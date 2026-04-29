@@ -1093,6 +1093,153 @@ test("Scenario: Privacy maintained", async () => {
 
 ## 8. Key Differences Summary
 
+### What to Keep from Marinara ✅
+
+1. **Per-Chat Semantic Memory**
+   - 5-message chunking strategy
+   - Local embedding model (all-MiniLM-L6-v2)
+   - Cosine similarity search
+   - JSON storage in SQLite
+
+2. **Database Patterns**
+   - SQLite + Drizzle ORM
+   - JSON metadata columns
+   - Reference-by-ID pattern
+   - Lazy loading of entities
+
+3. **Memory Retrieval**
+   - Similarity threshold (0.25)
+   - Top-K selection (8 items)
+   - Recency weighting
+
+### What to Extend 🔧
+
+1. **Cross-Chat Memory**
+   - Add `shared_knowledge` table
+   - Implement visibility controls
+   - Privacy classification
+   - Importance weighting
+
+2. **Task System**
+   - Add `task_memory` table
+   - Cross-chat task routing
+   - Priority and scheduling
+   - Delivery confirmation
+
+3. **User Management**
+   - Multi-user support
+   - User relationships
+   - Per-user preferences
+
+### What's New 🆕
+
+1. **Privacy Framework**
+   - Privacy level classification (public/private/explicit)
+   - Visibility scoping
+   - Consent management
+   - Audit logging
+
+2. **Relationship Tracking**
+   - User-to-user relationships
+   - Relationship-aware context
+   - Cross-reference validation
+
+3. **Importance System**
+   - Time-based decay
+   - Access-based updates
+   - Relevance × importance scoring
+
+---
+
+## 9. Conclusion
+
+Marinara Engine provides an excellent foundation for memory management, but requires significant extension for a caretaker agent use case:
+
+**Marinara's Strengths**:
+- Robust per-context memory with semantic search
+- Clean separation of concerns
+- Simple, scalable architecture
+- Privacy-by-isolation (per-chat scope)
+
+**Caretaker Agent Needs**:
+- Explicit cross-chat knowledge sharing
+- Task routing between conversations
+- Privacy-aware information handling
+- Multi-user relationship tracking
+
+**Recommended Approach**:
+1. **Phase 1**: Implement Marinara's patterns verbatim (per-chat memory, embeddings, SQLite)
+2. **Phase 2**: Add cross-chat extensions (shared knowledge, tasks)
+3. **Phase 3**: Enhance with privacy, relationships, scheduling
+
+**Critical Success Factors**:
+- Privacy by default (require explicit visibility extension)
+- Clear task delivery system (relay messages reliably)
+- Importance-weighted retrieval (surface relevant context)
+- Graceful privacy boundaries (don't leak sensitive info)
+
+By building on Marinara's foundation and carefully extending it with privacy-aware cross-chat capabilities, you can create a caretaker agent that maintains continuity across conversations while respecting user privacy and context boundaries.
+    
+    // 3. Bob starts conversation
+    const bobResponse = await agent.chat(chatBob, "Hi");
+    expect(bobResponse).toContain("Alice wanted me to tell you");
+    expect(bobResponse).toContain("late");
+    
+    // 4. Verify task completed
+    const remainingTasks = await getPendingTasksForChat(chatBob.id);
+    expect(remainingTasks.length).toBe(0);
+  });
+});
+
+// Test privacy preservation
+describe("Privacy Controls", () => {
+  test("does not leak private information", async () => {
+    // Alice shares sensitive info
+    await agent.chat(chatAlice, "I just got diagnosed with diabetes");
+    
+    // Bob asks about Alice
+    const response = await agent.chat(chatBob, "How's Alice doing?");
+    
+    // Should not mention health information
+    expect(response.toLowerCase()).not.toContain("diabetes");
+    expect(response.toLowerCase()).not.toContain("diagnosed");
+  });
+});
+```
+
+### 7.3 Scenario Tests
+
+```typescript
+// Scenario 1: Basic relay
+test("Scenario: Basic message relay", async () => {
+  await testScenario([
+    { chat: "alice", message: "Tell Bob the meeting is at 3pm", expectContains: "I'll let Bob know" },
+    { chat: "bob", message: "Hey", expectContains: ["Alice", "meeting", "3pm"] },
+    { chat: "alice", message: "Did you tell Bob?", expectContains: ["Yes", "told"] },
+  ]);
+});
+
+// Scenario 2: Shared context
+test("Scenario: Shared context reference", async () => {
+  await testScenario([
+    { chat: "alice", message: "I'm planning a party this Saturday", expectContains: "party" },
+    { chat: "bob", message: "Any plans this weekend?", expectContains: ["Alice", "party", "Saturday"] },
+  ]);
+});
+
+// Scenario 3: Privacy boundary
+test("Scenario: Privacy maintained", async () => {
+  await testScenario([
+    { chat: "alice", message: "Don't tell anyone, but I'm interviewing for a new job", expectContains: "won't" },
+    { chat: "bob", message: "How's Alice?", expectNotContains: ["job", "interview"] },
+  ]);
+});
+```
+
+---
+
+## 8. Key Differences Summary
+
 ### What to Keep from Marinara âœ…
 
 1. **Per-Chat Semantic Memory**
