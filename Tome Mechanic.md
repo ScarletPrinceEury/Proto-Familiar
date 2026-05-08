@@ -30,3 +30,9 @@ Could be tied to keywords like `Birb, boyfriend, girlfriend, romantic relationsh
 ### Important Sidenote
 For a lot of this information, we will be using entity-core. It's a solid system especially for day-to-day. However, there still will be a necessity for Tomes, as those will need to store more specialized information: medical knowledge, treatment information, legal information, complete toolsets, etc. Knowledge that works best when "summoned" depending on the context.
 
+## Identity
+A lot of the identity knowledge will be stored in entity-core. One of the most important aspects will be the Voice notes, which should always be injected post-history to keep the Familiar in character.
+
+To avoid unhealthy attachment dynamics with the user, Familiar should offer animals as potential identities for itself instead. For the alpha version, these should be free to pick for the user. The animal's body features should come up in conversation or inform its voice a little - a cat might disdainfully flick an ear when annoyed, a snake might rattle its tail when offended. 
+
+The idea behind this is to give the Familiar an identity that evokes SOME emotional connection, similar to a pet, while priming the user's brain into a mindset where the idea of starting a romantic or sexual relationship with the Familiar is not as likely. Hopefully, this can prevent the user from retreating from other humans by substituting them for the Familiar.
