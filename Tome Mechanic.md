@@ -27,3 +27,6 @@ Some entries will be activated by keywords. For example:
 
 Could be tied to keywords like `Birb, boyfriend, girlfriend, romantic relationship, partner, significant other` so it will always be pulled up in that context.
 
+### Important Sidenote
+For a lot of this information, we will be using entity-core. It's a solid system especially for day-to-day. However, there still will be a necessity for Tomes, as those will need to store more specialized information: medical knowledge, treatment information, legal information, complete toolsets, etc. Knowledge that works best when "summoned" depending on the context.
+
