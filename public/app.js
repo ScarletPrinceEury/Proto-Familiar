@@ -168,14 +168,25 @@ const state = {
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
+  // ── Topics & lorebook ────────────────────────────────────
+  lorebookScanDepth: 4,      // how many recent messages to scan for keyword matches
+  lorebook:          { entries: {} }, // cached from server; NOT persisted in localStorage
+  topics:            [],     // session-level; stored under pf_topics_{sessionId}
 };
 
 // ── Persistence ──────────────────────────────────────────────────
 function saveSettings() {
   try {
-    const { messages: _ignored, ...settings } = state;
+    const { messages: _ignored, lorebook: _lb, topics: _t, ...settings } = state;
     localStorage.setItem('pf_settings', JSON.stringify(settings));
   } catch { /* quota exceeded — silently skip */ }
+}
+
+function saveTopics() {
+  if (!state.sessionId) return;
+  try {
+    localStorage.setItem(`pf_topics_${state.sessionId}`, JSON.stringify(state.topics));
+  } catch { /* quota exceeded */ }
 }
 
 function saveHistory() {
@@ -200,6 +211,11 @@ function loadPersisted() {
     state.sessionStartedAt = new Date().toISOString();
     saveSettings();
   }
+  // Load session-scoped topics
+  try {
+    const rawTopics = localStorage.getItem(`pf_topics_${state.sessionId}`);
+    if (rawTopics) state.topics = JSON.parse(rawTopics);
+  } catch { /* corrupt */ }
 }
 
 // Fire-and-forget — writes the current session to disk via the server.
@@ -256,6 +272,10 @@ function buildApiMessages(userInput) {
     systemParts.push('[Character Profile]\n' + state.characterProfile.trim());
   if (state.userProfile.trim())
     systemParts.push('[User Profile]\n' + state.userProfile.trim());
+
+  // ── Lorebook context ─────────────────────────────────────────
+  const lorebookCtx = buildLorebookContext(userInput);
+  if (lorebookCtx) systemParts.push(lorebookCtx);
 
   if (systemParts.length)
     msgs.push({ role: 'system', content: systemParts.join('\n\n---\n\n') });
@@ -455,6 +475,8 @@ function wireCopyButton(btn, getText) {
 function appendUserMessage(text, timestamp) {
   const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp);
   wireCopyButton(copyBtn, () => text);
+  // Index will be assigned by refreshTopicGutter after state.messages is updated
+  el.dataset.msgIndex = String(state.messages.length); // optimistic: will be corrected
   $('messages').appendChild(el);
   scrollToBottom();
 }
@@ -552,12 +574,14 @@ function renderAllMessages() {
       ? esc(msg.content ?? '').replace(/\n/g, '<br>')
       : renderMarkdown(msg.content ?? '');
     const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
+    el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
     container.appendChild(el);
     i++;
   }
   updateRegenBtn();
+  refreshTopicGutter();
   scrollToBottom();
 }
 
@@ -751,6 +775,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
     state.messages.push(...pendingMsgs);
     state.messages.push({ role: 'assistant', content: fullContent, timestamp: assistantTimestamp });
     saveHistory();
+    refreshTopicGutter();
     wireCopyButton(shell.copyBtn, () => fullContent);
     updateRegenBtn();
     break;
@@ -832,6 +857,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
     state.messages.push(...pendingMsgs);
     state.messages.push({ role: 'assistant', content,            timestamp: roundTs });
     saveHistory();
+    refreshTopicGutter();
     wireCopyButton(copyBtn, () => content);
     updateRegenBtn();
     break;
@@ -974,6 +1000,8 @@ function readSettingsFromUI() {
   state.postHistoryPrompt = $('post-history-prompt').value;
   state.toolsEnabled      = $('tools-enabled').checked;
   state.customTools       = $('custom-tools').value;
+  const scanEl = $('lorebook-scan-depth');
+  if (scanEl) state.lorebookScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
   saveSettings();
 }
 
@@ -991,6 +1019,8 @@ function writeSettingsToUI() {
   $('post-history-prompt').value = state.postHistoryPrompt;
   $('tools-enabled').checked    = state.toolsEnabled ?? true;
   $('custom-tools').value       = state.customTools ?? '';
+  const scanEl = $('lorebook-scan-depth');
+  if (scanEl) scanEl.value = state.lorebookScanDepth ?? 4;
   refreshModelSuggestions(state.provider);
 }
 
@@ -1067,6 +1097,7 @@ function startNewSession() {
   state.sessionStartedAt = new Date().toISOString();
   state.sessionEndedAt   = null;
   state.messages         = [];
+  state.topics           = [];
   lastMessage            = null;
   state.lastMessage      = null;
   elapsedTime            = 0;
@@ -1074,6 +1105,8 @@ function startNewSession() {
   try { localStorage.setItem('pf_history', JSON.stringify([])); } catch { /* ignore */ }
   $('messages').innerHTML = '';
   updateRegenBtn();
+  updateTopicStrip();
+  refreshTopicGutter();
 }
 
 /**
@@ -1199,6 +1232,12 @@ async function loadSession(sessionId) {
     state.sessionStartedAt = data.startedAt || new Date().toISOString();
     state.sessionEndedAt   = null; // treat loaded session as resumed/active
 
+    // Close all open topics from the loaded session (treat as historic)
+    const rawTopics = localStorage.getItem(`pf_topics_${sessionId}`);
+    state.topics = rawTopics ? JSON.parse(rawTopics).map(t => ({
+      ...t, endIndex: t.endIndex ?? (state.messages.length - 1)
+    })) : [];
+
     const lastMsg   = state.messages[state.messages.length - 1];
     lastMessage         = lastMsg?.timestamp || null;
     state.lastMessage   = lastMessage;
@@ -1215,6 +1254,7 @@ async function loadSession(sessionId) {
     }
 
     renderAllMessages();
+    updateTopicStrip();
     closeLogsModal();
   } catch (err) {
     alert(`Failed to load session: ${err.message}`);
@@ -1259,6 +1299,7 @@ function init() {
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
+    'lorebook-scan-depth',
   ];
 
   settingsIds.forEach(id => {
@@ -1328,6 +1369,54 @@ function init() {
     if (e.target === $('logs-modal')) closeLogsModal();
   });
 
+  // ── Topic system ─────────────────────────────────────────────
+  $('new-topic-btn').addEventListener('click', openTopicNameModal);
+  $('topic-name-modal-close').addEventListener('click', closeTopicNameModal);
+  $('topic-name-cancel-btn').addEventListener('click', closeTopicNameModal);
+  $('topic-name-modal').addEventListener('click', e => {
+    if (e.target === $('topic-name-modal')) closeTopicNameModal();
+  });
+  $('topic-name-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('topic-name-start-btn').click(); }
+    if (e.key === 'Escape') closeTopicNameModal();
+  });
+  $('topic-name-start-btn').addEventListener('click', () => {
+    const label = $('topic-name-input').value.trim() || `Topic ${state.topics.length + 1}`;
+    closeTopicNameModal();
+    startTopic(label);
+  });
+
+  // Summary modal
+  $('summary-modal-close').addEventListener('click', () => {
+    if (confirm('Discard this topic summary? It will not be saved to the lorebook.')) {
+      closeSummaryModal();
+    }
+  });
+  $('summary-modal').addEventListener('click', e => {
+    if (e.target === $('summary-modal') && confirm('Discard this summary?')) closeSummaryModal();
+  });
+  $('summary-discard-btn').addEventListener('click', () => {
+    if (confirm('Discard this topic summary?')) closeSummaryModal();
+  });
+  $('summary-regen-btn').addEventListener('click', () => {
+    if (_pendingSummaryTopic) regenerateSummary(_pendingSummaryTopic);
+  });
+  $('summary-save-btn').addEventListener('click', savePendingSummary);
+
+  // Lorebook modal
+  $('lorebook-btn').addEventListener('click', openLorebookModal);
+  $('lorebook-modal-close').addEventListener('click', closeLorebookModal);
+  $('lorebook-modal').addEventListener('click', e => {
+    if (e.target === $('lorebook-modal')) closeLorebookModal();
+  });
+
+  // ── Load lorebook from server ─────────────────────────────────
+  loadLorebookFromServer();
+
+  // Restore topic strip
+  updateTopicStrip();
+  refreshTopicGutter();
+
   // ── Import buttons ───────────────────────────────────────────
   document.querySelectorAll('.import-btn').forEach(btn => {
     btn.addEventListener('click', () => triggerImport(btn.dataset.target));
@@ -1371,3 +1460,453 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+/* ================================================================
+   Topics & Lorebook
+   ================================================================ */
+
+// ── Topic colors ─────────────────────────────────────────────────
+const TOPIC_COLORS = [
+  '#f38ba8', // rose
+  '#a6e3a1', // green
+  '#89dceb', // sky
+  '#fab387', // peach
+  '#cba6f7', // mauve
+  '#f9e2af', // yellow
+  '#74c7ec', // sapphire
+  '#eba0ac', // flamingo
+];
+
+function nextTopicColor() {
+  const used = new Set(state.topics.map(t => t.color));
+  return TOPIC_COLORS.find(c => !used.has(c)) ?? TOPIC_COLORS[state.topics.length % TOPIC_COLORS.length];
+}
+
+// ── Topic lifecycle ───────────────────────────────────────────────
+function startTopic(label) {
+  const topic = {
+    id:         generateId(),
+    label,
+    color:      nextTopicColor(),
+    startIndex: state.messages.length, // first message that will belong to this topic
+    endIndex:   null,                  // null = open/ongoing
+    lorebookEntryId: null,
+  };
+  state.topics.push(topic);
+  saveTopics();
+  updateTopicStrip();
+  refreshTopicGutter();
+}
+
+function endTopic(topicId) {
+  const topic = state.topics.find(t => t.id === topicId);
+  if (!topic || topic.endIndex !== null) return;
+  topic.endIndex = state.messages.length - 1;
+  saveTopics();
+  updateTopicStrip();
+  refreshTopicGutter();
+
+  // Count displayable messages in range
+  const rangeMessages = [];
+  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+    const m = state.messages[i];
+    if (!m || m.role === 'tool') continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+    rangeMessages.push(m);
+  }
+
+  if (!rangeMessages.length || !state.apiKey.trim()) {
+    // No content to summarize or no API key — skip summary flow
+    return;
+  }
+
+  openSummaryModal(topic);
+  generateTopicSummary(topic, rangeMessages);
+}
+
+// ── Topic strip (active topic pills above input) ──────────────────
+function updateTopicStrip() {
+  const strip = $('topic-strip');
+  if (!strip) return;
+  // Remove existing pills but keep the "+ Topic" button
+  strip.querySelectorAll('.topic-pill').forEach(p => p.remove());
+
+  const openTopics = state.topics.filter(t => t.endIndex === null);
+  for (const topic of openTopics) {
+    const pill = document.createElement('button');
+    pill.className = 'topic-pill';
+    pill.style.setProperty('--topic-c', topic.color);
+    pill.dataset.topicId = topic.id;
+    pill.title = `End topic: ${topic.label}`;
+    pill.innerHTML =
+      `<span class="topic-pill-dot"></span>` +
+      `<span class="topic-pill-label">${esc(topic.label)}</span>` +
+      `<span class="topic-pill-end" aria-hidden="true">✕</span>`;
+    pill.addEventListener('click', () => endTopic(topic.id));
+    strip.insertBefore(pill, $('new-topic-btn'));
+  }
+}
+
+// ── Topic gutter (colored bars alongside messages) ────────────────
+function refreshTopicGutter() {
+  const gutter = $('topic-gutter');
+  if (!gutter) return;
+  gutter.innerHTML = '';
+
+  if (!state.topics.length) {
+    gutter.classList.remove('has-topics');
+    return;
+  }
+  gutter.classList.add('has-topics');
+
+  // Match DOM message elements to their state.messages indices
+  const msgElMap = buildMsgElMap();
+
+  const scroller = $('messages-scroller');
+  if (!scroller) return;
+
+  state.topics.forEach((topic, topicIdx) => {
+    // Find message elements whose state index falls in this topic's range
+    const rangeEntries = msgElMap.filter(({ idx }) =>
+      idx >= topic.startIndex && (topic.endIndex === null || idx <= topic.endIndex)
+    );
+    if (!rangeEntries.length) return;
+
+    const firstEl = rangeEntries[0].el;
+    const lastEl  = rangeEntries[rangeEntries.length - 1].el;
+    const gutterRect  = gutter.getBoundingClientRect();
+    const firstRect   = firstEl.getBoundingClientRect();
+    const lastRect    = lastEl.getBoundingClientRect();
+
+    // Absolute Y within gutter (both share same scroll parent, so delta cancels scroll)
+    const topPx    = firstRect.top  - gutterRect.top;
+    const bottomPx = lastRect.bottom - gutterRect.top;
+    const heightPx = Math.max(bottomPx - topPx, 8);
+
+    const bar = document.createElement('div');
+    bar.className     = 'topic-gutter-bar';
+    bar.dataset.label = topic.label;
+    bar.style.cssText =
+      `top: ${topPx}px;` +
+      `height: ${heightPx}px;` +
+      `background: ${topic.color};` +
+      `left: ${4 + topicIdx * 7}px;`;
+    if (topic.endIndex === null) bar.classList.add('topic-gutter-bar-open');
+    gutter.appendChild(bar);
+  });
+}
+
+/**
+ * Build an array of { idx (state index), el (DOM element) } for all
+ * displayable messages currently rendered in #messages.
+ */
+function buildMsgElMap() {
+  const container = $('messages');
+  if (!container) return [];
+  const result = [];
+  container.querySelectorAll('.message[data-msg-index]').forEach(el => {
+    const idx = parseInt(el.dataset.msgIndex, 10);
+    if (!isNaN(idx)) result.push({ idx, el });
+  });
+  // Sort by state index to handle any out-of-order appends
+  result.sort((a, b) => a.idx - b.idx);
+  return result;
+}
+
+// Re-render gutter on window resize (message heights may change)
+window.addEventListener('resize', () => {
+  clearTimeout(window._gutterResizeTimer);
+  window._gutterResizeTimer = setTimeout(refreshTopicGutter, 120);
+});
+
+// ── Topic name modal ──────────────────────────────────────────────
+function openTopicNameModal() {
+  $('topic-name-input').value = '';
+  $('topic-name-modal').classList.remove('hidden');
+  requestAnimationFrame(() => $('topic-name-input').focus());
+}
+
+function closeTopicNameModal() {
+  $('topic-name-modal').classList.add('hidden');
+}
+
+// ── Summary generation ────────────────────────────────────────────
+let _pendingSummaryTopic = null;
+
+async function generateTopicSummary(topic, rangeMessages) {
+  const convText = rangeMessages
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .join('\n\n');
+
+  const prompt = `Analyze the following conversation excerpt and produce a structured lorebook entry as a JSON object.
+
+Return ONLY valid JSON with exactly these fields:
+{
+  "title": "Concise descriptive title (max 60 chars)",
+  "content": "A comprehensive third-person summary capturing key facts, decisions, and important details from the exchange.",
+  "keywords": ["keyword1", "keyword2", "keyword3"]
+}
+
+The keywords array should contain 3–8 terms that would signal this entry is relevant when mentioned in a future conversation (names, concepts, topics discussed, medications, places, etc.).
+
+Conversation excerpt:
+${convText}`;
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        messages:    [{ role: 'user', content: prompt }],
+        stream:      false,
+        temperature: 0.25,
+        max_tokens:  800,
+      }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    const raw = data.choices?.[0]?.message?.content ?? '';
+    const jsonMatch = raw.match(/\{[\s\S]+\}/);
+    if (!jsonMatch) throw new Error('No JSON found in response');
+    const parsed = JSON.parse(jsonMatch[0]);
+    populateSummaryForm(parsed);
+  } catch (err) {
+    // Show editable blank form so user can write summary manually
+    populateSummaryForm({
+      title:    topic.label,
+      content:  '',
+      keywords: [],
+    });
+    // Surface error as placeholder hint
+    $('summary-content-input').placeholder = `Auto-generation failed: ${err.message}. Please write a summary manually.`;
+  }
+}
+
+async function regenerateSummary(topic) {
+  $('summary-regen-btn').disabled = true;
+  $('summary-save-btn').disabled  = true;
+  $('summary-generating-hint').classList.remove('hidden');
+  $('summary-form').classList.add('hidden');
+
+  const rangeMessages = [];
+  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+    const m = state.messages[i];
+    if (!m || m.role === 'tool') continue;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+    rangeMessages.push(m);
+  }
+  await generateTopicSummary(topic, rangeMessages);
+}
+
+function populateSummaryForm({ title, content, keywords }) {
+  $('summary-title-input').value   = title ?? '';
+  $('summary-content-input').value = content ?? '';
+  $('summary-keys-input').value    = Array.isArray(keywords) ? keywords.join(', ') : (keywords ?? '');
+  $('summary-generating-hint').classList.add('hidden');
+  $('summary-form').classList.remove('hidden');
+  $('summary-regen-btn').disabled = false;
+  $('summary-save-btn').disabled  = false;
+}
+
+// ── Summary modal ─────────────────────────────────────────────────
+function openSummaryModal(topic) {
+  _pendingSummaryTopic = topic;
+  $('summary-modal-title').textContent = `Summary: ${topic.label}`;
+  $('summary-generating-hint').classList.remove('hidden');
+  $('summary-form').classList.add('hidden');
+  $('summary-regen-btn').disabled = true;
+  $('summary-save-btn').disabled  = true;
+  $('summary-modal').classList.remove('hidden');
+}
+
+function closeSummaryModal() {
+  $('summary-modal').classList.add('hidden');
+  _pendingSummaryTopic = null;
+}
+
+async function savePendingSummary() {
+  const topic = _pendingSummaryTopic;
+  if (!topic) return;
+
+  const title   = $('summary-title-input').value.trim();
+  const content = $('summary-content-input').value.trim();
+  const keysRaw = $('summary-keys-input').value;
+  const keys    = keysRaw.split(',').map(k => k.trim()).filter(Boolean);
+
+  if (!title || !content) {
+    alert('Please fill in at least a title and summary content before saving.');
+    return;
+  }
+
+  const uid = generateId();
+  const entry = {
+    uid,
+    comment:          title,
+    keys,
+    keysecondary:     [],
+    content,
+    constant:         false,
+    selective:        false,
+    enabled:          true,
+    position:         'before_char',
+    insertion_order:  100,
+    created_at:       new Date().toISOString(),
+    session_id:       state.sessionId,
+    message_range:    [topic.startIndex, topic.endIndex],
+  };
+
+  try {
+    // Merge into cached lorebook and push to server
+    state.lorebook.entries[uid] = entry;
+    await fetch('/api/lorebook', {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: state.lorebook.entries }),
+    });
+    // Link back to topic
+    topic.lorebookEntryId = uid;
+    saveTopics();
+    closeSummaryModal();
+  } catch (err) {
+    alert(`Failed to save lorebook entry: ${err.message}`);
+  }
+}
+
+// ── Lorebook: server sync ─────────────────────────────────────────
+async function loadLorebookFromServer() {
+  try {
+    const res  = await fetch('/api/lorebook');
+    const data = await res.json();
+    if (data.entries) state.lorebook = data;
+  } catch { /* non-critical */ }
+}
+
+// ── Lorebook: keyword injection ───────────────────────────────────
+/**
+ * Scans recent messages + current user input for lorebook keyword matches.
+ * Returns a formatted context string to inject, or '' if nothing matched.
+ */
+function buildLorebookContext(userInput) {
+  const entries = Object.values(state.lorebook.entries ?? {});
+  if (!entries.length) return '';
+
+  const depth = state.lorebookScanDepth ?? 4;
+  // Build the scan corpus: recent displayable messages + new user input
+  const recent = state.messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .slice(-depth)
+    .map(m => (m.content ?? '').toLowerCase());
+  recent.push((userInput ?? '').toLowerCase());
+  const corpus = recent.join(' ');
+
+  const matched = entries.filter(e => {
+    if (!e.enabled) return false;
+    if (e.constant) return true;
+    return (e.keys ?? []).some(k => {
+      const kl = k.toLowerCase().trim();
+      return kl && corpus.includes(kl);
+    });
+  });
+
+  if (!matched.length) return '';
+
+  // Sort by insertion_order (lower = injected first)
+  matched.sort((a, b) => (a.insertion_order ?? 100) - (b.insertion_order ?? 100));
+
+  const lines = matched.map(e => {
+    const title = e.comment ? `[${e.comment}]\n` : '';
+    return title + e.content;
+  });
+  return '[Lorebook Context — relevant background information]\n\n' + lines.join('\n\n---\n\n');
+}
+
+// ── Lorebook modal ────────────────────────────────────────────────
+function openLorebookModal() {
+  $('lorebook-modal').classList.remove('hidden');
+  refreshLorebookList();
+}
+
+function closeLorebookModal() {
+  $('lorebook-modal').classList.add('hidden');
+}
+
+async function refreshLorebookList() {
+  await loadLorebookFromServer();
+  const container = $('lorebook-list');
+  container.innerHTML = '';
+
+  const entries = Object.values(state.lorebook.entries ?? {});
+  if (!entries.length) {
+    container.innerHTML = '<p class="lorebook-empty">No lorebook entries yet. End a topic to create one.</p>';
+    return;
+  }
+
+  // Sort newest first
+  entries.sort((a, b) => new Date(b.created_at ?? 0) - new Date(a.created_at ?? 0));
+
+  for (const entry of entries) {
+    const div = document.createElement('div');
+    div.className = 'lorebook-entry';
+
+    const keyTagsHtml = (entry.keys ?? [])
+      .slice(0, 8)
+      .map(k => `<span class="lorebook-key-tag">${esc(k)}</span>`)
+      .join('');
+
+    const dateStr = entry.created_at
+      ? new Date(entry.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+      : '';
+    const constBadge = entry.constant ? ' · <strong>always-on</strong>' : '';
+
+    div.innerHTML = `
+      <div class="lorebook-entry-header">
+        <div class="lorebook-entry-title">${esc(entry.comment ?? 'Untitled')}</div>
+        <div class="lorebook-entry-actions">
+          <button class="btn-ghost lore-toggle-btn" data-uid="${esc(entry.uid)}" title="${entry.enabled ? 'Disable entry' : 'Enable entry'}">
+            ${entry.enabled ? 'Enabled' : 'Disabled'}
+          </button>
+          <button class="btn-ghost lore-delete-btn" data-uid="${esc(entry.uid)}" title="Delete entry">✕</button>
+        </div>
+      </div>
+      <div class="lorebook-entry-keys">${keyTagsHtml}</div>
+      <div class="lorebook-entry-content">${esc(entry.content ?? '')}</div>
+      <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge}</div>
+    `;
+
+    div.querySelector('.lore-toggle-btn').addEventListener('click', () => toggleLorebookEntry(entry.uid));
+    div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteLorebookEntry(entry.uid));
+
+    container.appendChild(div);
+  }
+}
+
+async function toggleLorebookEntry(uid) {
+  const entry = state.lorebook.entries[uid];
+  if (!entry) return;
+  entry.enabled = !entry.enabled;
+  try {
+    await fetch('/api/lorebook', {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: state.lorebook.entries }),
+    });
+    refreshLorebookList();
+  } catch (err) {
+    alert(`Failed to update entry: ${err.message}`);
+  }
+}
+
+async function deleteLorebookEntry(uid) {
+  if (!confirm('Delete this lorebook entry? This cannot be undone.')) return;
+  delete state.lorebook.entries[uid];
+  try {
+    await fetch(`/api/lorebook/${uid}`, { method: 'DELETE' });
+    refreshLorebookList();
+  } catch (err) {
+    alert(`Failed to delete entry: ${err.message}`);
+  }
+}

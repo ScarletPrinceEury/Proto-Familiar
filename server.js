@@ -180,6 +180,71 @@ app.delete('/api/logs/:id', async (req, res) => {
 // Health check
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+// ── Lorebook endpoints ──────────────────────────────────────────
+const LOREBOOK_DIR  = path.join(__dirname, 'lorebook');
+const LOREBOOK_FILE = path.join(LOREBOOK_DIR, 'entries.json');
+mkdirSync(LOREBOOK_DIR, { recursive: true });
+
+// Valid lorebook UID: UUID shape or shorter alphanumeric+hyphen IDs
+function isValidLorebookUid(uid) {
+  return typeof uid === 'string' && /^[0-9a-f\-]{8,64}$/i.test(uid) && !uid.includes('..');
+}
+
+async function readLorebook() {
+  try {
+    const raw = await fsp.readFile(LOREBOOK_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return { entries: {} };
+  }
+}
+
+async function writeLorebook(data) {
+  await fsp.writeFile(LOREBOOK_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+// GET /api/lorebook — return all entries
+app.get('/api/lorebook', async (_req, res) => {
+  res.json(await readLorebook());
+});
+
+// PUT /api/lorebook — replace the full entries map
+app.put('/api/lorebook', async (req, res) => {
+  const { entries } = req.body;
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries))
+    return res.status(400).json({ error: 'entries object required.' });
+
+  // Accept only valid-UID keys to prevent arbitrary writes
+  const safe = {};
+  for (const [uid, entry] of Object.entries(entries)) {
+    if (!isValidLorebookUid(uid)) continue;
+    safe[uid] = entry;
+  }
+  try {
+    await writeLorebook({ entries: safe });
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to write lorebook.' });
+  }
+});
+
+// DELETE /api/lorebook/:uid — remove a single entry
+app.delete('/api/lorebook/:uid', async (req, res) => {
+  const { uid } = req.params;
+  if (!isValidLorebookUid(uid))
+    return res.status(400).json({ error: 'Invalid UID.' });
+  const data = await readLorebook();
+  if (!data.entries[uid])
+    return res.status(404).json({ error: 'Entry not found.' });
+  delete data.entries[uid];
+  try {
+    await writeLorebook(data);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to write lorebook.' });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\nProto-Familiar running at http://localhost:${PORT}\n`);

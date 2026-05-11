@@ -177,13 +177,34 @@
           </div>
         </div>
 
+        <!-- Lorebook -->
+        <div class="sidebar-section collapsible" id="section-lorebook">
+          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-lorebook">
+            Lorebook
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-lorebook">
+            <p class="field-hint">Summaries of past topics, injected as context when their keywords appear.</p>
+            <div class="field">
+              <label for="lorebook-scan-depth">Keyword scan depth <span class="label-hint">(messages)</span></label>
+              <input type="number" id="lorebook-scan-depth" value="4" min="1" max="50" step="1">
+            </div>
+            <div class="action-row" style="margin-top:4px">
+              <button id="lorebook-btn" class="btn-secondary">☰ View entries</button>
+            </div>
+          </div>
+        </div>
+
       </aside><!-- /sidebar -->
 
       <!-- ── Chat pane ──────────────────────────────────────── -->
       <main class="chat-pane" id="chat-pane">
 
         <div class="messages-scroller" id="messages-scroller">
-          <div id="messages" role="log" aria-live="polite" aria-label="Conversation"></div>
+          <div class="messages-with-gutter">
+            <div id="topic-gutter" class="topic-gutter" aria-hidden="true"></div>
+            <div id="messages" role="log" aria-live="polite" aria-label="Conversation"></div>
+          </div>
           <div id="typing-indicator" class="typing-indicator hidden" aria-label="Assistant is typing">
             <div class="typing-avatar">A</div>
             <div class="typing-dots">
@@ -193,19 +214,27 @@
         </div>
 
         <div class="input-bar" id="input-bar">
-          <div class="input-wrapper">
-            <textarea
-              id="user-input"
-              rows="1"
-              placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-              aria-label="Message input"
-            ></textarea>
-          </div>
-          <div class="input-controls">
-            <button id="send-btn" class="btn-send" title="Send (Enter)">Send</button>
-            <button id="regen-btn" class="icon-btn regen-btn" title="Regenerate last response" aria-label="Regenerate" disabled>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.28"/></svg>
+          <div class="topic-strip" id="topic-strip" aria-label="Active topics">
+            <button id="new-topic-btn" class="btn-new-topic" title="Start tracking a new topic">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+              Topic
             </button>
+          </div>
+          <div class="input-row">
+            <div class="input-wrapper">
+              <textarea
+                id="user-input"
+                rows="1"
+                placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+                aria-label="Message input"
+              ></textarea>
+            </div>
+            <div class="input-controls">
+              <button id="send-btn" class="btn-send" title="Send (Enter)">Send</button>
+              <button id="regen-btn" class="icon-btn regen-btn" title="Regenerate last response" aria-label="Regenerate" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.28"/></svg>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -224,6 +253,73 @@
         <button class="icon-btn modal-close" id="logs-modal-close" aria-label="Close modal">✕</button>
       </div>
       <div class="modal-body" id="logs-list">
+        <p class="logs-loading">Loading…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Topic name modal -->
+  <div class="modal-backdrop hidden" id="topic-name-modal" role="dialog" aria-modal="true" aria-labelledby="topic-name-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title" id="topic-name-modal-title">Start New Topic</h2>
+        <button class="icon-btn modal-close" id="topic-name-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="topic-name-input">Topic label <span class="label-hint">(optional)</span></label>
+          <input type="text" id="topic-name-input" placeholder="e.g. Medication schedule…" autocomplete="off" maxlength="80">
+        </div>
+        <p class="field-hint">Messages from this point forward will be grouped under this topic until you end it. You can run multiple topics in parallel.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="topic-name-cancel-btn">Cancel</button>
+        <button class="btn-send" id="topic-name-start-btn">Start Topic</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary review modal -->
+  <div class="modal-backdrop hidden" id="summary-modal" role="dialog" aria-modal="true" aria-labelledby="summary-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="summary-modal-title">Review Topic Summary</h2>
+        <button class="icon-btn modal-close" id="summary-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint" id="summary-generating-hint">Generating summary… please wait.</p>
+        <div id="summary-form" class="hidden">
+          <div class="field">
+            <label for="summary-title-input">Title</label>
+            <input type="text" id="summary-title-input" placeholder="Topic title…" maxlength="100">
+          </div>
+          <div class="field">
+            <label for="summary-content-input">Summary</label>
+            <textarea id="summary-content-input" rows="6" placeholder="Summary content…"></textarea>
+          </div>
+          <div class="field">
+            <label for="summary-keys-input">Keywords <span class="label-hint">(comma-separated, trigger injection)</span></label>
+            <input type="text" id="summary-keys-input" placeholder="e.g. medication, therapy, schedule">
+          </div>
+          <p class="field-hint summary-log-note">Full conversation context is preserved in the session log for reference.</p>
+        </div>
+      </div>
+      <div class="modal-footer" id="summary-footer">
+        <button class="btn-ghost" id="summary-discard-btn">Discard</button>
+        <button class="btn-secondary" id="summary-regen-btn" disabled>↻ Regenerate</button>
+        <button class="btn-send" id="summary-save-btn" disabled>Save to Lorebook</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lorebook modal -->
+  <div class="modal-backdrop hidden" id="lorebook-modal" role="dialog" aria-modal="true" aria-labelledby="lorebook-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="lorebook-modal-title">Lorebook</h2>
+        <button class="icon-btn modal-close" id="lorebook-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="lorebook-list">
         <p class="logs-loading">Loading…</p>
       </div>
     </div>
