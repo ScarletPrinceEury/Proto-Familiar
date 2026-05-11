@@ -32,6 +32,16 @@ To run on a different port, set the `PORT` environment variable before starting:
 PORT=8080 npm start
 ```
 
+### Wiki
+
+Project wiki pages are available in [`/wiki`](wiki/):
+
+- [Home](wiki/Home.md)
+- [Getting Started](wiki/Getting-Started.md)
+- [Configuration & Features](wiki/Configuration-and-Features.md)
+- [Server API](wiki/Server-API.md)
+- [Research Guide](wiki/Research-Guide.md)
+
 ---
 
 ### Features
@@ -338,4 +348,3 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 **Supporting mental health conditions?** → Review all three: [depression-caretaker-ai-implications.md](Research/depression-caretaker-ai-implications.md), [agoraphobia-caretaker-ai-implications.md](Research/agoraphobia-caretaker-ai-implications.md), [adhd-caretaker-ai-implications.md](Research/adhd-caretaker-ai-implications.md)
 
 **Security & privacy concerns?** → Read [privacy-security-compliance-patterns.md](Research/privacy-security-compliance-patterns.md) + [multi-user-chat-architecture-patterns.md](Research/multi-user-chat-architecture-patterns.md)
-
