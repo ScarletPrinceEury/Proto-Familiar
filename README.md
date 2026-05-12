@@ -54,6 +54,7 @@ PORT=8080 npm start
 | **Session logging** | Conversations saved as JSON files in `logs/` with start + end timestamps |
 | **Session browser** | In-app Logs modal to view, load, or delete any past session |
 | **Session auto-end** | After 3 hours of inactivity the session is closed and a new one starts automatically |
+| **Session memorization** | On every session close (idle timeout or manual clear), the LLM automatically extracts 1–8 distinct topics and saves each as a lorebook entry with keywords; a toast confirms the count |
 | **Export** | Download conversation as a Markdown `.md` file (tool-call turns are omitted) |
 | **Regenerate** | Re-run the last AI response with the same user message |
 | **Themes** | Dark / light toggle |
@@ -106,10 +107,28 @@ Each log file is named `<uuid>.json` and contains:
 
 1. A new session begins when the app starts (or when you clear history).
 2. Each time you send a message, `lastMessage` is updated to the current time and a 3-hour inactivity countdown resets.
-3. If 3 hours pass with no new message, the session is stamped with `endedAt` and saved; a fresh session starts automatically and a brief on-screen notice appears.
+3. If 3 hours pass with no new message, the session is stamped with `endedAt` and saved; a fresh session starts automatically, and memorization begins in the background (see below).
 4. If you close the tab and reopen it after 3+ hours, the same check runs on startup: the old session is finalised silently and a new one starts.
+5. Manually clearing the chat (the **Clear** button) also closes and memorizes the current session before starting a fresh one.
 
 You can browse, load, or delete sessions at any time via the **☰ Logs** button in the Chat section of the sidebar.
+
+#### Session memorization
+
+When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model is asked to identify the distinct topics discussed and return structured JSON. Each topic becomes a lorebook entry containing:
+
+- A concise **title** (used as the entry comment)
+- A third-person **summary** of key facts, decisions, and details worth remembering in future conversations
+- **3–8 keywords** that will trigger the entry when those subjects come up again
+
+Between 1 and 8 entries are created per session. A brief on-screen toast confirms how many were saved (e.g. *"3 lorebook entries memorized from the last session."*).
+
+**Conditions and limits:**
+- Sessions with fewer than 4 readable messages are skipped — too short to be worth summarising.
+- If no API key is configured, memorization is silently skipped.
+- The call runs entirely in the background after the new session has already started, so it never blocks the UI.
+- Entries are fetched fresh from the server before writing to avoid overwriting any changes made in the new session.
+- Entries created this way are indistinguishable from hand-crafted lorebook entries and can be edited, disabled, or deleted in the Lorebook modal.
 
 ---
 

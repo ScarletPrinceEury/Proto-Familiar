@@ -1205,12 +1205,18 @@ function startNewSession() {
 async function autoEndSession() {
   _sessionTimeoutId = null;
   if (state.messages.length) {
-    state.sessionEndedAt = new Date().toISOString();
+    const sessionMessages = [...state.messages];
+    const sessionId       = state.sessionId;
+    state.sessionEndedAt  = new Date().toISOString();
     saveSettings();
     await saveToServer();
+    startNewSession();
+    showSessionEndedNotice();
+    memorizeSessionToLorebook(sessionMessages, sessionId); // fire-and-forget
+  } else {
+    startNewSession();
+    showSessionEndedNotice();
   }
-  startNewSession();
-  showSessionEndedNotice();
 }
 
 function showSessionEndedNotice() {
@@ -1223,6 +1229,146 @@ function showSessionEndedNotice() {
     toast.classList.remove('session-toast-show');
     setTimeout(() => toast.remove(), 400);
   }, 4500);
+}
+
+function showMemorizationNotice(count) {
+  const toast = document.createElement('div');
+  toast.className = 'session-toast';
+  toast.textContent = `${count} lorebook entr${count === 1 ? 'y' : 'ies'} memorized from the last session.`;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('session-toast-show'));
+  setTimeout(() => {
+    toast.classList.remove('session-toast-show');
+    setTimeout(() => toast.remove(), 400);
+  }, 4500);
+}
+
+/**
+ * Automatically memorize a finished session into lorebook entries.
+ * Fires-and-forgets after session close — never blocks the UI.
+ * Calls the configured LLM to split the conversation into distinct topics
+ * and creates a lorebook entry for each one.
+ */
+async function memorizeSessionToLorebook(messages, sessionId) {
+  if (!state.apiKey.trim()) return;
+
+  // Filter to user/assistant only — skip tool-call plumbing and empty turns
+  const readable = messages.filter(m => {
+    if (m.role === 'tool') return false;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
+    return m.content?.trim();
+  });
+  if (readable.length < 4) return;
+
+  const convText = readable
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .join('\n\n');
+
+  const prompt =
+`Analyze this conversation and identify the distinct topics discussed. For each topic produce a lorebook entry.
+
+Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+{
+  "topics": [
+    {
+      "title": "Concise descriptive title (max 60 chars)",
+      "content": "Comprehensive third-person summary: key facts, decisions, and details worth remembering in future conversations.",
+      "keywords": ["keyword1", "keyword2", "keyword3"]
+    }
+  ]
+}
+
+Rules:
+- Identify 1–8 genuinely distinct topics. Merge closely related messages rather than over-splitting.
+- keywords: 3–8 terms per topic that would signal relevance when mentioned in a future conversation (names, concepts, places, medications, decisions, etc.).
+- Each entry must be self-contained and useful as a standalone memory.
+
+Conversation:
+${convText}`;
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        messages:    [{ role: 'user', content: prompt }],
+        stream:      false,
+        temperature: 0.2,
+        max_tokens:  2000,
+      }),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.error) return;
+
+    const raw       = data.choices?.[0]?.message?.content ?? '';
+    const jsonMatch = raw.match(/\{[\s\S]+\}/);
+    if (!jsonMatch) return;
+    const parsed = JSON.parse(jsonMatch[0]);
+    const topics = parsed.topics;
+    if (!Array.isArray(topics) || !topics.length) return;
+
+    // Fetch the current lorebook fresh from the server so we don't overwrite
+    // concurrent changes made in the new session that started after this one closed.
+    let lorebookData = { entries: {} };
+    try {
+      const lbRes = await fetch('/api/lorebook');
+      if (lbRes.ok) lorebookData = await lbRes.json();
+    } catch { /* fall back to empty */ }
+
+    const now = new Date().toISOString();
+    let created = 0;
+    for (const t of topics) {
+      const title   = (t.title   ?? '').trim();
+      const content = (t.content ?? '').trim();
+      if (!title || !content) continue;
+      const uid = generateId();
+      lorebookData.entries[uid] = {
+        uid,
+        comment:             title,
+        keys:                Array.isArray(t.keywords) ? t.keywords.map(k => String(k).trim()).filter(Boolean) : [],
+        keysecondary:        [],
+        content,
+        constant:            false,
+        selective:           false,
+        selectiveLogic:      0,
+        enabled:             true,
+        position:            0,
+        depth:               4,
+        role:                0,
+        scanDepth:           null,
+        caseSensitive:       null,
+        matchWholeWords:     null,
+        probability:         100,
+        sticky:              null,
+        cooldown:            null,
+        preventRecursion:    false,
+        delayUntilRecursion: false,
+        excludeRecursion:    false,
+        group:               '',
+        groupWeight:         null,
+        insertion_order:     100,
+        created_at:          now,
+        session_id:          sessionId,
+        message_range:       null,
+      };
+      created++;
+    }
+    if (!created) return;
+
+    await fetch('/api/lorebook', {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: lorebookData.entries }),
+    });
+
+    // Merge into active state so the lorebook modal reflects new entries immediately.
+    state.lorebook = lorebookData;
+    showMemorizationNotice(created);
+  } catch { /* non-critical — silently swallow any error */ }
 }
 
 // ── Logs modal ──────────────────────────────────────────────
@@ -1445,7 +1591,17 @@ function init() {
   // ── Clear history ────────────────────────────────────────────
   $('clear-chat-btn').addEventListener('click', () => {
     if (!state.messages.length || confirm('Clear all chat history? The current session log will be kept.')) {
-      startNewSession();
+      if (state.messages.length) {
+        const sessionMessages = [...state.messages];
+        const sessionId       = state.sessionId;
+        state.sessionEndedAt  = new Date().toISOString();
+        saveSettings();
+        saveToServer(); // fire-and-forget — stamps the log with endedAt
+        startNewSession();
+        memorizeSessionToLorebook(sessionMessages, sessionId); // fire-and-forget
+      } else {
+        startNewSession();
+      }
       setStatus('');
     }
   });
