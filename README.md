@@ -10,16 +10,17 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 ### Requirements
 
 - [Node.js](https://nodejs.org/) 18 or newer
+- [Deno](https://deno.com/) 2+ (only required if using the entity-core identity layer)
 
 ### Quick Start
 
 ```bash
-# 1. Install dependencies (Express only)
+# 1. Install dependencies
 npm install
 
 # 2. Start the server
 npm start          # production
-npm run dev        # auto-restarts on file changes (requires nodemon)
+npm run dev        # auto-restarts on file changes
 ```
 
 Open **http://localhost:3000** in your browser.
@@ -39,6 +40,7 @@ PORT=8080 npm start
 | Feature | Details |
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
+| **Entity-core enrichment** | Automatically prepends relevant memories, character values, and voice to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
@@ -327,16 +329,77 @@ The lorebook is stored as `lorebook.json` in the project root (next to `server.j
 ```
 /
 ├── server.js          Express proxy + log/lorebook API (Node.js 18+, ESM)
+├── thalamus.js        entity-core MCP bridge — enriches every LLM request
 ├── package.json
 ├── .gitignore
 ├── logs/              Session JSON files (auto-created, git-ignored)
 ├── lorebook.json      Lorebook entries (auto-created, git-ignored)
+├── scripts/
+│   └── import-entity.js  Import an existing entity-core data directory
 ├── public/
 │   ├── index.html     App shell (sidebar + chat pane + modals)
 │   ├── style.css      All styling — dark/light themes, responsive layout
 │   └── app.js         All frontend logic — state, API, rendering, topics, lorebook
 └── Research/          Background reading on architecture and mental-health AI
 ```
+
+---
+
+### Entity-Core Identity Layer
+
+Familiar optionally connects to a local [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
+
+#### How it works
+
+On startup, `thalamus.js` spawns entity-core as a child process over stdio using the MCP protocol. Before each LLM call in `POST /api/chat`, the server calls `enrich(userMessage)`, which fires two MCP tool calls in parallel:
+
+| MCP tool | What it fetches |
+|---|---|
+| `memory_search` | Up to 5 memories ranked by semantic similarity to the current user message |
+| `identity_get_all` | All identity files from the `self/` category |
+
+The results are assembled into three labelled sections and prepended to the system message:
+
+```
+[Relevant Context]
+— memory excerpts relevant to this message
+
+[Character Values]
+— my_identity, my_personhood, my_wants
+
+[Voice]
+— my_persona, my_mechanics
+```
+
+If entity-core is unreachable or returns an error, `enrich()` logs the problem and returns an empty string — the request proceeds normally without enrichment.
+
+#### Setup
+
+1. Clone [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) as a sibling directory:
+   ```bash
+   git clone https://github.com/zarilewis/entity-core-alpha ../entity-core-alpha
+   ```
+2. Follow its README to populate `data/` with identity files and memories.
+3. Start Familiar normally — `thalamus.js` spawns entity-core automatically.
+
+To use a non-default path, set `ENTITY_CORE_PATH` to the absolute path of `src/mod.ts` inside your entity-core install before starting the server.
+
+#### Importing an existing entity-core
+
+If you already have an entity-core data directory from another machine or embodiment, you can overwrite the local one with:
+
+```bash
+# From an entity-core root (auto-detects the data/ subdirectory)
+npm run import-entity -- --from /path/to/entity-core
+
+# From a bare data directory
+npm run import-entity -- --from /path/to/entity-core/data
+
+# Skip the confirmation prompt
+npm run import-entity -- --from /path/to/entity-core --yes
+```
+
+The script resolves the destination using the same logic as `thalamus.js` (`$ENTITY_CORE_PATH` → `../entity-core-alpha`). It reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides, preserves timestamps so recency ranking stays accurate, and stops you if source and destination are the same. **Stop the Familiar server before running this** to avoid write conflicts with the running entity-core process.
 
 ---
 
