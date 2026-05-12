@@ -8,6 +8,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
+import { enrich } from './thalamus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -54,7 +55,26 @@ app.post('/api/chat', async (req, res) => {
     return res.status(400).json({ error: 'Messages array is required and must not be empty.' });
   }
 
-  const payload = { model: model.trim(), messages, stream: !!stream };
+  // Enrich with entity-core context (memories + identity). Degrades gracefully.
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const userText = typeof lastUser?.content === 'string'
+    ? lastUser.content
+    : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
+  const entityContext = await enrich(userText);
+
+  let enrichedMessages = messages;
+  if (entityContext) {
+    const sysIdx = messages.findIndex(m => m.role === 'system');
+    if (sysIdx >= 0) {
+      enrichedMessages = messages.map((m, i) =>
+        i === sysIdx ? { ...m, content: entityContext + '\n\n' + m.content } : m,
+      );
+    } else {
+      enrichedMessages = [{ role: 'system', content: entityContext }, ...messages];
+    }
+  }
+
+  const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
   if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
