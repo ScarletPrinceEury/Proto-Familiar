@@ -593,6 +593,53 @@ button { cursor: pointer; font-family: var(--font); }
   border-color: var(--accent);
 }
 
+/* Topic start/end action buttons — hidden until message is hovered */
+.msg-topic-start-btn,
+.msg-topic-end-btn {
+  display: none;
+}
+
+.message:hover .msg-topic-start-btn,
+.message:hover .msg-topic-end-btn,
+.message:focus-within .msg-topic-start-btn,
+.message:focus-within .msg-topic-end-btn {
+  display: inline-block;
+}
+
+.msg-topic-start-btn { color: var(--success-color); }
+.msg-topic-end-btn   { color: var(--warn-color); }
+
+/* Retro-end topic picker list */
+.retro-end-topic-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 8px 12px;
+  background: var(--surface-raise);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--topic-c, var(--accent));
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.87rem;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.retro-end-topic-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--topic-c, var(--accent));
+}
+
+.retro-end-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--topic-c, var(--accent));
+  flex-shrink: 0;
+}
+
 /* ── Typing indicator ────────────────────────────────────────── */
 .typing-indicator {
   display: flex;
@@ -1100,6 +1147,31 @@ button { cursor: pointer; font-family: var(--font); }
 
 .topic-gutter-bar:hover::after {
   opacity: 1;
+}
+
+/* Open/ongoing topic bars: pulse dot at the bottom edge */
+.topic-gutter-bar-open {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.topic-gutter-bar-open::before {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: inherit;
+  animation: topic-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes topic-pulse {
+  0%, 100% { opacity: 1;   transform: translateX(-50%) scale(1); }
+  50%       { opacity: 0.3; transform: translateX(-50%) scale(0.55); }
 }
 
 /* Adjust #messages to fill remaining width */

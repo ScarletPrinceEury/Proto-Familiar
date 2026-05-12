@@ -455,6 +455,29 @@ function createMessageEl(role, htmlContent, timestamp) {
   // Will be wired up by callers who know the raw text
   actions.appendChild(copyBtn);
 
+  // Topic action buttons — only for user/assistant messages
+  if (role === 'user' || role === 'assistant') {
+    const topicStartBtn = document.createElement('button');
+    topicStartBtn.className = 'msg-action-btn msg-topic-start-btn';
+    topicStartBtn.title = 'Start a topic from this message';
+    topicStartBtn.textContent = '▷ Topic start';
+    topicStartBtn.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.msgIndex, 10);
+      if (!isNaN(idx)) startTopicAt(idx);
+    });
+    actions.appendChild(topicStartBtn);
+
+    const topicEndBtn = document.createElement('button');
+    topicEndBtn.className = 'msg-action-btn msg-topic-end-btn';
+    topicEndBtn.title = 'End an active topic at this message';
+    topicEndBtn.textContent = '□ Topic end';
+    topicEndBtn.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.msgIndex, 10);
+      if (!isNaN(idx)) endTopicAt(idx);
+    });
+    actions.appendChild(topicEndBtn);
+  }
+
   // Timestamp
   const timeEl = document.createElement('time');
   timeEl.className = 'msg-time';
@@ -1428,6 +1451,13 @@ function init() {
     if (e.target === $('lorebook-modal')) closeLorebookModal();
   });
 
+  // Retro-end modal
+  $('retro-end-modal-close').addEventListener('click', closeRetroEndModal);
+  $('retro-end-cancel-btn').addEventListener('click', closeRetroEndModal);
+  $('retro-end-modal').addEventListener('click', e => {
+    if (e.target === $('retro-end-modal')) closeRetroEndModal();
+  });
+
   // ── Load lorebook from server ─────────────────────────────────
   loadLorebookFromServer();
 
@@ -1501,13 +1531,24 @@ function nextTopicColor() {
 }
 
 // ── Topic lifecycle ───────────────────────────────────────────────
-function startTopic(label) {
+
+/** Index override for retroactively-started topics. */
+let _retroStartIndex = null;
+
+/**
+ * Start a new topic, optionally anchored at a past message index.
+ * If startIndex is provided it takes precedence over the current tail.
+ */
+function startTopic(label, startIndex = null) {
+  const idx = startIndex !== null ? startIndex
+    : (_retroStartIndex !== null ? _retroStartIndex : state.messages.length);
+  _retroStartIndex = null;
   const topic = {
     id:         generateId(),
     label,
     color:      nextTopicColor(),
-    startIndex: state.messages.length, // first message that will belong to this topic
-    endIndex:   null,                  // null = open/ongoing
+    startIndex: idx,
+    endIndex:   null,
     lorebookEntryId: null,
   };
   state.topics.push(topic);
@@ -1516,15 +1557,22 @@ function startTopic(label) {
   refreshTopicGutter();
 }
 
-function endTopic(topicId) {
-  const topic = state.topics.find(t => t.id === topicId);
-  if (!topic || topic.endIndex !== null) return;
-  topic.endIndex = state.messages.length - 1;
+/** Open the topic-name modal anchored at a specific past message. */
+function startTopicAt(msgIndex) {
+  _retroStartIndex = msgIndex;
+  openTopicNameModal();
+}
+
+/**
+ * Shared logic for closing a topic at a given message index.
+ * Used both by the live end-pill and the retroactive end-at-message button.
+ */
+function endTopicAtIndex(topic, endIdx) {
+  topic.endIndex = endIdx;
   saveTopics();
   updateTopicStrip();
   refreshTopicGutter();
 
-  // Count displayable messages in range
   const rangeMessages = [];
   for (let i = topic.startIndex; i <= topic.endIndex; i++) {
     const m = state.messages[i];
@@ -1532,14 +1580,31 @@ function endTopic(topicId) {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
     rangeMessages.push(m);
   }
-
-  if (!rangeMessages.length || !state.apiKey.trim()) {
-    // No content to summarize or no API key — skip summary flow
-    return;
-  }
-
+  if (!rangeMessages.length || !state.apiKey.trim()) return;
   openSummaryModal(topic);
   generateTopicSummary(topic, rangeMessages);
+}
+
+function endTopic(topicId) {
+  const topic = state.topics.find(t => t.id === topicId);
+  if (!topic || topic.endIndex !== null) return;
+  endTopicAtIndex(topic, state.messages.length - 1);
+}
+
+/**
+ * Called from the "End topic here" message action button.
+ * Finds open topics whose startIndex ≤ msgIndex and ends one of them.
+ */
+function endTopicAt(msgIndex) {
+  const openTopics = state.topics.filter(
+    t => t.endIndex === null && t.startIndex <= msgIndex
+  );
+  if (!openTopics.length) return;
+  if (openTopics.length === 1) {
+    endTopicAtIndex(openTopics[0], msgIndex);
+  } else {
+    openRetroEndModal(openTopics, msgIndex);
+  }
 }
 
 // ── Topic strip (active topic pills above input) ──────────────────
@@ -1598,7 +1663,11 @@ function refreshTopicGutter() {
 
     // Absolute Y within gutter (both share same scroll parent, so delta cancels scroll)
     const topPx    = firstRect.top  - gutterRect.top;
-    const bottomPx = lastRect.bottom - gutterRect.top;
+    // For open (ongoing) topics, extend the bar to the full gutter height
+    // so it's visible as a reminder that the topic is still active.
+    const bottomPx = topic.endIndex === null
+      ? gutterRect.height
+      : (lastRect.bottom - gutterRect.top);
     const heightPx = Math.max(bottomPx - topPx, 8);
 
     const bar = document.createElement('div');
@@ -1640,12 +1709,49 @@ window.addEventListener('resize', () => {
 // ── Topic name modal ──────────────────────────────────────────────
 function openTopicNameModal() {
   $('topic-name-input').value = '';
+  // Update hint text to reflect retroactive vs. live start
+  const hint = $('topic-name-hint');
+  if (hint) {
+    hint.textContent = _retroStartIndex !== null
+      ? 'This topic will be anchored back to the selected message.'
+      : 'Messages from this point forward will be grouped under this topic until you end it. You can run multiple topics in parallel.';
+  }
   $('topic-name-modal').classList.remove('hidden');
   requestAnimationFrame(() => $('topic-name-input').focus());
 }
 
 function closeTopicNameModal() {
+  _retroStartIndex = null;
   $('topic-name-modal').classList.add('hidden');
+}
+
+// ── Retroactive end picker modal ──────────────────────────────────
+let _retroEndIndex = null;
+
+function openRetroEndModal(openTopics, msgIndex) {
+  _retroEndIndex = msgIndex;
+  const list = $('retro-end-list');
+  list.innerHTML = '';
+  for (const topic of openTopics) {
+    const btn = document.createElement('button');
+    btn.className = 'retro-end-topic-btn';
+    btn.style.setProperty('--topic-c', topic.color);
+    btn.innerHTML =
+      `<span class="retro-end-dot"></span>` +
+      `<span>${esc(topic.label)}</span>`;
+    btn.addEventListener('click', () => {
+      const idx = _retroEndIndex;
+      closeRetroEndModal();
+      endTopicAtIndex(topic, idx);
+    });
+    list.appendChild(btn);
+  }
+  $('retro-end-modal').classList.remove('hidden');
+}
+
+function closeRetroEndModal() {
+  _retroEndIndex = null;
+  $('retro-end-modal').classList.add('hidden');
 }
 
 // ── Summary generation ────────────────────────────────────────────

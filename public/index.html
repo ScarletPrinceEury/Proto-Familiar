@@ -284,7 +284,7 @@
           <label for="topic-name-input">Topic label <span class="label-hint">(optional)</span></label>
           <input type="text" id="topic-name-input" placeholder="e.g. Medication schedule…" autocomplete="off" maxlength="80">
         </div>
-        <p class="field-hint">Messages from this point forward will be grouped under this topic until you end it. You can run multiple topics in parallel.</p>
+        <p class="field-hint" id="topic-name-hint">Messages from this point forward will be grouped under this topic until you end it. You can run multiple topics in parallel.</p>
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" id="topic-name-cancel-btn">Cancel</button>
@@ -335,6 +335,21 @@
       </div>
       <div class="modal-body" id="lorebook-list">
         <p class="logs-loading">Loading…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Retroactive topic end picker modal -->
+  <div class="modal-backdrop hidden" id="retro-end-modal" role="dialog" aria-modal="true" aria-labelledby="retro-end-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title" id="retro-end-modal-title">End Which Topic Here?</h2>
+        <button class="icon-btn modal-close" id="retro-end-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="retro-end-list">
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="retro-end-cancel-btn">Cancel</button>
       </div>
     </div>
   </div>
