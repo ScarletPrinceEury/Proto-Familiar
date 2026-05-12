@@ -82,7 +82,7 @@ export async function enrich(userMessage) {
   try {
     const [memResult, idResult] = await Promise.all([
       mcpClient.callTool({
-        name: 'memory/search',
+        name: 'memory_search',
         arguments: {
           query: userMessage,
           instanceId: 'proto-familiar',
@@ -90,7 +90,7 @@ export async function enrich(userMessage) {
         },
       }),
       mcpClient.callTool({
-        name: 'identity/get_all',
+        name: 'identity_get_all',
         arguments: {},
       }),
     ]);
@@ -103,10 +103,10 @@ export async function enrich(userMessage) {
       .join('\n');
 
     // ── Identity files ─────────────────────────────────────────────────────
-    // identity/get_all returns an array of { category, filename, content, promptLabel }
-    const idRaw = parseToolText(idResult, []);
-    const files = Array.isArray(idRaw) ? idRaw : (idRaw.files ?? []);
-    const selfFiles = files.filter(f => f.category === 'self');
+    // identity/get_all returns { self: [...], user: [...], relationship: [...], custom: [...] }
+    // Each item has { filename, content, promptLabel } — no category field.
+    const idRaw = parseToolText(idResult, {});
+    const selfFiles = Array.isArray(idRaw?.self) ? idRaw.self : [];
 
     const VALUE_FILES = new Set(['my_identity', 'my_personhood', 'my_wants']);
     const VOICE_FILES  = new Set(['my_persona', 'my_mechanics']);
