@@ -40,7 +40,8 @@ PORT=8080 npm start
 | Feature | Details |
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
-| **Entity-core enrichment** | Automatically prepends relevant memories, character values, and voice to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
+| **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
+| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, lorebook injections, and memory context |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
@@ -270,6 +271,13 @@ Proxies a chat request to the chosen provider.
 ```
 `temperature`, `max_tokens`, `tools`, and `tool_choice` are all optional. Returns an SSE stream when `stream: true`, otherwise returns the provider's JSON response verbatim. `tools` and `tool_choice` are forwarded to the provider as-is.
 
+#### `POST /api/debug-prompt`
+Returns the full enriched message array that would be sent to the LLM for a given conversation, without making any upstream API call. Used by the prompt inspector UI.
+
+**Request body:** `{ "messages": [...] }` — the same messages array that would go to `/api/chat`.
+
+**Response:** `{ "messages": [...] }` — the same array with entity-core enrichment prepended to the system message.
+
 #### `POST /api/log`
 Creates or overwrites the log file for a session.
 
@@ -351,27 +359,51 @@ Familiar optionally connects to a local [entity-core-alpha](https://github.com/z
 
 #### How it works
 
-On startup, `thalamus.js` spawns entity-core as a child process over stdio using the MCP protocol. Before each LLM call in `POST /api/chat`, the server calls `enrich(userMessage)`, which fires two MCP tool calls in parallel:
+On startup, `thalamus.js` spawns entity-core as a child process over stdio using the MCP protocol, with its working directory set to the entity-core project root so it reads the correct `data/` directory. Before each LLM call in `POST /api/chat`, the server calls `enrich(userMessage)`, which fires three MCP tool calls independently (failures in one do not block the others):
 
 | MCP tool | What it fetches |
 |---|---|
+| `identity_get_all` | All identity files across all four categories: `self/`, `user/`, `relationship/`, `custom/` |
 | `memory_search` | Up to 5 memories ranked by semantic similarity to the current user message |
-| `identity_get_all` | All identity files from the `self/` category |
+| `graph_node_search` | Up to 10 knowledge graph nodes relevant to the current user message, with 1-hop edge traversal |
 
-The results are assembled into three labelled sections and prepended to the system message:
+The results are assembled and prepended to the system message in the same order Psycheros uses:
 
 ```
-[Relevant Context]
-— memory excerpts relevant to this message
+<base_instructions>…</base_instructions>
+---
+My self files (from identity/self/ directory):
 
-[Character Values]
-— my_identity, my_personhood, my_wants
+<my_identity>…</my_identity>
+---
+<my_persona>…</my_persona>
+…
+---
+User files (from identity/user/ directory):
+…
+---
+Relationship files (from identity/relationship/ directory):
+…
+---
+Custom files (from identity/custom/ directory):
+…
+---
+Relevant Memories via RAG:
 
-[Voice]
-— my_persona, my_mechanics
+[1] (from daily/2026-05-12, 87% relevant)
+…
+---
+Relevant Knowledge from Graph:
+…
 ```
 
-If entity-core is unreachable or returns an error, `enrich()` logs the problem and returns an empty string — the request proceeds normally without enrichment.
+Each identity file is wrapped in XML tags named after the file's `promptLabel` (e.g. `<my_identity>`, `<my_persona>`). Files are sorted in the same canonical order entity-core uses internally.
+
+If entity-core is unreachable, `enrich()` logs the problem and returns an empty string — the request proceeds normally without enrichment. Individual tool failures (e.g. graph search unavailable) are also logged and silently skipped without affecting the other sections.
+
+#### Prompt inspector
+
+To see exactly what was sent to the LLM on any given message — including the full entity-core block, all lorebook injections, and the conversation history — click the **⊕ magnifying glass** button in the top bar. The inspector fetches the enriched prompt from the server and displays each message in a colour-coded, collapsible panel with per-message Copy buttons.
 
 #### Setup
 
@@ -514,4 +546,10 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 **Supporting mental health conditions?** → Review all three: [depression-caretaker-ai-implications.md](Research/depression-caretaker-ai-implications.md), [agoraphobia-caretaker-ai-implications.md](Research/agoraphobia-caretaker-ai-implications.md), [adhd-caretaker-ai-implications.md](Research/adhd-caretaker-ai-implications.md)
 
 **Security & privacy concerns?** → Read [privacy-security-compliance-patterns.md](Research/privacy-security-compliance-patterns.md) + [multi-user-chat-architecture-patterns.md](Research/multi-user-chat-architecture-patterns.md)
+
+---
+
+## Acknowledgements
+
+Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
 
