@@ -171,7 +171,11 @@ const state = {
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
   // ── Topics & lorebook ────────────────────────────────────
-  lorebookScanDepth: 4,      // how many recent messages to scan for keyword matches
+  lorebookScanDepth:         4,      // how many recent messages to scan for keyword matches
+  lorebookRecursive:         false,  // enable recursive lorebook activation
+  lorebookMaxRecursionSteps: 3,      // max recursive passes
+  lorebookCaseSensitive:     false,  // global case-sensitive keyword matching
+  lorebookMatchWholeWords:   false,  // global whole-word keyword matching
   lorebook:          { entries: {} }, // cached from server; NOT persisted in localStorage
   topics:            [],     // session-level; stored under pf_topics_{sessionId}
 };
@@ -277,24 +281,53 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
 function buildApiMessages(userInput) {
   const msgs = [];
 
+  // ── Activate lorebook entries ────────────────────────────────
+  const lore = activateLorebookEntries(userInput);
+  const joinLore = (entries) =>
+    entries.map(e => applyNameVars(e.content.trim())).filter(Boolean).join('\n\n---\n\n');
+
   // ── System message ────────────────────────────────────────────
   const systemParts = [];
+
+  // Position 2 — top of system message
+  if (lore.sys_top.length) systemParts.push(joinLore(lore.sys_top));
+
   if (state.systemPrompt.trim())
     systemParts.push(applyNameVars(state.systemPrompt.trim()));
+
+  // Position 0 — before character profile
+  if (lore.before_char.length) systemParts.push(joinLore(lore.before_char));
+
   if (state.characterProfile.trim())
     systemParts.push('[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
+
+  // Position 1 — after character profile
+  if (lore.after_char.length) systemParts.push(joinLore(lore.after_char));
+
   if (state.userProfile.trim())
     systemParts.push('[User Profile]\n' + applyNameVars(state.userProfile.trim()));
 
-  // ── Lorebook context ─────────────────────────────────────────
-  const lorebookCtx = buildLorebookContext(userInput);
-  if (lorebookCtx) systemParts.push(lorebookCtx);
+  // Position 3 — bottom of system message
+  if (lore.sys_bottom.length) systemParts.push(joinLore(lore.sys_bottom));
 
   if (systemParts.length)
     msgs.push({ role: 'system', content: systemParts.join('\n\n---\n\n') });
 
-  // ── History ───────────────────────────────────────────────────
-  msgs.push(...state.messages);
+  // ── History + position-4 (@depth) injections ─────────────────
+  // Clone history as clean API messages so we can splice into it
+  const histMsgs = state.messages.map(toApiMessage);
+
+  // Sort at_depth entries deepest-first so splice positions stay consistent
+  const atDepthSorted = [...lore.at_depth].sort((a, b) => (b.depth ?? 4) - (a.depth ?? 4));
+  const roleNames = ['system', 'user', 'assistant'];
+  for (const entry of atDepthSorted) {
+    const d    = Math.max(0, entry.depth ?? 4);
+    const role = roleNames[entry.role ?? 0] ?? 'system';
+    const idx  = Math.max(0, histMsgs.length - d);
+    histMsgs.splice(idx, 0, { role, content: applyNameVars(entry.content.trim()) });
+  }
+
+  msgs.push(...histMsgs);
 
   // ── New user turn ─────────────────────────────────────────────
   msgs.push({ role: 'user', content: userInput });
@@ -1040,6 +1073,14 @@ function readSettingsFromUI() {
   state.customTools       = $('custom-tools').value;
   const scanEl = $('lorebook-scan-depth');
   if (scanEl) state.lorebookScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
+  const recursiveEl = $('lorebook-recursive');
+  if (recursiveEl) state.lorebookRecursive = recursiveEl.checked;
+  const maxRecEl = $('lorebook-max-recursion');
+  if (maxRecEl) state.lorebookMaxRecursionSteps = Math.max(1, parseInt(maxRecEl.value, 10) || 3);
+  const csEl = $('lorebook-case-sensitive');
+  if (csEl) state.lorebookCaseSensitive = csEl.checked;
+  const wwEl = $('lorebook-match-whole-words');
+  if (wwEl) state.lorebookMatchWholeWords = wwEl.checked;
   saveSettings();
 }
 
@@ -1061,6 +1102,14 @@ function writeSettingsToUI() {
   $('custom-tools').value       = state.customTools ?? '';
   const scanEl = $('lorebook-scan-depth');
   if (scanEl) scanEl.value = state.lorebookScanDepth ?? 4;
+  const recursiveEl = $('lorebook-recursive');
+  if (recursiveEl) recursiveEl.checked = state.lorebookRecursive ?? false;
+  const maxRecEl = $('lorebook-max-recursion');
+  if (maxRecEl) maxRecEl.value = state.lorebookMaxRecursionSteps ?? 3;
+  const csEl = $('lorebook-case-sensitive');
+  if (csEl) csEl.checked = state.lorebookCaseSensitive ?? false;
+  const wwEl = $('lorebook-match-whole-words');
+  if (wwEl) wwEl.checked = state.lorebookMatchWholeWords ?? false;
   refreshModelSuggestions(state.provider);
 }
 
@@ -1340,7 +1389,8 @@ function init() {
     'temperature', 'max-tokens', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
-    'lorebook-scan-depth',
+    'lorebook-scan-depth', 'lorebook-recursive', 'lorebook-max-recursion',
+    'lorebook-case-sensitive', 'lorebook-match-whole-words',
   ];
 
   settingsIds.forEach(id => {
@@ -1449,6 +1499,26 @@ function init() {
   $('lorebook-modal-close').addEventListener('click', closeLorebookModal);
   $('lorebook-modal').addEventListener('click', e => {
     if (e.target === $('lorebook-modal')) closeLorebookModal();
+  });
+  $('lorebook-new-btn').addEventListener('click', () => openLoreEditor(null));
+
+  // Lorebook entry editor modal
+  $('lore-editor-close').addEventListener('click', closeLoreEditor);
+  $('lore-editor-cancel').addEventListener('click', closeLoreEditor);
+  $('lore-editor-modal').addEventListener('click', e => {
+    if (e.target === $('lore-editor-modal')) closeLoreEditor();
+  });
+  $('lore-editor-save').addEventListener('click', saveLoreEditorEntry);
+  $('lore-ed-selective').addEventListener('change', () => {
+    $('lore-ed-secondary-section').classList.toggle('hidden', !$('lore-ed-selective').checked);
+  });
+  $('lore-ed-position').addEventListener('change', () => {
+    const isAtDepth = $('lore-ed-position').value === '4';
+    $('lore-ed-depth-field').classList.toggle('hidden', !isAtDepth);
+    $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
+  });
+  $('lore-ed-probability').addEventListener('input', () => {
+    $('lore-ed-prob-display').textContent = `${$('lore-ed-probability').value}%`;
   });
 
   // Retro-end modal
@@ -1726,7 +1796,16 @@ function closeTopicNameModal() {
 }
 
 // ── Retroactive end picker modal ──────────────────────────────────
-let _retroEndIndex = null;
+let _retroEndIndex    = null;
+let _loreEditUid      = null; // UID being edited in lorebook entry editor (null = new)
+let lorebookTimedEffects = {}; // { [uid]: { stickyLeft: N, cooldownLeft: N } } — session only
+
+// Normalise legacy string position values ('before_char', etc.) to integers.
+function normEntryPos(pos) {
+  if (typeof pos === 'number') return pos;
+  const MAP = { 'before_char': 0, 'after_char': 1, 'sys_top': 2, 'sys_bottom': 3, 'at_depth': 4 };
+  return MAP[pos] ?? 0;
+}
 
 function openRetroEndModal(openTopics, msgIndex) {
   _retroEndIndex = msgIndex;
@@ -1873,10 +1952,24 @@ async function savePendingSummary() {
     keys,
     keysecondary:     [],
     content,
-    constant:         false,
-    selective:        false,
-    enabled:          true,
-    position:         'before_char',
+    constant:            false,
+    selective:           false,
+    selectiveLogic:      0,
+    enabled:             true,
+    position:            0,  // 0=before_char, 1=after_char, 2=sys_top, 3=sys_bottom, 4=at_depth
+    depth:               4,
+    role:                0,
+    scanDepth:           null,
+    caseSensitive:       null,
+    matchWholeWords:     null,
+    probability:         100,
+    sticky:              null,
+    cooldown:            null,
+    preventRecursion:    false,
+    delayUntilRecursion: false,
+    excludeRecursion:    false,
+    group:               '',
+    groupWeight:         null,
     insertion_order:  100,
     created_at:       new Date().toISOString(),
     session_id:       state.sessionId,
@@ -1909,43 +2002,217 @@ async function loadLorebookFromServer() {
   } catch { /* non-critical */ }
 }
 
-// ── Lorebook: keyword injection ───────────────────────────────────
+// ── Lorebook engine ───────────────────────────────────────────────
+
+/** Try to parse /pattern/flags regex from a keyword string. */
+function parseKeywordRegex(kw) {
+  const m = kw.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (!m) return null;
+  try { return new RegExp(m[1], m[2] || ''); } catch { return null; }
+}
+
 /**
- * Scans recent messages + current user input for lorebook keyword matches.
- * Returns a formatted context string to inject, or '' if nothing matched.
+ * Test a single keyword against haystack.
+ * Respects per-entry and global caseSensitive / matchWholeWords settings.
+ * Supports /regex/flags syntax.
  */
-function buildLorebookContext(userInput) {
-  const entries = Object.values(state.lorebook.entries ?? {});
-  if (!entries.length) return '';
+function matchKeyword(haystack, keyword, entry) {
+  const re = parseKeywordRegex(keyword);
+  if (re) return re.test(haystack);
+  const cs = entry.caseSensitive ?? state.lorebookCaseSensitive ?? false;
+  const ww = entry.matchWholeWords ?? state.lorebookMatchWholeWords ?? false;
+  const h  = cs ? haystack : haystack.toLowerCase();
+  const kw = cs ? keyword  : keyword.toLowerCase();
+  if (ww) {
+    const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|\\W)${esc}(?:$|\\W)`, cs ? '' : 'i').test(haystack);
+  }
+  return h.includes(kw);
+}
 
-  const depth = state.lorebookScanDepth ?? 4;
-  // Build the scan corpus: recent displayable messages + new user input
-  const recent = state.messages
-    .filter(m => m.role === 'user' || m.role === 'assistant')
-    .slice(-depth)
-    .map(m => (m.content ?? '').toLowerCase());
-  recent.push((userInput ?? '').toLowerCase());
-  const corpus = recent.join(' ');
+/**
+ * Test secondary keys using the entry's selectiveLogic.
+ * 0=AND_ANY, 1=NOT_ANY, 2=AND_ALL, 3=NOT_ALL
+ */
+function testSecondaryLogic(corpus, entry) {
+  const keys = (entry.keysecondary ?? []).filter(k => k.trim());
+  if (!keys.length) return true;
+  const logic = entry.selectiveLogic ?? 0;
+  let allMatch = true;
+  for (const kw of keys) {
+    const m = matchKeyword(corpus, kw.trim(), entry);
+    if (!m) allMatch = false;
+    if (logic === 0 && m)  return true;  // AND_ANY: short-circuit on first match
+    if (logic === 1 && m)  return false; // NOT_ANY: short-circuit on any match
+    if (logic === 3 && !m) return true;  // NOT_ALL: short-circuit on first non-match
+  }
+  if (logic === 0) return false;   // AND_ANY: nothing matched
+  if (logic === 1) return true;    // NOT_ANY: nothing matched
+  if (logic === 2) return allMatch; // AND_ALL
+  if (logic === 3) return !allMatch; // NOT_ALL (fallthrough — all matched)
+  return true;
+}
 
-  const matched = entries.filter(e => {
-    if (!e.enabled) return false;
-    if (e.constant) return true;
-    return (e.keys ?? []).some(k => {
-      const kl = k.toLowerCase().trim();
-      return kl && corpus.includes(kl);
+/**
+ * Build the text corpus from the last `depth` user/assistant messages
+ * plus the new user input (and optionally extra recursive content).
+ */
+function buildScanText(messages, userInput, depth, extra) {
+  const d = Math.max(0, depth || 0);
+  const relevant = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+  const slice = d === 0 ? [] : relevant.slice(-d);
+  const parts = [...slice.map(m => m.content || ''), userInput];
+  if (extra) parts.push(extra);
+  return parts.filter(Boolean).join('\n');
+}
+
+/**
+ * Run one activation scan pass over all entries.
+ * isRecursion=true means we're in a recursive pass (applies excludeRecursion / delayUntilRecursion).
+ */
+function scanLoreEntries(entries, getCorpus, alreadyActivated, isRecursion) {
+  const newlyActivated = [];
+  for (const entry of entries) {
+    if (!entry.enabled) continue;
+    if (alreadyActivated.has(entry.uid)) continue;
+    if (isRecursion  && entry.excludeRecursion)    continue;
+    if (!isRecursion && entry.delayUntilRecursion) continue;
+
+    const timed = lorebookTimedEffects[entry.uid] ?? { stickyLeft: 0, cooldownLeft: 0 };
+    if (timed.cooldownLeft > 0) continue;       // on cooldown
+    if (timed.stickyLeft  > 0) { newlyActivated.push(entry); continue; } // sticky
+
+    if (entry.constant) { newlyActivated.push(entry); continue; }
+
+    // Probability check (100 always passes)
+    const prob = entry.probability ?? 100;
+    if (prob < 100 && Math.random() * 100 > prob) continue;
+
+    // Get corpus for this entry (per-entry scan depth override)
+    const corpus = getCorpus(entry.scanDepth ?? null);
+
+    // Primary key matching
+    const pkeys = (entry.keys ?? []).filter(k => k.trim());
+    if (!pkeys.length) continue; // no primary keys → never activates
+    if (!pkeys.some(k => matchKeyword(corpus, k.trim(), entry))) continue;
+
+    // Secondary key matching (selective)
+    if (entry.selective && (entry.keysecondary ?? []).filter(k => k.trim()).length > 0) {
+      if (!testSecondaryLogic(corpus, entry)) continue;
+    }
+
+    newlyActivated.push(entry);
+  }
+  return newlyActivated;
+}
+
+/** Apply group exclusion: only the highest-weight (lowest insertion_order on tie) entry per group activates. */
+function applyGroupLogic(entries) {
+  const groups  = new Map();
+  const result  = [];
+  for (const e of entries) {
+    const g = (e.group ?? '').trim();
+    if (g) { const arr = groups.get(g) ?? []; arr.push(e); groups.set(g, arr); }
+    else result.push(e);
+  }
+  for (const [, grp] of groups) {
+    grp.sort((a, b) => {
+      const wA = a.groupWeight ?? 100, wB = b.groupWeight ?? 100;
+      if (wA !== wB) return wB - wA;
+      return (a.insertion_order ?? 100) - (b.insertion_order ?? 100);
     });
-  });
+    result.push(grp[0]);
+  }
+  return result;
+}
 
-  if (!matched.length) return '';
+/**
+ * Main lorebook activation engine.
+ * Returns { sys_top, before_char, after_char, sys_bottom, at_depth } arrays of activated entries.
+ * at_depth entries carry the full entry object (use entry.depth and entry.role for injection).
+ */
+function activateLorebookEntries(userInput) {
+  const empty = { sys_top: [], before_char: [], after_char: [], sys_bottom: [], at_depth: [] };
+  const allEntries = Object.values(state.lorebook.entries ?? {});
+  if (!allEntries.length) return empty;
 
-  // Sort by insertion_order (lower = injected first)
-  matched.sort((a, b) => (a.insertion_order ?? 100) - (b.insertion_order ?? 100));
+  const globalDepth = state.lorebookScanDepth ?? 4;
+  const messages    = state.messages;
 
-  const lines = matched.map(e => {
-    const title = e.comment ? `[${e.comment}]\n` : '';
-    return title + e.content;
-  });
-  return '[Lorebook Context — relevant background information]\n\n' + lines.join('\n\n---\n\n');
+  // Age timed effects by one tick; capture which UIDs just exhausted sticky
+  const prevSticky = {};
+  for (const uid of Object.keys(lorebookTimedEffects)) {
+    const e = lorebookTimedEffects[uid];
+    prevSticky[uid] = e.stickyLeft;
+    if (e.stickyLeft  > 0) e.stickyLeft--;
+    if (e.cooldownLeft > 0) e.cooldownLeft--;
+  }
+
+  // Corpus getter factory
+  function makeGetCorpus(extra) {
+    return (depthOverride) => {
+      const d = depthOverride !== null && depthOverride !== undefined ? depthOverride : globalDepth;
+      return buildScanText(messages, userInput, d, extra);
+    };
+  }
+
+  // Initial scan pass
+  const activated = new Set();
+  for (const e of scanLoreEntries(allEntries, makeGetCorpus(''), activated, false)) {
+    activated.add(e.uid);
+  }
+
+  // Recursive passes
+  if (state.lorebookRecursive) {
+    const maxSteps = state.lorebookMaxRecursionSteps ?? 3;
+    let prevRecursionContent = '';
+    for (let step = 0; step < maxSteps; step++) {
+      const recursionContent = Array.from(activated)
+        .map(uid => allEntries.find(e => e.uid === uid))
+        .filter(e => e && !e.preventRecursion)
+        .map(e => e.content || '')
+        .join('\n');
+      if (!recursionContent || recursionContent === prevRecursionContent) break;
+      prevRecursionContent = recursionContent;
+      const newEntries = scanLoreEntries(allEntries, makeGetCorpus(recursionContent), activated, true);
+      if (!newEntries.length) break;
+      for (const e of newEntries) activated.add(e.uid);
+    }
+  }
+
+  // Resolve entries and apply group logic
+  let activatedEntries = Array.from(activated)
+    .map(uid => allEntries.find(e => e.uid === uid))
+    .filter(Boolean);
+  activatedEntries = applyGroupLogic(activatedEntries);
+
+  // Update timed effects for this activation pass
+  for (const e of activatedEntries) {
+    if (!lorebookTimedEffects[e.uid]) lorebookTimedEffects[e.uid] = { stickyLeft: 0, cooldownLeft: 0 };
+    if (e.sticky) lorebookTimedEffects[e.uid].stickyLeft = e.sticky;
+  }
+  // Entries whose sticky just expired and weren't re-activated → start cooldown
+  const activatedSet = new Set(activatedEntries.map(e => e.uid));
+  for (const uid of Object.keys(prevSticky)) {
+    if (prevSticky[uid] > 0 && !(lorebookTimedEffects[uid]?.stickyLeft > 0) && !activatedSet.has(uid)) {
+      const entry = allEntries.find(e => e.uid === uid);
+      if (entry?.cooldown) {
+        if (!lorebookTimedEffects[uid]) lorebookTimedEffects[uid] = { stickyLeft: 0, cooldownLeft: 0 };
+        lorebookTimedEffects[uid].cooldownLeft = entry.cooldown;
+      }
+    }
+  }
+
+  // Sort by insertion_order then categorise by position
+  activatedEntries.sort((a, b) => (a.insertion_order ?? 100) - (b.insertion_order ?? 100));
+
+  return {
+    sys_top:     activatedEntries.filter(e => normEntryPos(e.position) === 2),
+    before_char: activatedEntries.filter(e => normEntryPos(e.position) === 0),
+    after_char:  activatedEntries.filter(e => normEntryPos(e.position) === 1),
+    sys_bottom:  activatedEntries.filter(e => normEntryPos(e.position) === 3),
+    at_depth:    activatedEntries.filter(e => normEntryPos(e.position) === 4),
+  };
 }
 
 // ── Lorebook modal ────────────────────────────────────────────────
@@ -1958,6 +2225,144 @@ function closeLorebookModal() {
   $('lorebook-modal').classList.add('hidden');
 }
 
+// ── Lorebook entry editor ─────────────────────────────────────────
+
+function openLoreEditor(uid) {
+  _loreEditUid = uid ?? null;
+  const entry  = uid ? (state.lorebook.entries[uid] ?? {}) : {};
+
+  $('lore-editor-title').textContent = uid ? 'Edit Entry' : 'New Entry';
+
+  // Basic
+  $('lore-ed-comment').value    = entry.comment ?? '';
+  $('lore-ed-keys').value       = (entry.keys ?? []).join(', ');
+  $('lore-ed-content').value    = entry.content ?? '';
+  $('lore-ed-enabled').checked  = entry.enabled !== false;
+  $('lore-ed-constant').checked = entry.constant ?? false;
+  $('lore-ed-order').value      = entry.insertion_order ?? 100;
+
+  // Selective
+  const selective = entry.selective ?? false;
+  $('lore-ed-selective').checked = selective;
+  $('lore-ed-secondary-section').classList.toggle('hidden', !selective);
+  $('lore-ed-keysecondary').value = (entry.keysecondary ?? []).join(', ');
+  $('lore-ed-logic').value        = String(entry.selectiveLogic ?? 0);
+
+  // Scan & matching
+  const sd = entry.scanDepth;
+  $('lore-ed-scan-depth').value = (sd !== null && sd !== undefined) ? String(sd) : '';
+  const cs = entry.caseSensitive;
+  $('lore-ed-case').value       = cs === true ? 'true' : cs === false ? 'false' : '';
+  const ww = entry.matchWholeWords;
+  $('lore-ed-whole-word').value = ww === true ? 'true' : ww === false ? 'false' : '';
+
+  // Injection position
+  const pos = normEntryPos(entry.position);
+  $('lore-ed-position').value = String(pos);
+  const isAtDepth = pos === 4;
+  $('lore-ed-depth-field').classList.toggle('hidden', !isAtDepth);
+  $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
+  $('lore-ed-depth').value = entry.depth ?? 4;
+  $('lore-ed-role').value  = String(entry.role ?? 0);
+
+  // Timing
+  const prob = entry.probability ?? 100;
+  $('lore-ed-probability').value     = prob;
+  $('lore-ed-prob-display').textContent = `${prob}%`;
+  const st = entry.sticky;
+  $('lore-ed-sticky').value   = (st !== null && st !== undefined) ? String(st) : '';
+  const cd = entry.cooldown;
+  $('lore-ed-cooldown').value = (cd !== null && cd !== undefined) ? String(cd) : '';
+
+  // Recursion
+  $('lore-ed-prevent-recursion').checked = entry.preventRecursion    ?? false;
+  $('lore-ed-delay-recursion').checked   = entry.delayUntilRecursion ?? false;
+  $('lore-ed-exclude-recursion').checked = entry.excludeRecursion    ?? false;
+
+  // Group
+  $('lore-ed-group').value        = entry.group ?? '';
+  const gw = entry.groupWeight;
+  $('lore-ed-group-weight').value = (gw !== null && gw !== undefined) ? String(gw) : '';
+
+  $('lore-editor-modal').classList.remove('hidden');
+}
+
+function closeLoreEditor() {
+  $('lore-editor-modal').classList.add('hidden');
+  _loreEditUid = null;
+}
+
+async function saveLoreEditorEntry() {
+  const content = $('lore-ed-content').value.trim();
+  if (!content) { alert('Content is required.'); return; }
+
+  const uid      = _loreEditUid || generateId();
+  const existing = _loreEditUid ? (state.lorebook.entries[uid] ?? {}) : {};
+
+  const keysRaw    = $('lore-ed-keys').value;
+  const keys       = keysRaw.split(',').map(k => k.trim()).filter(Boolean);
+  const ksecRaw    = $('lore-ed-keysecondary').value;
+  const keysecondary = ksecRaw.split(',').map(k => k.trim()).filter(Boolean);
+
+  const sdRaw      = $('lore-ed-scan-depth').value.trim();
+  const scanDepth  = sdRaw === '' ? null : Math.max(0, parseInt(sdRaw, 10) || 0);
+  const csVal      = $('lore-ed-case').value;
+  const caseSensitive   = csVal === 'true' ? true : csVal === 'false' ? false : null;
+  const wwVal      = $('lore-ed-whole-word').value;
+  const matchWholeWords = wwVal === 'true' ? true : wwVal === 'false' ? false : null;
+
+  const stRaw   = $('lore-ed-sticky').value.trim();
+  const sticky  = stRaw === '' ? null : Math.max(0, parseInt(stRaw, 10) || 0);
+  const cdRaw   = $('lore-ed-cooldown').value.trim();
+  const cooldown = cdRaw === '' ? null : Math.max(0, parseInt(cdRaw, 10) || 0);
+  const gwRaw   = $('lore-ed-group-weight').value.trim();
+  const groupWeight = gwRaw === '' ? null : Math.max(0, parseInt(gwRaw, 10) || 0);
+
+  const entry = {
+    ...existing,
+    uid,
+    comment:             $('lore-ed-comment').value.trim(),
+    keys,
+    keysecondary,
+    content,
+    constant:            $('lore-ed-constant').checked,
+    selective:           $('lore-ed-selective').checked,
+    selectiveLogic:      parseInt($('lore-ed-logic').value, 10) || 0,
+    enabled:             $('lore-ed-enabled').checked,
+    position:            parseInt($('lore-ed-position').value, 10) || 0,
+    depth:               parseInt($('lore-ed-depth').value, 10) || 4,
+    role:                parseInt($('lore-ed-role').value, 10) || 0,
+    insertion_order:     parseInt($('lore-ed-order').value, 10) || 100,
+    scanDepth,
+    caseSensitive,
+    matchWholeWords,
+    probability:         parseInt($('lore-ed-probability').value, 10) ?? 100,
+    sticky,
+    cooldown,
+    preventRecursion:    $('lore-ed-prevent-recursion').checked,
+    delayUntilRecursion: $('lore-ed-delay-recursion').checked,
+    excludeRecursion:    $('lore-ed-exclude-recursion').checked,
+    group:               $('lore-ed-group').value.trim(),
+    groupWeight,
+    created_at:          existing.created_at ?? new Date().toISOString(),
+    session_id:          existing.session_id ?? state.sessionId,
+    message_range:       existing.message_range ?? null,
+  };
+
+  try {
+    state.lorebook.entries[uid] = entry;
+    await fetch('/api/lorebook', {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: state.lorebook.entries }),
+    });
+    closeLoreEditor();
+    refreshLorebookList();
+  } catch (err) {
+    alert(`Failed to save entry: ${err.message}`);
+  }
+}
+
 async function refreshLorebookList() {
   await loadLorebookFromServer();
   const container = $('lorebook-list');
@@ -1965,7 +2370,7 @@ async function refreshLorebookList() {
 
   const entries = Object.values(state.lorebook.entries ?? {});
   if (!entries.length) {
-    container.innerHTML = '<p class="lorebook-empty">No lorebook entries yet. End a topic to create one.</p>';
+    container.innerHTML = '<p class="lorebook-empty">No lorebook entries yet. End a topic to create one, or click <strong>+ New</strong>.</p>';
     return;
   }
 
@@ -1981,15 +2386,18 @@ async function refreshLorebookList() {
       .map(k => `<span class="lorebook-key-tag">${esc(k)}</span>`)
       .join('');
 
-    const dateStr = entry.created_at
+    const dateStr     = entry.created_at
       ? new Date(entry.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
       : '';
-    const constBadge = entry.constant ? ' · <strong>always-on</strong>' : '';
+    const posLabel = ['Before char', 'After char', 'Sys top', 'Sys bottom', '@Depth'][normEntryPos(entry.position)] ?? '';
+    const constBadge  = entry.constant ? ' · <strong>always-on</strong>' : '';
+    const positionBadge = ` · ${posLabel}`;
 
     div.innerHTML = `
       <div class="lorebook-entry-header">
         <div class="lorebook-entry-title">${esc(entry.comment ?? 'Untitled')}</div>
         <div class="lorebook-entry-actions">
+          <button class="btn-ghost lore-edit-btn" data-uid="${esc(entry.uid)}" title="Edit entry">Edit</button>
           <button class="btn-ghost lore-toggle-btn" data-uid="${esc(entry.uid)}" title="${entry.enabled ? 'Disable entry' : 'Enable entry'}">
             ${entry.enabled ? 'Enabled' : 'Disabled'}
           </button>
@@ -1998,9 +2406,10 @@ async function refreshLorebookList() {
       </div>
       <div class="lorebook-entry-keys">${keyTagsHtml}</div>
       <div class="lorebook-entry-content">${esc(entry.content ?? '')}</div>
-      <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge}</div>
+      <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge}${positionBadge}</div>
     `;
 
+    div.querySelector('.lore-edit-btn').addEventListener('click', () => openLoreEditor(entry.uid));
     div.querySelector('.lore-toggle-btn').addEventListener('click', () => toggleLorebookEntry(entry.uid));
     div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteLorebookEntry(entry.uid));
 

@@ -203,6 +203,22 @@
               <label for="lorebook-scan-depth">Keyword scan depth <span class="label-hint">(messages)</span></label>
               <input type="number" id="lorebook-scan-depth" value="4" min="1" max="50" step="1">
             </div>
+            <div class="field-row">
+              <label for="lorebook-recursive">Enable recursion</label>
+              <input type="checkbox" id="lorebook-recursive">
+            </div>
+            <div class="field">
+              <label for="lorebook-max-recursion">Max recursion steps</label>
+              <input type="number" id="lorebook-max-recursion" value="3" min="1" max="10" step="1">
+            </div>
+            <div class="field-row">
+              <label for="lorebook-case-sensitive">Case-sensitive matching</label>
+              <input type="checkbox" id="lorebook-case-sensitive">
+            </div>
+            <div class="field-row">
+              <label for="lorebook-match-whole-words">Whole-word matching</label>
+              <input type="checkbox" id="lorebook-match-whole-words">
+            </div>
             <div class="action-row" style="margin-top:4px">
               <button id="lorebook-btn" class="btn-secondary">☰ View entries</button>
             </div>
@@ -331,7 +347,10 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2 class="modal-title" id="lorebook-modal-title">Lorebook</h2>
-        <button class="icon-btn modal-close" id="lorebook-modal-close" aria-label="Close">✕</button>
+        <div class="modal-header-actions">
+          <button class="btn-secondary" id="lorebook-new-btn">+ New</button>
+          <button class="icon-btn modal-close" id="lorebook-modal-close" aria-label="Close">✕</button>
+        </div>
       </div>
       <div class="modal-body" id="lorebook-list">
         <p class="logs-loading">Loading…</p>
@@ -350,6 +369,164 @@
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" id="retro-end-cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lorebook entry editor modal -->
+  <div class="modal-backdrop hidden" id="lore-editor-modal" role="dialog" aria-modal="true" aria-labelledby="lore-editor-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="lore-editor-title">Edit Entry</h2>
+        <button class="icon-btn modal-close" id="lore-editor-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body lore-editor-body">
+
+        <div class="lore-editor-section">Basic</div>
+        <div class="field">
+          <label for="lore-ed-comment">Title / Memo</label>
+          <input type="text" id="lore-ed-comment" placeholder="Entry name…" maxlength="200">
+        </div>
+        <div class="field">
+          <label for="lore-ed-keys">Primary keys <span class="label-hint">(comma-separated; /regex/flags supported)</span></label>
+          <input type="text" id="lore-ed-keys" placeholder="keyword1, keyword2, /pattern/i…">
+        </div>
+        <div class="field">
+          <label for="lore-ed-content">Content</label>
+          <textarea id="lore-ed-content" rows="5" placeholder="Text to inject into the prompt…"></textarea>
+        </div>
+        <div class="lore-ed-inline">
+          <div class="field-row">
+            <label for="lore-ed-enabled">Enabled</label>
+            <input type="checkbox" id="lore-ed-enabled" checked>
+          </div>
+          <div class="field-row">
+            <label for="lore-ed-constant">Always on</label>
+            <input type="checkbox" id="lore-ed-constant">
+          </div>
+          <div class="field lore-ed-order-field">
+            <label for="lore-ed-order">Order</label>
+            <input type="number" id="lore-ed-order" value="100" min="0" max="999" step="1">
+          </div>
+        </div>
+
+        <div class="lore-editor-section">Selective Activation</div>
+        <div class="field-row">
+          <label for="lore-ed-selective">Require secondary key match</label>
+          <input type="checkbox" id="lore-ed-selective">
+        </div>
+        <div id="lore-ed-secondary-section" class="hidden">
+          <div class="field">
+            <label for="lore-ed-keysecondary">Secondary keys <span class="label-hint">(comma-separated)</span></label>
+            <input type="text" id="lore-ed-keysecondary" placeholder="keyword1, keyword2…">
+          </div>
+          <div class="field">
+            <label for="lore-ed-logic">Secondary key logic</label>
+            <select id="lore-ed-logic">
+              <option value="0">AND ANY — primary match + any secondary matches</option>
+              <option value="1">NOT ANY — primary match + no secondary matches</option>
+              <option value="2">AND ALL — primary match + all secondary keys match</option>
+              <option value="3">NOT ALL — primary match + at least one secondary doesn't match</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="lore-editor-section">Scan &amp; Matching</div>
+        <div class="lore-ed-row3">
+          <div class="field">
+            <label for="lore-ed-scan-depth">Scan depth <span class="label-hint">(blank&nbsp;=&nbsp;global)</span></label>
+            <input type="number" id="lore-ed-scan-depth" placeholder="global" min="0" max="999" step="1">
+          </div>
+          <div class="field">
+            <label for="lore-ed-case">Case sensitive</label>
+            <select id="lore-ed-case">
+              <option value="">Global</option>
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="lore-ed-whole-word">Whole words</label>
+            <select id="lore-ed-whole-word">
+              <option value="">Global</option>
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="lore-editor-section">Injection Position</div>
+        <div class="lore-ed-row3">
+          <div class="field">
+            <label for="lore-ed-position">Position</label>
+            <select id="lore-ed-position">
+              <option value="2">⬆ Top of system message</option>
+              <option value="0" selected>↑ Before character profile</option>
+              <option value="1">↓ After character profile</option>
+              <option value="3">⬇ Bottom of system message</option>
+              <option value="4">@ At chat depth</option>
+            </select>
+          </div>
+          <div class="field" id="lore-ed-depth-field">
+            <label for="lore-ed-depth">Depth <span class="label-hint">(from end)</span></label>
+            <input type="number" id="lore-ed-depth" value="4" min="0" max="999" step="1">
+          </div>
+          <div class="field" id="lore-ed-role-field">
+            <label for="lore-ed-role">Inject as</label>
+            <select id="lore-ed-role">
+              <option value="0">System</option>
+              <option value="1">User</option>
+              <option value="2">Assistant</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="lore-editor-section">Timing</div>
+        <div class="lore-ed-row3">
+          <div class="field">
+            <label for="lore-ed-probability">Probability: <span id="lore-ed-prob-display">100%</span></label>
+            <input type="range" id="lore-ed-probability" min="0" max="100" step="1" value="100">
+          </div>
+          <div class="field">
+            <label for="lore-ed-sticky">Sticky <span class="label-hint">(msgs; blank&nbsp;=&nbsp;off)</span></label>
+            <input type="number" id="lore-ed-sticky" placeholder="off" min="0" step="1">
+          </div>
+          <div class="field">
+            <label for="lore-ed-cooldown">Cooldown <span class="label-hint">(msgs; blank&nbsp;=&nbsp;off)</span></label>
+            <input type="number" id="lore-ed-cooldown" placeholder="off" min="0" step="1">
+          </div>
+        </div>
+
+        <div class="lore-editor-section">Recursion</div>
+        <div class="field-row">
+          <label for="lore-ed-prevent-recursion">Prevent recursion <span class="label-hint">(content won't trigger other entries)</span></label>
+          <input type="checkbox" id="lore-ed-prevent-recursion">
+        </div>
+        <div class="field-row">
+          <label for="lore-ed-delay-recursion">Delay until recursion <span class="label-hint">(only activates in recursion passes)</span></label>
+          <input type="checkbox" id="lore-ed-delay-recursion">
+        </div>
+        <div class="field-row">
+          <label for="lore-ed-exclude-recursion">Exclude from recursion <span class="label-hint">(not scanned in recursion passes)</span></label>
+          <input type="checkbox" id="lore-ed-exclude-recursion">
+        </div>
+
+        <div class="lore-editor-section">Group</div>
+        <div class="lore-ed-row2">
+          <div class="field">
+            <label for="lore-ed-group">Group name <span class="label-hint">(blank&nbsp;=&nbsp;no group; only highest-weight per group activates)</span></label>
+            <input type="text" id="lore-ed-group" placeholder="e.g. location, npc…">
+          </div>
+          <div class="field">
+            <label for="lore-ed-group-weight">Weight <span class="label-hint">(higher wins; blank&nbsp;=&nbsp;100)</span></label>
+            <input type="number" id="lore-ed-group-weight" placeholder="100" min="0" step="1">
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="lore-editor-cancel">Cancel</button>
+        <button class="btn-send" id="lore-editor-save">Save Entry</button>
       </div>
     </div>
   </div>

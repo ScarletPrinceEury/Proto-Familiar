@@ -693,6 +693,7 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 .typing-indicator.hidden { display: none; }
+.hidden { display: none; }
 
 /* ── Input bar ───────────────────────────────────────────────── */
 .input-bar {
@@ -1404,5 +1405,86 @@ button { cursor: pointer; font-family: var(--font); }
   padding: 1px 5px;
   margin-left: 5px;
   vertical-align: middle;
+}
+
+/* ── Lorebook modal header with action button ────────────────── */
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.modal-header-actions .btn-secondary {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+}
+
+/* ── Lorebook entry editor ───────────────────────────────────── */
+.lore-editor-section {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin: 18px 0 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.lore-editor-section:first-child {
+  margin-top: 0;
+}
+
+.lore-ed-inline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 6px;
+}
+
+.lore-ed-inline .field-row {
+  margin: 0;
+}
+
+.lore-ed-order-field {
+  min-width: 68px;
+  max-width: 100px;
+}
+
+.lore-ed-order-field label {
+  white-space: nowrap;
+}
+
+.lore-ed-row3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.lore-ed-row2 {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 10px;
+}
+
+#lore-ed-depth-field,
+#lore-ed-role-field {
+  transition: opacity 0.15s;
+}
+
+#lore-ed-depth-field.hidden,
+#lore-ed-role-field.hidden {
+  display: block; /* stay in grid; override generic .hidden */
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0.3;
+}
+
+@media (max-width: 560px) {
+  .lore-ed-row3,
+  .lore-ed-row2 {
+    grid-template-columns: 1fr;
+  }
 }
 
