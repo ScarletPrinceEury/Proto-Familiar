@@ -1,12 +1,17 @@
 /**
  * thalamus.js — entity-core bridge for Proto-Familiar
  *
- * Spawns entity-core-alpha as a child process on startup and keeps it
- * running.  Exports enrich(), which assembles three sections of context
- * (memories, character values, voice) to prepend to the LLM system prompt.
+ * Mirrors Psycheros's context-building approach (src/entity/context.ts +
+ * src/rag/context-builder.ts):
+ *
+ *   1. All identity categories (self, user, relationship, custom), each file
+ *      wrapped in its promptLabel XML tags and sorted in canonical order.
+ *   2. base_instructions.md placed first if present (no section header).
+ *   3. Relevant memories formatted with score and source.
+ *   4. Knowledge graph context via node search + 1-hop edge traversal.
  *
  * If entity-core is unreachable for any reason, enrich() logs the error
- * and returns '' so the calling request can continue without enrichment.
+ * and returns '' so the request continues without enrichment.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -16,12 +21,27 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Allow overriding the entry-point path via environment variable.
 const ENTITY_CORE_ENTRY = process.env.ENTITY_CORE_PATH
   ?? path.resolve(__dirname, '../entity-core-alpha/src/mod.ts');
 
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
+
+// ── Canonical file orderings (mirrors Psycheros src/entity/context.ts) ───────
+
+const SELF_ORDER = [
+  'my_identity.md', 'my_persona.md', 'my_personhood.md',
+  'my_wants.md', 'my_mechanics.md',
+];
+const USER_ORDER = [
+  'user_identity.md', 'user_life.md', 'user_beliefs.md',
+  'user_preferences.md', 'user_patterns.md', 'user_notes.md',
+];
+const RELATIONSHIP_ORDER = [
+  'relationship_dynamics.md', 'relationship_history.md', 'relationship_notes.md',
+];
+
+// ── Connection ────────────────────────────────────────────────────────────────
 
 async function connect() {
   const transport = new StdioClientTransport({
@@ -34,7 +54,6 @@ async function connect() {
     { capabilities: {} },
   );
 
-  // Clear the reference when the process exits so enrich() degrades gracefully.
   client.onclose = () => {
     console.error('[thalamus] entity-core connection closed');
     mcpClient = null;
@@ -45,33 +64,70 @@ async function connect() {
   console.log('[thalamus] Connected to entity-core at', ENTITY_CORE_ENTRY);
 }
 
-// Fire-and-forget — a failure here must not crash the server.
 connect().catch(err => {
   console.error('[thalamus] Failed to start entity-core:', err.message);
 });
 
-// ---------------------------------------------------------------------------
-// Helper — safely pull the text payload from an MCP tool result
-// ---------------------------------------------------------------------------
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function parseToolText(result, fallback) {
   const text = result?.content?.find(c => c.type === 'text')?.text;
   if (!text) return fallback;
   try { return JSON.parse(text); } catch { return fallback; }
 }
 
-// ---------------------------------------------------------------------------
-// enrich
-// ---------------------------------------------------------------------------
+/** Wrap a file's content in its promptLabel XML tags. */
+function wrapFile(filename, content, promptLabel) {
+  const label = promptLabel ?? filename.replace(/\.md$/, '');
+  return `<${label}>\n${content.trim()}\n</${label}>`;
+}
+
+/** Sort identity files by a predefined order, alphabetical for unknowns. */
+function sortFiles(files, order) {
+  return [...files].sort((a, b) => {
+    const ai = order.indexOf(a.filename);
+    const bi = order.indexOf(b.filename);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a.filename.localeCompare(b.filename);
+  });
+}
 
 /**
- * Query entity-core for context relevant to the current user message and
- * return it as a formatted string with three clearly labelled sections:
+ * Convert an array of identity file objects to a string.
+ * Each non-empty file is XML-wrapped and joined with --- separators.
+ */
+function identitySection(files, order) {
+  if (!files?.length) return '';
+  const sorted = sortFiles(files.filter(f => f.content?.trim()), order);
+  if (!sorted.length) return '';
+  return sorted
+    .map(f => wrapFile(f.filename, f.content, f.promptLabel))
+    .join('\n\n---\n\n');
+}
+
+// ── enrich ────────────────────────────────────────────────────────────────────
+
+/**
+ * Build the full entity-core context for a user message.
+ * Fires identity, memory, and graph queries in parallel then assembles:
  *
- *   [Relevant Context]  — memories matching the user's message
- *   [Character Values]  — core identity files (my_identity, my_personhood, my_wants)
- *   [Voice]             — persona and behaviour files (my_persona, my_mechanics)
+ *   <base_instructions>…</base_instructions>          (if present)
+ *   ---
+ *   My self files …                                   (XML-wrapped, ordered)
+ *   ---
+ *   User files …
+ *   ---
+ *   Relationship files …
+ *   ---
+ *   Custom files …
+ *   ---
+ *   Relevant Memories via RAG:                        (scored excerpts)
+ *   ---
+ *   Relevant Knowledge from Graph:                    (nodes + edges)
  *
- * Returns '' if entity-core is unreachable or any error occurs.
+ * Returns '' on any error so the request degrades gracefully.
  *
  * @param {string} userMessage
  * @returns {Promise<string>}
@@ -80,58 +136,116 @@ export async function enrich(userMessage) {
   if (!mcpClient) return '';
 
   try {
-    const [memResult, idResult] = await Promise.all([
+    // Fire all three queries in parallel
+    const [idResult, memResult, graphResult] = await Promise.all([
+      mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
       mcpClient.callTool({
         name: 'memory_search',
-        arguments: {
-          query: userMessage,
-          instanceId: 'proto-familiar',
-          maxResults: 5,
-        },
+        arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5 },
       }),
       mcpClient.callTool({
-        name: 'identity_get_all',
-        arguments: {},
+        name: 'graph_node_search',
+        arguments: { query: userMessage, limit: 10, minScore: 0.3 },
       }),
     ]);
 
-    // ── [Relevant Context] from memory search ─────────────────────────────
-    const memData = parseToolText(memResult, {});
-    const memLines = (memData.results ?? [])
-      .map(r => `- ${(r.excerpt ?? r.content ?? '').trim()}`)
-      .filter(s => s.length > 2)
-      .join('\n');
+    // ── Identity ──────────────────────────────────────────────────────────
+    const id = parseToolText(idResult, {});
 
-    // ── Identity files ─────────────────────────────────────────────────────
-    // identity/get_all returns { self: [...], user: [...], relationship: [...], custom: [...] }
-    // Each item has { filename, content, promptLabel } — no category field.
-    const idRaw = parseToolText(idResult, {});
-    const selfFiles = Array.isArray(idRaw?.self) ? idRaw.self : [];
+    // base_instructions.md goes first without a section header
+    const baseFile = (id.self ?? []).find(f => f.filename === 'base_instructions.md');
+    const baseContent = baseFile?.content?.trim()
+      ? wrapFile(baseFile.filename, baseFile.content, baseFile.promptLabel)
+      : '';
 
-    const VALUE_FILES = new Set(['my_identity', 'my_personhood', 'my_wants']);
-    const VOICE_FILES  = new Set(['my_persona', 'my_mechanics']);
+    const selfFiles   = (id.self ?? []).filter(f => f.filename !== 'base_instructions.md');
+    const selfContent = identitySection(selfFiles, SELF_ORDER);
+    const userContent = identitySection(id.user ?? [], USER_ORDER);
+    const relContent  = identitySection(id.relationship ?? [], RELATIONSHIP_ORDER);
+    const custContent = identitySection(id.custom ?? [], []);
 
-    const valuesText = selfFiles
-      .filter(f => VALUE_FILES.has(f.filename))
-      .map(f => (f.content ?? '').trim())
-      .filter(Boolean)
+    // ── Memories ──────────────────────────────────────────────────────────
+    const mem = parseToolText(memResult, {});
+    const memLines = (mem.results ?? [])
+      .map((r, i) => {
+        const score  = ((r.score ?? r.vectorScore ?? 0) * 100).toFixed(0);
+        const source = [r.granularity, r.date].filter(Boolean).join('/');
+        return `[${i + 1}] (from ${source}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
+      })
+      .filter(s => s.length > 5)
       .join('\n\n');
 
-    const voiceText = selfFiles
-      .filter(f => VOICE_FILES.has(f.filename))
-      .map(f => (f.content ?? '').trim())
-      .filter(Boolean)
-      .join('\n\n');
+    // ── Knowledge graph ───────────────────────────────────────────────────
+    const graphData  = parseToolText(graphResult, {});
+    // Handle both { results: [...] } and { nodes: [...] } shapes
+    const graphNodes = graphData.results ?? graphData.nodes ?? [];
+    let graphLines = '';
 
-    // ── Assemble ───────────────────────────────────────────────────────────
+    if (graphNodes.length > 0) {
+      // Traverse 1 hop from top-3 nodes; ignore individual failures
+      const traversals = await Promise.allSettled(
+        graphNodes.slice(0, 3).map(n =>
+          mcpClient.callTool({
+            name: 'graph_subgraph',
+            arguments: { nodeId: n.id, depth: 1 },
+          })
+        )
+      );
+
+      const nodeLabels = new Map(graphNodes.map(n => [n.id, n.label]));
+      const nodeDescs  = new Map(graphNodes.map(n => [n.id, n.description ?? '']));
+      const seenEdges  = new Set();
+      const edgeNodeIds = new Set();
+      const lines = [];
+
+      for (const r of traversals) {
+        if (r.status !== 'fulfilled') continue;
+        const sg = parseToolText(r.value, {});
+        for (const node of sg.nodes ?? []) {
+          if (!nodeLabels.has(node.id)) {
+            nodeLabels.set(node.id, node.label);
+            nodeDescs.set(node.id, node.description ?? '');
+          }
+        }
+        for (const edge of sg.edges ?? []) {
+          if (seenEdges.has(edge.id)) continue;
+          seenEdges.add(edge.id);
+          edgeNodeIds.add(edge.fromId);
+          edgeNodeIds.add(edge.toId);
+          const from = nodeLabels.get(edge.fromId) ?? edge.fromId;
+          const to   = nodeLabels.get(edge.toId)   ?? edge.toId;
+          const rel  = edge.customType ?? edge.type;
+          const desc = nodeDescs.get(edge.toId);
+          lines.push(desc ? `${from} ${rel} ${to} (${desc})` : `${from} ${rel} ${to}`);
+        }
+      }
+
+      // Standalone nodes (no edges in this context)
+      for (const n of graphNodes) {
+        if (!edgeNodeIds.has(n.id)) {
+          const desc = n.description ? `: ${n.description}` : '';
+          lines.push(`${n.label} (type: ${n.type}${desc})`);
+        }
+      }
+
+      graphLines = lines.join('\n');
+    }
+
+    // ── Assemble (mirrors Psycheros buildSystemMessage) ───────────────────
     const sections = [];
-    if (memLines)   sections.push(`[Relevant Context]\n${memLines}`);
-    if (valuesText) sections.push(`[Character Values]\n${valuesText}`);
-    if (voiceText)  sections.push(`[Voice]\n${voiceText}`);
 
-    return sections.join('\n\n');
+    if (baseContent) sections.push(baseContent);
+    if (selfContent) sections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
+    if (userContent) sections.push(`---\nUser files (from identity/user/ directory):\n\n${userContent}`);
+    if (relContent)  sections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
+    if (custContent) sections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
+    if (memLines)    sections.push(`---\nRelevant Memories via RAG:\n\n${memLines}`);
+    if (graphLines)  sections.push(`---\nRelevant Knowledge from Graph:\n${graphLines}`);
+
+    return sections.join('\n');
   } catch (err) {
     console.error('[thalamus] enrich failed:', err.message);
     return '';
   }
 }
+
