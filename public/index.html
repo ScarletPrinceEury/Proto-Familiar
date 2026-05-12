@@ -81,6 +81,20 @@
           </div>
         </div>
 
+        <!-- Names -->
+        <div class="sidebar-section">
+          <h3 class="section-label">Names</h3>
+          <div class="field">
+            <label for="user-name">User name</label>
+            <input type="text" id="user-name" placeholder="User" maxlength="64" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="char-name">AI name</label>
+            <input type="text" id="char-name" placeholder="Assistant" maxlength="64" spellcheck="false">
+          </div>
+          <p class="field-hint">Use <code>{{user}}</code> and <code>{{char}}</code> in prompts to insert these names.</p>
+        </div>
+
         <!-- System Prompt -->
         <div class="sidebar-section collapsible" id="section-system">
           <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-system">

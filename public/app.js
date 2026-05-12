@@ -156,6 +156,8 @@ const state = {
   streaming:         true,
   temperature:       0.8,
   maxTokens:         2048,
+  userName:          'User',
+  charName:          'Assistant',
   systemPrompt:      '',
   characterProfile:  '',
   userProfile:       '',
@@ -238,6 +240,17 @@ async function saveToServer() {
   } catch { /* non-critical */ }
 }
 
+// ── Name variable substitution ──────────────────────────────────
+/**
+ * Replace {{user}} and {{char}} in a prompt string with the
+ * configured user/AI display names.
+ */
+function applyNameVars(text) {
+  return text
+    .replace(/\{\{user\}\}/gi, state.userName || 'User')
+    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant');
+}
+
 // ── Message building ─────────────────────────────────────────────
 /**
  * Sanitises a state message for the upstream API:
@@ -267,11 +280,11 @@ function buildApiMessages(userInput) {
   // ── System message ────────────────────────────────────────────
   const systemParts = [];
   if (state.systemPrompt.trim())
-    systemParts.push(state.systemPrompt.trim());
+    systemParts.push(applyNameVars(state.systemPrompt.trim()));
   if (state.characterProfile.trim())
-    systemParts.push('[Character Profile]\n' + state.characterProfile.trim());
+    systemParts.push('[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
   if (state.userProfile.trim())
-    systemParts.push('[User Profile]\n' + state.userProfile.trim());
+    systemParts.push('[User Profile]\n' + applyNameVars(state.userProfile.trim()));
 
   // ── Lorebook context ─────────────────────────────────────────
   const lorebookCtx = buildLorebookContext(userInput);
@@ -288,7 +301,7 @@ function buildApiMessages(userInput) {
 
   // ── Post-history prompt ───────────────────────────────────────
   if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'user', content: state.postHistoryPrompt.trim() });
+    msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
   return msgs;
 }
@@ -994,6 +1007,8 @@ function readSettingsFromUI() {
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
   state.maxTokens         = parseInt($('max-tokens').value, 10);
+  state.userName          = $('user-name').value.trim() || 'User';
+  state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
@@ -1013,6 +1028,8 @@ function writeSettingsToUI() {
   $('temperature').value        = state.temperature;
   $('temp-display').textContent = state.temperature;
   $('max-tokens').value         = state.maxTokens;
+  $('user-name').value          = state.userName ?? 'User';
+  $('char-name').value          = state.charName ?? 'Assistant';
   $('system-prompt').value      = state.systemPrompt;
   $('char-profile').value       = state.characterProfile;
   $('user-profile').value       = state.userProfile;
@@ -1297,7 +1314,8 @@ function init() {
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'system-prompt', 'char-profile',
+    'temperature', 'max-tokens', 'user-name', 'char-name',
+    'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'lorebook-scan-depth',
   ];
