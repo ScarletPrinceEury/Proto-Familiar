@@ -223,16 +223,6 @@ async function executeToolCall(name, argsJson) {
   return `Tool "${name}" has no client-side implementation. No result available.`;
 }
 
-/**
- * Sanitise a state message into the shape the upstream API expects.
- * Strips client-only fields: timestamp, _toolName.
- */
-function toApiMessage({ role, content, tool_calls, tool_call_id }) {
-  if (role === 'tool')  return { role, tool_call_id, content };
-  if (tool_calls)       return { role, content: content ?? null, tool_calls };
-  return { role, content };
-}
-
 // ── Session timing ──────────────────────────────────────────────
 /** ISO timestamp of the most recent message — persisted so the 3-hour
  *  inactivity timer can be recovered correctly after a page reload. */
@@ -267,14 +257,16 @@ const state = {
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
-  // ── Topics & lorebook ────────────────────────────────────
-  lorebookScanDepth:         4,      // how many recent messages to scan for keyword matches
-  lorebookRecursive:         false,  // enable recursive lorebook activation
-  lorebookMaxRecursionSteps: 3,      // max recursive passes
-  lorebookCaseSensitive:     false,  // global case-sensitive keyword matching
-  lorebookMatchWholeWords:   false,  // global whole-word keyword matching
-  lorebook:          { entries: {} }, // cached from server; NOT persisted in localStorage
-  topics:            [],     // session-level; stored under pf_topics_{sessionId}
+  // ── Topics & tomes (lorebook) ───────────────────────────
+  tomeScanDepth:         4,      // how many recent messages to scan for keyword matches
+  tomeRecursive:         false,  // enable recursive tome entry activation
+  tomeMaxRecursionSteps: 3,      // max recursive passes
+  tomeCaseSensitive:     false,  // global case-sensitive keyword matching
+  tomeMatchWholeWords:   false,  // global whole-word keyword matching
+  lorebook:          { entries: {} }, // legacy field kept for compatibility
+  tomeCache:         {},         // { [tomeId]: tomeObject } — not persisted
+  tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
+  topics:            [],         // session-level; stored under pf_topics_{sessionId}
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -469,18 +461,6 @@ function renderMarkdown(text) {
       return `<pre><code>${esc(part)}</code></pre>`;
     }
 
-    // Inline code (before other inline rules)
-    let s = part.replace(/`([^`\n]+)`/g, (_, c) => `<code>${esc(c)}</code>`);
-
-    // Bold and italic (non-greedy, no newlines)
-    s = s
-      .replace(/\*\*\*([^\n*]+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*([^\n*]+?)\*\*/g,     '<strong>$1</strong>')
-      .replace(/\*([^\n*]+?)\*/g,          '<em>$1</em>');
-
-    // Escape HTML in non-code text (done after inline code to avoid double-escaping)
-    // Note: esc() was already applied above via replace, we need a different strategy.
-    // Redo: escape first, then apply markdown.
     return renderInlineText(part);
   }).join('');
 }
@@ -2335,8 +2315,8 @@ function matchKeyword(haystack, keyword, entry) {
   const h  = cs ? haystack : haystack.toLowerCase();
   const kw = cs ? keyword  : keyword.toLowerCase();
   if (ww) {
-    const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?:^|\\W)${esc}(?:$|\\W)`, cs ? '' : 'i').test(haystack);
+    const kwEscaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|\\W)${kwEscaped}(?:$|\\W)`, cs ? '' : 'i').test(haystack);
   }
   return h.includes(kw);
 }
@@ -2739,7 +2719,7 @@ async function getDefaultTomeForSaving() {
 
 function openLoreEditor(uid) {
   _loreEditUid = uid ?? null;
-  const entry  = uid ? (state.lorebook.entries[uid] ?? {}) : {};
+  const entry  = uid ? (state.tomeCache[_currentTomeId]?.entries[uid] ?? {}) : {};
 
   $('lore-editor-title').textContent = uid ? 'Edit Entry' : 'New Entry';
 
