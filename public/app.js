@@ -183,7 +183,7 @@ const state = {
 // ── Persistence ──────────────────────────────────────────────────
 function saveSettings() {
   try {
-    const { messages: _ignored, lorebook: _lb, topics: _t, ...settings } = state;
+    const { messages: _ignored, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
     localStorage.setItem('pf_settings', JSON.stringify(settings));
   } catch { /* quota exceeded — silently skip */ }
 }
@@ -282,7 +282,7 @@ function buildApiMessages(userInput) {
   const msgs = [];
 
   // ── Activate lorebook entries ────────────────────────────────
-  const lore = activateLorebookEntries(userInput);
+  const lore = activateTomeEntries(userInput);
   const joinLore = (entries) =>
     entries.map(e => applyNameVars(e.content.trim())).filter(Boolean).join('\n\n---\n\n');
 
@@ -1076,16 +1076,16 @@ function readSettingsFromUI() {
   state.postHistoryPrompt = $('post-history-prompt').value;
   state.toolsEnabled      = $('tools-enabled').checked;
   state.customTools       = $('custom-tools').value;
-  const scanEl = $('lorebook-scan-depth');
-  if (scanEl) state.lorebookScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
-  const recursiveEl = $('lorebook-recursive');
-  if (recursiveEl) state.lorebookRecursive = recursiveEl.checked;
-  const maxRecEl = $('lorebook-max-recursion');
-  if (maxRecEl) state.lorebookMaxRecursionSteps = Math.max(1, parseInt(maxRecEl.value, 10) || 3);
-  const csEl = $('lorebook-case-sensitive');
-  if (csEl) state.lorebookCaseSensitive = csEl.checked;
-  const wwEl = $('lorebook-match-whole-words');
-  if (wwEl) state.lorebookMatchWholeWords = wwEl.checked;
+  const scanEl = $('tome-scan-depth');
+  if (scanEl) state.tomeScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
+  const recursiveEl = $('tome-recursive');
+  if (recursiveEl) state.tomeRecursive = recursiveEl.checked;
+  const maxRecEl = $('tome-max-recursion');
+  if (maxRecEl) state.tomeMaxRecursionSteps = Math.max(1, parseInt(maxRecEl.value, 10) || 3);
+  const csEl = $('tome-case-sensitive');
+  if (csEl) state.tomeCaseSensitive = csEl.checked;
+  const wwEl = $('tome-match-whole-words');
+  if (wwEl) state.tomeMatchWholeWords = wwEl.checked;
   saveSettings();
 }
 
@@ -1105,16 +1105,16 @@ function writeSettingsToUI() {
   $('post-history-prompt').value = state.postHistoryPrompt;
   $('tools-enabled').checked    = state.toolsEnabled ?? true;
   $('custom-tools').value       = state.customTools ?? '';
-  const scanEl = $('lorebook-scan-depth');
-  if (scanEl) scanEl.value = state.lorebookScanDepth ?? 4;
-  const recursiveEl = $('lorebook-recursive');
-  if (recursiveEl) recursiveEl.checked = state.lorebookRecursive ?? false;
-  const maxRecEl = $('lorebook-max-recursion');
-  if (maxRecEl) maxRecEl.value = state.lorebookMaxRecursionSteps ?? 3;
-  const csEl = $('lorebook-case-sensitive');
-  if (csEl) csEl.checked = state.lorebookCaseSensitive ?? false;
-  const wwEl = $('lorebook-match-whole-words');
-  if (wwEl) wwEl.checked = state.lorebookMatchWholeWords ?? false;
+  const scanEl = $('tome-scan-depth');
+  if (scanEl) scanEl.value = state.tomeScanDepth ?? 4;
+  const recursiveEl = $('tome-recursive');
+  if (recursiveEl) recursiveEl.checked = state.tomeRecursive ?? false;
+  const maxRecEl = $('tome-max-recursion');
+  if (maxRecEl) maxRecEl.value = state.tomeMaxRecursionSteps ?? 3;
+  const csEl = $('tome-case-sensitive');
+  if (csEl) csEl.checked = state.tomeCaseSensitive ?? false;
+  const wwEl = $('tome-match-whole-words');
+  if (wwEl) wwEl.checked = state.tomeMatchWholeWords ?? false;
   refreshModelSuggestions(state.provider);
 }
 
@@ -1217,7 +1217,7 @@ async function autoEndSession() {
     await saveToServer();
     startNewSession();
     showSessionEndedNotice();
-    memorizeSessionToLorebook(sessionMessages, sessionId); // fire-and-forget
+    memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
   } else {
     startNewSession();
     showSessionEndedNotice();
@@ -1254,7 +1254,7 @@ function showMemorizationNotice(count) {
  * Calls the configured LLM to split the conversation into distinct topics
  * and creates a lorebook entry for each one.
  */
-async function memorizeSessionToLorebook(messages, sessionId) {
+async function memorizeSessionToTome(messages, sessionId) {
   if (!state.apiKey.trim()) return;
 
   // Filter to user/assistant only — skip tool-call plumbing and empty turns
@@ -1316,12 +1316,16 @@ ${convText}`;
     const topics = parsed.topics;
     if (!Array.isArray(topics) || !topics.length) return;
 
-    // Fetch the current lorebook fresh from the server so we don't overwrite
-    // concurrent changes made in the new session that started after this one closed.
-    let lorebookData = { entries: {} };
+    // Get or create the default tome for auto-saved memories
+    let targetTome = null;
+    try { targetTome = await getDefaultTomeForSaving(); } catch { return; }
+    if (!targetTome) return;
+
+    // Fetch the current tome fresh from the server
+    let tomeData = { entries: {} };
     try {
-      const lbRes = await fetch('/api/lorebook');
-      if (lbRes.ok) lorebookData = await lbRes.json();
+      const tRes = await fetch(`/api/tomes/${targetTome.id}`);
+      if (tRes.ok) tomeData = await tRes.json();
     } catch { /* fall back to empty */ }
 
     const now = new Date().toISOString();
@@ -1331,7 +1335,7 @@ ${convText}`;
       const content = (t.content ?? '').trim();
       if (!title || !content) continue;
       const uid = generateId();
-      lorebookData.entries[uid] = {
+      tomeData.entries[uid] = {
         uid,
         comment:             title,
         keys:                Array.isArray(t.keywords) ? t.keywords.map(k => String(k).trim()).filter(Boolean) : [],
@@ -1364,14 +1368,14 @@ ${convText}`;
     }
     if (!created) return;
 
-    await fetch('/api/lorebook', {
+    await fetch(`/api/tomes/${targetTome.id}`, {
       method:  'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: lorebookData.entries }),
+      body: JSON.stringify({ entries: tomeData.entries }),
     });
 
-    // Merge into active state so the lorebook modal reflects new entries immediately.
-    state.lorebook = lorebookData;
+    // Update cache so the tome entries modal reflects new entries immediately.
+    state.tomeCache[targetTome.id] = tomeData;
     showMemorizationNotice(created);
   } catch { /* non-critical — silently swallow any error */ }
 }
@@ -1540,8 +1544,8 @@ function init() {
     'temperature', 'max-tokens', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
-    'lorebook-scan-depth', 'lorebook-recursive', 'lorebook-max-recursion',
-    'lorebook-case-sensitive', 'lorebook-match-whole-words',
+    'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
+    'tome-case-sensitive', 'tome-match-whole-words',
   ];
 
   settingsIds.forEach(id => {
@@ -1603,7 +1607,7 @@ function init() {
         saveSettings();
         saveToServer(); // fire-and-forget — stamps the log with endedAt
         startNewSession();
-        memorizeSessionToLorebook(sessionMessages, sessionId); // fire-and-forget
+        memorizeSessionToTome(sessionMessages, sessionId); // fire-and-forget
       } else {
         startNewSession();
       }
@@ -1647,7 +1651,7 @@ function init() {
 
   // Summary modal
   $('summary-modal-close').addEventListener('click', () => {
-    if (confirm('Discard this topic summary? It will not be saved to the lorebook.')) {
+    if (confirm('Discard this topic summary? It will not be saved to a Tome.')) {
       closeSummaryModal();
     }
   });
@@ -1662,13 +1666,36 @@ function init() {
   });
   $('summary-save-btn').addEventListener('click', savePendingSummary);
 
-  // Lorebook modal
-  $('lorebook-btn').addEventListener('click', openLorebookModal);
-  $('lorebook-modal-close').addEventListener('click', closeLorebookModal);
-  $('lorebook-modal').addEventListener('click', e => {
-    if (e.target === $('lorebook-modal')) closeLorebookModal();
+  // Tomes modal
+  $('tomes-btn').addEventListener('click', openTomesModal);
+  $('tomes-modal-close').addEventListener('click', closeTomesModal);
+  $('tomes-modal').addEventListener('click', e => {
+    if (e.target === $('tomes-modal')) closeTomesModal();
   });
-  $('lorebook-new-btn').addEventListener('click', () => openLoreEditor(null));
+  $('tome-new-btn').addEventListener('click', openNewTomeModal);
+
+  // Tome entries modal
+  $('tome-entries-modal-close').addEventListener('click', closeTomeEntriesModal);
+  $('tome-entries-back-btn').addEventListener('click', () => {
+    closeTomeEntriesModal();
+    openTomesModal();
+  });
+  $('tome-entries-modal').addEventListener('click', e => {
+    if (e.target === $('tome-entries-modal')) closeTomeEntriesModal();
+  });
+  $('tome-entries-new-btn').addEventListener('click', () => openLoreEditor(null));
+
+  // New tome modal
+  $('new-tome-modal-close').addEventListener('click', closeNewTomeModal);
+  $('new-tome-cancel-btn').addEventListener('click', closeNewTomeModal);
+  $('new-tome-modal').addEventListener('click', e => {
+    if (e.target === $('new-tome-modal')) closeNewTomeModal();
+  });
+  $('new-tome-name-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('new-tome-create-btn').click(); }
+    if (e.key === 'Escape') closeNewTomeModal();
+  });
+  $('new-tome-create-btn').addEventListener('click', createNewTome);
 
   // Lorebook entry editor modal
   $('lore-editor-close').addEventListener('click', closeLoreEditor);
@@ -1696,8 +1723,8 @@ function init() {
     if (e.target === $('retro-end-modal')) closeRetroEndModal();
   });
 
-  // ── Load lorebook from server ─────────────────────────────────
-  loadLorebookFromServer();
+  // ── Load tomes from server ────────────────────────────────────
+  loadTomesFromServer();
 
   // Restore topic strip
   updateTopicStrip();
@@ -1965,8 +1992,9 @@ function closeTopicNameModal() {
 
 // ── Retroactive end picker modal ──────────────────────────────────
 let _retroEndIndex    = null;
-let _loreEditUid      = null; // UID being edited in lorebook entry editor (null = new)
-let lorebookTimedEffects = {}; // { [uid]: { stickyLeft: N, cooldownLeft: N } } — session only
+let _loreEditUid      = null; // UID being edited in tome entry editor (null = new)
+let _currentTomeId    = null; // tome currently open in the entries view
+let tomeTimedEffects  = {}; // { [uid]: { stickyLeft: N, cooldownLeft: N } } — session only
 
 // Normalise legacy string position values ('before_char', etc.) to integers.
 function normEntryPos(pos) {
@@ -2145,28 +2173,44 @@ async function savePendingSummary() {
   };
 
   try {
-    // Merge into cached lorebook and push to server
-    state.lorebook.entries[uid] = entry;
-    await fetch('/api/lorebook', {
+    // Get or create the default tome, fetch fresh, merge, save
+    const targetTome = await getDefaultTomeForSaving();
+    if (!targetTome) throw new Error('No tome available for saving.');
+    const tRes = await fetch(`/api/tomes/${targetTome.id}`);
+    if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
+    const tomeData = await tRes.json();
+    tomeData.entries[uid] = entry;
+    await fetch(`/api/tomes/${targetTome.id}`, {
       method:  'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: state.lorebook.entries }),
+      body: JSON.stringify({ entries: tomeData.entries }),
     });
+    state.tomeCache[targetTome.id] = tomeData;
     // Link back to topic
-    topic.lorebookEntryId = uid;
+    topic.tomeEntryId = uid;
     saveTopics();
     closeSummaryModal();
   } catch (err) {
-    alert(`Failed to save lorebook entry: ${err.message}`);
+    alert(`Failed to save Tome entry: ${err.message}`);
   }
 }
 
-// ── Lorebook: server sync ─────────────────────────────────────────
-async function loadLorebookFromServer() {
+// ── Tomes: server sync ───────────────────────────────────────────
+async function loadTomesFromServer() {
   try {
-    const res  = await fetch('/api/lorebook');
-    const data = await res.json();
-    if (data.entries) state.lorebook = data;
+    const res  = await fetch('/api/tomes');
+    if (!res.ok) return;
+    const list = await res.json(); // array of { id, name, description, enabled, entryCount }
+    state.tomeRegistry = list;
+    // Pre-load enabled tomes into cache
+    await Promise.all(
+      list.filter(t => t.enabled).map(async t => {
+        try {
+          const r = await fetch(`/api/tomes/${t.id}`);
+          if (r.ok) state.tomeCache[t.id] = await r.json();
+        } catch { /* skip */ }
+      })
+    );
   } catch { /* non-critical */ }
 }
 
@@ -2187,8 +2231,8 @@ function parseKeywordRegex(kw) {
 function matchKeyword(haystack, keyword, entry) {
   const re = parseKeywordRegex(keyword);
   if (re) return re.test(haystack);
-  const cs = entry.caseSensitive ?? state.lorebookCaseSensitive ?? false;
-  const ww = entry.matchWholeWords ?? state.lorebookMatchWholeWords ?? false;
+  const cs = entry.caseSensitive ?? state.tomeCaseSensitive ?? false;
+  const ww = entry.matchWholeWords ?? state.tomeMatchWholeWords ?? false;
   const h  = cs ? haystack : haystack.toLowerCase();
   const kw = cs ? keyword  : keyword.toLowerCase();
   if (ww) {
@@ -2246,7 +2290,7 @@ function scanLoreEntries(entries, getCorpus, alreadyActivated, isRecursion) {
     if (isRecursion  && entry.excludeRecursion)    continue;
     if (!isRecursion && entry.delayUntilRecursion) continue;
 
-    const timed = lorebookTimedEffects[entry.uid] ?? { stickyLeft: 0, cooldownLeft: 0 };
+    const timed = tomeTimedEffects[entry.uid] ?? { stickyLeft: 0, cooldownLeft: 0 };
     if (timed.cooldownLeft > 0) continue;       // on cooldown
     if (timed.stickyLeft  > 0) { newlyActivated.push(entry); continue; } // sticky
 
@@ -2295,22 +2339,25 @@ function applyGroupLogic(entries) {
 }
 
 /**
- * Main lorebook activation engine.
+ * Main tome activation engine.
  * Returns { sys_top, before_char, after_char, sys_bottom, at_depth } arrays of activated entries.
- * at_depth entries carry the full entry object (use entry.depth and entry.role for injection).
+ * Aggregates entries from all enabled tomes cached in state.tomeCache.
  */
-function activateLorebookEntries(userInput) {
+function activateTomeEntries(userInput) {
   const empty = { sys_top: [], before_char: [], after_char: [], sys_bottom: [], at_depth: [] };
-  const allEntries = Object.values(state.lorebook.entries ?? {});
+  // Flatten all entries from all enabled (cached) tomes
+  const allEntries = Object.values(state.tomeCache).flatMap(tome =>
+    Object.values(tome.entries ?? {})
+  );
   if (!allEntries.length) return empty;
 
-  const globalDepth = state.lorebookScanDepth ?? 4;
+  const globalDepth = state.tomeScanDepth ?? 4;
   const messages    = state.messages;
 
   // Age timed effects by one tick; capture which UIDs just exhausted sticky
   const prevSticky = {};
-  for (const uid of Object.keys(lorebookTimedEffects)) {
-    const e = lorebookTimedEffects[uid];
+  for (const uid of Object.keys(tomeTimedEffects)) {
+    const e = tomeTimedEffects[uid];
     prevSticky[uid] = e.stickyLeft;
     if (e.stickyLeft  > 0) e.stickyLeft--;
     if (e.cooldownLeft > 0) e.cooldownLeft--;
@@ -2331,8 +2378,8 @@ function activateLorebookEntries(userInput) {
   }
 
   // Recursive passes
-  if (state.lorebookRecursive) {
-    const maxSteps = state.lorebookMaxRecursionSteps ?? 3;
+  if (state.tomeRecursive) {
+    const maxSteps = state.tomeMaxRecursionSteps ?? 3;
     let prevRecursionContent = '';
     for (let step = 0; step < maxSteps; step++) {
       const recursionContent = Array.from(activated)
@@ -2356,17 +2403,17 @@ function activateLorebookEntries(userInput) {
 
   // Update timed effects for this activation pass
   for (const e of activatedEntries) {
-    if (!lorebookTimedEffects[e.uid]) lorebookTimedEffects[e.uid] = { stickyLeft: 0, cooldownLeft: 0 };
-    if (e.sticky) lorebookTimedEffects[e.uid].stickyLeft = e.sticky;
+    if (!tomeTimedEffects[e.uid]) tomeTimedEffects[e.uid] = { stickyLeft: 0, cooldownLeft: 0 };
+    if (e.sticky) tomeTimedEffects[e.uid].stickyLeft = e.sticky;
   }
   // Entries whose sticky just expired and weren't re-activated → start cooldown
   const activatedSet = new Set(activatedEntries.map(e => e.uid));
   for (const uid of Object.keys(prevSticky)) {
-    if (prevSticky[uid] > 0 && !(lorebookTimedEffects[uid]?.stickyLeft > 0) && !activatedSet.has(uid)) {
+    if (prevSticky[uid] > 0 && !(tomeTimedEffects[uid]?.stickyLeft > 0) && !activatedSet.has(uid)) {
       const entry = allEntries.find(e => e.uid === uid);
       if (entry?.cooldown) {
-        if (!lorebookTimedEffects[uid]) lorebookTimedEffects[uid] = { stickyLeft: 0, cooldownLeft: 0 };
-        lorebookTimedEffects[uid].cooldownLeft = entry.cooldown;
+        if (!tomeTimedEffects[uid]) tomeTimedEffects[uid] = { stickyLeft: 0, cooldownLeft: 0 };
+        tomeTimedEffects[uid].cooldownLeft = entry.cooldown;
       }
     }
   }
@@ -2383,17 +2430,213 @@ function activateLorebookEntries(userInput) {
   };
 }
 
-// ── Lorebook modal ────────────────────────────────────────────────
-function openLorebookModal() {
-  $('lorebook-modal').classList.remove('hidden');
-  refreshLorebookList();
+// ── Tomes modal (manager) ─────────────────────────────────────────
+function openTomesModal() {
+  $('tomes-modal').classList.remove('hidden');
+  refreshTomesList();
 }
 
-function closeLorebookModal() {
-  $('lorebook-modal').classList.add('hidden');
+function closeTomesModal() {
+  $('tomes-modal').classList.add('hidden');
 }
 
-// ── Lorebook entry editor ─────────────────────────────────────────
+async function refreshTomesList() {
+  await loadTomesFromServer();
+  const container = $('tomes-list');
+  container.innerHTML = '';
+  const tomes = state.tomeRegistry;
+  if (!tomes.length) {
+    container.innerHTML = '<p class="lorebook-empty">No tomes yet. Click <strong>+ New Tome</strong> to create one.</p>';
+    return;
+  }
+  for (const tome of tomes) {
+    const div = document.createElement('div');
+    div.className = 'lorebook-entry';
+    div.innerHTML = `
+      <div class="lorebook-entry-header">
+        <div class="lorebook-entry-title">${esc(tome.name ?? 'Untitled')}</div>
+        <div class="lorebook-entry-actions">
+          <button class="btn-ghost tome-open-btn" data-id="${esc(tome.id)}" title="View entries">Open</button>
+          <button class="btn-ghost tome-toggle-btn" data-id="${esc(tome.id)}" title="${tome.enabled ? 'Disable tome' : 'Enable tome'}">${tome.enabled ? 'Enabled' : 'Disabled'}</button>
+          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome">✕</button>
+        </div>
+      </div>
+      ${tome.description ? `<div class="lorebook-entry-content">${esc(tome.description)}</div>` : ''}
+      <div class="lorebook-entry-meta">${tome.entryCount} entr${tome.entryCount !== 1 ? 'ies' : 'y'}</div>
+    `;
+    div.querySelector('.tome-open-btn').addEventListener('click', () => openTomeEntriesModal(tome.id));
+    div.querySelector('.tome-toggle-btn').addEventListener('click', () => toggleTomeEnabled(tome.id));
+    div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteTome(tome.id));
+    container.appendChild(div);
+  }
+}
+
+async function toggleTomeEnabled(tomeId) {
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  if (!tome) return;
+  try {
+    await fetch(`/api/tomes/${tomeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !tome.enabled }),
+    });
+    await refreshTomesList();
+  } catch (err) {
+    alert(`Failed to update tome: ${err.message}`);
+  }
+}
+
+async function deleteTome(tomeId) {
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  if (!confirm(`Delete tome "${tome?.name ?? tomeId}" and all its entries? This cannot be undone.`)) return;
+  try {
+    await fetch(`/api/tomes/${tomeId}`, { method: 'DELETE' });
+    delete state.tomeCache[tomeId];
+    await refreshTomesList();
+  } catch (err) {
+    alert(`Failed to delete tome: ${err.message}`);
+  }
+}
+
+// ── New tome modal ────────────────────────────────────────────────
+function openNewTomeModal() {
+  $('new-tome-name-input').value = '';
+  $('new-tome-description-input').value = '';
+  $('new-tome-modal').classList.remove('hidden');
+  requestAnimationFrame(() => $('new-tome-name-input').focus());
+}
+
+function closeNewTomeModal() {
+  $('new-tome-modal').classList.add('hidden');
+}
+
+async function createNewTome() {
+  const name = $('new-tome-name-input').value.trim();
+  if (!name) { alert('Please enter a name for the tome.'); return; }
+  const description = $('new-tome-description-input').value.trim();
+  try {
+    const res = await fetch('/api/tomes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to create tome.');
+    closeNewTomeModal();
+    await refreshTomesList();
+  } catch (err) {
+    alert(`Failed to create tome: ${err.message}`);
+  }
+}
+
+// ── Tome entries modal ─────────────────────────────────────────────
+function openTomeEntriesModal(tomeId) {
+  _currentTomeId = tomeId;
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  $('tome-entries-modal-title').textContent = tome?.name ?? 'Tome Entries';
+  $('tome-entries-modal').classList.remove('hidden');
+  refreshTomeEntriesList();
+}
+
+function closeTomeEntriesModal() {
+  $('tome-entries-modal').classList.add('hidden');
+  _currentTomeId = null;
+}
+
+async function refreshTomeEntriesList() {
+  if (!_currentTomeId) return;
+  const container = $('tome-entries-list');
+  container.innerHTML = '<p class="logs-loading">Loading\u2026</p>';
+  try {
+    const res = await fetch(`/api/tomes/${_currentTomeId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const tome = await res.json();
+    state.tomeCache[_currentTomeId] = tome;
+    container.innerHTML = '';
+    const entries = Object.values(tome.entries ?? {});
+    if (!entries.length) {
+      container.innerHTML = '<p class="lorebook-empty">No entries in this tome yet. Click <strong>+ New</strong> to add one.</p>';
+      return;
+    }
+    entries.sort((a, b) => new Date(b.created_at ?? 0) - new Date(a.created_at ?? 0));
+    for (const entry of entries) {
+      const div = document.createElement('div');
+      div.className = 'lorebook-entry';
+      const keyTagsHtml = (entry.keys ?? []).slice(0, 8).map(k => `<span class="lorebook-key-tag">${esc(k)}</span>`).join('');
+      const dateStr = entry.created_at
+        ? new Date(entry.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+        : '';
+      const posLabel = ['Before char', 'After char', 'Sys top', 'Sys bottom', '@Depth'][normEntryPos(entry.position)] ?? '';
+      const constBadge = entry.constant ? ' \u00b7 <strong>always-on</strong>' : '';
+      div.innerHTML = `
+        <div class="lorebook-entry-header">
+          <div class="lorebook-entry-title">${esc(entry.comment ?? 'Untitled')}</div>
+          <div class="lorebook-entry-actions">
+            <button class="btn-ghost lore-edit-btn" data-uid="${esc(entry.uid)}" title="Edit entry">Edit</button>
+            <button class="btn-ghost lore-toggle-btn" data-uid="${esc(entry.uid)}" title="${entry.enabled ? 'Disable entry' : 'Enable entry'}">${entry.enabled ? 'Enabled' : 'Disabled'}</button>
+            <button class="btn-ghost lore-delete-btn" data-uid="${esc(entry.uid)}" title="Delete entry">\u2715</button>
+          </div>
+        </div>
+        <div class="lorebook-entry-keys">${keyTagsHtml}</div>
+        <div class="lorebook-entry-content">${esc(entry.content ?? '')}</div>
+        <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge} \u00b7 ${posLabel}</div>
+      `;
+      div.querySelector('.lore-edit-btn').addEventListener('click', () => openLoreEditor(entry.uid));
+      div.querySelector('.lore-toggle-btn').addEventListener('click', () => toggleTomeEntry(entry.uid));
+      div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteTomeEntry(entry.uid));
+      container.appendChild(div);
+    }
+  } catch (err) {
+    container.innerHTML = `<p class="logs-error">\u26a0 Failed to load entries: ${esc(String(err.message))}</p>`;
+  }
+}
+
+async function toggleTomeEntry(uid) {
+  if (!_currentTomeId) return;
+  const tome = state.tomeCache[_currentTomeId];
+  if (!tome?.entries[uid]) return;
+  tome.entries[uid].enabled = !tome.entries[uid].enabled;
+  try {
+    await fetch(`/api/tomes/${_currentTomeId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: tome.entries }),
+    });
+    refreshTomeEntriesList();
+  } catch (err) {
+    alert(`Failed to update entry: ${err.message}`);
+  }
+}
+
+async function deleteTomeEntry(uid) {
+  if (!_currentTomeId) return;
+  if (!confirm('Delete this entry? This cannot be undone.')) return;
+  try {
+    await fetch(`/api/tomes/${_currentTomeId}/entries/${uid}`, { method: 'DELETE' });
+    const tome = state.tomeCache[_currentTomeId];
+    if (tome?.entries) delete tome.entries[uid];
+    refreshTomeEntriesList();
+  } catch (err) {
+    alert(`Failed to delete entry: ${err.message}`);
+  }
+}
+
+/** Return the first enabled tome, or create a "General" tome if none exist. */
+async function getDefaultTomeForSaving() {
+  const enabled = state.tomeRegistry.filter(t => t.enabled);
+  if (enabled.length > 0) return enabled[0];
+  // Create a default tome
+  const res = await fetch('/api/tomes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'General', description: 'Default tome for session memories and topic summaries.' }),
+  });
+  if (!res.ok) throw new Error('Failed to create default tome.');
+  await loadTomesFromServer();
+  const { id } = await res.json();
+  return state.tomeRegistry.find(t => t.id === id) ?? state.tomeRegistry[0] ?? null;
+}
+
+// ── Tome entry editor ─────────────────────────────────────────────
 
 function openLoreEditor(uid) {
   _loreEditUid = uid ?? null;
@@ -2518,96 +2761,22 @@ async function saveLoreEditorEntry() {
   };
 
   try {
-    state.lorebook.entries[uid] = entry;
-    await fetch('/api/lorebook', {
+    if (!_currentTomeId) throw new Error('No tome selected.');
+    const tomeRes = await fetch(`/api/tomes/${_currentTomeId}`);
+    if (!tomeRes.ok) throw new Error(`HTTP ${tomeRes.status}`);
+    const tomeData = await tomeRes.json();
+    tomeData.entries[uid] = entry;
+    await fetch(`/api/tomes/${_currentTomeId}`, {
       method:  'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: state.lorebook.entries }),
+      body: JSON.stringify({ entries: tomeData.entries }),
     });
+    state.tomeCache[_currentTomeId] = tomeData;
     closeLoreEditor();
-    refreshLorebookList();
+    refreshTomeEntriesList();
   } catch (err) {
     alert(`Failed to save entry: ${err.message}`);
   }
 }
 
-async function refreshLorebookList() {
-  await loadLorebookFromServer();
-  const container = $('lorebook-list');
-  container.innerHTML = '';
 
-  const entries = Object.values(state.lorebook.entries ?? {});
-  if (!entries.length) {
-    container.innerHTML = '<p class="lorebook-empty">No lorebook entries yet. End a topic to create one, or click <strong>+ New</strong>.</p>';
-    return;
-  }
-
-  // Sort newest first
-  entries.sort((a, b) => new Date(b.created_at ?? 0) - new Date(a.created_at ?? 0));
-
-  for (const entry of entries) {
-    const div = document.createElement('div');
-    div.className = 'lorebook-entry';
-
-    const keyTagsHtml = (entry.keys ?? [])
-      .slice(0, 8)
-      .map(k => `<span class="lorebook-key-tag">${esc(k)}</span>`)
-      .join('');
-
-    const dateStr     = entry.created_at
-      ? new Date(entry.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
-      : '';
-    const posLabel = ['Before char', 'After char', 'Sys top', 'Sys bottom', '@Depth'][normEntryPos(entry.position)] ?? '';
-    const constBadge  = entry.constant ? ' · <strong>always-on</strong>' : '';
-    const positionBadge = ` · ${posLabel}`;
-
-    div.innerHTML = `
-      <div class="lorebook-entry-header">
-        <div class="lorebook-entry-title">${esc(entry.comment ?? 'Untitled')}</div>
-        <div class="lorebook-entry-actions">
-          <button class="btn-ghost lore-edit-btn" data-uid="${esc(entry.uid)}" title="Edit entry">Edit</button>
-          <button class="btn-ghost lore-toggle-btn" data-uid="${esc(entry.uid)}" title="${entry.enabled ? 'Disable entry' : 'Enable entry'}">
-            ${entry.enabled ? 'Enabled' : 'Disabled'}
-          </button>
-          <button class="btn-ghost lore-delete-btn" data-uid="${esc(entry.uid)}" title="Delete entry">✕</button>
-        </div>
-      </div>
-      <div class="lorebook-entry-keys">${keyTagsHtml}</div>
-      <div class="lorebook-entry-content">${esc(entry.content ?? '')}</div>
-      <div class="lorebook-entry-meta">${esc(dateStr)}${constBadge}${positionBadge}</div>
-    `;
-
-    div.querySelector('.lore-edit-btn').addEventListener('click', () => openLoreEditor(entry.uid));
-    div.querySelector('.lore-toggle-btn').addEventListener('click', () => toggleLorebookEntry(entry.uid));
-    div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteLorebookEntry(entry.uid));
-
-    container.appendChild(div);
-  }
-}
-
-async function toggleLorebookEntry(uid) {
-  const entry = state.lorebook.entries[uid];
-  if (!entry) return;
-  entry.enabled = !entry.enabled;
-  try {
-    await fetch('/api/lorebook', {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: state.lorebook.entries }),
-    });
-    refreshLorebookList();
-  } catch (err) {
-    alert(`Failed to update entry: ${err.message}`);
-  }
-}
-
-async function deleteLorebookEntry(uid) {
-  if (!confirm('Delete this lorebook entry? This cannot be undone.')) return;
-  delete state.lorebook.entries[uid];
-  try {
-    await fetch(`/api/lorebook/${uid}`, { method: 'DELETE' });
-    refreshLorebookList();
-  } catch (err) {
-    alert(`Failed to delete entry: ${err.message}`);
-  }
-}

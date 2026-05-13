@@ -41,7 +41,7 @@ PORT=8080 npm start
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
 | **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
-| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, lorebook injections, and memory context |
+| **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
@@ -51,13 +51,13 @@ PORT=8080 npm start
 | **Tool calling** | LLM can invoke built-in tools (`get_datetime`, `get_session_info`) or custom tools you define; multi-round loop up to 5 rounds |
 | **Custom tools** | Paste a JSON array of OpenAI-compatible function definitions; executed client-side |
 | **Topics** | Track named conversation threads with coloured gutter bars; start/end retroactively by clicking any message; parallel topics supported |
-| **Topic summaries** | On topic end, an AI-generated summary is reviewed, edited, and saved to the Lorebook with auto-suggested keywords |
-| **Lorebook** | Full SillyTavern-compatible World Info engine — keyword injection, 5 injection positions, selective logic, recursion, timed effects, group exclusion; see below |
+| **Topic summaries** | On topic end, an AI-generated summary is reviewed, edited, and saved to a Tome with auto-suggested keywords |
+| **Tomes** | Plug-and-play multi-tome knowledge base — each Tome is an independent file you can enable/disable; the full SillyTavern-compatible World Info engine (keyword injection, 5 injection positions, selective logic, recursion, timed effects, group exclusion) aggregates entries across all enabled Tomes; see [docs/tomes.md](docs/tomes.md) |
 | **Message timestamps** | Every message is stamped `HH:MM` (today) or `Mon DD HH:MM` (older) |
 | **Session logging** | Conversations saved as JSON files in `logs/` with start + end timestamps |
 | **Session browser** | In-app Logs modal to view, load, or delete any past session |
 | **Session auto-end** | After 3 hours of inactivity the session is closed and a new one starts automatically |
-| **Session memorization** | On every session close (idle timeout or manual clear), the LLM automatically extracts 1–8 distinct topics and saves each as a lorebook entry with keywords; a toast confirms the count |
+| **Session memorization** | On every session close (idle timeout or manual clear), the LLM automatically extracts 1–8 distinct topics and saves each as a Tome entry with keywords; a toast confirms the count |
 | **Export** | Download conversation as a Markdown `.md` file (tool-call turns are omitted) |
 | **Regenerate** | Re-run the last AI response with the same user message |
 | **Themes** | Dark / light toggle |

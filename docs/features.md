@@ -61,7 +61,7 @@ Open with **☰** in the top bar.
 
 All prompt fields support `{{user}}` and `{{char}}` name variables and can be loaded from a `.txt`, `.md`, or `.json` file.
 
-### Lorebook Settings
+### Tomes Settings
 
 | Setting | Description |
 |---|---|
@@ -71,7 +71,7 @@ All prompt fields support `{{user}}` and `{{char}}` name variables and can be lo
 | Enable recursion | Re-scan activated entries' content for additional keyword matches |
 | Max recursion steps | Maximum recursive scan passes (default: 3) |
 
-See [Lorebook](lorebook.md) for full details.
+See [Tomes](tomes.md) for full details.
 
 ---
 
@@ -95,7 +95,7 @@ See [Topics](topics.md) for the full reference.
 - **+ Topic** — start a named topic from the current message
 - **▷** on any past message — start a topic retroactively
 - **⬛** on any message — end an open topic at that point
-- On topic end, an LLM-generated summary is reviewed and optionally saved to the Lorebook
+- On topic end, an LLM-generated summary is reviewed and optionally saved to a Tome
 
 ---
 
@@ -106,7 +106,7 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 | Feature | Description |
 |---|---|
 | Auto-end | After 3 hours of inactivity the session closes and a new one starts |
-| Session memorization | On every session close, the LLM extracts 1–8 topics and saves each as a lorebook entry |
+| Session memorization | On every session close, the LLM extracts 1–8 topics and saves each as a Tome entry |
 | Clear | Manual clear closes and memorizes the current session before starting a fresh one |
 | Session browser | **☰ → Logs** — view, load, or delete any past session |
 
@@ -116,7 +116,7 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 
 Click the **🔍** button in the top bar after any message to see the complete prompt that was sent to the LLM, including:
 - The full entity-core identity, memory, and knowledge-graph block
-- All active lorebook injections at every position
+- All active Tome injections at every position
 - The assembled conversation history
 
 Messages are shown in colour-coded, collapsible panels with per-message Copy buttons. Uses `POST /api/debug-prompt` — no upstream LLM call is made.

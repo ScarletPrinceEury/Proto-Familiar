@@ -71,7 +71,7 @@ Tool-call turns (role `tool` and assistant turns containing `tool_calls`) are in
 
 ## Session Memorization
 
-When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model extracts distinct topics discussed and returns structured JSON. Each topic becomes a new [Lorebook](lorebook.md) entry.
+When a session closes — either by the 3-hour idle timeout or by manually clearing the chat — the full conversation is automatically sent to the configured LLM. The model extracts distinct topics discussed and returns structured JSON. Each topic becomes a new entry in the **default Tome** (the first enabled Tome; if none exist, a "General" Tome is created automatically).
 
 ### What Gets Saved Per Entry
 
@@ -90,13 +90,13 @@ When a session closes — either by the 3-hour idle timeout or by manually clear
 | No API key configured | Silently skipped |
 | 1–8 entries per session | The LLM is asked to return between 1 and 8 topic entries |
 | Background execution | Runs after the new session has already started; never blocks the UI |
-| Race-condition safety | The lorebook is fetched fresh from the server before writing, so no concurrent edits are lost |
+| Race-condition safety | The target Tome is fetched fresh from the server before writing, so no concurrent edits are lost |
 
 ### User Feedback
 
 A brief on-screen toast confirms the result, e.g.:
 
-> *"3 lorebook entries memorized from the last session."*
+> *"3 Tome entries memorized from the last session."*
 
 ### Editing Memorized Entries
 

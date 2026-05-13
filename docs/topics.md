@@ -2,7 +2,7 @@
 
 ## Overview
 
-Topics let you tag a named slice of a conversation and track it with a coloured bar in the message gutter. When a topic ends, an LLM-generated summary can be saved directly to the Lorebook as a new entry with auto-suggested keywords.
+Topics let you tag a named slice of a conversation and track it with a coloured bar in the message gutter. When a topic ends, an LLM-generated summary can be saved directly to a Tome as a new entry with auto-suggested keywords.
 
 Topics are stored per-session in `localStorage` under the key `pf_topics_<sessionId>`.
 
@@ -34,7 +34,7 @@ When a topic ends, an LLM call is made to summarize the messages within that top
 - **Body** — the generated summary; fully editable before saving
 - **Keywords** — 3–8 suggested trigger words; editable
 
-Clicking **Save to Lorebook** creates a new [Lorebook](lorebook.md) entry with:
+Clicking **Save to Tome** creates a new [Tomes](tomes.md) entry with:
 - The title as the entry comment
 - The summary body as the entry content
 - The chosen keywords as primary keys

@@ -1,8 +1,20 @@
-# Lorebook
+# Tomes
 
-The Lorebook is a persistent knowledge base that automatically injects context into every LLM prompt when relevant keywords appear in the conversation. Proto-Familiar implements a full SillyTavern-compatible World Info engine.
+Tomes are persistent knowledge bases that automatically inject context into every LLM prompt when relevant keywords appear in the conversation. Proto-Familiar implements a full SillyTavern-compatible World Info engine across an unlimited number of independent Tome files.
 
-The lorebook is stored in `lorebook.json` in the project root (auto-created on first save, git-ignored). Manage it via **☰ → Lorebook → View entries** in the sidebar.
+Tomes are stored as individual JSON files inside the `tomes/` directory (auto-created, git-ignored). Each Tome is a standalone file — `tomes/<uuid>.json` — and can be independently enabled or disabled. Manage them via **☰ → Tomes → Manage Tomes** in the sidebar.
+
+---
+
+## Multiple Tomes
+
+Unlike a single monolithic world-info file, Proto-Familiar stores each Tome separately so they can be:
+
+- **Toggled individually** — enable or disable a whole Tome without deleting its entries
+- **Named and described** — give each Tome a clear purpose (e.g. *"World Lore"*, *"Character Notes"*, *"Session Memories"*)
+- **Stacked freely** — all enabled Tomes are scanned together; entries from every active Tome compete and cooperate as a single unified pool
+
+The activation engine aggregates entries from every enabled Tome before applying keyword scanning, group exclusion, and injection ordering. Order between Tomes is determined by each entry's `insertion_order` field, not Tome order.
 
 ---
 
@@ -63,7 +75,7 @@ Enable **Require secondary key match** on an entry to add a second gating condit
 | **Sticky N** | Once activated, the entry continues injecting for the next N messages even if its keywords are no longer present in the scan corpus. |
 | **Cooldown N** | After a sticky period ends (or after a normal one-shot activation), the entry is suppressed for N messages before it can trigger again. |
 
-Timed effect state is tracked per session. The counters reset when the page reloads.
+Timed effect state is tracked in memory per page-load (not persisted). The counters reset when the page reloads.
 
 ---
 
@@ -85,6 +97,8 @@ Per-entry recursion flags:
 
 Set the same **Group name** on multiple entries to make them compete: only the one entry with the highest **Weight** (ties broken by lowest insertion order) activates when any member of the group is triggered. Use this for mutually exclusive content like location descriptions, relationship states, or character moods.
 
+Groups work across Tomes — entries from different Tomes sharing a group name are treated as competitors.
+
 ---
 
 ## Probability
@@ -93,9 +107,33 @@ Set **Probability (0–100)** to randomly skip an entry even when its keywords m
 
 ---
 
-## Entry Schema
+## Tome File Format
 
-Each lorebook entry has the following fields:
+Each Tome is stored as a JSON file at `tomes/<id>.json`:
+
+```json
+{
+  "id":          "550e8400-e29b-41d4-a716-446655440000",
+  "name":        "World Lore",
+  "description": "Geographical and cultural facts about the setting.",
+  "enabled":     true,
+  "entries": {
+    "<uid>": { ... }
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | UUID — matches the filename |
+| `name` | string | Human-readable Tome name |
+| `description` | string | Optional description shown in the Tomes Manager |
+| `enabled` | boolean | Whether this Tome participates in activation |
+| `entries` | object | Map of `uid → entry` |
+
+---
+
+## Entry Schema
 
 | Field | Type | Description |
 |---|---|---|
@@ -103,34 +141,23 @@ Each lorebook entry has the following fields:
 | `comment` | string | Human-readable label (shown in the entry list) |
 | `content` | string | The text injected into the prompt when the entry activates |
 | `keys` | string[] | Primary keyword list |
-| `secondaryKeys` | string[] | Secondary keys for selective logic |
-| `selectiveLogic` | string | `"and_any"`, `"not_any"`, `"and_all"`, `"not_all"` |
+| `keysecondary` | string[] | Secondary keys for selective logic |
+| `selectiveLogic` | number | `0`=AND_ANY, `1`=NOT_ANY, `2`=AND_ALL, `3`=NOT_ALL |
 | `selective` | boolean | Whether secondary keys are enabled |
-| `position` | string | Injection position (see table above) |
+| `position` | number | `0`=before_char, `1`=after_char, `2`=sys_top, `3`=sys_bottom, `4`=at_depth |
 | `depth` | number | Chat depth for `at_depth` injection |
-| `depthRole` | string | `"system"`, `"user"`, or `"assistant"` for depth injection |
+| `role` | number | `0`=system, `1`=user, `2`=assistant (for depth injection) |
 | `enabled` | boolean | Whether the entry can activate |
 | `scanDepth` | number \| null | Per-entry override for scan depth |
 | `caseSensitive` | boolean \| null | Per-entry override for case sensitivity |
 | `matchWholeWords` | boolean \| null | Per-entry override for whole-word matching |
-| `sticky` | number | Sticky counter (messages to stay active after last match) |
-| `cooldown` | number | Cooldown counter (messages suppressed after sticky expires) |
+| `sticky` | number \| null | Sticky counter (messages to stay active after last match) |
+| `cooldown` | number \| null | Cooldown counter (messages suppressed after sticky expires) |
 | `probability` | number | 0–100, chance of activation when keywords match |
 | `group` | string | Group name for group exclusion |
-| `weight` | number | Priority within a group |
-| `preventRecursion` | boolean | Exclude this entry's content from recursive scans |
-| `delayUntilRecursion` | boolean | Only activate during recursive passes |
-| `excludeFromRecursion` | boolean | Do not check this entry during recursive passes |
-
----
-
-## Managing Entries
-
-Open **☰ → Lorebook → View entries**. From there:
-- **+ New** — creates a blank entry and opens its editor.
-- **Edit** — opens the full editor for any existing entry.
-- Toggle the **enabled** checkbox directly in the list to quickly disable/enable an entry without opening the editor.
-
-Entries created by the [Topic auto-summary](topics.md) flow start with `before_char` injection position and the keywords chosen at summary time. They are indistinguishable from hand-crafted entries and can be edited, disabled, or deleted freely.
-
-Entries created by [Session memorization](sessions.md#session-memorization) work the same way.
+| `groupWeight` | number \| null | Priority within a group |
+| `insertion_order` | number | Sort order when multiple entries inject at the same position (lower = earlier) |
+| `constant` | boolean | If true, always injects regardless of keyword matching |
+| `preventRecursion` | boolean | Excludes this entry's content from recursive scan passes |
+| `delayUntilRecursion` | boolean | Only activates on recursive passes, not the initial scan |
+| `excludeRecursion` | boolean | Not checked during recursive passes at all |

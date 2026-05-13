@@ -8,6 +8,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
+import { randomUUID } from 'crypto';
 import { enrich } from './thalamus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -234,68 +235,147 @@ app.delete('/api/logs/:id', async (req, res) => {
 // Health check
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-// ── Lorebook endpoints ──────────────────────────────────────────
-const LOREBOOK_DIR  = path.join(__dirname, 'lorebook');
-const LOREBOOK_FILE = path.join(LOREBOOK_DIR, 'entries.json');
-mkdirSync(LOREBOOK_DIR, { recursive: true });
+// ── Tome endpoints ──────────────────────────────────────────────
+const TOMES_DIR = path.join(__dirname, 'tomes');
+mkdirSync(TOMES_DIR, { recursive: true });
 
-// Valid lorebook UID: UUID shape or shorter alphanumeric+hyphen IDs
-function isValidLorebookUid(uid) {
+function isValidTomeId(id) {
+  return typeof id === 'string' && /^[0-9a-f\-]{8,64}$/i.test(id) && !id.includes('..');
+}
+
+function isValidEntryUid(uid) {
   return typeof uid === 'string' && /^[0-9a-f\-]{8,64}$/i.test(uid) && !uid.includes('..');
 }
 
-async function readLorebook() {
+async function readTome(id) {
   try {
-    const raw = await fsp.readFile(LOREBOOK_FILE, 'utf8');
+    const raw = await fsp.readFile(path.join(TOMES_DIR, `${id}.json`), 'utf8');
     return JSON.parse(raw);
   } catch {
-    return { entries: {} };
+    return null;
   }
 }
 
-async function writeLorebook(data) {
-  await fsp.writeFile(LOREBOOK_FILE, JSON.stringify(data, null, 2), 'utf8');
+async function writeTome(tome) {
+  await fsp.writeFile(path.join(TOMES_DIR, `${tome.id}.json`), JSON.stringify(tome, null, 2), 'utf8');
 }
 
-// GET /api/lorebook — return all entries
-app.get('/api/lorebook', async (_req, res) => {
-  res.json(await readLorebook());
+// GET /api/tomes — list all tomes (metadata + entry count)
+app.get('/api/tomes', async (_req, res) => {
+  try {
+    const files = await fsp.readdir(TOMES_DIR);
+    const tomes = [];
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+        const { id, name, description, enabled, entries } = JSON.parse(raw);
+        tomes.push({ id, name, description, enabled, entryCount: Object.keys(entries ?? {}).length });
+      } catch { /* skip corrupt */ }
+    }
+    tomes.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+    res.json(tomes);
+  } catch {
+    res.json([]);
+  }
 });
 
-// PUT /api/lorebook — replace the full entries map
-app.put('/api/lorebook', async (req, res) => {
-  const { entries } = req.body;
+// POST /api/tomes — create a new tome
+app.post('/api/tomes', async (req, res) => {
+  const { name, description } = req.body;
+  if (!name || typeof name !== 'string' || !name.trim())
+    return res.status(400).json({ error: 'name is required.' });
+  const id = randomUUID();
+  const tome = { id, name: name.trim(), description: (description ?? '').trim(), enabled: true, entries: {} };
+  try {
+    await writeTome(tome);
+    res.json({ id });
+  } catch {
+    res.status(500).json({ error: 'Failed to create tome.' });
+  }
+});
+
+// GET /api/tomes/:id — get a full tome with entries
+app.get('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  const tome = await readTome(id);
+  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
+  res.json(tome);
+});
+
+// PUT /api/tomes/:id — save full tome (entries + optional metadata)
+app.put('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  const { name, description, enabled, entries } = req.body;
   if (!entries || typeof entries !== 'object' || Array.isArray(entries))
     return res.status(400).json({ error: 'entries object required.' });
-
-  // Accept only valid-UID keys to prevent arbitrary writes
+  const existing = await readTome(id);
+  if (!existing) return res.status(404).json({ error: 'Tome not found.' });
   const safe = {};
   for (const [uid, entry] of Object.entries(entries)) {
-    if (!isValidLorebookUid(uid)) continue;
+    if (!isValidEntryUid(uid)) continue;
     safe[uid] = entry;
   }
+  const updated = {
+    ...existing,
+    name:        name !== undefined ? (String(name).trim() || existing.name) : existing.name,
+    description: description !== undefined ? String(description ?? '').trim() : (existing.description ?? ''),
+    enabled:     enabled !== undefined ? !!enabled : existing.enabled,
+    entries:     safe,
+  };
   try {
-    await writeLorebook({ entries: safe });
+    await writeTome(updated);
     res.json({ ok: true });
   } catch {
-    res.status(500).json({ error: 'Failed to write lorebook.' });
+    res.status(500).json({ error: 'Failed to save tome.' });
   }
 });
 
-// DELETE /api/lorebook/:uid — remove a single entry
-app.delete('/api/lorebook/:uid', async (req, res) => {
-  const { uid } = req.params;
-  if (!isValidLorebookUid(uid))
-    return res.status(400).json({ error: 'Invalid UID.' });
-  const data = await readLorebook();
-  if (!data.entries[uid])
-    return res.status(404).json({ error: 'Entry not found.' });
-  delete data.entries[uid];
+// PATCH /api/tomes/:id — update metadata only (name, description, enabled)
+app.patch('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  const tome = await readTome(id);
+  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
+  if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
+  if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
+  if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
   try {
-    await writeLorebook(data);
+    await writeTome(tome);
     res.json({ ok: true });
   } catch {
-    res.status(500).json({ error: 'Failed to write lorebook.' });
+    res.status(500).json({ error: 'Failed to update tome.' });
+  }
+});
+
+// DELETE /api/tomes/:id — delete a tome
+app.delete('/api/tomes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  try {
+    await fsp.unlink(path.join(TOMES_DIR, `${id}.json`));
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: 'Tome not found.' });
+  }
+});
+
+// DELETE /api/tomes/:id/entries/:uid — remove a single entry
+app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
+  const { id, uid } = req.params;
+  if (!isValidTomeId(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
+  if (!isValidEntryUid(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
+  const tome = await readTome(id);
+  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
+  if (!tome.entries?.[uid]) return res.status(404).json({ error: 'Entry not found.' });
+  delete tome.entries[uid];
+  try {
+    await writeTome(tome);
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to save tome.' });
   }
 });
 

@@ -13,7 +13,7 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 | [Features](features.md) | Complete feature reference |
 | [API Reference](api-reference.md) | All server endpoints, request/response shapes |
 | [Entity-Core](entity-core.md) | Identity layer, memory enrichment, and MCP bridge |
-| [Lorebook](lorebook.md) | World Info engine — activation, injection, recursion, groups |
+| [Tomes](tomes.md) | World Info engine — multi-tome knowledge bases, activation, injection, recursion, groups |
 | [Sessions & Memorization](sessions.md) | Session lifecycle, logging, and automatic memory extraction |
 | [Tool Calling](tool-calling.md) | Built-in tools, custom tools, and the execution loop |
 | [Topics](topics.md) | Conversation topic tagging and auto-summaries |
@@ -25,6 +25,6 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 
 Proto-Familiar exists to validate the building blocks of **Familiar**: a personal, agentic caretaker AI designed to support users with conditions like ADHD, depression, and agoraphobia through proactive monitoring, long-term memory, and intentional parasocial bonding with an animal-character identity.
 
-The prototype focuses on the chat layer — provider proxying, lorebook injection, entity-core enrichment, session management, and tool calling — while the [Development Roadmap](../DEVELOPMENT_ROADMAP.md) describes the full planned system.
+The prototype focuses on the chat layer — provider proxying, Tome injection, entity-core enrichment, session management, and tool calling — while the [Development Roadmap](../DEVELOPMENT_ROADMAP.md) describes the full planned system.
 
 Research notes on architecture patterns, mental-health AI design, and memory systems can be found in the [`Research/`](../Research/) directory.

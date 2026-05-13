@@ -194,36 +194,36 @@
           </div>
         </div>
 
-        <!-- Lorebook -->
-        <div class="sidebar-section collapsible" id="section-lorebook">
-          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-lorebook">
-            Lorebook
+        <!-- Tomes -->
+        <div class="sidebar-section collapsible" id="section-tomes">
+          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-tomes">
+            Tomes
             <span class="chevron">▾</span>
           </button>
-          <div class="section-content" id="content-lorebook">
+          <div class="section-content" id="content-tomes">
             <p class="field-hint">Summaries of past topics, injected as context when their keywords appear.</p>
             <div class="field">
-              <label for="lorebook-scan-depth">Keyword scan depth <span class="label-hint">(messages)</span></label>
-              <input type="number" id="lorebook-scan-depth" value="4" min="1" max="50" step="1">
+              <label for="tome-scan-depth">Keyword scan depth <span class="label-hint">(messages)</span></label>
+              <input type="number" id="tome-scan-depth" value="4" min="1" max="50" step="1">
             </div>
             <div class="field-row">
-              <label for="lorebook-recursive">Enable recursion</label>
-              <input type="checkbox" id="lorebook-recursive">
+              <label for="tome-recursive">Enable recursion</label>
+              <input type="checkbox" id="tome-recursive">
             </div>
             <div class="field">
-              <label for="lorebook-max-recursion">Max recursion steps</label>
-              <input type="number" id="lorebook-max-recursion" value="3" min="1" max="10" step="1">
+              <label for="tome-max-recursion">Max recursion steps</label>
+              <input type="number" id="tome-max-recursion" value="3" min="1" max="10" step="1">
             </div>
             <div class="field-row">
-              <label for="lorebook-case-sensitive">Case-sensitive matching</label>
-              <input type="checkbox" id="lorebook-case-sensitive">
+              <label for="tome-case-sensitive">Case-sensitive matching</label>
+              <input type="checkbox" id="tome-case-sensitive">
             </div>
             <div class="field-row">
-              <label for="lorebook-match-whole-words">Whole-word matching</label>
-              <input type="checkbox" id="lorebook-match-whole-words">
+              <label for="tome-match-whole-words">Whole-word matching</label>
+              <input type="checkbox" id="tome-match-whole-words">
             </div>
             <div class="action-row" style="margin-top:4px">
-              <button id="lorebook-btn" class="btn-secondary">☰ View entries</button>
+              <button id="tomes-btn" class="btn-secondary">☰ Manage Tomes</button>
             </div>
           </div>
         </div>
@@ -353,23 +353,64 @@
       <div class="modal-footer" id="summary-footer">
         <button class="btn-ghost" id="summary-discard-btn">Discard</button>
         <button class="btn-secondary" id="summary-regen-btn" disabled>↻ Regenerate</button>
-        <button class="btn-send" id="summary-save-btn" disabled>Save to Lorebook</button>
+        <button class="btn-send" id="summary-save-btn" disabled>Save to Tome</button>
       </div>
     </div>
   </div>
 
-  <!-- Lorebook modal -->
-  <div class="modal-backdrop hidden" id="lorebook-modal" role="dialog" aria-modal="true" aria-labelledby="lorebook-modal-title">
+  <!-- Tomes manager modal -->
+  <div class="modal-backdrop hidden" id="tomes-modal" role="dialog" aria-modal="true" aria-labelledby="tomes-modal-title">
     <div class="modal modal-wide">
       <div class="modal-header">
-        <h2 class="modal-title" id="lorebook-modal-title">Lorebook</h2>
+        <h2 class="modal-title" id="tomes-modal-title">Tomes</h2>
         <div class="modal-header-actions">
-          <button class="btn-secondary" id="lorebook-new-btn">+ New</button>
-          <button class="icon-btn modal-close" id="lorebook-modal-close" aria-label="Close">✕</button>
+          <button class="btn-secondary" id="tome-new-btn">+ New Tome</button>
+          <button class="icon-btn modal-close" id="tomes-modal-close" aria-label="Close">✕</button>
         </div>
       </div>
-      <div class="modal-body" id="lorebook-list">
+      <div class="modal-body" id="tomes-list">
         <p class="logs-loading">Loading…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tome entries modal -->
+  <div class="modal-backdrop hidden" id="tome-entries-modal" role="dialog" aria-modal="true" aria-labelledby="tome-entries-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="tome-entries-modal-title">Tome Entries</h2>
+        <div class="modal-header-actions">
+          <button class="btn-ghost" id="tome-entries-back-btn">← Back</button>
+          <button class="btn-secondary" id="tome-entries-new-btn">+ New</button>
+          <button class="icon-btn modal-close" id="tome-entries-modal-close" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" id="tome-entries-list">
+        <p class="logs-loading">Loading…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- New tome creation modal -->
+  <div class="modal-backdrop hidden" id="new-tome-modal" role="dialog" aria-modal="true" aria-labelledby="new-tome-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title" id="new-tome-modal-title">New Tome</h2>
+        <button class="icon-btn modal-close" id="new-tome-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="new-tome-name-input">Tome name <span class="required">*</span></label>
+          <input type="text" id="new-tome-name-input" placeholder="e.g. World Lore, Character Notes…" maxlength="120">
+        </div>
+        <div class="field">
+          <label for="new-tome-description-input">Description <span class="label-hint">(optional)</span></label>
+          <textarea id="new-tome-description-input" rows="3" placeholder="Brief description of what this tome covers."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="new-tome-cancel-btn">Cancel</button>
+        <button class="btn-primary" id="new-tome-create-btn">Create Tome</button>
       </div>
     </div>
   </div>

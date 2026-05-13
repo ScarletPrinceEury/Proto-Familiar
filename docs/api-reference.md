@@ -162,37 +162,149 @@ Deletes the session log file for the given UUID.
 
 ---
 
-## Lorebook
+## Tomes
 
-### `GET /api/lorebook`
+Tomes are stored as individual JSON files in the `tomes/` directory. Each Tome is independently addressable and can be enabled or disabled. The activation engine aggregates entries from all enabled Tomes.
 
-Returns the full lorebook. Returns `{ "entries": {} }` if no lorebook file exists yet.
+### `GET /api/tomes`
+
+Returns a metadata list of all Tomes (no entry bodies).
+
+**Response:**
+
+```json
+[
+  {
+    "id":          "550e8400-e29b-41d4-a716-446655440000",
+    "name":        "World Lore",
+    "description": "Geographical and cultural facts.",
+    "enabled":     true,
+    "entryCount":  14
+  }
+]
+```
+
+---
+
+### `POST /api/tomes`
+
+Creates a new Tome.
+
+**Request body:**
+
+```json
+{
+  "name":        "Character Notes",
+  "description": "Optional description.",
+  "enabled":     true
+}
+```
+
+`name` is required. `description` and `enabled` are optional (defaults: `""`, `true`).
+
+**Response:** The full new Tome object including its generated `id` and empty `entries: {}`.
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | `name` is missing or blank |
+
+---
+
+### `GET /api/tomes/:id`
+
+Returns the full Tome including all entries.
 
 **Response:**
 
 ```json
 {
+  "id":      "550e8400-e29b-41d4-a716-446655440000",
+  "name":    "World Lore",
+  "enabled": true,
   "entries": {
     "<uid>": { ... entry object ... }
   }
 }
 ```
 
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Invalid Tome ID format |
+| `404` | Tome not found |
+
 ---
 
-### `PUT /api/lorebook`
+### `PUT /api/tomes/:id`
 
-Replaces the entire lorebook with the supplied body. The request body must be `{ "entries": { ... } }`.
+Replaces the `entries` map of an existing Tome. Optionally updates metadata fields in the same call.
+
+**Request body:**
+
+```json
+{
+  "entries": { "<uid>": { ... } },
+  "name":    "Optional new name",
+  "enabled": true
+}
+```
+
+Only `entries` is required. Any additional top-level fields (`name`, `description`, `enabled`) are merged into the stored Tome metadata.
 
 **Response:** `{ "ok": true }`
 
 ---
 
-### `DELETE /api/lorebook/:uid`
+### `PATCH /api/tomes/:id`
 
-Removes a single entry by UID and rewrites the lorebook file.
+Updates Tome metadata only (does not touch entries).
+
+**Request body:**
+
+```json
+{
+  "name":        "New name",
+  "description": "Updated description.",
+  "enabled":     false
+}
+```
+
+All fields are optional; only provided fields are updated.
+
+**Response:** The updated Tome metadata (without entries).
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Invalid Tome ID format |
+| `404` | Tome not found |
+
+---
+
+### `DELETE /api/tomes/:id`
+
+Deletes the Tome file permanently.
 
 **Response:** `{ "ok": true }`
+
+---
+
+### `DELETE /api/tomes/:id/entries/:uid`
+
+Removes a single entry from a Tome by UID and rewrites the Tome file.
+
+**Response:** `{ "ok": true }`
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| `400` | Invalid Tome ID or entry UID format |
+| `404` | Tome or entry not found |
 
 ---
 
