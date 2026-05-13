@@ -1,0 +1,116 @@
+# Architecture
+
+## Overview
+
+Proto-Familiar is a Node.js application split into a thin Express server and a vanilla-JS single-page frontend. The server's primary job is to proxy LLM requests (avoiding browser CORS restrictions), enrich them with entity-core context, and persist session logs and the lorebook.
+
+```
+Browser (public/)
+    │
+    │  HTTP + SSE
+    ▼
+server.js  (Express, Node 18+, ESM)
+    │
+    ├── thalamus.js  ──►  entity-core-alpha  (Deno, stdio MCP)
+    │
+    ├── logs/         (session JSON files, git-ignored)
+    └── lorebook.json (world info entries, git-ignored)
+```
+
+## File Structure
+
+```
+/
+├── server.js            Express server — API proxy, log/lorebook endpoints
+├── thalamus.js          Entity-core MCP bridge — enriches every LLM request
+├── package.json
+├── .gitignore
+│
+├── logs/                Session JSON files (auto-created, git-ignored)
+├── lorebook.json        Lorebook entries (auto-created, git-ignored)
+│
+├── scripts/
+│   └── import-entity.js Import an entity-core data directory into the local instance
+│
+├── public/
+│   ├── index.html       App shell — sidebar, chat pane, all modals
+│   ├── style.css        All styling — dark/light themes, responsive layout
+│   └── app.js           All frontend logic — state, API calls, rendering, topics, lorebook
+│
+├── docs/                This documentation
+│
+└── Research/            Background reading on architecture and mental-health AI design
+```
+
+## Component Responsibilities
+
+### `server.js`
+
+The Express server handles:
+- **`POST /api/chat`** — validates the request, calls `thalamus.js:enrich()` to prepend entity-core context to the system message, then proxies the enriched request to the upstream LLM provider. Supports both streaming (SSE) and non-streaming modes.
+- **`POST /api/debug-prompt`** — returns the enriched message array without calling any upstream LLM; used by the prompt inspector UI.
+- **Log endpoints** (`/api/log`, `/api/logs`, `/api/logs/:id`, `DELETE /api/logs/:id`) — persist and retrieve session JSON files from the `logs/` directory.
+- **Lorebook endpoints** (`/api/lorebook`, `PUT /api/lorebook`, `DELETE /api/lorebook/:uid`) — persist and retrieve lorebook entries from `lorebook.json`.
+- **`GET /api/health`** — lightweight uptime probe.
+- **Static file serving** — serves `public/` at the root.
+
+### `thalamus.js`
+
+The entity-core bridge:
+- On startup, spawns `entity-core-alpha` as a child Deno process over stdio using the MCP (Model Context Protocol) SDK.
+- Exposes a single `enrich(userMessage)` function called once per chat request.
+- Fires three MCP tool calls in parallel (`identity_get_all`, `memory_search`, `graph_node_search`). A failure in any one does not block the others (`Promise.allSettled`).
+- Assembles the results into a structured context block and prepends it to the system message.
+- Returns an empty string (graceful degradation) if entity-core is unreachable.
+
+### `public/app.js`
+
+All frontend logic in a single ES5-style script:
+- **State management** — a plain `state` object holds provider, API key, model, all prompt fields, messages, session metadata, topics, lorebook cache, and tool settings.
+- **Persistence** — settings and message history are stored in `localStorage`; sessions are also written to the server via `POST /api/log` (fire-and-forget).
+- **Message building** — `buildApiMessages()` assembles the full message array for each request: system message (with lorebook injections at each position), conversation history, new user turn, post-history prompt.
+- **Lorebook engine** — full SillyTavern-compatible World Info implementation: keyword scanning, injection positions, selective logic, timed effects (sticky/cooldown), recursion, and group exclusion.
+- **Tool calling loop** — sends tools with each request, executes results client-side, and re-sends up to 5 rounds.
+- **Topics** — tracks named conversation slices with coloured gutter bars; triggers LLM-generated summaries saved to the lorebook on topic end.
+- **Session memorization** — on session close, sends the full conversation to the LLM and saves the extracted topics as lorebook entries.
+- **UI rendering** — renders messages, tool-call blocks, topic bars, modals, and settings panels.
+
+## Data Flow — Single Chat Request
+
+```
+User types message
+        │
+        ▼
+buildApiMessages()
+   ├── activateLorebookEntries()   ← keyword scan → inject at each position
+   ├── applyNameVars()             ← {{user}} / {{char}} substitution
+   └── assembles system + history + new user turn + post-history prompt
+        │
+        ▼
+POST /api/chat  { provider, apiKey, model, messages, stream, tools, … }
+        │
+        ▼  server.js
+enrich(lastUserMessage)            ← thalamus.js
+   ├── identity_get_all  ──►  entity-core (MCP)
+   ├── memory_search     ──►  entity-core (MCP)
+   └── graph_node_search ──►  entity-core (MCP)
+        │
+        ▼
+Prepend entity-core block to system message
+        │
+        ▼
+fetch(providerURL, enrichedPayload)
+        │
+        ▼  SSE stream or JSON
+Tool calls?
+   ├── YES → execute client-side → append results → re-send (up to 5 rounds)
+   └── NO  → render assistant message → save to localStorage + server
+```
+
+## Security Design
+
+- **API key handling:** The key travels from browser to `localhost` only. It is never logged or stored by the server — it is used once per request and discarded.
+- **Path traversal prevention:** All log endpoints validate session IDs against a strict UUID regex (`/^[0-9a-f]{8}-…$/`) before constructing any file path.
+- **Input size limit:** `express.json` is capped at 4 MB.
+- **Local-only default:** The server binds to all interfaces but is not designed to be exposed to the internet without adding authentication middleware.
+- **No telemetry:** No data is sent anywhere except the proxied LLM request to the configured provider.
