@@ -58,7 +58,7 @@ The Express server handles:
 ### `thalamus.js`
 
 The entity-core bridge:
-- On startup, spawns `entity-core-alpha` as a child Deno process over stdio using the MCP (Model Context Protocol) SDK.
+- On startup, spawns `entity-core-alpha` as a child Deno process over stdio using the MCP (Model Context Protocol) SDK. The subprocess is launched with `deno run -A --unstable-cron`, granting it all Deno permissions. For a personal local tool this is fine; in a shared or networked environment consider restricting to `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env` once you have audited the minimum permissions your entity-core build needs.
 - Exposes a single `enrich(userMessage)` function called once per chat request.
 - Fires three MCP tool calls in parallel (`identity_get_all`, `memory_search`, `graph_node_search`). A failure in any one does not block the others (`Promise.allSettled`).
 - Assembles the results into a structured context block and prepends it to the system message.
@@ -110,8 +110,11 @@ Tool calls?
 
 ## Security Design
 
-- **API key handling:** The key travels from browser to `localhost` only. It is never logged or stored by the server — it is used once per request and discarded.
-- **Path traversal prevention:** All log endpoints validate session IDs against a strict UUID regex (`/^[0-9a-f]{8}-…$/`) before constructing any file path.
-- **Input size limit:** `express.json` is capped at 4 MB.
+- **API key handling:** The key travels from browser to `localhost` only. It is never logged or stored by the server — it is used once per request and discarded. The browser persists the key in `localStorage`; do not use the app on shared or untrusted devices.
+- **Path traversal prevention:** All file-backed endpoints validate IDs against a strict UUID regex (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/`) before constructing any file path. This covers session log IDs, Tome IDs, and Tome entry UIDs.
+- **Rate limiting:** `POST /api/chat` enforces a per-IP cap of 20 requests per minute (in-memory, no external dependency) to guard against runaway tool-call loops and accidental public exposure.
+- **Prompt inspector endpoint:** `POST /api/debug-prompt` returns the full entity-core enriched context with no authentication. It is intended for local development only — disable or firewall it before any non-localhost deployment.
+- **Entity-core permissions:** `thalamus.js` spawns entity-core with `deno run -A`, granting the subprocess all Deno permissions. Acceptable for a personal local tool. For shared deployments, scope to the minimum required flags once audited.
+- **Input size limit:** `express.json` is capped at 4 MB. Individual memory and identity write endpoints have tighter per-field caps (8 KB).
 - **Local-only default:** The server binds to all interfaces but is not designed to be exposed to the internet without adding authentication middleware.
 - **No telemetry:** No data is sent anywhere except the proxied LLM request to the configured provider.

@@ -495,9 +495,9 @@ function renderInlineText(text) {
     s = s.replace(/^[*\-] (.+)$/gm, '<li>$1</li>');
     s = s.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
 
-    // Ordered lists
-    s = s.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-    // (wrap already done above via same pattern)
+    // Ordered lists — use a temporary tag to avoid re-wrapping unordered <li> items
+    s = s.replace(/^\d+\. (.+)$/gm, '<oli>$1</oli>');
+    s = s.replace(/(<oli>.*<\/oli>\n?)+/g, m => `<ol>${m.replace(/<oli>/g, '<li>').replace(/<\/oli>/g, '</li>')}</ol>`);
 
     // Paragraphs: double newline → </p><p>
     s = s.replace(/\n\n+/g, '</p><p>');

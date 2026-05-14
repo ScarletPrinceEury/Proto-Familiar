@@ -80,6 +80,8 @@ Entity-core provides persistent identity and memory enrichment for every LLM req
 2. Follow the entity-core README to populate its `data/` directory with identity files.
 3. Start Proto-Familiar normally — `thalamus.js` will spawn entity-core automatically on startup.
 
+> **Permissions note:** entity-core is launched with `deno run -A --unstable-cron`, granting it all Deno permissions. For a personal local setup this is the simplest approach. If you run Familiar in a shared or networked environment, consider restricting entity-core to a scoped permission set (e.g. `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env`) in `thalamus.js` once you have verified the minimum your build requires.
+
 To import an existing entity-core data directory from another machine:
 
 ```bash

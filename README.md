@@ -455,8 +455,11 @@ The script renames SillyTavern fields to their Proto-Familiar equivalents (`key�
 
 ### Privacy & Security Notes
 
-- **API key security:** The key is sent from the browser to `localhost` only. The server uses it once per request to call the upstream API and never logs or stores it.
-- **Path traversal prevention:** Log endpoints validate session IDs against a strict UUID regex before constructing any file path.
+- **API key security:** The key is sent from the browser to `localhost` only. The server uses it once per request to call the upstream API and never logs or stores it. The key is persisted in `localStorage` in your browser — do not use the app on a shared or untrusted device.
+- **Path traversal prevention:** All file-backed endpoints (session logs, Tomes, entity writes) validate IDs against a strict UUID regex before constructing any file path.
+- **Rate limiting:** `POST /api/chat` is limited to 20 requests per minute per IP (in-memory, no external dependency) to protect against accidental exposure and runaway tool-call loops.
+- **Prompt inspector endpoint:** `POST /api/debug-prompt` returns the full enriched context — entity memories, identity data, and the assembled system message — with no authentication. It is a development tool; do not expose it publicly.
+- **Entity-core permissions:** `thalamus.js` spawns entity-core with Deno's `-A` (all-permissions) flag. This is the easiest setup for a local personal tool. If you run the server in a shared or networked environment, consider restricting entity-core to a scoped permission set (e.g. `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env`) once you have verified the minimum your build requires.
 - **Local-only by default:** The server binds to all interfaces on the configured port but is not intended to be exposed to the internet without additional authentication.
 - **No telemetry:** Nothing is phoned home. The only outbound traffic is the proxied LLM request to the provider you configure.
 

@@ -34,12 +34,30 @@ const PROVIDER_URLS = {
   'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
 };
 
+// Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
+// Protects against accidental public exposure and runaway tool-call loops.
+const _chatRateCounts = new Map();
+function chatRateLimit(req, res, next) {
+  const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
+  const now = Date.now();
+  const WINDOW_MS = 60_000;
+  const MAX_REQ   = 20;
+  const entry = _chatRateCounts.get(ip) ?? { count: 0, resetAt: now + WINDOW_MS };
+  if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + WINDOW_MS; }
+  entry.count++;
+  _chatRateCounts.set(ip, entry);
+  if (entry.count > MAX_REQ) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a moment before sending another message.' });
+  }
+  next();
+}
+
 /**
  * POST /api/chat
  * Body: { provider, apiKey, model, messages, stream, temperature?, max_tokens? }
  * Proxies to the chosen provider and streams or returns the response.
  */
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', chatRateLimit, async (req, res) => {
   const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice } = req.body;
 
   const url = PROVIDER_URLS[provider];
@@ -133,6 +151,10 @@ app.post('/api/chat', async (req, res) => {
  * Returns the full message array that would be sent to the LLM for a given
  * messages payload — including entity-core enrichment prepended to the system
  * message. Does NOT call any upstream LLM.
+ *
+ * WARNING: This endpoint returns entity-core enriched context (personal memory /
+ * identity data) with no authentication. Keep it disabled or firewalled in any
+ * deployment outside localhost.
  */
 app.post('/api/debug-prompt', async (req, res) => {
   const { messages } = req.body;
@@ -240,11 +262,11 @@ const TOMES_DIR = path.join(__dirname, 'tomes');
 mkdirSync(TOMES_DIR, { recursive: true });
 
 function isValidTomeId(id) {
-  return typeof id === 'string' && /^[0-9a-f\-]{8,64}$/i.test(id) && !id.includes('..');
+  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 }
 
 function isValidEntryUid(uid) {
-  return typeof uid === 'string' && /^[0-9a-f\-]{8,64}$/i.test(uid) && !uid.includes('..');
+  return typeof uid === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
 }
 
 async function readTome(id) {
