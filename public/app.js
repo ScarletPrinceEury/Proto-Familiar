@@ -2495,9 +2495,9 @@ function applyGroupLogic(entries) {
 function activateTomeEntries(userInput) {
   const empty = { sys_top: [], before_char: [], after_char: [], sys_bottom: [], at_depth: [] };
   // Flatten all entries from all enabled (cached) tomes
-  const allEntries = Object.values(state.tomeCache).flatMap(tome =>
-    Object.values(tome.entries ?? {})
-  );
+  const allEntries = Object.values(state.tomeCache)
+    .filter(tome => tome.enabled !== false)
+    .flatMap(tome => Object.values(tome.entries ?? {}));
   if (!allEntries.length) return empty;
 
   const globalDepth = state.tomeScanDepth ?? 4;
