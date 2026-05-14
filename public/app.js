@@ -263,6 +263,8 @@ const state = {
   tomeMaxRecursionSteps: 3,      // max recursive passes
   tomeCaseSensitive:     false,  // global case-sensitive keyword matching
   tomeMatchWholeWords:   false,  // global whole-word keyword matching
+  turnCount:             0,      // conversation turn counter (used by entry.delay)
+  generationMode:        'normal', // current generation mode (used by entry.triggers[])
   lorebook:          { entries: {} }, // legacy field kept for compatibility
   tomeCache:         {},         // { [tomeId]: tomeObject } — not persisted
   tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
@@ -787,6 +789,7 @@ async function sendMessage(userInput) {
       await doNonStreamingRequest(apiMessages, userInput, userTimestamp);
     }
     setStatus('ok');
+    state.turnCount = (state.turnCount ?? 0) + 1;
   } catch (err) {
     setTyping(false);
     if (err.name !== 'AbortError') {
@@ -2081,6 +2084,14 @@ function normEntryPos(pos) {
   return MAP[pos] ?? 0;
 }
 
+/** Normalize SillyTavern-format entry field names to Proto-Familiar native names in-place. */
+function normalizeEntry(entry) {
+  if ('key' in entry && !('keys' in entry))              entry.keys            = entry.key;
+  if ('order' in entry && !('insertion_order' in entry)) entry.insertion_order = entry.order;
+  if ('disable' in entry && !('enabled' in entry))       entry.enabled         = !entry.disable;
+  return entry;
+}
+
 function openRetroEndModal(openTopics, msgIndex) {
   _retroEndIndex = msgIndex;
   const list = $('retro-end-list');
@@ -2364,10 +2375,26 @@ function buildScanText(messages, userInput, depth, extra) {
 function scanLoreEntries(entries, getCorpus, alreadyActivated, isRecursion) {
   const newlyActivated = [];
   for (const entry of entries) {
+    normalizeEntry(entry);
     if (!entry.enabled) continue;
     if (alreadyActivated.has(entry.uid)) continue;
     if (isRecursion  && entry.excludeRecursion)    continue;
     if (!isRecursion && entry.delayUntilRecursion) continue;
+
+    // delay: skip until enough conversation turns have passed
+    if ((entry.delay ?? 0) > 0 && (state.turnCount ?? 0) < entry.delay) continue;
+
+    // triggers: skip if current generation mode is not in the allowed list
+    if (entry.triggers?.length > 0 && !entry.triggers.includes(state.generationMode ?? 'normal')) continue;
+
+    // characterFilter: skip based on active entity name
+    if (entry.characterFilter) {
+      const names = entry.characterFilter.names ?? [];
+      if (names.length > 0) {
+        const nameMatch = names.some(n => n.toLowerCase() === (state.charName ?? '').toLowerCase());
+        if (entry.characterFilter.isExclude ? nameMatch : !nameMatch) continue;
+      }
+    }
 
     const timed = tomeTimedEffects[entry.uid] ?? { stickyLeft: 0, cooldownLeft: 0 };
     if (timed.cooldownLeft > 0) continue;       // on cooldown
@@ -2379,8 +2406,8 @@ function scanLoreEntries(entries, getCorpus, alreadyActivated, isRecursion) {
     const prob = entry.probability ?? 100;
     if (prob < 100 && Math.random() * 100 > prob) continue;
 
-    // Get corpus for this entry (per-entry scan depth override)
-    const corpus = getCorpus(entry.scanDepth ?? null);
+    // Get corpus for this entry (per-entry scan depth override + match source flags)
+    const corpus = getCorpus(entry.scanDepth ?? null, entry);
 
     // Primary key matching
     const pkeys = (entry.keys ?? []).filter(k => k.trim());
@@ -2407,12 +2434,14 @@ function applyGroupLogic(entries) {
     else result.push(e);
   }
   for (const [, grp] of groups) {
-    grp.sort((a, b) => {
+    // groupOverride entries win unconditionally; fall back to weight/order among overrides
+    const pool = grp.some(e => e.groupOverride) ? grp.filter(e => e.groupOverride) : grp;
+    pool.sort((a, b) => {
       const wA = a.groupWeight ?? 100, wB = b.groupWeight ?? 100;
       if (wA !== wB) return wB - wA;
       return (a.insertion_order ?? 100) - (b.insertion_order ?? 100);
     });
-    result.push(grp[0]);
+    result.push(pool[0]);
   }
   return result;
 }
@@ -2444,9 +2473,21 @@ function activateTomeEntries(userInput) {
 
   // Corpus getter factory
   function makeGetCorpus(extra) {
-    return (depthOverride) => {
+    return (depthOverride, entry) => {
       const d = depthOverride !== null && depthOverride !== undefined ? depthOverride : globalDepth;
-      return buildScanText(messages, userInput, d, extra);
+      let text = buildScanText(messages, userInput, d, extra);
+      if (entry) {
+        // matchCharacterDescription / matchCharacterPersonality → Familiar's entity card
+        if ((entry.matchCharacterDescription || entry.matchCharacterPersonality) && state.characterProfile)
+          text += '\n' + state.characterProfile;
+        // matchPersonaDescription → user profile
+        if (entry.matchPersonaDescription && state.userProfile)
+          text += '\n' + state.userProfile;
+        // matchScenario → system prompt (closest equivalent)
+        if (entry.matchScenario && state.systemPrompt)
+          text += '\n' + state.systemPrompt;
+      }
+      return text;
     };
   }
 
