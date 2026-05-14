@@ -269,9 +269,30 @@ function isValidEntryUid(uid) {
   return typeof uid === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
 }
 
+// Returns the absolute path for a tome file, falling back to a directory scan
+// so that pre-existing tomes with non-UUID filenames (e.g. "ADHD-Tome.json") are found.
+async function findTomeFile(id) {
+  const direct = path.join(TOMES_DIR, `${id}.json`);
+  try {
+    await fsp.access(direct);
+    return direct;
+  } catch { /* not found by UUID filename — scan */ }
+  const files = await fsp.readdir(TOMES_DIR);
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
+      const data = JSON.parse(raw);
+      if (data.id === id) return path.join(TOMES_DIR, f);
+    } catch { /* skip corrupt */ }
+  }
+  return direct; // default path for newly created tomes
+}
+
 async function readTome(id) {
   try {
-    const raw = await fsp.readFile(path.join(TOMES_DIR, `${id}.json`), 'utf8');
+    const filePath = await findTomeFile(id);
+    const raw = await fsp.readFile(filePath, 'utf8');
     return JSON.parse(raw);
   } catch {
     return null;
@@ -279,7 +300,8 @@ async function readTome(id) {
 }
 
 async function writeTome(tome) {
-  await fsp.writeFile(path.join(TOMES_DIR, `${tome.id}.json`), JSON.stringify(tome, null, 2), 'utf8');
+  const filePath = await findTomeFile(tome.id);
+  await fsp.writeFile(filePath, JSON.stringify(tome, null, 2), 'utf8');
 }
 
 // GET /api/tomes — list all tomes (metadata + entry count)
