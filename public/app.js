@@ -1461,6 +1461,47 @@ ${convText}`;
   } catch { /* non-critical — silently swallow any error */ }
 }
 
+// ── Prompt inspector modal ───────────────────────────────────
+function openPromptInspector() {
+  const body = $('prompt-inspector-body');
+  if (!lastSentMessages) {
+    body.innerHTML = '<p class="logs-empty">Send a message first.</p>';
+  } else {
+    body.innerHTML = '';
+    for (const msg of lastSentMessages) {
+      const div = document.createElement('div');
+      div.className = 'pi-msg';
+      const roleClass = `pi-role-${msg.role ?? 'user'}`;
+      const contentText = typeof msg.content === 'string'
+        ? msg.content
+        : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn-ghost pi-copy';
+      copyBtn.textContent = 'Copy';
+      wireCopyButton(copyBtn, () => contentText);
+      div.innerHTML = `<span class="pi-role ${roleClass}">${esc(msg.role ?? 'user')}</span>`;
+      const details = document.createElement('details');
+      details.open = msg.role === 'system' || lastSentMessages.length <= 6;
+      const summary = document.createElement('summary');
+      summary.className = 'pi-summary';
+      summary.textContent = contentText.slice(0, 120).replace(/\n/g, ' ');
+      const pre = document.createElement('pre');
+      pre.className = 'pi-pre';
+      pre.textContent = contentText;
+      details.appendChild(summary);
+      details.appendChild(pre);
+      div.appendChild(details);
+      div.appendChild(copyBtn);
+      body.appendChild(div);
+    }
+  }
+  $('prompt-inspector-modal').classList.remove('hidden');
+}
+
+function closePromptInspector() {
+  $('prompt-inspector-modal').classList.add('hidden');
+}
+
 // ── Logs modal ──────────────────────────────────────────────
 function openLogsModal() {
   $('logs-modal').classList.remove('hidden');
