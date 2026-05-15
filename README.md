@@ -12,7 +12,17 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 - [Node.js](https://nodejs.org/) 18 or newer
 - [Deno](https://deno.com/) 2+ (only required if using the entity-core identity layer)
 
-### Quick Start
+### Quick Start (one double-click)
+
+| OS | First-run | Launch | Stop |
+|---|---|---|---|
+| **Windows** | Double-click `Proto-Familiar.vbs`. It auto-installs Node, Deno, and Git via `winget` (no admin needed — `--scope user`), runs `npm install`, clones entity-core, and creates Desktop + Start Menu shortcuts. | Double-click the **Proto-Familiar** Desktop shortcut (or `Proto-Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops both Proto-Familiar and entity-core. |
+| **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies; subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. | Press **Ctrl-C** in the Terminal window, then close the window. |
+| **Linux** | Run `./install.sh` once. It installs Node deps, clones entity-core, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
+
+Everything runs locally at **http://localhost:3000** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
+
+**Manual / advanced:**
 
 ```bash
 # 1. Install dependencies
@@ -50,7 +60,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | Feature | Details |
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
-| **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
+| **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server |
 | **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
@@ -382,7 +392,7 @@ The lorebook is stored as `lorebook.json` in the project root (next to `server.j
 
 ### Entity-Core Identity Layer
 
-Familiar optionally connects to a local [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
+Familiar optionally connects to a local [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
 
 #### How it works
 
@@ -434,9 +444,9 @@ To see exactly what was sent to the LLM on any given message — including the f
 
 #### Setup
 
-1. Clone [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) as a sibling directory:
+1. Clone [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory:
    ```bash
-   git clone https://github.com/zarilewis/entity-core-alpha ../entity-core-alpha
+   git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 ../entity-core-alpha
    ```
 2. Follow its README to populate `data/` with identity files and memories.
 3. Start Familiar normally — `thalamus.js` spawns entity-core automatically.
@@ -598,5 +608,5 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 
 ## Acknowledgements
 
-Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/zarilewis/entity-core-alpha) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
+Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
 
