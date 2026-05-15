@@ -33,6 +33,16 @@ To run on a different port, set the `PORT` environment variable before starting:
 PORT=8080 npm start
 ```
 
+### Wiki
+
+Project wiki pages are available in [`/wiki`](wiki/):
+
+- [Home](wiki/Home.md)
+- [Getting Started](wiki/Getting-Started.md)
+- [Configuration & Features](wiki/Configuration-and-Features.md)
+- [Server API](wiki/Server-API.md)
+- [Research Guide](wiki/Research-Guide.md)
+
 ---
 
 ### Features
