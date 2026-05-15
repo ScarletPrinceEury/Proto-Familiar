@@ -249,11 +249,12 @@ const state = {
   characterProfile:  '',
   userProfile:       '',
   postHistoryPrompt: '',
-  sessionId:         null,   // UUID, created at init or on clear
-  sessionStartedAt:  null,   // ISO timestamp
-  sessionEndedAt:    null,   // ISO timestamp — set when session is auto-ended
-  lastMessage:       null,   // ISO timestamp — mirrors the module-level lastMessage
-  messages:          [],     // { role, content, timestamp }[]
+  sessionId:               null,   // UUID, created at init or on clear
+  sessionStartedAt:        null,   // ISO timestamp
+  sessionEndedAt:          null,   // ISO timestamp — set when session is auto-ended
+  previousSessionEndedAt:  null,   // ISO timestamp of the most recent prior session's endedAt — drives {{timeSinceLastSession}}
+  lastMessage:             null,   // ISO timestamp — mirrors the module-level lastMessage
+  messages:                [],     // { role, content, timestamp }[]
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
   customTools:       '',     // JSON array string of user-defined tool definitions
@@ -335,15 +336,116 @@ async function saveToServer() {
   } catch { /* non-critical */ }
 }
 
-// ── Name variable substitution ──────────────────────────────────
+// ── Macro substitution ──────────────────────────────────────────
 /**
- * Replace {{user}} and {{char}} in a prompt string with the
- * configured user/AI display names.
+ * Format a millisecond duration as a compact human string: "47s", "5m",
+ * "2h 14m", "3d 4h", or "just now" when under a minute.
+ */
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+  if (ms < 60_000) return ms < 5_000 ? 'just now' : `${Math.floor(ms / 1000)}s`;
+  const min  = Math.floor(ms / 60_000);
+  const hour = Math.floor(min / 60);
+  const day  = Math.floor(hour / 24);
+  if (day  >= 1) return `${day}d ${hour % 24}h`;
+  if (hour >= 1) return `${hour}h ${min % 60}m`;
+  return `${min}m`;
+}
+
+/**
+ * Milliseconds between the timestamps of the two most recent USER messages.
+ *
+ * When applied while a new user turn is being built (the common case —
+ * `applyNameVars` is called from `buildApiMessages`), the "current" user
+ * message is `Date.now()` and the macro reads as the gap leading up to it.
+ * When applied outside of that context (no new turn in flight), it falls
+ * back to the gap between the two most recent user messages already in
+ * `state.messages`.
+ *
+ * Stays inside `state.messages`, so it can't accidentally cross a session
+ * boundary the way the module-level `elapsedTime` field can after a state
+ * restore.
+ */
+function elapsedBetweenUserMessages() {
+  const stamps = [];
+  for (let i = state.messages.length - 1; i >= 0 && stamps.length < 2; i--) {
+    const m = state.messages[i];
+    if (m?.role === 'user' && m.timestamp) {
+      const t = new Date(m.timestamp).getTime();
+      if (Number.isFinite(t)) stamps.push(t);
+    }
+  }
+  if (!stamps.length) return null;
+  if (_macroNowMs !== null) return _macroNowMs - stamps[0];
+  if (stamps.length < 2)    return null;
+  return stamps[0] - stamps[1];
+}
+
+// Set by `buildApiMessages` for the duration of macro substitution so
+// {{elapsedTime}} can treat the in-flight user turn as "the latest user
+// message". Reset to null after the build so other callers of
+// applyNameVars (e.g. ad-hoc lorebook content rendering) still get the
+// history-only behaviour.
+let _macroNowMs = null;
+
+/**
+ * Milliseconds since the most recent prior session ended, based on
+ * `state.previousSessionEndedAt` (maintained on session-boundary events
+ * and refreshed from /api/logs when the cache is missing).
+ */
+function timeSinceLastSessionEnded() {
+  if (!state.previousSessionEndedAt) return null;
+  const t = new Date(state.previousSessionEndedAt).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Date.now() - t;
+}
+
+/**
+ * Refresh `state.previousSessionEndedAt` from the server's session list,
+ * picking the most recent `endedAt` among logs that aren't the current
+ * session. Used on cold start and when loading a different historical
+ * session — both cases where localStorage may not reflect what the
+ * server knows.
+ */
+async function refreshPreviousSessionEndedAt() {
+  try {
+    const res = await fetch('/api/logs');
+    if (!res.ok) return;
+    const list = await res.json();
+    let latest = null;
+    for (const s of list) {
+      if (!s?.endedAt) continue;
+      if (s.sessionId === state.sessionId) continue;
+      const t = new Date(s.endedAt).getTime();
+      if (!Number.isFinite(t)) continue;
+      if (latest === null || t > new Date(latest).getTime()) latest = s.endedAt;
+    }
+    if (latest && latest !== state.previousSessionEndedAt) {
+      state.previousSessionEndedAt = latest;
+      saveSettings();
+    }
+  } catch { /* best-effort cache refresh */ }
+}
+
+/**
+ * Replace prompt macros with their current values:
+ *   {{user}}                — configured user display name
+ *   {{char}}                — configured AI display name
+ *   {{elapsedTime}}         — duration between the last two user messages
+ *   {{timeSinceLastSession}} — duration since the previous session ended
  */
 function applyNameVars(text) {
   return text
     .replace(/\{\{user\}\}/gi, state.userName || 'User')
-    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant');
+    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
+    .replace(/\{\{elapsedTime\}\}/gi, () => {
+      const ms = elapsedBetweenUserMessages();
+      return ms !== null ? formatDuration(ms) : 'first message of this session';
+    })
+    .replace(/\{\{timeSinceLastSession\}\}/gi, () => {
+      const ms = timeSinceLastSessionEnded();
+      return ms !== null ? formatDuration(ms) : 'no prior session';
+    });
 }
 
 // ── Message building ─────────────────────────────────────────────
@@ -371,6 +473,12 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
  */
 function buildApiMessages(userInput) {
   const msgs = [];
+
+  // Pin "now" for macro substitution so {{elapsedTime}} can treat the
+  // turn being built as the latest user message, and so every macro in
+  // the same prompt build sees a consistent moment.
+  _macroNowMs = Date.now();
+  try {
 
   // ── Activate lorebook entries ────────────────────────────────
   const lore = activateTomeEntries(userInput);
@@ -428,6 +536,9 @@ function buildApiMessages(userInput) {
     msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
   return msgs;
+  } finally {
+    _macroNowMs = null;
+  }
 }
 
 // ── Markdown rendering ───────────────────────────────────────────
@@ -1293,6 +1404,9 @@ async function autoEndSession() {
     const sessionMessages = [...state.messages];
     const sessionId       = state.sessionId;
     state.sessionEndedAt  = new Date().toISOString();
+    // Remember when this session ended so {{timeSinceLastSession}} reads
+    // correctly from the new session that's about to start.
+    state.previousSessionEndedAt = state.sessionEndedAt;
     saveSettings();
     await saveToServer();
     memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
@@ -1615,6 +1729,10 @@ async function loadSession(sessionId) {
     renderAllMessages();
     updateTopicStrip();
     closeLogsModal();
+
+    // Loading a different session changes which log is "the prior one" —
+    // recompute the cache so {{timeSinceLastSession}} stays correct.
+    refreshPreviousSessionEndedAt().catch(() => {});
   } catch (err) {
     alert(`Failed to load session: ${err.message}`);
   }
@@ -1631,9 +1749,16 @@ function init() {
   if (lastMessage) {
     const idleMs = Date.now() - new Date(lastMessage).getTime();
     if (idleMs >= SESSION_IDLE_MS) {
-      // Session expired while the tab was closed — finalize silently, then reset
+      // Session expired while the tab was closed — finalize silently, then reset.
+      // Capture the just-finalised endedAt for {{timeSinceLastSession}} before
+      // startNewSession() clears sessionEndedAt.
       if (state.messages.length && !state.sessionEndedAt) {
         state.sessionEndedAt = lastMessage; // approximate — last known activity
+      }
+      if (state.sessionEndedAt) {
+        state.previousSessionEndedAt = state.sessionEndedAt;
+      }
+      if (state.messages.length) {
         saveSettings();
         saveToServer(); // fire-and-forget
       }
@@ -1642,6 +1767,12 @@ function init() {
       // Resume the countdown with however much time remains
       _sessionTimeoutId = setTimeout(autoEndSession, SESSION_IDLE_MS - idleMs);
     }
+  }
+
+  // Backfill {{timeSinceLastSession}}'s cache from server logs on cold start,
+  // so the macro works for users whose localStorage doesn't have it yet.
+  if (!state.previousSessionEndedAt) {
+    refreshPreviousSessionEndedAt().catch(() => {});
   }
 
   // Apply saved theme
@@ -1719,6 +1850,9 @@ function init() {
         const sessionMessages = [...state.messages];
         const sessionId       = state.sessionId;
         state.sessionEndedAt  = new Date().toISOString();
+        // Hand the just-ended session's endedAt to {{timeSinceLastSession}}
+        // before startNewSession() resets sessionEndedAt to null.
+        state.previousSessionEndedAt = state.sessionEndedAt;
         saveSettings();
         saveToServer(); // fire-and-forget — stamps the log with endedAt
         memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });

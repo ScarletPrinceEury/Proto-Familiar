@@ -59,7 +59,14 @@ Open with **☰** in the top bar.
 | User profile | Appended to the system message after the character profile, under `[User Profile]` |
 | Post-history prompt | Appended as a final user turn immediately before each AI response |
 
-All prompt fields support `{{user}}` and `{{char}}` name variables and can be loaded from a `.txt`, `.md`, or `.json` file.
+All prompt fields and Tome entry content support these macros and can be loaded from a `.txt`, `.md`, or `.json` file:
+
+| Macro | Renders |
+|---|---|
+| `{{user}}` | The configured **User name** |
+| `{{char}}` | The configured **AI name** |
+| `{{elapsedTime}}` | Time between the **two most recent user messages** in the current session — e.g. `5m`, `2h 14m`, `3d 4h`. Falls back to `first message of this session` when there's only one user turn so far. Computed from `state.messages` so it can never cross a session boundary. |
+| `{{timeSinceLastSession}}` | Time since the **previous session** ended — same format. Falls back to `no prior session` on a fresh install. Cached on session-boundary events (idle auto-end, Clear, tab close) and refreshed from `/api/logs` on cold start or when loading a different historical session. |
 
 ### Tomes Settings
 

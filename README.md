@@ -53,7 +53,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/zarilewis/entity-core-alpha) MCP server |
 | **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt sent to the LLM — including entity-core identity, Tome injections, and memory context |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
-| **Name variables** | Set a User name and AI name in the sidebar; use `{{user}}` and `{{char}}` anywhere in prompts |
+| **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` renders the gap between the last two user messages in this session; `{{timeSinceLastSession}}` renders the gap since the previous session ended (e.g. `5m`, `2h 14m`, `3d 4h`) |
 | **System prompt** | Free-text field or import from `.txt` / `.md` / `.json` |
 | **Character profile** | Injected into the system message after the system prompt |
 | **User profile** | Injected into the system message after character profile |
