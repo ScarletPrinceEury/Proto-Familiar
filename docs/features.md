@@ -65,7 +65,7 @@ All prompt fields and Tome entry content support these macros and can be loaded 
 |---|---|
 | `{{user}}` | The configured **User name** |
 | `{{char}}` | The configured **AI name** |
-| `{{elapsedTime}}` | Time between the **two most recent user messages** in the current session — e.g. `5m`, `2h 14m`, `3d 4h`. Falls back to `first message of this session` when there's only one user turn so far. Computed from `state.messages` so it can never cross a session boundary. |
+| `{{elapsedTime}}` | Time between the **two most recent user messages** in the current session — strictly between two timestamps stored in chat history, no `Date.now()` involved. The value surfaces on the prompt build *after* the user returns, so it correctly conveys "{{user}} just messaged the Familiar again after a long absence" once that absence becomes a gap between two saved messages. Falls back to `no prior user message` when fewer than two user messages exist. Renders as `5m`, `2h 14m`, `3d 4h`, etc. Computed from `state.messages` so it can never cross a session boundary. |
 | `{{timeSinceLastSession}}` | Time since the **previous session** ended — same format. Falls back to `no prior session` on a fresh install. Cached on session-boundary events (idle auto-end, Clear, tab close) and refreshed from `/api/logs` on cold start or when loading a different historical session. |
 
 ### Tomes Settings

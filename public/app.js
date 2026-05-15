@@ -353,18 +353,19 @@ function formatDuration(ms) {
 }
 
 /**
- * Milliseconds between the timestamps of the two most recent USER messages.
+ * Milliseconds between the timestamps of the two most recent USER messages
+ * in `state.messages`. Returns null when fewer than two timestamped user
+ * messages exist.
  *
- * When applied while a new user turn is being built (the common case —
- * `applyNameVars` is called from `buildApiMessages`), the "current" user
- * message is `Date.now()` and the macro reads as the gap leading up to it.
- * When applied outside of that context (no new turn in flight), it falls
- * back to the gap between the two most recent user messages already in
- * `state.messages`.
+ * This is intentionally history-only — no synthesized `Date.now()` — so the
+ * macro is detecting "user returned after a long absence" by comparing the
+ * timestamps of two messages that are both actually in the saved chat
+ * history. Every message is dated and timestamped on send, so once the new
+ * user turn lands the gap surfaces on the next prompt build.
  *
  * Stays inside `state.messages`, so it can't accidentally cross a session
- * boundary the way the module-level `elapsedTime` field can after a state
- * restore.
+ * boundary the way the legacy module-level `elapsedTime` field can after a
+ * state restore.
  */
 function elapsedBetweenUserMessages() {
   const stamps = [];
@@ -375,18 +376,9 @@ function elapsedBetweenUserMessages() {
       if (Number.isFinite(t)) stamps.push(t);
     }
   }
-  if (!stamps.length) return null;
-  if (_macroNowMs !== null) return _macroNowMs - stamps[0];
-  if (stamps.length < 2)    return null;
+  if (stamps.length < 2) return null;
   return stamps[0] - stamps[1];
 }
-
-// Set by `buildApiMessages` for the duration of macro substitution so
-// {{elapsedTime}} can treat the in-flight user turn as "the latest user
-// message". Reset to null after the build so other callers of
-// applyNameVars (e.g. ad-hoc lorebook content rendering) still get the
-// history-only behaviour.
-let _macroNowMs = null;
 
 /**
  * Milliseconds since the most recent prior session ended, based on
@@ -440,7 +432,7 @@ function applyNameVars(text) {
     .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
     .replace(/\{\{elapsedTime\}\}/gi, () => {
       const ms = elapsedBetweenUserMessages();
-      return ms !== null ? formatDuration(ms) : 'first message of this session';
+      return ms !== null ? formatDuration(ms) : 'no prior user message';
     })
     .replace(/\{\{timeSinceLastSession\}\}/gi, () => {
       const ms = timeSinceLastSessionEnded();
@@ -473,12 +465,6 @@ function toApiMessage({ role, content, tool_calls, tool_call_id }) {
  */
 function buildApiMessages(userInput) {
   const msgs = [];
-
-  // Pin "now" for macro substitution so {{elapsedTime}} can treat the
-  // turn being built as the latest user message, and so every macro in
-  // the same prompt build sees a consistent moment.
-  _macroNowMs = Date.now();
-  try {
 
   // ── Activate lorebook entries ────────────────────────────────
   const lore = activateTomeEntries(userInput);
@@ -536,9 +522,6 @@ function buildApiMessages(userInput) {
     msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
   return msgs;
-  } finally {
-    _macroNowMs = null;
-  }
 }
 
 // ── Markdown rendering ───────────────────────────────────────────
