@@ -2364,7 +2364,7 @@ async function waitForMemorizationJob(jobId, { timeoutMs = 5 * 60 * 1000, interv
 let _manualMemorize = null; // { sessionId, messages: [], topics: [], tomeId }
 
 async function openManualMemorize(session) {
-  $('memorize-choice-modal').classList.add('hidden');
+  closeMemorizeChoice();
 
   // Reset state and open the modal in a loading state so the user sees movement.
   _manualMemorize = {
@@ -2422,10 +2422,12 @@ function renderManualMemorizeMessages() {
     return;
   }
 
+  let rendered = 0;
   mm.messages.forEach((msg, idx) => {
     // Skip tool plumbing — same filter as the worker uses.
     if (msg.role === 'tool') return;
     if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return;
+    rendered++;
 
     const row = document.createElement('div');
     row.className = `mm-msg mm-msg-${msg.role}`;
@@ -2463,6 +2465,11 @@ function renderManualMemorizeMessages() {
 
     container.appendChild(row);
   });
+
+  if (!rendered) {
+    container.innerHTML = '<p class="logs-empty">This session has no user/assistant messages to memorize.</p>';
+    return;
+  }
 
   refreshManualMemorizeDecorations();
 }
@@ -2528,33 +2535,40 @@ function manualMemorizeEndTopic(msgIndex) {
     alert('No open topic to end here. Click "Topic start" on an earlier message first.');
     return;
   }
-  const topic = open.length === 1
-    ? open[0]
-    : open.find(t => t.label === prompt(
-        `End which topic?\n${open.map(t => `- ${t.label}`).join('\n')}`,
-        open[0].label,
-      ));
-  if (!topic) return;
-  topic.endIndex = msgIndex;
-  refreshManualMemorizeDecorations();
+  let topic;
+  if (open.length === 1) {
+    topic = open[0];
+  } else {
+    const choice = prompt(
+      `End which topic?\n${open.map(t => `- ${t.label}`).join('\n')}`,
+      open[0].label,
+    );
+    if (choice === null) return; // cancelled
+    topic = open.find(t => t.label === choice.trim());
+    if (!topic) { alert(`No open topic named "${choice.trim()}".`); return; }
+  }
 
   // Gather range messages, filtered like the worker does.
   const rangeMessages = [];
-  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+  for (let i = topic.startIndex; i <= msgIndex; i++) {
     const m = mm.messages[i];
     if (!m || m.role === 'tool') continue;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
     rangeMessages.push(m);
   }
   if (rangeMessages.length < 2) {
-    alert('A topic needs at least two non-tool messages to summarize.');
-    return;
+    alert('A topic needs at least two non-tool messages to summarize. Pick a later message to end at.');
+    return; // keep the topic open so the user can try again
   }
 
+  topic.endIndex = msgIndex;
+  refreshManualMemorizeDecorations();
+
   openSummaryModal(topic, {
-    sessionId: mm.sessionId,
-    tomeId:    mm.tomeId,
-    onSaved:   () => { refreshManualMemorizeDecorations(); },
+    sessionId:     mm.sessionId,
+    tomeId:        mm.tomeId,
+    rangeMessages,
+    onSaved:       () => { refreshManualMemorizeDecorations(); },
   });
   generateTopicSummary(topic, rangeMessages);
 }
@@ -2650,18 +2664,19 @@ async function regenerateSummary(topic) {
   $('summary-generating-hint').classList.remove('hidden');
   $('summary-form').classList.add('hidden');
 
-  // Source messages from the manual-memorize buffer when the summary modal was
-  // opened for a historical session; otherwise the live session.
-  const source = (_pendingSummaryContext && _manualMemorize
-                   && _pendingSummaryContext.sessionId === _manualMemorize.sessionId)
-    ? _manualMemorize.messages
-    : state.messages;
-  const rangeMessages = [];
-  for (let i = topic.startIndex; i <= topic.endIndex; i++) {
-    const m = source[i];
-    if (!m || m.role === 'tool') continue;
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
-    rangeMessages.push(m);
+  // Manual-session contexts capture their messages at open time so regen still
+  // works even if the manual viewer has been closed in the meantime.
+  let rangeMessages;
+  if (_pendingSummaryContext?.rangeMessages) {
+    rangeMessages = _pendingSummaryContext.rangeMessages;
+  } else {
+    rangeMessages = [];
+    for (let i = topic.startIndex; i <= topic.endIndex; i++) {
+      const m = state.messages[i];
+      if (!m || m.role === 'tool') continue;
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
+      rangeMessages.push(m);
+    }
   }
   await generateTopicSummary(topic, rangeMessages);
 }

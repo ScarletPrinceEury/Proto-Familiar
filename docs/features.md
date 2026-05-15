@@ -110,6 +110,7 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 | Clear | Manual clear closes and enqueues memorization of the current session before starting a fresh one |
 | Memorize now | **Chat sidebar** button that enqueues memorization of the current session on demand without ending it |
 | Session browser | **☰ → Logs** — view, load, or delete any past session |
+| Per-session Memorize | Each row in the Logs modal has a **Memorize** button offering **Auto-summarize** (run the worker over the session and save to **Session Memories**) or **Manual topics** (open the session read-only, mark topic ranges by hand, review each entry) |
 
 ---
 
