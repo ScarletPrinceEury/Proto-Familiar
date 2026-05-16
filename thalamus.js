@@ -205,8 +205,16 @@ export async function enrich(userMessage) {
 
     // ── Knowledge graph ───────────────────────────────────────────────────
     const graphData  = parseToolText(graphResult, {});
-    // Handle both { results: [...] } and { nodes: [...] } shapes
-    const graphNodes = graphData.results ?? graphData.nodes ?? [];
+    // graph_node_search returns { results: [{ node: {...}, score }, ...] }.
+    // Older / alternate shapes return { nodes: [...] } with flat nodes.
+    // Normalise to flat nodes so n.id / n.label / n.type are always defined —
+    // otherwise the standalone-nodes branch below renders "undefined (type:
+    // undefined)" for every result, and the graph_subgraph traversal calls
+    // get nodeId=undefined and return nothing.
+    const rawGraphItems = graphData.results ?? graphData.nodes ?? [];
+    const graphNodes = rawGraphItems
+      .map(item => (item && item.node) ? item.node : item)
+      .filter(n => n && n.id);
     let graphLines = '';
 
     if (graphNodes.length > 0) {
@@ -248,12 +256,16 @@ export async function enrich(userMessage) {
         }
       }
 
-      // Standalone nodes (no edges in this context)
+      // Standalone nodes (no edges in this context). Skip nodes whose
+      // label is missing — a labelless node has nothing meaningful to
+      // contribute to the prompt and would render as a noise line.
       for (const n of graphNodes) {
-        if (!edgeNodeIds.has(n.id)) {
-          const desc = n.description ? `: ${n.description}` : '';
-          lines.push(`${n.label} (type: ${n.type}${desc})`);
-        }
+        if (edgeNodeIds.has(n.id)) continue;
+        const label = n.label;
+        if (!label) continue;
+        const type = n.type ? ` (type: ${n.type})` : '';
+        const desc = n.description ? ` — ${n.description}` : '';
+        lines.push(`${label}${type}${desc}`);
       }
 
       graphLines = lines.join('\n');
