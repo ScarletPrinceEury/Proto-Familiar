@@ -1,6 +1,14 @@
 # Proto-Familiar Windows installer
-# Auto-installs Node, Deno, and Git via winget when available, runs `npm install`,
-# clones entity-core-alpha, and creates Desktop + Start Menu shortcuts.
+#
+# Fresh install: auto-installs Node, Deno, and Git via winget (when
+#   available), runs `npm install`, clones entity-core-alpha, pre-caches
+#   its Deno module graph, and creates Desktop + Start Menu shortcuts.
+#
+# Update mode: triggered automatically when node_modules\ already exists.
+#   Pulls latest Proto-Familiar (`git pull --ff-only`), refreshes
+#   entity-core to the pinned tag, re-runs the idempotent npm install +
+#   deno cache. Skips the winget prerequisite installs and the shortcut
+#   creation since they're already in place.
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -20,13 +28,33 @@ function Ok($msg)    { Write-Host "    $msg" -ForegroundColor Green }
 function Warn($msg)  { Write-Host "!!  $msg" -ForegroundColor Yellow }
 function Fail($msg)  { Write-Host "XX  $msg" -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
 
+# Detect mode: an existing node_modules means we're updating, not
+# setting up from scratch. Both paths run the same idempotent steps
+# (npm install, deno cache); update mode skips the winget prerequisite
+# install attempts and the shortcut creation.
+$updateMode = Test-Path (Join-Path $projectRoot "node_modules")
+
 Clear-Host
-Write-Host "Proto-Familiar installer" -ForegroundColor Magenta
+if ($updateMode) {
+    Write-Host "Proto-Familiar updater (existing install detected)" -ForegroundColor Magenta
+} else {
+    Write-Host "Proto-Familiar installer" -ForegroundColor Magenta
+}
 Write-Host "Project: $projectRoot"
 Write-Host ""
 
+# --- Pull latest Proto-Familiar (update mode only) -------------------
+if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
+    Step "Pulling latest Proto-Familiar (git pull --ff-only)..."
+    Push-Location $projectRoot
+    try {
+        & git pull --ff-only
+        if ($LASTEXITCODE -ne 0) { Warn "git pull --ff-only failed. Continuing with current checkout." }
+    } finally { Pop-Location }
+}
+
 $haveWinget = Have "winget"
-if (-not $haveWinget) {
+if (-not $updateMode -and -not $haveWinget) {
     Warn "winget not found - prerequisites must be installed manually if missing."
     Warn "  Node.js 18+:  https://nodejs.org/"
     Warn "  Deno 2+:      https://deno.com/"
@@ -37,11 +65,13 @@ if (-not $haveWinget) {
 # --- Node.js ---
 Step "Checking Node.js..."
 if (-not (Have "node")) {
-    if ($haveWinget) {
+    if (-not $updateMode -and $haveWinget) {
         Step "Installing Node.js LTS via winget (per-user, no admin needed)..."
         winget install --id OpenJS.NodeJS.LTS --scope user --silent `
             --accept-source-agreements --accept-package-agreements
         Refresh-Path
+    } elseif ($updateMode) {
+        Fail "Node.js missing from PATH despite an existing install. Open a new terminal and re-run, or reinstall Node from https://nodejs.org/."
     } else {
         Fail "Node.js is required. Install from https://nodejs.org/ and re-run."
     }
@@ -55,7 +85,7 @@ Ok "Node.js v$nodeVersion"
 # --- Deno (recommended) ---
 Step "Checking Deno..."
 if (-not (Have "deno")) {
-    if ($haveWinget) {
+    if (-not $updateMode -and $haveWinget) {
         Step "Installing Deno via winget..."
         try {
             winget install --id DenoLand.Deno --scope user --silent `
@@ -71,7 +101,7 @@ if (Have "deno") { Ok "Deno present" } else { Warn "Deno missing (Proto-Familiar
 # --- Git ---
 Step "Checking Git..."
 if (-not (Have "git")) {
-    if ($haveWinget) {
+    if (-not $updateMode -and $haveWinget) {
         Step "Installing Git via winget..."
         try {
             winget install --id Git.Git --scope user --silent `
@@ -82,19 +112,30 @@ if (-not (Have "git")) {
 }
 if (Have "git") { Ok "Git present" } else { Warn "Git missing" }
 
-# --- npm install ---
-Step "Installing Proto-Familiar dependencies (npm install)..."
+# --- npm install (idempotent) ---
+Step "Running npm install..."
 Push-Location $projectRoot
 try {
     & npm install
     if ($LASTEXITCODE -ne 0) { Fail "npm install failed (exit $LASTEXITCODE)." }
 } finally { Pop-Location }
-Ok "Dependencies installed"
+Ok "Dependencies up to date"
 
-# --- entity-core clone ---
+# --- entity-core: clone (install) or refresh to pinned tag (update) ---
 Step "Setting up entity-core-alpha..."
 if (Test-Path $entityCoreDir) {
-    Ok "Already present at $entityCoreDir"
+    if ($updateMode -and (Test-Path (Join-Path $entityCoreDir ".git")) -and (Have "git")) {
+        Step "Refreshing entity-core-alpha to tag $entityCoreTag..."
+        Push-Location $entityCoreDir
+        try {
+            & git fetch --tags --depth 1 origin "refs/tags/${entityCoreTag}:refs/tags/${entityCoreTag}" 2>$null | Out-Null
+            & git checkout --quiet $entityCoreTag
+            if ($LASTEXITCODE -ne 0) { Warn "Could not refresh entity-core to $entityCoreTag. Keeping current checkout." }
+            else { Ok "Refreshed to $entityCoreTag" }
+        } finally { Pop-Location }
+    } else {
+        Ok "Already present at $entityCoreDir"
+    }
 } elseif (Have "git") {
     Step "Cloning $entityCoreRepo (tag $entityCoreTag) into $entityCoreDir..."
     & git clone --depth 1 --branch $entityCoreTag $entityCoreRepo $entityCoreDir
@@ -107,7 +148,7 @@ if (Test-Path $entityCoreDir) {
     Warn "git unavailable; skipping entity-core clone."
 }
 
-# --- entity-core dependency pre-cache ---
+# --- entity-core dependency pre-cache (idempotent) ---
 # Psycheros is now a Deno workspace; entity-core lives at packages/entity-core.
 # Older releases kept it at the repo root, so probe both and prefer the workspace path.
 $entityCorePkg = $null
@@ -117,7 +158,7 @@ if (Test-Path (Join-Path $entityCoreDir "packages\entity-core\src\mod.ts")) {
     $entityCorePkg = $entityCoreDir
 }
 if ($entityCorePkg -and (Have "deno")) {
-    Step "Pre-caching entity-core dependencies (one-time; can take several minutes)..."
+    Step "Caching entity-core dependencies (only fetches what's new)..."
     Push-Location $entityCorePkg
     try {
         & deno cache src/mod.ts | Out-Null
@@ -128,30 +169,38 @@ if ($entityCorePkg -and (Have "deno")) {
     Warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
 }
 
-# --- Shortcuts ---
-Step "Creating Desktop and Start Menu shortcuts..."
-$launcher  = Join-Path $projectRoot "Proto-Familiar.vbs"
-$desktop   = [Environment]::GetFolderPath("Desktop")
-$startMenu = [Environment]::GetFolderPath("Programs")
-$wsh = New-Object -ComObject WScript.Shell
+# --- Shortcuts (install mode only) ---
+# The Desktop / Start Menu shortcuts already exist on an update; recreating
+# them is harmless but adds noise. Skip for clarity.
+if (-not $updateMode) {
+    Step "Creating Desktop and Start Menu shortcuts..."
+    $launcher  = Join-Path $projectRoot "Proto-Familiar.vbs"
+    $desktop   = [Environment]::GetFolderPath("Desktop")
+    $startMenu = [Environment]::GetFolderPath("Programs")
+    $wsh = New-Object -ComObject WScript.Shell
 
-foreach ($linkPath in @(
-    (Join-Path $desktop   "Proto-Familiar.lnk"),
-    (Join-Path $startMenu "Proto-Familiar.lnk")
-)) {
-    $sc = $wsh.CreateShortcut($linkPath)
-    $sc.TargetPath       = "wscript.exe"
-    $sc.Arguments        = """$launcher"""
-    $sc.WorkingDirectory = $projectRoot
-    $sc.IconLocation     = "shell32.dll,13"
-    $sc.Description      = "Proto-Familiar"
-    $sc.WindowStyle      = 7  # minimized; doesn't actually show because wscript is windowless
-    $sc.Save()
-    Ok "  $linkPath"
+    foreach ($linkPath in @(
+        (Join-Path $desktop   "Proto-Familiar.lnk"),
+        (Join-Path $startMenu "Proto-Familiar.lnk")
+    )) {
+        $sc = $wsh.CreateShortcut($linkPath)
+        $sc.TargetPath       = "wscript.exe"
+        $sc.Arguments        = """$launcher"""
+        $sc.WorkingDirectory = $projectRoot
+        $sc.IconLocation     = "shell32.dll,13"
+        $sc.Description      = "Proto-Familiar"
+        $sc.WindowStyle      = 7  # minimized; doesn't actually show because wscript is windowless
+        $sc.Save()
+        Ok "  $linkPath"
+    }
 }
 
 Write-Host ""
-Write-Host "Install complete." -ForegroundColor Green
+if ($updateMode) {
+    Write-Host "Update complete." -ForegroundColor Green
+} else {
+    Write-Host "Install complete." -ForegroundColor Green
+}
 Write-Host "Launch any time via:"
 Write-Host "  - Desktop shortcut: Proto-Familiar"
 Write-Host "  - Start Menu:       Proto-Familiar"

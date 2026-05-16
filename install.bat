@@ -1,6 +1,12 @@
 @echo off
 REM Proto-Familiar installer (Windows)
-REM Installs Node dependencies and clones entity-core-alpha as a sibling directory.
+REM
+REM Fresh install: installs Node deps, clones entity-core-alpha as a
+REM   sibling directory, pre-caches its Deno module graph.
+REM Update mode: triggered when node_modules\ already exists. Pulls
+REM   latest Proto-Familiar via `git pull --ff-only`, refreshes
+REM   entity-core to the pinned tag, re-runs idempotent npm install +
+REM   deno cache. Skips Node/Deno install steps and shortcut creation.
 
 setlocal EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
@@ -10,9 +16,28 @@ set "ENTITY_CORE_DIR=%PARENT_DIR%\entity-core-alpha"
 set "ENTITY_CORE_REPO=https://github.com/PsycherosAI/Psycheros.git"
 set "ENTITY_CORE_TAG=entity-core-v0.2.2"
 
-echo === Proto-Familiar installer ===
+REM --- Detect mode ---
+if exist "%SCRIPT_DIR%\node_modules" (
+  set "MODE=update"
+  echo === Proto-Familiar updater ^(existing install detected^) ===
+) else (
+  set "MODE=install"
+  echo === Proto-Familiar installer ===
+)
 echo Working dir: %SCRIPT_DIR%
 echo.
+
+REM --- Pull latest Proto-Familiar (update mode only) ---
+if "!MODE!"=="update" if exist "%SCRIPT_DIR%\.git" (
+  where git >nul 2>nul
+  if not errorlevel 1 (
+    echo Pulling latest Proto-Familiar ^(git pull --ff-only^)...
+    pushd "%SCRIPT_DIR%"
+    git pull --ff-only
+    if errorlevel 1 echo [WARN] git pull --ff-only failed. Continuing with current checkout.
+    popd
+  )
+)
 
 REM --- Node.js check ---
 where node >nul 2>nul
@@ -37,9 +62,9 @@ if errorlevel 1 (
   echo Deno found.
 )
 
-REM --- npm install ---
+REM --- npm install (idempotent) ---
 echo.
-echo === Installing Proto-Familiar dependencies (npm install) ===
+echo === Running npm install ===
 pushd "%SCRIPT_DIR%"
 call npm install
 if errorlevel 1 (
@@ -50,9 +75,21 @@ if errorlevel 1 (
 )
 popd
 
-REM --- entity-core clone ---
+REM --- entity-core: clone (install) or refresh to pinned tag (update) ---
 if exist "%ENTITY_CORE_DIR%" (
-  echo entity-core-alpha already present at %ENTITY_CORE_DIR% - skipping clone.
+  if "!MODE!"=="update" if exist "%ENTITY_CORE_DIR%\.git" (
+    where git >nul 2>nul
+    if not errorlevel 1 (
+      echo Refreshing entity-core-alpha to tag %ENTITY_CORE_TAG%...
+      pushd "%ENTITY_CORE_DIR%"
+      git fetch --tags --depth 1 origin refs/tags/%ENTITY_CORE_TAG%:refs/tags/%ENTITY_CORE_TAG% >nul 2>nul
+      git checkout --quiet %ENTITY_CORE_TAG%
+      if errorlevel 1 echo [WARN] Could not refresh entity-core to %ENTITY_CORE_TAG%. Keeping current checkout.
+      popd
+    )
+  ) else (
+    echo entity-core-alpha already present at %ENTITY_CORE_DIR% - skipping clone.
+  )
 ) else (
   where git >nul 2>nul
   if errorlevel 1 (
@@ -67,8 +104,7 @@ if exist "%ENTITY_CORE_DIR%" (
   )
 )
 
-REM --- entity-core dependency pre-cache ---
-REM Psycheros is now a Deno workspace; probe packages/entity-core first, then the legacy top-level layout.
+REM --- entity-core dependency pre-cache (idempotent) ---
 set "ENTITY_CORE_PKG="
 if exist "%ENTITY_CORE_DIR%\packages\entity-core\src\mod.ts" (
   set "ENTITY_CORE_PKG=%ENTITY_CORE_DIR%\packages\entity-core"
@@ -77,7 +113,7 @@ if exist "%ENTITY_CORE_DIR%\packages\entity-core\src\mod.ts" (
 )
 where deno >nul 2>nul
 if not errorlevel 1 if defined ENTITY_CORE_PKG (
-  echo Pre-caching entity-core dependencies (one-time; can take several minutes)...
+  echo Caching entity-core dependencies ^(only fetches what's new^)...
   pushd "%ENTITY_CORE_PKG%"
   deno cache src/mod.ts >nul 2>nul
   if errorlevel 1 (
@@ -89,9 +125,13 @@ if not errorlevel 1 if defined ENTITY_CORE_PKG (
 )
 
 echo.
-echo === Install complete ===
-echo   Start: start.bat   (double-click)
-echo   Stop:  stop.bat    (double-click)
+if "!MODE!"=="update" (
+  echo === Update complete ===
+) else (
+  echo === Install complete ===
+)
+echo   Start: start.bat   ^(double-click^)
+echo   Stop:  stop.bat    ^(double-click^)
 echo.
 pause
 endlocal
