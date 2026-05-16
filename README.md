@@ -189,6 +189,8 @@ The **Enable tool use** checkbox controls whether the `tools` array is sent with
 | `save_to_tome` | Saves a fact learned during the conversation as a new entry in the first enabled Tome, with trigger keywords for future activation. |
 | `save_memory` | Writes a new time-stamped entry to entity-core's long-term memory at the chosen granularity (`daily`/`weekly`/`monthly`/`yearly`/`significant`). |
 | `update_identity` | Appends a durable fact to one of entity-core's identity files (`user_notes.md` or `relationship_notes.md`). |
+| `find_graph_node` | Looks up the underlying graph id for an entity by name (e.g. `"Chen"` → `1747...c4d8`). Used before the editing tools when the entity isn't in the prompt's graph-ids legend. |
+| `find_graph_edges` | Lists a node's 1-hop edges with their ids, ready to paste into the edge editing tools. |
 | `update_memory` | Overwrites an existing memory entry to correct an inaccuracy. Auto-snapshots first. |
 | `delete_memory` | Permanently deletes a memory entry. Use only when fully obsolete; prefer `save_memory` (contradicting newer entry) when the change has historical value. Auto-snapshots first. |
 | `rewrite_identity_section` | Replaces one section of an identity file. Stronger than the append-only `update_identity` when an existing section has gone stale. Auto-snapshots first. |
@@ -197,7 +199,7 @@ The **Enable tool use** checkbox controls whether the `tools` array is sent with
 | `update_graph_edge` | Changes a relationship's type or weight. |
 | `delete_graph_edge` | Removes one relationship between two entities while keeping the entities. Auto-snapshots first. |
 
-All twelve tools are always available when tool use is enabled. `get_datetime` and `get_session_info` take no arguments; the others accept the parameters described in [`docs/tool-calling.md`](docs/tool-calling.md). The ten entity-core tools degrade gracefully if entity-core is unreachable. Each tool's description carries first-person guidance on when to append vs. update vs. delete — the model is told to err toward preservation when uncertain, and to supersede stale memories with a newer dated entry rather than deleting outright when the change has historical value.
+All fourteen tools are always available when tool use is enabled. `get_datetime` and `get_session_info` take no arguments; the others accept the parameters described in [`docs/tool-calling.md`](docs/tool-calling.md). The twelve entity-core tools degrade gracefully if entity-core is unreachable. Each editing tool's description carries first-person guidance on when to append vs. update vs. delete — the model is told to err toward preservation when uncertain, and to supersede stale memories with a newer dated entry rather than deleting outright when the change has historical value. The enriched prompt's graph block ends with a compact id legend so common edits don't need a `find_graph_*` round-trip.
 
 #### Custom tools
 

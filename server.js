@@ -12,7 +12,7 @@ import { randomUUID } from 'crypto';
 import {
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
-  listMemories, readMemory, getIdentityAll, listGraphNodes, getGraphSubgraph,
+  listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
   updateMemory, deleteMemory, rewriteIdentitySection,
@@ -755,6 +755,17 @@ app.get('/api/entity/graph/nodes', async (req, res) => {
   const n = limit  !== undefined ? Math.max(1, Math.min(500, parseInt(limit, 10)  || 200)) : 200;
   const o = offset !== undefined ? Math.max(0, parseInt(offset, 10) || 0) : 0;
   try { res.json(await listGraphNodes({ type, limit: n, offset: o })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+// Text search across graph nodes — backs the find_graph_node LLM tool so
+// the Familiar can resolve a name ("Eury", "Chen") to a graph id without
+// loading the full node list.
+app.get('/api/entity/graph/search', async (req, res) => {
+  const { q, type, limit } = req.query;
+  if (!q || typeof q !== 'string' || !q.trim()) return badRequest(res, 'q (query) is required');
+  const n = limit !== undefined ? Math.max(1, Math.min(100, parseInt(limit, 10) || 10)) : 10;
+  try { res.json(await searchGraphNodes({ query: q.trim(), type, limit: n })); }
   catch (err) { gatewayDown(res, err.message); }
 });
 
