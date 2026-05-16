@@ -14,7 +14,7 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Twelve tools are always available when tool use is enabled. The first five are read/append tools; the bottom seven are the editing surface for correcting stale entity-core state. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
+Fourteen tools are always available when tool use is enabled. The first five are read/append tools; the next two are read-only lookups for resolving graph names to ids; the bottom seven are the editing surface for correcting stale entity-core state. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
 | Tool | Description | Returns |
 |---|---|---|
@@ -23,6 +23,8 @@ Twelve tools are always available when tool use is enabled. The first five are r
 | `save_to_tome` | Save a fact or piece of knowledge into the persistent Tome knowledge base, with trigger keywords | Confirmation string with the assigned entry UID |
 | `save_memory` | Write a new time-stamped memory entry to entity-core at a chosen granularity (`daily` \| `weekly` \| `monthly` \| `yearly` \| `significant`) | `"Memory saved."` or an error string |
 | `update_identity` | Append a durable fact to an entity-core identity file (`user` or `relationship` category) | `"Identity file updated."` or an error string |
+| `find_graph_node` | Look up the graph id(s) for an entity by name. Use before `update_graph_node` / `delete_graph_node` when the entity isn't in the graph block's ids legend | One line per match: `<label> (id=…, type=…) — <description>` |
+| `find_graph_edges` | List a node's 1-hop edges with their ids. Use before `update_graph_edge` / `delete_graph_edge` when the edge isn't in the graph block's ids legend | One line per edge: `<from> -<rel>-> <to> (id=…)` |
 | `update_memory` | Overwrite an existing memory entry to correct an inaccuracy. Replaces the entry whole — include everything you want kept | Status string |
 | `delete_memory` | Permanently delete a memory entry. Use only when the entry is fully wrong / obsolete; prefer `save_memory` (with today's date, contradicting the stale entry) when the change has historical value | Status string + snapshot note |
 | `rewrite_identity_section` | Replace one section of an identity file. Use when an existing section is misleading and a clean rewrite serves future-you better than appending a correction | Status string |
@@ -30,6 +32,21 @@ Twelve tools are always available when tool use is enabled. The first five are r
 | `delete_graph_node` | Delete an entity AND all its edges. Only when the node is an error (duplicate, wrong entity); for "no longer related" use `delete_graph_edge` instead | Status string + snapshot note |
 | `update_graph_edge` | Change a relationship's type or weight when it still holds but is mis-typed (e.g. "acquaintance" → "close friend") | Status string |
 | `delete_graph_edge` | Remove one relationship between two entities while keeping the entities themselves. The right tool for "X is no longer at Y" / "X no longer works with Y" | Status string + snapshot note |
+
+### Graph ids in the prompt
+
+The "Relevant Knowledge from Graph" block in every enriched prompt ends with a compact id legend so the Familiar can resolve names like "Eury protects Chen" into the underlying graph ids without an extra tool call. The legend has two sections:
+
+```
+[graph ids — pass these strings to update_graph_node / delete_graph_node / update_graph_edge / delete_graph_edge]
+nodes:
+  Eury = 1747389234876-a3f2e8b1
+  Chen = 1747389234876-c4d8f7a2
+edges:
+  Eury -protects-> Chen = 1747389234877-e1f9b3c4
+```
+
+For entities or edges not in the active block, `find_graph_node` and `find_graph_edges` resolve names → ids on demand.
 
 ### Editing principles surfaced to the model
 
@@ -74,6 +91,25 @@ Requires entity-core to be running. Degrades gracefully (returns an error string
 | `content` | string | Yes | Text to append to the file |
 
 Requires entity-core. Appends to the end of the specified file.
+
+#### `find_graph_node`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | Entity name or fragment (e.g. `"Chen"`, `"vacation"`) |
+| `type`  | string | No  | Restrict matches to a single node type |
+| `limit` | number | No  | Max matches (default 10, max 100) |
+
+Calls `graph_node_search` server-side. Returns one match per line in the form `<label> (id=…, type=…) — <description>`, ready to paste into `update_graph_node` / `delete_graph_node`.
+
+#### `find_graph_edges`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `nodeId` | string | Yes | Graph id of the node whose edges to list |
+| `depth`  | number | No  | Traversal depth 1–3 (default 1) |
+
+Calls `graph_subgraph` server-side. Returns one edge per line as `<from> -<rel>-> <to> (id=…)`, ready to paste into `update_graph_edge` / `delete_graph_edge`.
 
 #### `update_memory`
 

@@ -575,7 +575,8 @@ The endpoints below back the **Knowledge editor** modal in the sidebar and the L
 | Method & path | Purpose | Body / query |
 |---|---|---|
 | `GET /api/entity/graph/nodes` | List graph nodes. Query: `type` (optional), `limit` (1–500, default 200), `offset` | — |
-| `GET /api/entity/graph/nodes/:id/subgraph` | Node + 1-hop neighbours and edges. Query: `depth` (1–3, default 1) | — |
+| `GET /api/entity/graph/search` | Text search across graph nodes (backs the `find_graph_node` LLM tool). Query: `q` (required), `type` (optional), `limit` (1–100, default 10) | — |
+| `GET /api/entity/graph/nodes/:id/subgraph` | Node + 1-hop neighbours and edges (backs the `find_graph_edges` LLM tool). Query: `depth` (1–3, default 1) | — |
 | `PATCH /api/entity/graph/nodes/:id` | Update label / type / description (auto-snapshots) | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
 | `DELETE /api/entity/graph/nodes/:id` | Delete the node and its edges (auto-snapshots). Query: `permanent=1` for hard delete | — |
 | `PATCH /api/entity/graph/edges/:id` | Update edge type or weight (auto-snapshots) | `{ "type"?: "…", "weight"?: 0.85 }` |

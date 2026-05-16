@@ -233,6 +233,10 @@ export async function enrich(userMessage) {
       const seenEdges  = new Set();
       const edgeNodeIds = new Set();
       const lines = [];
+      // Track id ↔ label for the in-prompt legend so the Familiar can resolve
+      // "Eury protects Chen" to the underlying graph IDs without a tool call.
+      const idLegendNodes = new Map(); // id → label
+      const idLegendEdges = [];        // { id, fromLabel, rel, toLabel }
 
       for (const r of traversals) {
         if (r.status !== 'fulfilled') continue;
@@ -253,6 +257,9 @@ export async function enrich(userMessage) {
           const rel  = edge.customType ?? edge.type;
           const desc = nodeDescs.get(edge.toId);
           lines.push(desc ? `${from} ${rel} ${to} (${desc})` : `${from} ${rel} ${to}`);
+          if (edge.fromId && nodeLabels.has(edge.fromId)) idLegendNodes.set(edge.fromId, nodeLabels.get(edge.fromId));
+          if (edge.toId   && nodeLabels.has(edge.toId))   idLegendNodes.set(edge.toId,   nodeLabels.get(edge.toId));
+          if (edge.id) idLegendEdges.push({ id: edge.id, fromLabel: from, rel, toLabel: to });
         }
       }
 
@@ -266,6 +273,26 @@ export async function enrich(userMessage) {
         const type = n.type ? ` (type: ${n.type})` : '';
         const desc = n.description ? ` — ${n.description}` : '';
         lines.push(`${label}${type}${desc}`);
+        idLegendNodes.set(n.id, label);
+      }
+
+      // Compact ID legend at the end of the block — the Familiar uses these
+      // strings as `id` arguments to update_graph_node / delete_graph_node /
+      // update_graph_edge / delete_graph_edge. Kept compact (one entry per
+      // line, no surrounding prose) to bound the token cost. For anything
+      // not in this list, the Familiar can use find_graph_node /
+      // find_graph_edges to look ids up on demand.
+      if (idLegendNodes.size || idLegendEdges.length) {
+        const legendLines = ['', '[graph ids — pass these strings to update_graph_node / delete_graph_node / update_graph_edge / delete_graph_edge]'];
+        if (idLegendNodes.size) {
+          legendLines.push('nodes:');
+          for (const [id, label] of idLegendNodes) legendLines.push(`  ${label} = ${id}`);
+        }
+        if (idLegendEdges.length) {
+          legendLines.push('edges:');
+          for (const e of idLegendEdges) legendLines.push(`  ${e.fromLabel} -${e.rel}-> ${e.toLabel} = ${e.id}`);
+        }
+        lines.push(legendLines.join('\n'));
       }
 
       graphLines = lines.join('\n');
@@ -401,6 +428,10 @@ export async function getIdentityAll() {
 
 export async function listGraphNodes({ type, limit = 200, offset = 0 } = {}) {
   return callTool('graph_node_list', { type, limit, offset });
+}
+
+export async function searchGraphNodes({ query, type, limit = 10, minScore } = {}) {
+  return callTool('graph_node_search', { query, type, limit, minScore });
 }
 
 export async function getGraphSubgraph({ nodeId, depth = 1 }) {

@@ -198,8 +198,39 @@ const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'find_graph_node',
+      description: 'I look up the underlying graph id(s) for an entity by name. I use this before update_graph_node or delete_graph_node when I only have the human-readable label (from the graph block in my context) and need the id to pass to the editing tool. Returns the top matching nodes with their ids, types, and descriptions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The entity name or fragment to search for (e.g. "Chen", "vacation").' },
+          type:  { type: 'string', description: 'Optional: restrict matches to a single node type (e.g. "person", "place").' },
+          limit: { type: 'number', description: 'Optional: max matches to return (default 10).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_graph_edges',
+      description: 'I list the edges connected to a graph node (1-hop neighbours), with each edge\'s id. I use this before update_graph_edge or delete_graph_edge to look up an edge id from the relationship I want to change. Pass the node id (resolve it with find_graph_node first if I only have a label).',
+      parameters: {
+        type: 'object',
+        properties: {
+          nodeId: { type: 'string', description: 'The graph id of the node whose edges I want to see.' },
+          depth:  { type: 'number', description: 'Optional: traversal depth (1–3, default 1).' },
+        },
+        required: ['nodeId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'update_graph_node',
-      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for.',
+      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
       parameters: {
         type: 'object',
         properties: {
@@ -215,7 +246,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_node',
-      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists.',
+      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
       parameters: {
         type: 'object',
         properties: {
@@ -229,7 +260,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_graph_edge',
-      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"). For a relationship that USED to be true and is now false, I delete the edge instead.',
+      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
       parameters: {
         type: 'object',
         properties: {
@@ -245,7 +276,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_edge',
-      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y." The connection vanishes; both entities remain available for future relationships. Entity-core auto-snapshots before each delete.',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y." The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
       parameters: {
         type: 'object',
         properties: {
@@ -359,6 +390,36 @@ const BUILTIN_EXECUTORS = {
       if (!res.ok) return `Failed to rewrite section: ${data.error ?? res.status}`;
       return `Section "${section}" of ${category}/${filename} rewritten.`;
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
+  },
+
+  find_graph_node: async ({ query, type, limit }) => {
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (type)  params.set('type', type);
+      if (limit) params.set('limit', String(limit));
+      const res = await fetch(`/api/entity/graph/search?${params}`);
+      const data = await res.json();
+      if (!res.ok) return `Failed to search graph: ${data.error ?? res.status}`;
+      const items = (data.results ?? []).map(r => r.node ? r.node : r).filter(n => n && n.id);
+      if (!items.length) return `No graph nodes matched "${query}".`;
+      return items.map(n => `${n.label ?? '(no label)'} (id=${n.id}, type=${n.type ?? '?'})${n.description ? ' — ' + n.description : ''}`).join('\n');
+    } catch (err) { return `Failed to search graph: ${err.message}`; }
+  },
+
+  find_graph_edges: async ({ nodeId, depth }) => {
+    try {
+      const params = new URLSearchParams();
+      if (depth) params.set('depth', String(depth));
+      const url = `/api/entity/graph/nodes/${encodeURIComponent(nodeId)}/subgraph` + (params.toString() ? `?${params}` : '');
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) return `Failed to list edges: ${data.error ?? res.status}`;
+      const nodes = data.nodes ?? [];
+      const edges = data.edges ?? [];
+      if (!edges.length) return `Node ${nodeId} has no edges in scope.`;
+      const labelOf = id => nodes.find(n => n.id === id)?.label ?? id;
+      return edges.map(e => `${labelOf(e.fromId)} -${e.type}-> ${labelOf(e.toId)} (id=${e.id})`).join('\n');
+    } catch (err) { return `Failed to list edges: ${err.message}`; }
   },
 
   update_graph_node: async ({ id, label, description, type }) => {
