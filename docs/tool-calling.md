@@ -14,15 +14,31 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Five tools are always available when tool use is enabled:
+Twelve tools are always available when tool use is enabled. The first five are read/append tools; the bottom seven are the editing surface for correcting stale entity-core state. Every destructive tool (delete / rewrite / replace) auto-snapshots entity-core before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
 | Tool | Description | Returns |
 |---|---|---|
 | `get_datetime` | Current local date, time, and timezone | Human-readable locale string (e.g. `"Tuesday, May 13, 2026 at 02:30:00 PM CEST"`) |
 | `get_session_info` | Metadata about the current session | JSON with `startedAt`, `messageCount`, `provider`, `model`, `elapsedMsSinceLastMessage` |
-| `save_to_tome` | Save a fact or piece of knowledge into the persistent Tome knowledge base, with trigger keywords. The entry is immediately available for activation in future conversations. | Confirmation string with the assigned entry UID |
-| `save_memory` | Write a new time-stamped memory entry to entity-core's long-term memory store at a chosen granularity (`daily`, `weekly`, `monthly`, `yearly`, `significant`). | `"Memory saved."` or an error string |
-| `update_identity` | Append a durable fact to an entity-core identity file (`user` or `relationship` category). | `"Identity file updated."` or an error string |
+| `save_to_tome` | Save a fact or piece of knowledge into the persistent Tome knowledge base, with trigger keywords | Confirmation string with the assigned entry UID |
+| `save_memory` | Write a new time-stamped memory entry to entity-core at a chosen granularity (`daily` \| `weekly` \| `monthly` \| `yearly` \| `significant`) | `"Memory saved."` or an error string |
+| `update_identity` | Append a durable fact to an entity-core identity file (`user` or `relationship` category) | `"Identity file updated."` or an error string |
+| `update_memory` | Overwrite an existing memory entry to correct an inaccuracy. Replaces the entry whole — include everything you want kept | Status string |
+| `delete_memory` | Permanently delete a memory entry. Use only when the entry is fully wrong / obsolete; prefer `save_memory` (with today's date, contradicting the stale entry) when the change has historical value | Status string + snapshot note |
+| `rewrite_identity_section` | Replace one section of an identity file. Use when an existing section is misleading and a clean rewrite serves future-you better than appending a correction | Status string |
+| `update_graph_node` | Rename or re-describe a knowledge-graph entity (person / place / project). Use when the label or description is wrong, not for new relationships | Status string |
+| `delete_graph_node` | Delete an entity AND all its edges. Only when the node is an error (duplicate, wrong entity); for "no longer related" use `delete_graph_edge` instead | Status string + snapshot note |
+| `update_graph_edge` | Change a relationship's type or weight when it still holds but is mis-typed (e.g. "acquaintance" → "close friend") | Status string |
+| `delete_graph_edge` | Remove one relationship between two entities while keeping the entities themselves. The right tool for "X is no longer at Y" / "X no longer works with Y" | Status string + snapshot note |
+
+### Editing principles surfaced to the model
+
+Every editing tool's description carries first-person guidance on **when** to use it. The shared principles, repeated in different forms across the descriptions:
+
+- **APPEND** when the new information adds to an existing record without contradicting it. Append is non-destructive and reversible by deletion.
+- **UPDATE / REWRITE** when the existing record is now inaccurate or incomplete in a way that a partial addition wouldn't fix.
+- **DELETE** when the record is fully obsolete or was wrong from the start. If the change has historical value ("they were on vacation, now back"), prefer writing a newer contradicting memory instead — the recency-decay scoring demotes the stale entry while preserving the audit trail.
+- **If unsure, err toward preservation.** Writing an extra note is cheaper than restoring from a snapshot.
 
 `get_datetime` and `get_session_info` require no arguments. See parameter details for the write tools below.
 
@@ -58,6 +74,72 @@ Requires entity-core to be running. Degrades gracefully (returns an error string
 | `content` | string | Yes | Text to append to the file |
 
 Requires entity-core. Appends to the end of the specified file.
+
+#### `update_memory`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `granularity` | enum | Yes | `daily` \| `weekly` \| `monthly` \| `yearly` \| `significant` |
+| `date`        | string | Yes | Date of the entry, in the format it was stored (e.g. `YYYY-MM-DD` for daily) |
+| `content`     | string | Yes | Full new contents — REPLACES the entry |
+
+Auto-snapshots entity-core, then calls `memory_update`. Use to correct an inaccuracy. To record a change that has historical value, use `save_memory` instead so the old version is preserved.
+
+#### `delete_memory`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `granularity` | enum | Yes | Memory tier |
+| `date`        | string | Yes | Date of the entry to delete |
+
+Auto-snapshots, then calls `memory_delete`. Reserve for fully wrong / obsolete entries.
+
+#### `rewrite_identity_section`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `category` | enum | Yes | `self` \| `user` \| `relationship` \| `custom` |
+| `filename` | string | Yes | Target file, e.g. `user_notes.md` |
+| `section`  | string | Yes | The markdown heading of the section (without leading `#`s), e.g. `"Sleep patterns"` |
+| `content`  | string | Yes | Full new body for that section, in first-person voice |
+
+Auto-snapshots, then calls `identity_rewrite_section`. For adding facts, use `update_identity` (append) instead.
+
+#### `update_graph_node`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id`          | string | Yes | Node id (from earlier graph context) |
+| `label`       | string | No | New display label |
+| `description` | string | No | New description |
+
+Auto-snapshots, then calls `graph_node_update`. Omit fields you want to leave unchanged.
+
+#### `delete_graph_node`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | Yes | Node id |
+
+Auto-snapshots, then calls `graph_node_delete`. Deletes all edges attached to the node. For "they're no longer at Y" use `delete_graph_edge` instead — the node still exists.
+
+#### `update_graph_edge`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id`     | string | Yes | Edge id |
+| `type`   | string | No | New relationship type |
+| `weight` | number | No | New strength in [0, 1] |
+
+Auto-snapshots, then calls `graph_edge_update`. For a relationship that USED to be true and is now false, delete instead.
+
+#### `delete_graph_edge`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | Yes | Edge id |
+
+Auto-snapshots, then calls `graph_edge_delete`. Both endpoint nodes remain.
 
 ---
 

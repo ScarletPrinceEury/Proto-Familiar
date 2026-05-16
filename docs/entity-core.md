@@ -106,11 +106,21 @@ Files sorted alphabetically.
 
 ---
 
-## Prompt Inspector
+## Editing the knowledge
+
+The Familiar surfaces the editing side of entity-core through two paths:
+
+- **Knowledge editor** in the sidebar (button **🧠 Open Knowledge editor** under the Knowledge section). Four tabs — Memories, Graph, Identity, Snapshots — that let the user browse, edit, delete, and supersede entries directly. Every destructive op auto-snapshots first; the Snapshots tab is the always-on undo. See [Features → Knowledge editor](features.md#knowledge-editor-entity-core) for the full UI walkthrough.
+
+- **LLM tool calls.** Beyond `save_memory` and `update_identity` (both append-only), the Familiar can call `update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, and `delete_graph_edge`. Each tool's description teaches the model when to append vs. rewrite vs. delete, and recommends superseding (writing a new contradicting memory) over deleting when the change has historical value. Every destructive tool auto-snapshots before the underlying MCP call, so even a bad model decision is recoverable from the Knowledge editor's Snapshots tab. See [Tool Calling](tool-calling.md#built-in-tools) for the full parameter reference.
+
+The auto-snapshots are pruned by entity-core's own retention policy (`ENTITY_CORE_SNAPSHOT_RETENTION_DAYS`, default 30 days) so this doesn't grow without bound.
+
+---
+
+## Prompt inspector
 
 To see exactly what was sent to the LLM on the previous turn — including the full entity-core block, all lorebook injections, and the conversation history — click the **🔍 magnifying glass** button in the top bar after sending a message. The entity-core block is captured from a `_thalamus` envelope the server attaches to every `/api/chat` response (both streaming and non-streaming), so the inspector shows the actual injected text rather than a re-derived preview that could drift if intervening memory or identity writes have changed what `enrich()` would now return. See [Prompt Inspector](features.md#prompt-inspector) for the full source palette.
-
-The inspector calls `POST /api/debug-prompt` with the current message array and displays each message in a colour-coded, collapsible panel with per-message Copy buttons. No API call is made to the upstream LLM.
 
 ---
 

@@ -549,6 +549,48 @@ Appends to or updates a section of an identity file.
 
 ---
 
+### Knowledge editor endpoints
+
+The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Every destructive op (`PUT`, `PATCH`, `DELETE`) auto-snapshots entity-core before the underlying MCP call, so a mistake is always recoverable via the snapshots endpoints. All return `502` when entity-core is unavailable; reads return entity-core's JSON verbatim.
+
+#### Memory
+
+| Method & path | Purpose | Body / query |
+|---|---|---|
+| `GET /api/entity/memories` | List memories. Query: `granularity` (optional, one of the five tiers), `limit` (1–100, default 50) | — |
+| `GET /api/entity/memories/:granularity/:date` | Read one memory | — |
+| `PUT /api/entity/memories/:granularity/:date` | Overwrite the memory's content (auto-snapshots) | `{ "content": "…", "editedBy": "user-edit" }` (≤ 16 KB) |
+| `DELETE /api/entity/memories/:granularity/:date` | Delete the memory (auto-snapshots). Query: `instanceId`, `slug` (optional) | — |
+| `POST /api/entity/memories/supersede` | Write a new dated memory contradicting an old one, prefixed with `[supersedes <granularity>/<date>]`. Preserves history; recency-decay demotes the stale entry | `{ "content": "…", "granularity": "daily", "supersedes": { "granularity": "daily", "date": "2026-05-15" } }` |
+
+#### Identity
+
+| Method & path | Purpose | Body |
+|---|---|---|
+| `GET /api/entity/identity` | All identity files grouped by category | — |
+| `PUT /api/entity/identity/:category/:filename/sections/:section` | Rewrite the body of one markdown section (auto-snapshots) | `{ "content": "…" }` (≤ 16 KB) |
+
+#### Graph
+
+| Method & path | Purpose | Body / query |
+|---|---|---|
+| `GET /api/entity/graph/nodes` | List graph nodes. Query: `type` (optional), `limit` (1–500, default 200), `offset` | — |
+| `GET /api/entity/graph/nodes/:id/subgraph` | Node + 1-hop neighbours and edges. Query: `depth` (1–3, default 1) | — |
+| `PATCH /api/entity/graph/nodes/:id` | Update label / type / description (auto-snapshots) | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
+| `DELETE /api/entity/graph/nodes/:id` | Delete the node and its edges (auto-snapshots). Query: `permanent=1` for hard delete | — |
+| `PATCH /api/entity/graph/edges/:id` | Update edge type or weight (auto-snapshots) | `{ "type"?: "…", "weight"?: 0.85 }` |
+| `DELETE /api/entity/graph/edges/:id` | Delete one relationship; both endpoint nodes remain (auto-snapshots) | — |
+
+#### Snapshots
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/entity/snapshots` | List available snapshots |
+| `POST /api/entity/snapshots` | Create a snapshot now (user-triggered; in addition to the auto-snapshots before destructive ops) |
+| `POST /api/entity/snapshots/:id/restore` | Restore one snapshot — overwrites current memory / identity / graph with its contents |
+
+---
+
 ## Health
 
 ### `GET /api/health`

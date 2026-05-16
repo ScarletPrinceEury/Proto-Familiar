@@ -231,6 +231,20 @@
           </div>
         </div>
 
+        <!-- Knowledge editor (entity-core) -->
+        <div class="sidebar-section collapsible collapsed" id="section-knowledge">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-knowledge">
+            Knowledge (entity-core)
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-knowledge">
+            <p class="field-hint">Browse and edit the memories, identity files, and knowledge-graph entries the Familiar sees. Destructive ops auto-snapshot first.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="knowledge-btn" class="btn-secondary">🧠 Open Knowledge editor</button>
+            </div>
+          </div>
+        </div>
+
       </aside><!-- /sidebar -->
 
       <!-- ── Chat pane ──────────────────────────────────────── -->
@@ -361,6 +375,80 @@
         <button class="btn-ghost" id="summary-discard-btn">Discard</button>
         <button class="btn-secondary" id="summary-regen-btn" disabled>↻ Regenerate</button>
         <button class="btn-send" id="summary-save-btn" disabled>Save to Tome</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Knowledge editor modal (entity-core) -->
+  <div class="modal-backdrop hidden" id="knowledge-modal" role="dialog" aria-modal="true" aria-labelledby="knowledge-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="knowledge-modal-title">Knowledge editor</h2>
+        <button class="icon-btn modal-close" id="knowledge-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="ke-tabs" role="tablist">
+        <button class="ke-tab ke-tab-active" data-tab="memories"  role="tab">Memories</button>
+        <button class="ke-tab"               data-tab="graph"     role="tab">Graph</button>
+        <button class="ke-tab"               data-tab="identity"  role="tab">Identity</button>
+        <button class="ke-tab"               data-tab="snapshots" role="tab">Snapshots</button>
+      </div>
+      <div class="modal-body ke-body">
+        <div class="ke-pane ke-pane-active" id="ke-pane-memories">
+          <div class="ke-toolbar">
+            <label>Granularity
+              <select id="ke-mem-granularity">
+                <option value="">all</option>
+                <option value="daily">daily</option>
+                <option value="weekly">weekly</option>
+                <option value="monthly">monthly</option>
+                <option value="yearly">yearly</option>
+                <option value="significant">significant</option>
+              </select>
+            </label>
+            <button id="ke-mem-refresh" class="btn-ghost">Refresh</button>
+          </div>
+          <div class="ke-split">
+            <div class="ke-list" id="ke-mem-list"></div>
+            <div class="ke-detail" id="ke-mem-detail">
+              <p class="logs-empty">Pick a memory on the left to view or edit.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ke-pane" id="ke-pane-graph">
+          <div class="ke-toolbar">
+            <label>Type
+              <input id="ke-graph-type" type="text" placeholder="(any)" />
+            </label>
+            <button id="ke-graph-refresh" class="btn-ghost">Refresh</button>
+          </div>
+          <div class="ke-split">
+            <div class="ke-list" id="ke-graph-list"></div>
+            <div class="ke-detail" id="ke-graph-detail">
+              <p class="logs-empty">Pick a node on the left to view its edges and details.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ke-pane" id="ke-pane-identity">
+          <div class="ke-toolbar">
+            <button id="ke-id-refresh" class="btn-ghost">Refresh</button>
+          </div>
+          <div class="ke-split">
+            <div class="ke-list" id="ke-id-list"></div>
+            <div class="ke-detail" id="ke-id-detail">
+              <p class="logs-empty">Pick an identity file to edit a section.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ke-pane" id="ke-pane-snapshots">
+          <div class="ke-toolbar">
+            <button id="ke-snap-create"  class="btn-secondary">＋ Create snapshot now</button>
+            <button id="ke-snap-refresh" class="btn-ghost">Refresh</button>
+          </div>
+          <div class="ke-list ke-list-full" id="ke-snap-list"></div>
+        </div>
       </div>
     </div>
   </div>

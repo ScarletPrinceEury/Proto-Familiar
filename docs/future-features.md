@@ -20,3 +20,40 @@ pick it up without re-deriving the problem.
   Need to decide: is this a free-form tag or a closed enum, does the
   summarizer pick it or only the user, and does it affect activation
   (e.g. weight or scope) or only display.
+
+## Entity-Core
+
+Implemented (see [Knowledge editor](features.md#knowledge-editor-entity-core)
+and [Tool Calling](tool-calling.md#built-in-tools)): a Knowledge editor
+modal with Memories / Graph / Identity / Snapshots tabs, plus the seven
+LLM-callable editing tools (`update_memory`, `delete_memory`,
+`rewrite_identity_section`, `update_graph_node`, `delete_graph_node`,
+`update_graph_edge`, `delete_graph_edge`). Auto-snapshot before every
+destructive op, plus a manual "create snapshot now" button and one-click
+restore from the Snapshots tab.
+
+Open follow-ups for this area, if/when they earn their slot:
+
+- **Graph node and edge CREATION from the UI.** The current panel can
+  rename / re-describe / delete nodes and delete edges, but adding a
+  new node or wiring a new edge still requires either an LLM tool call
+  or hand-editing the SQLite store. Add "+ Node" and "+ Edge" buttons
+  on the Graph tab; both are one-shot forms backed by `graph_node_create`
+  and `graph_edge_create` (already exposed by entity-core).
+
+- **Memory diff view on supersede.** When the user clicks "Supersede
+  with today's date" in the Memories tab, show the old vs. new content
+  side by side before committing — easier to confirm the contradiction
+  reads cleanly.
+
+- **Identity top-of-file editing.** The Identity tab currently shows
+  pre-heading content as read-only ("(top)") because the underlying
+  `identity_rewrite_section` tool needs a heading to target. Either add
+  an `identity_write` round-trip that preserves headings, or change the
+  on-disk convention so every identity file starts with a heading.
+
+- **Surface snapshots' bytes/age and what they captured.** The Snapshots
+  list currently shows just id + createdAt. Pulling in the snapshot's
+  size and the (date, op) of the most recent destructive call that
+  preceded it would make "which snapshot do I restore?" much easier.
+

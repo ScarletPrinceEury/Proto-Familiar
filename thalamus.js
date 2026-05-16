@@ -205,8 +205,16 @@ export async function enrich(userMessage) {
 
     // ── Knowledge graph ───────────────────────────────────────────────────
     const graphData  = parseToolText(graphResult, {});
-    // Handle both { results: [...] } and { nodes: [...] } shapes
-    const graphNodes = graphData.results ?? graphData.nodes ?? [];
+    // graph_node_search returns { results: [{ node: {...}, score }, ...] }.
+    // Older / alternate shapes return { nodes: [...] } with flat nodes.
+    // Normalise to flat nodes so n.id / n.label / n.type are always defined —
+    // otherwise the standalone-nodes branch below renders "undefined (type:
+    // undefined)" for every result, and the graph_subgraph traversal calls
+    // get nodeId=undefined and return nothing.
+    const rawGraphItems = graphData.results ?? graphData.nodes ?? [];
+    const graphNodes = rawGraphItems
+      .map(item => (item && item.node) ? item.node : item)
+      .filter(n => n && n.id);
     let graphLines = '';
 
     if (graphNodes.length > 0) {
@@ -248,12 +256,16 @@ export async function enrich(userMessage) {
         }
       }
 
-      // Standalone nodes (no edges in this context)
+      // Standalone nodes (no edges in this context). Skip nodes whose
+      // label is missing — a labelless node has nothing meaningful to
+      // contribute to the prompt and would render as a noise line.
       for (const n of graphNodes) {
-        if (!edgeNodeIds.has(n.id)) {
-          const desc = n.description ? `: ${n.description}` : '';
-          lines.push(`${n.label} (type: ${n.type}${desc})`);
-        }
+        if (edgeNodeIds.has(n.id)) continue;
+        const label = n.label;
+        if (!label) continue;
+        const type = n.type ? ` (type: ${n.type})` : '';
+        const desc = n.description ? ` — ${n.description}` : '';
+        lines.push(`${label}${type}${desc}`);
       }
 
       graphLines = lines.join('\n');
@@ -347,3 +359,176 @@ export async function updateIdentitySection({ category, filename, heading, conte
   }
 }
 
+// ── Knowledge editing (memory, identity, graph) ──────────────────────────────
+//
+// Every destructive op (update / delete / rewrite) auto-snapshots first via
+// snapshot_create so the user has a one-click undo path through the
+// snapshot_restore tool. Snapshots themselves are pruned by entity-core's own
+// retention policy (ENTITY_CORE_SNAPSHOT_RETENTION_DAYS, default 30 days),
+// so this doesn't leak storage.
+
+const PROTO_INSTANCE_ID = 'proto-familiar';
+
+async function callTool(name, args = {}) {
+  if (!mcpClient) throw new Error('entity-core not connected');
+  const result = await mcpClient.callTool({ name, arguments: args });
+  return parseToolText(result, {});
+}
+
+async function autoSnapshot(reason) {
+  try {
+    await callTool('snapshot_create', {});
+    console.log(`[thalamus] auto-snapshot before ${reason}`);
+  } catch (err) {
+    // Don't block the destructive op on snapshot failure — log and continue.
+    console.warn(`[thalamus] auto-snapshot failed before ${reason}: ${err.message}`);
+  }
+}
+
+// ── Reads (used by the Knowledge editor UI) ──────────────────────────────────
+
+export async function listMemories({ granularity, limit = 50, offset = 0 } = {}) {
+  return callTool('memory_list', { granularity, limit, offset });
+}
+
+export async function readMemory({ granularity, date }) {
+  return callTool('memory_read', { granularity, date });
+}
+
+export async function getIdentityAll() {
+  return callTool('identity_get_all', {});
+}
+
+export async function listGraphNodes({ type, limit = 200, offset = 0 } = {}) {
+  return callTool('graph_node_list', { type, limit, offset });
+}
+
+export async function getGraphSubgraph({ nodeId, depth = 1 }) {
+  return callTool('graph_subgraph', { nodeId, depth });
+}
+
+export async function listSnapshots() {
+  return callTool('snapshot_list', {});
+}
+
+// ── Writes (auto-snapshot before destructive) ────────────────────────────────
+
+export async function updateMemory({ granularity, date, content, editedBy = PROTO_INSTANCE_ID }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  await autoSnapshot(`memory_update ${granularity}/${date}`);
+  try {
+    const result = await callTool('memory_update', { granularity, date, content, editedBy });
+    console.log(`[thalamus] updateMemory ${granularity}/${date}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] updateMemory failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteMemory({ granularity, date, instanceId, slug }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  await autoSnapshot(`memory_delete ${granularity}/${date}`);
+  try {
+    const result = await callTool('memory_delete', { granularity, date, instanceId, slug });
+    console.log(`[thalamus] deleteMemory ${granularity}/${date}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] deleteMemory failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function rewriteIdentitySection({ category, filename, section, content, instanceId = PROTO_INSTANCE_ID }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  await autoSnapshot(`identity_rewrite_section ${category}/${filename}#${section}`);
+  try {
+    const result = await callTool('identity_rewrite_section', { category, filename, section, content, instanceId });
+    console.log(`[thalamus] rewriteIdentitySection ${category}/${filename} § ${section}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] rewriteIdentitySection failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateGraphNode({ id, label, description, type, instanceId = PROTO_INSTANCE_ID }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  await autoSnapshot(`graph_node_update ${id}`);
+  try {
+    const args = { id, instanceId };
+    if (label       !== undefined) args.label       = label;
+    if (description !== undefined) args.description = description;
+    if (type        !== undefined) args.type        = type;
+    const result = await callTool('graph_node_update', args);
+    console.log(`[thalamus] updateGraphNode ${id}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] updateGraphNode failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteGraphNode({ id, permanent = false }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  await autoSnapshot(`graph_node_delete ${id}`);
+  try {
+    const result = await callTool('graph_node_delete', { id, permanent });
+    console.log(`[thalamus] deleteGraphNode ${id}${permanent ? ' (permanent)' : ''}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] deleteGraphNode failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateGraphEdge({ id, type, weight, instanceId = PROTO_INSTANCE_ID }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  await autoSnapshot(`graph_edge_update ${id}`);
+  try {
+    const args = { id, instanceId };
+    if (type   !== undefined) args.type   = type;
+    if (weight !== undefined) args.weight = weight;
+    const result = await callTool('graph_edge_update', args);
+    console.log(`[thalamus] updateGraphEdge ${id}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] updateGraphEdge failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteGraphEdge({ id }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  await autoSnapshot(`graph_edge_delete ${id}`);
+  try {
+    const result = await callTool('graph_edge_delete', { id });
+    console.log(`[thalamus] deleteGraphEdge ${id}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] deleteGraphEdge failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Snapshots (used by the Knowledge editor's safety-net UI) ────────────────
+
+export async function createSnapshot() {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  try {
+    const result = await callTool('snapshot_create', {});
+    return { ok: true, result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function restoreSnapshot({ snapshotId }) {
+  if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
+  try {
+    const result = await callTool('snapshot_restore', { snapshotId });
+    return { ok: true, result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}

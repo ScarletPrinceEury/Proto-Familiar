@@ -9,7 +9,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
-import { enrich, createMemory, appendIdentity, updateIdentitySection } from './thalamus.js';
+import {
+  enrich, createMemory, appendIdentity, updateIdentitySection,
+  // Reads for the Knowledge editor UI
+  listMemories, readMemory, getIdentityAll, listGraphNodes, getGraphSubgraph,
+  listSnapshots,
+  // Writes (each auto-snapshots before the destructive op)
+  updateMemory, deleteMemory, rewriteIdentitySection,
+  updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
+  createSnapshot, restoreSnapshot,
+} from './thalamus.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -650,6 +659,172 @@ app.post('/api/entity/identity', async (req, res) => {
 
   if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
   res.json({ ok: true });
+});
+
+// ── Entity-core editing endpoints (Knowledge editor UI + LLM write tools) ──
+//
+// All destructive ops auto-snapshot on the thalamus side via snapshot_create
+// before calling the entity-core tool, so the Snapshots tab in the UI lets
+// the user roll back if something goes sideways.
+
+const VALID_MEMORY_DATE_RE = /^\d{4}(-W\d{2}|(-\d{2})?(-\d{2})?)$/;
+const VALID_GRAPH_ID_RE    = /^[\w-]{1,128}$/;
+const VALID_SECTION_RE     = /^[\w\s\-()&'?!,.:/]{1,200}$/; // markdown headings — permissive but bounded
+const VALID_SNAPSHOT_ID_RE = /^[\w.\-:]{1,200}$/;
+
+function badRequest(res, message) { return res.status(400).json({ error: message }); }
+function gatewayDown(res, err)    { return res.status(502).json({ error: err ?? 'entity-core unavailable' }); }
+
+// ── Memory ────────────────────────────────────────────────────────────────
+app.get('/api/entity/memories', async (req, res) => {
+  const { granularity, limit } = req.query;
+  if (granularity && !VALID_MEMORY_GRANULARITIES.has(granularity))
+    return badRequest(res, `granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.`);
+  const n = limit !== undefined ? Math.max(1, Math.min(100, parseInt(limit, 10) || 50)) : 50;
+  try { res.json(await listMemories({ granularity, limit: n })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.get('/api/entity/memories/:granularity/:date', async (req, res) => {
+  const { granularity, date } = req.params;
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
+  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  try { res.json(await readMemory({ granularity, date })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.put('/api/entity/memories/:granularity/:date', async (req, res) => {
+  const { granularity, date } = req.params;
+  const { content, editedBy } = req.body;
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
+  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
+  if (content.length > 16384)                       return badRequest(res, 'content exceeds 16 KB limit');
+  const result = await updateMemory({ granularity, date, content: content.trim(), editedBy });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.delete('/api/entity/memories/:granularity/:date', async (req, res) => {
+  const { granularity, date } = req.params;
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return badRequest(res, 'invalid granularity');
+  if (!VALID_MEMORY_DATE_RE.test(date))             return badRequest(res, 'invalid date format');
+  const result = await deleteMemory({ granularity, date, instanceId: req.query.instanceId, slug: req.query.slug });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+// "Supersede" — write a new memory contradicting an old one. Doesn't delete
+// the original; the recency-decay scoring will demote it naturally over
+// time while preserving the audit trail.
+app.post('/api/entity/memories/supersede', async (req, res) => {
+  const { content, granularity = 'daily', supersedes } = req.body;
+  if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
+  if (!VALID_MEMORY_GRANULARITIES.has(granularity))   return badRequest(res, 'invalid granularity');
+  const today = new Date().toISOString().slice(0, 10);
+  const body  = supersedes
+    ? `[supersedes ${supersedes.granularity ?? 'memory'}/${supersedes.date ?? '?'}]\n${content.trim()}`
+    : content.trim();
+  const result = await createMemory({ content: body, granularity, date: today });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json({ ok: true, date: today });
+});
+
+// ── Identity ──────────────────────────────────────────────────────────────
+app.get('/api/entity/identity', async (_req, res) => {
+  try { res.json(await getIdentityAll()); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.put('/api/entity/identity/:category/:filename/sections/:section', async (req, res) => {
+  const { category, filename, section } = req.params;
+  const { content } = req.body;
+  if (!VALID_IDENTITY_CATEGORIES.has(category)) return badRequest(res, 'invalid category');
+  if (!VALID_FILENAME_RE.test(filename))        return badRequest(res, 'invalid filename');
+  if (!VALID_SECTION_RE.test(section))          return badRequest(res, 'invalid section heading');
+  if (typeof content !== 'string')              return badRequest(res, 'content required');
+  if (content.length > 16384)                   return badRequest(res, 'content exceeds 16 KB limit');
+  const result = await rewriteIdentitySection({ category, filename, section, content });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+// ── Graph ─────────────────────────────────────────────────────────────────
+app.get('/api/entity/graph/nodes', async (req, res) => {
+  const { type, limit, offset } = req.query;
+  const n = limit  !== undefined ? Math.max(1, Math.min(500, parseInt(limit, 10)  || 200)) : 200;
+  const o = offset !== undefined ? Math.max(0, parseInt(offset, 10) || 0) : 0;
+  try { res.json(await listGraphNodes({ type, limit: n, offset: o })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.get('/api/entity/graph/nodes/:id/subgraph', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const depth = Math.max(1, Math.min(3, parseInt(req.query.depth, 10) || 1));
+  try { res.json(await getGraphSubgraph({ nodeId: id, depth })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.patch('/api/entity/graph/nodes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { label, description, type } = req.body;
+  if (label !== undefined && typeof label !== 'string')             return badRequest(res, 'label must be string');
+  if (description !== undefined && typeof description !== 'string') return badRequest(res, 'description must be string');
+  if (type !== undefined && typeof type !== 'string')               return badRequest(res, 'type must be string');
+  const result = await updateGraphNode({ id, label, description, type });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.delete('/api/entity/graph/nodes/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const permanent = req.query.permanent === '1' || req.query.permanent === 'true';
+  const result = await deleteGraphNode({ id, permanent });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.patch('/api/entity/graph/edges/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { type, weight } = req.body;
+  if (type !== undefined && typeof type !== 'string') return badRequest(res, 'type must be string');
+  if (weight !== undefined && (typeof weight !== 'number' || weight < 0 || weight > 1))
+    return badRequest(res, 'weight must be a number in [0, 1]');
+  const result = await updateGraphEdge({ id, type, weight });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.delete('/api/entity/graph/edges/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const result = await deleteGraphEdge({ id });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+// ── Snapshots ─────────────────────────────────────────────────────────────
+app.get('/api/entity/snapshots', async (_req, res) => {
+  try { res.json(await listSnapshots()); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.post('/api/entity/snapshots', async (_req, res) => {
+  const result = await createSnapshot();
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
+});
+
+app.post('/api/entity/snapshots/:id/restore', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_SNAPSHOT_ID_RE.test(id)) return badRequest(res, 'invalid snapshot id');
+  const result = await restoreSnapshot({ snapshotId: id });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result);
 });
 
 const PORT = process.env.PORT || 3000;
