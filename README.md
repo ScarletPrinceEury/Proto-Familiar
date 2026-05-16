@@ -61,6 +61,7 @@ Project wiki pages are available in [`/wiki`](wiki/):
 |---|---|
 | **Providers** | NanoGPT (OpenAI-compatible) · Z.ai Standard API · Z.ai Coding Plan |
 | **Entity-core enrichment** | Automatically prepends the full identity layer (all four identity categories, XML-wrapped) + RAG memories + knowledge graph context to every system prompt via a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server |
+| **Knowledge editor** | Sidebar **🧠 Open Knowledge editor** modal with four tabs: Memories (browse / edit / delete / supersede by date), Graph (nodes with their 1-hop edges; rename / re-describe / delete), Identity (per-section editor across self / user / relationship / custom files), Snapshots (one-click restore of any auto- or user-created snapshot). Every destructive op auto-snapshots entity-core first |
 | **Prompt inspector** | Click the 🔍 button in the top bar after any message to see the complete prompt actually sent to the LLM, color-coded by source — entity-core block (captured live from the response, not re-derived), each lorebook injection by position, base system / character / user profile, post-history prompt, and the conversation history |
 | **Streaming** | Server-sent event streaming by default; toggle off for full-response mode |
 | **Prompt macros** | `{{user}}` / `{{char}}` insert configured names; `{{elapsedTime}}` is the time between the two most recent user messages in this session (so the LLM can detect when the user returns after a long absence — surfaces once both messages are in saved history); `{{timeSinceLastSession}}` is the gap since the previous session ended. All durations render as `5m`, `2h 14m`, `3d 4h`, etc. |
@@ -188,8 +189,15 @@ The **Enable tool use** checkbox controls whether the `tools` array is sent with
 | `save_to_tome` | Saves a fact learned during the conversation as a new entry in the first enabled Tome, with trigger keywords for future activation. |
 | `save_memory` | Writes a new time-stamped entry to entity-core's long-term memory at the chosen granularity (`daily`/`weekly`/`monthly`/`yearly`/`significant`). |
 | `update_identity` | Appends a durable fact to one of entity-core's identity files (`user_notes.md` or `relationship_notes.md`). |
+| `update_memory` | Overwrites an existing memory entry to correct an inaccuracy. Auto-snapshots first. |
+| `delete_memory` | Permanently deletes a memory entry. Use only when fully obsolete; prefer `save_memory` (contradicting newer entry) when the change has historical value. Auto-snapshots first. |
+| `rewrite_identity_section` | Replaces one section of an identity file. Stronger than the append-only `update_identity` when an existing section has gone stale. Auto-snapshots first. |
+| `update_graph_node` | Renames or re-describes an entity in the knowledge graph. |
+| `delete_graph_node` | Deletes a knowledge-graph entity and ALL its edges. For "no longer related" prefer `delete_graph_edge`. Auto-snapshots first. |
+| `update_graph_edge` | Changes a relationship's type or weight. |
+| `delete_graph_edge` | Removes one relationship between two entities while keeping the entities. Auto-snapshots first. |
 
-All five tools are always available when tool use is enabled. `get_datetime` and `get_session_info` take no arguments; the three write tools accept the parameters described in [`docs/tool-calling.md`](docs/tool-calling.md). The two entity-core tools degrade gracefully if entity-core is unreachable.
+All twelve tools are always available when tool use is enabled. `get_datetime` and `get_session_info` take no arguments; the others accept the parameters described in [`docs/tool-calling.md`](docs/tool-calling.md). The ten entity-core tools degrade gracefully if entity-core is unreachable. Each tool's description carries first-person guidance on when to append vs. update vs. delete — the model is told to err toward preservation when uncertain, and to supersede stale memories with a newer dated entry rather than deleting outright when the change has historical value.
 
 #### Custom tools
 

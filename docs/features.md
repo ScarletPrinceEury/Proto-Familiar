@@ -122,6 +122,21 @@ See [Sessions & Memorization](sessions.md) for the full reference.
 
 ---
 
+## Knowledge editor (entity-core)
+
+Click **🧠 Open Knowledge editor** under the "Knowledge (entity-core)" sidebar section to browse and edit the long-term state that thalamus enriches every prompt with. Four tabs:
+
+- **Memories** — list by granularity, click to view full content, edit-and-save (overwrites in place), delete, or **Supersede with today's date** (writes a new contradicting entry so the recency-decay scoring demotes the stale one while preserving history). 
+- **Graph** — list nodes optionally filtered by type, click to see the node's edges in a 1-hop subgraph. Rename / re-describe / change type / delete the node, or delete individual edges from the row list.
+- **Identity** — list every identity file (self / user / relationship / custom). Click one to see its markdown sections; each section has its own textarea and a per-section Save that calls `identity_rewrite_section`. Top-of-file content (before any heading) is read-only — edit the file by hand if you need to change it.
+- **Snapshots** — list every entity-core snapshot, restore any one (replaces the current state), or **＋ Create snapshot now**. Auto-snapshots are taken before every destructive op in the other tabs and from every LLM editing tool call, so this tab is the safety net.
+
+Every destructive HTTP call goes through `thalamus.js` wrappers that call `snapshot_create` before the underlying MCP tool, so the user never needs to remember to back up before a delete.
+
+The Familiar can do the same edits autonomously via the seven editing tools described in [Tool Calling](tool-calling.md). The tool descriptions carry first-person guidance on when to append vs. update vs. delete, plus the recommendation to supersede with a new memory rather than deleting outright when the change has historical value.
+
+---
+
 ## Prompt Inspector
 
 Click the **🔍** button in the top bar after sending a message to see the complete prompt that was actually sent to the LLM on the previous turn, color-coded by source:

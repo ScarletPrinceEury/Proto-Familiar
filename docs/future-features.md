@@ -23,35 +23,37 @@ pick it up without re-deriving the problem.
 
 ## Entity-Core
 
-Entity-core already exposes the full read/write surface for identity,
-memory, and graph over MCP — see `packages/entity-core/src/server.ts`
-for the registered tools (memory_create / read / update / delete /
-consolidate; identity_write / append / prepend / update_section /
-rewrite_section / delete_custom / set_meta; graph_node_*, graph_edge_*,
-graph_write_transaction, etc.). Proto-Familiar surfaces only three of
-these to the Familiar today: `save_to_tome`, `save_memory` (wraps
-memory_create), and `update_identity` (wraps identity_append). Two
-mostly-orthogonal directions:
+Implemented (see [Knowledge editor](features.md#knowledge-editor-entity-core)
+and [Tool Calling](tool-calling.md#built-in-tools)): a Knowledge editor
+modal with Memories / Graph / Identity / Snapshots tabs, plus the seven
+LLM-callable editing tools (`update_memory`, `delete_memory`,
+`rewrite_identity_section`, `update_graph_node`, `delete_graph_node`,
+`update_graph_edge`, `delete_graph_edge`). Auto-snapshot before every
+destructive op, plus a manual "create snapshot now" button and one-click
+restore from the Snapshots tab.
 
-- **Expand the Familiar's tool set.** Add LLM-callable wrappers for the
-  destructive / mutating tools the Familiar would need to self-correct
-  stale state — at minimum `memory_update`, `memory_delete`,
-  `identity_rewrite_section`, and a small graph-editing subset
-  (`graph_node_update`, `graph_node_delete`, `graph_edge_delete`). Each
-  needs a careful description: when to use it, when not. Tradeoff: more
-  power means more chances for an over-confident model to delete
-  something the user wanted to keep — consider a per-tool confirmation
-  toggle, an undo via snapshot_create before destructive ops, or
-  gating destructive tools behind an explicit user-set flag.
+Open follow-ups for this area, if/when they earn their slot:
 
-- **User-facing editor UI.** A "Graph / Memories" tab in the sidebar
-  that lists nodes (label, type, description, confidence) with edges
-  expanded inline, lists memory entries by granularity/date, and exposes
-  rename / re-describe / delete actions backed by the existing
-  entity-core MCP tools. Same panel could surface a "supersede" action
-  that writes a new memory dated today that contradicts the stale one
-  (the recency-decay scoring will then bury the stale entry without
-  losing the audit trail). Adding this on top of the tool-set expansion
-  gives the user direct manual control as a safety net for whatever
-  the Familiar does on its own.
+- **Graph node and edge CREATION from the UI.** The current panel can
+  rename / re-describe / delete nodes and delete edges, but adding a
+  new node or wiring a new edge still requires either an LLM tool call
+  or hand-editing the SQLite store. Add "+ Node" and "+ Edge" buttons
+  on the Graph tab; both are one-shot forms backed by `graph_node_create`
+  and `graph_edge_create` (already exposed by entity-core).
+
+- **Memory diff view on supersede.** When the user clicks "Supersede
+  with today's date" in the Memories tab, show the old vs. new content
+  side by side before committing — easier to confirm the contradiction
+  reads cleanly.
+
+- **Identity top-of-file editing.** The Identity tab currently shows
+  pre-heading content as read-only ("(top)") because the underlying
+  `identity_rewrite_section` tool needs a heading to target. Either add
+  an `identity_write` round-trip that preserves headings, or change the
+  on-disk convention so every identity file starts with a heading.
+
+- **Surface snapshots' bytes/age and what they captured.** The Snapshots
+  list currently shows just id + createdAt. Pulling in the snapshot's
+  size and the (date, op) of the most recent destructive call that
+  preceded it would make "which snapshot do I restore?" much easier.
 

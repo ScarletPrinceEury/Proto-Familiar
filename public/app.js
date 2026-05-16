@@ -119,7 +119,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I do NOT use this for session-specific or transient information.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I do NOT use this for session-specific or transient information. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
@@ -128,6 +128,130 @@ const BUILTIN_TOOLS = [
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
+      },
+    },
+  },
+  // ── Knowledge-editing tools ───────────────────────────────────────────
+  // The Familiar can correct stale or wrong information in memory / identity
+  // / graph instead of letting it pile up. Each destructive op auto-snapshots
+  // entity-core first, so the user can roll back via the Knowledge editor.
+  // Editing principles (apply to every tool below):
+  //   • APPEND when the new information adds to an existing record without
+  //     contradicting it. Append is non-destructive and reversible by deletion.
+  //   • UPDATE / REWRITE when the existing record is now inaccurate or
+  //     incomplete in a way that a partial addition would not fix.
+  //   • DELETE when the record is fully obsolete or was wrong in the first
+  //     place, and keeping it would mislead future-me. If the change has
+  //     historical value ("they were on vacation, now back"), prefer writing
+  //     a newer memory that contradicts the stale one rather than deleting —
+  //     the recency-decay scoring will demote the stale entry on its own.
+  //   • If unsure, write a new note instead of editing or deleting an
+  //     existing one. Erring toward preservation is cheaper than restoring.
+  {
+    type: 'function',
+    function: {
+      name: 'update_memory',
+      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I do NOT use this to record new information — that is save_memory. I do NOT use this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to overwrite.' },
+          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily).' },
+          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff.' },
+        },
+        required: ['granularity', 'date', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_memory',
+      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Entity-core auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to delete.' },
+          date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored.' },
+        },
+        required: ['granularity', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'rewrite_identity_section',
+      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, prefer rewriting the whole section over deletion.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['self', 'user', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'Target filename, e.g. user_notes.md.' },
+          section:  { type: 'string', description: 'The markdown heading of the section to rewrite (without leading #s), e.g. "Sleep patterns".' },
+          content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },
+        },
+        required: ['category', 'filename', 'section', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_graph_node',
+      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:          { type: 'string', description: 'The id of the node to update (from earlier graph context).' },
+          label:       { type: 'string', description: 'New display label. Omit to leave unchanged.' },
+          description: { type: 'string', description: 'New description. Omit to leave unchanged.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_graph_node',
+      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the node to delete.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_graph_edge',
+      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"). For a relationship that USED to be true and is now false, I delete the edge instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:     { type: 'string', description: 'The id of the edge to update.' },
+          type:   { type: 'string', description: 'New relationship type. Omit to leave unchanged.' },
+          weight: { type: 'number', description: 'New confidence/strength weight in [0, 1]. Omit to leave unchanged.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_graph_edge',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y." The connection vanishes; both entities remain available for future relationships. Entity-core auto-snapshots before each delete.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the edge to delete.' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -195,6 +319,97 @@ const BUILTIN_EXECUTORS = {
     } catch (err) {
       return `Failed to update identity: ${err.message}`;
     }
+  },
+
+  // ── Knowledge-editing executors ────────────────────────────────────
+  // Each one calls a server endpoint that auto-snapshots entity-core before
+  // the destructive op. Return strings the model can read back.
+
+  update_memory: async ({ granularity, date, content }) => {
+    try {
+      const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content, editedBy: 'familiar-toolcall' }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update memory: ${data.error ?? res.status}`;
+      return `Memory ${granularity}/${date} updated.`;
+    } catch (err) { return `Failed to update memory: ${err.message}`; }
+  },
+
+  delete_memory: async ({ granularity, date }) => {
+    try {
+      const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) return `Failed to delete memory: ${data.error ?? res.status}`;
+      return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+    } catch (err) { return `Failed to delete memory: ${err.message}`; }
+  },
+
+  rewrite_identity_section: async ({ category, filename, section, content }) => {
+    try {
+      const path = `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(filename)}/sections/${encodeURIComponent(section)}`;
+      const res  = await fetch(path, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to rewrite section: ${data.error ?? res.status}`;
+      return `Section "${section}" of ${category}/${filename} rewritten.`;
+    } catch (err) { return `Failed to rewrite section: ${err.message}`; }
+  },
+
+  update_graph_node: async ({ id, label, description, type }) => {
+    try {
+      const body = {};
+      if (label       !== undefined) body.label       = label;
+      if (description !== undefined) body.description = description;
+      if (type        !== undefined) body.type        = type;
+      const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update graph node: ${data.error ?? res.status}`;
+      return `Graph node ${id} updated.`;
+    } catch (err) { return `Failed to update graph node: ${err.message}`; }
+  },
+
+  delete_graph_node: async ({ id }) => {
+    try {
+      const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) return `Failed to delete graph node: ${data.error ?? res.status}`;
+      return `Graph node ${id} deleted (snapshot saved).`;
+    } catch (err) { return `Failed to delete graph node: ${err.message}`; }
+  },
+
+  update_graph_edge: async ({ id, type, weight }) => {
+    try {
+      const body = {};
+      if (type   !== undefined) body.type   = type;
+      if (weight !== undefined) body.weight = weight;
+      const res = await fetch(`/api/entity/graph/edges/${encodeURIComponent(id)}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to update graph edge: ${data.error ?? res.status}`;
+      return `Graph edge ${id} updated.`;
+    } catch (err) { return `Failed to update graph edge: ${err.message}`; }
+  },
+
+  delete_graph_edge: async ({ id }) => {
+    try {
+      const res = await fetch(`/api/entity/graph/edges/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) return `Failed to delete graph edge: ${data.error ?? res.status}`;
+      return `Graph edge ${id} deleted (snapshot saved).`;
+    } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
   },
 };
 
@@ -1992,6 +2207,23 @@ function init() {
   });
   $('summary-save-btn').addEventListener('click', savePendingSummary);
 
+  // Knowledge editor (entity-core)
+  $('knowledge-btn').addEventListener('click', openKnowledgeModal);
+  $('knowledge-modal-close').addEventListener('click', closeKnowledgeModal);
+  $('knowledge-modal').addEventListener('click', e => {
+    if (e.target === $('knowledge-modal')) closeKnowledgeModal();
+  });
+  document.querySelectorAll('.ke-tab').forEach(el => {
+    el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
+  });
+  $('ke-mem-refresh').addEventListener('click', keLoadMemories);
+  $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-graph-refresh').addEventListener('click', keLoadGraphNodes);
+  $('ke-graph-type').addEventListener('change', keLoadGraphNodes);
+  $('ke-id-refresh').addEventListener('click', keLoadIdentity);
+  $('ke-snap-create').addEventListener('click', keCreateSnapshot);
+  $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
+
   // Tomes modal
   $('tomes-btn').addEventListener('click', openTomesModal);
   $('tomes-modal-close').addEventListener('click', closeTomesModal);
@@ -3504,6 +3736,309 @@ async function getDefaultTomeForSaving() {
   await loadTomesFromServer();
   const { id } = await res.json();
   return state.tomeRegistry.find(t => t.id === id) ?? state.tomeRegistry[0] ?? null;
+}
+
+// ── Knowledge editor (entity-core: memories, identity, graph, snapshots) ─
+//
+// Layered UI: tabs across the top, two-pane list+detail per tab. All ops
+// hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
+// so the Snapshots tab is the always-on undo.
+
+const KE_TABS = ['memories', 'graph', 'identity', 'snapshots'];
+
+function openKnowledgeModal() {
+  $('knowledge-modal').classList.remove('hidden');
+  keSwitchTab('memories');
+}
+function closeKnowledgeModal() { $('knowledge-modal').classList.add('hidden'); }
+
+function keSwitchTab(tab) {
+  for (const t of KE_TABS) {
+    $(`ke-pane-${t}`)?.classList.toggle('ke-pane-active', t === tab);
+  }
+  document.querySelectorAll('.ke-tab').forEach(el => {
+    el.classList.toggle('ke-tab-active', el.dataset.tab === tab);
+  });
+  if (tab === 'memories')   keLoadMemories();
+  if (tab === 'graph')      keLoadGraphNodes();
+  if (tab === 'identity')   keLoadIdentity();
+  if (tab === 'snapshots')  keLoadSnapshots();
+}
+
+function keSetDetail(paneId, html) { $(paneId).innerHTML = html; }
+
+function keError(err, fallback) {
+  const m = (err && err.message) ? err.message : (typeof err === 'string' ? err : fallback);
+  return `<p class="logs-error">⚠ ${esc(String(m))}</p>`;
+}
+
+// ── Memories tab ────────────────────────────────────────────────────────
+async function keLoadMemories() {
+  const list = $('ke-mem-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  const granularity = $('ke-mem-granularity').value || undefined;
+  try {
+    const res = await fetch('/api/entity/memories' + (granularity ? `?granularity=${encodeURIComponent(granularity)}` : ''));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const memories = data.memories ?? [];
+    if (!memories.length) { list.innerHTML = '<p class="logs-empty">No memories found.</p>'; return; }
+    list.innerHTML = '';
+    for (const m of memories) {
+      const row = document.createElement('div');
+      row.className = 'ke-row';
+      row.innerHTML = `
+        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date)}</div>
+        <div class="ke-row-sub">${esc((m.preview ?? '').slice(0, 140))}</div>`;
+      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date));
+      list.appendChild(row);
+    }
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
+}
+
+async function keOpenMemory(granularity, date) {
+  keSetDetail('ke-mem-detail', '<p class="logs-loading">Loading…</p>');
+  try {
+    const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const content = data.memory?.content ?? data.content ?? '';
+    const det = $('ke-mem-detail');
+    det.innerHTML = `
+      <div class="ke-detail-header">
+        <h3>${esc(granularity)} · ${esc(date)}</h3>
+      </div>
+      <textarea id="ke-mem-content" rows="14" class="ke-textarea">${esc(content)}</textarea>
+      <div class="ke-actions">
+        <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
+        <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
+        <button id="ke-mem-delete"  class="btn-ghost ke-danger">Delete</button>
+      </div>
+      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
+    $('ke-mem-save').addEventListener('click', async () => {
+      const body = $('ke-mem-content').value;
+      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: body, editedBy: 'user-edit' }),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadMemories();
+      keOpenMemory(granularity, date);
+    });
+    $('ke-mem-super').addEventListener('click', async () => {
+      const body = $('ke-mem-content').value;
+      if (!body.trim()) { alert('Write the corrected memory content first.'); return; }
+      const r = await fetch('/api/entity/memories/supersede', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: body, granularity, supersedes: { granularity, date } }),
+      });
+      if (!r.ok) { alert(`Supersede failed: ${(await r.json()).error ?? r.status}`); return; }
+      const j = await r.json();
+      alert(`Wrote new ${granularity}/${j.date}.`);
+      keLoadMemories();
+    });
+    $('ke-mem-delete').addEventListener('click', async () => {
+      if (!confirm(`Delete memory ${granularity}/${date}? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
+      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      keSetDetail('ke-mem-detail', '<p class="logs-empty">Deleted.</p>');
+      keLoadMemories();
+    });
+  } catch (err) { keSetDetail('ke-mem-detail', keError(err, 'Failed to load memory.')); }
+}
+
+// ── Graph tab ───────────────────────────────────────────────────────────
+async function keLoadGraphNodes() {
+  const list = $('ke-graph-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  const type = $('ke-graph-type').value.trim() || undefined;
+  try {
+    const res = await fetch('/api/entity/graph/nodes' + (type ? `?type=${encodeURIComponent(type)}` : ''));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data  = await res.json();
+    const nodes = data.nodes ?? data.results ?? [];
+    if (!nodes.length) { list.innerHTML = '<p class="logs-empty">No graph nodes found.</p>'; return; }
+    list.innerHTML = '';
+    for (const n of nodes) {
+      const row = document.createElement('div');
+      row.className = 'ke-row';
+      row.innerHTML = `
+        <div class="ke-row-title">${esc(n.label ?? n.id)}</div>
+        <div class="ke-row-sub">${esc(n.type ?? '')}${n.description ? ' · ' + esc(n.description.slice(0, 100)) : ''}</div>`;
+      row.addEventListener('click', () => keOpenGraphNode(n.id));
+      list.appendChild(row);
+    }
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load graph nodes.'); }
+}
+
+async function keOpenGraphNode(id) {
+  keSetDetail('ke-graph-detail', '<p class="logs-loading">Loading…</p>');
+  try {
+    const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}/subgraph?depth=1`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const sg   = await res.json();
+    const self = (sg.nodes ?? []).find(n => n.id === id) ?? { id };
+    const det  = $('ke-graph-detail');
+    const edgesHtml = (sg.edges ?? []).map(e => {
+      const other = e.fromId === id ? e.toId : e.fromId;
+      const otherLabel = (sg.nodes ?? []).find(n => n.id === other)?.label ?? other;
+      const dir = e.fromId === id ? '→' : '←';
+      return `<div class="ke-edge-row">
+        <span class="ke-edge-text"><strong>${esc(self.label ?? id)}</strong> ${dir} ${esc(e.type)} ${dir} <strong>${esc(otherLabel)}</strong></span>
+        <button class="btn-ghost ke-danger" data-edge-id="${esc(e.id)}">Delete edge</button>
+      </div>`;
+    }).join('');
+    det.innerHTML = `
+      <div class="ke-detail-header"><h3>${esc(self.label ?? id)}</h3></div>
+      <div class="field"><label>Label</label><input id="ke-graph-label" type="text" value="${esc(self.label ?? '')}"></div>
+      <div class="field"><label>Type</label><input id="ke-graph-nodetype" type="text" value="${esc(self.type ?? '')}"></div>
+      <div class="field"><label>Description</label><textarea id="ke-graph-desc" rows="4" class="ke-textarea">${esc(self.description ?? '')}</textarea></div>
+      <div class="ke-actions">
+        <button id="ke-graph-save" class="btn-send">Save</button>
+        <button id="ke-graph-delete" class="btn-ghost ke-danger">Delete node</button>
+      </div>
+      <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
+      <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>`;
+    $('ke-graph-save').addEventListener('click', async () => {
+      const body = {
+        label:       $('ke-graph-label').value,
+        type:        $('ke-graph-nodetype').value,
+        description: $('ke-graph-desc').value,
+      };
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadGraphNodes();
+      keOpenGraphNode(id);
+    });
+    $('ke-graph-delete').addEventListener('click', async () => {
+      if (!confirm('Delete this node and ALL its edges? An auto-snapshot is taken first.')) return;
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      keSetDetail('ke-graph-detail', '<p class="logs-empty">Deleted.</p>');
+      keLoadGraphNodes();
+    });
+    det.querySelectorAll('button[data-edge-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const eid = btn.dataset.edgeId;
+        if (!confirm(`Delete edge ${eid}? Auto-snapshot first.`)) return;
+        const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, { method: 'DELETE' });
+        if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+        keOpenGraphNode(id);
+      });
+    });
+  } catch (err) { keSetDetail('ke-graph-detail', keError(err, 'Failed to load node.')); }
+}
+
+// ── Identity tab ────────────────────────────────────────────────────────
+async function keLoadIdentity() {
+  const list = $('ke-id-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    const res = await fetch('/api/entity/identity');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    list.innerHTML = '';
+    let any = false;
+    for (const category of ['self', 'user', 'relationship', 'custom']) {
+      const files = data[category] ?? [];
+      if (!files.length) continue;
+      const header = document.createElement('div');
+      header.className = 'ke-row-header';
+      header.textContent = category;
+      list.appendChild(header);
+      for (const f of files) {
+        any = true;
+        const row = document.createElement('div');
+        row.className = 'ke-row';
+        row.innerHTML = `
+          <div class="ke-row-title">${esc(f.filename)}</div>
+          <div class="ke-row-sub">${esc((f.content ?? '').slice(0, 100).replace(/\n/g, ' '))}</div>`;
+        row.addEventListener('click', () => keOpenIdentity(category, f));
+        list.appendChild(row);
+      }
+    }
+    if (!any) list.innerHTML = '<p class="logs-empty">No identity files yet.</p>';
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load identity.'); }
+}
+
+function keOpenIdentity(category, file) {
+  // Parse markdown sections (## heading lines)
+  const text = file.content ?? '';
+  const lines = text.split('\n');
+  const sections = [];
+  let current = { heading: '(top)', body: [] };
+  for (const line of lines) {
+    const m = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (m) { sections.push(current); current = { heading: m[1].trim(), body: [] }; }
+    else current.body.push(line);
+  }
+  sections.push(current);
+  const det = $('ke-id-detail');
+  const sectionsHtml = sections.map((s, i) => `
+    <div class="ke-section">
+      <div class="ke-section-head">${esc(s.heading)}</div>
+      <textarea class="ke-textarea ke-id-section" rows="6" data-section="${esc(s.heading)}">${esc(s.body.join('\n').trim())}</textarea>
+      <div class="ke-actions">
+        <button class="btn-send ke-id-save" data-section="${esc(s.heading)}" ${s.heading === '(top)' ? 'disabled title="Top-of-file content has no heading to target — edit the file manually for now."' : ''}>Save section</button>
+      </div>
+    </div>`).join('');
+  det.innerHTML = `
+    <div class="ke-detail-header"><h3>${esc(category)} / ${esc(file.filename)}</h3></div>
+    <p class="field-hint">Each section here corresponds to a markdown heading in the file. Saving a section rewrites just that heading's body via identity_rewrite_section; an auto-snapshot is taken first.</p>
+    ${sectionsHtml}`;
+  det.querySelectorAll('.ke-id-save').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sec = btn.dataset.section;
+      const ta  = det.querySelector(`textarea.ke-id-section[data-section="${sec.replace(/"/g, '\\"')}"]`);
+      const r = await fetch(
+        `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(file.filename)}/sections/${encodeURIComponent(sec)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) },
+      );
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadIdentity();
+    });
+  });
+}
+
+// ── Snapshots tab ───────────────────────────────────────────────────────
+async function keLoadSnapshots() {
+  const list = $('ke-snap-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    const res  = await fetch('/api/entity/snapshots');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const snaps = data.snapshots ?? data ?? [];
+    if (!snaps.length) { list.innerHTML = '<p class="logs-empty">No snapshots yet.</p>'; return; }
+    list.innerHTML = '';
+    for (const s of snaps) {
+      const row = document.createElement('div');
+      row.className = 'ke-row';
+      row.innerHTML = `
+        <div class="ke-row-title">${esc(s.id ?? s.snapshotId ?? 'snapshot')}</div>
+        <div class="ke-row-sub">${esc(s.createdAt ?? s.date ?? '')}</div>
+        <div class="ke-actions">
+          <button class="btn-secondary ke-snap-restore" data-id="${esc(s.id ?? s.snapshotId)}">Restore</button>
+        </div>`;
+      list.appendChild(row);
+    }
+    list.querySelectorAll('.ke-snap-restore').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Restore this snapshot? This will overwrite the CURRENT memory / identity / graph state with the snapshot contents.')) return;
+        const r = await fetch(`/api/entity/snapshots/${encodeURIComponent(btn.dataset.id)}/restore`, { method: 'POST' });
+        if (!r.ok) { alert(`Restore failed: ${(await r.json()).error ?? r.status}`); return; }
+        alert('Snapshot restored.');
+      });
+    });
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load snapshots.'); }
+}
+
+async function keCreateSnapshot() {
+  const r = await fetch('/api/entity/snapshots', { method: 'POST' });
+  if (!r.ok) { alert(`Snapshot failed: ${(await r.json()).error ?? r.status}`); return; }
+  keLoadSnapshots();
 }
 
 // ── Tome entry editor ─────────────────────────────────────────────
