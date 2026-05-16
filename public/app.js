@@ -1441,6 +1441,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     sessionId,
     scope:        opts.scope ?? 'session',
     topicId:      opts.topicId ?? null,
+    topicLabel:   opts.topicLabel ?? null,
     messageRange: opts.messageRange ?? null,
     messages,
     provider:     state.provider,
@@ -1476,6 +1477,7 @@ function memorizeViaBeacon(messages, sessionId, opts = {}) {
     sessionId,
     scope:        opts.scope ?? 'session',
     topicId:      opts.topicId ?? null,
+    topicLabel:   opts.topicLabel ?? null,
     messageRange: opts.messageRange ?? null,
     messages,
     provider:     state.provider,
@@ -2087,6 +2089,18 @@ function nextTopicColor() {
 let _retroStartIndex = null;
 
 /**
+ * Returns the topic label if the user named it themselves, or null if it's
+ * the auto-generated "Topic N" fallback used when the user dismissed the
+ * name prompt without typing anything.
+ */
+function userNamedTopicLabel(topic) {
+  const label = (topic?.label ?? '').trim();
+  if (!label) return null;
+  if (/^Topic \d+$/.test(label)) return null;
+  return label;
+}
+
+/**
  * Start a new topic, optionally anchored at a past message index.
  * If startIndex is provided it takes precedence over the current tail.
  */
@@ -2140,6 +2154,7 @@ function endTopicAtIndex(topic, endIdx) {
     memorizeSessionToTome(rangeMessages, state.sessionId, {
       scope:        'topic',
       topicId:      topic.id,
+      topicLabel:   userNamedTopicLabel(topic),
       messageRange: { start: topic.startIndex, end: topic.endIndex },
     });
     generateTopicSummary(topic, rangeMessages);
@@ -2705,7 +2720,12 @@ async function generateTopicSummary(topic, rangeMessages) {
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n\n');
 
-  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.
+  const userLabel = userNamedTopicLabel(topic);
+  const focusBlock = userLabel
+    ? `\n\n### Focus topic\nThe user named this topic "${userLabel}". Center the entry on that topic. Skip tangential threads in the conversation that don't bear on it.`
+    : '';
+
+  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.${focusBlock}
 
 Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
 {

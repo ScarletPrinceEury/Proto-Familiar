@@ -546,12 +546,12 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
   if (!body || typeof body !== 'object') {
     return res.status(400).json({ error: 'Request body required.' });
   }
-  const { sessionId, scope, topicId, messageRange, messages, provider, apiKey, model } = body;
+  const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model } = body;
   if (!isValidUUID(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const { jobId, deduped } = await enqueueMemorization({
-      sessionId, scope, topicId, messageRange, messages, provider, apiKey, model,
+      sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model,
     });
     res.status(202).json({ jobId, deduped });
   } catch (err) {
