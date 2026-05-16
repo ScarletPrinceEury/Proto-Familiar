@@ -154,7 +154,11 @@ Set **Probability (0–100)** to randomly skip an entry even when its keywords m
 
 ## Tome File Format
 
-Each Tome is stored as a JSON file at `tomes/<id>.json`:
+Each Tome is stored as a JSON file at `tomes/<id>.json`. The memorization
+worker also keeps its job queue in this directory at
+`tomes/.memorization-queue.json`; this and any other dotfile inside
+`tomes/` is skipped by both `/api/tomes` and `findTomeFile`, so it
+never appears in the Tome Manager.
 
 ```json
 {

@@ -116,21 +116,30 @@ The inspector calls `POST /api/debug-prompt` with the current message array and 
 
 ## Setup
 
-The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windows, `Proto-Familiar.command` on macOS, `./install.sh` on Linux). If you'd rather do it by hand:
+The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windows, `Proto-Familiar.command` on macOS, `./install.sh` on Linux). They also pre-cache the Deno module graph so the first server start doesn't stall on downloads. If you'd rather do it by hand:
 
 1. Clone entity-core-alpha as a sibling directory next to Proto-Familiar:
    ```bash
    git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core-alpha
    ```
-2. Populate its `data/` directory with identity files following the entity-core README.
-3. Start Proto-Familiar normally. `thalamus.js` spawns entity-core automatically on startup.
+   Psycheros is a Deno workspace at this tag, so entity-core itself lives at `../entity-core-alpha/packages/entity-core/`. Older releases kept it at the repo root (`../entity-core-alpha/src/mod.ts`); `thalamus.js` probes both layouts and prefers the workspace path.
+
+2. Populate the package's `data/` directory — `entity-core-alpha/packages/entity-core/data/` for the workspace layout, or `entity-core-alpha/data/` for the legacy layout — with identity files following the entity-core README.
+
+3. (Optional but recommended) Pre-cache Deno dependencies so the first launch is instant:
+   ```bash
+   cd ../entity-core-alpha/packages/entity-core   # or just ../entity-core-alpha on the legacy layout
+   deno cache src/mod.ts
+   ```
+
+4. Start Proto-Familiar normally. `thalamus.js` spawns entity-core automatically on startup. Make sure `deno` is on `PATH` for the process that runs `node server.js`; `start.sh` adds `~/.deno/bin` to `PATH` automatically when the official installer was used and the user's shell config hasn't been reloaded.
 
 If entity-core is missing or fails to start, `thalamus.js` logs the error and `enrich()` returns an empty string — Proto-Familiar runs normally without enrichment.
 
 To use a custom install path, set `ENTITY_CORE_PATH` to the absolute path of entity-core's `src/mod.ts` before starting the server:
 
 ```bash
-ENTITY_CORE_PATH=/home/user/my-entity-core/src/mod.ts npm start
+ENTITY_CORE_PATH=/home/user/my-entity-core/packages/entity-core/src/mod.ts npm start
 ```
 
 ---
@@ -152,7 +161,7 @@ npm run import-entity -- --from /path/to/entity-core --yes
 
 The script:
 - Auto-detects whether `--from` is an entity-core root or a bare data directory.
-- Resolves the destination using the same logic as `thalamus.js` (`$ENTITY_CORE_PATH` → `../entity-core-alpha`).
+- Resolves the destination using the same logic as `thalamus.js`: `$ENTITY_CORE_PATH` if set, otherwise probes `../entity-core-alpha/packages/entity-core` (Deno-workspace layout) and falls back to `../entity-core-alpha` (legacy top-level layout).
 - Reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides.
 - Preserves file timestamps so memory recency ranking stays accurate.
 - Refuses to proceed if source and destination resolve to the same path.

@@ -12,6 +12,14 @@ LOG_FILE="$SCRIPT_DIR/.proto-familiar.log"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 
+# thalamus.js spawns `deno` for entity-core. Make sure ~/.deno/bin is on
+# PATH even when the user installed Deno via the official script but
+# hasn't reloaded their shell — otherwise the spawn fails with ENOENT
+# and the identity layer silently doesn't load.
+if ! command -v deno >/dev/null 2>&1 && [ -x "$HOME/.deno/bin/deno" ]; then
+  export PATH="$HOME/.deno/bin:$PATH"
+fi
+
 # Already running?
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   say "Proto-Familiar already running (PID $(cat "$PID_FILE"))."

@@ -132,7 +132,7 @@ async function withTomeLock(file, fn) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-function buildPrompt(messages) {
+function buildPrompt(messages, topicLabel = null) {
   const readable = messages.filter(m => {
     if (m.role === 'tool') return false;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
@@ -144,7 +144,11 @@ function buildPrompt(messages) {
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n\n');
 
-  return `You are producing Tome entries for a Familiar (AI companion). Each entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.
+  const focusBlock = topicLabel
+    ? `\n\n### Focus topic\nThe user named this segment "${topicLabel}". Center the entries on that topic; collapse or skip tangential threads that don't bear on it. Prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
+    : '';
+
+  return `You are producing Tome entries for a Familiar (AI companion). Each entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.${focusBlock}
 
 Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
@@ -235,7 +239,7 @@ function parseTopics(raw) {
 // ── Worker ───────────────────────────────────────────────────────
 
 async function processJob(job) {
-  const prompt = buildPrompt(job.messages);
+  const prompt = buildPrompt(job.messages, job.topicLabel ?? null);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const raw    = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
@@ -368,12 +372,13 @@ export function startMemorizationWorker() {
 
 // ── Public API used by server endpoints ─────────────────────────
 
-export async function enqueueMemorization({ sessionId, scope, topicId, messageRange, messages, provider, apiKey, model }) {
+export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model }) {
   await loadQueue();
   if (!sessionId || typeof sessionId !== 'string') throw new Error('sessionId is required.');
   if (!Array.isArray(messages) || messages.length < 2) throw new Error('At least 2 messages are required.');
   if (!provider || !apiKey || !model) throw new Error('provider, apiKey, and model are required.');
   const normScope = scope === 'topic' ? 'topic' : 'session';
+  const normLabel = typeof topicLabel === 'string' && topicLabel.trim() ? topicLabel.trim() : null;
 
   // Idempotency: same session+scope+topicId+rangeKey collapses to the existing job
   // unless that job is already in a terminal state.
@@ -388,6 +393,7 @@ export async function enqueueMemorization({ sessionId, scope, topicId, messageRa
     sessionId,
     scope:         normScope,
     topicId:       topicId ?? null,
+    topicLabel:    normLabel,
     messageRange:  messageRange ?? null,
     messages,
     provider,

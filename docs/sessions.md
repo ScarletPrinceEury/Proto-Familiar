@@ -40,7 +40,7 @@ Load persisted settings + history from localStorage
 | **3-hour idle timeout** | Session stamped with `endedAt` and saved. New session starts automatically. A memorization job is enqueued on the server. |
 | **Manual clear** | **Clear** button closes the current session, enqueues a memorization job, and starts a fresh one. |
 | **Tab close** | A `beforeunload` handler uses `navigator.sendBeacon` to enqueue the current session before the page unloads. |
-| **Topic end** | Clicking **□ Topic end** enqueues a topic-scoped memorization for that topic's message range, in addition to the existing topic summary. |
+| **Topic end** | Clicking **□ Topic end** (or the active topic pill) always opens the summary review dialog so you can write or edit the entry, and — when an API key is set and the range contains readable messages — also enqueues a topic-scoped memorization for that range. With no key or no readable messages the dialog drops into a blank manual form with a hint. |
 | **Memorize now** | The **✦ Memorize now** button in the Chat sidebar enqueues the current session on demand without ending it. |
 | **Per-session Memorize button** | Each row in the Logs modal has a **Memorize** button. It opens a chooser with **Auto-summarize** (enqueue a job for that historical session and wait inline for the result) or **Manual topics** (open the session in a read-only viewer with topic-mark buttons and review each entry before saving). Both write to **Session Memories**. |
 
@@ -103,6 +103,7 @@ The queue is persisted to `tomes/.memorization-queue.json` (git-ignored), so job
 | Sticky | How many turns the entry stays active after first match (sized to how long the situation typically lasts) |
 | Position | `before_char` (default for memorized entries) |
 | `scope`, `topic_id`, `message_range`, `session_id` | Provenance metadata: which trigger produced the entry and what conversation slice it came from |
+| `topicLabel` (job-only, not stored on the entry) | Optional. When a topic was named by the user, the label is forwarded to the worker so the prompt centers the entry on that topic. Auto-named topics (`Topic 1`, etc.) suppress this field at the client. |
 
 ### Job Lifecycle
 

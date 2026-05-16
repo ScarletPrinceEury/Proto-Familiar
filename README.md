@@ -214,10 +214,10 @@ Tool-call turns are stored in the session log but are stripped from chat exports
 Topics let you tag a slice of conversation with a label and track it with a coloured bar in the message gutter.
 
 - **Start a topic** — click the **+ Topic** button in the input bar, give it a name (or leave blank), and messages from that point forward are grouped under it. Multiple topics can run in parallel.
-- **End a topic** — click the **□ Topic end** button that appears on any message while hovering. If multiple open topics include that message, a picker appears.
+- **End a topic** — click the **□ Topic end** button that appears on any message while hovering, or click the active topic pill above the input bar. If multiple open topics include that message, a picker appears. The summary review dialog always opens, even with no API key — it drops into a blank manual form with a hint when auto-generation isn't possible.
 - **Retroactive start** — click the **▷ Topic start** button on any past message to begin a topic from that point instead of the present.
 - **Open topic indicator** — the gutter bar for an open topic extends to the bottom of the message list with a pulsing dot, keeping it visible while it is still active.
-- **Auto-summary** — when a topic ends, the LLM is prompted in the style of [docs/tome-writing-guide.md](docs/tome-writing-guide.md): conversational trigger keywords, Familiar-perspective bullet content, and a suggested sticky value. You can edit any field and save it to a Tome as a new entry.
+- **Auto-summary** — when a topic ends, the LLM is prompted in the style of [docs/tome-writing-guide.md](docs/tome-writing-guide.md): conversational trigger keywords, Familiar-perspective bullet content, and a suggested sticky value. If you named the topic yourself, the label is forwarded to the summarizer as a "focus topic" so the entry centers on that subject and skips tangential threads. You can edit any field and save it to a Tome as a new entry.
 
 ---
 

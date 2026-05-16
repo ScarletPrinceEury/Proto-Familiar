@@ -1441,6 +1441,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     sessionId,
     scope:        opts.scope ?? 'session',
     topicId:      opts.topicId ?? null,
+    topicLabel:   opts.topicLabel ?? null,
     messageRange: opts.messageRange ?? null,
     messages,
     provider:     state.provider,
@@ -1476,6 +1477,7 @@ function memorizeViaBeacon(messages, sessionId, opts = {}) {
     sessionId,
     scope:        opts.scope ?? 'session',
     topicId:      opts.topicId ?? null,
+    topicLabel:   opts.topicLabel ?? null,
     messageRange: opts.messageRange ?? null,
     messages,
     provider:     state.provider,
@@ -2087,6 +2089,18 @@ function nextTopicColor() {
 let _retroStartIndex = null;
 
 /**
+ * Returns the topic label if the user named it themselves, or null if it's
+ * the auto-generated "Topic N" fallback used when the user dismissed the
+ * name prompt without typing anything.
+ */
+function userNamedTopicLabel(topic) {
+  const label = (topic?.label ?? '').trim();
+  if (!label) return null;
+  if (/^Topic \d+$/.test(label)) return null;
+  return label;
+}
+
+/**
  * Start a new topic, optionally anchored at a past message index.
  * If startIndex is provided it takes precedence over the current tail.
  */
@@ -2131,17 +2145,25 @@ function endTopicAtIndex(topic, endIdx) {
     if (m.role === 'assistant' && Array.isArray(m.tool_calls)) continue;
     rangeMessages.push(m);
   }
-  if (!rangeMessages.length || !state.apiKey.trim()) return;
 
-  // Enqueue a topic-scoped memorization in addition to the topic summary.
-  memorizeSessionToTome(rangeMessages, state.sessionId, {
-    scope:        'topic',
-    topicId:      topic.id,
-    messageRange: { start: topic.startIndex, end: topic.endIndex },
-  });
-
+  // Always open the summary modal so the user sees the topic actually ended.
+  // Auto-generate only when we have something to summarize AND an API key;
+  // otherwise drop into a blank manual form with a hint.
   openSummaryModal(topic);
-  generateTopicSummary(topic, rangeMessages);
+  if (rangeMessages.length && state.apiKey.trim()) {
+    memorizeSessionToTome(rangeMessages, state.sessionId, {
+      scope:        'topic',
+      topicId:      topic.id,
+      topicLabel:   userNamedTopicLabel(topic),
+      messageRange: { start: topic.startIndex, end: topic.endIndex },
+    });
+    generateTopicSummary(topic, rangeMessages);
+  } else {
+    populateSummaryForm({ title: topic.label, content: '', keywords: [], sticky: null });
+    $('summary-content-input').placeholder = !state.apiKey.trim()
+      ? 'Set an API key in Settings to auto-generate, or write the summary manually.'
+      : 'No readable messages in this topic range. Write the summary manually.';
+  }
 }
 
 function endTopic(topicId) {
@@ -2698,7 +2720,12 @@ async function generateTopicSummary(topic, rangeMessages) {
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
     .join('\n\n');
 
-  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.
+  const userLabel = userNamedTopicLabel(topic);
+  const focusBlock = userLabel
+    ? `\n\n### Focus topic\nThe user named this topic "${userLabel}". Center the entry on that topic. Skip tangential threads in the conversation that don't bear on it.`
+    : '';
+
+  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.${focusBlock}
 
 Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
 {
@@ -3196,7 +3223,7 @@ async function refreshTomesList() {
   await loadTomesFromServer();
   const container = $('tomes-list');
   container.innerHTML = '';
-  const tomes = state.tomeRegistry;
+  const tomes = state.tomeRegistry.filter(t => t && t.id);
   if (!tomes.length) {
     container.innerHTML = '<p class="lorebook-empty">No tomes yet. Click <strong>+ New Tome</strong> to create one.</p>';
     return;
@@ -3471,7 +3498,9 @@ async function saveLoreEditorEntry() {
   if (!content) { alert('Content is required.'); return; }
 
   const uid      = _loreEditUid || generateId();
-  const existing = _loreEditUid ? (state.lorebook.entries[uid] ?? {}) : {};
+  const existing = _loreEditUid
+    ? (state.tomeCache[_currentTomeId]?.entries?.[uid] ?? {})
+    : {};
 
   const keysRaw    = $('lore-ed-keys').value;
   const keys       = keysRaw.split(',').map(k => k.trim()).filter(Boolean);

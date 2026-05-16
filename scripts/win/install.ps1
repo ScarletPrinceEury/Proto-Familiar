@@ -107,6 +107,27 @@ if (Test-Path $entityCoreDir) {
     Warn "git unavailable; skipping entity-core clone."
 }
 
+# --- entity-core dependency pre-cache ---
+# Psycheros is now a Deno workspace; entity-core lives at packages/entity-core.
+# Older releases kept it at the repo root, so probe both and prefer the workspace path.
+$entityCorePkg = $null
+if (Test-Path (Join-Path $entityCoreDir "packages\entity-core\src\mod.ts")) {
+    $entityCorePkg = Join-Path $entityCoreDir "packages\entity-core"
+} elseif (Test-Path (Join-Path $entityCoreDir "src\mod.ts")) {
+    $entityCorePkg = $entityCoreDir
+}
+if ($entityCorePkg -and (Have "deno")) {
+    Step "Pre-caching entity-core dependencies (one-time; can take several minutes)..."
+    Push-Location $entityCorePkg
+    try {
+        & deno cache src/mod.ts | Out-Null
+        if ($LASTEXITCODE -eq 0) { Ok "entity-core dependencies cached" }
+        else { Warn "deno cache failed - first server start will download deps before entity-core comes up." }
+    } finally { Pop-Location }
+} elseif ($entityCorePkg) {
+    Warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
+}
+
 # --- Shortcuts ---
 Step "Creating Desktop and Start Menu shortcuts..."
 $launcher  = Join-Path $projectRoot "Proto-Familiar.vbs"

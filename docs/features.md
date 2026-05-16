@@ -101,8 +101,9 @@ See [Topics](topics.md) for the full reference.
 
 - **+ Topic** — start a named topic from the current message
 - **▷ Topic start** on any past message — start a topic retroactively
-- **□ Topic end** on any message — end an open topic at that point
-- On topic end, an LLM-generated entry (written in the [tome-writing-guide](tome-writing-guide.md) style) is reviewed and optionally saved to a Tome
+- **□ Topic end** on any message — end an open topic at that point; the active topic pill above the input also ends the topic at the latest message
+- On topic end, the summary review dialog always opens; an LLM-generated entry (written in the [tome-writing-guide](tome-writing-guide.md) style) is pre-filled when an API key is set, otherwise the dialog drops into a manual form
+- User-named topics forward their label to the summarizer as a "focus topic" so the generated entry centers on that subject; auto-named topics (`Topic N`) fall back to the unscoped prompt
 
 ---
 

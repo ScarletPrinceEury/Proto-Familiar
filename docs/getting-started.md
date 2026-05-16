@@ -111,7 +111,7 @@ On Windows, set the env var in the current shell before double-clicking `Proto-F
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP port the server listens on |
-| `ENTITY_CORE_PATH` | `../entity-core-alpha/src/mod.ts` | Absolute path to entity-core's `src/mod.ts`. Override if your entity-core install is not in the sibling directory. |
+| `ENTITY_CORE_PATH` | auto: probes `../entity-core-alpha/packages/entity-core/src/mod.ts` then `../entity-core-alpha/src/mod.ts` | Absolute path to entity-core's `src/mod.ts`. Override if your entity-core install is not in the sibling directory or to force a specific layout. |
 
 ---
 
@@ -135,9 +135,9 @@ All three providers use the OpenAI-compatible `chat/completions` format. The ser
 
 ## Setting up entity-core
 
-The one-click installer clones entity-core-alpha automatically. If you want to do it manually (or import an existing data directory), see [Entity-Core](entity-core.md).
+The one-click installer clones entity-core-alpha automatically and pre-caches its Deno dependencies so the first server start is instant. If you want to do it manually (or import an existing data directory), see [Entity-Core](entity-core.md).
 
-In short: entity-core lives at `../entity-core-alpha` relative to Proto-Familiar, and `thalamus.js` spawns it on startup. If it's missing or fails, enrichment is skipped and Proto-Familiar runs normally.
+In short: entity-core lives at `../entity-core-alpha/packages/entity-core` (Deno-workspace layout) relative to Proto-Familiar, and `thalamus.js` spawns it on startup. The older top-level layout at `../entity-core-alpha/src/mod.ts` is still detected as a fallback. If entity-core is missing or fails, enrichment is skipped and Proto-Familiar runs normally.
 
 ---
 

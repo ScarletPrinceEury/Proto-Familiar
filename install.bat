@@ -67,6 +67,27 @@ if exist "%ENTITY_CORE_DIR%" (
   )
 )
 
+REM --- entity-core dependency pre-cache ---
+REM Psycheros is now a Deno workspace; probe packages/entity-core first, then the legacy top-level layout.
+set "ENTITY_CORE_PKG="
+if exist "%ENTITY_CORE_DIR%\packages\entity-core\src\mod.ts" (
+  set "ENTITY_CORE_PKG=%ENTITY_CORE_DIR%\packages\entity-core"
+) else if exist "%ENTITY_CORE_DIR%\src\mod.ts" (
+  set "ENTITY_CORE_PKG=%ENTITY_CORE_DIR%"
+)
+where deno >nul 2>nul
+if not errorlevel 1 if defined ENTITY_CORE_PKG (
+  echo Pre-caching entity-core dependencies (one-time; can take several minutes)...
+  pushd "%ENTITY_CORE_PKG%"
+  deno cache src/mod.ts >nul 2>nul
+  if errorlevel 1 (
+    echo [WARN] deno cache failed - first server start will download deps before entity-core comes up.
+  ) else (
+    echo entity-core dependencies cached.
+  )
+  popd
+)
+
 echo.
 echo === Install complete ===
 echo   Start: start.bat   (double-click)

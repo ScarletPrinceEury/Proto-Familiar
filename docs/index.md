@@ -19,6 +19,7 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 | [Tool Calling](tool-calling.md) | Built-in tools, custom tools, and the execution loop |
 | [Topics](topics.md) | Conversation topic tagging and auto-summaries |
 | [Project Vision](project-vision.md) | Design principles, goals, and the road to the full Familiar |
+| [Future Features](future-features.md) | Scratch pad for ideas pending design or implementation |
 
 ---
 

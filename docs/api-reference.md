@@ -168,7 +168,10 @@ Tomes are stored as individual JSON files in the `tomes/` directory. Each Tome i
 
 ### `GET /api/tomes`
 
-Returns a metadata list of all Tomes (no entry bodies).
+Returns a metadata list of all Tomes (no entry bodies). Files inside
+`tomes/` whose name starts with `.` (e.g. `.memorization-queue.json`,
+which the memorization worker uses for its persistent job queue) are
+skipped, as are files that parse but lack an `id` field.
 
 **Response:**
 
@@ -381,6 +384,7 @@ Enqueue a memorization job. Accepts both `application/json` and `text/plain` JSO
   "sessionId":    "550e8400-e29b-41d4-a716-446655440000",
   "scope":        "session | topic",
   "topicId":      "<topic id, when scope = topic>",
+  "topicLabel":   "<user-supplied topic label, when scope = topic>",
   "messageRange": { "start": 0, "end": 42 },
   "messages":     [ /* role + content turns */ ],
   "provider":     "nanogpt",
@@ -394,6 +398,7 @@ Enqueue a memorization job. Accepts both `application/json` and `text/plain` JSO
 | `sessionId` | string (UUID) | Yes | Session the memorization belongs to |
 | `scope` | string | Yes | `"session"` for full-session memorization, `"topic"` for a topic-bounded range |
 | `topicId` | string | When `scope = topic` | Identifier of the topic being memorized |
+| `topicLabel` | string | Optional | When the user named the topic themselves, the worker injects a "focus topic" block into the summarizer prompt so the generated entry centers on that topic. Omit (or pass `null`) for auto-named topics (`"Topic 1"`, etc.) — the client suppresses the field for those automatically. |
 | `messageRange` | object | When `scope = topic` | `{ start, end }` indices into the supplied `messages` array |
 | `messages` | array | Yes | Conversation turns to summarise (user/assistant only — tool plumbing is filtered server-side) |
 | `provider` / `apiKey` / `model` | string | Yes | Provider credentials the worker uses for the LLM call |
