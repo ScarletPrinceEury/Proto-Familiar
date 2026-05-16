@@ -1,6 +1,16 @@
 # Proto-Familiar Windows installer
-# Auto-installs Node, Deno, and Git via winget when available, runs `npm install`,
-# clones entity-core-alpha, and creates Desktop + Start Menu shortcuts.
+#
+# Fresh install: auto-installs Node, Deno, and Git via winget (when
+#   available), runs `npm install`, clones entity-core-alpha, pre-caches
+#   its Deno module graph, and creates Desktop + Start Menu shortcuts.
+#
+# Update mode: triggered automatically when node_modules\ already exists.
+#   Takes a defensive backup of tomes\, logs\, and entity-core data\
+#   into .pf-backups\<timestamp>\ BEFORE any git op runs, then pulls
+#   latest Proto-Familiar (`git pull --ff-only`), refreshes entity-core
+#   to the pinned tag, and re-runs the idempotent npm install + deno
+#   cache. Node/Deno/Git auto-install still runs if any is missing — the
+#   only thing skipped in update mode is the shortcut creation.
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -8,6 +18,7 @@ $parentDir   = Split-Path -Parent $projectRoot
 $entityCoreDir = Join-Path $parentDir "entity-core-alpha"
 $entityCoreRepo = "https://github.com/PsycherosAI/Psycheros.git"
 $entityCoreTag  = "entity-core-v0.2.2"
+$backupRoot    = Join-Path $projectRoot ".pf-backups"
 
 function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 function Refresh-Path {
@@ -20,10 +31,55 @@ function Ok($msg)    { Write-Host "    $msg" -ForegroundColor Green }
 function Warn($msg)  { Write-Host "!!  $msg" -ForegroundColor Yellow }
 function Fail($msg)  { Write-Host "XX  $msg" -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
 
+# Detect mode: existing node_modules => update.
+$updateMode = Test-Path (Join-Path $projectRoot "node_modules")
+
 Clear-Host
-Write-Host "Proto-Familiar installer" -ForegroundColor Magenta
+if ($updateMode) {
+    Write-Host "Proto-Familiar updater (existing install detected)" -ForegroundColor Magenta
+} else {
+    Write-Host "Proto-Familiar installer" -ForegroundColor Magenta
+}
 Write-Host "Project: $projectRoot"
 Write-Host ""
+
+# --- Pre-pull data backup (update mode only) ---
+# Defensive copy of at-risk dirs into .pf-backups\<timestamp>\ before any
+# git op. Safety net on top of git's own protections.
+$anythingBackedUp = $false
+$backupDir = $null
+if ($updateMode) {
+    $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $backupDir = Join-Path $backupRoot $stamp
+    $sources = @(
+        @{ Path = (Join-Path $projectRoot "tomes"); Rel = "tomes" },
+        @{ Path = (Join-Path $projectRoot "logs");  Rel = "logs"  },
+        @{ Path = (Join-Path $entityCoreDir "packages\entity-core\data"); Rel = "entity-core-alpha\packages\entity-core\data" },
+        @{ Path = (Join-Path $entityCoreDir "data"); Rel = "entity-core-alpha\data" }
+    )
+    foreach ($s in $sources) {
+        if ((Test-Path $s.Path) -and ((Get-ChildItem $s.Path -Force | Measure-Object).Count -gt 0)) {
+            $dest = Join-Path $backupDir $s.Rel
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+            Copy-Item -Recurse -Force -Path $s.Path -Destination $dest
+            $anythingBackedUp = $true
+        }
+    }
+    if ($anythingBackedUp) {
+        Ok "User data backed up to $backupDir\"
+        Ok "  (tomes\, logs\, entity-core data\ — restore by copying back if needed)"
+    }
+}
+
+# --- Pull latest Proto-Familiar (update mode only) ---
+if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
+    Step "Pulling latest Proto-Familiar (git pull --ff-only)..."
+    Push-Location $projectRoot
+    try {
+        & git pull --ff-only
+        if ($LASTEXITCODE -ne 0) { Warn "git pull --ff-only failed. Work tree is unchanged." }
+    } finally { Pop-Location }
+}
 
 $haveWinget = Have "winget"
 if (-not $haveWinget) {
@@ -34,7 +90,7 @@ if (-not $haveWinget) {
     Write-Host ""
 }
 
-# --- Node.js ---
+# --- Node.js (install if missing, in both modes) ---
 Step "Checking Node.js..."
 if (-not (Have "node")) {
     if ($haveWinget) {
@@ -52,7 +108,7 @@ $nodeMajor = [int]($nodeVersion.Split('.')[0])
 if ($nodeMajor -lt 18) { Fail "Node.js $nodeVersion detected; Proto-Familiar needs 18+." }
 Ok "Node.js v$nodeVersion"
 
-# --- Deno (recommended) ---
+# --- Deno (install if missing, in both modes) ---
 Step "Checking Deno..."
 if (-not (Have "deno")) {
     if ($haveWinget) {
@@ -68,7 +124,7 @@ if (-not (Have "deno")) {
 }
 if (Have "deno") { Ok "Deno present" } else { Warn "Deno missing (Proto-Familiar will still run without entity-core)" }
 
-# --- Git ---
+# --- Git (install if missing, in both modes) ---
 Step "Checking Git..."
 if (-not (Have "git")) {
     if ($haveWinget) {
@@ -82,19 +138,32 @@ if (-not (Have "git")) {
 }
 if (Have "git") { Ok "Git present" } else { Warn "Git missing" }
 
-# --- npm install ---
-Step "Installing Proto-Familiar dependencies (npm install)..."
+# --- npm install (idempotent) ---
+Step "Running npm install..."
 Push-Location $projectRoot
 try {
     & npm install
     if ($LASTEXITCODE -ne 0) { Fail "npm install failed (exit $LASTEXITCODE)." }
 } finally { Pop-Location }
-Ok "Dependencies installed"
+Ok "Dependencies up to date"
 
-# --- entity-core clone ---
+# --- entity-core: clone (install) or refresh to pinned tag (update) ---
+# entity-core's runtime data\ is gitignored at both workspace and package
+# root, so `git checkout <tag>` never touches user data.
 Step "Setting up entity-core-alpha..."
 if (Test-Path $entityCoreDir) {
-    Ok "Already present at $entityCoreDir"
+    if ($updateMode -and (Test-Path (Join-Path $entityCoreDir ".git")) -and (Have "git")) {
+        Step "Refreshing entity-core-alpha to tag $entityCoreTag..."
+        Push-Location $entityCoreDir
+        try {
+            & git fetch --tags --depth 1 origin "refs/tags/${entityCoreTag}:refs/tags/${entityCoreTag}" 2>$null | Out-Null
+            & git checkout --quiet $entityCoreTag
+            if ($LASTEXITCODE -ne 0) { Warn "Could not refresh entity-core to $entityCoreTag. Keeping current checkout." }
+            else { Ok "Refreshed to $entityCoreTag" }
+        } finally { Pop-Location }
+    } else {
+        Ok "Already present at $entityCoreDir"
+    }
 } elseif (Have "git") {
     Step "Cloning $entityCoreRepo (tag $entityCoreTag) into $entityCoreDir..."
     & git clone --depth 1 --branch $entityCoreTag $entityCoreRepo $entityCoreDir
@@ -107,9 +176,7 @@ if (Test-Path $entityCoreDir) {
     Warn "git unavailable; skipping entity-core clone."
 }
 
-# --- entity-core dependency pre-cache ---
-# Psycheros is now a Deno workspace; entity-core lives at packages/entity-core.
-# Older releases kept it at the repo root, so probe both and prefer the workspace path.
+# --- entity-core dependency pre-cache (idempotent) ---
 $entityCorePkg = $null
 if (Test-Path (Join-Path $entityCoreDir "packages\entity-core\src\mod.ts")) {
     $entityCorePkg = Join-Path $entityCoreDir "packages\entity-core"
@@ -117,7 +184,7 @@ if (Test-Path (Join-Path $entityCoreDir "packages\entity-core\src\mod.ts")) {
     $entityCorePkg = $entityCoreDir
 }
 if ($entityCorePkg -and (Have "deno")) {
-    Step "Pre-caching entity-core dependencies (one-time; can take several minutes)..."
+    Step "Caching entity-core dependencies (only fetches what's new)..."
     Push-Location $entityCorePkg
     try {
         & deno cache src/mod.ts | Out-Null
@@ -128,30 +195,37 @@ if ($entityCorePkg -and (Have "deno")) {
     Warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
 }
 
-# --- Shortcuts ---
-Step "Creating Desktop and Start Menu shortcuts..."
-$launcher  = Join-Path $projectRoot "Proto-Familiar.vbs"
-$desktop   = [Environment]::GetFolderPath("Desktop")
-$startMenu = [Environment]::GetFolderPath("Programs")
-$wsh = New-Object -ComObject WScript.Shell
+# --- Shortcuts (install mode only) ---
+if (-not $updateMode) {
+    Step "Creating Desktop and Start Menu shortcuts..."
+    $launcher  = Join-Path $projectRoot "Proto-Familiar.vbs"
+    $desktop   = [Environment]::GetFolderPath("Desktop")
+    $startMenu = [Environment]::GetFolderPath("Programs")
+    $wsh = New-Object -ComObject WScript.Shell
 
-foreach ($linkPath in @(
-    (Join-Path $desktop   "Proto-Familiar.lnk"),
-    (Join-Path $startMenu "Proto-Familiar.lnk")
-)) {
-    $sc = $wsh.CreateShortcut($linkPath)
-    $sc.TargetPath       = "wscript.exe"
-    $sc.Arguments        = """$launcher"""
-    $sc.WorkingDirectory = $projectRoot
-    $sc.IconLocation     = "shell32.dll,13"
-    $sc.Description      = "Proto-Familiar"
-    $sc.WindowStyle      = 7  # minimized; doesn't actually show because wscript is windowless
-    $sc.Save()
-    Ok "  $linkPath"
+    foreach ($linkPath in @(
+        (Join-Path $desktop   "Proto-Familiar.lnk"),
+        (Join-Path $startMenu "Proto-Familiar.lnk")
+    )) {
+        $sc = $wsh.CreateShortcut($linkPath)
+        $sc.TargetPath       = "wscript.exe"
+        $sc.Arguments        = """$launcher"""
+        $sc.WorkingDirectory = $projectRoot
+        $sc.IconLocation     = "shell32.dll,13"
+        $sc.Description      = "Proto-Familiar"
+        $sc.WindowStyle      = 7  # minimized; doesn't actually show because wscript is windowless
+        $sc.Save()
+        Ok "  $linkPath"
+    }
 }
 
 Write-Host ""
-Write-Host "Install complete." -ForegroundColor Green
+if ($updateMode) {
+    Write-Host "Update complete." -ForegroundColor Green
+    if ($anythingBackedUp) { Write-Host "Pre-update backup: $backupDir" -ForegroundColor Green }
+} else {
+    Write-Host "Install complete." -ForegroundColor Green
+}
 Write-Host "Launch any time via:"
 Write-Host "  - Desktop shortcut: Proto-Familiar"
 Write-Host "  - Start Menu:       Proto-Familiar"

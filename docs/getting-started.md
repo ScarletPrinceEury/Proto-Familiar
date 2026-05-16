@@ -75,11 +75,11 @@ The repo also ships three plain shell scripts you can call directly:
 
 | Script | What it does |
 |---|---|
-| `./install.sh` | `npm install` + clone entity-core-alpha + register Linux desktop entry |
+| `./install.sh` | First run: `npm install` + clone entity-core-alpha + register Linux desktop entry. Subsequent runs auto-detect the existing install (presence of `node_modules/`) and switch to **update mode**: `git pull --ff-only` on Proto-Familiar, refresh entity-core to the pinned tag, re-run the idempotent `npm install` and `deno cache`. No prerequisite installs and no shortcut creation in update mode. |
 | `./start.sh` | Start server in the background, write PID file, open browser |
 | `./stop.sh` | Kill the PID-file process (and its entity-core child) |
 
-Windows equivalents (`install.bat`, `start.bat`, `stop.bat`) exist for CLI/recovery use, but **the recommended Windows entry point is `Proto-Familiar.vbs`** — it avoids the brief console flash and gives you the tray icon.
+Windows equivalents (`install.bat`, `start.bat`, `stop.bat`, and the PowerShell installer under `scripts/win/install.ps1`) behave identically — `install.bat` detects `node_modules\` and routes to update mode the same way. The recommended Windows entry point is `Proto-Familiar.vbs` — it avoids the brief console flash and gives you the tray icon.
 
 ---
 
@@ -92,6 +92,38 @@ Windows equivalents (`install.bat`, `start.bat`, `stop.bat`) exist for CLI/recov
 5. Start chatting.
 
 Your API key lives in browser `localStorage` and is sent only to `localhost`.
+
+---
+
+## Updating an existing install
+
+Re-run the same installer you used for the first install:
+
+- **Windows:** double-click `Proto-Familiar.vbs` (the launcher re-runs the installer if needed) or run `install.bat` directly.
+- **macOS:** double-click `Proto-Familiar.command`, or `./install.sh` from a terminal.
+- **Linux:** `./install.sh`.
+
+The installer detects the existing install via the `node_modules/` directory and switches to **update mode**. The flow:
+
+1. **Defensive backup** — `tomes/`, `logs/`, and entity-core's `data/` directory (if non-empty) are copied to `.pf-backups/<UTC-timestamp>/` inside the project root *before* any git operation runs. Safety net even though the git ops below are designed not to touch user data.
+2. **`git pull --ff-only`** on the Proto-Familiar repo. Skipped if the directory isn't a git checkout. The `--ff-only` flag means git refuses any non-fast-forward merge — if you're on a non-default branch, have local commits, or have uncommitted changes that would conflict, the pull aborts with a warning and the work tree is left exactly as you had it.
+3. **Node / Deno / Git checks**, with auto-install of anything missing (same as fresh install — your environment catches up if a new release added a requirement).
+4. **`npm install`** to pick up any new Node deps.
+5. **`git fetch && git checkout <pinned tag>`** on entity-core-alpha (idempotent — only does work if the tag bumped). entity-core's runtime `data/` directory is gitignored at both the workspace and package root, so this never touches your identity files, memory markdown, or SQLite store.
+6. **`deno cache`** to pick up any new entity-core Deno deps (only fetches what's missing).
+
+Update mode skips only the shortcut / desktop-entry creation, since those are already in place.
+
+**What's protected:**
+
+| Data | Where it lives | Protected by |
+|---|---|---|
+| User-saved tomes (`<uuid>.json`) | `tomes/` | Untracked filenames; git never touches them. Also copied into `.pf-backups/` |
+| Built-in tome content you edited | `tomes/ADHD-Tome.json`, etc. | If upstream changed the same file, `git pull --ff-only` refuses the merge and warns. Also copied into `.pf-backups/` |
+| Session logs | `logs/` | Gitignored. Also copied into `.pf-backups/` |
+| entity-core identity files, memory markdown, SQLite store | `entity-core-alpha/packages/entity-core/data/` | Gitignored at both workspace and package roots; never touched by `git checkout <tag>`. Also copied into `.pf-backups/` |
+
+If you ever need to roll back, the contents of `.pf-backups/<timestamp>/` mirror the project tree — copy any subtree back over the live one. Old backups can be removed by hand; nothing prunes them automatically.
 
 ---
 

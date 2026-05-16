@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 # Proto-Familiar installer (macOS / Linux)
-# Installs Node dependencies and clones entity-core-alpha as a sibling directory.
+#
+# Fresh install: installs Node deps, auto-installs Deno (if missing),
+#   clones entity-core-alpha as a sibling directory, pre-caches its Deno
+#   module graph, and registers a desktop entry on Linux.
+#
+# Update mode: triggered automatically when node_modules/ already exists.
+#   Pulls latest Proto-Familiar (git pull --ff-only), refreshes
+#   entity-core to the pinned tag, re-runs the idempotent npm install
+#   and deno cache. Re-runs Node/Deno checks (and auto-install if needed)
+#   so the system catches up to new requirements too.
+#
+# User-data safety: BEFORE any git operation in update mode the installer
+# takes a defensive copy of tomes/, logs/, and entity-core's data/ into
+# .pf-backups/<timestamp>/ inside the project root. Independent of git's
+# own protections (untracked files left alone, --ff-only refusing
+# dirty-conflict merges, entity-core's data/ being gitignored), this
+# gives a clear recovery path if anything goes sideways.
 
 set -e
 
@@ -9,15 +25,66 @@ PARENT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
 ENTITY_CORE_DIR="$PARENT_DIR/entity-core-alpha"
 ENTITY_CORE_REPO="https://github.com/PsycherosAI/Psycheros.git"
 ENTITY_CORE_TAG="entity-core-v0.2.2"
+BACKUP_ROOT="$SCRIPT_DIR/.pf-backups"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mXX %s\033[0m\n' "$*"; exit 1; }
 
-say "Proto-Familiar installer"
+# Detect mode: an existing node_modules means we're refreshing an install
+# rather than setting one up from scratch. Both paths run the same
+# idempotent steps; update mode adds a pre-pull backup and skips
+# shortcut creation.
+if [ -d "$SCRIPT_DIR/node_modules" ]; then
+  MODE="update"
+else
+  MODE="install"
+fi
+
+if [ "$MODE" = "update" ]; then
+  say "Proto-Familiar updater (existing install detected)"
+else
+  say "Proto-Familiar installer"
+fi
 say "Working dir: $SCRIPT_DIR"
 
-# --- Node.js check ---
+# --- Pre-pull data backup (update mode only) -----------------------------
+# Copy at-risk directories into .pf-backups/<timestamp>/ before any git
+# operation runs. Independent safety net on top of git's own protections.
+# If a directory doesn't exist or is empty, it's silently skipped.
+if [ "$MODE" = "update" ]; then
+  STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  BACKUP_DIR="$BACKUP_ROOT/$STAMP"
+  ANYTHING_BACKED_UP=0
+  for src in \
+    "$SCRIPT_DIR/tomes" \
+    "$SCRIPT_DIR/logs" \
+    "$ENTITY_CORE_DIR/packages/entity-core/data" \
+    "$ENTITY_CORE_DIR/data"; do
+    if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
+      mkdir -p "$BACKUP_DIR"
+      rel="$(echo "$src" | sed "s|^$PARENT_DIR/||")"
+      dest="$BACKUP_DIR/$rel"
+      mkdir -p "$(dirname "$dest")"
+      cp -a "$src" "$dest"
+      ANYTHING_BACKED_UP=1
+    fi
+  done
+  if [ "$ANYTHING_BACKED_UP" = "1" ]; then
+    say "User data backed up to $BACKUP_DIR/"
+    say "  (tomes/, logs/, entity-core data/ — restore by copying back if needed)"
+  fi
+fi
+
+# --- Pull latest Proto-Familiar (update mode only) -----------------------
+if [ "$MODE" = "update" ] && [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+  say "Pulling latest Proto-Familiar (git pull --ff-only)..."
+  if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
+    warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
+  fi
+fi
+
+# --- Node.js check (install if missing, in both modes) ------------------
 if ! command -v node >/dev/null 2>&1; then
   die "Node.js is not installed. Install Node 18+ from https://nodejs.org/ and re-run."
 fi
@@ -27,11 +94,11 @@ if [ "$NODE_MAJOR" -lt 18 ]; then
 fi
 say "Node.js $(node -v) found."
 
-# --- Deno check (auto-install if missing) ---
+# --- Deno check (auto-install if missing, in both modes) ----------------
 # Look in PATH first, then in the common install location the official
-# script writes to. We add ~/.deno/bin to PATH for the rest of this
-# install run so the post-install steps see it without needing a shell
-# restart; start.sh does the same probe at launch time.
+# script writes to. We add ~/.deno/bin to PATH for the rest of this run
+# so post-install steps see it without needing a shell restart; start.sh
+# does the same probe at launch time.
 if [ -d "$HOME/.deno/bin" ]; then PATH="$HOME/.deno/bin:$PATH"; fi
 if command -v deno >/dev/null 2>&1; then
   say "Deno $(deno --version | head -n1) found."
@@ -58,13 +125,23 @@ else
   fi
 fi
 
-# --- npm install ---
-say "Installing Proto-Familiar dependencies (npm install)..."
+# --- npm install (idempotent; fast when nothing changed) ----------------
+say "Running npm install..."
 ( cd "$SCRIPT_DIR" && npm install )
 
-# --- entity-core clone ---
+# --- entity-core: clone (install) or refresh to pinned tag (update) ----
+# Note: entity-core's runtime data/ directory is gitignored at both the
+# workspace root and the package root, so `git checkout <tag>` never
+# touches user identity files, memory markdown, or the SQLite store.
 if [ -d "$ENTITY_CORE_DIR" ]; then
-  say "entity-core-alpha already present at $ENTITY_CORE_DIR — skipping clone."
+  if [ "$MODE" = "update" ] && [ -d "$ENTITY_CORE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    say "Refreshing entity-core-alpha to tag $ENTITY_CORE_TAG..."
+    if ! ( cd "$ENTITY_CORE_DIR" && git fetch --tags --depth 1 origin "refs/tags/$ENTITY_CORE_TAG:refs/tags/$ENTITY_CORE_TAG" 2>/dev/null && git checkout --quiet "$ENTITY_CORE_TAG" ); then
+      warn "Could not refresh entity-core to $ENTITY_CORE_TAG (local changes or network). Keeping current checkout."
+    fi
+  else
+    say "entity-core-alpha already present at $ENTITY_CORE_DIR — skipping clone."
+  fi
 else
   if command -v git >/dev/null 2>&1; then
     say "Cloning entity-core-alpha into $ENTITY_CORE_DIR ..."
@@ -79,11 +156,11 @@ else
   fi
 fi
 
-# --- entity-core dependency pre-cache ---
-# Psycheros is a Deno workspace, so the entity-core package lives at
-# packages/entity-core/ (older releases kept it at the repo root). Probe
-# both; the workspace path wins. Pre-cache the Deno graph so the user's
-# first server start doesn't stall for several minutes on first download.
+# --- entity-core dependency pre-cache (idempotent) ---------------------
+# Psycheros is a Deno workspace; entity-core lives at packages/entity-core/
+# (older releases kept it at the repo root). Probe both; the workspace
+# path wins. `deno cache` only fetches what's missing, so this is safe
+# to re-run in update mode after a tag bump.
 ENTITY_CORE_PKG_DIR=""
 if [ -f "$ENTITY_CORE_DIR/packages/entity-core/src/mod.ts" ]; then
   ENTITY_CORE_PKG_DIR="$ENTITY_CORE_DIR/packages/entity-core"
@@ -92,7 +169,7 @@ elif [ -f "$ENTITY_CORE_DIR/src/mod.ts" ]; then
 fi
 
 if [ -n "$ENTITY_CORE_PKG_DIR" ] && [ "$HAVE_DENO" = "1" ]; then
-  say "Pre-caching entity-core dependencies (one-time; can take several minutes)..."
+  say "Caching entity-core dependencies (only fetches what's new)..."
   if ( cd "$ENTITY_CORE_PKG_DIR" && deno cache src/mod.ts >/dev/null 2>&1 ); then
     say "entity-core dependencies cached."
   else
@@ -102,24 +179,35 @@ elif [ -n "$ENTITY_CORE_PKG_DIR" ]; then
   warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
 fi
 
-# --- Platform-specific launcher polish ---
+# --- Platform-specific launcher polish (install mode only) --------------
+# In update mode, the desktop entry / launcher already exists. Re-running
+# the desktop-entry script is harmless but adds noise; skip for clarity.
 UNAME="$(uname -s 2>/dev/null || echo unknown)"
-case "$UNAME" in
-  Linux)
-    if [ -f "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" ]; then
-      say "Installing application-menu entry..."
-      bash "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" || warn "Desktop entry install failed (non-fatal)."
-    fi
-    ;;
-  Darwin)
-    if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
-      chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
-      say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
-    fi
-    ;;
-esac
+if [ "$MODE" = "install" ]; then
+  case "$UNAME" in
+    Linux)
+      if [ -f "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" ]; then
+        say "Installing application-menu entry..."
+        bash "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" || warn "Desktop entry install failed (non-fatal)."
+      fi
+      ;;
+    Darwin)
+      if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
+        chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
+        say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
+      fi
+      ;;
+  esac
+fi
 
-say "Install complete."
+if [ "$MODE" = "update" ]; then
+  say "Update complete."
+  if [ "$ANYTHING_BACKED_UP" = "1" ]; then
+    say "Pre-update backup: $BACKUP_DIR"
+  fi
+else
+  say "Install complete."
+fi
 echo
 echo "  Launch:"
 case "$UNAME" in
