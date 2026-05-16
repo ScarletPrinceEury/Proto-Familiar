@@ -17,12 +17,24 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Resolve the entity-core entry point. The Psycheros repo became a Deno
+// workspace at entity-core-v0.2.x, with entity-core living at
+// packages/entity-core/. Older sibling checkouts kept it at the repo root.
+// Honour $ENTITY_CORE_PATH first, then probe the workspace path, then fall
+// back to the legacy top-level path.
+const ENTITY_CORE_ALPHA = path.resolve(__dirname, '../entity-core-alpha');
+const ENTITY_CORE_WORKSPACE_ENTRY = path.join(ENTITY_CORE_ALPHA, 'packages', 'entity-core', 'src', 'mod.ts');
+const ENTITY_CORE_LEGACY_ENTRY    = path.join(ENTITY_CORE_ALPHA, 'src', 'mod.ts');
+
 const ENTITY_CORE_ENTRY = process.env.ENTITY_CORE_PATH
-  ?? path.resolve(__dirname, '../entity-core-alpha/src/mod.ts');
+  ?? (existsSync(ENTITY_CORE_WORKSPACE_ENTRY) ? ENTITY_CORE_WORKSPACE_ENTRY
+      : existsSync(ENTITY_CORE_LEGACY_ENTRY)  ? ENTITY_CORE_LEGACY_ENTRY
+      : ENTITY_CORE_WORKSPACE_ENTRY); // default to the current layout in the error
 
 // Project root of entity-core (parent of src/).
 // entity-core resolves its ./data directory relative to cwd, so we must
