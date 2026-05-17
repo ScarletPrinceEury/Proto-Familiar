@@ -11,7 +11,7 @@ Browser (public/)
     ▼
 server.js  (Express, Node 18+, ESM)
     │
-    ├── thalamus.js       ──►  entity-core-alpha  (Deno, stdio MCP)
+    ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)
     ├── memorization.js   ──►  persistent queue + worker for session memorization
     │
     ├── logs/         (session JSON files, git-ignored)
@@ -71,7 +71,7 @@ Server-side session-memorization queue:
 ### `thalamus.js`
 
 The entity-core bridge:
-- On startup, spawns `entity-core-alpha` as a child Deno process over stdio using the MCP (Model Context Protocol) SDK. The subprocess is launched with `deno run -A --unstable-cron`, granting it all Deno permissions. For a personal local tool this is fine; in a shared or networked environment consider restricting to `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env` once you have audited the minimum permissions your entity-core build needs.
+- On startup, spawns `entity-core` as a child Deno process over stdio using the MCP (Model Context Protocol) SDK. The subprocess is launched with `deno run -A --unstable-cron`, granting it all Deno permissions. For a personal local tool this is fine; in a shared or networked environment consider restricting to `--allow-read=<data-dir> --allow-write=<data-dir> --allow-env` once you have audited the minimum permissions your entity-core build needs.
 - Exposes a single `enrich(userMessage)` function called once per chat request.
 - Fires three MCP tool calls in parallel (`identity_get_all`, `memory_search`, `graph_node_search`). A failure in any one does not block the others (`Promise.allSettled`).
 - Assembles the results into a structured context block and prepends it to the system message.

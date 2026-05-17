@@ -2,8 +2,8 @@
 # Proto-Familiar installer (macOS / Linux)
 #
 # Fresh install: installs Node deps, auto-installs Deno (if missing),
-#   clones entity-core-alpha as a sibling directory, pre-caches its Deno
-#   module graph, and registers a desktop entry on Linux.
+#   clones entity-core (release tag) as a sibling directory, pre-caches
+#   its Deno module graph, and registers a desktop entry on Linux.
 #
 # Update mode: triggered automatically when node_modules/ already exists.
 #   Pulls latest Proto-Familiar (git pull --ff-only), refreshes
@@ -22,7 +22,20 @@ set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PARENT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
-ENTITY_CORE_DIR="$PARENT_DIR/entity-core-alpha"
+# Resolve the entity-core sibling checkout. New installs land in
+# `entity-core/`; older installs from before the rename used
+# `entity-core-alpha/` and we keep using that in place to avoid silent
+# directory moves.
+ENTITY_CORE_DIR_NEW="$PARENT_DIR/entity-core"
+ENTITY_CORE_DIR_LEGACY="$PARENT_DIR/entity-core-alpha"
+if [ -d "$ENTITY_CORE_DIR_NEW" ]; then
+  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_NEW"
+elif [ -d "$ENTITY_CORE_DIR_LEGACY" ]; then
+  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_LEGACY"
+else
+  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_NEW"
+fi
+# The release lives at https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 ENTITY_CORE_REPO="https://github.com/PsycherosAI/Psycheros.git"
 ENTITY_CORE_TAG="entity-core-v0.2.2"
 BACKUP_ROOT="$SCRIPT_DIR/.pf-backups"
@@ -56,6 +69,7 @@ if [ "$MODE" = "update" ]; then
   STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
   BACKUP_DIR="$BACKUP_ROOT/$STAMP"
   ANYTHING_BACKED_UP=0
+  # Directories
   for src in \
     "$SCRIPT_DIR/tomes" \
     "$SCRIPT_DIR/logs" \
@@ -70,9 +84,21 @@ if [ "$MODE" = "update" ]; then
       ANYTHING_BACKED_UP=1
     fi
   done
+  # Single files (Tailscale toggle state etc.)
+  for f in \
+    "$SCRIPT_DIR/.proto-familiar-config.json"; do
+    if [ -f "$f" ]; then
+      mkdir -p "$BACKUP_DIR"
+      rel="$(echo "$f" | sed "s|^$PARENT_DIR/||")"
+      dest="$BACKUP_DIR/$rel"
+      mkdir -p "$(dirname "$dest")"
+      cp -a "$f" "$dest"
+      ANYTHING_BACKED_UP=1
+    fi
+  done
   if [ "$ANYTHING_BACKED_UP" = "1" ]; then
     say "User data backed up to $BACKUP_DIR/"
-    say "  (tomes/, logs/, entity-core data/ — restore by copying back if needed)"
+    say "  (tomes/, logs/, entity-core data/, .proto-familiar-config.json — restore by copying back if needed)"
   fi
 fi
 
@@ -135,24 +161,24 @@ say "Running npm install..."
 # touches user identity files, memory markdown, or the SQLite store.
 if [ -d "$ENTITY_CORE_DIR" ]; then
   if [ "$MODE" = "update" ] && [ -d "$ENTITY_CORE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-    say "Refreshing entity-core-alpha to tag $ENTITY_CORE_TAG..."
+    say "Refreshing entity-core to tag $ENTITY_CORE_TAG..."
     if ! ( cd "$ENTITY_CORE_DIR" && git fetch --tags --depth 1 origin "refs/tags/$ENTITY_CORE_TAG:refs/tags/$ENTITY_CORE_TAG" 2>/dev/null && git checkout --quiet "$ENTITY_CORE_TAG" ); then
       warn "Could not refresh entity-core to $ENTITY_CORE_TAG (local changes or network). Keeping current checkout."
     fi
   else
-    say "entity-core-alpha already present at $ENTITY_CORE_DIR — skipping clone."
+    say "entity-core already present at $ENTITY_CORE_DIR — skipping clone."
   fi
 else
   if command -v git >/dev/null 2>&1; then
-    say "Cloning entity-core-alpha into $ENTITY_CORE_DIR ..."
+    say "Cloning entity-core ($ENTITY_CORE_TAG) into $ENTITY_CORE_DIR ..."
     if git clone --depth 1 --branch "$ENTITY_CORE_TAG" "$ENTITY_CORE_REPO" "$ENTITY_CORE_DIR"; then
-      say "entity-core-alpha cloned at tag $ENTITY_CORE_TAG."
+      say "entity-core cloned at tag $ENTITY_CORE_TAG."
     else
       warn "Tag clone failed; falling back to default branch."
       git clone --depth 1 "$ENTITY_CORE_REPO" "$ENTITY_CORE_DIR" || warn "Clone failed. You can clone it manually later."
     fi
   else
-    warn "git not found — skipping entity-core clone. Install git or place entity-core-alpha at $ENTITY_CORE_DIR manually."
+    warn "git not found — skipping entity-core clone. Install git or place entity-core at $ENTITY_CORE_DIR manually."
   fi
 fi
 
