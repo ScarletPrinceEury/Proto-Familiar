@@ -6,8 +6,11 @@
 set -e
 cd "$(dirname "$0")"
 
-PORT="${PORT:-3000}"
+PORT="${PORT:-7842}"
 URL="http://localhost:$PORT"
+# TAILSCALE=1 binds the server to 0.0.0.0 so other devices on your Tailnet
+# (or LAN) can reach the UI. Default is loopback-only.
+export TAILSCALE="${TAILSCALE:-0}"
 
 # First-run install
 if [ ! -d "node_modules" ]; then
@@ -43,4 +46,4 @@ cat <<EOF
 
 EOF
 
-PORT="$PORT" exec node server.js
+PORT="$PORT" TAILSCALE="$TAILSCALE" exec node server.js

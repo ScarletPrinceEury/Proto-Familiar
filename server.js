@@ -9,6 +9,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileP = promisify(execFile);
 import {
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
@@ -872,8 +876,50 @@ app.post('/api/entity/snapshots/:id/restore', async (req, res) => {
   res.json(result.result);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`\nProto-Familiar running at http://localhost:${PORT}\n`);
+const PORT = Number(process.env.PORT) || 7842;
+
+// HOST controls the bind address. Default is `localhost` (loopback only) so
+// the API key and prompt-inspector endpoint stay on the local machine. Set
+// HOST=0.0.0.0 — or, equivalently, TAILSCALE=1 — to expose Proto-Familiar to
+// other devices on your LAN / Tailnet. Tailscale handles auth and encryption
+// at the network layer; on a plain LAN, anyone who can reach the port can
+// use the proxy.
+const TAILSCALE_ENABLED = /^(1|true|yes)$/i.test(process.env.TAILSCALE || '');
+const HOST = process.env.HOST || (TAILSCALE_ENABLED ? '0.0.0.0' : 'localhost');
+
+// Best-effort Tailscale lookup. Failures (CLI missing, not logged in, not
+// running) are silent — we just don't print Tailscale URLs.
+async function detectTailscale() {
+  try {
+    const { stdout: ipOut } = await execFileP('tailscale', ['ip', '-4'], { timeout: 2000 });
+    const ipv4 = ipOut.split('\n').map(s => s.trim()).filter(Boolean)[0] || null;
+    let hostname = null;
+    try {
+      const { stdout: statusOut } = await execFileP('tailscale', ['status', '--json'], { timeout: 2000 });
+      const status = JSON.parse(statusOut);
+      const fqdn = status?.Self?.DNSName || '';
+      // DNSName comes back like "machine.tailnet-name.ts.net." — trim trailing dot.
+      hostname = fqdn ? fqdn.replace(/\.$/, '') : (status?.Self?.HostName || null);
+    } catch { /* status optional */ }
+    return { ipv4, hostname };
+  } catch {
+    return null;
+  }
+}
+
+app.listen(PORT, HOST, async () => {
+  const lines = ['', 'Proto-Familiar running at:'];
+  if (HOST === '0.0.0.0' || HOST === '::') {
+    lines.push(`  http://localhost:${PORT}`);
+    const ts = await detectTailscale();
+    if (ts?.hostname) lines.push(`  http://${ts.hostname}:${PORT}    (Tailscale)`);
+    if (ts?.ipv4)     lines.push(`  http://${ts.ipv4}:${PORT}    (Tailscale IPv4)`);
+    if (!ts) lines.push(`  (other devices: use this machine's LAN/Tailscale address on port ${PORT})`);
+    lines.push('  WARNING: server is bound to all interfaces. API key proxying and');
+    lines.push('  /api/debug-prompt are reachable from any device that can hit this port.');
+  } else {
+    lines.push(`  http://${HOST}:${PORT}`);
+  }
+  console.log(lines.join('\n') + '\n');
   startMemorizationWorker();
 });

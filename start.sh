@@ -5,8 +5,11 @@
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PORT="${PORT:-3000}"
+PORT="${PORT:-7842}"
 URL="http://localhost:$PORT"
+# TAILSCALE=1 binds the server to 0.0.0.0 so other devices on your Tailnet
+# (or LAN) can reach the UI. Default is loopback-only.
+TAILSCALE="${TAILSCALE:-0}"
 PID_FILE="$SCRIPT_DIR/.proto-familiar.pid"
 LOG_FILE="$SCRIPT_DIR/.proto-familiar.log"
 
@@ -30,7 +33,7 @@ else
     bash "$SCRIPT_DIR/install.sh"
   fi
   say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."
-  ( cd "$SCRIPT_DIR" && PORT="$PORT" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
+  ( cd "$SCRIPT_DIR" && PORT="$PORT" TAILSCALE="$TAILSCALE" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
 
   # Wait up to ~15s for the port to come up
   for i in $(seq 1 30); do

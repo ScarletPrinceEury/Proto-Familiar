@@ -1,6 +1,6 @@
 # API Reference
 
-All endpoints are served by the Express server at `http://localhost:3000` (or your configured port). The server is a local proxy — it is not intended to be exposed to the public internet without additional authentication.
+All endpoints are served by the Express server at `http://localhost:7842` (or your configured port). The server is a local proxy — it is not intended to be exposed to the public internet without additional authentication. For accessing the UI from another device, prefer the Tailscale opt-in described in [Getting Started → Access from other devices](getting-started.md#access-from-other-devices-tailscale--lan).
 
 ---
 
