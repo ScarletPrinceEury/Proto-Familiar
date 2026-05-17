@@ -1287,6 +1287,17 @@ button { cursor: pointer; font-family: var(--font); }
   max-width: 760px;
 }
 
+.modal-resizable {
+  resize: both;
+  overflow: hidden;
+  width: 760px;
+  height: 75vh;
+  min-width: 480px;
+  min-height: 360px;
+  max-width: 95vw;
+  max-height: 92vh;
+}
+
 /* ── Knowledge editor ──────────────────────────────────────── */
 .ke-tabs {
   display: flex;

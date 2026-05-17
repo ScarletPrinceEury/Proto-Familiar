@@ -2344,10 +2344,12 @@ function init() {
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
   $('ke-graph-refresh').addEventListener('click', () => {
+    keGraphClosePopover();
     if (_keGraphView === 'map') keLoadGraphMap();
     else keLoadGraphNodes();
   });
   $('ke-graph-type').addEventListener('change', () => {
+    keGraphClosePopover();
     if (_keGraphView === 'map') keLoadGraphMap();
     else keLoadGraphNodes();
   });
@@ -3997,11 +3999,45 @@ function downloadDiagnosticReport() {
 
 const KE_TABS = ['memories', 'graph', 'identity', 'snapshots'];
 
+const KE_SIZE_KEY = 'pf-knowledge-modal-size';
+let _keSizeObserver = null;
+
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
+  keRestoreModalSize();
+  keGraphClosePopover();
   keSwitchTab('memories');
 }
-function closeKnowledgeModal() { $('knowledge-modal').classList.add('hidden'); }
+function closeKnowledgeModal() {
+  $('knowledge-modal').classList.add('hidden');
+  keGraphClosePopover();
+}
+
+function keRestoreModalSize() {
+  const el = $('knowledge-modal-inner');
+  if (!el) return;
+  try {
+    const raw = localStorage.getItem(KE_SIZE_KEY);
+    if (raw) {
+      const { w, h } = JSON.parse(raw);
+      if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
+      if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
+    }
+  } catch {/* ignore */}
+  if (!_keSizeObserver && typeof ResizeObserver !== 'undefined') {
+    let saveT = 0;
+    _keSizeObserver = new ResizeObserver(entries => {
+      clearTimeout(saveT);
+      saveT = setTimeout(() => {
+        const r = entries[0]?.contentRect;
+        if (!r) return;
+        try { localStorage.setItem(KE_SIZE_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); }
+        catch {/* ignore */}
+      }, 250);
+    });
+    _keSizeObserver.observe(el);
+  }
+}
 
 function keSwitchTab(tab) {
   for (const t of KE_TABS) {
@@ -4212,6 +4248,7 @@ const KE_GRAPH_NODE_R   = 6;
 const KE_GRAPH_LABEL_ZOOM = 1.4;
 
 function keSetGraphView(view) {
+  const changed = (view !== _keGraphView);
   _keGraphView = view;
   $('ke-graph-view-list').classList.toggle('ke-view-active', view === 'list');
   $('ke-graph-view-map').classList.toggle('ke-view-active',  view === 'map');
@@ -4219,6 +4256,9 @@ function keSetGraphView(view) {
   $('ke-graph-view-map').setAttribute('aria-selected',  view === 'map'  ? 'true' : 'false');
   $('ke-graph-split').classList.toggle('hidden', view !== 'list');
   $('ke-graph-map').classList.toggle('hidden',   view !== 'map');
+  // Popover is anchored to a specific (possibly stale) node, so leaving
+  // the map view, or refreshing it, should dismiss it.
+  if (changed) keGraphClosePopover();
   if (view === 'map') {
     keInitGraphMapOnce();
     keLoadGraphMap();
@@ -4255,9 +4295,12 @@ function keInitGraphMapOnce() {
       _keGraph.tx = _keGraph.drag.tx + dx;
       _keGraph.ty = _keGraph.drag.ty + dy;
       keGraphRequestDraw();
-    } else if (_keGraphView === 'map' && !$('ke-graph-map').classList.contains('hidden')) {
-      keGraphUpdateHover(e);
+      return;
     }
+    if (_keGraphView !== 'map') return;
+    if ($('knowledge-modal').classList.contains('hidden')) return;
+    if ($('ke-graph-map').classList.contains('hidden'))   return;
+    keGraphUpdateHover(e);
   });
   window.addEventListener('mouseup', e => {
     if (!_keGraph.drag) return;
@@ -4395,43 +4438,71 @@ function keGraphFit() {
 }
 
 // ── Color encoding ──────────────────────────────────────────────────────
-function keGraphHashHue(s) {
-  const str = String(s ?? '');
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
-  // Golden-ratio multiplier spreads hashed buckets across the wheel.
-  return Math.abs(Math.round(h * 137.508)) % 360;
+//
+// Per-graph deterministic assignment beats hashing for a small categorical
+// space: hashes happily put 10 of 16 common types into the magenta band.
+// Instead, sort the live type names and walk a 24-step hue palette in
+// alphabetical order. Edge types start half a palette later, so a node
+// and an edge with the same sort index can't pick the same hue.
+
+const KE_GRAPH_PALETTE = [
+    0,  15,  30,  45,  60,  75,  90, 105,
+  120, 135, 150, 165, 180, 195, 210, 225,
+  240, 255, 270, 285, 300, 315, 330, 345,
+];
+const _keGraphColors = { node: new Map(), edge: new Map() };
+
+function keGraphAssignColors() {
+  const nodeTypes = Array.from(new Set(_keGraph.nodes.map(n => n.type || 'untyped'))).sort();
+  const edgeTypes = Array.from(new Set(_keGraph.edges.map(e => e.type || e.customType || 'related'))).sort();
+  _keGraphColors.node.clear();
+  _keGraphColors.edge.clear();
+  const N      = KE_GRAPH_PALETTE.length;
+  // Stride coprime to N spreads adjacent indices around the wheel:
+  // index 0,1,2,3,… → palette[0,7,14,21,…] = red, green, blue, purple, …
+  // rather than the eye-killing 0,15,30,45 gradient.
+  const stride = 7;
+  const off    = Math.floor(N / 2);
+  nodeTypes.forEach((t, i) => _keGraphColors.node.set(t, KE_GRAPH_PALETTE[(i * stride) % N]));
+  edgeTypes.forEach((t, i) => _keGraphColors.edge.set(t, KE_GRAPH_PALETTE[((i * stride) + off) % N]));
+}
+
+function keGraphNodeHue(n) {
+  return _keGraphColors.node.get(n.type || 'untyped') ?? 0;
+}
+function keGraphEdgeHue(e) {
+  return _keGraphColors.edge.get(e.type || e.customType || 'related') ?? 0;
 }
 function keGraphNodeColor(n) {
-  const hue = keGraphHashHue(n.type || 'untyped');
-  return `hsl(${hue}, 65%, 60%)`;
+  return `hsl(${keGraphNodeHue(n)}, 65%, 60%)`;
 }
 function keGraphEdgeColor(e) {
-  const hue = keGraphHashHue(e.type || e.customType || 'related');
-  const w   = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
-  const sat  = Math.round(20 + 70 * w);
-  const lt   = Math.round(32 + 30 * w);
+  const hue   = keGraphEdgeHue(e);
+  const w     = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
+  const sat   = Math.round(20 + 70 * w);
+  const lt    = Math.round(32 + 30 * w);
   const alpha = (0.35 + 0.55 * w).toFixed(2);
   return `hsla(${hue}, ${sat}%, ${lt}%, ${alpha})`;
 }
 
 function keGraphBuildLegend() {
+  keGraphAssignColors();
   const legend = $('ke-graph-legend');
-  const nodeTypes = new Set();
-  const edgeTypes = new Set();
-  for (const n of _keGraph.nodes) nodeTypes.add(n.type || 'untyped');
-  for (const e of _keGraph.edges) edgeTypes.add(e.type || e.customType || 'related');
-  const rows = [];
-  if (nodeTypes.size) {
+  const rows   = [];
+  const nodeTypes = Array.from(_keGraphColors.node.keys()).sort();
+  const edgeTypes = Array.from(_keGraphColors.edge.keys()).sort();
+  if (nodeTypes.length) {
     rows.push('<div class="ke-graph-legend-section">Nodes</div>');
-    for (const t of Array.from(nodeTypes).sort()) {
-      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${keGraphHashHue(t)},65%,60%)"></span>${esc(t)}</div>`);
+    for (const t of nodeTypes) {
+      const hue = _keGraphColors.node.get(t);
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},65%,60%)"></span>${esc(t)}</div>`);
     }
   }
-  if (edgeTypes.size) {
+  if (edgeTypes.length) {
     rows.push('<div class="ke-graph-legend-section">Edges</div>');
-    for (const t of Array.from(edgeTypes).sort()) {
-      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${keGraphHashHue(t)},75%,55%)"></span>${esc(t)}</div>`);
+    for (const t of edgeTypes) {
+      const hue = _keGraphColors.edge.get(t);
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},75%,55%)"></span>${esc(t)}</div>`);
     }
   }
   legend.innerHTML = rows.join('');
@@ -4560,27 +4631,31 @@ function keGraphUpdateHover(e) {
   const changed = (hover?.ref !== _keGraph.hover?.ref);
   _keGraph.hover = hover;
   const tip = $('ke-graph-tooltip');
-  if (!hover) {
+  // Suppress the tooltip while the editor popover is open — they'd
+  // stack and the popover content is more authoritative.
+  const popoverOpen = !$('ke-graph-popover').classList.contains('hidden');
+  if (!hover || popoverOpen) {
     tip.classList.add('hidden');
-  } else {
-    if (hover.kind === 'node') {
-      const n = hover.ref;
-      tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(n.label ?? n.id)}</div>
-        <div class="ke-graph-tooltip-sub">${esc(n.type ?? 'untyped')}</div>
-        ${n.description ? `<div>${esc(String(n.description).slice(0, 160))}</div>` : ''}`;
-    } else {
-      const ed = hover.ref;
-      const a  = _keGraph.nodeById.get(ed.fromId);
-      const b  = _keGraph.nodeById.get(ed.toId);
-      const w  = typeof ed.weight === 'number' ? ed.weight.toFixed(2) : '—';
-      tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(ed.type ?? ed.customType ?? 'related')}</div>
-        <div class="ke-graph-tooltip-sub">${esc(a?.label ?? ed.fromId)} → ${esc(b?.label ?? ed.toId)}</div>
-        <div class="ke-graph-tooltip-sub">weight: ${esc(w)}</div>`;
-    }
-    tip.style.left = `${sx + 12}px`;
-    tip.style.top  = `${sy + 12}px`;
-    tip.classList.remove('hidden');
+    if (changed) keGraphRequestDraw();
+    return;
   }
+  if (hover.kind === 'node') {
+    const n = hover.ref;
+    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(n.label ?? n.id)}</div>
+      <div class="ke-graph-tooltip-sub">${esc(n.type ?? 'untyped')}</div>
+      ${n.description ? `<div>${esc(String(n.description).slice(0, 160))}</div>` : ''}`;
+  } else {
+    const ed = hover.ref;
+    const a  = _keGraph.nodeById.get(ed.fromId);
+    const b  = _keGraph.nodeById.get(ed.toId);
+    const w  = typeof ed.weight === 'number' ? ed.weight.toFixed(2) : '—';
+    tip.innerHTML = `<div class="ke-graph-tooltip-title">${esc(ed.type ?? ed.customType ?? 'related')}</div>
+      <div class="ke-graph-tooltip-sub">${esc(a?.label ?? ed.fromId)} → ${esc(b?.label ?? ed.toId)}</div>
+      <div class="ke-graph-tooltip-sub">weight: ${esc(w)}</div>`;
+  }
+  tip.style.left = `${sx + 12}px`;
+  tip.style.top  = `${sy + 12}px`;
+  tip.classList.remove('hidden');
   if (changed) keGraphRequestDraw();
 }
 
