@@ -102,16 +102,29 @@ body {
 }
 
 /* ── Top bar ─────────────────────────────────────────────────── */
+/* Pinned to the top of the visible viewport so the menu / inspector /
+   tailscale / theme buttons stay reachable even when the mobile URL bar
+   is showing and the layout viewport gets shorter than 100vh. A spacer
+   div with the same height holds the layout open below. */
 .topbar {
-  height: var(--topbar-h);
-  flex-shrink: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--topbar-h) + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
+  padding-left: 14px;
+  padding-right: 14px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  z-index: 20;
+  z-index: 40;
+}
+.topbar-spacer {
+  flex-shrink: 0;
+  height: calc(var(--topbar-h) + env(safe-area-inset-top));
 }
 
 .topbar-left,
@@ -398,6 +411,105 @@ button { cursor: pointer; font-family: var(--font); }
 .icon-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+.icon-btn.is-active {
+  color: var(--accent, #4ade80);
+  background: color-mix(in srgb, var(--accent, #4ade80) 15%, transparent);
+}
+
+/* ── Tailscale toggle + popover ──────────────────────────────── */
+.tailscale-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.tailscale-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  padding: 12px;
+  background: var(--surface, #1e1e22);
+  border: 1px solid var(--border, #333);
+  border-radius: var(--radius, 8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  font-size: 0.85rem;
+  color: var(--text, #eee);
+}
+.tailscale-popover.hidden { display: none; }
+.tailscale-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.tailscale-state-label { font-weight: 600; }
+.tailscale-status {
+  margin: 0 0 8px 0;
+  color: var(--text-dim, #999);
+  font-size: 0.8rem;
+}
+.tailscale-urls {
+  list-style: none;
+  margin: 0 0 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tailscale-urls li {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+.tailscale-urls a {
+  color: var(--accent, #4ade80);
+  text-decoration: none;
+}
+.tailscale-urls a:hover { text-decoration: underline; }
+.tailscale-hint {
+  margin: 0;
+  color: var(--text-dim, #999);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Minimal on/off switch */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-raise, #444);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.switch input:checked + .switch-slider {
+  background: var(--accent, #4ade80);
+}
+.switch input:checked + .switch-slider::before {
+  transform: translateX(16px);
 }
 
 /* ── Chat pane ───────────────────────────────────────────────── */
@@ -695,25 +807,155 @@ button { cursor: pointer; font-family: var(--font); }
 .typing-indicator.hidden { display: none; }
 .hidden { display: none; }
 
+/* ── Retry / fallback status (inline with typing indicator) ── */
+.retry-status {
+  font-size: 0.78rem;
+  color: var(--warn-color, var(--text-muted));
+  font-style: italic;
+  margin-left: 4px;
+  align-self: center;
+}
+.retry-status:empty { display: none; }
+
+/* ── Saved Connections list ─────────────────────────────────── */
+.connections-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.connections-list:empty::before {
+  content: 'No saved connections yet.';
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.connection-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 8px;
+  background: var(--assistant-bg, rgba(255,255,255,0.04));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+}
+.connection-item.is-primary {
+  border-color: var(--accent, #6cf);
+  box-shadow: 0 0 0 1px var(--accent-dim, rgba(108,200,255,0.15)) inset;
+}
+.connection-item .conn-role {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 44px;
+}
+.connection-item .conn-role label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.connection-item .conn-role input[type="radio"] {
+  margin: 0;
+}
+.connection-item .conn-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.connection-item .conn-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.connection-item .conn-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.connection-item .conn-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 8px;
+  background: var(--accent-dim, rgba(108,200,255,0.15));
+  color: var(--accent, #6cf);
+}
+.connection-item .conn-badge.fb {
+  background: rgba(255,180,80,0.15);
+  color: var(--warn-color, #fb0);
+}
+.connection-item .conn-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.connection-item .conn-actions button {
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.connection-item .conn-actions button:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.connection-item .conn-actions button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.connection-save-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.connection-save-row input { flex: 1; min-width: 0; }
+.connection-save-row button { flex-shrink: 0; }
+
 /* ── Input bar ───────────────────────────────────────────────── */
 .input-bar {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px 16px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  flex-direction: column;
   background: var(--surface);
   border-top: 1px solid var(--border);
+  /* `--kb-inset` is set by initMobileViewport() (iOS Safari fallback). On
+     platforms where the layout viewport already resizes for the keyboard
+     (Android Chrome via `interactive-widget=resizes-content`) the inset
+     stays at 0 and we just use the safe-area bottom. */
+  padding-bottom: max(var(--kb-inset, 0px), env(safe-area-inset-bottom));
 }
 
-.input-wrapper {
-  flex: 1;
+.input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
 }
 
 #user-input {
-  display: block;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   background: var(--surface-raise);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -723,7 +965,9 @@ button { cursor: pointer; font-family: var(--font); }
   font-family: var(--font);
   line-height: var(--line-height);
   resize: none;
-  max-height: 160px;
+  /* Desktop cap; mobile gets a softer 40dvh cap further down. autoResize()
+     enforces both dynamically as the user types. */
+  max-height: 220px;
   overflow-y: auto;
   transition: border-color 0.15s;
 }
@@ -737,19 +981,16 @@ button { cursor: pointer; font-family: var(--font); }
   color: var(--text-muted);
 }
 
-.input-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  flex-shrink: 0;
-}
-
 .btn-send {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--accent);
   color: #fff;
   border: none;
   border-radius: var(--radius-md);
-  padding: 10px 18px;
+  padding: 10px 16px;
   font-size: 0.9rem;
   font-weight: 600;
   transition: background 0.15s, opacity 0.15s;
@@ -757,10 +998,7 @@ button { cursor: pointer; font-family: var(--font); }
 
 .btn-send:hover  { background: var(--accent-hover); }
 .btn-send:disabled { opacity: 0.45; cursor: not-allowed; }
-
-.regen-btn {
-  align-self: center;
-}
+.btn-send svg { display: none; }
 
 /* ── Scrollbar ───────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -787,7 +1025,7 @@ button { cursor: pointer; font-family: var(--font); }
 @media (max-width: 767px) {
   .sidebar {
     position: fixed;
-    top: var(--topbar-h);
+    top: calc(var(--topbar-h) + env(safe-area-inset-top));
     left: 0;
     bottom: 0;
     width: min(var(--sidebar-w), 100vw);
@@ -813,8 +1051,31 @@ button { cursor: pointer; font-family: var(--font); }
     max-width: 86%;
   }
 
+  /* Icon-only send on narrow screens — saves horizontal room for the
+     textarea while keeping the affordance clear. */
   .btn-send {
-    padding: 10px 14px;
+    padding: 10px 12px;
+  }
+  .btn-send-label { display: none; }
+  .btn-send svg   { display: inline-block; }
+
+  /* Cap the auto-growing textarea so the conversation above always has
+     room to scroll. autoResize() also enforces this dynamically. */
+  #user-input {
+    max-height: 40dvh;
+  }
+}
+
+/* Suppress iOS Safari's auto-zoom on input focus — anything under 16px
+   triggers it. Coarse pointer = touch. */
+@media (pointer: coarse) {
+  #user-input,
+  input[type="text"],
+  input[type="number"],
+  input[type="password"],
+  textarea,
+  select {
+    font-size: 16px;
   }
 
   #messages {
@@ -1184,35 +1445,21 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 /* ── Topic strip (above input) ───────────────────────────────── */
-.input-bar {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
-  padding-bottom: max(0px, env(safe-area-inset-bottom));
-}
-
 .topic-strip {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 7px 14px 0;
+  padding: 5px 14px 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.topic-strip:empty,
-.topic-strip:has(button:only-child) {
-  /* keeps a small footprint when only the "+ Topic" button is present */
-}
-
-.input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px 14px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
+/* When only the "+ Topic" button is showing, hide its label on mobile
+   so the row collapses to a single chip and stops eating chat height. */
+@media (max-width: 767px) {
+  .topic-strip:has(button:only-child) .btn-new-topic-label { display: none; }
+  .topic-strip:has(button:only-child) .btn-new-topic       { padding: 2px 6px; }
 }
 
 /* ── New-topic button ────────────────────────────────────────── */

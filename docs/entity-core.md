@@ -2,7 +2,7 @@
 
 ## What Is Entity-Core?
 
-[entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
+[entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) is a Deno-based MCP (Model Context Protocol) server that manages persistent identity files, RAG memories, and a knowledge graph for a named AI entity. Proto-Familiar connects to it through `thalamus.js` to ground every LLM request in stable, long-term context that survives session boundaries.
 
 This integration is **optional** — the app runs fully without it. When entity-core is unavailable, `thalamus.js` logs the error and returns an empty string, and every chat request proceeds without enrichment.
 
@@ -128,17 +128,17 @@ To see exactly what was sent to the LLM on the previous turn — including the f
 
 The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windows, `Proto-Familiar.command` on macOS, `./install.sh` on Linux). They also pre-cache the Deno module graph so the first server start doesn't stall on downloads. If you'd rather do it by hand:
 
-1. Clone entity-core-alpha as a sibling directory next to Proto-Familiar:
+1. Clone entity-core as a sibling directory next to Proto-Familiar:
    ```bash
-   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core-alpha
+   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core
    ```
-   Psycheros is a Deno workspace at this tag, so entity-core itself lives at `../entity-core-alpha/packages/entity-core/`. Older releases kept it at the repo root (`../entity-core-alpha/src/mod.ts`); `thalamus.js` probes both layouts and prefers the workspace path.
+   Psycheros is a Deno workspace at this tag, so entity-core itself lives at `../entity-core/packages/entity-core/`. Older releases kept it at the repo root (`../entity-core/src/mod.ts`). `thalamus.js` probes both layouts and prefers the workspace path. Pre-rename installs that used `../entity-core-alpha/` are still detected as a fallback so existing setups keep working without a directory move.
 
-2. Populate the package's `data/` directory — `entity-core-alpha/packages/entity-core/data/` for the workspace layout, or `entity-core-alpha/data/` for the legacy layout — with identity files following the entity-core README.
+2. Populate the package's `data/` directory — `entity-core/packages/entity-core/data/` for the workspace layout, or `entity-core/data/` for the legacy layout — with identity files following the entity-core README.
 
 3. (Optional but recommended) Pre-cache Deno dependencies so the first launch is instant:
    ```bash
-   cd ../entity-core-alpha/packages/entity-core   # or just ../entity-core-alpha on the legacy layout
+   cd ../entity-core/packages/entity-core   # or just ../entity-core on the legacy layout
    deno cache src/mod.ts
    ```
 
@@ -171,7 +171,7 @@ npm run import-entity -- --from /path/to/entity-core --yes
 
 The script:
 - Auto-detects whether `--from` is an entity-core root or a bare data directory.
-- Resolves the destination using the same logic as `thalamus.js`: `$ENTITY_CORE_PATH` if set, otherwise probes `../entity-core-alpha/packages/entity-core` (Deno-workspace layout) and falls back to `../entity-core-alpha` (legacy top-level layout).
+- Resolves the destination using the same logic as `thalamus.js`: `$ENTITY_CORE_PATH` if set, otherwise probes `../entity-core/packages/entity-core` (Deno-workspace layout) and falls back to `../entity-core` (legacy top-level layout), then repeats both probes under the pre-rename `../entity-core-alpha/` directory for back-compat.
 - Reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides.
 - Preserves file timestamps so memory recency ranking stays accurate.
 - Refuses to proceed if source and destination resolve to the same path.

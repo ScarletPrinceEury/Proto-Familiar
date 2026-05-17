@@ -20,9 +20,11 @@ A lightweight, self-hosted chat UI for [z.ai](https://api.z.ai) and [NanoGPT](ht
 | **macOS** | Double-click `Proto-Familiar.command` in Finder. First run installs dependencies; subsequent runs just start it. | Double-click `Proto-Familiar.command`. Browser opens automatically. | Press **Ctrl-C** in the Terminal window, then close the window. |
 | **Linux** | Run `./install.sh` once. It installs Node deps, clones entity-core, and registers a **Proto-Familiar** entry in your application menu. | Search **Proto-Familiar** in your app launcher, or `./start.sh`. | `./stop.sh` |
 
-Everything runs locally at **http://localhost:3000** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
+Everything runs locally at **http://localhost:8742** — your API key never leaves your machine. Set `PORT=8080` (env var, or `PORT=8080 ./start.sh`) to change the port.
 
-**Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode. Before any git op runs, `tomes/`, `logs/`, and entity-core's `data/` directory are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache`. Node/Deno/Git are reinstalled if missing in either mode; only shortcut creation is skipped on update. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
+**Access from other devices (Tailscale / LAN):** click the globe icon in the top bar (next to the prompt-inspector magnifier) to toggle external access on. While on, the UI is reachable at the displayed Tailscale hostname / IPv4 (auto-detected from the `tailscale` CLI if installed) from any device on your tailnet. While off (the default), non-loopback requests get a 403 — same effective posture as the historical localhost-only bind. The setting persists in `.proto-familiar-config.json`. Tailscale provides the auth and encryption — on a plain LAN with no Tailscale, anyone on the network can hit the proxy and use your API key, so only flip it on when you actually need cross-device access on a trusted network. See [docs/getting-started.md#access-from-other-devices-tailscale--lan](docs/getting-started.md#access-from-other-devices-tailscale--lan).
+
+**Updating an existing install:** re-run the same installer. It detects `node_modules/` and switches to update mode. Before any git op runs, `tomes/`, `logs/`, entity-core's `data/` directory, and `.proto-familiar-config.json` (Tailscale toggle state) are copied to `.pf-backups/<timestamp>/` as a safety net. Then `git pull --ff-only` on Proto-Familiar (refuses non-FF merges; your work tree stays put on conflict), `git fetch && checkout <pinned tag>` on entity-core (whose `data/` is gitignored, never touched), idempotent `npm install` + `deno cache`. Node/Deno/Git are reinstalled if missing in either mode; only shortcut creation is skipped on update. See [docs/getting-started.md#updating-an-existing-install](docs/getting-started.md#updating-an-existing-install) for the protection table.
 
 **Manual / advanced:**
 
@@ -35,7 +37,7 @@ npm start          # production
 npm run dev        # auto-restarts on file changes
 ```
 
-Open **http://localhost:3000** in your browser.
+Open **http://localhost:8742** in your browser.
 
 Open the Settings panel (☰), choose your provider, paste your API key, pick a model, and start chatting.
 
@@ -85,7 +87,6 @@ Project wiki pages are available in [`/wiki`](wiki/):
 | **Session memorization** | Sessions are queued for memorization on idle timeout, manual clear, tab close, topic end, or via the **Memorize now** button; a server-side worker calls the LLM, extracts 1–8 distinct topics, and saves each as an entry in the dedicated **Session Memories** Tome. Jobs survive tab close and server restart, with exponential backoff retry on failure |
 | **Per-session Memorize** | Each row in the Logs modal has a **Memorize** button that opens a chooser: **Auto-summarize** runs the worker over that session and shows the entry count inline, while **Manual topics** opens the session read-only so you can mark topic ranges by hand and review each entry before saving |
 | **Export** | Download conversation as a Markdown `.md` file (tool-call turns are omitted) |
-| **Regenerate** | Re-run the last AI response with the same user message |
 | **Themes** | Dark / light toggle |
 | **Responsive layout** | Full sidebar on desktop · Full-screen slide-in panel on mobile |
 | **File import** | Load any prompt field from a plain-text, Markdown, or JSON file |
@@ -303,7 +304,7 @@ Open **☰ View entries** in the sidebar Lorebook section. Use **+ New** to crea
 
 ### Server API Reference
 
-The Express server runs on `localhost:3000` and exposes the following endpoints.
+The Express server runs on `localhost:8742` (or whatever you set `PORT` to) and exposes the following endpoints.
 
 #### `POST /api/chat`
 Proxies a chat request to the chosen provider.
@@ -425,7 +426,7 @@ Write-through endpoints used by the `save_memory` and `update_identity` built-in
 
 ### Entity-Core Identity Layer
 
-Familiar optionally connects to a local [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
+Familiar optionally connects to a local [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) MCP server to ground every LLM request in persistent identity and memory. This is wired through `thalamus.js`.
 
 #### How it works
 
@@ -477,9 +478,9 @@ To see exactly what was sent to the LLM on the previous turn — including the f
 
 #### Setup
 
-1. Clone [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory:
+1. Clone [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) as a sibling directory at the release tag:
    ```bash
-   git clone https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2 ../entity-core-alpha
+   git clone --depth 1 --branch entity-core-v0.2.2 https://github.com/PsycherosAI/Psycheros.git ../entity-core
    ```
 2. Follow its README to populate `data/` with identity files and memories.
 3. Start Familiar normally — `thalamus.js` spawns entity-core automatically.
@@ -501,7 +502,7 @@ npm run import-entity -- --from /path/to/entity-core/data
 npm run import-entity -- --from /path/to/entity-core --yes
 ```
 
-The script resolves the destination using the same logic as `thalamus.js` (`$ENTITY_CORE_PATH` → `../entity-core-alpha`). It reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides, preserves timestamps so recency ranking stays accurate, and stops you if source and destination are the same. **Stop the Familiar server before running this** to avoid write conflicts with the running entity-core process.
+The script resolves the destination using the same logic as `thalamus.js` (`$ENTITY_CORE_PATH` → `../entity-core`). It reads both installs' `.env` files for `ENTITY_CORE_DATA_DIR` overrides, preserves timestamps so recency ranking stays accurate, and stops you if source and destination are the same. **Stop the Familiar server before running this** to avoid write conflicts with the running entity-core process.
 
 #### Importing a SillyTavern lorebook
 
@@ -641,5 +642,5 @@ SillyTavern's universal adapter architecture. Chat Completions API (OpenAI-compa
 
 ## Acknowledgements
 
-Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core-alpha](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
+Huge thanks to **[zarilewis](https://github.com/zarilewis)** for creating [entity-core](https://github.com/PsycherosAI/Psycheros/releases/tag/entity-core-v0.2.2) — the MCP server that powers Familiar's identity and memory layer. entity-core provides the persistent self-model, RAG memory, and knowledge graph that make it possible for Familiar to maintain consistent character values, voice, and relational context across conversations. None of the identity injection work in this project would exist without it.
 
