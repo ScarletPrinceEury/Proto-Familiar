@@ -84,6 +84,16 @@ function Test-Port {
 
 function Start-Server {
     if (Test-Port) { Set-Status "running"; return }
+    # PID file points at a live process, but the configured port isn't
+    # responding — almost certainly a stale instance from a previous PORT
+    # value or older build. Recycle it so the new config takes effect.
+    if (Test-Path $script:pidFile) {
+        $stalePid = Get-Content $script:pidFile -ErrorAction SilentlyContinue
+        if ($stalePid -and (Get-Process -Id $stalePid -ErrorAction SilentlyContinue)) {
+            try { Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        Remove-Item $script:pidFile -ErrorAction SilentlyContinue
+    }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Node.js is not on PATH. Run the installer (double-click Proto-Familiar.vbs while node_modules is missing, or run scripts\win\install.ps1).",

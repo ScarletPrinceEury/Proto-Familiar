@@ -25,10 +25,31 @@ if ! command -v deno >/dev/null 2>&1 && [ -x "$HOME/.deno/bin/deno" ]; then
 fi
 
 # Already running?
-if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  say "Proto-Familiar already running (PID $(cat "$PID_FILE"))."
+EXISTING_PID=""
+if [ -f "$PID_FILE" ]; then EXISTING_PID="$(cat "$PID_FILE")"; fi
+PID_ALIVE=0
+if [ -n "$EXISTING_PID" ] && kill -0 "$EXISTING_PID" 2>/dev/null; then PID_ALIVE=1; fi
+
+PORT_LISTENING=0
+if (echo >"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then PORT_LISTENING=1; fi
+
+if [ "$PID_ALIVE" = "1" ] && [ "$PORT_LISTENING" = "1" ]; then
+  say "Proto-Familiar already running (PID $EXISTING_PID) on port $PORT."
   say "Opening $URL ..."
 else
+  if [ "$PID_ALIVE" = "1" ]; then
+    # Tracked PID is alive but not serving the configured port — e.g. left
+    # over from a different PORT value or an older build. Recycle it so the
+    # new config actually takes effect.
+    say "Found stale Proto-Familiar process (PID $EXISTING_PID) not on port $PORT — restarting."
+    kill "$EXISTING_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$EXISTING_PID" 2>/dev/null || break
+      sleep 0.25
+    done
+    kill -9 "$EXISTING_PID" 2>/dev/null || true
+    rm -f "$PID_FILE"
+  fi
   if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
     say "Dependencies missing. Running installer first..."
     bash "$SCRIPT_DIR/install.sh"
