@@ -4438,43 +4438,71 @@ function keGraphFit() {
 }
 
 // ── Color encoding ──────────────────────────────────────────────────────
-function keGraphHashHue(s) {
-  const str = String(s ?? '');
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
-  // Golden-ratio multiplier spreads hashed buckets across the wheel.
-  return Math.abs(Math.round(h * 137.508)) % 360;
+//
+// Per-graph deterministic assignment beats hashing for a small categorical
+// space: hashes happily put 10 of 16 common types into the magenta band.
+// Instead, sort the live type names and walk a 24-step hue palette in
+// alphabetical order. Edge types start half a palette later, so a node
+// and an edge with the same sort index can't pick the same hue.
+
+const KE_GRAPH_PALETTE = [
+    0,  15,  30,  45,  60,  75,  90, 105,
+  120, 135, 150, 165, 180, 195, 210, 225,
+  240, 255, 270, 285, 300, 315, 330, 345,
+];
+const _keGraphColors = { node: new Map(), edge: new Map() };
+
+function keGraphAssignColors() {
+  const nodeTypes = Array.from(new Set(_keGraph.nodes.map(n => n.type || 'untyped'))).sort();
+  const edgeTypes = Array.from(new Set(_keGraph.edges.map(e => e.type || e.customType || 'related'))).sort();
+  _keGraphColors.node.clear();
+  _keGraphColors.edge.clear();
+  const N      = KE_GRAPH_PALETTE.length;
+  // Stride coprime to N spreads adjacent indices around the wheel:
+  // index 0,1,2,3,… → palette[0,7,14,21,…] = red, green, blue, purple, …
+  // rather than the eye-killing 0,15,30,45 gradient.
+  const stride = 7;
+  const off    = Math.floor(N / 2);
+  nodeTypes.forEach((t, i) => _keGraphColors.node.set(t, KE_GRAPH_PALETTE[(i * stride) % N]));
+  edgeTypes.forEach((t, i) => _keGraphColors.edge.set(t, KE_GRAPH_PALETTE[((i * stride) + off) % N]));
+}
+
+function keGraphNodeHue(n) {
+  return _keGraphColors.node.get(n.type || 'untyped') ?? 0;
+}
+function keGraphEdgeHue(e) {
+  return _keGraphColors.edge.get(e.type || e.customType || 'related') ?? 0;
 }
 function keGraphNodeColor(n) {
-  const hue = keGraphHashHue(n.type || 'untyped');
-  return `hsl(${hue}, 65%, 60%)`;
+  return `hsl(${keGraphNodeHue(n)}, 65%, 60%)`;
 }
 function keGraphEdgeColor(e) {
-  const hue = keGraphHashHue(e.type || e.customType || 'related');
-  const w   = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
-  const sat  = Math.round(20 + 70 * w);
-  const lt   = Math.round(32 + 30 * w);
+  const hue   = keGraphEdgeHue(e);
+  const w     = Math.max(0, Math.min(1, typeof e.weight === 'number' ? e.weight : 0.5));
+  const sat   = Math.round(20 + 70 * w);
+  const lt    = Math.round(32 + 30 * w);
   const alpha = (0.35 + 0.55 * w).toFixed(2);
   return `hsla(${hue}, ${sat}%, ${lt}%, ${alpha})`;
 }
 
 function keGraphBuildLegend() {
+  keGraphAssignColors();
   const legend = $('ke-graph-legend');
-  const nodeTypes = new Set();
-  const edgeTypes = new Set();
-  for (const n of _keGraph.nodes) nodeTypes.add(n.type || 'untyped');
-  for (const e of _keGraph.edges) edgeTypes.add(e.type || e.customType || 'related');
-  const rows = [];
-  if (nodeTypes.size) {
+  const rows   = [];
+  const nodeTypes = Array.from(_keGraphColors.node.keys()).sort();
+  const edgeTypes = Array.from(_keGraphColors.edge.keys()).sort();
+  if (nodeTypes.length) {
     rows.push('<div class="ke-graph-legend-section">Nodes</div>');
-    for (const t of Array.from(nodeTypes).sort()) {
-      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${keGraphHashHue(t)},65%,60%)"></span>${esc(t)}</div>`);
+    for (const t of nodeTypes) {
+      const hue = _keGraphColors.node.get(t);
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},65%,60%)"></span>${esc(t)}</div>`);
     }
   }
-  if (edgeTypes.size) {
+  if (edgeTypes.length) {
     rows.push('<div class="ke-graph-legend-section">Edges</div>');
-    for (const t of Array.from(edgeTypes).sort()) {
-      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${keGraphHashHue(t)},75%,55%)"></span>${esc(t)}</div>`);
+    for (const t of edgeTypes) {
+      const hue = _keGraphColors.edge.get(t);
+      rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${hue},75%,55%)"></span>${esc(t)}</div>`);
     }
   }
   legend.innerHTML = rows.join('');
