@@ -577,10 +577,15 @@ The endpoints below back the **Knowledge editor** modal in the sidebar and the L
 | `GET /api/entity/graph/nodes` | List graph nodes. Query: `type` (optional), `limit` (1–500, default 200), `offset` | — |
 | `GET /api/entity/graph/search` | Text search across graph nodes (backs the `find_graph_node` LLM tool). Query: `q` (required), `type` (optional), `limit` (1–100, default 10) | — |
 | `GET /api/entity/graph/nodes/:id/subgraph` | Node + 1-hop neighbours and edges (backs the `find_graph_edges` LLM tool). Query: `depth` (1–3, default 1) | — |
+| `GET /api/entity/graph/full` | All nodes + all deduplicated edges in one payload (backs the Knowledge editor's Map view). Walks each node's 1-hop subgraph under a 16-worker concurrency cap and drops edges whose endpoints fall outside the (possibly type-filtered) visible set so the rendered legend matches what's drawn. Query: `type` (optional), `limit` (1–500, default 500) | — |
+| `POST /api/entity/graph/nodes` | Create a new node via `graph_node_create`. At least one of `label` / `type` / `description` is required | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
 | `PATCH /api/entity/graph/nodes/:id` | Update label / type / description (auto-snapshots) | `{ "label"?: "…", "type"?: "…", "description"?: "…" }` |
 | `DELETE /api/entity/graph/nodes/:id` | Delete the node and its edges (auto-snapshots). Query: `permanent=1` for hard delete | — |
+| `POST /api/entity/graph/edges` | Create a new edge via `graph_edge_create`. `fromId` and `toId` are required and must differ; `weight` is clamped to `[0, 1]` | `{ "fromId": "…", "toId": "…", "type"?: "…", "weight"?: 0.5 }` |
 | `PATCH /api/entity/graph/edges/:id` | Update edge type or weight (auto-snapshots) | `{ "type"?: "…", "weight"?: 0.85 }` |
 | `DELETE /api/entity/graph/edges/:id` | Delete one relationship; both endpoint nodes remain (auto-snapshots) | — |
+
+Creates do not auto-snapshot — they are additive and reversible via the matching `DELETE`.
 
 #### Snapshots
 
