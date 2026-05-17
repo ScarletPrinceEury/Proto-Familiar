@@ -947,6 +947,46 @@ async function detectTailscale() {
   }
 }
 
+// ── Centralised settings ─────────────────────────────────────────
+// User preferences (prompts, names, saved connections with API keys,
+// tomes settings, …) are stored on the server so opening Proto-Familiar
+// on a second device doesn't reset everything. The frontend treats this
+// as the source of truth on load and pushes updates back here on every
+// change. localStorage on each client stays as a fast offline cache.
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const SETTINGS_MAX_BYTES = 2 * 1024 * 1024;  // 2 MB hard cap — way more than realistic
+
+app.get('/api/settings', async (_req, res) => {
+  try {
+    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
+    return res.json({ settings: JSON.parse(raw) });
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.json({ settings: null });
+    return res.status(500).json({ error: `failed to read settings: ${err.message}` });
+  }
+});
+
+app.put('/api/settings', async (req, res) => {
+  const { settings } = req.body ?? {};
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return badRequest(res, 'settings (object) is required');
+  }
+  let serialised;
+  try { serialised = JSON.stringify(settings, null, 2); }
+  catch (err) { return badRequest(res, `settings not serialisable: ${err.message}`); }
+  if (serialised.length > SETTINGS_MAX_BYTES) {
+    return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
+  }
+  try {
+    const tmp = SETTINGS_FILE + '.tmp';
+    await fsp.writeFile(tmp, serialised, 'utf8');
+    await fsp.rename(tmp, SETTINGS_FILE);
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: `failed to write settings: ${err.message}` });
+  }
+});
+
 app.get('/api/tailscale', async (_req, res) => {
   const ts = await detectTailscale();
   res.json({

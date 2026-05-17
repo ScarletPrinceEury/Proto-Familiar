@@ -61,9 +61,10 @@ if "!MODE!"=="update" (
   call :backupIfExists      "%ENTITY_CORE_DIR%\packages\entity-core\data" "!ENTITY_CORE_DIR_REL!\packages\entity-core\data"
   call :backupIfExists      "%ENTITY_CORE_DIR%\data"                       "!ENTITY_CORE_DIR_REL!\data"
   call :backupFileIfExists  "%SCRIPT_DIR%\.proto-familiar-config.json"     ".proto-familiar-config.json"
+  call :backupFileIfExists  "%SCRIPT_DIR%\settings.json"                   "settings.json"
   if "!ANYTHING_BACKED_UP!"=="1" (
     echo User data backed up to !BACKUP_DIR!\
-    echo   ^(tomes\, logs\, entity-core data\, .proto-familiar-config.json — restore by copying back if needed^)
+    echo   ^(tomes\, logs\, entity-core data\, .proto-familiar-config.json, settings.json — restore by copying back if needed^)
   )
 )
 

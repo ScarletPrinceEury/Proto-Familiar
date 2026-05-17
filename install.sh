@@ -84,9 +84,10 @@ if [ "$MODE" = "update" ]; then
       ANYTHING_BACKED_UP=1
     fi
   done
-  # Single files (Tailscale toggle state etc.)
+  # Single files (Tailscale toggle state, central settings, etc.)
   for f in \
-    "$SCRIPT_DIR/.proto-familiar-config.json"; do
+    "$SCRIPT_DIR/.proto-familiar-config.json" \
+    "$SCRIPT_DIR/settings.json"; do
     if [ -f "$f" ]; then
       mkdir -p "$BACKUP_DIR"
       rel="$(echo "$f" | sed "s|^$PARENT_DIR/||")"
@@ -98,7 +99,7 @@ if [ "$MODE" = "update" ]; then
   done
   if [ "$ANYTHING_BACKED_UP" = "1" ]; then
     say "User data backed up to $BACKUP_DIR/"
-    say "  (tomes/, logs/, entity-core data/, .proto-familiar-config.json — restore by copying back if needed)"
+    say "  (tomes/, logs/, entity-core data/, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
   fi
 fi
 

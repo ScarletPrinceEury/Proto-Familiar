@@ -74,7 +74,8 @@ if ($updateMode) {
         @{ Path = (Join-Path $projectRoot "logs");  Rel = "logs";  IsFile = $false },
         @{ Path = (Join-Path $entityCoreDir "packages\entity-core\data"); Rel = "$entityCoreDirRel\packages\entity-core\data"; IsFile = $false },
         @{ Path = (Join-Path $entityCoreDir "data"); Rel = "$entityCoreDirRel\data"; IsFile = $false },
-        @{ Path = (Join-Path $projectRoot ".proto-familiar-config.json"); Rel = ".proto-familiar-config.json"; IsFile = $true }
+        @{ Path = (Join-Path $projectRoot ".proto-familiar-config.json"); Rel = ".proto-familiar-config.json"; IsFile = $true },
+        @{ Path = (Join-Path $projectRoot "settings.json");                Rel = "settings.json";                IsFile = $true }
     )
     foreach ($s in $sources) {
         if (-not (Test-Path $s.Path)) { continue }
@@ -86,7 +87,7 @@ if ($updateMode) {
     }
     if ($anythingBackedUp) {
         Ok "User data backed up to $backupDir\"
-        Ok "  (tomes\, logs\, entity-core data\, .proto-familiar-config.json — restore by copying back if needed)"
+        Ok "  (tomes\, logs\, entity-core data\, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
     }
 }
 

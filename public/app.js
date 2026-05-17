@@ -584,11 +584,48 @@ const state = {
 };
 
 // ── Persistence ──────────────────────────────────────────────────
+//
+// Settings live centrally on the server (so opening Proto-Familiar on a
+// second device doesn't reset prompts, names, and saved connections).
+// localStorage is a fast offline cache that gets refreshed from the
+// server on every page load.
+//
+// SERVER_SYNCED_KEYS is the subset of `state` that's user preference
+// rather than per-device session state. Session timing (sessionId,
+// sessionStartedAt, …) stays local — syncing it across devices would
+// be weird (e.g. device A's idle timer applying to device B).
+const SERVER_SYNCED_KEYS = [
+  'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
+  'userName', 'charName',
+  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt',
+  'toolsEnabled', 'customTools',
+  'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
+  'tomeCaseSensitive', 'tomeMatchWholeWords',
+  'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
+];
+function extractServerSettings(s) {
+  const out = {};
+  for (const k of SERVER_SYNCED_KEYS) if (k in s) out[k] = s[k];
+  return out;
+}
+let _settingsPutTimer = null;
+function pushSettingsToServer() {
+  clearTimeout(_settingsPutTimer);
+  _settingsPutTimer = setTimeout(() => {
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: extractServerSettings(state) }),
+    }).catch(err => console.warn('settings sync to server failed', err));
+  }, 500);
+}
+
 function saveSettings() {
   try {
     const { messages: _ignored, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
     localStorage.setItem('pf_settings', JSON.stringify(settings));
   } catch { /* quota exceeded — silently skip */ }
+  pushSettingsToServer();
 }
 
 function saveTopics() {
@@ -630,6 +667,49 @@ function loadPersisted() {
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   if (typeof state.maxEmptyRetries !== 'number')   state.maxEmptyRetries = 2;
   migrateLegacyConnection();
+}
+
+// Pull the canonical settings from the server and overlay them onto
+// the in-memory state. Called once at startup, after the synchronous
+// localStorage load has already painted the UI from the offline cache;
+// this lets a second device pick up settings edited on the primary.
+//
+// Order: localStorage → instant UI → server fetch → overlay → refresh UI.
+// If the server is empty (fresh install), we push the local cache up so
+// it becomes the source of truth going forward.
+async function syncSettingsFromServer() {
+  let remote;
+  try {
+    const r = await fetch('/api/settings');
+    if (!r.ok) return;
+    const data = await r.json();
+    remote = data.settings ?? null;
+  } catch (err) {
+    console.warn('initial settings fetch failed', err);
+    return;
+  }
+  if (remote && typeof remote === 'object') {
+    // Server is source of truth: overlay only the synced keys.
+    for (const k of SERVER_SYNCED_KEYS) {
+      if (k in remote) state[k] = remote[k];
+    }
+    if (!Array.isArray(state.connections))           state.connections = [];
+    if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
+    migrateLegacyConnection();
+    // Refresh the UI to reflect what we just pulled.
+    writeSettingsToUI();
+    renderConnectionsList();
+    refreshModelSuggestions(state.provider);
+    // Mirror to localStorage so the offline cache stays in sync.
+    try {
+      const { messages: _i, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
+      localStorage.setItem('pf_settings', JSON.stringify(settings));
+    } catch { /* quota */ }
+  } else {
+    // Server is empty — seed it from whatever we just loaded out of
+    // localStorage so the user doesn't lose anything on the next load.
+    pushSettingsToServer();
+  }
 }
 
 // ── Saved connections ──────────────────────────────────────────
@@ -2615,10 +2695,15 @@ function init() {
   const savedTheme = localStorage.getItem('pf_theme') || 'dark';
   applyTheme(savedTheme);
 
-  // Populate UI from state
+  // Populate UI from state (fast path — uses the localStorage cache).
   writeSettingsToUI();
   renderAllMessages();
   initCollapsibles();
+
+  // Pull the canonical settings from the server in the background. If the
+  // server has data, it overlays + repaints; if it's empty, our local
+  // settings get pushed up so the next device sees them.
+  syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
 
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
