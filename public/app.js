@@ -669,15 +669,80 @@ function loadPersisted() {
   migrateLegacyConnection();
 }
 
-// Pull the canonical settings from the server and overlay them onto
-// the in-memory state. Called once at startup, after the synchronous
-// localStorage load has already painted the UI from the offline cache;
-// this lets a second device pick up settings edited on the primary.
+// True for non-empty strings / non-empty arrays / any non-null number /
+// any non-null object. Used by the merge logic to decide whether a field
+// is "carrying real user data" versus just a default/empty placeholder.
+function isMeaningfulSetting(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === 'string') return v.trim() !== '';
+  if (Array.isArray(v))      return v.length > 0;
+  return true;
+}
+
+// Union two connection arrays by id, with a soft-duplicate guard:
+// if two connections from different devices have different ids but
+// identical (provider, model, apiKey), treat them as the same entry
+// and keep the existing one. Otherwise both survive.
+function unionConnections(remote = [], local = []) {
+  const byId = new Map();
+  for (const c of remote) if (c && c.id) byId.set(c.id, c);
+  for (const c of local) {
+    if (!c || !c.id) continue;
+    if (byId.has(c.id)) continue;
+    let isDupe = false;
+    for (const existing of byId.values()) {
+      if (existing.provider === c.provider
+          && existing.model    === c.model
+          && existing.apiKey   === c.apiKey) { isDupe = true; break; }
+    }
+    if (!isDupe) byId.set(c.id, c);
+  }
+  return [...byId.values()];
+}
+
+// One-time absorption: when this device first contacts a server that
+// already has data, fold the device's local values into the server
+// payload before treating server as source of truth. Scalars from the
+// server win when both sides are meaningful (server is presumed most
+// recent across the tailnet); the local value is kept only when the
+// server has nothing. Connections / fallbacks are unioned so different
+// devices' saved presets all survive.
+function absorbLocalIntoRemote(remote, local) {
+  const merged = { ...remote };
+  for (const k of SERVER_SYNCED_KEYS) {
+    if (k === 'connections' || k === 'fallbackConnectionIds' || k === 'primaryConnectionId') continue;
+    if (isMeaningfulSetting(local[k]) && !isMeaningfulSetting(remote[k])) {
+      merged[k] = local[k];
+    }
+  }
+  merged.connections = unionConnections(remote.connections, local.connections);
+  merged.primaryConnectionId = remote.primaryConnectionId
+    || local.primaryConnectionId
+    || (merged.connections[0]?.id ?? null);
+  const fallbackUnion = [
+    ...(Array.isArray(remote.fallbackConnectionIds) ? remote.fallbackConnectionIds : []),
+    ...(Array.isArray(local.fallbackConnectionIds)  ? local.fallbackConnectionIds  : []),
+  ];
+  merged.fallbackConnectionIds = [...new Set(fallbackUnion)]
+    .filter(id => id !== merged.primaryConnectionId)
+    .filter(id => merged.connections.find(c => c.id === id));
+  return merged;
+}
+
+// Pull the canonical settings from the server and overlay them onto the
+// in-memory state. Called once at startup, after the synchronous
+// localStorage load has already painted the UI from the offline cache.
 //
-// Order: localStorage → instant UI → server fetch → overlay → refresh UI.
-// If the server is empty (fresh install), we push the local cache up so
-// it becomes the source of truth going forward.
+// First-run absorption: each device flips `pf_settings_absorbed` in its
+// own localStorage the first time this sync completes. Until that flag
+// is set, anything the user had locally that the server doesn't yet
+// know about is folded in (scalars keep server values when both are set,
+// connections are unioned). After that, the server is the source of
+// truth and a plain overlay runs.
+const ABSORBED_FLAG_KEY = 'pf_settings_absorbed';
+
 async function syncSettingsFromServer() {
+  const localSnapshot = extractServerSettings(state);
   let remote;
   try {
     const r = await fetch('/api/settings');
@@ -688,27 +753,42 @@ async function syncSettingsFromServer() {
     console.warn('initial settings fetch failed', err);
     return;
   }
-  if (remote && typeof remote === 'object') {
-    // Server is source of truth: overlay only the synced keys.
-    for (const k of SERVER_SYNCED_KEYS) {
-      if (k in remote) state[k] = remote[k];
-    }
-    if (!Array.isArray(state.connections))           state.connections = [];
-    if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
-    migrateLegacyConnection();
-    // Refresh the UI to reflect what we just pulled.
-    writeSettingsToUI();
-    renderConnectionsList();
-    refreshModelSuggestions(state.provider);
-    // Mirror to localStorage so the offline cache stays in sync.
-    try {
-      const { messages: _i, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
-      localStorage.setItem('pf_settings', JSON.stringify(settings));
-    } catch { /* quota */ }
-  } else {
+  const alreadyAbsorbed = (() => {
+    try { return localStorage.getItem(ABSORBED_FLAG_KEY) === '1'; }
+    catch { return false; }
+  })();
+
+  if (!remote || typeof remote !== 'object') {
     // Server is empty — seed it from whatever we just loaded out of
     // localStorage so the user doesn't lose anything on the next load.
     pushSettingsToServer();
+    try { localStorage.setItem(ABSORBED_FLAG_KEY, '1'); } catch {}
+    return;
+  }
+
+  const effective = alreadyAbsorbed
+    ? remote
+    : absorbLocalIntoRemote(remote, localSnapshot);
+
+  for (const k of SERVER_SYNCED_KEYS) {
+    if (k in effective) state[k] = effective[k];
+  }
+  if (!Array.isArray(state.connections))           state.connections = [];
+  if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
+  migrateLegacyConnection();
+  writeSettingsToUI();
+  renderConnectionsList();
+  refreshModelSuggestions(state.provider);
+
+  // Mirror the resolved state back to localStorage, and push the
+  // (possibly absorbed) result up so the server keeps the new entries.
+  try {
+    const { messages: _i, tomeCache: _tc, tomeRegistry: _tr, topics: _t, ...settings } = state;
+    localStorage.setItem('pf_settings', JSON.stringify(settings));
+  } catch { /* quota */ }
+  if (!alreadyAbsorbed) {
+    pushSettingsToServer();
+    try { localStorage.setItem(ABSORBED_FLAG_KEY, '1'); } catch {}
   }
 }
 
