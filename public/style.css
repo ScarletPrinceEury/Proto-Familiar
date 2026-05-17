@@ -695,6 +695,131 @@ button { cursor: pointer; font-family: var(--font); }
 .typing-indicator.hidden { display: none; }
 .hidden { display: none; }
 
+/* ── Retry / fallback status (inline with typing indicator) ── */
+.retry-status {
+  font-size: 0.78rem;
+  color: var(--warn-color, var(--text-muted));
+  font-style: italic;
+  margin-left: 4px;
+  align-self: center;
+}
+.retry-status:empty { display: none; }
+
+/* ── Saved Connections list ─────────────────────────────────── */
+.connections-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.connections-list:empty::before {
+  content: 'No saved connections yet.';
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.connection-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 8px;
+  background: var(--assistant-bg, rgba(255,255,255,0.04));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+}
+.connection-item.is-primary {
+  border-color: var(--accent, #6cf);
+  box-shadow: 0 0 0 1px var(--accent-dim, rgba(108,200,255,0.15)) inset;
+}
+.connection-item .conn-role {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 44px;
+}
+.connection-item .conn-role label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.connection-item .conn-role input[type="radio"] {
+  margin: 0;
+}
+.connection-item .conn-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.connection-item .conn-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.connection-item .conn-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.connection-item .conn-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 8px;
+  background: var(--accent-dim, rgba(108,200,255,0.15));
+  color: var(--accent, #6cf);
+}
+.connection-item .conn-badge.fb {
+  background: rgba(255,180,80,0.15);
+  color: var(--warn-color, #fb0);
+}
+.connection-item .conn-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.connection-item .conn-actions button {
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.connection-item .conn-actions button:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.connection-item .conn-actions button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.connection-save-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.connection-save-row input { flex: 1; min-width: 0; }
+.connection-save-row button { flex-shrink: 0; }
+
 /* ── Input bar ───────────────────────────────────────────────── */
 .input-bar {
   flex-shrink: 0;

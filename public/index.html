@@ -60,6 +60,7 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
             </div>
+            <p class="field-hint" id="api-key-autofill-hint" style="display:none;">Filled from a saved connection with the same provider.</p>
           </div>
 
           <div class="field">
@@ -81,6 +82,30 @@
           <div class="field">
             <label for="max-tokens">Max Tokens</label>
             <input type="number" id="max-tokens" value="2048" min="128" max="128000" step="128">
+          </div>
+        </div>
+
+        <!-- Saved Connections & Fallbacks -->
+        <div class="sidebar-section collapsible" id="section-connections">
+          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-connections">
+            Saved Connections
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-connections">
+            <p class="field-hint">Save the fields above as a named connection. The first one is your <strong>primary</strong>; the rest are tried in order as <strong>fallbacks</strong> when a request fails or returns empty content.</p>
+
+            <ul id="connections-list" class="connections-list" aria-label="Saved connections"></ul>
+
+            <div class="field connection-save-row">
+              <input type="text" id="connection-name-input" placeholder="Name this connection (e.g. Primary, Work, Backup)" maxlength="64" spellcheck="false">
+              <button id="save-connection-btn" class="btn-secondary" type="button">+ Save current as connection</button>
+            </div>
+
+            <div class="field">
+              <label for="max-empty-retries">Retries on empty response</label>
+              <input type="number" id="max-empty-retries" min="0" max="10" step="1" value="2">
+              <p class="field-hint">If the model returns no content, retry the same connection this many times before moving to the next fallback.</p>
+            </div>
           </div>
         </div>
 
@@ -274,6 +299,7 @@
             <div class="typing-dots">
               <span></span><span></span><span></span>
             </div>
+            <div id="retry-status" class="retry-status" aria-live="polite"></div>
           </div>
         </div>
 
