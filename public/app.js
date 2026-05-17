@@ -3997,11 +3997,41 @@ function downloadDiagnosticReport() {
 
 const KE_TABS = ['memories', 'graph', 'identity', 'snapshots'];
 
+const KE_SIZE_KEY = 'pf-knowledge-modal-size';
+let _keSizeObserver = null;
+
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
+  keRestoreModalSize();
   keSwitchTab('memories');
 }
 function closeKnowledgeModal() { $('knowledge-modal').classList.add('hidden'); }
+
+function keRestoreModalSize() {
+  const el = $('knowledge-modal-inner');
+  if (!el) return;
+  try {
+    const raw = localStorage.getItem(KE_SIZE_KEY);
+    if (raw) {
+      const { w, h } = JSON.parse(raw);
+      if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
+      if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
+    }
+  } catch {/* ignore */}
+  if (!_keSizeObserver && typeof ResizeObserver !== 'undefined') {
+    let saveT = 0;
+    _keSizeObserver = new ResizeObserver(entries => {
+      clearTimeout(saveT);
+      saveT = setTimeout(() => {
+        const r = entries[0]?.contentRect;
+        if (!r) return;
+        try { localStorage.setItem(KE_SIZE_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); }
+        catch {/* ignore */}
+      }, 250);
+    });
+    _keSizeObserver.observe(el);
+  }
+}
 
 function keSwitchTab(tab) {
   for (const t of KE_TABS) {
