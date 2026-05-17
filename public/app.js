@@ -4066,6 +4066,17 @@ function keError(err, fallback) {
   return `<p class="logs-error">⚠ ${esc(String(m))}</p>`;
 }
 
+// Pull the server's real `{ error }` message out of a non-OK response.
+// Falls back to HTTP status. Surfaces 'entity-core not connected'
+// instead of the opaque 'HTTP 502' the user used to see.
+async function keReadServerError(res) {
+  try {
+    const j = await res.json();
+    if (j?.error) return String(j.error);
+  } catch {/* not JSON */}
+  return `HTTP ${res.status}`;
+}
+
 // ── Memories tab ────────────────────────────────────────────────────────
 async function keLoadMemories() {
   const list = $('ke-mem-list');
@@ -4073,7 +4084,7 @@ async function keLoadMemories() {
   const granularity = $('ke-mem-granularity').value || undefined;
   try {
     const res = await fetch('/api/entity/memories' + (granularity ? `?granularity=${encodeURIComponent(granularity)}` : ''));
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
     const memories = data.memories ?? [];
     if (!memories.length) { list.innerHTML = '<p class="logs-empty">No memories found.</p>'; return; }
@@ -4094,7 +4105,7 @@ async function keOpenMemory(granularity, date) {
   keSetDetail('ke-mem-detail', '<p class="logs-loading">Loading…</p>');
   try {
     const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
     const content = data.memory?.content ?? data.content ?? '';
     const det = $('ke-mem-detail');
@@ -4148,7 +4159,7 @@ async function keLoadGraphNodes() {
   const type = $('ke-graph-type').value.trim() || undefined;
   try {
     const res = await fetch('/api/entity/graph/nodes' + (type ? `?type=${encodeURIComponent(type)}` : ''));
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const data  = await res.json();
     const nodes = data.nodes ?? data.results ?? [];
     if (!nodes.length) { list.innerHTML = '<p class="logs-empty">No graph nodes found.</p>'; return; }
@@ -4170,7 +4181,7 @@ async function keOpenGraphNode(id) {
   keSetDetail('ke-graph-detail', '<p class="logs-loading">Loading…</p>');
   try {
     const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(id)}/subgraph?depth=1`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === id) ?? { id };
     keUpdateNodeTypes([self, ...(sg.nodes ?? [])]);
@@ -4216,10 +4227,13 @@ async function keOpenGraphNode(id) {
 // ── Graph map view ──────────────────────────────────────────────────────
 //
 // Renders the full knowledge graph as dots (nodes) and quadratic curves
-// (edges) on a canvas. Color encodes type (hashed → hue); edge saturation
-// and lightness encode weight (entity-core edges carry a weight in [0,1]).
-// Wheel zooms, drag pans, hover shows labels, zoom-in reveals labels for
-// every dot, and clicking a node opens the existing list-view editor.
+// (edges) on a canvas. Node hue encodes type via a deterministic
+// per-graph palette (sorted types → palette[i*stride % 24]); edge hue
+// encodes relationship type, with saturation / lightness / alpha
+// scaled to the edge's weight in [0, 1] so strong relationships read
+// vivid and weak ones fade. Wheel zooms, drag pans, hover surfaces a
+// tooltip (hit-tested against the actual Bézier curve), and clicking a
+// dot opens the draggable popover editor.
 
 let _keGraphView = 'list';
 const _keGraph = {
@@ -4329,7 +4343,11 @@ function keGraphResize() {
   canvas.height = Math.max(1, Math.floor(rect.height * dpr));
 }
 
+// Generation counter — guards against a slow earlier load resolving
+// after a faster later one and clobbering the visible map.
+let _keGraphLoadGen = 0;
 async function keLoadGraphMap() {
+  const gen    = ++_keGraphLoadGen;
   const status = $('ke-graph-map-status');
   status.textContent = 'Loading…';
   status.classList.remove('hidden');
@@ -4337,8 +4355,10 @@ async function keLoadGraphMap() {
   const url  = '/api/entity/graph/full' + (type ? `?type=${encodeURIComponent(type)}` : '');
   try {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (gen !== _keGraphLoadGen) return;
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const data  = await res.json();
+    if (gen !== _keGraphLoadGen) return;
     // Preserve existing positions for nodes that survived a reload —
     // avoids reshuffling the whole map when the user adds an edge.
     const prevById = _keGraph.nodeById;
@@ -5034,7 +5054,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
   if (!_kePopoverDragged) keGraphPositionPopover(pop, clientX, clientY);
   try {
     const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}/subgraph?depth=1`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
     const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
@@ -5096,8 +5116,12 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       // Re-fetch the full graph so newly-added or removed edges show up
       // on the canvas. Old positions are preserved for nodes that still
       // exist, so the layout doesn't snap.
+      const startId = node.id;
       await keLoadGraphMap();
-      const refreshed = _keGraph.nodeById.get(node.id);
+      // The await can take a while on a big graph; if the user clicked
+      // a different node in the meantime, don't yank their popover back.
+      if (_kePopoverNodeId !== startId) return;
+      const refreshed = _keGraph.nodeById.get(startId);
       keGraphOpenPopover(refreshed ?? node, clientX, clientY);
     });
   } catch (err) {
@@ -5113,7 +5137,7 @@ async function keLoadIdentity() {
   list.innerHTML = '<p class="logs-loading">Loading…</p>';
   try {
     const res = await fetch('/api/entity/identity');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
     list.innerHTML = '';
     let any = false;
@@ -5184,7 +5208,7 @@ async function keLoadSnapshots() {
   list.innerHTML = '<p class="logs-loading">Loading…</p>';
   try {
     const res  = await fetch('/api/entity/snapshots');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
     const snaps = data.snapshots ?? data ?? [];
     if (!snaps.length) { list.innerHTML = '<p class="logs-empty">No snapshots yet.</p>'; return; }
