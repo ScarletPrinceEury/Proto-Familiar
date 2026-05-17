@@ -1519,7 +1519,10 @@ button { cursor: pointer; font-family: var(--font); }
 .ke-graph-popover-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 6px; margin-bottom: 6px;
+  cursor: grab;
+  user-select: none;
 }
+.ke-graph-popover-head:active { cursor: grabbing; }
 .ke-graph-popover-head h3 {
   margin: 0; font-size: 0.92rem; color: var(--text);
   word-break: break-word;
