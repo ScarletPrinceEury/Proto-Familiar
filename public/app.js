@@ -2366,14 +2366,12 @@ function init() {
   });
   $('tome-new-btn').addEventListener('click', openNewTomeModal);
 
-  // Tome entries modal
+  // Tome entries modal — no backdrop-click-to-close; the modal is
+  // resizable and easy to dismiss with the ✕.
   $('tome-entries-modal-close').addEventListener('click', closeTomeEntriesModal);
   $('tome-entries-back-btn').addEventListener('click', () => {
     closeTomeEntriesModal();
     openTomesModal();
-  });
-  $('tome-entries-modal').addEventListener('click', e => {
-    if (e.target === $('tome-entries-modal')) closeTomeEntriesModal();
   });
   $('tome-entries-new-btn').addEventListener('click', () => openLoreEditor(null));
 
@@ -2389,12 +2387,10 @@ function init() {
   });
   $('new-tome-create-btn').addEventListener('click', createNewTome);
 
-  // Lorebook entry editor modal
+  // Lorebook entry editor modal — same rationale as above: resizable,
+  // no backdrop-click-to-close.
   $('lore-editor-close').addEventListener('click', closeLoreEditor);
   $('lore-editor-cancel').addEventListener('click', closeLoreEditor);
-  $('lore-editor-modal').addEventListener('click', e => {
-    if (e.target === $('lore-editor-modal')) closeLoreEditor();
-  });
   $('lore-editor-save').addEventListener('click', saveLoreEditorEntry);
   $('lore-ed-selective').addEventListener('change', () => {
     $('lore-ed-secondary-section').classList.toggle('hidden', !$('lore-ed-selective').checked);
@@ -3770,6 +3766,7 @@ function openTomeEntriesModal(tomeId) {
   const tome = state.tomeRegistry.find(t => t.id === tomeId);
   $('tome-entries-modal-title').textContent = tome?.name ?? 'Tome Entries';
   $('tome-entries-modal').classList.remove('hidden');
+  bindResizableModal('tome-entries-modal-inner', 'pf-tome-entries-modal-size');
   refreshTomeEntriesList();
 }
 
@@ -3998,12 +3995,9 @@ function downloadDiagnosticReport() {
 
 const KE_TABS = ['memories', 'graph', 'identity', 'snapshots'];
 
-const KE_SIZE_KEY = 'pf-knowledge-modal-size';
-let _keSizeObserver = null;
-
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
-  keRestoreModalSize();
+  bindResizableModal('knowledge-modal-inner', 'pf-knowledge-modal-size');
   keGraphClosePopover();
   keSwitchTab('memories');
 }
@@ -4012,30 +4006,34 @@ function closeKnowledgeModal() {
   keGraphClosePopover();
 }
 
-function keRestoreModalSize() {
-  const el = $('knowledge-modal-inner');
+// Restore a persisted size for a `.modal-resizable` element and persist
+// future resizes. Idempotent — repeat calls re-apply the saved size but
+// only install one ResizeObserver per element.
+const _resizableBound = new WeakSet();
+function bindResizableModal(elId, storageKey) {
+  const el = $(elId);
   if (!el) return;
   try {
-    const raw = localStorage.getItem(KE_SIZE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const { w, h } = JSON.parse(raw);
       if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
       if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
     }
   } catch {/* ignore */}
-  if (!_keSizeObserver && typeof ResizeObserver !== 'undefined') {
-    let saveT = 0;
-    _keSizeObserver = new ResizeObserver(entries => {
-      clearTimeout(saveT);
-      saveT = setTimeout(() => {
-        const r = entries[0]?.contentRect;
-        if (!r) return;
-        try { localStorage.setItem(KE_SIZE_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); }
-        catch {/* ignore */}
-      }, 250);
-    });
-    _keSizeObserver.observe(el);
-  }
+  if (_resizableBound.has(el) || typeof ResizeObserver === 'undefined') return;
+  _resizableBound.add(el);
+  let saveT = 0;
+  const ro = new ResizeObserver(entries => {
+    clearTimeout(saveT);
+    saveT = setTimeout(() => {
+      const r = entries[0]?.contentRect;
+      if (!r) return;
+      try { localStorage.setItem(storageKey, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); }
+      catch {/* ignore */}
+    }, 250);
+  });
+  ro.observe(el);
 }
 
 function keSwitchTab(tab) {
@@ -4952,6 +4950,7 @@ function openLoreEditor(uid) {
   }
 
   $('lore-editor-modal').classList.remove('hidden');
+  bindResizableModal('lore-editor-modal-inner', 'pf-lore-editor-modal-size');
 }
 
 function closeLoreEditor() {
