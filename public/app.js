@@ -4145,6 +4145,7 @@ async function keLoadGraphNodes() {
     const data  = await res.json();
     const nodes = data.nodes ?? data.results ?? [];
     if (!nodes.length) { list.innerHTML = '<p class="logs-empty">No graph nodes found.</p>'; return; }
+    keUpdateNodeTypes(nodes);
     list.innerHTML = '';
     for (const n of nodes) {
       const row = document.createElement('div');
@@ -4165,6 +4166,7 @@ async function keOpenGraphNode(id) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === id) ?? { id };
+    keUpdateNodeTypes([self, ...(sg.nodes ?? [])]);
     const det  = $('ke-graph-detail');
     const edgesHtml = (sg.edges ?? []).map(e => {
       const other = e.fromId === id ? e.toId : e.fromId;
@@ -4178,7 +4180,7 @@ async function keOpenGraphNode(id) {
     det.innerHTML = `
       <div class="ke-detail-header"><h3>${esc(self.label ?? id)}</h3></div>
       <div class="field"><label>Label</label><input id="ke-graph-label" type="text" value="${esc(self.label ?? '')}"></div>
-      <div class="field"><label>Type</label><input id="ke-graph-nodetype" type="text" value="${esc(self.type ?? '')}"></div>
+      <div class="field"><label>Type</label><input id="ke-graph-nodetype" type="text" value="${esc(self.type ?? '')}" list="ke-node-types-dl"></div>
       <div class="field"><label>Description</label><textarea id="ke-graph-desc" rows="4" class="ke-textarea">${esc(self.description ?? '')}</textarea></div>
       <div class="ke-actions">
         <button id="ke-graph-save" class="btn-send">Save</button>
@@ -4347,6 +4349,7 @@ async function keLoadGraphMap() {
     const nodes = (data.nodes ?? []).map(n => ({ ...n }));
     const edges = (data.edges ?? []).slice();
     if (!nodes.length) { status.textContent = 'No graph nodes yet.'; return; }
+    keUpdateNodeTypes(nodes);
     _keGraph.nodes = nodes;
     _keGraph.edges = edges;
     _keGraph.nodeById = new Map(nodes.map(n => [n.id, n]));
@@ -4663,10 +4666,78 @@ function keGraphHandleClick(e) {
   keGraphOpenPopover(node, e.clientX, e.clientY);
 }
 
+// ── Type autocomplete (shared by list & map editors) ───────────────────
+//
+// Every place we receive node data we feed unique non-empty types into a
+// global set and re-render a single hidden <datalist> that all the Type
+// inputs reference via `list="ke-node-types-dl"`. New types the user
+// invents are still allowed — datalist is a suggestion, not a constraint.
+const _keNodeTypes = new Set();
+
+function keUpdateNodeTypes(nodes) {
+  if (!Array.isArray(nodes)) return;
+  let changed = false;
+  for (const n of nodes) {
+    const t = (n?.type || '').trim();
+    if (t && !_keNodeTypes.has(t)) { _keNodeTypes.add(t); changed = true; }
+  }
+  if (changed) keRefreshTypesDatalist();
+}
+
+function keRefreshTypesDatalist() {
+  let dl = document.getElementById('ke-node-types-dl');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'ke-node-types-dl';
+    document.body.appendChild(dl);
+  }
+  dl.innerHTML = Array.from(_keNodeTypes).sort()
+    .map(t => `<option value="${esc(t)}">`).join('');
+}
+
 // ── Inline editor popover ───────────────────────────────────────────────
+let _kePopoverNodeId = null;
+let _kePopoverDragged = false;
+
 function keGraphClosePopover() {
   const pop = $('ke-graph-popover');
   if (pop) pop.classList.add('hidden');
+  _kePopoverNodeId  = null;
+  _kePopoverDragged = false;
+}
+
+// Drag the popover by its header so the user can move it out from
+// behind itself when it covers something they want to click.
+function keGraphInitPopoverDrag(pop) {
+  const head = pop.querySelector('.ke-graph-popover-head');
+  if (!head) return;
+  head.addEventListener('mousedown', e => {
+    // Don't start a drag from the ✕ button.
+    if (e.target.closest('.ke-graph-popover-close')) return;
+    e.preventDefault();
+    const map  = $('ke-graph-map').getBoundingClientRect();
+    const popR = pop.getBoundingClientRect();
+    const offX = e.clientX - popR.left;
+    const offY = e.clientY - popR.top;
+    head.style.cursor = 'grabbing';
+    const onMove = ev => {
+      const mr = $('ke-graph-map').getBoundingClientRect();
+      let x = ev.clientX - mr.left - offX;
+      let y = ev.clientY - mr.top  - offY;
+      x = Math.max(6, Math.min(x, mr.width  - pop.offsetWidth  - 6));
+      y = Math.max(6, Math.min(y, mr.height - pop.offsetHeight - 6));
+      pop.style.left = `${x}px`;
+      pop.style.top  = `${y}px`;
+      _kePopoverDragged = true;
+    };
+    const onUp = () => {
+      head.style.cursor = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
 }
 
 function keGraphPositionPopover(pop, clientX, clientY) {
@@ -4687,9 +4758,15 @@ function keGraphPositionPopover(pop, clientX, clientY) {
 
 async function keGraphOpenPopover(node, clientX, clientY) {
   const pop = $('ke-graph-popover');
+  // Reset the dragged flag when opening on a different node — but
+  // preserve the user's manual position when re-rendering the same one
+  // (e.g. after Save reloads the popover).
+  const sameNode = (_kePopoverNodeId === node.id);
+  if (!sameNode) _kePopoverDragged = false;
+  _kePopoverNodeId = node.id;
   pop.innerHTML = '<p class="logs-loading">Loading…</p>';
   pop.classList.remove('hidden');
-  keGraphPositionPopover(pop, clientX, clientY);
+  if (!_kePopoverDragged) keGraphPositionPopover(pop, clientX, clientY);
   try {
     const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}/subgraph?depth=1`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4710,7 +4787,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
         <button class="ke-graph-popover-close" type="button" aria-label="Close" id="ke-pop-close">✕</button>
       </div>
       <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
-      <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}"></div>
+      <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}" list="ke-node-types-dl"></div>
       <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
       <div class="ke-actions">
         <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
@@ -4718,6 +4795,9 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       </div>
       <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
       <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>`;
+
+    keUpdateNodeTypes([self, ...(sg.nodes ?? [])]);
+    keGraphInitPopoverDrag(pop);
 
     pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
 
