@@ -576,6 +576,11 @@ const state = {
   tomeCache:         {},         // { [tomeId]: tomeObject } — not persisted
   tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
   topics:            [],         // session-level; stored under pf_topics_{sessionId}
+  // ── Saved connections (primary + fallbacks) ─────────────
+  connections:           [],     // [{ id, name, provider, apiKey, model }]
+  primaryConnectionId:   null,   // id of the active/primary connection
+  fallbackConnectionIds: [],     // ordered ids tried when primary fails/returns empty
+  maxEmptyRetries:       2,      // retries per connection when response is empty
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -620,6 +625,226 @@ function loadPersisted() {
     const rawTopics = localStorage.getItem(`pf_topics_${state.sessionId}`);
     if (rawTopics) state.topics = JSON.parse(rawTopics);
   } catch { /* corrupt */ }
+  // Normalize connection-related fields after restore from disk
+  if (!Array.isArray(state.connections))           state.connections = [];
+  if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
+  if (typeof state.maxEmptyRetries !== 'number')   state.maxEmptyRetries = 2;
+  migrateLegacyConnection();
+}
+
+// ── Saved connections ──────────────────────────────────────────
+/**
+ * If the user has an apiKey set but no saved connections (first run after
+ * upgrade, or pre-feature setup), seed one connection from the current fields
+ * so the "primary connection" abstraction has something to point at.
+ */
+function migrateLegacyConnection() {
+  if (state.connections.length === 0 && (state.apiKey ?? '').trim() && (state.model ?? '').trim()) {
+    const conn = {
+      id:       generateId(),
+      name:     'Primary',
+      provider: state.provider,
+      apiKey:   state.apiKey,
+      model:    state.model,
+    };
+    state.connections = [conn];
+    state.primaryConnectionId = conn.id;
+  }
+  // If primaryConnectionId points to a missing connection, fall back to the first.
+  if (state.primaryConnectionId && !state.connections.find(c => c.id === state.primaryConnectionId)) {
+    state.primaryConnectionId = state.connections[0]?.id ?? null;
+  }
+  // Drop fallback ids that no longer exist or duplicate the primary.
+  state.fallbackConnectionIds = (state.fallbackConnectionIds || [])
+    .filter(id => state.connections.find(c => c.id === id))
+    .filter(id => id !== state.primaryConnectionId);
+}
+
+function getPrimaryConnection() {
+  return state.connections.find(c => c.id === state.primaryConnectionId) || null;
+}
+
+/**
+ * Returns the ordered list of usable connections for a request: primary first,
+ * then each enabled fallback. Falls back to a synthetic connection built from
+ * the live field values if no saved connections exist yet.
+ */
+function getConnectionSequence() {
+  const seq = [];
+  const primary = getPrimaryConnection();
+  if (primary) {
+    seq.push(primary);
+  } else if ((state.apiKey ?? '').trim() && (state.model ?? '').trim()) {
+    seq.push({
+      id: '_live', name: 'Current fields',
+      provider: state.provider, apiKey: state.apiKey, model: state.model,
+    });
+  }
+  for (const id of state.fallbackConnectionIds) {
+    if (id === state.primaryConnectionId) continue;
+    const c = state.connections.find(x => x.id === id);
+    if (c && c.provider && (c.apiKey ?? '').trim() && (c.model ?? '').trim()) {
+      seq.push(c);
+    }
+  }
+  return seq;
+}
+
+/** Most recent apiKey saved against the given provider, or empty string. */
+function findKeyForProvider(provider) {
+  for (let i = state.connections.length - 1; i >= 0; i--) {
+    const c = state.connections[i];
+    if (c.provider === provider && (c.apiKey ?? '').trim()) return c.apiKey;
+  }
+  return '';
+}
+
+/** Push the current Connection-section fields into the primary connection. */
+function syncFieldsToPrimaryConnection() {
+  const conn = getPrimaryConnection();
+  if (!conn) return;
+  conn.provider = state.provider;
+  conn.apiKey   = state.apiKey;
+  conn.model    = state.model;
+}
+
+function saveNewConnection(name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return null;
+  if (!(state.apiKey ?? '').trim() || !(state.model ?? '').trim()) return null;
+  const conn = {
+    id:       generateId(),
+    name:     trimmed,
+    provider: state.provider,
+    apiKey:   state.apiKey,
+    model:    state.model,
+  };
+  state.connections.push(conn);
+  if (!state.primaryConnectionId) state.primaryConnectionId = conn.id;
+  saveSettings();
+  renderConnectionsList();
+  return conn;
+}
+
+function deleteConnection(id) {
+  state.connections = state.connections.filter(c => c.id !== id);
+  state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
+  if (state.primaryConnectionId === id) {
+    state.primaryConnectionId = state.connections[0]?.id ?? null;
+    const newPrimary = getPrimaryConnection();
+    if (newPrimary) {
+      state.provider = newPrimary.provider;
+      state.apiKey   = newPrimary.apiKey;
+      state.model    = newPrimary.model;
+      writeSettingsToUI();
+    }
+  }
+  saveSettings();
+  renderConnectionsList();
+}
+
+function setPrimaryConnection(id) {
+  const conn = state.connections.find(c => c.id === id);
+  if (!conn) return;
+  state.primaryConnectionId = id;
+  state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
+  state.provider = conn.provider;
+  state.apiKey   = conn.apiKey;
+  state.model    = conn.model;
+  writeSettingsToUI();
+  saveSettings();
+  renderConnectionsList();
+}
+
+function toggleFallback(id, enabled) {
+  if (id === state.primaryConnectionId) return;
+  state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
+  if (enabled) state.fallbackConnectionIds.push(id);
+  saveSettings();
+  renderConnectionsList();
+}
+
+function moveFallback(id, delta) {
+  const arr = [...state.fallbackConnectionIds];
+  const idx = arr.indexOf(id);
+  if (idx < 0) return;
+  const newIdx = Math.max(0, Math.min(arr.length - 1, idx + delta));
+  if (newIdx === idx) return;
+  arr.splice(idx, 1);
+  arr.splice(newIdx, 0, id);
+  state.fallbackConnectionIds = arr;
+  saveSettings();
+  renderConnectionsList();
+}
+
+function renderConnectionsList() {
+  const ul = $('connections-list');
+  if (!ul) return;
+  ul.innerHTML = '';
+  for (const conn of state.connections) {
+    const isPrimary = conn.id === state.primaryConnectionId;
+    const fbIdx     = state.fallbackConnectionIds.indexOf(conn.id);
+    const isFallback = fbIdx >= 0 && !isPrimary;
+
+    const li = document.createElement('li');
+    li.className = 'connection-item' + (isPrimary ? ' is-primary' : '');
+
+    // Role column: Primary radio + Fallback checkbox
+    const role = document.createElement('div');
+    role.className = 'conn-role';
+    const radioId = `conn-primary-${conn.id}`;
+    role.innerHTML =
+      `<input type="radio" name="primary-conn" id="${radioId}" ${isPrimary ? 'checked' : ''}>` +
+      `<label for="${radioId}" title="Use as primary connection">Primary</label>`;
+    role.querySelector('input').addEventListener('change', () => setPrimaryConnection(conn.id));
+
+    // Info column
+    const info = document.createElement('div');
+    info.className = 'conn-info';
+    const badgeHtml = isPrimary
+      ? '<span class="conn-badge">primary</span>'
+      : (isFallback ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '');
+    info.innerHTML =
+      `<div class="conn-name">${esc(conn.name)}${badgeHtml}</div>` +
+      `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
+
+    // Actions column
+    const actions = document.createElement('div');
+    actions.className = 'conn-actions';
+
+    const fbBtn = document.createElement('button');
+    fbBtn.type = 'button';
+    fbBtn.textContent = isFallback ? '✓ fallback' : '+ fallback';
+    fbBtn.title = isPrimary ? 'Primary connection cannot also be a fallback' : 'Toggle fallback';
+    fbBtn.disabled = isPrimary;
+    fbBtn.addEventListener('click', () => toggleFallback(conn.id, !isFallback));
+    actions.appendChild(fbBtn);
+
+    if (isFallback) {
+      const upBtn = document.createElement('button');
+      upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.title = 'Try earlier in fallback order';
+      upBtn.disabled = fbIdx === 0;
+      upBtn.addEventListener('click', () => moveFallback(conn.id, -1));
+      const dnBtn = document.createElement('button');
+      dnBtn.type = 'button'; dnBtn.textContent = '▼'; dnBtn.title = 'Try later in fallback order';
+      dnBtn.disabled = fbIdx === state.fallbackConnectionIds.length - 1;
+      dnBtn.addEventListener('click', () => moveFallback(conn.id, +1));
+      actions.appendChild(upBtn);
+      actions.appendChild(dnBtn);
+    }
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button'; delBtn.textContent = '✕'; delBtn.title = 'Delete connection';
+    delBtn.addEventListener('click', () => {
+      if (confirm(`Delete connection "${conn.name}"?`)) deleteConnection(conn.id);
+    });
+    actions.appendChild(delBtn);
+
+    li.appendChild(role);
+    li.appendChild(info);
+    li.appendChild(actions);
+    ul.appendChild(li);
+  }
 }
 
 // Fire-and-forget — writes the current session to disk via the server.
@@ -936,6 +1161,18 @@ function setTyping(visible) {
   if (visible) scrollToBottom();
 }
 
+/** Inline italic note shown next to the typing indicator during retries / fallbacks. */
+function setRetryStatus(text) {
+  const el = $('retry-status');
+  if (!el) return;
+  el.textContent = text || '';
+  if (text) setTyping(true);
+}
+function clearRetryStatus() {
+  const el = $('retry-status');
+  if (el) el.textContent = '';
+}
+
 function setStatus(type) {
   // type: '' | 'ok' | 'busy' | 'err'
   const badge = $('status-badge');
@@ -1094,6 +1331,7 @@ function appendToolUseEl(toolCalls, toolResults) {
   wrap.appendChild(body);
   $('messages').appendChild(wrap);
   scrollToBottom();
+  return wrap;
 }
 
 /** Re-render all messages from state (used at init and after clear). */
@@ -1230,14 +1468,21 @@ async function sendMessage(userInput) {
   }
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
-  const activeTools     = state.toolsEnabled ? getActiveTools() : [];
-  const pendingMsgs     = []; // tool_call + tool_result messages accumulated across rounds
-  let   currentMsgs     = apiMessages;
+/**
+ * One streaming attempt against a single connection. Runs the tool-call loop
+ * to completion. DOM side effects (assistant shell, tool-use blocks) accumulate
+ * during the attempt and are returned so the caller can roll them back on a
+ * failed attempt before retrying. Throws on HTTP / network / abort errors.
+ */
+async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts) {
+  const pendingMsgs = [];   // tool_call + tool_result messages to commit
+  const toolUseEls  = domArtifacts; // shared array — caller can roll back on error
+  let   currentMsgs = apiMessages;
+  let   finalShell  = null;
+  let   finalContent = '';
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     abortController = new AbortController();
-
     const extraPayload = activeTools.length > 0
       ? { tools: activeTools, tool_choice: 'auto' }
       : {};
@@ -1247,9 +1492,9 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       signal: abortController.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        provider:    state.provider,
-        apiKey:      state.apiKey,
-        model:       state.model,
+        provider:    conn.provider,
+        apiKey:      conn.apiKey,
+        model:       conn.model,
         messages:    currentMsgs,
         stream:      true,
         temperature: state.temperature,
@@ -1269,9 +1514,9 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
     const decoder = new TextDecoder();
     let buffer       = '';
     let fullContent  = '';
-    let toolCallsAcc = {};  // index → {id, type, function:{name,arguments}}
+    let toolCallsAcc = {};
     let finishReason = null;
-    let shell        = null; // assistant bubble, created lazily on first content delta
+    let shell        = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1288,9 +1533,6 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
 
         try {
           const parsed = JSON.parse(raw);
-          // Sidecar envelope from server: the entity-core block thalamus
-          // actually prepended to this request's system message. Arrives
-          // before the upstream stream so the prompt inspector has it.
           if (parsed._thalamus) {
             lastThalamusContext = parsed._thalamus.entityContext ?? null;
             continue;
@@ -1299,7 +1541,6 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
           const delta  = choice?.delta;
           if (choice?.finish_reason) finishReason = choice.finish_reason;
 
-          // Content delta
           if (typeof delta?.content === 'string' && delta.content.length > 0) {
             if (!shell) {
               setTyping(false);
@@ -1310,21 +1551,19 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
             scrollToBottom();
           }
 
-          // Tool-call deltas
           for (const tc of (delta?.tool_calls ?? [])) {
             const acc = (toolCallsAcc[tc.index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
-            if (tc.id)                    acc.id                   += tc.id;
-            if (tc.function?.name)        acc.function.name        += tc.function.name;
-            if (tc.function?.arguments)   acc.function.arguments   += tc.function.arguments;
+            if (tc.id)                  acc.id                 += tc.id;
+            if (tc.function?.name)      acc.function.name      += tc.function.name;
+            if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
           }
         } catch { /* malformed chunk */ }
       }
     }
 
-    // ── Tool-call round ──────────────────────────────────────────
     if (finishReason === 'tool_calls' && round < MAX_TOOL_ROUNDS) {
-      const toolCalls  = Object.values(toolCallsAcc);
-      const roundTs    = new Date().toISOString();
+      const toolCalls   = Object.values(toolCallsAcc);
+      const roundTs     = new Date().toISOString();
       const toolResults = await Promise.all(toolCalls.map(async tc => ({
         role:         'tool',
         tool_call_id: tc.id,
@@ -1332,17 +1571,14 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
         timestamp:    roundTs,
         _toolName:    tc.function.name,
       })));
-
-      // Record in pending (for state.messages commit at the end)
       pendingMsgs.push({ role: 'assistant', content: fullContent || null, tool_calls: toolCalls, timestamp: roundTs });
       pendingMsgs.push(...toolResults);
 
-      // Show compact tool-use block in chat
       setTyping(false);
-      appendToolUseEl(toolCalls, toolResults);
+      const tEl = appendToolUseEl(toolCalls, toolResults);
+      if (tEl) toolUseEls.push(tEl);
       setTyping(true);
 
-      // Extend apiMessages for next round
       currentMsgs = [
         ...currentMsgs,
         { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
@@ -1351,32 +1587,106 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       continue;
     }
 
-    // ── Final response ───────────────────────────────────────────
-    if (!shell) {
-      setTyping(false);
-      shell = appendAssistantShell(new Date().toISOString());
-    }
-    const assistantTimestamp = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
-
-    state.messages.push({ role: 'user',      content: userInput,   timestamp: userTimestamp });
-    state.messages.push(...pendingMsgs);
-    state.messages.push({ role: 'assistant', content: fullContent, timestamp: assistantTimestamp });
-    saveHistory();
-    refreshTopicGutter();
-    wireCopyButton(shell.copyBtn, () => fullContent);
-    updateRegenBtn();
+    finalShell   = shell;
+    finalContent = fullContent;
     break;
   }
+
+  return { content: finalContent, pendingMsgs, finalShell };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
   const activeTools = state.toolsEnabled ? getActiveTools() : [];
+  const sequence    = getConnectionSequence();
+  if (sequence.length === 0) {
+    throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
+  }
+  const maxRetries = Math.max(0, parseInt(state.maxEmptyRetries, 10) || 0);
+
+  let lastError = null;
+
+  for (let connIdx = 0; connIdx < sequence.length; connIdx++) {
+    const conn = sequence[connIdx];
+    if (connIdx > 0) {
+      setRetryStatus(`Falling back to "${conn.name}" (${conn.provider} / ${conn.model})…`);
+    }
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        setRetryStatus(`Empty response from "${conn.name}". Retrying ${attempt}/${maxRetries}…`);
+      }
+
+      const domArtifacts = [];
+      let result;
+      try {
+        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts);
+      } catch (err) {
+        if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
+        // Roll back any tool-use blocks added during this failed attempt.
+        for (const el of domArtifacts) el.remove?.();
+        lastError = err;
+        if (attempt < maxRetries) {
+          setRetryStatus(`Request to "${conn.name}" failed (${err.message}). Retrying ${attempt + 1}/${maxRetries}…`);
+          continue;
+        }
+        if (connIdx < sequence.length - 1) {
+          appendErrorMessage(`Connection "${conn.name}" failed: ${err.message}. Trying next fallback…`);
+          break;
+        }
+        clearRetryStatus();
+        throw err;
+      }
+
+      const { content, pendingMsgs, finalShell } = result;
+      const trimmed = (content ?? '').trim();
+      const usedTools = pendingMsgs.length > 0;
+
+      // Empty response with no tool side-effects → eligible for retry/fallback.
+      if (!trimmed && !usedTools) {
+        if (finalShell?.el) finalShell.el.remove();
+        for (const el of domArtifacts) el.remove?.();
+        if (attempt < maxRetries) continue;
+        if (connIdx < sequence.length - 1) {
+          appendErrorMessage(`Connection "${conn.name}" returned empty responses after ${maxRetries + 1} attempts. Trying next fallback…`);
+          break;
+        }
+        clearRetryStatus();
+        throw new Error(`All connections returned empty responses (last: "${conn.name}").`);
+      }
+
+      // ── Success — commit. ────────────────────────────────────
+      let shell = finalShell;
+      if (!shell) {
+        setTyping(false);
+        shell = appendAssistantShell(new Date().toISOString());
+        shell.bubble.innerHTML = renderMarkdown(content);
+      }
+      const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
+
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+      state.messages.push(...pendingMsgs);
+      state.messages.push({ role: 'assistant', content,            timestamp: ts });
+      saveHistory();
+      refreshTopicGutter();
+      wireCopyButton(shell.copyBtn, () => content);
+      updateRegenBtn();
+      clearRetryStatus();
+      return;
+    }
+  }
+
+  clearRetryStatus();
+  throw lastError || new Error('Request failed and no fallback connections succeeded.');
+}
+
+async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts) {
   const pendingMsgs = [];
   let   currentMsgs = apiMessages;
+  let   finalContent = '';
+  let   finalTimestamp = new Date().toISOString();
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     abortController = new AbortController();
-
     const extraPayload = activeTools.length > 0
       ? { tools: activeTools, tool_choice: 'auto' }
       : {};
@@ -1386,9 +1696,9 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
       signal: abortController.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        provider:    state.provider,
-        apiKey:      state.apiKey,
-        model:       state.model,
+        provider:    conn.provider,
+        apiKey:      conn.apiKey,
+        model:       conn.model,
         messages:    currentMsgs,
         stream:      false,
         temperature: state.temperature,
@@ -1406,11 +1716,10 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
     }
     if (data._thalamus) lastThalamusContext = data._thalamus.entityContext ?? null;
 
-    const choice      = data.choices?.[0];
-    const message     = choice?.message;
+    const choice       = data.choices?.[0];
+    const message      = choice?.message;
     const finishReason = choice?.finish_reason;
 
-    // ── Tool-call round ──────────────────────────────────────────
     if (finishReason === 'tool_calls' && Array.isArray(message?.tool_calls) && round < MAX_TOOL_ROUNDS) {
       const toolCalls   = message.tool_calls;
       const toolResults = await Promise.all(toolCalls.map(async tc => ({
@@ -1420,11 +1729,11 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
         timestamp:    roundTs,
         _toolName:    tc.function.name,
       })));
-
       pendingMsgs.push({ role: 'assistant', content: message.content || null, tool_calls: toolCalls, timestamp: roundTs });
       pendingMsgs.push(...toolResults);
 
-      appendToolUseEl(toolCalls, toolResults);
+      const tEl = appendToolUseEl(toolCalls, toolResults);
+      if (tEl) domArtifacts.push(tEl);
       setTyping(true);
 
       currentMsgs = [
@@ -1435,21 +1744,88 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
       continue;
     }
 
-    // ── Final response ───────────────────────────────────────────
-    const content = message?.content ?? '';
-    const { bubble, copyBtn } = appendAssistantShell(roundTs);
-    bubble.innerHTML = renderMarkdown(content);
-    scrollToBottom();
-
-    state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
-    state.messages.push(...pendingMsgs);
-    state.messages.push({ role: 'assistant', content,            timestamp: roundTs });
-    saveHistory();
-    refreshTopicGutter();
-    wireCopyButton(copyBtn, () => content);
-    updateRegenBtn();
+    finalContent   = message?.content ?? '';
+    finalTimestamp = roundTs;
     break;
   }
+
+  return { content: finalContent, pendingMsgs, timestamp: finalTimestamp };
+}
+
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
+  const activeTools = state.toolsEnabled ? getActiveTools() : [];
+  const sequence    = getConnectionSequence();
+  if (sequence.length === 0) {
+    throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
+  }
+  const maxRetries = Math.max(0, parseInt(state.maxEmptyRetries, 10) || 0);
+
+  let lastError = null;
+
+  for (let connIdx = 0; connIdx < sequence.length; connIdx++) {
+    const conn = sequence[connIdx];
+    if (connIdx > 0) {
+      setRetryStatus(`Falling back to "${conn.name}" (${conn.provider} / ${conn.model})…`);
+    }
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        setRetryStatus(`Empty response from "${conn.name}". Retrying ${attempt}/${maxRetries}…`);
+      }
+
+      const domArtifacts = [];
+      let result;
+      try {
+        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts);
+      } catch (err) {
+        if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
+        for (const el of domArtifacts) el.remove?.();
+        lastError = err;
+        if (attempt < maxRetries) {
+          setRetryStatus(`Request to "${conn.name}" failed (${err.message}). Retrying ${attempt + 1}/${maxRetries}…`);
+          continue;
+        }
+        if (connIdx < sequence.length - 1) {
+          appendErrorMessage(`Connection "${conn.name}" failed: ${err.message}. Trying next fallback…`);
+          break;
+        }
+        clearRetryStatus();
+        throw err;
+      }
+
+      const { content, pendingMsgs, timestamp } = result;
+      const trimmed   = (content ?? '').trim();
+      const usedTools = pendingMsgs.length > 0;
+
+      if (!trimmed && !usedTools) {
+        for (const el of domArtifacts) el.remove?.();
+        if (attempt < maxRetries) continue;
+        if (connIdx < sequence.length - 1) {
+          appendErrorMessage(`Connection "${conn.name}" returned empty responses after ${maxRetries + 1} attempts. Trying next fallback…`);
+          break;
+        }
+        clearRetryStatus();
+        throw new Error(`All connections returned empty responses (last: "${conn.name}").`);
+      }
+
+      const { bubble, copyBtn } = appendAssistantShell(timestamp);
+      bubble.innerHTML = renderMarkdown(content);
+      scrollToBottom();
+
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });
+      state.messages.push(...pendingMsgs);
+      state.messages.push({ role: 'assistant', content,            timestamp });
+      saveHistory();
+      refreshTopicGutter();
+      wireCopyButton(copyBtn, () => content);
+      updateRegenBtn();
+      clearRetryStatus();
+      return;
+    }
+  }
+
+  clearRetryStatus();
+  throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
 // ── Regenerate ───────────────────────────────────────────────────
@@ -1602,7 +1978,15 @@ function readSettingsFromUI() {
   if (csEl) state.tomeCaseSensitive = csEl.checked;
   const wwEl = $('tome-match-whole-words');
   if (wwEl) state.tomeMatchWholeWords = wwEl.checked;
+  const retriesEl = $('max-empty-retries');
+  if (retriesEl) {
+    const n = parseInt(retriesEl.value, 10);
+    state.maxEmptyRetries = Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+  // Keep the primary connection in sync with the live Connection-section fields.
+  syncFieldsToPrimaryConnection();
   saveSettings();
+  renderConnectionsList();
 }
 
 function writeSettingsToUI() {
@@ -1631,6 +2015,8 @@ function writeSettingsToUI() {
   if (csEl) csEl.checked = state.tomeCaseSensitive ?? false;
   const wwEl = $('tome-match-whole-words');
   if (wwEl) wwEl.checked = state.tomeMatchWholeWords ?? false;
+  const retriesEl = $('max-empty-retries');
+  if (retriesEl) retriesEl.value = state.maxEmptyRetries ?? 2;
   refreshModelSuggestions(state.provider);
 }
 
@@ -2193,6 +2579,7 @@ function init() {
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
+    'max-empty-retries',
   ];
 
   settingsIds.forEach(id => {
@@ -2208,18 +2595,70 @@ function init() {
     });
   });
 
-  // Provider change → refresh model suggestions and set sane default
+  // Provider change → refresh model suggestions and set sane default. Also
+  // auto-fill the API key field from any saved connection using the same
+  // provider, so a user with multiple saved keys per provider doesn't have
+  // to retype the bearer token when switching providers.
   $('provider-select').addEventListener('change', e => {
     const prov  = e.target.value;
     const input = $('model-input');
     refreshModelSuggestions(prov);
-    // Only switch if the current model name doesn't exist in the new list
     if (!PROVIDER_MODELS[prov]?.includes(input.value)) {
       input.value = PROVIDER_DEFAULT_MODEL[prov] || '';
       state.model = input.value;
     }
+    const keyInput  = $('api-key');
+    const hint      = $('api-key-autofill-hint');
+    const savedKey  = findKeyForProvider(prov);
+    if (savedKey && (!keyInput.value.trim() || keyInput.value !== savedKey)) {
+      keyInput.value = savedKey;
+      state.apiKey   = savedKey;
+      if (hint) hint.style.display = '';
+    } else if (hint) {
+      hint.style.display = 'none';
+    }
+    syncFieldsToPrimaryConnection();
     saveSettings();
+    renderConnectionsList();
   });
+
+  // Hide the autofill hint as soon as the user manually edits the key.
+  const apiKeyEl = $('api-key');
+  if (apiKeyEl) {
+    apiKeyEl.addEventListener('input', () => {
+      const hint = $('api-key-autofill-hint');
+      if (hint) hint.style.display = 'none';
+    });
+  }
+
+  // Save current Connection fields as a new named connection.
+  const saveConnBtn = $('save-connection-btn');
+  if (saveConnBtn) {
+    saveConnBtn.addEventListener('click', () => {
+      const nameInput = $('connection-name-input');
+      const name = (nameInput?.value || '').trim();
+      if (!name) {
+        alert('Give the connection a name first (e.g. "Primary", "Work", "Backup").');
+        nameInput?.focus();
+        return;
+      }
+      if (!state.apiKey.trim() || !state.model.trim()) {
+        alert('Fill in the API key and model fields above before saving a connection.');
+        return;
+      }
+      const conn = saveNewConnection(name);
+      if (conn && nameInput) nameInput.value = '';
+    });
+    const nameInput = $('connection-name-input');
+    if (nameInput) {
+      nameInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); saveConnBtn.click(); }
+      });
+    }
+  }
+
+  // Initial render of the saved-connections list.
+  renderConnectionsList();
 
   // ── Send ─────────────────────────────────────────────────────
   $('send-btn').addEventListener('click', () => {
