@@ -4272,6 +4272,12 @@ function keInitGraphMapOnce() {
     keGraphRequestDraw();
   });
 
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('ke-graph-popover').classList.contains('hidden')) {
+      keGraphClosePopover();
+    }
+  });
+
   // Keep the canvas sized to its container.
   const ro = new ResizeObserver(() => {
     keGraphResize();
@@ -4581,11 +4587,114 @@ function keGraphUpdateHover(e) {
 function keGraphHandleClick(e) {
   const { x, y } = keGraphClientToWorld(e.clientX, e.clientY);
   const node = keGraphHitNode(x, y);
-  if (!node) return;
-  // Switch to list view and load the node's detail panel.
-  keSetGraphView('list');
-  keLoadGraphNodes();
-  keOpenGraphNode(node.id);
+  if (!node) { keGraphClosePopover(); return; }
+  keGraphOpenPopover(node, e.clientX, e.clientY);
+}
+
+// ── Inline editor popover ───────────────────────────────────────────────
+function keGraphClosePopover() {
+  const pop = $('ke-graph-popover');
+  if (pop) pop.classList.add('hidden');
+}
+
+function keGraphPositionPopover(pop, clientX, clientY) {
+  const map = $('ke-graph-map');
+  const r   = map.getBoundingClientRect();
+  pop.style.left = `${(clientX - r.left) + 14}px`;
+  pop.style.top  = `${(clientY - r.top)  + 14}px`;
+  // Clamp on next frame once the popover has been laid out.
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    let nx = pr.left - r.left, ny = pr.top - r.top;
+    if (pr.right  > r.right  - 6) nx = r.width  - pr.width  - 10;
+    if (pr.bottom > r.bottom - 6) ny = r.height - pr.height - 10;
+    pop.style.left = `${Math.max(6, nx)}px`;
+    pop.style.top  = `${Math.max(6, ny)}px`;
+  });
+}
+
+async function keGraphOpenPopover(node, clientX, clientY) {
+  const pop = $('ke-graph-popover');
+  pop.innerHTML = '<p class="logs-loading">Loading…</p>';
+  pop.classList.remove('hidden');
+  keGraphPositionPopover(pop, clientX, clientY);
+  try {
+    const res = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}/subgraph?depth=1`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const sg   = await res.json();
+    const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
+    const edgesHtml = (sg.edges ?? []).map(e => {
+      const otherId = e.fromId === node.id ? e.toId : e.fromId;
+      const otherLabel = (sg.nodes ?? []).find(n => n.id === otherId)?.label ?? otherId;
+      const dir = e.fromId === node.id ? '→' : '←';
+      return `<div class="ke-edge-row">
+        <span class="ke-edge-text">${dir} ${esc(e.type ?? e.customType ?? 'related')} ${dir} <strong>${esc(otherLabel)}</strong></span>
+        <button class="btn-ghost ke-danger" data-edge-id="${esc(e.id)}" type="button">✕</button>
+      </div>`;
+    }).join('');
+    pop.innerHTML = `
+      <div class="ke-graph-popover-head">
+        <h3>${esc(self.label ?? node.id)}</h3>
+        <button class="ke-graph-popover-close" type="button" aria-label="Close" id="ke-pop-close">✕</button>
+      </div>
+      <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
+      <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}"></div>
+      <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
+      <div class="ke-actions">
+        <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
+        <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
+      </div>
+      <h4 class="ke-subhead">Edges (${(sg.edges ?? []).length})</h4>
+      <div class="ke-edges">${edgesHtml || '<p class="logs-empty">No edges.</p>'}</div>`;
+
+    pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
+
+    pop.querySelector('#ke-pop-save').addEventListener('click', async () => {
+      const body = {
+        label:       $('ke-pop-label').value,
+        type:        $('ke-pop-type').value,
+        description: $('ke-pop-desc').value,
+      };
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      Object.assign(node, body);
+      keGraphBuildLegend();
+      keGraphRequestDraw();
+      keGraphOpenPopover(node, clientX, clientY);
+    });
+
+    pop.querySelector('#ke-pop-delete').addEventListener('click', async () => {
+      if (!confirm('Delete this node and ALL its edges? An auto-snapshot is taken first.')) return;
+      const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+      _keGraph.nodes = _keGraph.nodes.filter(n => n.id !== node.id);
+      _keGraph.edges = _keGraph.edges.filter(e => e.fromId !== node.id && e.toId !== node.id);
+      _keGraph.nodeById.delete(node.id);
+      _keGraph.hover = null;
+      keGraphClosePopover();
+      keGraphBuildLegend();
+      keGraphRequestDraw();
+    });
+
+    pop.querySelectorAll('button[data-edge-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const eid = btn.dataset.edgeId;
+        if (!confirm('Delete this edge? Auto-snapshot first.')) return;
+        const r = await fetch(`/api/entity/graph/edges/${encodeURIComponent(eid)}`, { method: 'DELETE' });
+        if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
+        _keGraph.edges = _keGraph.edges.filter(e => e.id !== eid);
+        keGraphBuildLegend();
+        keGraphRequestDraw();
+        keGraphOpenPopover(node, clientX, clientY);
+      });
+    });
+  } catch (err) {
+    pop.innerHTML = `<p class="logs-error">⚠ ${esc(err.message || String(err))}</p>
+      <div class="ke-actions"><button class="btn-ghost" type="button" id="ke-pop-close">Close</button></div>`;
+    pop.querySelector('#ke-pop-close').addEventListener('click', keGraphClosePopover);
+  }
 }
 
 // ── Identity tab ────────────────────────────────────────────────────────

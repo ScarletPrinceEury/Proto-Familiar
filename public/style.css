@@ -1473,6 +1473,50 @@ button { cursor: pointer; font-family: var(--font); }
   pointer-events: none;
 }
 .ke-graph-legend.hidden { display: none; }
+
+.ke-graph-popover {
+  position: absolute;
+  z-index: 5;
+  width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 10px 12px 12px;
+  font-size: 0.82rem;
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+}
+.ke-graph-popover.hidden { display: none; }
+.ke-graph-popover .field { margin-bottom: 8px; display: flex; flex-direction: column; gap: 3px; }
+.ke-graph-popover .field label { font-size: 0.72rem; color: var(--text-dim); }
+.ke-graph-popover .field input,
+.ke-graph-popover .field textarea {
+  font-size: 0.82rem;
+  padding: 5px 7px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+}
+.ke-graph-popover .field textarea { resize: vertical; min-height: 50px; }
+.ke-graph-popover .ke-actions { margin: 4px 0 6px; }
+.ke-graph-popover .ke-subhead { margin: 8px 0 4px; }
+.ke-graph-popover .ke-edge-row { font-size: 0.76rem; padding: 4px 6px; }
+.ke-graph-popover-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 6px; margin-bottom: 6px;
+}
+.ke-graph-popover-head h3 {
+  margin: 0; font-size: 0.92rem; color: var(--text);
+  word-break: break-word;
+}
+.ke-graph-popover-close {
+  background: none; border: none; color: var(--text-dim);
+  cursor: pointer; font-size: 0.95rem; padding: 0 2px;
+}
+.ke-graph-popover-close:hover { color: var(--text); }
 .ke-graph-legend-row { display: flex; align-items: center; gap: 6px; }
 .ke-graph-legend-swatch {
   width: 10px; height: 10px; border-radius: 50%;
