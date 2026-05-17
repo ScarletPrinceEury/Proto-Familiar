@@ -16,7 +16,8 @@
  *
  * The destination is resolved the same way thalamus.js finds entity-core:
  *   1. $ENTITY_CORE_PATH  (env var pointing to entity-core's src/mod.ts)
- *   2. ../entity-core-alpha (sibling directory, default)
+ *   2. ../entity-core (sibling directory, default for new installs)
+ *   3. ../entity-core-alpha (legacy sibling name, kept for back-compat)
  * Then reads that install's .env for ENTITY_CORE_DATA_DIR, defaulting to ./data.
  *
  * Requires Node.js 18+ (uses fs.cpSync).
@@ -92,20 +93,28 @@ if (!existsSync(sourceDataDir)) {
 
 // Mirror the same resolution logic as thalamus.js:
 //   $ENTITY_CORE_PATH (mod.ts) → its root is two levels up.
-//   Otherwise probe both the Deno-workspace path
-//   (../entity-core-alpha/packages/entity-core) and the legacy
-//   top-level path (../entity-core-alpha), preferring the workspace one.
+//   Otherwise probe each sibling dir (../entity-core, then the legacy
+//   ../entity-core-alpha) for the Deno-workspace layout first, then
+//   the legacy top-level layout.
 const entityCorePath = process.env.ENTITY_CORE_PATH;
 let entityCoreRoot;
 if (entityCorePath) {
   entityCoreRoot = resolve(dirname(dirname(entityCorePath)));
 } else {
-  const alpha     = resolve(__dirname, '..', '..', 'entity-core-alpha');
-  const workspace = join(alpha, 'packages', 'entity-core');
-  const legacy    = alpha;
-  entityCoreRoot = existsSync(join(workspace, 'src', 'mod.ts')) ? workspace
-                 : existsSync(join(legacy,    'src', 'mod.ts')) ? legacy
-                 : workspace; // default to the current layout for errors
+  const siblingDirs = [
+    resolve(__dirname, '..', '..', 'entity-core'),
+    resolve(__dirname, '..', '..', 'entity-core-alpha'),
+  ];
+  entityCoreRoot = null;
+  for (const dir of siblingDirs) {
+    const workspace = join(dir, 'packages', 'entity-core');
+    if (existsSync(join(workspace, 'src', 'mod.ts'))) { entityCoreRoot = workspace; break; }
+    if (existsSync(join(dir,       'src', 'mod.ts'))) { entityCoreRoot = dir;       break; }
+  }
+  // Default to the workspace layout under the new dir for clear errors.
+  if (!entityCoreRoot) {
+    entityCoreRoot = join(siblingDirs[0], 'packages', 'entity-core');
+  }
 }
 
 const destEnvPath = join(entityCoreRoot, '.env');

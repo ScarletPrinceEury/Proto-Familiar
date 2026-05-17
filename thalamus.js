@@ -22,19 +22,34 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Resolve the entity-core entry point. The Psycheros repo became a Deno
-// workspace at entity-core-v0.2.x, with entity-core living at
-// packages/entity-core/. Older sibling checkouts kept it at the repo root.
-// Honour $ENTITY_CORE_PATH first, then probe the workspace path, then fall
-// back to the legacy top-level path.
-const ENTITY_CORE_ALPHA = path.resolve(__dirname, '../entity-core-alpha');
-const ENTITY_CORE_WORKSPACE_ENTRY = path.join(ENTITY_CORE_ALPHA, 'packages', 'entity-core', 'src', 'mod.ts');
-const ENTITY_CORE_LEGACY_ENTRY    = path.join(ENTITY_CORE_ALPHA, 'src', 'mod.ts');
+// Resolve the entity-core entry point.
+//
+// Sibling directory: new installs land at `../entity-core/`. Older
+// installs from before the rename used `../entity-core-alpha/`; we
+// still probe that as a fallback to avoid breaking existing setups.
+//
+// Inside the checkout: the Psycheros repo became a Deno workspace at
+// entity-core-v0.2.x, with entity-core living at packages/entity-core/.
+// Older sibling checkouts kept it at the repo root, so probe both.
+//
+// $ENTITY_CORE_PATH wins over all probes.
+const ENTITY_CORE_DIRS = [
+  path.resolve(__dirname, '../entity-core'),
+  path.resolve(__dirname, '../entity-core-alpha'),
+];
+function probeEntry() {
+  for (const dir of ENTITY_CORE_DIRS) {
+    const workspace = path.join(dir, 'packages', 'entity-core', 'src', 'mod.ts');
+    if (existsSync(workspace)) return workspace;
+    const legacy = path.join(dir, 'src', 'mod.ts');
+    if (existsSync(legacy)) return legacy;
+  }
+  // Default to the modern layout in the new dir so error messages point
+  // at where a fresh install would land.
+  return path.join(ENTITY_CORE_DIRS[0], 'packages', 'entity-core', 'src', 'mod.ts');
+}
 
-const ENTITY_CORE_ENTRY = process.env.ENTITY_CORE_PATH
-  ?? (existsSync(ENTITY_CORE_WORKSPACE_ENTRY) ? ENTITY_CORE_WORKSPACE_ENTRY
-      : existsSync(ENTITY_CORE_LEGACY_ENTRY)  ? ENTITY_CORE_LEGACY_ENTRY
-      : ENTITY_CORE_WORKSPACE_ENTRY); // default to the current layout in the error
+const ENTITY_CORE_ENTRY = process.env.ENTITY_CORE_PATH ?? probeEntry();
 
 // Project root of entity-core (parent of src/).
 // entity-core resolves its ./data directory relative to cwd, so we must

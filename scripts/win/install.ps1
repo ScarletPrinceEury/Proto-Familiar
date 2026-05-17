@@ -1,21 +1,39 @@
 # Proto-Familiar Windows installer
 #
 # Fresh install: auto-installs Node, Deno, and Git via winget (when
-#   available), runs `npm install`, clones entity-core-alpha, pre-caches
-#   its Deno module graph, and creates Desktop + Start Menu shortcuts.
+#   available), runs `npm install`, clones entity-core (release tag),
+#   pre-caches its Deno module graph, and creates Desktop + Start Menu
+#   shortcuts.
 #
 # Update mode: triggered automatically when node_modules\ already exists.
-#   Takes a defensive backup of tomes\, logs\, and entity-core data\
-#   into .pf-backups\<timestamp>\ BEFORE any git op runs, then pulls
-#   latest Proto-Familiar (`git pull --ff-only`), refreshes entity-core
-#   to the pinned tag, and re-runs the idempotent npm install + deno
-#   cache. Node/Deno/Git auto-install still runs if any is missing — the
-#   only thing skipped in update mode is the shortcut creation.
+#   Takes a defensive backup of tomes\, logs\, entity-core data\, and
+#   .proto-familiar-config.json into .pf-backups\<timestamp>\ BEFORE
+#   any git op runs, then pulls latest Proto-Familiar
+#   (`git pull --ff-only`), refreshes entity-core to the pinned tag,
+#   and re-runs the idempotent npm install + deno cache. Node/Deno/Git
+#   auto-install still runs if any is missing — the only thing skipped
+#   in update mode is the shortcut creation.
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $parentDir   = Split-Path -Parent $projectRoot
-$entityCoreDir = Join-Path $parentDir "entity-core-alpha"
+# Resolve the entity-core sibling checkout. New installs land in
+# `entity-core\`; older installs from before the rename used
+# `entity-core-alpha\` and we keep using that in place to avoid silent
+# directory moves.
+$entityCoreDirNew    = Join-Path $parentDir "entity-core"
+$entityCoreDirLegacy = Join-Path $parentDir "entity-core-alpha"
+if (Test-Path $entityCoreDirNew) {
+    $entityCoreDir    = $entityCoreDirNew
+    $entityCoreDirRel = "entity-core"
+} elseif (Test-Path $entityCoreDirLegacy) {
+    $entityCoreDir    = $entityCoreDirLegacy
+    $entityCoreDirRel = "entity-core-alpha"
+} else {
+    $entityCoreDir    = $entityCoreDirNew
+    $entityCoreDirRel = "entity-core"
+}
+# Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 $entityCoreRepo = "https://github.com/PsycherosAI/Psycheros.git"
 $entityCoreTag  = "entity-core-v0.2.2"
 $backupRoot    = Join-Path $projectRoot ".pf-backups"
@@ -52,22 +70,23 @@ if ($updateMode) {
     $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $backupDir = Join-Path $backupRoot $stamp
     $sources = @(
-        @{ Path = (Join-Path $projectRoot "tomes"); Rel = "tomes" },
-        @{ Path = (Join-Path $projectRoot "logs");  Rel = "logs"  },
-        @{ Path = (Join-Path $entityCoreDir "packages\entity-core\data"); Rel = "entity-core-alpha\packages\entity-core\data" },
-        @{ Path = (Join-Path $entityCoreDir "data"); Rel = "entity-core-alpha\data" }
+        @{ Path = (Join-Path $projectRoot "tomes"); Rel = "tomes"; IsFile = $false },
+        @{ Path = (Join-Path $projectRoot "logs");  Rel = "logs";  IsFile = $false },
+        @{ Path = (Join-Path $entityCoreDir "packages\entity-core\data"); Rel = "$entityCoreDirRel\packages\entity-core\data"; IsFile = $false },
+        @{ Path = (Join-Path $entityCoreDir "data"); Rel = "$entityCoreDirRel\data"; IsFile = $false },
+        @{ Path = (Join-Path $projectRoot ".proto-familiar-config.json"); Rel = ".proto-familiar-config.json"; IsFile = $true }
     )
     foreach ($s in $sources) {
-        if ((Test-Path $s.Path) -and ((Get-ChildItem $s.Path -Force | Measure-Object).Count -gt 0)) {
-            $dest = Join-Path $backupDir $s.Rel
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
-            Copy-Item -Recurse -Force -Path $s.Path -Destination $dest
-            $anythingBackedUp = $true
-        }
+        if (-not (Test-Path $s.Path)) { continue }
+        if (-not $s.IsFile -and ((Get-ChildItem $s.Path -Force | Measure-Object).Count -eq 0)) { continue }
+        $dest = Join-Path $backupDir $s.Rel
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+        Copy-Item -Recurse -Force -Path $s.Path -Destination $dest
+        $anythingBackedUp = $true
     }
     if ($anythingBackedUp) {
         Ok "User data backed up to $backupDir\"
-        Ok "  (tomes\, logs\, entity-core data\ — restore by copying back if needed)"
+        Ok "  (tomes\, logs\, entity-core data\, .proto-familiar-config.json — restore by copying back if needed)"
     }
 }
 
@@ -150,10 +169,10 @@ Ok "Dependencies up to date"
 # --- entity-core: clone (install) or refresh to pinned tag (update) ---
 # entity-core's runtime data\ is gitignored at both workspace and package
 # root, so `git checkout <tag>` never touches user data.
-Step "Setting up entity-core-alpha..."
+Step "Setting up entity-core..."
 if (Test-Path $entityCoreDir) {
     if ($updateMode -and (Test-Path (Join-Path $entityCoreDir ".git")) -and (Have "git")) {
-        Step "Refreshing entity-core-alpha to tag $entityCoreTag..."
+        Step "Refreshing entity-core to tag $entityCoreTag..."
         Push-Location $entityCoreDir
         try {
             & git fetch --tags --depth 1 origin "refs/tags/${entityCoreTag}:refs/tags/${entityCoreTag}" 2>$null | Out-Null
