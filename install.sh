@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # Proto-Familiar installer (macOS / Linux)
 #
-# Fresh install: installs Node deps, auto-installs Deno (if missing),
-#   clones entity-core (release tag) as a sibling directory, pre-caches
-#   its Deno module graph, and registers a desktop entry on Linux.
+# Fresh install: installs Node deps, auto-installs Deno + uv (if
+#   missing), clones entity-core (release tag) as a sibling directory,
+#   pre-caches its Deno module graph, syncs Unruh's Python venv from
+#   unruh/uv.lock, and registers a desktop entry on Linux.
 #
 # Update mode: triggered automatically when node_modules/ already exists.
 #   Pulls latest Proto-Familiar (git pull --ff-only), refreshes
-#   entity-core to the pinned tag, re-runs the idempotent npm install
-#   and deno cache. Re-runs Node/Deno checks (and auto-install if needed)
-#   so the system catches up to new requirements too.
+#   entity-core to the pinned tag, re-runs idempotent npm install +
+#   deno cache + uv sync. Re-runs Node / Deno / uv checks (and
+#   auto-installs anything missing) in both modes so the system catches
+#   up to new requirements.
+#
+# Desktop entry creation is idempotent and runs in both modes: it
+# creates the entry only when it doesn't already exist, so a fresh
+# clone over an old data dir (or any path that lands in update mode
+# without an existing desktop entry) still gets the application-menu
+# shortcut.
 #
 # User-data safety: BEFORE any git operation in update mode the installer
 # takes a defensive copy of tomes/, logs/, and entity-core's data/ into
@@ -258,26 +266,33 @@ elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
   warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
 fi
 
-# --- Platform-specific launcher polish (install mode only) --------------
-# In update mode, the desktop entry / launcher already exists. Re-running
-# the desktop-entry script is harmless but adds noise; skip for clarity.
+# --- Platform-specific launcher polish (idempotent, runs in both modes) -
+# Previously gated on install mode only, which silently skipped desktop-
+# entry creation on update mode — fine when the entry already existed,
+# broken when it didn't (manual cleanup, restored backup, OS reinstall
+# that preserved the project dir). Both branches below check for the
+# target's presence first, so re-running is cheap.
 UNAME="$(uname -s 2>/dev/null || echo unknown)"
-if [ "$MODE" = "install" ]; then
-  case "$UNAME" in
-    Linux)
-      if [ -f "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" ]; then
-        say "Installing application-menu entry..."
-        bash "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" || warn "Desktop entry install failed (non-fatal)."
-      fi
-      ;;
-    Darwin)
-      if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
-        chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
-        say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
-      fi
-      ;;
-  esac
-fi
+case "$UNAME" in
+  Linux)
+    DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/proto-familiar.desktop"
+    if [ -f "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" ] && [ ! -f "$DESKTOP_FILE" ]; then
+      say "Installing application-menu entry..."
+      bash "$SCRIPT_DIR/scripts/linux/install-desktop-entry.sh" || warn "Desktop entry install failed (non-fatal)."
+    elif [ -f "$DESKTOP_FILE" ]; then
+      say "Application-menu entry already present at $DESKTOP_FILE."
+    fi
+    ;;
+  Darwin)
+    if [ -f "$SCRIPT_DIR/Proto-Familiar.command" ]; then
+      # chmod +x is idempotent and cheap; always run so a re-clone or a
+      # filesystem that drops the executable bit (network shares, some
+      # zip extractors) doesn't break the double-click path.
+      chmod +x "$SCRIPT_DIR/Proto-Familiar.command" || true
+      [ "$MODE" = "install" ] && say "macOS launcher ready: double-click Proto-Familiar.command in Finder."
+    fi
+    ;;
+esac
 
 if [ "$MODE" = "update" ]; then
   say "Update complete."

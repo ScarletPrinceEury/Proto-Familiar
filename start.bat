@@ -1,5 +1,21 @@
 @echo off
 REM Proto-Familiar launcher (Windows) - double-click to run.
+REM
+REM Responsibilities, in order:
+REM   1. Detect & recycle any stale Proto-Familiar instance holding
+REM      the configured port (via PID file + Win32_Process+CommandLine
+REM      heuristic matching this project dir).
+REM   2. Trigger install.bat if node_modules or unruh\.venv is missing.
+REM   3. Prime PATH so the spawned node sees uv (and via thalamus.js,
+REM      Unruh's MCP child gets a working uv).
+REM   4. Launch node server.js detached via PowerShell, write PID file,
+REM      wait for the port to come up, open the browser.
+REM
+REM Stop with stop.bat — kills every node.exe whose CommandLine
+REM references server.js in this dir, not just the tracked PID.
+REM
+REM The system-tray launcher (Proto-Familiar.vbs -> tray.ps1) is the
+REM canonical Windows path; this .bat is for terminal users.
 
 setlocal EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"

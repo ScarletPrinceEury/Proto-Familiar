@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
-# Proto-Familiar launcher (macOS / Linux)
-# Starts the server (which auto-spawns entity-core via thalamus.js) and opens the UI.
+# Proto-Familiar launcher (macOS / Linux).
+#
+# Responsibilities, in order:
+#   1. Prime PATH so spawned MCP children find deno + uv even when the
+#      shell hasn't reloaded after install.
+#   2. Detect & recycle any stale Proto-Familiar instance holding the
+#      configured port (via PID file + pgrep+cwd-match heuristic).
+#   3. Trigger install.sh if node_modules or unruh/.venv is missing.
+#   4. Launch `node server.js` detached, write PID file, open browser.
+#
+# Stop with ./stop.sh — kills every node server.js rooted here, not
+# just the tracked PID. server.js auto-spawns entity-core (Deno) and
+# Unruh (Python via uv) as MCP children; both die when server.js does.
 
 set -e
 
