@@ -106,6 +106,17 @@ function resolveUvBinary() {
 // up the API-key designation for entity-core. Read is sync and small.
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
+// OpenAI-compatible base URLs per provider (without /chat/completions —
+// entity-core's LLM client appends the path itself, as do most
+// OpenAI-compatible SDKs). KEEP IN SYNC with PROVIDER_URLS in server.js
+// — server.js stores the *full* chat-completions URL because that's
+// what its fetch proxy hits directly; entity-core needs the base.
+const PROVIDER_BASE_URLS = {
+  nanogpt:     'https://nano-gpt.com/api/v1',
+  zai:         'https://api.z.ai/api/paas/v4',
+  'zai-coding':'https://api.z.ai/api/coding/paas/v4',
+};
+
 /**
  * Build the env block passed to the entity-core child process based on
  * the saved-connection the user designated as the entity-core source
@@ -116,13 +127,22 @@ const SETTINGS_FILE = path.join(__dirname, 'settings.json');
  * API key — same as before this wiring existed — so the change is
  * additive and safe.
  *
+ * Entity-core's createLLMClient() (packages/entity-core/src/llm/client.ts
+ * in the upstream Psycheros repo, release entity-core-v0.2.2) reads
+ * three env vars and returns null if ANY are missing — causing the
+ * misleading "No LLM API key configured" error from the consolidator
+ * even when only the base URL or model is the missing one. We
+ * therefore have to set all three.
+ *
  * Env mapping:
- *   ENTITY_CORE_LLM_API_KEY    — set whenever a designation resolves
- *   ENTITY_CORE_LLM_PROVIDER   — provider tag from the connection
+ *   ENTITY_CORE_LLM_API_KEY    — always set when designation resolves
+ *   ENTITY_CORE_LLM_BASE_URL   — derived from provider via PROVIDER_BASE_URLS
  *   ENTITY_CORE_LLM_MODEL      — model id from the connection
- *   ZAI_API_KEY                — *only* when the designated connection
- *                                is a z.ai provider (entity-core's z.ai
- *                                backend reads this env name directly)
+ *   ENTITY_CORE_LLM_PROVIDER   — provider tag (informational)
+ *   ZAI_API_KEY / ZAI_BASE_URL / ZAI_MODEL  — only when the designated
+ *     connection is a z.ai provider; entity-core treats these as
+ *     equivalent fallback names, but setting both pairs makes builds
+ *     that read either work without re-config.
  */
 export function loadEntityCoreEnv() {
   let settings;
@@ -137,13 +157,20 @@ export function loadEntityCoreEnv() {
   if (!conn) return {};
   const apiKey = (conn.apiKey ?? '').trim();
   if (!apiKey) return {};
+  const provider = conn.provider ?? '';
+  const model    = conn.model ?? '';
+  const baseUrl  = PROVIDER_BASE_URLS[provider] ?? '';
+
   const env = {
     ENTITY_CORE_LLM_API_KEY:  apiKey,
-    ENTITY_CORE_LLM_PROVIDER: conn.provider ?? '',
-    ENTITY_CORE_LLM_MODEL:    conn.model ?? '',
+    ENTITY_CORE_LLM_BASE_URL: baseUrl,
+    ENTITY_CORE_LLM_MODEL:    model,
+    ENTITY_CORE_LLM_PROVIDER: provider,
   };
-  if (conn.provider === 'zai' || conn.provider === 'zai-coding') {
-    env.ZAI_API_KEY = apiKey;
+  if (provider === 'zai' || provider === 'zai-coding') {
+    env.ZAI_API_KEY  = apiKey;
+    env.ZAI_BASE_URL = baseUrl;
+    env.ZAI_MODEL    = model;
   }
   return env;
 }
@@ -181,6 +208,16 @@ async function connect() {
   // (DEFAULT_INHERITED_ENV_VARS), so we don't clobber the shell env.
   const ecEnv = loadEntityCoreEnv();
   const haveKey = Object.prototype.hasOwnProperty.call(ecEnv, 'ENTITY_CORE_LLM_API_KEY');
+  // Surface partial-config gotchas explicitly: entity-core's createLLMClient
+  // returns null (→ "No LLM API key configured" error from the consolidator)
+  // when any of api_key / base_url / model is missing. A blank base_url
+  // typically means the connection's provider isn't in PROVIDER_BASE_URLS.
+  if (haveKey && !ecEnv.ENTITY_CORE_LLM_BASE_URL) {
+    console.warn(`[thalamus] entity-core: provider "${ecEnv.ENTITY_CORE_LLM_PROVIDER}" has no known base URL — add it to PROVIDER_BASE_URLS in thalamus.js`);
+  }
+  if (haveKey && !ecEnv.ENTITY_CORE_LLM_MODEL) {
+    console.warn('[thalamus] entity-core: designated connection has no model set — consolidation will fail');
+  }
 
   const transport = new StdioClientTransport({
     command: 'deno',
