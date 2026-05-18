@@ -225,6 +225,21 @@ top of it.
         "empty payload → empty string → section omitted" contract.
       - Formatter extracted to `temporal-format.js` so tests can
         import it without triggering thalamus.js's startup spawns.
+- [x] **Auto-install + auto-sync in launchers/installers** (pulled
+      forward from M13 because the first real `git pull` hit the
+      "Unruh venv missing" message immediately — installer-time
+      work shouldn't be a manual prerequisite to the launcher
+      working). `install.sh` / `install.bat` / `scripts/win/install.ps1`
+      now detect `uv` (via PATH / `~/.local/bin` / winget) and
+      auto-install via Astral's official one-liner if missing, then
+      run `uv sync` in `unruh/`. `start.sh` / `start.bat` /
+      `Proto-Familiar.command` / `Proto-Familiar.vbs` detect a
+      missing `unruh/.venv/` after a pull and silently invoke the
+      installer — symmetric to how `node_modules` missing already
+      triggers it. Result: any user who pulls a checkout
+      containing Unruh gets it working on next launch with no
+      manual steps. M13 still owns the broader installer polish
+      (cleanup of orphaned children, etc.).
 
 **Still flagged but deferred** (from the M1+M2 review, deliberately
 not done here — listed in §3 Cross-cutting concerns for whichever

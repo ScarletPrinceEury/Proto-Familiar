@@ -172,6 +172,44 @@ if not errorlevel 1 if defined ENTITY_CORE_PKG (
   popd
 )
 
+REM --- uv check (auto-install if missing, in both modes) ---
+REM uv is the Python package/runtime manager Unruh uses. Astral's
+REM installer writes to %USERPROFILE%\.local\bin\uv.exe by default.
+REM Prime PATH so the subsequent `uv sync` works without a shell restart.
+if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+set "HAVE_UV=0"
+where uv >nul 2>nul
+if not errorlevel 1 (
+  echo uv found.
+  set "HAVE_UV=1"
+) else (
+  echo uv not found - installing via the official Astral script ^(writes to %%USERPROFILE%%\.local\bin^)...
+  powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex" >nul 2>nul
+  if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+  where uv >nul 2>nul
+  if not errorlevel 1 (
+    echo uv installed.
+    set "HAVE_UV=1"
+  ) else (
+    echo [WARN] uv auto-install failed. Unruh ^(temporal context^) will be disabled until you install uv from https://docs.astral.sh/uv/.
+  )
+)
+
+REM --- Unruh dependency sync (idempotent; fast when nothing changed) ---
+if "!HAVE_UV!"=="1" if exist "%SCRIPT_DIR%\unruh\pyproject.toml" (
+  echo Syncing Unruh dependencies ^(only fetches what's new^)...
+  pushd "%SCRIPT_DIR%\unruh"
+  uv sync --quiet
+  if errorlevel 1 (
+    echo [WARN] uv sync failed - Unruh will be disabled until this is resolved.
+  ) else (
+    echo Unruh dependencies synced.
+  )
+  popd
+) else if exist "%SCRIPT_DIR%\unruh\pyproject.toml" (
+  echo [WARN] Skipping Unruh dep sync ^(uv not available^). Temporal context will be disabled until uv is installed.
+)
+
 echo.
 if "!MODE!"=="update" (
   echo === Update complete ===

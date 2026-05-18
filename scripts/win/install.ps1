@@ -220,6 +220,53 @@ if ($entityCorePkg -and (Have "deno")) {
     Warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
 }
 
+# --- uv (install if missing, in both modes) ---
+# uv is the Python package/runtime manager Unruh uses. Astral's installer
+# writes to %USERPROFILE%\.local\bin\uv.exe by default. winget has a uv
+# package too; prefer it when available for consistency with how we
+# handle Node/Deno/Git, fall back to the official one-liner.
+Step "Checking uv..."
+$uvDefaultPath = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
+if (Test-Path $uvDefaultPath) {
+    # Prime PATH so subsequent `uv sync` and Have "uv" see it without
+    # a shell restart (symmetric to what Refresh-Path does for winget).
+    $env:PATH = (Join-Path $env:USERPROFILE ".local\bin") + ";" + $env:PATH
+}
+if (-not (Have "uv")) {
+    if ($haveWinget) {
+        Step "Installing uv via winget..."
+        try {
+            winget install --id astral-sh.uv --scope user --silent `
+                --accept-source-agreements --accept-package-agreements
+            Refresh-Path
+        } catch { Warn "winget uv install failed - trying Astral's official installer..." }
+    }
+    if (-not (Have "uv")) {
+        Step "Installing uv via the official Astral script (writes to ~\.local\bin)..."
+        try {
+            Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+            if (Test-Path $uvDefaultPath) {
+                $env:PATH = (Join-Path $env:USERPROFILE ".local\bin") + ";" + $env:PATH
+            }
+        } catch { Warn "uv auto-install failed - Unruh (temporal context) will be disabled until you install uv from https://docs.astral.sh/uv/." }
+    }
+}
+if (Have "uv") { Ok "uv present" } else { Warn "uv missing (Proto-Familiar will still run without Unruh)" }
+
+# --- Unruh dependency sync (idempotent; fast when nothing changed) ---
+$unruhDir = Join-Path $projectRoot "unruh"
+if ((Have "uv") -and (Test-Path (Join-Path $unruhDir "pyproject.toml"))) {
+    Step "Syncing Unruh dependencies (only fetches what's new)..."
+    Push-Location $unruhDir
+    try {
+        & uv sync --quiet
+        if ($LASTEXITCODE -eq 0) { Ok "Unruh dependencies synced" }
+        else { Warn "uv sync failed - Unruh will be disabled until this is resolved." }
+    } finally { Pop-Location }
+} elseif (Test-Path (Join-Path $unruhDir "pyproject.toml")) {
+    Warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
+}
+
 # --- Shortcuts (install mode only) ---
 if (-not $updateMode) {
     Step "Creating Desktop and Start Menu shortcuts..."

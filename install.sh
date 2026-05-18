@@ -211,6 +211,53 @@ elif [ -n "$ENTITY_CORE_PKG_DIR" ]; then
   warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
 fi
 
+# --- uv check (auto-install if missing, in both modes) -----------------
+# uv is the Python package/runtime manager Unruh uses. The official
+# installer writes to ~/.local/bin by default. We pre-add that to PATH so
+# the subsequent `uv sync` works without needing a shell restart;
+# start.sh / Proto-Familiar.command do the same probe at launch time.
+if [ -d "$HOME/.local/bin" ]; then PATH="$HOME/.local/bin:$PATH"; fi
+if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
+if command -v uv >/dev/null 2>&1; then
+  say "uv $(uv --version 2>&1 | head -n1) found."
+  HAVE_UV=1
+else
+  if command -v curl >/dev/null 2>&1; then
+    say "uv not found — installing via the official Astral script (writes to ~/.local/bin)..."
+    if curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; then
+      PATH="$HOME/.local/bin:$PATH"
+      if command -v uv >/dev/null 2>&1; then
+        say "uv $(uv --version 2>&1 | head -n1) installed."
+        HAVE_UV=1
+      else
+        warn "uv install ran but 'uv' is still not on PATH. Open a new terminal and re-run, or install manually from https://docs.astral.sh/uv/."
+        HAVE_UV=0
+      fi
+    else
+      warn "uv auto-install failed. Unruh (temporal context) will be disabled until you install uv from https://docs.astral.sh/uv/."
+      HAVE_UV=0
+    fi
+  else
+    warn "Neither 'uv' nor 'curl' available. Unruh needs uv; install from https://docs.astral.sh/uv/."
+    HAVE_UV=0
+  fi
+fi
+
+# --- Unruh dependency sync (idempotent; fast when nothing changed) -----
+# Materialises unruh/.venv from unruh/uv.lock. uv sync is a no-op when
+# nothing has changed, so re-running in update mode after a git pull
+# picks up any locked-dep changes cleanly.
+if [ "$HAVE_UV" = "1" ] && [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
+  say "Syncing Unruh dependencies (only fetches what's new)..."
+  if ( cd "$SCRIPT_DIR/unruh" && uv sync --quiet ); then
+    say "Unruh dependencies synced."
+  else
+    warn "uv sync failed — Unruh will be disabled until this is resolved."
+  fi
+elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
+  warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
+fi
+
 # --- Platform-specific launcher polish (install mode only) --------------
 # In update mode, the desktop entry / launcher already exists. Re-running
 # the desktop-entry script is harmless but adds noise; skip for clarity.
@@ -252,4 +299,7 @@ echo "  Trouble?       see docs/troubleshooting.md"
 echo
 if [ "$HAVE_DENO" = "0" ]; then
   warn "Reminder: install Deno before first start if you want entity-core enrichment."
+fi
+if [ "${HAVE_UV:-0}" = "0" ]; then
+  warn "Reminder: install uv before first start if you want Unruh (temporal context)."
 fi

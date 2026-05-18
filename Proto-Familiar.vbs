@@ -2,16 +2,24 @@
 ' Runs install on first launch, then starts the system-tray app with no console window.
 Option Explicit
 
-Dim sh, fso, scriptDir, nodeModules, installPs1, trayPs1
+Dim sh, fso, scriptDir, nodeModules, unruhPyproject, unruhVenv, installPs1, trayPs1, needInstall
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-nodeModules = scriptDir & "\node_modules"
-installPs1 = scriptDir & "\scripts\win\install.ps1"
-trayPs1 = scriptDir & "\scripts\win\tray.ps1"
+nodeModules    = scriptDir & "\node_modules"
+unruhPyproject = scriptDir & "\unruh\pyproject.toml"
+unruhVenv      = scriptDir & "\unruh\.venv"
+installPs1     = scriptDir & "\scripts\win\install.ps1"
+trayPs1        = scriptDir & "\scripts\win\tray.ps1"
 
-' First-run install: show a visible console window and wait until it finishes.
-If Not fso.FolderExists(nodeModules) Then
+' Trigger install on first run OR after a git pull that introduces Unruh.
+' Symmetric to start.bat / start.sh: a missing unruh\.venv with present
+' unruh\pyproject.toml means deps haven't been materialised yet.
+needInstall = False
+If Not fso.FolderExists(nodeModules) Then needInstall = True
+If fso.FileExists(unruhPyproject) And Not fso.FolderExists(unruhVenv) Then needInstall = True
+
+If needInstall Then
   sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & installPs1 & """", 1, True
 End If
 

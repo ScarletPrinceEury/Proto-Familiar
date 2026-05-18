@@ -87,12 +87,12 @@ function resolveUvBinary() {
   const isWin = process.platform === 'win32';
   const candidates = isWin
     ? [
-        path.join(process.env.LOCALAPPDATA ?? '', 'uv', 'bin', 'uv.exe'),
-        path.join(home, '.local', 'bin', 'uv.exe'),
+        path.join(home, '.local', 'bin', 'uv.exe'),                      // Astral's current default
+        path.join(process.env.LOCALAPPDATA ?? '', 'uv', 'bin', 'uv.exe'),// older default
         path.join(home, '.cargo', 'bin', 'uv.exe'),
       ]
     : [
-        path.join(home, '.local', 'bin', 'uv'),
+        path.join(home, '.local', 'bin', 'uv'),                          // Astral's current default
         path.join(home, '.cargo', 'bin', 'uv'),
         '/usr/local/bin/uv',
         '/opt/homebrew/bin/uv',

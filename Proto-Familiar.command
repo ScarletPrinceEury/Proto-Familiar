@@ -17,6 +17,18 @@ export TAILSCALE="${TAILSCALE:-0}"
 if [ ! -d "node_modules" ]; then
   echo "First run - installing dependencies..."
   bash ./install.sh
+elif [ -f "unruh/pyproject.toml" ] && [ ! -d "unruh/.venv" ]; then
+  # Unruh ships in-tree; after a git pull that introduces it, the venv
+  # needs to be materialised before Thalamus can connect. Run installer.
+  echo "Unruh dependencies missing - running installer..."
+  bash ./install.sh
+fi
+
+# Prime PATH for uv (Astral's installer writes to ~/.local/bin); same
+# pattern start.sh uses for deno. thalamus.js has its own resolver but
+# this means a fresh shell after install.sh sees uv without restart.
+if ! command -v uv >/dev/null 2>&1 && [ -x "$HOME/.local/bin/uv" ]; then
+  export PATH="$HOME/.local/bin:$PATH"
 fi
 
 # Open browser after the server is listening

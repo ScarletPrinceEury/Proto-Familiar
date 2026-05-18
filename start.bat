@@ -56,6 +56,24 @@ if "!PID_ALIVE!"=="1" (
 if not exist "%SCRIPT_DIR%\node_modules" (
   echo Dependencies missing. Running installer first...
   call "%SCRIPT_DIR%\install.bat"
+) else (
+  REM Unruh ships in-tree as a subdirectory; its Python venv is
+  REM managed by uv. After a `git pull` that introduces Unruh, the
+  REM venv has to be materialised before Thalamus can connect.
+  REM Silently re-run the installer so users don't have to know
+  REM about uv to start the app.
+  if exist "%SCRIPT_DIR%\unruh\pyproject.toml" if not exist "%SCRIPT_DIR%\unruh\.venv" (
+    echo Unruh dependencies missing. Running installer to set them up...
+    call "%SCRIPT_DIR%\install.bat"
+  )
+)
+
+REM Prime PATH for uv (Astral's installer writes to %USERPROFILE%\.local\bin
+REM by default). thalamus.js has its own resolver but this lets the launched
+REM Node process find uv on PATH without needing a shell restart.
+where uv >nul 2>nul
+if errorlevel 1 (
+  if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 )
 
 echo Starting Proto-Familiar on %URL% ^(log: %LOG_FILE%^) ...

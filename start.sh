@@ -24,6 +24,13 @@ if ! command -v deno >/dev/null 2>&1 && [ -x "$HOME/.deno/bin/deno" ]; then
   export PATH="$HOME/.deno/bin:$PATH"
 fi
 
+# Same pattern for `uv` (Unruh / temporal context). Astral's installer
+# writes to ~/.local/bin by default. thalamus.js has its own resolver
+# but PATH-priming here means install.sh below can also find it.
+if ! command -v uv >/dev/null 2>&1 && [ -x "$HOME/.local/bin/uv" ]; then
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
 # Already running?
 EXISTING_PID=""
 if [ -f "$PID_FILE" ]; then EXISTING_PID="$(cat "$PID_FILE")"; fi
@@ -82,6 +89,13 @@ else
   fi
   if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
     say "Dependencies missing. Running installer first..."
+    bash "$SCRIPT_DIR/install.sh"
+  elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ] && [ ! -d "$SCRIPT_DIR/unruh/.venv" ]; then
+    # Symmetric to node_modules: Unruh ships in-tree (subdirectory) but
+    # its Python venv has to be materialised by uv. After a `git pull`
+    # that introduces Unruh, the user hits this branch — silently run
+    # the installer so they don't have to know about uv to start the app.
+    say "Unruh dependencies missing. Running installer to set them up..."
     bash "$SCRIPT_DIR/install.sh"
   fi
   say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."
