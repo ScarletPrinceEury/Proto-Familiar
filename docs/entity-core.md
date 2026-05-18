@@ -124,6 +124,36 @@ To see exactly what was sent to the LLM on the previous turn — including the f
 
 ---
 
+## API key designation
+
+Entity-core's background **consolidator** (weekly / monthly / yearly memory summaries) makes its own outbound LLM calls — independent of whatever the chat path uses. It reads three env vars from the spawn environment: `ENTITY_CORE_LLM_API_KEY`, `ENTITY_CORE_LLM_BASE_URL`, and `ENTITY_CORE_LLM_MODEL`, falling back to `ZAI_API_KEY` / `ZAI_BASE_URL` / `ZAI_MODEL`. Missing any of the three causes the consolidator to error with `No LLM API key configured (ENTITY_CORE_LLM_API_KEY or ZAI_API_KEY)` — the message names the key but fires for any of the three.
+
+Proto-Familiar wires this for you. In the sidebar's **Connections** section, click **+ entity-core** on any saved connection to designate it as the source. The badge **entity-core** appears next to the row.
+
+When the designation changes, server.js diffs the entity-core creds (id + apiKey + provider + model) before and after the settings save. If anything material changed, it fires `reconnectEntityCore()` on `thalamus.js` — which tears down the entity-core child and respawns it with the new env. The next chat or scheduled consolidation picks up the new key automatically; no Proto-Familiar restart needed.
+
+The connection you designate is independent of the chat path. It doesn't have to be your primary or any fallback. Click the **+ entity-core** button a second time on the same row to clear the designation; click on a different row to move it.
+
+### Env vars Proto-Familiar sets
+
+When you designate a connection, `thalamus.js` resolves the env block via `loadEntityCoreEnv()` (reads `settings.json` directly) and passes it to `StdioClientTransport({ env: ... })`. The MCP SDK merges this with `DEFAULT_INHERITED_ENV_VARS` (PATH, HOME, etc.) so PATH is preserved.
+
+| Env var | Always set? | Notes |
+|---|---|---|
+| `ENTITY_CORE_LLM_API_KEY` | yes | Bearer token from the designated connection |
+| `ENTITY_CORE_LLM_BASE_URL` | yes | Full chat-completions URL (see [providers.js](../providers.js) — entity-core POSTs to this exactly, no path appending) |
+| `ENTITY_CORE_LLM_MODEL` | yes | Model name from the connection |
+| `ENTITY_CORE_LLM_PROVIDER` | yes | Informational provider tag |
+| `ZAI_API_KEY` | only for `zai` / `zai-coding` providers | Alternate name some entity-core builds read |
+| `ZAI_BASE_URL` | only for `zai` / `zai-coding` providers | Same |
+| `ZAI_MODEL` | only for `zai` / `zai-coding` providers | Same |
+
+If you designate a connection whose provider isn't in `providers.js`'s `PROVIDER_URLS` map, `thalamus.js` logs a warning at boot naming the provider so you can either pick a supported one or add yours to the map.
+
+If you don't designate anything, the env block is empty and entity-core spawns with no LLM credentials — same as before this feature existed. enrichment still works (it doesn't need outbound LLM calls), but the consolidator will fail on its next tick with the error above.
+
+---
+
 ## Setup
 
 The one-click installers handle the clone for you (`Proto-Familiar.vbs` on Windows, `Proto-Familiar.command` on macOS, `./install.sh` on Linux). They also pre-cache the Deno module graph so the first server start doesn't stall on downloads. If you'd rather do it by hand:

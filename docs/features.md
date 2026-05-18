@@ -40,6 +40,18 @@ Open with **☰** in the top bar.
 | Temperature | Sampling temperature (0.0–2.0) |
 | Max tokens | Maximum response length in tokens |
 
+### Saved connections (sidebar)
+
+The **Connections** sidebar section keeps multiple named provider / key / model combos so you can switch without re-typing. Each row has three independent toggles:
+
+| Toggle | Behaviour |
+|---|---|
+| **Primary** (radio, mutually exclusive) | The connection used for the chat path. Selecting it copies its fields into the active Provider / API Key / Model inputs. |
+| **+ fallback** | Adds this connection to the ordered fallback list. When the primary returns an empty response or fails, the client retries in fallback order. Arrows let you reorder. |
+| **+ entity-core** (single-select across all rows) | Designates this connection's API key + model for entity-core's background consolidator. Triggers a server-side respawn of the entity-core child with the new env on save — no Proto-Familiar restart needed. See [Entity-Core → API key designation](entity-core.md#api-key-designation). |
+
+The list syncs across devices via `settings.json` along with the rest of your settings (Tailscale-mediated).
+
 ### Names
 
 | Setting | Description |
