@@ -27,7 +27,7 @@ if command -v pgrep >/dev/null 2>&1; then
     if [ -r "/proc/$pid/cwd" ]; then
       cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)"
     elif command -v lsof >/dev/null 2>&1; then
-      cwd="$(lsof -a -d cwd -p "$pid" 2>/dev/null | awk 'NR==2{print $NF}')"
+      cwd="$(lsof -a -d cwd -p "$pid" -Fn 2>/dev/null | awk '/^n/{print substr($0,2); exit}')"
     fi
     [ "$cwd" = "$SCRIPT_DIR" ] || continue
     case " $PIDS " in

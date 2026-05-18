@@ -40,6 +40,13 @@ only, whitespace), skip it. Otherwise bump.
   `SERVER_SYNCED_KEYS` in `public/app.js` is the canonical subset of
   `state` that syncs to the server — add new user-preference fields
   there if you want them to follow the user across devices.
+  - **Absorption caveat:** the first sync from a given device merges
+    its local state into the server. Scalar fields use a "server wins
+    when both are meaningful" rule, so an *empty string* on the local
+    side won't displace a server value during that one-time merge —
+    i.e. clearing a prompt on one device before its first sync won't
+    propagate to others. After both devices are flagged absorbed,
+    normal edits do propagate.
 - **Tailscale gate**: `server.js` always binds to `0.0.0.0` but a
   middleware blocks non-loopback requests with 403 until the in-UI
   toggle (or the `TAILSCALE=1` env var on first start) flips it on.

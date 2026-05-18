@@ -69,12 +69,17 @@ if [ "$MODE" = "update" ]; then
   STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
   BACKUP_DIR="$BACKUP_ROOT/$STAMP"
   ANYTHING_BACKED_UP=0
-  # Directories
+  # Directories. Explicitly probe BOTH the new entity-core dir and the
+  # pre-rename entity-core-alpha so a user with leftover legacy data
+  # still gets it backed up (resolved $ENTITY_CORE_DIR only points at
+  # one of them).
   for src in \
     "$SCRIPT_DIR/tomes" \
     "$SCRIPT_DIR/logs" \
-    "$ENTITY_CORE_DIR/packages/entity-core/data" \
-    "$ENTITY_CORE_DIR/data"; do
+    "$ENTITY_CORE_DIR_NEW/packages/entity-core/data" \
+    "$ENTITY_CORE_DIR_NEW/data" \
+    "$ENTITY_CORE_DIR_LEGACY/packages/entity-core/data" \
+    "$ENTITY_CORE_DIR_LEGACY/data"; do
     if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
       mkdir -p "$BACKUP_DIR"
       rel="$(echo "$src" | sed "s|^$PARENT_DIR/||")"

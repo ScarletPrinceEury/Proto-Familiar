@@ -226,7 +226,7 @@ Proto-Familiar's version lives in `package.json` (`version` field) and is the **
 - The startup banner: `Proto-Familiar <v> running at:`
 - The sidebar footer badge in the UI.
 
-Current release: `0.1.1-alpha`. Pre-release while the schema and storage layout are still in flux.
+Current release: `0.1.2-alpha`. Pre-release while the schema and storage layout are still in flux.
 
 Bump policy (followed by AI agents working in this repo via [`CLAUDE.md`](../CLAUDE.md)):
 

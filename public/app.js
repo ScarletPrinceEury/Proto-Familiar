@@ -742,7 +742,6 @@ function absorbLocalIntoRemote(remote, local) {
 const ABSORBED_FLAG_KEY = 'pf_settings_absorbed';
 
 async function syncSettingsFromServer() {
-  const localSnapshot = extractServerSettings(state);
   let remote;
   try {
     const r = await fetch('/api/settings');
@@ -766,9 +765,14 @@ async function syncSettingsFromServer() {
     return;
   }
 
+  // Re-snapshot AT MERGE TIME (not at function entry) so that any
+  // keystrokes the user landed during the in-flight fetch are folded in
+  // rather than discarded. Field listeners write straight into `state`
+  // via readSettingsFromUI, so this always reflects the freshest values.
+  const freshSnapshot = extractServerSettings(state);
   const effective = alreadyAbsorbed
     ? remote
-    : absorbLocalIntoRemote(remote, localSnapshot);
+    : absorbLocalIntoRemote(remote, freshSnapshot);
 
   for (const k of SERVER_SYNCED_KEYS) {
     if (k in effective) state[k] = effective[k];
@@ -2111,34 +2115,35 @@ function readSettingsFromUI() {
   renderConnectionsList();
 }
 
+// Don't clobber the input the user is actively typing in — the async
+// server sync would otherwise stomp on a half-typed API key or prompt.
+function setIfNotFocused(el, prop, value) {
+  if (!el) return;
+  if (document.activeElement === el) return;
+  el[prop] = value;
+}
 function writeSettingsToUI() {
-  $('provider-select').value    = state.provider;
-  $('api-key').value            = state.apiKey;
-  $('model-input').value        = state.model;
-  $('streaming-toggle').checked = state.streaming;
-  $('temperature').value        = state.temperature;
+  setIfNotFocused($('provider-select'), 'value',   state.provider);
+  setIfNotFocused($('api-key'),         'value',   state.apiKey);
+  setIfNotFocused($('model-input'),     'value',   state.model);
+  setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
+  setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
-  $('max-tokens').value         = state.maxTokens;
-  $('user-name').value          = state.userName ?? 'User';
-  $('char-name').value          = state.charName ?? 'Assistant';
-  $('system-prompt').value      = state.systemPrompt;
-  $('char-profile').value       = state.characterProfile;
-  $('user-profile').value       = state.userProfile;
-  $('post-history-prompt').value = state.postHistoryPrompt;
-  $('tools-enabled').checked    = state.toolsEnabled ?? true;
-  $('custom-tools').value       = state.customTools ?? '';
-  const scanEl = $('tome-scan-depth');
-  if (scanEl) scanEl.value = state.tomeScanDepth ?? 4;
-  const recursiveEl = $('tome-recursive');
-  if (recursiveEl) recursiveEl.checked = state.tomeRecursive ?? false;
-  const maxRecEl = $('tome-max-recursion');
-  if (maxRecEl) maxRecEl.value = state.tomeMaxRecursionSteps ?? 3;
-  const csEl = $('tome-case-sensitive');
-  if (csEl) csEl.checked = state.tomeCaseSensitive ?? false;
-  const wwEl = $('tome-match-whole-words');
-  if (wwEl) wwEl.checked = state.tomeMatchWholeWords ?? false;
-  const retriesEl = $('max-empty-retries');
-  if (retriesEl) retriesEl.value = state.maxEmptyRetries ?? 2;
+  setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
+  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'User');
+  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
+  setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
+  setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
+  setIfNotFocused($('user-profile'),       'value',   state.userProfile);
+  setIfNotFocused($('post-history-prompt'),'value',   state.postHistoryPrompt);
+  setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
+  setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
+  setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
+  setIfNotFocused($('tome-recursive'),        'checked', state.tomeRecursive ?? false);
+  setIfNotFocused($('tome-max-recursion'),    'value',   state.tomeMaxRecursionSteps ?? 3);
+  setIfNotFocused($('tome-case-sensitive'),   'checked', state.tomeCaseSensitive ?? false);
+  setIfNotFocused($('tome-match-whole-words'),'checked', state.tomeMatchWholeWords ?? false);
+  setIfNotFocused($('max-empty-retries'),     'value',   state.maxEmptyRetries ?? 2);
   refreshModelSuggestions(state.provider);
 }
 
@@ -3189,8 +3194,11 @@ function init() {
 // On Android Chrome the `interactive-widget=resizes-content` meta
 // already shrinks the layout viewport when the IME opens, so the
 // composer sits above the keyboard for free. iOS Safari ignores
-// that hint, so we fall back to the visualViewport API and expose
-// the offset as `--kb-inset` for the input bar to consume.
+// that hint, so we fall back to the visualViewport API and write the
+// visible viewport height onto `--app-h`. The CSS uses that to
+// shrink the whole app shell, which pulls the .input-bar (last flex
+// child) up above the keyboard. `--kb-inset` is also exposed for any
+// other element that wants to compensate.
 //
 // Separately, when the textarea auto-grows we want the conversation
 // to stay anchored — if the user is already at the bottom, follow
@@ -3203,6 +3211,7 @@ function initMobileViewport() {
     const updateInset = () => {
       const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
       root.style.setProperty('--kb-inset', `${inset}px`);
+      root.style.setProperty('--app-h', `${vv.height}px`);
     };
     vv.addEventListener('resize', updateInset);
     vv.addEventListener('scroll', updateInset);
