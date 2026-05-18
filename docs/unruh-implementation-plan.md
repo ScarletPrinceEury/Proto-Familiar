@@ -184,6 +184,66 @@ now). Killing either child process does not break the other.
 
 ---
 
+### Milestone 2.5 — Hardening pass (post-M1+M2 review)
+
+**Goal:** Close the highest-probability ways the M1+M2 work would
+silently break on a real install before any further code lands on
+top of it.
+
+**Tasks**
+- [x] **Absolute-path `uv` resolution.** `resolveUvBinary()` in
+      `thalamus.js` probes `~/.local/bin/uv`, `~/.cargo/bin/uv`,
+      `/usr/local/bin/uv`, `/opt/homebrew/bin/uv` on Unix and
+      `%LOCALAPPDATA%\uv\bin\uv.exe` on Windows before falling back
+      to PATH. `UV_BIN` env var overrides everything. Prevents
+      ENOENT when GUI launchers inherit a minimal PATH.
+- [x] **`.venv/` probe.** `connectUnruh()` now requires both
+      `unruh/pyproject.toml` and `unruh/.venv/` to exist before
+      attempting the spawn. Surfaces a clear "run `uv sync`" message
+      instead of letting `uv run` fail opaquely.
+- [x] **Reconnect with backoff.** `onclose` schedules a reconnect
+      via `scheduleUnruhReconnect()` — backoff sequence
+      `1s, 2s, 5s, 10s, 30s` (last value repeats), capped at 10
+      attempts. Successful connect resets the counter.
+      `shutdownUnruh()` export lets a future SIGTERM handler stop
+      the loop cleanly.
+- [x] **Timeout on `temporal_context`.** The call is wrapped in
+      `Promise.race` with a 2000ms cap (`UNRUH_CALL_TIMEOUT_MS`)
+      so a slow or hung Unruh can never block the chat path. The
+      underlying MCP request keeps running in the background —
+      Promise.race doesn't cancel — but it can't delay the LLM
+      response. Real cancellation lands when query budgets become
+      a real concern.
+- [x] **Test scaffold.**
+      - `unruh/tests/test_server.py` (pytest, `uv run pytest`):
+        contract tests for `health_check` and `temporal_context`
+        return shapes — the shapes Thalamus's formatter depends on.
+        Dev dep via `[dependency-groups] dev`.
+      - `tests/temporal-format.test.mjs` (Node 22 `node:test`,
+        `npm test`): 11 tests for the formatter covering populated,
+        empty, null, and edge-case payloads. Includes the critical
+        "empty payload → empty string → section omitted" contract.
+      - Formatter extracted to `temporal-format.js` so tests can
+        import it without triggering thalamus.js's startup spawns.
+
+**Still flagged but deferred** (from the M1+M2 review, deliberately
+not done here — listed in §3 Cross-cutting concerns for whichever
+future milestone is the natural home):
+
+- Orphaned Python child on hard kill of `node server.js` (esp.
+  Windows) — needs an explicit child-PID tracker + SIGTERM handler
+  in `server.js`, which is server-side, not Thalamus-side.
+- Unruh's stderr piping — verify `StdioClientTransport` actually
+  forwards child stderr to the parent; if not, wrap the spawn.
+- Timezone in the rendered prompt — Decision 6 says local TZ but
+  the formatter currently passes UTC straight through. Resolve as
+  part of M3 when phase nodes start carrying times.
+- Clock drift / monotonic time for decay — concern for M5.
+- SQLite multi-process safety + read pagination — design concerns
+  for M3.
+
+---
+
 ### Milestone 3 — Schedule layer: graph storage + write tools
 
 **Goal:** Persistent graph of events, tasks, phases, states with

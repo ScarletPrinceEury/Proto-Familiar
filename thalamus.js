@@ -17,6 +17,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
+import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 
@@ -69,11 +70,45 @@ const ENTITY_CORE_ROOT = path.dirname(path.dirname(ENTITY_CORE_ENTRY));
 // the unruh/ root so its ./data/ resolves. UNRUH_PATH overrides the probe.
 const UNRUH_ROOT = path.resolve(__dirname, 'unruh');
 const UNRUH_ENTRY = process.env.UNRUH_PATH ?? path.join(UNRUH_ROOT, 'src', 'unruh', '__main__.py');
+const UNRUH_PYPROJECT = path.join(UNRUH_ROOT, 'pyproject.toml');
+const UNRUH_VENV = path.join(UNRUH_ROOT, '.venv');
+// Hard cap so a slow / hung temporal_context can never block the chat path.
+// Real Unruh queries are graph reads in the kilobytes — 2s is generous.
+const UNRUH_CALL_TIMEOUT_MS = 2000;
+
+// Resolve `uv` to an absolute path. GUI launchers (Proto-Familiar.command,
+// the .vbs / tray.ps1) inherit a minimal PATH that often misses ~/.local/bin
+// or %LOCALAPPDATA%\uv\bin, so a bare `command: 'uv'` to StdioClientTransport
+// silently fails with ENOENT. Probe the known install locations first and
+// fall back to PATH only if none match. UV_BIN env var overrides everything.
+function resolveUvBinary() {
+  if (process.env.UV_BIN && existsSync(process.env.UV_BIN)) return process.env.UV_BIN;
+  const home = os.homedir();
+  const isWin = process.platform === 'win32';
+  const candidates = isWin
+    ? [
+        path.join(process.env.LOCALAPPDATA ?? '', 'uv', 'bin', 'uv.exe'),
+        path.join(home, '.local', 'bin', 'uv.exe'),
+        path.join(home, '.cargo', 'bin', 'uv.exe'),
+      ]
+    : [
+        path.join(home, '.local', 'bin', 'uv'),
+        path.join(home, '.cargo', 'bin', 'uv'),
+        '/usr/local/bin/uv',
+        '/opt/homebrew/bin/uv',
+      ];
+  for (const c of candidates) { if (c && existsSync(c)) return c; }
+  return isWin ? 'uv.exe' : 'uv'; // last-resort PATH lookup
+}
 
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let unruhClient = null;
+let unruhShuttingDown = false;
+let unruhReconnectAttempts = 0;
+const UNRUH_RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+const UNRUH_RECONNECT_MAX_ATTEMPTS = 10;
 
 // ── Canonical file orderings (mirrors Psycheros src/entity/context.ts) ───────
 
@@ -116,14 +151,25 @@ async function connect() {
 // Unruh runs as an independent stdio child. Its failures must not affect
 // entity-core's enrichment path — connectUnruh() is best-effort and the
 // rest of enrich() degrades gracefully when unruhClient is null.
+//
+// Probe both the source tree AND the venv: the source file ships with the
+// repo, so existsSync(__main__.py) is true on every fresh clone even before
+// `uv sync` has materialised dependencies. Checking .venv/ catches the
+// real "not ready yet" state, so we surface a clear actionable message
+// instead of letting `uv run` fail opaquely after spawn.
 async function connectUnruh() {
-  if (!existsSync(UNRUH_ENTRY)) {
-    console.log('[thalamus] Unruh not installed at', UNRUH_ENTRY, '— skipping');
+  if (!existsSync(UNRUH_PYPROJECT)) {
+    console.log('[thalamus] Unruh source not found at', UNRUH_ROOT, '— skipping');
     return;
   }
+  if (!existsSync(UNRUH_VENV)) {
+    console.warn('[thalamus] Unruh venv missing at', UNRUH_VENV, '— run `cd unruh && uv sync` to enable temporal context');
+    return;
+  }
+  const uvBin = resolveUvBinary();
   const transport = new StdioClientTransport({
-    command: 'uv',
-    args: ['run', 'python', '-m', 'unruh'],
+    command: uvBin,
+    args: ['run', '--no-sync', 'python', '-m', 'unruh'],
     cwd: UNRUH_ROOT,
   });
 
@@ -135,11 +181,42 @@ async function connectUnruh() {
   client.onclose = () => {
     console.error('[thalamus] Unruh connection closed');
     unruhClient = null;
+    if (unruhShuttingDown) return;
+    scheduleUnruhReconnect();
   };
 
   await client.connect(transport);
   unruhClient = client;
-  console.log('[thalamus] Connected to Unruh at', UNRUH_ENTRY);
+  unruhReconnectAttempts = 0; // success resets the backoff
+  console.log('[thalamus] Connected to Unruh via', uvBin);
+}
+
+// Reconnect with exponential backoff. Capped at MAX_ATTEMPTS so a
+// fundamentally-broken Unruh doesn't spin forever — after that the user
+// has to restart the server (or fix uv/.venv and restart). The cap is
+// reset by every successful connect, so transient crashes recover cleanly.
+function scheduleUnruhReconnect() {
+  if (unruhShuttingDown) return;
+  if (unruhReconnectAttempts >= UNRUH_RECONNECT_MAX_ATTEMPTS) {
+    console.error(`[thalamus] Unruh reconnect gave up after ${UNRUH_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
+    return;
+  }
+  const delay = UNRUH_RECONNECT_BACKOFF_MS[Math.min(unruhReconnectAttempts, UNRUH_RECONNECT_BACKOFF_MS.length - 1)];
+  unruhReconnectAttempts += 1;
+  console.log(`[thalamus] Reconnecting to Unruh in ${delay}ms (attempt ${unruhReconnectAttempts}/${UNRUH_RECONNECT_MAX_ATTEMPTS})`);
+  setTimeout(() => {
+    connectUnruh().catch(err => {
+      console.error('[thalamus] Unruh reconnect failed:', err.message);
+      scheduleUnruhReconnect();
+    });
+  }, delay).unref?.(); // unref so a pending retry doesn't keep the process alive
+}
+
+// Clean shutdown — call from server.js if it adds a SIGTERM handler. Stops
+// the reconnect loop and lets the child process die from stdin EOF.
+export function shutdownUnruh() {
+  unruhShuttingDown = true;
+  try { unruhClient?.close?.(); } catch { /* best-effort */ }
 }
 
 connect().catch(err => {
@@ -148,6 +225,7 @@ connect().catch(err => {
 
 connectUnruh().catch(err => {
   console.error('[thalamus] Failed to start Unruh:', err.message);
+  scheduleUnruhReconnect();
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -164,72 +242,11 @@ function wrapFile(filename, content, promptLabel) {
   return `<${label}>\n${content.trim()}\n</${label}>`;
 }
 
-/**
- * Render Unruh's temporal_context payload as a compact human-readable block.
- *
- * Returns '' when there's nothing meaningful to surface (Unruh down, payload
- * missing, or all sub-blocks empty) so the assembler can omit the section
- * header entirely. Sub-block order — handoff, schedule, interests — mirrors
- * the design doc's daily-briefing order from docs/unruh-design.md.
- *
- * Shape:
- *   {
- *     ts: '2026-01-15T10:00:00Z',
- *     schedule:  { window: [...], phase: {...} | null },
- *     interests: { standing: [...], live: [...] },
- *     handoff:   { intent: '...' | null, open_threads: [...] }
- *   }
- */
-export function formatTemporalContext(payload) {
-  if (!payload || typeof payload !== 'object') return '';
-
-  const blocks = [];
-
-  const handoff = payload.handoff ?? {};
-  if (handoff.intent || (handoff.open_threads ?? []).length) {
-    const handoffLines = ['Last session:'];
-    if (handoff.intent) handoffLines.push(`  intent — ${handoff.intent}`);
-    for (const thread of handoff.open_threads ?? []) {
-      handoffLines.push(`  open — ${typeof thread === 'string' ? thread : thread.label ?? thread.id}`);
-    }
-    blocks.push(handoffLines.join('\n'));
-  }
-
-  const schedule = payload.schedule ?? {};
-  const phase = schedule.phase;
-  const window = schedule.window ?? [];
-  if (phase || window.length) {
-    const schedLines = [];
-    if (phase) schedLines.push(`Current phase: ${phase.label ?? phase.id ?? phase}`);
-    for (const item of window) {
-      const when = item.when ?? item.fires_at ?? '';
-      const label = item.label ?? item.id ?? '';
-      schedLines.push(`  ${when ? `${when} — ` : ''}${label}`);
-    }
-    if (schedLines.length) blocks.push(schedLines.join('\n'));
-  }
-
-  const interests = payload.interests ?? {};
-  const standing = interests.standing ?? [];
-  const live = interests.live ?? [];
-  if (standing.length || live.length) {
-    const interestLines = [];
-    if (standing.length) {
-      interestLines.push('Standing values:');
-      for (const v of standing) interestLines.push(`  ${v.label ?? v}`);
-    }
-    if (live.length) {
-      interestLines.push('Live interests (by weight):');
-      for (const i of live) {
-        const w = typeof i.weight === 'number' ? ` [${i.weight.toFixed(2)}]` : '';
-        interestLines.push(`  ${i.label ?? i.id}${w}`);
-      }
-    }
-    blocks.push(interestLines.join('\n'));
-  }
-
-  return blocks.join('\n\n');
-}
+// Pure renderer lives in its own file so tests can import it without
+// triggering thalamus.js's startup-time MCP child spawns. Re-exported
+// here so callers that imported it from thalamus.js keep working.
+import { formatTemporalContext } from './temporal-format.js';
+export { formatTemporalContext };
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -303,8 +320,19 @@ export async function enrich(userMessage) {
          Promise.reject(new Error('entity-core not connected')),
          Promise.reject(new Error('entity-core not connected'))];
 
+    // Cap Unruh's contribution to the chat path so a slow / hung query can
+    // never block the LLM call. The underlying MCP request keeps running in
+    // the background — Promise.race doesn't cancel — but it can no longer
+    // delay the response. If timeouts become common, that's a signal for
+    // the next milestone to add real cancellation or a query budget.
     const unruhPromise = unruhClient
-      ? unruhClient.callTool({ name: 'temporal_context', arguments: { now: new Date().toISOString() } })
+      ? Promise.race([
+          unruhClient.callTool({ name: 'temporal_context', arguments: { now: new Date().toISOString() } }),
+          new Promise((_, reject) => setTimeout(
+            () => reject(new Error(`temporal_context timed out after ${UNRUH_CALL_TIMEOUT_MS}ms`)),
+            UNRUH_CALL_TIMEOUT_MS,
+          ).unref?.()),
+        ])
       : Promise.reject(new Error('unruh not connected'));
 
     const [idSettled, memSettled, graphSettled, temporalSettled] = await Promise.allSettled([
