@@ -107,6 +107,65 @@ test('falls back to id when label missing', () => {
   assert.match(out, /node-42/);
 });
 
+test('formats ISO timestamps as local-TZ HH:MM (today)', () => {
+  const today = new Date();
+  today.setHours(22, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [{ when: today.toISOString(), label: 'cat play' }] },
+  });
+  assert.match(out, /22:00 — cat play/);
+});
+
+test('formats ISO timestamps as "tomorrow HH:MM" when applicable', () => {
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  tomorrow.setHours(14, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [{ when: tomorrow.toISOString(), label: 'Chen' }] },
+  });
+  assert.match(out, /tomorrow 14:00 — Chen/);
+});
+
+test('renders phase span using start–end times', () => {
+  const t = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.toISOString(); };
+  const out = formatTemporalContext({
+    schedule: {
+      phase: { id: 'p1', label: 'morning correspondence', when: t(10, 0), end: t(13, 0) },
+      window: [],
+    },
+  });
+  assert.match(out, /Current phase: morning correspondence \(10:00–13:00\)/);
+});
+
+test('does not repeat the current phase in the window list', () => {
+  const t = (h) => { const d = new Date(); d.setHours(h, 0, 0, 0); return d.toISOString(); };
+  const phase = { id: 'p1', label: 'morning', when: t(10), end: t(13) };
+  const out = formatTemporalContext({
+    schedule: { phase, window: [
+      { ...phase, type: 'phase' },         // current phase — should be filtered
+      { id: 'e1', label: 'event 1', when: t(11) },
+    ]},
+  });
+  assert.equal(out.match(/morning/g)?.length, 1, 'current phase should appear exactly once');
+  assert.match(out, /event 1/);
+});
+
+test('renders resolution badge on resolved items', () => {
+  const t = new Date(); t.setHours(15, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { when: t.toISOString(), label: 'laundry', resolution: 'done' },
+    ]},
+  });
+  assert.match(out, /laundry \[done\]/);
+});
+
+test('passes through non-ISO time strings unchanged (backward-compat)', () => {
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [{ when: '14:00', label: 'literal' }] },
+  });
+  assert.match(out, /14:00 — literal/);
+});
+
 test('block order is handoff → schedule → interests', () => {
   const out = formatTemporalContext({
     handoff: { intent: 'HANDOFF-MARKER', open_threads: [] },

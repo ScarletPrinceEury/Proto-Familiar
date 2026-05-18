@@ -266,35 +266,64 @@ temporal/causal edges. Read tool used by Milestone 2's
 `temporal_context`. CRUD tools usable by Thalamus or by a future UI.
 
 **Tasks**
-- [ ] SQLite schema in `unruh/data/unruh.db` per Decision 5. Use a
-      tiny migration runner (single `migrations/` folder, version
-      stored in a `meta` table) so future schema changes are safe.
-- [ ] MCP tools:
-      - `schedule_add_node({ type, label, when?, payload })`
-      - `schedule_add_edge({ src, dst, kind, payload })`
-      - `schedule_get_window({ from, to })` — returns nodes whose
-        `when` falls in window plus edges touching them
-      - `schedule_resolve({ id, resolution })` — marks task done /
-        carried forward / cancelled
-- [ ] Wire `temporal_context` (from Milestone 2) to call
-      `schedule_get_window(now ± 24h)` and render a compact
-      human-readable block. The model assembles meaning — keep
-      formatting structural, not narrative.
-- [ ] Seed file `unruh/data/seed_routine.json` capturing the user's
-      anchors from the design doc (`~10 AM wake/meds/cat`,
-      `~10 PM cat play/dinner`) so a fresh install has a routine to
-      compare against. Loadable via `unruh seed-routine` CLI.
+- [x] SQLite schema in `unruh/data/unruh.db` per Decision 5. Tiny
+      migration runner (`unruh/src/unruh/migrations/NNNN_*.sql`,
+      version stored in `meta.schema_version`). WAL mode +
+      `busy_timeout=5000` for the M2.5-deferred multi-process
+      safety concern. Foreign keys ON so edges cascade on node
+      delete. `0001_initial.sql` covers both schedule AND interest
+      layers (one `nodes` table with a `layer` discriminator) so M4
+      doesn't need a follow-up migration.
+- [x] MCP tools:
+      - `schedule_add_node({ type, label, when?, end?, payload? })`
+      - `schedule_add_edge({ src, dst, kind, payload? })`
+      - `schedule_get_window({ from?, to?, limit?, include_open_tasks? })`
+        — returns nodes inside the window + open tasks (no when_ts,
+        unresolved) + every edge touching them. `limit` defaults
+        to 200 (M2.5 pagination concern addressed from the start).
+      - `schedule_resolve({ id, resolution })` — done / cancelled /
+        carried_forward.
+      All return a structured `{ok, ...}` shape so the Familiar gets
+      actionable errors instead of bare exceptions.
+- [x] Wire `temporal_context` to call `current_phase()` +
+      `get_window(now ± 12h)` and return them under `schedule:
+      { phase, window }`. Formatter in `temporal-format.js` renders
+      `Current phase: <label> (HH:MM–HH:MM)` and time-sorted window
+      lines `HH:MM — <label>`. Resolution badges surface as
+      `[done]` / `[cancelled]` / `[carried_forward]`.
+- [x] Seed file `unruh/src/unruh/seed_routine.json` capturing the
+      user's anchors (`~10 AM wake/meds/cat`, `~10 PM cat
+      play/dinner`) plus four ambient phases. Loadable via
+      `python -m unruh seed-routine` (idempotent: skip phases
+      already present today) or `seed-routine --replace` (rewrite
+      today's phases, leave user-created events/tasks alone).
+- [x] **Local-TZ rendering** (deferred from M2.5 Decision 6).
+      `formatLocalTime()` in `temporal-format.js` converts UTC
+      ISO-8601 to landmarks-style local strings — `HH:MM` (today),
+      `yesterday HH:MM`, `tomorrow HH:MM`, `Mon DD HH:MM` (this
+      year), `YYYY-MM-DD HH:MM` (other years). Uses the Node
+      process's system TZ.
+- [x] **Pagination from day one** (deferred from M2.5). Every read
+      tool's signature has a `limit` parameter, defaulting to 200.
+- [x] Test scaffold expanded: 43 new pytest tests (`test_schedule.py`,
+      `test_temporal_context.py`, `test_seed.py`) covering CRUD,
+      window edge cases, phase boundary semantics, payload round-
+      trip, migrations idempotency, FK cascade, and the seed
+      loader's replace-vs-skip semantics. 6 new Node tests for the
+      local-TZ formatting + resolution badges. Totals: 54 Python +
+      17 Node.
 
-**Acceptance:** Adding an event via tool call surfaces it in the next
-`/api/chat`'s `[Temporal Context]` block. Resolving a task removes it
-from the active window. Schema survives a process restart.
+**Acceptance:** Verified end-to-end. Running
+`uv run python -m unruh seed-routine` populates phases + anchors;
+`enrich('hello')` returns a `[Temporal Context]` block with the
+current phase and time-sorted window. Resolved tasks drop out of
+the window. Schema survives process restarts.
 
-**Open design question — landmarks vs coordinates.** The design doc
-emphasises *phases* (named time-blocks) over raw timestamps. The
-schema above stores `when` as a timestamp. Phases should be modelled
-as separate `phase` nodes with start/end times, and events can attach
-to a phase via a `during` edge. This lets the model say "mid-morning"
-instead of "10:43" naturally.
+**Resolved design question — landmarks vs coordinates.** Phases live
+as `phase`-type nodes with `when_ts` (start) + `end_ts`, attached
+to events/tasks via `during` edges. The formatter prepends the
+current phase to the window so the model sees "we're in *afternoon
+work*, here's what's coming" rather than coordinates.
 
 ---
 
