@@ -6,11 +6,12 @@
 > Code session can pick it up cold from this file, do the work, and
 > commit. Keep that property when editing this doc.
 
-**Branch convention:** development happens on
-`claude/implement-unruh-mechanism-<slug>` branches per session. Merge to
-`main` via PR once a milestone is shippable. The Unruh module itself
-lives in a **sibling repository** at `../unruh/`, mirroring the
-`../entity-core/` layout.
+**Branch convention:** development happens on the dedicated `Unruh`
+branch of Proto-Familiar. Merge to `main` via PR once a milestone is
+shippable. The Unruh module itself lives **inside this repo** as a
+subdirectory at `unruh/` — *not* a sibling repo (this differs from
+entity-core, which lives at `../entity-core/`). See Decision 1 below
+for the rationale.
 
 ---
 
@@ -53,10 +54,19 @@ Things that **do not yet exist** and the design assumes will be built:
 These are choices that the design doc leaves open or implies. Resolving
 them early keeps later milestones from forking.
 
-1. **Sibling repo vs in-repo Python module.** Mirror entity-core: keep
-   Unruh in `../unruh/` as its own repo so it can version independently.
-   The installer clones it the same way it clones entity-core. The
-   `ENTITY_CORE_PATH` env override gets a sibling `UNRUH_PATH`.
+1. **Subdirectory under Proto-Familiar, not a sibling repo.** Unruh
+   lives at `unruh/` inside this repo, on the `Unruh` branch. This
+   diverges from the entity-core pattern (which is a separate
+   sibling-cloned repo) for two reasons: (a) the user pre-created the
+   `Unruh` branch as the home for this work, signalling intent to keep
+   it in-tree; (b) it removes the install-time clone-and-pin dance,
+   simplifying installer changes. Trade-off: Unruh can't version
+   independently of Proto-Familiar, but at this stage that's
+   acceptable — Proto-Familiar's `package.json` version is the single
+   source of truth (per `CLAUDE.md`) and Unruh changes get bundled
+   into the same version stream. Python tooling: `uv` with
+   `pyproject.toml`. The `UNRUH_PATH` env var still exists as an
+   override for testing.
 
 2. **Transport.** MCP over stdio, JSON-RPC 2.0, same SDK
    (`@modelcontextprotocol/sdk` on the Thalamus side; the official
@@ -76,7 +86,7 @@ them early keeps later milestones from forking.
    it *after* graph context because temporal facts should be the
    freshest context the model sees before the user message.
 
-5. **Graph storage.** SQLite (single file under `../unruh/data/`),
+5. **Graph storage.** SQLite (single file under `unruh/data/`),
    schema-light: `nodes(id, layer, type, label, payload_json, weight,
    created_at, updated_at)` and `edges(id, src, dst, kind, payload_json,
    created_at)`. SQLite gives us atomic writes, easy backup, and the
@@ -121,23 +131,24 @@ progress · `[x]` shipped. Update the boxes as work lands.
 
 ### Milestone 1 — Unruh process skeleton & MCP handshake
 
-**Goal:** A new sibling repository at `../unruh/` that, when run,
-exposes an MCP server over stdio that Thalamus can connect to. No real
-data yet — just the plumbing and a `health_check` tool.
+**Goal:** A new `unruh/` subdirectory inside Proto-Familiar that, when
+run, exposes an MCP server over stdio that Thalamus can connect to. No
+real data yet — just the plumbing and a `health_check` tool.
 
 **Tasks**
-- [ ] Create `../unruh/` repo with Python project (`pyproject.toml`,
-      `pip install -e .` friendly, Python ≥ 3.11).
-- [ ] Add `mcp` SDK dep and a minimal server in
-      `src/unruh/server.py` that registers one tool: `health_check`
-      returning `{ "ok": true, "version": "...", "ts": "..." }`.
-- [ ] Add `unruh/data/` (gitignored) for future SQLite, plus an
+- [x] Create `unruh/` subdirectory with `pyproject.toml` targeting
+      Python ≥ 3.11 and managed by `uv`.
+- [x] Add `mcp` SDK dep and a minimal server in
+      `unruh/src/unruh/server.py` that registers one tool:
+      `health_check` returning `{ "ok": true, "version": "...",
+      "ts": "..." }`.
+- [x] Add `unruh/data/` (gitignored) for future SQLite, plus an
       `unruh.toml` config stub.
-- [ ] Add a README to that repo with the same shape as entity-core's.
+- [x] Add a `unruh/README.md` covering local-dev setup.
 
-**Acceptance:** Running `python -m unruh` from `../unruh/` produces a
-process that speaks MCP over stdio and answers `tools/list` and
-`tools/call` for `health_check`.
+**Acceptance:** Running `uv run python -m unruh` from `unruh/`
+produces a process that speaks MCP over stdio and answers
+`tools/list` and `tools/call` for `health_check`.
 
 **Out of scope:** graphs, weights, anything user-facing.
 
@@ -151,19 +162,18 @@ entity-core, calls a single tool per message, and inserts a
 failures on each peer.
 
 **Tasks**
-- [ ] Refactor `thalamus.js:67` so the single `mcpClient` becomes a
+- [x] Refactor `thalamus.js:67` so the single `mcpClient` becomes a
       map `mcpClients = { entityCore: null, unruh: null }`.
-- [ ] Add `connect()` calls for both, with independent error logging.
-      Mirror the `entity-core` fallback pattern for Unruh: probe
-      `../unruh/src/unruh/__main__.py` and let `UNRUH_PATH` override.
-- [ ] Spawn command for Unruh: `python -m unruh` with `cwd` set to
-      the repo root so its `data/` resolves correctly. Match
-      entity-core's pattern at `thalamus.js:64`.
-- [ ] In `enrich()`, add a fourth `Promise.allSettled` entry calling
-      `unruh.callTool({ name: 'temporal_context', arguments: { now: <iso> } })`.
-- [ ] Format the response under a `[Temporal Context]` header,
+- [x] Add `connect()` calls for both, with independent error logging.
+      Probe `unruh/src/unruh/__main__.py` and let `UNRUH_PATH`
+      override.
+- [x] Spawn command for Unruh: `uv run python -m unruh` with `cwd`
+      set to `unruh/` so its `data/` resolves correctly.
+- [x] In `enrich()`, add a fourth `Promise.allSettled` entry calling
+      Unruh's `temporal_context` tool.
+- [x] Format the response under a `[Temporal Context]` header,
       inserted after the graph section in the assembled string.
-- [ ] Tool returns an empty payload until Milestone 3 fills it in;
+- [x] Tool returns an empty payload until Milestone 3 fills it in;
       verify the section still renders cleanly when empty (omit
       rather than print a hollow header).
 
@@ -506,10 +516,11 @@ entity-core today.
 
 **Tasks**
 - [ ] `install.sh` / `install.bat` / `scripts/win/install.ps1`:
-      Python ≥ 3.11 detection (install if missing on platforms where
-      we already auto-install Deno), venv creation under `../unruh/`,
-      `pip install -e .` of the Unruh repo. Mirror the entity-core
-      clone pattern (pin a tag, support refresh-in-place).
+      `uv` detection (install via the official one-line installer if
+      missing — it ships a self-contained Python runtime, so we
+      don't need to detect system Python separately), then
+      `uv sync` inside `unruh/` to materialise the venv. No
+      clone-and-pin needed since Unruh ships in-tree.
 - [ ] Launchers (`start.sh`, `start.bat`, `Proto-Familiar.command`,
       `scripts/win/tray.ps1`): no changes expected — Thalamus
       spawns Unruh as a child, same as entity-core.

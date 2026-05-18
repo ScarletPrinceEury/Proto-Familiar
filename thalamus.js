@@ -63,8 +63,17 @@ const ENTITY_CORE_ENTRY = process.env.ENTITY_CORE_PATH ?? probeEntry();
 // start it from its own root, not from wherever node server.js was launched.
 const ENTITY_CORE_ROOT = path.dirname(path.dirname(ENTITY_CORE_ENTRY));
 
+// Unruh — the temporal-context specialist. Ships in-tree at ./unruh/
+// (subdirectory rather than sibling repo; see docs/unruh-implementation-plan.md
+// §1 Decision 1). Launched via `uv run python -m unruh` with cwd set to
+// the unruh/ root so its ./data/ resolves. UNRUH_PATH overrides the probe.
+const UNRUH_ROOT = path.resolve(__dirname, 'unruh');
+const UNRUH_ENTRY = process.env.UNRUH_PATH ?? path.join(UNRUH_ROOT, 'src', 'unruh', '__main__.py');
+
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
+/** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
+let unruhClient = null;
 
 // ── Canonical file orderings (mirrors Psycheros src/entity/context.ts) ───────
 
@@ -104,8 +113,41 @@ async function connect() {
   console.log('[thalamus] Connected to entity-core at', ENTITY_CORE_ENTRY);
 }
 
+// Unruh runs as an independent stdio child. Its failures must not affect
+// entity-core's enrichment path — connectUnruh() is best-effort and the
+// rest of enrich() degrades gracefully when unruhClient is null.
+async function connectUnruh() {
+  if (!existsSync(UNRUH_ENTRY)) {
+    console.log('[thalamus] Unruh not installed at', UNRUH_ENTRY, '— skipping');
+    return;
+  }
+  const transport = new StdioClientTransport({
+    command: 'uv',
+    args: ['run', 'python', '-m', 'unruh'],
+    cwd: UNRUH_ROOT,
+  });
+
+  const client = new Client(
+    { name: 'proto-familiar', version: PKG_VERSION },
+    { capabilities: {} },
+  );
+
+  client.onclose = () => {
+    console.error('[thalamus] Unruh connection closed');
+    unruhClient = null;
+  };
+
+  await client.connect(transport);
+  unruhClient = client;
+  console.log('[thalamus] Connected to Unruh at', UNRUH_ENTRY);
+}
+
 connect().catch(err => {
   console.error('[thalamus] Failed to start entity-core:', err.message);
+});
+
+connectUnruh().catch(err => {
+  console.error('[thalamus] Failed to start Unruh:', err.message);
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -120,6 +162,73 @@ function parseToolText(result, fallback) {
 function wrapFile(filename, content, promptLabel) {
   const label = promptLabel ?? filename.replace(/\.md$/, '');
   return `<${label}>\n${content.trim()}\n</${label}>`;
+}
+
+/**
+ * Render Unruh's temporal_context payload as a compact human-readable block.
+ *
+ * Returns '' when there's nothing meaningful to surface (Unruh down, payload
+ * missing, or all sub-blocks empty) so the assembler can omit the section
+ * header entirely. Sub-block order — handoff, schedule, interests — mirrors
+ * the design doc's daily-briefing order from docs/unruh-design.md.
+ *
+ * Shape:
+ *   {
+ *     ts: '2026-01-15T10:00:00Z',
+ *     schedule:  { window: [...], phase: {...} | null },
+ *     interests: { standing: [...], live: [...] },
+ *     handoff:   { intent: '...' | null, open_threads: [...] }
+ *   }
+ */
+export function formatTemporalContext(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+
+  const blocks = [];
+
+  const handoff = payload.handoff ?? {};
+  if (handoff.intent || (handoff.open_threads ?? []).length) {
+    const handoffLines = ['Last session:'];
+    if (handoff.intent) handoffLines.push(`  intent — ${handoff.intent}`);
+    for (const thread of handoff.open_threads ?? []) {
+      handoffLines.push(`  open — ${typeof thread === 'string' ? thread : thread.label ?? thread.id}`);
+    }
+    blocks.push(handoffLines.join('\n'));
+  }
+
+  const schedule = payload.schedule ?? {};
+  const phase = schedule.phase;
+  const window = schedule.window ?? [];
+  if (phase || window.length) {
+    const schedLines = [];
+    if (phase) schedLines.push(`Current phase: ${phase.label ?? phase.id ?? phase}`);
+    for (const item of window) {
+      const when = item.when ?? item.fires_at ?? '';
+      const label = item.label ?? item.id ?? '';
+      schedLines.push(`  ${when ? `${when} — ` : ''}${label}`);
+    }
+    if (schedLines.length) blocks.push(schedLines.join('\n'));
+  }
+
+  const interests = payload.interests ?? {};
+  const standing = interests.standing ?? [];
+  const live = interests.live ?? [];
+  if (standing.length || live.length) {
+    const interestLines = [];
+    if (standing.length) {
+      interestLines.push('Standing values:');
+      for (const v of standing) interestLines.push(`  ${v.label ?? v}`);
+    }
+    if (live.length) {
+      interestLines.push('Live interests (by weight):');
+      for (const i of live) {
+        const w = typeof i.weight === 'number' ? ` [${i.weight.toFixed(2)}]` : '';
+        interestLines.push(`  ${i.label ?? i.id}${w}`);
+      }
+    }
+    blocks.push(interestLines.join('\n'));
+  }
+
+  return blocks.join('\n\n');
 }
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
@@ -173,13 +282,14 @@ function identitySection(files, order) {
  * @returns {Promise<string>}
  */
 export async function enrich(userMessage) {
-  if (!mcpClient) return '';
+  if (!mcpClient && !unruhClient) return '';
 
   try {
-    // Fire all three queries in parallel but independently — a failure in
-    // memory_search or graph_node_search must not prevent identity from being
-    // injected. Promise.allSettled never rejects.
-    const [idSettled, memSettled, graphSettled] = await Promise.allSettled([
+    // Fire all queries in parallel but independently — a failure in any
+    // one of them must not prevent the others from being injected.
+    // Promise.allSettled never rejects. Unruh is queried alongside
+    // entity-core; either or both may be absent and the rest still works.
+    const entityCorePromises = mcpClient ? [
       mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
       mcpClient.callTool({
         name: 'memory_search',
@@ -189,15 +299,28 @@ export async function enrich(userMessage) {
         name: 'graph_node_search',
         arguments: { query: userMessage, limit: 10, minScore: 0.3 },
       }),
+    ] : [Promise.reject(new Error('entity-core not connected')),
+         Promise.reject(new Error('entity-core not connected')),
+         Promise.reject(new Error('entity-core not connected'))];
+
+    const unruhPromise = unruhClient
+      ? unruhClient.callTool({ name: 'temporal_context', arguments: { now: new Date().toISOString() } })
+      : Promise.reject(new Error('unruh not connected'));
+
+    const [idSettled, memSettled, graphSettled, temporalSettled] = await Promise.allSettled([
+      ...entityCorePromises,
+      unruhPromise,
     ]);
 
-    if (idSettled.status    === 'rejected') console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
-    if (memSettled.status   === 'rejected') console.error('[thalamus] memory_search failed:',    memSettled.reason?.message ?? memSettled.reason);
-    if (graphSettled.status === 'rejected') console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+    if (idSettled.status       === 'rejected' && mcpClient)   console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
+    if (memSettled.status      === 'rejected' && mcpClient)   console.error('[thalamus] memory_search failed:',    memSettled.reason?.message ?? memSettled.reason);
+    if (graphSettled.status    === 'rejected' && mcpClient)   console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+    if (temporalSettled.status === 'rejected' && unruhClient) console.error('[thalamus] temporal_context failed:',  temporalSettled.reason?.message ?? temporalSettled.reason);
 
-    const idResult    = idSettled.status    === 'fulfilled' ? idSettled.value    : null;
-    const memResult   = memSettled.status   === 'fulfilled' ? memSettled.value   : null;
-    const graphResult = graphSettled.status === 'fulfilled' ? graphSettled.value : null;
+    const idResult       = idSettled.status       === 'fulfilled' ? idSettled.value       : null;
+    const memResult      = memSettled.status      === 'fulfilled' ? memSettled.value      : null;
+    const graphResult    = graphSettled.status    === 'fulfilled' ? graphSettled.value    : null;
+    const temporalResult = temporalSettled.status === 'fulfilled' ? temporalSettled.value : null;
 
     // ── Identity ──────────────────────────────────────────────────────────
     const id = parseToolText(idResult, {});
@@ -320,16 +443,24 @@ export async function enrich(userMessage) {
       graphLines = lines.join('\n');
     }
 
+    // ── Temporal context (Unruh) ──────────────────────────────────────────
+    // Empty payload until Milestones 3-6 populate it. We deliberately omit
+    // the section entirely when there is nothing to say rather than print
+    // a hollow "[Temporal Context]" header, so the LLM doesn't waste
+    // attention parsing scaffolding.
+    const temporalLines = formatTemporalContext(parseToolText(temporalResult, null));
+
     // ── Assemble (mirrors Psycheros buildSystemMessage) ───────────────────
     const sections = [];
 
-    if (baseContent) sections.push(baseContent);
-    if (selfContent) sections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
-    if (userContent) sections.push(`---\nUser files (from identity/user/ directory):\n\n${userContent}`);
-    if (relContent)  sections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
-    if (custContent) sections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
-    if (memLines)    sections.push(`---\nRelevant Memories via RAG:\n\n${memLines}`);
-    if (graphLines)  sections.push(`---\nRelevant Knowledge from Graph:\n${graphLines}`);
+    if (baseContent)   sections.push(baseContent);
+    if (selfContent)   sections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
+    if (userContent)   sections.push(`---\nUser files (from identity/user/ directory):\n\n${userContent}`);
+    if (relContent)    sections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
+    if (custContent)   sections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
+    if (memLines)      sections.push(`---\nRelevant Memories via RAG:\n\n${memLines}`);
+    if (graphLines)    sections.push(`---\nRelevant Knowledge from Graph:\n${graphLines}`);
+    if (temporalLines) sections.push(`---\n[Temporal Context]\n${temporalLines}`);
 
     if (sections.length === 0) {
       console.warn('[thalamus] enrich() produced no content — identity files may be empty and no memories found');
