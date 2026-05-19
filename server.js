@@ -24,13 +24,14 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
+  shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
   acknowledgeJob as acknowledgeMemorizationJob,
   cancelJob as cancelMemorizationJob,
-  startMemorizationWorker,
+  startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 
@@ -1153,7 +1154,7 @@ app.post('/api/tailscale', async (req, res) => {
   });
 });
 
-app.listen(PORT, HOST, async () => {
+const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
   if (tailscaleState.enabled) {
@@ -1168,3 +1169,36 @@ app.listen(PORT, HOST, async () => {
   console.log(lines.join('\n') + '\n');
   startMemorizationWorker();
 });
+
+// Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
+// stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
+// the memorization setIntervals would keep the event loop alive past
+// httpServer.close(), and the MCP children (entity-core, Unruh) would
+// be left to die from stdin EOF — which works on Unix but can be slow
+// on Windows. With this handler:
+//   1. Stop accepting new HTTP connections.
+//   2. Stop the memorization tick + prune intervals.
+//   3. Close the Unruh MCP client (its onclose-reconnect is suppressed
+//      via the unruhShuttingDown flag inside shutdownUnruh).
+//   4. process.exit(0) with a fallback timer in case anything hangs.
+let _shuttingDown = false;
+async function handleSignal(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`\n[server] ${signal} received — shutting down…`);
+  // Hard-exit safety net: never let a stuck handle keep the process
+  // alive past this window. SIGKILL-equivalent if anything misbehaves.
+  setTimeout(() => {
+    console.error('[server] graceful shutdown timed out — forcing exit');
+    process.exit(1);
+  }, 5000).unref();
+  try { httpServer.close(); } catch { /* already closed */ }
+  try { stopMemorizationWorker(); } catch { /* already stopped */ }
+  try { shutdownEntityCore(); } catch { /* already disconnected */ }
+  try { shutdownUnruh(); } catch { /* already disconnected */ }
+  // Give the close handshakes a tiny window, then exit.
+  setTimeout(() => process.exit(0), 250).unref();
+}
+process.on('SIGTERM', () => handleSignal('SIGTERM'));
+process.on('SIGINT',  () => handleSignal('SIGINT'));
+process.on('SIGHUP',  () => handleSignal('SIGHUP'));

@@ -140,7 +140,9 @@ import { PROVIDER_URLS } from './providers.js';
  *     equivalent fallback names, but setting both pairs makes builds
  *     that read either work without re-config.
  */
-export function loadEntityCoreEnv() {
+// Internal — exposed for diagnostic logging only. Earlier iterations
+// exported this for an out-of-tree smoke test that no longer exists.
+function loadEntityCoreEnv() {
   let settings;
   try {
     settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -378,11 +380,18 @@ function scheduleUnruhReconnect() {
   }, delay).unref?.(); // unref so a pending retry doesn't keep the process alive
 }
 
-// Clean shutdown — call from server.js if it adds a SIGTERM handler. Stops
-// the reconnect loop and lets the child process die from stdin EOF.
+// Clean shutdown — called from server.js's SIGTERM/SIGINT/SIGHUP
+// handler. Sets the shutting-down flags so any pending reconnect
+// timers no-op when they fire, then closes the MCP clients so the
+// child processes die cleanly from stdin EOF rather than being
+// orphaned by a hard process.exit().
 export function shutdownUnruh() {
   unruhShuttingDown = true;
   try { unruhClient?.close?.(); } catch { /* best-effort */ }
+}
+export function shutdownEntityCore() {
+  entityCoreShuttingDown = true;
+  try { mcpClient?.close?.(); } catch { /* best-effort */ }
 }
 
 connect().catch(err => {
@@ -409,10 +418,10 @@ function wrapFile(filename, content, promptLabel) {
 }
 
 // Pure renderer lives in its own file so tests can import it without
-// triggering thalamus.js's startup-time MCP child spawns. Re-exported
-// here so callers that imported it from thalamus.js keep working.
+// triggering thalamus.js's startup-time MCP child spawns. We only
+// import here for enrich()'s internal use; everything else imports
+// from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
-export { formatTemporalContext };
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {

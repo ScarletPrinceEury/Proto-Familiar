@@ -572,7 +572,6 @@ const state = {
   tomeMatchWholeWords:   false,  // global whole-word keyword matching
   turnCount:             0,      // conversation turn counter (used by entry.delay)
   generationMode:        'normal', // current generation mode (used by entry.triggers[])
-  lorebook:          { entries: {} }, // legacy field kept for compatibility
   tomeCache:         {},         // { [tomeId]: tomeObject } — not persisted
   tomeRegistry:      [],         // array of { id, name, enabled, entryCount } — not persisted
   topics:            [],         // session-level; stored under pf_topics_{sessionId}
