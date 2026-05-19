@@ -334,29 +334,56 @@ always-on and live interests carrying weight. Anchored values
 referenced from entity-core.
 
 **Tasks**
-- [ ] Extend node schema with a `layer` discriminator (`schedule` |
-      `interest`) so a single `nodes` table holds both. Edges already
-      generic.
-- [ ] Interest node types: `standing_value`, `active_pursuit`,
-      `live_interest`, `curiosity`. Add `bookmark` as a separate
-      node type with a `bookmarked` edge from a `Familiar` singleton
-      node (or just from a virtual `self` id).
-- [ ] MCP tools:
-      - `interest_record({ topic, source, payload })` — bumps weight,
-        creates node if missing
-      - `interest_bookmark({ topic, resource, note })`
-      - `interest_list({ limit, min_weight })` — sorted by effective
-        weight (decay applied on read per Decision 8)
-      - `interest_set_standing({ topic, value_ref })` — links a node
-        to an entity-core identity fact (stored as opaque string ref
-        for now; Milestone 7 makes the link bidirectional)
-- [ ] Wire `temporal_context` to include the top N interests above a
-      threshold under a sub-header so the model sees them alongside
-      the schedule.
+- [x] Schema already covers this via the `layer` discriminator
+      landed in M3's `0001_initial.sql` — no migration needed.
+      `nodes.weight` + `nodes.last_touched` columns are populated
+      starting M4.
+- [x] Interest node types: `standing_value`, `active_pursuit`,
+      `live_interest`, `curiosity`, plus `bookmark` as a separate
+      type. Bookmark linking via a `bookmarked` edge from the
+      bookmark node to its topic (sidestepped the singleton-self-
+      node design question — bookmarks reference topics directly).
+- [x] MCP tools:
+      - `interest_record({ topic, source, payload, delta })` — bumps
+        weight, creates node if missing. Decay-then-add on existing
+        nodes: stored raw weight reflects current effective weight
+        before the bump, so rapid engagement doesn't accumulate
+        unboundedly.
+      - `interest_bookmark({ topic, resource, note })` — bookmark
+        node + `bookmarked` edge to the topic (auto-creates topic
+        as curiosity if missing).
+      - `interest_list({ limit, min_weight, include_standing })` —
+        sorted by effective weight desc; standing values bypass
+        min_weight and surface alphabetically.
+      - `interest_set_standing({ topic, value_ref, weight })` —
+        promotes (or creates) a node with type=standing_value and
+        payload.value_ref. Standing values bypass decay entirely.
+- [x] Wire `temporal_context` to include `list_interests(limit=10)`
+      under `payload.interests = { standing, live }`. The
+      thalamus.js formatter already rendered this shape (M2's
+      placeholder), so the addition is server-side only and
+      surfaces in the [Temporal Context] block automatically.
 
-**Acceptance:** A topic recorded via `interest_record` appears in the
-prompt's temporal context section, with a weight that visibly decays
-over time. Standing values surface regardless of decay.
+**Acceptance:** Verified end-to-end. `interest_record("owl feather
+aerodynamics", delta=1.5)` followed by `enrich('hello')` produces a
+`[Temporal Context]` block containing `Live interests (by weight):
+owl feather aerodynamics [1.50]`. Standing values render in their
+own sub-section regardless of weight. Decay reduces effective weight
+over simulated time (see `test_effective_weight` cases).
+
+**Open question — weight curve shape resolved.** Default tau is
+5 days (rough half-life = 5*ln(2) ≈ 3.5 days; a 1.0 weight decays
+to ~0.18 at 5d, ~0.03 at 15d). Min surfaced effective-weight is
+0.01 — below that, an interest is too faded to be worth prompt
+tokens. Both configurable as MCP tool arguments now; settings-
+synced UI control lands with M5.
+
+**Tier classification** is computed on read from effective weight,
+not stored: curiosity < 0.5 ≤ live_interest < 2.0 ≤ active_pursuit.
+Promotion is implicit (engagement raises the tier label without
+mutating the stored type). The one explicit type change is
+`interest_set_standing`, which forces type=standing_value and
+disables decay.
 
 ---
 

@@ -29,6 +29,7 @@ from mcp.server.fastmcp import FastMCP
 from unruh import __version__
 from unruh.db import get_conn
 from unruh import schedule as sched
+from unruh import interest as interests
 
 mcp = FastMCP("unruh")
 
@@ -178,6 +179,135 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
         return _err(str(e))
 
 
+# ── Interest layer (M4) ───────────────────────────────────────────────
+
+
+@mcp.tool()
+def interest_record(
+    topic: str,
+    source: str | None = None,
+    payload: dict | None = None,
+    delta: float = 0.1,
+) -> dict[str, Any]:
+    """Record a moment of engagement with `topic`.
+
+    Creates the topic as a curiosity if it doesn't exist, otherwise
+    applies decay-then-add so the stored raw weight tracks recent
+    engagement rather than historical sum. Standing values still
+    have their last_touched updated (for provenance) but their
+    weight stays put — the design says standing values don't
+    accumulate.
+
+    Args:
+        topic: free-form label, used to look up an existing node.
+            Case-sensitive after .strip().
+        source: optional provenance tag stored in payload.source —
+            'token_volume' / 'persistence' / 'session_boundary' /
+            'bookmark' once M5 instruments those signals.
+        payload: arbitrary extras stored as JSON.
+        delta: weight bump magnitude. Defaults to 0.1; M5's
+            instrumentation will pass varied values based on the
+            signal strength (long response → bigger delta, etc).
+
+    Returns: {ok: True, id, type, raw_weight, effective_weight}.
+    """
+    try:
+        with get_conn() as conn:
+            return interests.record(
+                conn, topic=topic, source=source, payload=payload, delta=delta,
+            )
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def interest_bookmark(topic: str, resource: str, note: str | None = None) -> dict[str, Any]:
+    """Save a resource against a topic for a free cycle.
+
+    Creates the topic as a curiosity if it doesn't exist (so a
+    bookmark can be the first signal of interest in something).
+    Bookmark nodes are linked to their topic via a 'bookmarked'
+    edge — making the relationship traversable for idle-time
+    surfacing in M8.
+
+    Args:
+        topic: the interest the bookmark is filed under.
+        resource: the URL / identifier / quote you're saving.
+        note: optional context for why this is worth returning to.
+
+    Returns: {ok: True, bookmark_id, topic_id, edge_id}.
+    """
+    try:
+        with get_conn() as conn:
+            return interests.bookmark(
+                conn, topic=topic, resource=resource, note=note,
+            )
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def interest_set_standing(
+    topic: str,
+    value_ref: str | None = None,
+    weight: float = 1.0,
+) -> dict[str, Any]:
+    """Promote a topic to a standing value (or create one outright).
+
+    Standing values are always-on identity-level orientations that
+    bypass the decay model. The design doc lists "caring for the
+    user's wellbeing" and "wanting them to thrive" as canonical
+    examples — things that shouldn't fade just because they haven't
+    been explicitly mentioned in a while.
+
+    Args:
+        topic: the value's label.
+        value_ref: opaque anchor to an entity-core identity fact for
+            the M7 bidirectional bridge. Stored verbatim as
+            payload.value_ref; not validated until M7.
+        weight: the constant rendering weight. Defaults to 1.0 —
+            slightly above the live_interest threshold so the value
+            consistently surfaces in the briefing without dominating
+            it.
+
+    Returns: {ok: True, id, created: <bool>}.
+    """
+    try:
+        with get_conn() as conn:
+            return interests.set_standing(
+                conn, topic=topic, value_ref=value_ref, weight=weight,
+            )
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def interest_list(
+    limit: int = 20,
+    min_weight: float = 0.01,
+    include_standing: bool = True,
+) -> dict[str, Any]:
+    """List interests sorted by effective weight (decay applied on
+    read per Decision 8). Standing values bypass min_weight — they
+    always surface.
+
+    Args:
+        limit: max live-interest entries (standing values not capped).
+        min_weight: floor for live-interest surfacing. Below this,
+            an interest is considered too faded to be worth the
+            prompt tokens.
+        include_standing: set False if you specifically want the
+            non-standing slice.
+
+    Returns: {ok: True, standing: [...], live: [...]}.
+    """
+    with get_conn() as conn:
+        return interests.list_interests(
+            conn, limit=limit, min_weight=min_weight,
+            include_standing=include_standing,
+        )
+
+
 # ── Per-message briefing ──────────────────────────────────────────────
 
 
@@ -195,18 +325,27 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         handoff:   { intent: ..., open_threads: [...] } # M6 populates
       }
 
-    M3 populates `schedule`. Empty sub-blocks render as empty in
-    the prompt; Thalamus's formatter omits the [Temporal Context]
-    section entirely when everything is empty.
+    M3 populates `schedule`, M4 populates `interests`. Empty
+    sub-blocks render as empty in the prompt; Thalamus's formatter
+    omits the [Temporal Context] section entirely when everything
+    is empty.
     """
     with get_conn() as conn:
         phase = sched.current_phase(conn, at=now)
         window = sched.get_window(conn, from_ts=None, to_ts=None, limit=50)
+        # Interest layer surfacing: top weighted live interests plus
+        # all standing values. Limited to keep the prompt cheap —
+        # the design's "kilobytes-scale" budget assumes ~10 items
+        # max here, not the full list.
+        interest_block = interests.list_interests(conn, limit=10)
     schedule_block: dict[str, Any] = {"phase": phase, "window": window["nodes"]}
     return {
         "ts": now or _now_iso(),
         "schedule":  schedule_block,
-        "interests": {"standing": [], "live": []},
+        "interests": {
+            "standing": interest_block["standing"],
+            "live":     interest_block["live"],
+        },
         "handoff":   {"intent": None, "open_threads": []},
     }
 
