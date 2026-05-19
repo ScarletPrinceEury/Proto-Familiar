@@ -1018,10 +1018,17 @@ function renderConnectionsList() {
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
 
+    // a11y note: each action button gets both `title` (sighted hover
+    // tooltip) and `aria-label` (screen-reader announcement) because
+    // the visible textContent is a symbol (✓ / + / ▲ / ▼ / ✕) that
+    // doesn't announce meaningfully on its own. Toggle buttons use
+    // aria-pressed so assistive tech can convey on/off state.
     const fbBtn = document.createElement('button');
     fbBtn.type = 'button';
     fbBtn.textContent = isFallback ? '✓ fallback' : '+ fallback';
     fbBtn.title = isPrimary ? 'Primary connection cannot also be a fallback' : 'Toggle fallback';
+    fbBtn.setAttribute('aria-label', `${isFallback ? 'Remove' : 'Add'} "${conn.name}" as fallback`);
+    fbBtn.setAttribute('aria-pressed', isFallback ? 'true' : 'false');
     fbBtn.disabled = isPrimary;
     fbBtn.addEventListener('click', () => toggleFallback(conn.id, !isFallback));
     actions.appendChild(fbBtn);
@@ -1037,16 +1044,24 @@ function renderConnectionsList() {
     ecBtn.title = isEntityCore
       ? 'Currently the API key source for entity-core (click to clear)'
       : 'Use this connection’s API key for entity-core';
+    ecBtn.setAttribute('aria-label', isEntityCore
+      ? `Clear entity-core API-key designation from "${conn.name}"`
+      : `Use "${conn.name}" as entity-core API-key source`);
+    ecBtn.setAttribute('aria-pressed', isEntityCore ? 'true' : 'false');
     ecBtn.addEventListener('click', () => setEntityCoreConnection(conn.id));
     actions.appendChild(ecBtn);
 
     if (isFallback) {
       const upBtn = document.createElement('button');
-      upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.title = 'Try earlier in fallback order';
+      upBtn.type = 'button'; upBtn.textContent = '▲';
+      upBtn.title = 'Try earlier in fallback order';
+      upBtn.setAttribute('aria-label', `Move "${conn.name}" earlier in fallback order`);
       upBtn.disabled = fbIdx === 0;
       upBtn.addEventListener('click', () => moveFallback(conn.id, -1));
       const dnBtn = document.createElement('button');
-      dnBtn.type = 'button'; dnBtn.textContent = '▼'; dnBtn.title = 'Try later in fallback order';
+      dnBtn.type = 'button'; dnBtn.textContent = '▼';
+      dnBtn.title = 'Try later in fallback order';
+      dnBtn.setAttribute('aria-label', `Move "${conn.name}" later in fallback order`);
       dnBtn.disabled = fbIdx === state.fallbackConnectionIds.length - 1;
       dnBtn.addEventListener('click', () => moveFallback(conn.id, +1));
       actions.appendChild(upBtn);
@@ -1054,7 +1069,9 @@ function renderConnectionsList() {
     }
 
     const delBtn = document.createElement('button');
-    delBtn.type = 'button'; delBtn.textContent = '✕'; delBtn.title = 'Delete connection';
+    delBtn.type = 'button'; delBtn.textContent = '✕';
+    delBtn.title = 'Delete connection';
+    delBtn.setAttribute('aria-label', `Delete connection "${conn.name}"`);
     delBtn.addEventListener('click', () => {
       if (confirm(`Delete connection "${conn.name}"?`)) deleteConnection(conn.id);
     });

@@ -129,11 +129,23 @@ test('injection is a system role (not user/assistant)', () => {
 
 // ── Edge: empty messages array (defensive) ───────────────────────────
 
-test('empty messages array still places dynamic at index 1 clamp', () => {
+test('empty messages array places dynamic at index 0 (no system to protect)', () => {
   const out = injectDynamicAtDepth([], 'DYN', 4);
-  // Math.max(1, 0 - 4) = 1, but the array is empty so slice(0,1)
-  // gives [], slice(1) gives []. Result is [dynamic-msg].
-  assert.equal(out.injectedAt, 1);
+  // No system message in the array → lower bound is 0, not 1.
+  // Math.max(0, 0 - 4) = 0. Dynamic IS the array.
+  assert.equal(out.injectedAt, 0);
   assert.equal(out.messages.length, 1);
   assert.equal(out.messages[0].content, 'DYN');
+});
+
+test('no-system + short conversation: dynamic lands BEFORE the user message', () => {
+  // Edge case: API consumer skipped the system message. Without the
+  // hasSystemAtStart-aware clamp, dynamic would land AFTER the user
+  // message (depth=4, max(1, -3)=1, [user, DYN]) — model sees its
+  // context too late. The fix: when there's no system message,
+  // clamp lower bound to 0, so dynamic lands before the user.
+  const out = injectDynamicAtDepth([USR('first message')], 'DYN', 4);
+  assert.equal(out.injectedAt, 0);
+  assert.equal(out.messages[0].content, 'DYN');
+  assert.equal(out.messages[1].content, 'first message');
 });

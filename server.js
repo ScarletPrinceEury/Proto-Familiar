@@ -1034,14 +1034,25 @@ function getThalamusDynamicDepth() {
 // positions from the end of `messages`, leaving the array stable
 // above that point for the upstream LLM's prefix cache. Returns the
 // new array plus the actual position used so the inspector can show
-// where it landed. Clamped to max(1, …) so even an empty conversation
-// keeps the injection below the system message.
+// where it landed.
+//
+// Two clamps:
+//   - lower bound `1` if there's a system message at index 0 — keeps
+//     the dynamic injection below the static prefix so the cache stays
+//     valid. `0` when there's no system message anyway (no cache to
+//     protect).
+//   - upper bound `messages.length` — appended at the end when the
+//     conversation is so short that `len - depth` would otherwise put
+//     the dynamic block AFTER what would be the position-clamped index
+//     (i.e. an empty messages array).
 //
 // No-op (returns messages unchanged + injectedAt=null) when
 // dynamicContent is empty.
 function injectDynamicAtDepth(messages, dynamicContent, depth) {
   if (!dynamicContent) return { messages, injectedAt: null };
-  const injectedAt = Math.max(1, messages.length - depth);
+  const hasSystemAtStart = messages.length > 0 && messages[0]?.role === 'system';
+  const minIdx = hasSystemAtStart ? 1 : 0;
+  const injectedAt = Math.max(minIdx, messages.length - depth);
   const dynamicMsg = { role: 'system', content: dynamicContent };
   return {
     messages: [

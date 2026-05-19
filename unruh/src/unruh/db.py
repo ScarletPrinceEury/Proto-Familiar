@@ -50,13 +50,19 @@ def new_id() -> str:
 def get_conn(db_path: Path | None = None) -> sqlite3.Connection:
     """Open a connection, configure pragmas, apply pending migrations.
 
+    Uses Python's deferred-transaction mode (the sqlite3 default) so
+    the standard `with conn:` context manager wraps each block in a
+    transaction — commit on clean exit, rollback on exception. That
+    matters for multi-write operations like seed_today(): a crash
+    halfway through used to leave half a routine in the DB; now it
+    rolls back cleanly.
+
     Returns a connection with row_factory = sqlite3.Row so callers can
-    treat rows as dicts. The caller owns the connection — close it via
-    context manager (`with get_conn() as conn`) or explicit `.close()`.
+    treat rows as dicts.
     """
     path = db_path or default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
+    conn = sqlite3.connect(str(path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     # WAL: readers don't block writers, safer for the rare multi-process case.
     conn.execute("PRAGMA journal_mode = WAL")
@@ -107,6 +113,13 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     just picks up where the previous attempt left off. The
     schema_version write happens only after the script returns
     successfully, so a failed migration won't mark itself complete.
+
+    We commit the meta-version update explicitly because the caller
+    might be holding the connection without a `with` block (e.g.
+    Unruh's main() does `get_conn().close()` to surface schema
+    problems early; without an explicit commit the version
+    record would roll back on close and we'd re-run migrations
+    on every boot — harmless but wasteful).
     """
     current = _current_version(conn)
     for version, path in _pending_migrations(current):
@@ -116,3 +129,4 @@ def run_migrations(conn: sqlite3.Connection) -> None:
             "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
             (str(version),),
         )
+        conn.commit()

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .db import get_conn
@@ -45,13 +45,18 @@ def _local_to_utc_today(hhmm: str, base_date: datetime | None = None) -> str:
 
 def _phase_end_today(start_hhmm: str, end_hhmm: str, base_date: datetime | None = None) -> str:
     """End-time variant that rolls into 'next day' when the end is
-    not-later-than the start (the 'late night' 23:00→06:00 case)."""
+    not-later-than the start (the 'late night' 23:00→06:00 case).
+
+    Uses timedelta(days=1) for the roll-over — `dt.replace(day=day+1)`
+    raises on month-end boundaries (May 31 → June 31 is invalid). The
+    seed-routine command was broken on the 31st of any 30-day month and
+    on Feb 28/29 before this fix landed."""
     today = (base_date or datetime.now()).astimezone()
     sh, sm = (int(x) for x in start_hhmm.split(":"))
     eh, em = (int(x) for x in end_hhmm.split(":"))
     local_end = today.replace(hour=eh, minute=em, second=0, microsecond=0)
     if (eh, em) <= (sh, sm):
-        local_end = local_end.replace(day=local_end.day + 1)
+        local_end = local_end + timedelta(days=1)
     return local_end.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 

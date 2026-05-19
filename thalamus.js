@@ -174,6 +174,12 @@ export function loadEntityCoreEnv() {
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let mcpClient = null;
 let entityCoreShuttingDown = false;
+let entityCoreReconnectAttempts = 0;
+/** @type {Promise<void> | null} */
+let entityCoreReconnectInFlight = null;          // mutex for reconnect path
+const ENTITY_CORE_RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+const ENTITY_CORE_RECONNECT_MAX_ATTEMPTS = 10;
+
 /** @type {import('@modelcontextprotocol/sdk/client/index.js').Client | null} */
 let unruhClient = null;
 let unruhShuttingDown = false;
@@ -230,14 +236,42 @@ async function connect() {
   client.onclose = () => {
     console.error('[thalamus] entity-core connection closed');
     mcpClient = null;
+    // Auto-reconnect with backoff on unexpected close — mirrors the
+    // Unruh path. Skipped when we're tearing down on purpose (settings
+    // change or server shutdown).
+    if (entityCoreShuttingDown) return;
+    scheduleEntityCoreReconnect();
   };
 
   await client.connect(transport);
   mcpClient = client;
+  entityCoreReconnectAttempts = 0; // successful connect resets backoff
   console.log(
     '[thalamus] Connected to entity-core at', ENTITY_CORE_ENTRY,
     haveKey ? `(API key from connection "${ecEnv.ENTITY_CORE_LLM_PROVIDER}")` : '(no API key — designate one in the Connections sidebar)',
   );
+}
+
+// Reconnect with exponential backoff on unexpected close — same shape
+// as scheduleUnruhReconnect. Capped to avoid spinning forever when
+// entity-core is fundamentally broken. Skips when a settings-change
+// reconnect is already in flight (no need to double up).
+function scheduleEntityCoreReconnect() {
+  if (entityCoreShuttingDown) return;
+  if (entityCoreReconnectInFlight) return;
+  if (entityCoreReconnectAttempts >= ENTITY_CORE_RECONNECT_MAX_ATTEMPTS) {
+    console.error(`[thalamus] entity-core reconnect gave up after ${ENTITY_CORE_RECONNECT_MAX_ATTEMPTS} attempts — restart Proto-Familiar to retry`);
+    return;
+  }
+  const delay = ENTITY_CORE_RECONNECT_BACKOFF_MS[Math.min(entityCoreReconnectAttempts, ENTITY_CORE_RECONNECT_BACKOFF_MS.length - 1)];
+  entityCoreReconnectAttempts += 1;
+  console.log(`[thalamus] Reconnecting to entity-core in ${delay}ms (attempt ${entityCoreReconnectAttempts}/${ENTITY_CORE_RECONNECT_MAX_ATTEMPTS})`);
+  setTimeout(() => {
+    connect().catch(err => {
+      console.error('[thalamus] entity-core reconnect failed:', err.message);
+      scheduleEntityCoreReconnect();
+    });
+  }, delay).unref?.(); // unref so the timer doesn't keep the process alive
 }
 
 /**
@@ -246,26 +280,37 @@ async function connect() {
  * at connection's apiKey takes effect immediately). Safe to call when
  * no client is currently connected — behaves as a plain connect().
  *
- * Caller is server.js, after a successful PUT /api/settings that
- * changed the entity-core API-key designation. A chat request in
- * flight at reconnect time may lose its enrichment for that one
- * message; enrich() already degrades gracefully on entity-core
- * failures so this is acceptable.
+ * Two callers can fire this in quick succession (rapid settings PUTs
+ * while a chat is in flight, the user clicking the +entity-core toggle
+ * on different rows quickly). A single in-flight promise serialises
+ * them so concurrent calls don't orphan a child process.
  */
 export async function reconnectEntityCore() {
-  entityCoreShuttingDown = true;
-  try {
-    if (mcpClient) {
-      try { await mcpClient.close?.(); } catch { /* best-effort */ }
-      mcpClient = null;
+  if (entityCoreReconnectInFlight) return entityCoreReconnectInFlight;
+  entityCoreReconnectInFlight = (async () => {
+    entityCoreShuttingDown = true;
+    try {
+      if (mcpClient) {
+        try { await mcpClient.close?.(); } catch { /* best-effort */ }
+        mcpClient = null;
+      }
+    } finally {
+      entityCoreShuttingDown = false;
     }
-  } finally {
-    entityCoreShuttingDown = false;
-  }
+    try {
+      await connect();
+      entityCoreReconnectAttempts = 0;
+    } catch (err) {
+      console.error('[thalamus] entity-core reconnect failed:', err.message);
+      // Fall back to backoff retries — the user's settings change
+      // will eventually take effect when entity-core comes back.
+      scheduleEntityCoreReconnect();
+    }
+  })();
   try {
-    await connect();
-  } catch (err) {
-    console.error('[thalamus] entity-core reconnect failed:', err.message);
+    await entityCoreReconnectInFlight;
+  } finally {
+    entityCoreReconnectInFlight = null;
   }
 }
 

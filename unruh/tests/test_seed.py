@@ -52,6 +52,26 @@ class TestSeedRoutine:
         assert again["phases_added"] == first["phases_added"]
         assert again["skipped"] == 0
 
+    def test_month_end_does_not_crash(self, isolated_db):
+        """Regression guard: prior `dt.replace(day=day+1)` raised
+        ValueError on the 31st of 30-day months and on Feb 28/29
+        because day 31 (or 29/30) doesn't exist in the next month
+        viewed from .replace's perspective. timedelta(days=1) handles
+        this correctly. Test runs seed for a few known-bad dates."""
+        from datetime import datetime, timezone
+        from unruh.seed import _phase_end_today
+        for bad_date in [
+            datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc),   # May 31 → June 1
+            datetime(2026, 1, 31, 12, 0, tzinfo=timezone.utc),   # Jan 31 → Feb 1
+            datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc),   # Apr 30 → May 1
+            datetime(2024, 2, 29, 12, 0, tzinfo=timezone.utc),   # Leap day → Mar 1
+            datetime(2026, 2, 28, 12, 0, tzinfo=timezone.utc),   # Non-leap Feb 28 → Mar 1
+            datetime(2026, 12, 31, 12, 0, tzinfo=timezone.utc),  # Dec 31 → Jan 1 next year
+        ]:
+            # The wrap-around case (end <= start triggers next-day).
+            result = _phase_end_today("23:00", "06:00", bad_date)
+            assert result, f"_phase_end_today crashed for {bad_date.date().isoformat()}"
+
     def test_replace_does_not_touch_user_events(self, isolated_db):
         from unruh import schedule as sched
         seed_today()

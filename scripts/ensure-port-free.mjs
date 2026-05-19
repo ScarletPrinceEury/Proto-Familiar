@@ -194,15 +194,32 @@ if (!inPidFile && !isOurServerProcess(portOwner, info)) {
 const source = inPidFile ? 'from PID file' : 'identified by process inspection';
 say(`Recycling stale Proto-Familiar (PID ${portOwner}, ${source}) holding port ${PORT}…`);
 if (info.cmdline) say(`  CommandLine: ${info.cmdline}`);
-try { process.kill(portOwner, 'SIGTERM'); } catch { /* already dying */ }
+
+// Kill the process AND its children. On Linux/macOS, process.kill
+// sends a signal that the node process catches (it then closes its
+// stdio pipes, the MCP children get EOF and die). On Windows,
+// process.kill maps to TerminateProcess which does NOT propagate to
+// children — orphaned deno/python instances would linger. Use
+// taskkill /T /F (tree, force) so we sweep the whole subtree the
+// same way stop.bat already does.
+function killProcessTree(pid, signal) {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    try { process.kill(pid, signal); } catch { /* already gone */ }
+  }
+}
+
+killProcessTree(portOwner, 'SIGTERM');
 
 if (await waitForRelease(PORT, 5_000)) {
   process.exit(0);
 }
 
-// Stubborn — escalate.
-warn(`PID ${portOwner} didn't release port ${PORT} after 5s — sending SIGKILL.`);
-try { process.kill(portOwner, 'SIGKILL'); } catch { /* already gone */ }
+// Stubborn — escalate. (No-op on Windows where taskkill /F was
+// already forceful, but the wait-and-retry gives the OS a moment.)
+warn(`PID ${portOwner} didn't release port ${PORT} after 5s — escalating to SIGKILL.`);
+killProcessTree(portOwner, 'SIGKILL');
 if (await waitForRelease(PORT, 2_000)) process.exit(0);
 
 warn(`Port ${PORT} is still busy after SIGKILL. Investigate manually.`);
