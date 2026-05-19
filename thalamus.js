@@ -101,6 +101,36 @@ function resolveUvBinary() {
   return isWin ? 'uv.exe' : 'uv'; // last-resort PATH lookup
 }
 
+// Resolve `deno` to an absolute path, same rationale as resolveUvBinary.
+// This matters for `npm start` specifically: unlike the launcher scripts
+// (start.sh / start.bat / Proto-Familiar.command / tray.ps1) which prime
+// PATH with ~/.deno/bin before spawning node, `npm start` inherits only
+// the invoking shell's PATH. Deno's installer writes to ~/.deno/bin and
+// appends it to the shell *profile*, so a shell that hasn't been reloaded
+// since install won't have it — and a bare `command: 'deno'` then fails
+// with ENOENT, silently disabling entity-core. Probing the known install
+// locations first makes entity-core robust regardless of PATH state.
+// DENO_BIN env var overrides everything.
+function resolveDenoBinary() {
+  if (process.env.DENO_BIN && existsSync(process.env.DENO_BIN)) return process.env.DENO_BIN;
+  const home = os.homedir();
+  const isWin = process.platform === 'win32';
+  const candidates = isWin
+    ? [
+        path.join(home, '.deno', 'bin', 'deno.exe'),                     // official installer default
+        path.join(process.env.LOCALAPPDATA ?? '', 'deno', 'deno.exe'),
+        path.join(home, '.cargo', 'bin', 'deno.exe'),
+      ]
+    : [
+        path.join(home, '.deno', 'bin', 'deno'),                         // official installer default
+        path.join(home, '.cargo', 'bin', 'deno'),
+        '/usr/local/bin/deno',
+        '/opt/homebrew/bin/deno',                                        // Apple-silicon Homebrew
+      ];
+  for (const c of candidates) { if (c && existsSync(c)) return c; }
+  return isWin ? 'deno.exe' : 'deno'; // last-resort PATH lookup
+}
+
 // Path to the central settings file. server.js owns the read/write
 // surface (PUT /api/settings) but we read it here at spawn time to pick
 // up the API-key designation for entity-core. Read is sync and small.
@@ -224,7 +254,7 @@ async function connect() {
   }
 
   const transport = new StdioClientTransport({
-    command: 'deno',
+    command: resolveDenoBinary(),
     args: ['run', '-A', '--unstable-cron', ENTITY_CORE_ENTRY],
     cwd: ENTITY_CORE_ROOT,
     env: ecEnv,
