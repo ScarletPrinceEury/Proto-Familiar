@@ -589,6 +589,14 @@ const state = {
   // the prefix. 4 is a balance between cache wins and the model
   // seeing the retrieved memories close to the current question.
   thalamusDynamicDepth:    4,
+  // ── Session handoff (M6) ─────────────────────────────────
+  // When on, the end of a session triggers a small LLM call (cheapest
+  // available connection) that summarises the conversation into an
+  // intent + open threads, stored in Unruh and surfaced at the top of
+  // the next session's [Temporal Context] so the Familiar resumes
+  // mid-thought. It's one extra short generation per session boundary;
+  // turn it off if you'd rather not spend that.
+  handoffEnabled:          true,
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -611,7 +619,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'entityCoreConnectionId',
-  'thalamusDynamicDepth',
+  'thalamusDynamicDepth', 'handoffEnabled',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -681,6 +689,7 @@ function loadPersisted() {
       || state.thalamusDynamicDepth > 50) {
     state.thalamusDynamicDepth = 4;
   }
+  if (typeof state.handoffEnabled !== 'boolean') state.handoffEnabled = true;
   migrateLegacyConnection();
 }
 
@@ -1787,6 +1796,109 @@ function recordTopicEngagement() {
 }
 
 /**
+ * Parse the handoff JSON the summariser LLM returns. Models wrap JSON
+ * in prose or ```json fences despite instructions, so be liberal:
+ * strip fences, grab the first {...}, validate the shape. Returns
+ * { active_intent, open_threads } or null if nothing usable.
+ */
+function parseHandoffJSON(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  let s = text.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const brace = s.match(/\{[\s\S]*\}/);
+  if (brace) s = brace[0];
+  try {
+    const o = JSON.parse(s);
+    const intent = typeof o.active_intent === 'string' ? o.active_intent.trim() : '';
+    const threads = Array.isArray(o.open_threads)
+      ? o.open_threads.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim())
+      : [];
+    if (!intent && threads.length === 0) return null;
+    return { active_intent: intent, open_threads: threads };
+  } catch { return null; }
+}
+
+/**
+ * M6 session handoff. On session end, summarise the just-ended
+ * conversation into { active_intent, open_threads } via the cheapest
+ * available connection and store it in Unruh, so the next session's
+ * first [Temporal Context] resumes mid-thought.
+ *
+ * Fully best-effort and fire-and-forget: it captures the messages by
+ * value (caller passes a copy taken before startNewSession clears
+ * state), never blocks the session-end flow, and swallows every error.
+ * Gated on state.handoffEnabled so cost-conscious users can opt out.
+ */
+async function generateAndStoreHandoff(messages, sessionId) {
+  try {
+    if (!state.handoffEnabled) return;
+    if (!Array.isArray(messages) || messages.length < 2) return; // nothing worth summarising
+
+    const seq = getConnectionSequence();
+    if (seq.length === 0) return;
+    const conn = seq[0];
+
+    // Compact transcript of the last few user/assistant turns. Tool
+    // and system messages are dropped — they're noise for an intent
+    // summary.
+    const recent = messages
+      .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-12)
+      .map(m => `${m.role}: ${m.content.trim()}`)
+      .join('\n');
+    if (!recent.trim()) return;
+
+    // The server prepends your identity/persona (static enrichment),
+    // so write the note in your own voice — a private memory-to-self
+    // the next session will read as "what I was doing last".
+    const sysPrompt =
+      'The text above is who you are. You are writing a short private handoff note to your ' +
+      'future self for the next time you talk with this user, capturing what you were doing ' +
+      'and what\'s still open. Respond with ONLY minified JSON, no prose, no code fence: ' +
+      '{"active_intent": string, "open_threads": string[]}. ' +
+      'active_intent: one short sentence, in your own first-person voice, on the through-line of ' +
+      'the session (address the user as "you"). ' +
+      'open_threads: specific unfinished questions or tasks, each a short phrase (empty array if none).';
+
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        messages: [
+          { role: 'system', content: sysPrompt },
+          { role: 'user', content: recent },
+        ],
+        stream: false,
+        temperature: 0.3,
+        max_tokens: 400,
+        // 'static' enrichment: include the Familiar's persona/identity
+        // so the handoff note is in character, but skip memory + graph
+        // + temporal — those would bloat the summary and the temporal
+        // fetch would consume the very handoff we're about to write.
+        enrich: 'static',
+      }),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content ?? '';
+    const parsed = parseHandoffJSON(content);
+    if (!parsed) return;
+
+    await fetch('/api/session/handoff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        intent:  parsed.active_intent,
+        threads: parsed.open_threads,
+        sessionId,
+      }),
+    });
+  } catch { /* best-effort — a missed handoff just means the next session starts cold */ }
+}
+
+/**
  * One streaming attempt against a single connection. Runs the tool-call loop
  * to completion. DOM side effects (assistant shell, tool-use blocks) accumulate
  * during the attempt and are returned so the caller can roll them back on a
@@ -2250,6 +2362,7 @@ function readSettingsFromUI() {
     const v = parseInt($('thalamus-dynamic-depth')?.value, 10);
     state.thalamusDynamicDepth = Number.isFinite(v) && v >= 1 && v <= 50 ? v : 4;
   }
+  if ($('handoff-toggle')) state.handoffEnabled = $('handoff-toggle').checked;
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
@@ -2291,6 +2404,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('api-key'),         'value',   state.apiKey);
   setIfNotFocused($('model-input'),     'value',   state.model);
   setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
+  if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
@@ -2413,6 +2527,10 @@ async function autoEndSession() {
     await saveToServer();
     memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
     state._beaconedSessionId = sessionId;
+    // M6: summarise this session into a handoff for the next one.
+    // Fire-and-forget on the captured copy — never blocks the
+    // session-end flow, surfaces at the next session's first message.
+    generateAndStoreHandoff(sessionMessages, sessionId);
     startNewSession();
     showSessionEndedNotice();
   } else {
@@ -3002,7 +3120,7 @@ function init() {
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'user-name', 'char-name',
+    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
@@ -3122,6 +3240,8 @@ function init() {
         saveToServer(); // fire-and-forget — stamps the log with endedAt
         memorizeViaBeacon(sessionMessages, sessionId, { scope: 'session' });
         state._beaconedSessionId = sessionId;
+        // M6: summarise the cleared session into a handoff for the next.
+        generateAndStoreHandoff(sessionMessages, sessionId);
         startNewSession();
       } else {
         startNewSession();

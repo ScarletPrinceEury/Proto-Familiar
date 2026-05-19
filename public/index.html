@@ -109,6 +109,12 @@
             <input type="number" id="thalamus-dynamic-depth" value="4" min="1" max="50" step="1">
             <div class="field-hint">How many messages from the end of the conversation the dynamic-thalamus block (memories / graph / temporal) is injected at. Identity stays at the top (cacheable); dynamic stuff goes here. Smaller = better model attention, larger = more cache hits on long sessions.</div>
           </div>
+
+          <div class="field-row">
+            <label for="handoff-toggle">Session handoff</label>
+            <input type="checkbox" id="handoff-toggle" checked>
+          </div>
+          <div class="field-hint">When on, the end of a session runs a short summary (cheapest connection) so the next session resumes mid-thought via the temporal context. One small extra generation per session boundary — turn off to save it.</div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->

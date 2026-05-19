@@ -37,6 +37,7 @@ Proxies a chat completion request to the selected LLM provider. Supports both st
 | `max_tokens` | number | No | Maximum response tokens |
 | `tools` | array | No | OpenAI function-calling tool definitions |
 | `tool_choice` | string/object | No | Tool choice directive (e.g. `"auto"`) |
+| `enrich` | boolean/string | No | Enrichment mode. `true`/omitted = full (identity + memory + graph + temporal, and consume any surfaced session handoff); `"static"` = persona/identity only (no memory/temporal, no handoff consumption — used by the handoff summariser so its note is in character without the dynamic context); `false` = none. |
 
 **Enrichment:** Before forwarding, the server calls `thalamus.js:enrich()`, which returns the entity-core + Unruh context split into two parts for prompt-cache efficiency (see [`architecture.md`](architecture.md#prompt-cache-aware-assembly)):
 
@@ -693,6 +694,34 @@ Records a turn's engagement into Unruh's interest layer (Milestone 5). The front
 **Weight formula** (`interestEngagementDelta` in `server.js`): `min(responseChars / 1500 × 0.1, 0.5)` (token volume) `+ min(spanMessages × 0.05, 0.3)` (persistence). The per-topic delta is forwarded to Unruh's `interest_record` tool with `source: "chat"`, which applies decay-then-add.
 
 **Response:** `{ "ok": true, "recorded": [{ "topic": "...", "delta": 0.23, "ok": true }] }`. `recorded[].ok` is `false` when Unruh was down for that bump.
+
+---
+
+## Session handoff
+
+### `POST /api/session/handoff`
+
+Stores a session-end handoff in Unruh (Milestone 6) so the next session resumes mid-thought. The frontend calls this fire-and-forget when a session ends, after summarising the conversation into an intent + open threads via the chat LLM (using `enrich: "static"` so the summary is in the Familiar's voice). Degrades silently when Unruh is unavailable.
+
+**Request body:**
+
+```json
+{
+  "intent": "I was helping you outline the thesis intro; you were stuck on the hook",
+  "threads": ["lead with the anecdote or the statistic?", "tighten the second paragraph"],
+  "sessionId": "f1e2d3c4-..."
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `intent` | string | No | One-sentence "what you were doing last", in the Familiar's voice. |
+| `threads` | string[] | No | Unfinished questions/tasks. Blank entries are dropped. |
+| `sessionId` | string | No | Source session id (provenance). |
+
+A handoff with neither intent nor threads is a no-op (no hollow "Last session:" header). Writing a new handoff supersedes any prior unconsumed one. The next session's first `/api/chat` surfaces it at the top of `[Temporal Context]` and marks it consumed so it doesn't repeat.
+
+**Response:** `{ "ok": true }` (`ok: false` when Unruh was down).
 
 ---
 

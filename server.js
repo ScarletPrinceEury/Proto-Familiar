@@ -24,7 +24,7 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
-  recordInterest,
+  recordInterest, recordHandoff,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import {
@@ -140,7 +140,16 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag } = req.body;
+  // Enrichment mode:
+  //   true / undefined → full (identity + memory + graph + temporal),
+  //                      and consume any surfaced session handoff.
+  //   'static'         → identity / persona only — no memory bloat, no
+  //                      temporal block, no handoff consumption. Used by
+  //                      the handoff summariser so its note is in the
+  //                      Familiar's voice without the dynamic context.
+  //   false            → none.
+  const enrichMode = enrichFlag === false ? 'none' : enrichFlag === 'static' ? 'static' : 'full';
 
   const url = PROVIDER_URLS[provider];
   if (!url) {
@@ -167,7 +176,13 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
-  const enriched = await enrich(userText);
+  // consumeHandoff: only the full chat path surfaces + consumes the
+  // session handoff. 'static' fetches persona only (handoff summariser);
+  // 'none' skips enrichment entirely.
+  const enriched =
+      enrichMode === 'full'   ? await enrich(userText, { consumeHandoff: true })
+    : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
+    : { static: '', dynamic: '' };
   const depth = getThalamusDynamicDepth();
 
   let enrichedMessages = messages;
@@ -383,6 +398,24 @@ app.post('/api/interest/engage', async (req, res) => {
     recorded.push({ topic: label, delta, ok });
   }
   res.json({ ok: true, recorded });
+});
+
+// ── Session handoff (M6) ─────────────────────────────────────────
+
+// POST /api/session/handoff
+// Body: { intent, threads: [...], sessionId }
+// Stores a session-end handoff in Unruh so the next session resumes
+// mid-thought. Fire-and-forget from the client; degrades silently
+// when Unruh is down. The frontend generates intent/threads by asking
+// the chat LLM to summarise the ending session.
+app.post('/api/session/handoff', async (req, res) => {
+  const { intent, threads, sessionId } = req.body ?? {};
+  const ok = await recordHandoff({
+    intent: typeof intent === 'string' ? intent : null,
+    threads: Array.isArray(threads) ? threads : [],
+    sessionId: typeof sessionId === 'string' ? sessionId : null,
+  });
+  res.json({ ok });
 });
 
 // ── Log endpoints ───────────────────────────────────────────────

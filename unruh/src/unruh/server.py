@@ -30,6 +30,7 @@ from unruh import __version__
 from unruh.db import get_conn
 from unruh import schedule as sched
 from unruh import interest as interests
+from unruh import handoff as handoffs
 
 mcp = FastMCP("unruh")
 
@@ -308,6 +309,59 @@ def interest_list(
         )
 
 
+# ── Session handoff (M6) ──────────────────────────────────────────────
+
+
+@mcp.tool()
+def session_set_handoff(
+    intent: str | None = None,
+    threads: list | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Store a session-end handoff: what the Familiar was doing
+    (`intent`) and unfinished business (`threads`). Surfaces at the
+    top of the next session's [Temporal Context].
+
+    Supersedes any prior unconsumed handoff (one live at a time).
+    A no-op when both intent and threads are empty — we don't store
+    hollow handoffs.
+
+    Args:
+        intent: one-sentence "what you were working on".
+        threads: list of unfinished-question/task strings.
+        session_id: the source session id (provenance; not required).
+
+    Returns: {ok, id, skipped}.
+    """
+    with get_conn() as conn:
+        return handoffs.set_handoff(
+            conn, intent=intent, threads=threads, session_id=session_id,
+        )
+
+
+@mcp.tool()
+def session_get_handoff(include_consumed: bool = False) -> dict[str, Any]:
+    """Return the latest unconsumed handoff (or latest of any, with
+    include_consumed=True). temporal_context already folds this into
+    its payload; this tool is for explicit reads / debugging.
+
+    Returns: {ok, handoff: {...} | None}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "handoff": handoffs.get_handoff(conn, include_consumed=include_consumed)}
+
+
+@mcp.tool()
+def session_mark_handoff_consumed(id: str) -> dict[str, Any]:
+    """Mark a handoff consumed so it stops surfacing. Called by the
+    chat path once a new session has rendered it. Idempotent.
+
+    Returns: {ok, updated}.
+    """
+    with get_conn() as conn:
+        return handoffs.mark_consumed(conn, id=id)
+
+
 # ── Per-message briefing ──────────────────────────────────────────────
 
 
@@ -338,6 +392,11 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # the design's "kilobytes-scale" budget assumes ~10 items
         # max here, not the full list.
         interest_block = interests.list_interests(conn, limit=10)
+        # Session handoff: the latest unconsumed one. The `id` rides
+        # along so the chat path can mark it consumed after surfacing
+        # it once (the renderer ignores `id`). NULL/[] when there's
+        # nothing pending.
+        handoff = handoffs.get_handoff(conn)
     schedule_block: dict[str, Any] = {"phase": phase, "window": window["nodes"]}
     return {
         "ts": now or _now_iso(),
@@ -346,7 +405,11 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
             "standing": interest_block["standing"],
             "live":     interest_block["live"],
         },
-        "handoff":   {"intent": None, "open_threads": []},
+        "handoff": {
+            "intent":       handoff["intent"] if handoff else None,
+            "open_threads": handoff["open_threads"] if handoff else [],
+            "id":           handoff["id"] if handoff else None,
+        },
     }
 
 

@@ -443,22 +443,39 @@ Tracked as a near-term follow-on, not a blocker.
 surfaces them at the top of `[Temporal Context]`.
 
 **Tasks**
-- [ ] **Session-end hook.** Frontend already fires `autoEndSession`
-      after idle timeout. Add a small extra call that asks the chat
-      LLM (cheapest configured model) to emit a structured
-      `{ active_intent, open_threads[] }` from the last N messages,
-      then posts it to Unruh via `session_set_handoff`.
-- [ ] **Session-start surfacing.** On the first message of a new
-      session, Thalamus calls `session_get_handoff` and renders any
-      returned intent + threads at the top of `[Temporal Context]`,
-      clearly labelled so the model treats them as "what you were
-      doing last" rather than facts.
-- [ ] After the handoff is rendered in a new session and the user
-      engages, mark it as "consumed" so it doesn't keep re-surfacing.
-      Open threads persist until explicitly resolved.
+- [x] **Session-end hook.** Both session-end paths (`autoEndSession`
+      idle-timer + the Clear-history button) call
+      `generateAndStoreHandoff(messages, sessionId)` fire-and-forget.
+      It summarises the last ≤12 user/assistant turns into
+      `{ active_intent, open_threads[] }` via the cheapest connection
+      (`getConnectionSequence()[0]`) and POSTs to `/api/session/handoff`
+      → `recordHandoff` → Unruh `session_set_handoff`. Gated on a
+      synced `handoffEnabled` setting (default on) so the extra
+      per-session generation can be turned off.
+- [x] **Session-start surfacing.** `temporal_context` folds the latest
+      unconsumed handoff into its payload; `temporal-format.js` already
+      renders it as the "Last session:" block at the top of
+      `[Temporal Context]`, ahead of schedule + interests.
+- [x] **Consumption.** The real chat path calls
+      `enrich(…, { consumeHandoff: true })`; after surfacing the
+      handoff once, thalamus fires `session_mark_handoff_consumed` so
+      it doesn't reappear on later messages. `set_handoff` supersedes
+      any prior unconsumed handoff, so at most one is ever live.
+      (debug-prompt / the summariser don't consume.)
 
-**Acceptance:** End a session mid-thought; start a new one; the model
-picks up where it left off without needing to be told.
+**In-character summaries.** The summariser call uses `enrich: 'static'`
+— a new enrichment mode that injects ONLY the identity/persona block,
+not memory / graph / temporal. So the handoff note comes out in the
+Familiar's first-person voice ("I was helping you outline the intro…")
+without (a) bloating the summary with RAG memories or (b) the temporal
+fetch consuming the very handoff we're about to write.
+
+**Acceptance:** Verified end-to-end via smoke — write a handoff, the
+next session's first message surfaces "Last session: intent — … / open
+— …", and the message after that no longer shows it (consumed). The
+session-boundary interest signal that M5 deferred is now unblockable
+(a handoff write is the natural place to bump re-emerging topics);
+left as a follow-on.
 
 ---
 

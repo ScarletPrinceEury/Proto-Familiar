@@ -469,6 +469,36 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
   }
 }
 
+/**
+ * Store a session-end handoff (M6) into Unruh. The chat path (frontend)
+ * summarises the ending session into intent + open threads and posts
+ * them here via server.js; we forward to the `session_set_handoff`
+ * tool, which surfaces it at the top of the next session's
+ * [Temporal Context].
+ *
+ * Best-effort: a down Unruh just means the next session starts cold.
+ *
+ * @param {{ intent?: string, threads?: string[], sessionId?: string }} args
+ * @returns {Promise<boolean>}
+ */
+export async function recordHandoff({ intent, threads, sessionId } = {}) {
+  if (!unruhClient) return false;
+  try {
+    await unruhClient.callTool({
+      name: 'session_set_handoff',
+      arguments: {
+        intent: intent ?? null,
+        threads: Array.isArray(threads) ? threads : [],
+        session_id: sessionId ?? null,
+      },
+    });
+    return true;
+  } catch (err) {
+    console.error('[thalamus] session_set_handoff failed:', err?.message ?? err);
+    return false;
+  }
+}
+
 connect().catch(err => {
   console.error('[thalamus] Failed to start entity-core:', err.message);
 });
@@ -547,25 +577,34 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string }>}
  */
-export async function enrich(userMessage) {
+export async function enrich(userMessage, { consumeHandoff = false, staticOnly = false } = {}) {
   const EMPTY = { static: '', dynamic: '' };
   if (!mcpClient && !unruhClient) return EMPTY;
 
   try {
+    // staticOnly: fetch ONLY the identity layer (the persona / "who the
+    // Familiar is"), skipping memory, graph, and temporal entirely.
+    // Used by the session-handoff summariser so its note comes out in
+    // the Familiar's voice WITHOUT pulling in RAG memories (bloat) or
+    // the temporal block (which would consume the pending handoff and
+    // is irrelevant to summarising the session that just happened).
+    //
     // Fire all queries in parallel but independently — a failure in any
     // one of them must not prevent the others from being injected.
     // Promise.allSettled never rejects. Unruh is queried alongside
     // entity-core; either or both may be absent and the rest still works.
     const entityCorePromises = mcpClient ? [
       mcpClient.callTool({ name: 'identity_get_all', arguments: {} }),
-      mcpClient.callTool({
-        name: 'memory_search',
-        arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5 },
-      }),
-      mcpClient.callTool({
-        name: 'graph_node_search',
-        arguments: { query: userMessage, limit: 10, minScore: 0.3 },
-      }),
+      staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
+        : mcpClient.callTool({
+            name: 'memory_search',
+            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5 },
+          }),
+      staticOnly ? Promise.reject(new Error('skipped (staticOnly)'))
+        : mcpClient.callTool({
+            name: 'graph_node_search',
+            arguments: { query: userMessage, limit: 10, minScore: 0.3 },
+          }),
     ] : [Promise.reject(new Error('entity-core not connected')),
          Promise.reject(new Error('entity-core not connected')),
          Promise.reject(new Error('entity-core not connected'))];
@@ -575,7 +614,7 @@ export async function enrich(userMessage) {
     // the background — Promise.race doesn't cancel — but it can no longer
     // delay the response. If timeouts become common, that's a signal for
     // the next milestone to add real cancellation or a query budget.
-    const unruhPromise = unruhClient
+    const unruhPromise = (unruhClient && !staticOnly)
       ? Promise.race([
           unruhClient.callTool({ name: 'temporal_context', arguments: { now: new Date().toISOString() } }),
           new Promise((_, reject) => setTimeout(
@@ -583,17 +622,17 @@ export async function enrich(userMessage) {
             UNRUH_CALL_TIMEOUT_MS,
           ).unref?.()),
         ])
-      : Promise.reject(new Error('unruh not connected'));
+      : Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'unruh not connected'));
 
     const [idSettled, memSettled, graphSettled, temporalSettled] = await Promise.allSettled([
       ...entityCorePromises,
       unruhPromise,
     ]);
 
-    if (idSettled.status       === 'rejected' && mcpClient)   console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
-    if (memSettled.status      === 'rejected' && mcpClient)   console.error('[thalamus] memory_search failed:',    memSettled.reason?.message ?? memSettled.reason);
-    if (graphSettled.status    === 'rejected' && mcpClient)   console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
-    if (temporalSettled.status === 'rejected' && unruhClient) console.error('[thalamus] temporal_context failed:',  temporalSettled.reason?.message ?? temporalSettled.reason);
+    if (idSettled.status       === 'rejected' && mcpClient)                console.error('[thalamus] identity_get_all failed:', idSettled.reason?.message ?? idSettled.reason);
+    if (memSettled.status      === 'rejected' && mcpClient   && !staticOnly) console.error('[thalamus] memory_search failed:',    memSettled.reason?.message ?? memSettled.reason);
+    if (graphSettled.status    === 'rejected' && mcpClient   && !staticOnly) console.error('[thalamus] graph_node_search failed:', graphSettled.reason?.message ?? graphSettled.reason);
+    if (temporalSettled.status === 'rejected' && unruhClient && !staticOnly) console.error('[thalamus] temporal_context failed:',  temporalSettled.reason?.message ?? temporalSettled.reason);
 
     const idResult       = idSettled.status       === 'fulfilled' ? idSettled.value       : null;
     const memResult      = memSettled.status      === 'fulfilled' ? memSettled.value      : null;
@@ -722,11 +761,24 @@ export async function enrich(userMessage) {
     }
 
     // ── Temporal context (Unruh) ──────────────────────────────────────────
-    // Empty payload until Milestones 3-6 populate it. We deliberately omit
-    // the section entirely when there is nothing to say rather than print
-    // a hollow "[Temporal Context]" header, so the LLM doesn't waste
-    // attention parsing scaffolding.
-    const temporalLines = formatTemporalContext(parseToolText(temporalResult, null));
+    // We deliberately omit the section entirely when there is nothing
+    // to say rather than print a hollow "[Temporal Context]" header, so
+    // the LLM doesn't waste attention parsing scaffolding.
+    const temporalPayload = parseToolText(temporalResult, null);
+    const temporalLines = formatTemporalContext(temporalPayload);
+
+    // Session handoff (M6) is surfaced as part of [Temporal Context].
+    // On the real chat path (consumeHandoff), mark it consumed once
+    // we've surfaced it so it doesn't reappear on every message of the
+    // new session. Fire-and-forget; gated to the chat path so a
+    // debug-prompt preview (which also calls enrich) never consumes it.
+    const handoffId = temporalPayload?.handoff?.id;
+    if (consumeHandoff && handoffId && unruhClient) {
+      unruhClient.callTool({
+        name: 'session_mark_handoff_consumed',
+        arguments: { id: handoffId },
+      }).catch(err => console.error('[thalamus] mark handoff consumed failed:', err?.message ?? err));
+    }
 
     // ── Assemble into static + dynamic blocks ─────────────────────────────
     //
