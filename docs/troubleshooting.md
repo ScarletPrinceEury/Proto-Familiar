@@ -34,6 +34,37 @@ Chat still works without entity-core — `enrich()` returns an empty
 string and every request goes through unenriched. But the Knowledge
 editor will be unusable until the MCP child reconnects.
 
+### Logs say `entity-core not found … skipping`, or it keeps reconnecting
+
+Two distinct entity-core startup states, distinguished by what the
+`[thalamus]` logs say:
+
+- **`entity-core not found at <path> — skipping (run install.sh /
+  install.bat to clone it)`** — entity-core isn't cloned. `connect()`
+  pre-checks for the checkout (symmetric with how Unruh checks its
+  venv) and skips cleanly: one line, no retry loop. Run the installer
+  to clone it, or set `ENTITY_CORE_PATH` if you keep it somewhere
+  non-standard.
+
+- **Repeated `Reconnecting to entity-core in …ms (attempt N/10)`** —
+  entity-core *is* cloned, but the `deno` spawn is failing. The
+  checkout exists so the skip-check passes, then the spawn errors and
+  the backoff loop runs (1s, 2s, 5s, 10s, 30s; max 10 attempts) before
+  giving up. The usual cause is **`deno` not installed, or installed
+  but not findable**. `thalamus.js` resolves `deno` from `~/.deno/bin`,
+  `~/.cargo/bin`, Homebrew, and (Windows) `%USERPROFILE%\.deno\bin`
+  before falling back to `PATH` — so this only bites when deno genuinely
+  isn't in any of those. (This is the one entity-core failure mode that
+  still spins rather than skipping: it's rare, because the installer
+  installs deno *when* it clones entity-core, so "cloned but no deno" is
+  an unusual hand-edited state.)
+
+  **Fix:** re-run `./install.sh` / `install.bat` (it installs deno and
+  caches entity-core's deps), or install Deno yourself from
+  <https://deno.com/> and point `DENO_BIN` at the binary if it lives
+  somewhere unusual. Restart Proto-Familiar afterward to retry — the
+  loop doesn't re-arm itself once it's given up.
+
 ### Map view is empty or stuck on "Loading…"
 
 If the toolbar's Type filter has a value, only nodes of that type are
