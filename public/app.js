@@ -1758,13 +1758,17 @@ function recordTopicEngagement() {
     const openTopics = state.topics.filter(t => t.endIndex === null);
     if (openTopics.length === 0) return;
 
-    // Length of the final assistant message this turn — the last
-    // assistant-role message with string content in the history.
+    // Length of this turn's final assistant reply. Stop at the FIRST
+    // assistant message scanning back from the end — that's this
+    // turn's answer. (Don't skip an empty one and walk into a prior
+    // turn's reply, which would over-attribute the token-volume
+    // signal. An empty final reply legitimately means zero token
+    // volume; persistence still counts.)
     let responseChars = 0;
     for (let i = state.messages.length - 1; i >= 0; i--) {
       const m = state.messages[i];
-      if (m.role === 'assistant' && typeof m.content === 'string' && m.content) {
-        responseChars = m.content.length;
+      if (m.role === 'assistant') {
+        responseChars = typeof m.content === 'string' ? m.content.length : 0;
         break;
       }
     }

@@ -9,38 +9,16 @@
  *
  * server.js isn't importable as an ES module (it has side effects at
  * module load — Express server boot, MCP connect, etc.) so we
- * vm-extract the function the same way tests/extract-error.test.mjs
- * does for app.js. Single source of truth stays in server.js.
+ * vm-extract the function via the shared tests/_vm-extract helper.
+ * Single source of truth stays in server.js.
  */
 
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { loadFunction } from './_vm-extract.mjs';
 
 const SERVER_JS = new URL('../server.js', import.meta.url);
-const src = readFileSync(SERVER_JS, 'utf8');
-
-function extractFunctionSource(text, name) {
-  const start = text.indexOf(`function ${name}`);
-  if (start < 0) throw new Error(`${name} not found in ${SERVER_JS.pathname}`);
-  let depth = 0;
-  let inBraces = false;
-  for (let i = text.indexOf('{', start); i < text.length; i++) {
-    if (text[i] === '{') { depth++; inBraces = true; }
-    else if (text[i] === '}') {
-      depth--;
-      if (inBraces && depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  throw new Error(`unbalanced braces in ${name}`);
-}
-
-const fnSrc = extractFunctionSource(src, 'injectDynamicAtDepth');
-const ctx = {};
-runInNewContext(`${fnSrc};\nresult = injectDynamicAtDepth;`, ctx);
-const injectDynamicAtDepth = ctx.result;
-assert.equal(typeof injectDynamicAtDepth, 'function');
+const injectDynamicAtDepth = loadFunction(SERVER_JS, 'injectDynamicAtDepth');
 
 const SYS = (c) => ({ role: 'system', content: c });
 const USR = (c) => ({ role: 'user',   content: c });

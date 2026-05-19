@@ -357,19 +357,27 @@ function interestEngagementDelta({ responseChars = 0, spanMessages = 0 } = {}) {
 // just completed. Fire-and-forget from the client's perspective —
 // returns the computed deltas for debugging but never blocks or fails
 // the conversation. Degrades silently when Unruh is down.
+const ENGAGE_MAX_TOPICS = 32; // sanity cap; real sessions have a handful
+
 app.post('/api/interest/engage', async (req, res) => {
   const { topics, responseChars } = req.body ?? {};
   if (!Array.isArray(topics) || topics.length === 0) {
     return res.json({ ok: true, recorded: [] });
   }
-  const recorded = [];
-  for (const t of topics) {
+  // Dedup by label so two open topics sharing a label don't
+  // double-count the same engagement; keep the larger span when they
+  // collide. Bounded to ENGAGE_MAX_TOPICS so a malformed payload
+  // can't drive an unbounded sequence of Unruh calls.
+  const byLabel = new Map();
+  for (const t of topics.slice(0, ENGAGE_MAX_TOPICS)) {
     const label = typeof t?.label === 'string' ? t.label.trim() : '';
     if (!label) continue;
-    const delta = interestEngagementDelta({
-      responseChars,
-      spanMessages: t?.spanMessages,
-    });
+    const span = Number.isFinite(t?.spanMessages) ? t.spanMessages : 0;
+    byLabel.set(label, Math.max(byLabel.get(label) ?? 0, span));
+  }
+  const recorded = [];
+  for (const [label, spanMessages] of byLabel) {
+    const delta = interestEngagementDelta({ responseChars, spanMessages });
     if (delta <= 0) continue;
     const ok = await recordInterest({ topic: label, delta, source: 'chat' });
     recorded.push({ topic: label, delta, ok });

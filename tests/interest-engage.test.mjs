@@ -11,45 +11,17 @@
  * vm-extract the function the same way the other server-side tests do.
  */
 
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { loadFunction } from './_vm-extract.mjs';
 
 const SERVER_JS = new URL('../server.js', import.meta.url);
-const src = readFileSync(SERVER_JS, 'utf8');
 
-function extractFunctionSource(text, name) {
-  const start = text.indexOf(`function ${name}`);
-  if (start < 0) throw new Error(`${name} not found in ${SERVER_JS.pathname}`);
-  // Skip the parameter list first — destructuring defaults like
-  // `({ a = 0 } = {})` contain braces that would otherwise be
-  // mistaken for the function body's opening brace. Walk to the ')'
-  // that closes the param list, THEN find the body brace.
-  const parenOpen = text.indexOf('(', start);
-  let pd = 0, afterParams = parenOpen;
-  for (let i = parenOpen; i < text.length; i++) {
-    if (text[i] === '(') pd++;
-    else if (text[i] === ')') { pd--; if (pd === 0) { afterParams = i; break; } }
-  }
-  let depth = 0, inBraces = false;
-  for (let i = text.indexOf('{', afterParams); i < text.length; i++) {
-    if (text[i] === '{') { depth++; inBraces = true; }
-    else if (text[i] === '}') {
-      depth--;
-      if (inBraces && depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  throw new Error(`unbalanced braces in ${name}`);
-}
-
-// The function references module-level constants; pull those in too.
-const constLines = src.split('\n').filter(l => /^const ENGAGE_[A-Z_]+\s*=/.test(l)).join('\n');
-const fnSrc = extractFunctionSource(src, 'interestEngagementDelta');
-const ctx = {};
-runInNewContext(`${constLines}\n${fnSrc}\nresult = interestEngagementDelta;`, ctx);
-const interestEngagementDelta = ctx.result;
-assert.equal(typeof interestEngagementDelta, 'function');
+// interestEngagementDelta references the module-level ENGAGE_* consts,
+// so pull those lines in alongside the function body.
+const interestEngagementDelta = loadFunction(SERVER_JS, 'interestEngagementDelta', {
+  constsMatch: /^const ENGAGE_[A-Z_]+\s*=/,
+});
 
 // ── Empty / degenerate inputs ─────────────────────────────────────────
 

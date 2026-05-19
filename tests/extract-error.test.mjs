@@ -12,36 +12,14 @@
  * Run via: npm test
  */
 
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { loadFunction } from './_vm-extract.mjs';
 
-// ── Extract the function from app.js by balanced-brace matching ──────
-
+// Extract extractErrorText from app.js (a classic browser script, not
+// importable) and eval it in a fresh vm context.
 const APP_JS = new URL('../public/app.js', import.meta.url);
-const src = readFileSync(APP_JS, 'utf8');
-
-function extractFunctionSource(text, name) {
-  const start = text.indexOf(`function ${name}`);
-  if (start < 0) throw new Error(`${name} not found in ${APP_JS.pathname}`);
-  let depth = 0;
-  let inBraces = false;
-  for (let i = text.indexOf('{', start); i < text.length; i++) {
-    if (text[i] === '{') { depth++; inBraces = true; }
-    else if (text[i] === '}') {
-      depth--;
-      if (inBraces && depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  throw new Error(`unbalanced braces in ${name}`);
-}
-
-const fnSrc = extractFunctionSource(src, 'extractErrorText');
-const ctx = {};
-runInNewContext(`${fnSrc};\nresult = extractErrorText;`, ctx);
-const extractErrorText = ctx.result;
-assert.equal(typeof extractErrorText, 'function');
+const extractErrorText = loadFunction(APP_JS, 'extractErrorText');
 
 // ── Tests ────────────────────────────────────────────────────────────
 
