@@ -733,7 +733,10 @@ app.post('/api/tomes/default/entries', async (req, res) => {
       selective:           false,
       selectiveLogic:      0,
       enabled:             true,
-      position:            0,
+      // At-depth, not a system-message position — these keyword-triggered
+      // entries would invalidate the prompt prefix cache if injected into
+      // it. See the same rationale in memorization.js.
+      position:            4,
       depth:               4,
       role:                0,
       scanDepth:           null,

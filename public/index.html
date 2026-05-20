@@ -590,6 +590,7 @@
         <h2 class="modal-title" id="tome-entries-modal-title">Tome Entries</h2>
         <div class="modal-header-actions">
           <button class="btn-ghost" id="tome-entries-back-btn">← Back</button>
+          <button class="btn-ghost" id="tome-entries-depth-btn" title="Move every non-constant (keyword-triggered) entry out of the system-message positions to @ chat depth 4, so they stop invalidating the prompt cache. Constant entries are left in place.">↓ Non-constant → depth 4</button>
           <button class="btn-secondary" id="tome-entries-new-btn">+ New</button>
           <button class="icon-btn modal-close" id="tome-entries-modal-close" aria-label="Close">✕</button>
         </div>
@@ -774,6 +775,7 @@
               <option value="3">⬇ Bottom of system message</option>
               <option value="4">@ At chat depth</option>
             </select>
+            <div class="field-hint hidden" id="lore-ed-position-lock-hint">System-message positions are limited to <strong>constant</strong> entries — a keyword-triggered entry there would invalidate the prompt cache each time it flips. Non-constant entries inject @ chat depth. Check <em>Constant</em> to unlock the other positions.</div>
           </div>
           <div class="field" id="lore-ed-depth-field">
             <label for="lore-ed-depth">Depth <span class="label-hint">(from end)</span></label>

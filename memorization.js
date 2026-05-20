@@ -272,7 +272,11 @@ async function processJob(job) {
         selective:           false,
         selectiveLogic:      0,
         enabled:             true,
-        position:            0,
+        // At-depth (4), not a system-message position: these are
+        // non-constant (keyword-triggered) entries, so injecting them
+        // into the cacheable prompt prefix would invalidate it every
+        // time they activate. At-depth keeps the prefix stable.
+        position:            4,
         depth:               4,
         role:                0,
         scanDepth:           null,

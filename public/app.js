@@ -3368,6 +3368,7 @@ function init() {
     openTomesModal();
   });
   $('tome-entries-new-btn').addEventListener('click', () => openLoreEditor(null));
+  $('tome-entries-depth-btn').addEventListener('click', moveNonConstantToDepth);
 
   // New tome modal
   $('new-tome-modal-close').addEventListener('click', closeNewTomeModal);
@@ -3394,6 +3395,8 @@ function init() {
     $('lore-ed-depth-field').classList.toggle('hidden', !isAtDepth);
     $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
   });
+  // Cache-safety: re-evaluate the position lock whenever "constant" flips.
+  $('lore-ed-constant').addEventListener('change', applyLorePositionLock);
   $('lore-ed-probability').addEventListener('input', () => {
     $('lore-ed-prob-display').textContent = `${$('lore-ed-probability').value}%`;
   });
@@ -6297,6 +6300,71 @@ async function keCreateSnapshot() {
 
 // ── Tome entry editor ─────────────────────────────────────────────
 
+// Cache-safety lock for lore-entry positions. System-message positions
+// (0–3) live in the cacheable prompt prefix; a non-constant
+// (keyword-triggered) entry there flips on/off between turns and
+// invalidates the upstream prefix cache each time. So restrict those
+// positions to constant entries — non-constant entries must inject
+// @ depth (4), which sits below the cached prefix in the conversation.
+// Reactive: disables the system options + snaps to @depth when the
+// "constant" box is unchecked.
+function applyLorePositionLock() {
+  const constant = $('lore-ed-constant').checked;
+  const sel = $('lore-ed-position');
+  for (const opt of sel.options) {
+    opt.disabled = (opt.value !== '4') && !constant;
+  }
+  if (!constant && sel.value !== '4') {
+    sel.value = '4';
+    sel.dispatchEvent(new Event('change')); // refresh depth/role field visibility
+  }
+  const hint = $('lore-ed-position-lock-hint');
+  if (hint) hint.classList.toggle('hidden', constant);
+}
+
+// Bulk action: relocate every non-constant entry that's sitting in a
+// system-message position (0–3, the cache-breaking ones) to @ depth 4.
+// Constant entries and entries already @ depth are left untouched —
+// they're already cache-safe. Operates on the currently-open tome.
+async function moveNonConstantToDepth() {
+  if (!_currentTomeId) return;
+  const tomeName = state.tomeCache[_currentTomeId]?.name ?? 'this tome';
+  if (!confirm(
+    `Move every non-constant entry in "${tomeName}" that's in a system-message position to @ chat depth 4?\n\n` +
+    `Keyword-triggered (non-constant) entries in the system message break the prompt cache when they flip on and off. ` +
+    `This relocates them below the cached prefix. Constant entries, and entries already @ depth, are left as they are.`
+  )) return;
+  try {
+    const res = await fetch(`/api/tomes/${_currentTomeId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const tomeData = await res.json();
+    const entries = tomeData.entries ?? {};
+    let moved = 0;
+    for (const uid of Object.keys(entries)) {
+      const e = entries[uid];
+      if (e.constant !== true && normEntryPos(e.position) !== 4) {
+        e.position = 4;
+        e.depth = 4;
+        moved++;
+      }
+    }
+    if (moved === 0) {
+      alert('Nothing to move — every non-constant entry is already @ depth (or all entries are constant).');
+      return;
+    }
+    await fetch(`/api/tomes/${_currentTomeId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries }),
+    });
+    state.tomeCache[_currentTomeId] = tomeData;
+    refreshTomeEntriesList();
+    alert(`Moved ${moved} non-constant ${moved === 1 ? 'entry' : 'entries'} to @ depth 4.`);
+  } catch (err) {
+    alert(`Failed to move entries: ${err.message}`);
+  }
+}
+
 function openLoreEditor(uid) {
   _loreEditUid = uid ?? null;
   const entry  = uid ? (state.tomeCache[_currentTomeId]?.entries[uid] ?? {}) : {};
@@ -6334,6 +6402,10 @@ function openLoreEditor(uid) {
   $('lore-ed-role-field').classList.toggle('hidden', !isAtDepth);
   $('lore-ed-depth').value = entry.depth ?? 4;
   $('lore-ed-role').value  = String(entry.role ?? 0);
+  // Enforce the constant-only-in-prefix rule for the loaded entry
+  // (also corrects a legacy non-constant system-position entry to
+  // @depth in the UI; saving then persists the fix).
+  applyLorePositionLock();
 
   // Timing
   const prob = entry.probability ?? 100;
@@ -6432,6 +6504,15 @@ async function saveLoreEditorEntry() {
     session_id:          existing.session_id ?? state.sessionId,
     message_range:       existing.message_range ?? null,
   };
+
+  // Cache-safety backstop. The editor UI prevents this, but an imported
+  // tome or a hand-edited JSON could still carry a non-constant entry in
+  // a system-message position (0–3) — which would invalidate the prompt
+  // prefix cache. Force such entries to @ depth (4).
+  if (!entry.constant && entry.position !== 4) {
+    entry.position = 4;
+    if (!entry.depth) entry.depth = 4;
+  }
 
   try {
     if (!_currentTomeId) throw new Error('No tome selected.');
