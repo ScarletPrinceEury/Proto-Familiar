@@ -313,7 +313,15 @@ if ((Have "uv") -and (Test-Path (Join-Path $unruhDir "pyproject.toml"))) {
     Push-Location $unruhDir
     try {
         & uv sync --quiet
-        if ($LASTEXITCODE -eq 0) { Ok "Unruh dependencies synced" }
+        if ($LASTEXITCODE -eq 0) {
+            Ok "Unruh dependencies synced"
+            # Apply any pending DB migrations now (idempotent) so a schema
+            # change shipped in this update is in place before the first
+            # chat rather than lazily on first connect. Best-effort.
+            & uv run --no-sync python -c "from unruh.db import get_conn; get_conn().close()" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "Unruh database up to date" }
+            else { Warn "Unruh DB migration step skipped - it will apply on first start." }
+        }
         else { Warn "uv sync failed - Unruh will be disabled until this is resolved." }
     } finally { Pop-Location }
 } elseif (Test-Path (Join-Path $unruhDir "pyproject.toml")) {

@@ -259,6 +259,16 @@ if [ "$HAVE_UV" = "1" ] && [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
   say "Syncing Unruh dependencies (only fetches what's new)..."
   if ( cd "$SCRIPT_DIR/unruh" && uv sync --quiet ); then
     say "Unruh dependencies synced."
+    # Apply any pending DB migrations now (idempotent) so a schema change
+    # shipped in this update is in place before the first chat, rather
+    # than lazily on the first Unruh connect. Opening a connection runs
+    # run_migrations(). Best-effort: on failure it still applies on first
+    # start, so this is non-fatal.
+    if ( cd "$SCRIPT_DIR/unruh" && uv run --no-sync python -c "from unruh.db import get_conn; get_conn().close()" >/dev/null 2>&1 ); then
+      say "Unruh database up to date."
+    else
+      warn "Unruh DB migration step skipped — it will apply on first start."
+    fi
   else
     warn "uv sync failed — Unruh will be disabled until this is resolved."
   fi

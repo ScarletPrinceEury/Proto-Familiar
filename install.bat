@@ -279,6 +279,18 @@ if "!HAVE_UV!"=="1" if exist "%SCRIPT_DIR%\unruh\pyproject.toml" (
     echo [WARN] uv sync failed - Unruh will be disabled until this is resolved.
   ) else (
     echo Unruh dependencies synced.
+    REM Apply any pending DB migrations now so a schema change shipped in
+    REM this update is in place before the first chat rather than lazily
+    REM on first connect. Idempotent, best-effort, non-fatal.
+    REM Keep REM lines in this block free of parentheses - a bare close
+    REM paren ends the block early. The parens in the python string below
+    REM are safe because they sit inside double quotes.
+    uv run --no-sync python -c "from unruh.db import get_conn; get_conn().close()" >nul 2>nul
+    if errorlevel 1 (
+      echo [WARN] Unruh DB migration step skipped - it will apply on first start.
+    ) else (
+      echo Unruh database up to date.
+    )
   )
   popd
 ) else if exist "%SCRIPT_DIR%\unruh\pyproject.toml" (
