@@ -28,6 +28,20 @@
 const VALID_CATEGORIES = new Set(['self', 'user', 'relationship', 'custom']);
 
 /**
+ * True only if `identity` (an identity_get_all result) actually carries
+ * content — at least one category with at least one file. The
+ * standing-value bridge MUST gate on this before trusting any "missing"
+ * verdict: a down or erroring entity-core parses to `{}` (or all-empty),
+ * against which every ref would read "missing" and trigger a wrongful
+ * mass-demotion. Erring toward "looks empty → don't reconcile" keeps a
+ * transient outage from stripping every standing value.
+ */
+export function identityHasContent(identity) {
+  return !!identity && typeof identity === 'object'
+    && [...VALID_CATEGORIES].some(k => Array.isArray(identity[k]) && identity[k].length > 0);
+}
+
+/**
  * Parse a value_ref string into its parts, or null if it isn't a
  * well-formed entity-core ref.
  * @returns {{ source:'entity-core', category:string, filename:string, section:string|null } | null}

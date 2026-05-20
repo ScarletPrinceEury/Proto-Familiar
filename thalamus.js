@@ -527,7 +527,7 @@ function wrapFile(filename, content, promptLabel) {
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
-import { resolveEntityCoreRef } from './entity-ref.js';
+import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -575,10 +575,20 @@ function identitySection(files, order) {
  * degrades gracefully — server.js treats empty strings as "skip the
  * injection".
  *
+ * Options:
+ *   liveTurn   — this is a real chat turn (only /api/chat sets it), so
+ *                side-effecting reconciliations are allowed: consume a
+ *                surfaced session handoff, and demote standing values
+ *                whose entity-core anchor has vanished. debug-prompt and
+ *                the handoff summariser leave it false → read-only.
+ *   staticOnly — fetch only the identity layer (persona), skipping
+ *                memory / graph / temporal. Used by the handoff
+ *                summariser so its note is in voice without the bloat.
+ *
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string }>}
  */
-export async function enrich(userMessage, { consumeHandoff = false, staticOnly = false } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false } = {}) {
   const EMPTY = { static: '', dynamic: '' };
   if (!mcpClient && !unruhClient) return EMPTY;
 
@@ -769,12 +779,12 @@ export async function enrich(userMessage, { consumeHandoff = false, staticOnly =
     const temporalLines = formatTemporalContext(temporalPayload);
 
     // Session handoff (M6) is surfaced as part of [Temporal Context].
-    // On the real chat path (consumeHandoff), mark it consumed once
-    // we've surfaced it so it doesn't reappear on every message of the
-    // new session. Fire-and-forget; gated to the chat path so a
-    // debug-prompt preview (which also calls enrich) never consumes it.
+    // On a live turn, mark it consumed once we've surfaced it so it
+    // doesn't reappear on every message of the new session.
+    // Fire-and-forget; gated to live turns so a debug-prompt preview
+    // (which also calls enrich) never consumes it.
     const handoffId = temporalPayload?.handoff?.id;
-    if (consumeHandoff && handoffId && unruhClient) {
+    if (liveTurn && handoffId && unruhClient) {
       unruhClient.callTool({
         name: 'session_mark_handoff_consumed',
         arguments: { id: handoffId },
@@ -788,13 +798,18 @@ export async function enrich(userMessage, { consumeHandoff = false, staticOnly =
     // (don't drop it). Thalamus mediates because it alone holds both
     // sides — entity-core's identity (`id`) and Unruh's interests.
     //
-    // Guard hard against false demotions: only run when entity-core
-    // actually RESPONDED (idResult non-null). If entity-core is down,
-    // `id` would look empty and every ref would seem "missing" — we must
-    // not mass-demote on a transient outage. Also only touch refs that
-    // parse as entity-core refs (resolve → 'missing'); anything else is
-    // left alone.
-    if (unruhClient && idResult && idSettled.status === 'fulfilled') {
+    // Two guards against false mass-demotion:
+    //   1. liveTurn — only reconcile on a real chat turn (a read-only
+    //      debug-prompt preview must not mutate state).
+    //   2. identityLooksReal — entity-core must have returned actual
+    //      identity content. `idResult` being non-null isn't enough:
+    //      an error / non-JSON payload parses to `id = {}`, against
+    //      which EVERY ref would read "missing" → mass demote. Require
+    //      at least one non-empty identity category before trusting a
+    //      "missing" verdict. (Erring toward not-demoting is the safe
+    //      direction — a stale standing value is cheaper than wrongly
+    //      stripping every value because entity-core hiccuped.)
+    if (liveTurn && unruhClient && identityHasContent(id)) {
       for (const sv of (temporalPayload?.interests?.standing ?? [])) {
         const ref = sv?.value_ref;
         if (!ref || !sv?.id) continue;

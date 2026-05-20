@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseEntityCoreRef, resolveEntityCoreRef } from '../entity-ref.js';
+import { parseEntityCoreRef, resolveEntityCoreRef, identityHasContent } from '../entity-ref.js';
 
 // Sample identity_get_all shape.
 const identity = {
@@ -95,4 +95,23 @@ test('case-insensitive section match', () => {
 test('empty identity reports missing — caller must guard on entity-core being up', () => {
   assert.equal(resolveEntityCoreRef('entity-core:self/my_wants.md', {}), 'missing');
   assert.equal(resolveEntityCoreRef('entity-core:self/my_wants.md', null), 'missing');
+});
+
+// ── identityHasContent (the mass-demotion guard) ──────────────────────
+
+test('identityHasContent: real identity → true', () => {
+  assert.equal(identityHasContent(identity), true);
+});
+
+test('identityHasContent: empty / down entity-core → false (do NOT reconcile)', () => {
+  assert.equal(identityHasContent({}), false);                                  // unparseable → {}
+  assert.equal(identityHasContent(null), false);                               // no result
+  assert.equal(identityHasContent(undefined), false);
+  assert.equal(identityHasContent({ self: [], user: [], relationship: [], custom: [] }), false); // all empty
+  assert.equal(identityHasContent('garbage'), false);
+  assert.equal(identityHasContent({ self: 'not-an-array' }), false);
+});
+
+test('identityHasContent: any one non-empty category → true', () => {
+  assert.equal(identityHasContent({ self: [], custom: [{ filename: 'x.md', content: 'y' }] }), true);
 });

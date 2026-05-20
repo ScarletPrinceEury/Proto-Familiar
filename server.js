@@ -176,11 +176,13 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
-  // consumeHandoff: only the full chat path surfaces + consumes the
-  // session handoff. 'static' fetches persona only (handoff summariser);
-  // 'none' skips enrichment entirely.
+  // liveTurn: only the full chat path may reconcile state (consume the
+  // surfaced session handoff, demote standing values whose entity-core
+  // anchor vanished). 'static' fetches persona only (handoff summariser);
+  // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
+  // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { consumeHandoff: true })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '' };
   const depth = getThalamusDynamicDepth();
