@@ -102,12 +102,15 @@ if "!MODE!"=="update" (
       popd
     )
   ) else (
-    echo [WARN] This folder is NOT a git checkout - it looks like a downloaded ZIP.
-    echo        install.bat cannot pull updates here. To update, double-click
-    echo        update.bat in this folder - it downloads the latest version and
-    echo        applies it, keeping your settings and memories.
-    echo        For git-based updates instead, reinstall with:
-    echo          git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
+    REM Skip this warning when update.bat is the caller - it just updated us.
+    if not "%PF_FROM_UPDATER%"=="1" (
+      echo [WARN] This folder is NOT a git checkout - it looks like a downloaded ZIP.
+      echo        install.bat cannot pull updates here. To update, double-click
+      echo        update.bat in this folder - it downloads the latest version and
+      echo        applies it, keeping your settings and memories.
+      echo        For git-based updates instead, reinstall with:
+      echo          git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
+    )
   )
 )
 
@@ -371,7 +374,9 @@ echo   Start:     start.bat   ^(double-click^)
 echo   Stop:      stop.bat    ^(double-click^)
 echo   Trouble?   see docs\troubleshooting.md
 echo.
-pause
+REM When run by update.bat, let the updater own the final pause so its
+REM "restart Proto-Familiar" message is the last thing on screen.
+if not "%PF_FROM_UPDATER%"=="1" pause
 endlocal
 goto :eof
 

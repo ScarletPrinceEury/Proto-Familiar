@@ -48,7 +48,16 @@ if errorlevel 1 (
   exit /b 1
 )
 
-set "SRC=%TMP%\x\Proto-Familiar-main"
+REM Find the extracted top-level folder rather than hardcoding the name,
+REM so a repo/branch rename doesn't silently break the updater.
+set "SRC="
+for /d %%D in ("%TMP%\x\Proto-Familiar-*") do set "SRC=%%D"
+if not defined SRC (
+  echo [ERROR] Unexpected archive layout - aborting without changing anything.
+  rmdir /s /q "%TMP%" 2>nul
+  pause
+  exit /b 1
+)
 if not exist "%SRC%\package.json" (
   echo [ERROR] Unexpected archive layout - aborting without changing anything.
   rmdir /s /q "%TMP%" 2>nul
@@ -76,6 +85,13 @@ if errorlevel 8 (
 rmdir /s /q "%TMP%" 2>nul
 
 echo Running install.bat for dependencies + database migrations...
+REM Tell install.bat it's running under the updater so it doesn't print
+REM the "not a git checkout - use update.bat" warning back at us.
+set "PF_FROM_UPDATER=1"
 call "%DEST%\install.bat"
 
+echo.
+echo === Update complete. Restart Proto-Familiar to use the new version. ===
+echo.
+pause
 endlocal

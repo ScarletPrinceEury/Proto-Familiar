@@ -123,9 +123,10 @@ if [ "$MODE" = "update" ]; then
     if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
       warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
     fi
-  elif [ ! -d "$SCRIPT_DIR/.git" ]; then
+  elif [ ! -d "$SCRIPT_DIR/.git" ] && [ "$PF_FROM_UPDATER" != "1" ]; then
     # No .git means this is a downloaded ZIP, not a clone — the installer
     # can't pull updates, so point the user at the one-click updater.
+    # Skipped when update.sh is the caller (it just did the update).
     warn "This folder is NOT a git checkout — it looks like a downloaded ZIP."
     warn "  install.sh can't pull updates here. To update, run ./update.sh —"
     warn "  it downloads the latest version and applies it, keeping your data."

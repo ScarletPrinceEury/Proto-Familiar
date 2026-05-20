@@ -44,8 +44,10 @@ fi
 
 say "Extracting…"
 tar -xzf "$TMP/pf.tar.gz" -C "$TMP" || die "Could not extract the download."
-SRC="$TMP/Proto-Familiar-main"
-[ -f "$SRC/package.json" ] || die "Unexpected archive layout — aborting without changing anything."
+# Find the extracted top-level dir rather than hardcoding the name, so a
+# repo/branch rename doesn't silently break the updater.
+SRC="$(find "$TMP" -maxdepth 1 -type d -name 'Proto-Familiar-*' | head -n 1)"
+[ -n "$SRC" ] && [ -f "$SRC/package.json" ] || die "Unexpected archive layout — aborting without changing anything."
 
 # Never copy the updater scripts over themselves: a running script that
 # gets overwritten mid-run can misbehave. You keep your current ones.
@@ -58,6 +60,8 @@ cp -R "$SRC/." "$DEST/" || die "Copy failed."
 chmod +x "$DEST"/*.sh "$DEST"/*.command 2>/dev/null || true
 
 say "Running the installer for dependencies + database migrations…"
-bash "$DEST/install.sh"
+# Tell install.sh it's running under the updater so it doesn't print the
+# "not a git checkout — run ./update.sh" warning back at us.
+PF_FROM_UPDATER=1 bash "$DEST/install.sh"
 
-say "Update complete."
+say "Update complete. Restart Proto-Familiar (./start.sh, or your usual launcher) to use the new version."

@@ -113,7 +113,7 @@ if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git
         & git pull --ff-only
         if ($LASTEXITCODE -ne 0) { Warn "git pull --ff-only failed. Work tree is unchanged." }
     } finally { Pop-Location }
-} elseif ($updateMode -and -not (Test-Path (Join-Path $projectRoot ".git"))) {
+} elseif ($updateMode -and -not (Test-Path (Join-Path $projectRoot ".git")) -and ($env:PF_FROM_UPDATER -ne '1')) {
     # No .git — this is a downloaded ZIP, not a clone. The installer can't
     # pull updates here, so the user would silently stay on this version.
     Warn "This folder is NOT a git checkout - it looks like a downloaded ZIP."
