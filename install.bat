@@ -103,11 +103,11 @@ if "!MODE!"=="update" (
     )
   ) else (
     echo [WARN] This folder is NOT a git checkout - it looks like a downloaded ZIP.
-    echo        The installer cannot pull updates here, so you will stay on this
-    echo        version no matter how often you re-run it. To get updates, install
-    echo        with git instead:
+    echo        install.bat cannot pull updates here. To update, double-click
+    echo        update.bat in this folder - it downloads the latest version and
+    echo        applies it, keeping your settings and memories.
+    echo        For git-based updates instead, reinstall with:
     echo          git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
-    echo        then run the installer from the cloned folder. See docs\getting-started.md.
   )
 )
 
@@ -365,7 +365,7 @@ REM missing newer work) is obvious right here, not a mystery later.
 if exist "%SCRIPT_DIR%\.git" (
   for /f %%b in ('git -C "%SCRIPT_DIR%" rev-parse --abbrev-ref HEAD 2^>nul') do echo   Branch:    %%b
 ) else (
-  echo   Branch:    not a git checkout ^(downloaded ZIP - updates are disabled^)
+  echo   Branch:    not a git checkout - to update, double-click update.bat
 )
 echo   Start:     start.bat   ^(double-click^)
 echo   Stop:      stop.bat    ^(double-click^)

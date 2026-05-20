@@ -280,13 +280,15 @@ the reconnect loop repeatedly:
 
 Almost always one of two things:
 
-- **You installed from a downloaded ZIP, not a `git clone`.** GitHub's "Download ZIP" gives you a folder like `Proto-Familiar-main` that is **not** a git repository — there's no `.git` inside it. The installer pulls updates with `git`, so on a ZIP it silently can't, and you stay on whatever version the ZIP captured. (The "up to date" you saw may also have been **npm's** `up to date` line, which is about node modules, not the app.) The installer now warns about this explicitly and prints `Branch: (not a git checkout …)` at the end. **Fix:** reinstall via git so updates work:
+- **You installed from a downloaded ZIP, not a `git clone`.** GitHub's "Download ZIP" gives you a folder like `Proto-Familiar-main` that is **not** a git repository — there's no `.git` inside it. The installer pulls updates with `git`, so on a ZIP it silently can't, and you stay on whatever version the ZIP captured. (The "up to date" you saw may also have been **npm's** `up to date` line, which is about node modules, not the app.) The installer now detects this, warns explicitly, and prints `Branch: (not a git checkout …)` at the end.
+
+  **Fix — the one-click updater (no git needed):** double-click **`update.bat`** (Windows) or **`update.command`** (macOS), or run **`./update.sh`** (Linux). It downloads the latest version from GitHub and lays it over your folder, then runs the installer. Your settings, saved memories, tomes, chat logs, and entity-core data are **preserved** — they aren't part of the download, so they're never overwritten (and the installer auto-backs them up to `.pf-backups/` too). This is the recommended path for non-technical users.
+
+  **Or reinstall via git** (enables the installer's own `git pull` going forward):
 
   ```
   git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git
   ```
-
-  then run the installer from the cloned folder. Back up `tomes/`, `logs/`, `settings.json`, and entity-core's `data/` first if you're replacing an existing folder (the installer also auto-backs these up into `.pf-backups/` in update mode).
 
 - **The version you want is on a different branch.** A `git clone` checks out the default branch (usually `main`); work in progress may live on a feature branch that hasn't been merged yet. `git pull` only updates the branch you're on, so if the new code is elsewhere you'll see "Already up to date." Check your branch with `git branch --show-current` (the installer also prints `Branch:` at the end). To switch: `git checkout <branch>` then re-run the installer.
 

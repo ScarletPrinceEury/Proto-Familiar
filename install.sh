@@ -125,12 +125,11 @@ if [ "$MODE" = "update" ]; then
     fi
   elif [ ! -d "$SCRIPT_DIR/.git" ]; then
     # No .git means this is a downloaded ZIP, not a clone — the installer
-    # can't pull updates, so the user would silently stay on this version.
+    # can't pull updates, so point the user at the one-click updater.
     warn "This folder is NOT a git checkout — it looks like a downloaded ZIP."
-    warn "  The installer can't pull updates here; you'll stay on this version."
-    warn "  To get updates, install with git instead:"
-    warn "    git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git"
-    warn "  then run the installer from the cloned folder. See docs/getting-started.md."
+    warn "  install.sh can't pull updates here. To update, run ./update.sh —"
+    warn "  it downloads the latest version and applies it, keeping your data."
+    warn "  (Or reinstall with: git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git)"
   fi
 fi
 
@@ -286,6 +285,11 @@ elif [ -f "$SCRIPT_DIR/unruh/pyproject.toml" ]; then
   warn "Skipping Unruh dep sync (uv not available). Temporal context will be disabled until uv is installed."
 fi
 
+# Make the shell launchers + updaters executable — a ZIP extractor or a
+# restored backup can drop the bit, which would break ./update.sh and the
+# macOS double-click path.
+chmod +x "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.command 2>/dev/null || true
+
 # --- Platform-specific launcher polish (idempotent, runs in both modes) -
 # Previously gated on install mode only, which silently skipped desktop-
 # entry creation on update mode — fine when the entry already existed,
@@ -340,7 +344,7 @@ if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
   PF_BRANCH="$( cd "$SCRIPT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null )"
   [ -n "$PF_BRANCH" ] && say "Branch:  $PF_BRANCH"
 else
-  say "Branch:  (not a git checkout — downloaded ZIP; updates disabled)"
+  say "Branch:  (not a git checkout — downloaded ZIP; update with ./update.sh)"
 fi
 echo
 echo "  Launch:"

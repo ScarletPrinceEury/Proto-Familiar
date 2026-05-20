@@ -117,10 +117,9 @@ if ($updateMode -and (Test-Path (Join-Path $projectRoot ".git")) -and (Have "git
     # No .git — this is a downloaded ZIP, not a clone. The installer can't
     # pull updates here, so the user would silently stay on this version.
     Warn "This folder is NOT a git checkout - it looks like a downloaded ZIP."
-    Warn "  The installer can't pull updates here; you'll stay on this version."
-    Warn "  To get updates, install with git instead:"
-    Warn "    git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git"
-    Warn "  then run the installer from the cloned folder. See docs\getting-started.md."
+    Warn "  This installer can't pull updates here. To update, double-click"
+    Warn "  update.bat - it downloads the latest version and applies it, keeping your data."
+    Warn "  (Or reinstall with: git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git)"
 }
 
 $haveWinget = Have "winget"
@@ -404,7 +403,7 @@ if ((Test-Path (Join-Path $projectRoot ".git")) -and (Have "git")) {
     $pfBranch = (& git -C $projectRoot rev-parse --abbrev-ref HEAD 2>$null)
     if ($pfBranch) { Write-Host "Branch:  $pfBranch" -ForegroundColor Green }
 } else {
-    Write-Host "Branch:  (not a git checkout - downloaded ZIP; updates disabled)" -ForegroundColor Yellow
+    Write-Host "Branch:  (not a git checkout - downloaded ZIP; update with update.bat)" -ForegroundColor Yellow
 }
 Write-Host "Launch any time via:"
 Write-Host "  - Desktop shortcut: Proto-Familiar"
