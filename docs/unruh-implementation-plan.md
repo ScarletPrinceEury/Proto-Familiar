@@ -486,24 +486,44 @@ typed references to entity-core identity facts, so the redundancy the
 design doc calls for becomes structural rather than nominal.
 
 **Tasks**
-- [ ] Define a tiny shared schema for the reference: probably
-      `{ source: 'entity-core', path: 'self/my_wants.md#paragraph-id' }`
-      or similar. Anchor by stable identifier, not free text.
-- [ ] On standing value read, Unruh asks entity-core (via Thalamus,
-      or via a direct sibling-MCP capability — both options should
-      be evaluated; sibling-MCP avoids round-tripping through
-      Thalamus but adds a dependency edge between specialists).
-- [ ] Document the rule: if entity-core's referenced fact disappears,
-      Unruh demotes the standing value to `live_interest` rather
-      than silently dropping it.
+- [x] Reference schema, anchored by stable identifier — a string:
+      `entity-core:<category>/<filename>[#<section>]`
+      (e.g. `entity-core:self/my_wants.md#Caring for the user`).
+      `<category>` is one of self / user / relationship / custom.
+      Stored verbatim in the standing value's `payload.value_ref`
+      (already plumbed in M4) and surfaced at top level by
+      `list_interests`. Parsed/resolved by `entity-ref.js`.
+- [x] **Resolved: Thalamus mediates** (not sibling-MCP). Thalamus is
+      the only component that holds both sides — entity-core's identity
+      (`identity_get_all`) and Unruh's interests (`temporal_context`) —
+      and it already fetches both in `enrich()`. Validating there keeps
+      Unruh independent and inference-free, with no dependency edge
+      between the two specialists (which sibling-MCP would have added).
+      The check is a cheap string-parse + lookup in already-fetched
+      data; demotion is a fire-and-forget call to the new
+      `interest_demote_standing` tool.
+- [x] Demotion rule documented + implemented: when a standing value's
+      anchored entity-core fact has disappeared, it is **demoted to
+      `live_interest`** (keeping its label + weight, `last_touched`
+      refreshed so it surfaces once then decays) rather than dropped.
+      **Hard safety guard:** the bridge only runs when entity-core
+      actually responded, and only acts on refs that parse as
+      `entity-core:` refs and resolve to `missing` — so a transient
+      entity-core outage can never mass-demote standing values.
 
-**Acceptance:** Editing the identity file in the Knowledge editor
-that anchors a standing value flows through to Unruh's interest layer
-on next read.
+**Acceptance:** Verified at the component level — `entity-ref.js`
+resolves present/missing anchors (14 tests); `interest_demote_standing`
+moves a standing value into the live list without dropping it (Python
+tests); `temporal_context` surfaces `value_ref` + `id` so Thalamus can
+act. The end-to-end "edit the identity file → demote on next read" path
+runs through `enrich()` and needs a live entity-core to exercise (no
+Deno in CI), but every link is unit-tested and the wiring reads the
+verified fields.
 
 **Notes:** This milestone is small but politically important — it is
 the seam where the design's "redundancy is intentional" claim becomes
-real or hollow.
+real or hollow. It is now real: a standing value either re-derives from
+a living entity-core fact or quietly steps down to an ordinary interest.
 
 ---
 

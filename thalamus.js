@@ -527,6 +527,7 @@ function wrapFile(filename, content, promptLabel) {
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
+import { resolveEntityCoreRef } from './entity-ref.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -778,6 +779,33 @@ export async function enrich(userMessage, { consumeHandoff = false, staticOnly =
         name: 'session_mark_handoff_consumed',
         arguments: { id: handoffId },
       }).catch(err => console.error('[thalamus] mark handoff consumed failed:', err?.message ?? err));
+    }
+
+    // ── Standing-value → entity-core bridge (M7) ──────────────────────────
+    // A standing value can anchor to an entity-core identity fact via a
+    // `value_ref` (e.g. "entity-core:self/my_wants.md#Caring…"). If that
+    // fact has disappeared, demote the standing value to a live interest
+    // (don't drop it). Thalamus mediates because it alone holds both
+    // sides — entity-core's identity (`id`) and Unruh's interests.
+    //
+    // Guard hard against false demotions: only run when entity-core
+    // actually RESPONDED (idResult non-null). If entity-core is down,
+    // `id` would look empty and every ref would seem "missing" — we must
+    // not mass-demote on a transient outage. Also only touch refs that
+    // parse as entity-core refs (resolve → 'missing'); anything else is
+    // left alone.
+    if (unruhClient && idResult && idSettled.status === 'fulfilled') {
+      for (const sv of (temporalPayload?.interests?.standing ?? [])) {
+        const ref = sv?.value_ref;
+        if (!ref || !sv?.id) continue;
+        if (resolveEntityCoreRef(ref, id) === 'missing') {
+          console.log(`[thalamus] standing value "${sv.label}" anchor gone (${ref}) — demoting to live interest`);
+          unruhClient.callTool({
+            name: 'interest_demote_standing',
+            arguments: { id: sv.id },
+          }).catch(err => console.error('[thalamus] demote standing failed:', err?.message ?? err));
+        }
+      }
     }
 
     // ── Assemble into static + dynamic blocks ─────────────────────────────

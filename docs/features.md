@@ -164,7 +164,7 @@ Events, tasks, phases, and states on a timeline. The block shows the **current p
 
 Two kinds, both rendered under the temporal block:
 
-- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn.
+- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn. A standing value can be **anchored to an entity-core identity fact** (a `value_ref` like `entity-core:self/my_wants.md#Caring for the user`); on each turn Thalamus checks the anchor still exists, and if you've since deleted that fact from the Knowledge editor, the standing value is **demoted to a live interest** (kept, but now subject to decay) rather than silently dropped. This is the structural side of the design's "redundancy is intentional" — a standing value stays standing only while the identity fact it mirrors is alive.
 - **Live interests** — topics the Familiar engages with accrue **weight** automatically: longer replies and topics the conversation keeps returning to bump it (the signal comes from your open [Topic](topics.md) markers). Weight **decays** when a topic goes untouched (≈5-day half-life), so a passing curiosity fades within a couple of weeks while a sustained interest climbs into "active pursuit". Bookmarks are a supplementary explicit signal.
 
 Interests are read-only from the UI today; they accrue from chat and surface in the prompt. Tuning constants (decay rate, accrual scales) are code-level for now.

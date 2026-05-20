@@ -15,6 +15,7 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     interest_record       — bump engagement weight for a topic
     interest_bookmark     — save a resource against a topic
     interest_set_standing — promote a topic to an always-on standing value
+    interest_demote_standing — demote a standing value to a live interest
     interest_list         — list interests by effective (decayed) weight
 
   Session handoff (M6):
@@ -291,6 +292,21 @@ def interest_set_standing(
             )
     except ValueError as e:
         return _err(str(e))
+
+
+@mcp.tool()
+def interest_demote_standing(id: str) -> dict[str, Any]:
+    """Demote a standing value to a live interest (M7 bridge).
+
+    Thalamus calls this when the entity-core fact a standing value
+    anchored (via its value_ref) has disappeared — we demote rather
+    than drop, so the topic lives on as a decaying interest. Idempotent;
+    a no-op (demoted=0) if the id isn't a current standing value.
+
+    Returns: {ok, demoted}.
+    """
+    with get_conn() as conn:
+        return interests.demote_standing(conn, id=id)
 
 
 @mcp.tool()
