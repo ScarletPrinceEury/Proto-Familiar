@@ -39,6 +39,8 @@ Open with **☰** in the top bar.
 | Streaming | Enable/disable SSE streaming |
 | Temperature | Sampling temperature (0.0–2.0) |
 | Max tokens | Maximum response length in tokens |
+| Context-cache depth | How many messages from the end of the conversation the dynamic enrichment block (memories / graph / temporal) is injected at (`thalamusDynamicDepth`, default 4). Identity stays at the top so the provider's prefix cache covers it; the dynamic block goes deeper so per-turn churn doesn't invalidate the cache. Smaller = the model sees retrieved context closer to the question; larger = more cache hits on long sessions. |
+| Session handoff | When on (`handoffEnabled`, default on), the end of a session runs one short summary call (cheapest connection) so the next session resumes mid-thought via the temporal context. One extra small generation per session boundary — turn off to skip it. See [Temporal context](#temporal-context-unruh). |
 
 ### Saved connections (sidebar)
 
@@ -147,6 +149,37 @@ Click **🧠 Open Knowledge editor** under the "Knowledge (entity-core)" sidebar
 Every destructive HTTP call goes through `thalamus.js` wrappers that call `snapshot_create` before the underlying MCP tool, so the user never needs to remember to back up before a delete. Creates (new node, new edge) do not auto-snapshot — they are additive and reversible by deleting.
 
 The Familiar can do the same edits autonomously via the seven editing tools described in [Tool Calling](tool-calling.md). The tool descriptions carry first-person guidance on when to append vs. update vs. delete, plus the recommendation to supersede with a new memory rather than deleting outright when the change has historical value.
+
+---
+
+## Temporal context (Unruh)
+
+A sibling Python MCP module (`unruh/`, alpha) adds a `[Temporal Context]` block to the dynamic enrichment — the Familiar's sense of *when* it is and *what's been going on*, distinct from entity-core's identity/memory layer. It runs as its own child process (`uv run python -m unruh`) and degrades gracefully: if it isn't installed or is down, the block is simply absent. Design rationale lives in [`unruh-design.md`](unruh-design.md); the three layers it surfaces:
+
+### Schedule
+
+Events, tasks, phases, and states on a timeline. The block shows the **current phase** (e.g. "morning correspondence") plus an upcoming **window** of events/tasks, rendered in your local timezone as landmarks ("today 14:00 — Chen's appointment") rather than ISO timestamps. Seed a default daily rhythm with `cd unruh && uv run python -m unruh seed-routine`.
+
+### Interests
+
+Two kinds, both rendered under the temporal block:
+
+- **Standing values** — always-on identity-level orientations (e.g. "caring for the user's wellbeing"). They never decay, so they surface every turn.
+- **Live interests** — topics the Familiar engages with accrue **weight** automatically: longer replies and topics the conversation keeps returning to bump it (the signal comes from your open [Topic](topics.md) markers). Weight **decays** when a topic goes untouched (≈5-day half-life), so a passing curiosity fades within a couple of weeks while a sustained interest climbs into "active pursuit". Bookmarks are a supplementary explicit signal.
+
+Interests are read-only from the UI today; they accrue from chat and surface in the prompt. Tuning constants (decay rate, accrual scales) are code-level for now.
+
+### Session handoff
+
+When a session ends (idle auto-end or **Clear history**), the Familiar summarises the conversation into an **intent** ("what I was doing") plus **open threads** ("what's unfinished"), in its own voice, and stores it. The next session's first message surfaces it at the top of `[Temporal Context]`:
+
+```
+Last session:
+  intent — I was helping you outline the thesis intro; you were stuck on the hook
+  open — lead with the anecdote or the statistic?
+```
+
+…then marks it consumed so it doesn't repeat. This is one short extra generation per session boundary (cheapest connection, persona-only enrichment so it stays in character without pulling in memories) — turn it off with the **Session handoff** setting. It runs on idle-end and Clear, not on tab-close (an async summary can't complete during page unload), so a tab-closed session simply starts the next one cold.
 
 ---
 
