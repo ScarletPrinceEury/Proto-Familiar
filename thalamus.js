@@ -528,6 +528,7 @@ function wrapFile(filename, content, promptLabel) {
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
+import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -841,10 +842,23 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
     if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
 
+    // ── Recent ponderings (local tome read; honesty loop for step 3') ────
+    // Best-effort, never blocks: a bad read or missing tome silently
+    // contributes nothing. Skipped on staticOnly the same as the other
+    // dynamic sources, so handoff-summary turns stay lean.
+    const ponderings = staticOnly
+      ? []
+      : await getRecentPonderings().catch(err => {
+          console.error('[thalamus] getRecentPonderings failed:', err?.message ?? err);
+          return [];
+        });
+    const ponderingsBlock = formatPonderingsForPrompt(ponderings);
+
     const dynamicSections = [];
-    if (memLines)      dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
-    if (graphLines)    dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
-    if (temporalLines) dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
+    if (memLines)        dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
+    if (graphLines)      dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
+    if (ponderingsBlock) dynamicSections.push(ponderingsBlock);
+    if (temporalLines)   dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
 
     const staticBlock  = staticSections.join('\n');
     const dynamicBlock = dynamicSections.join('\n\n---\n\n');
