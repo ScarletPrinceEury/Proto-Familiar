@@ -197,6 +197,71 @@ class TestUpdateNode:
         assert row["label"] == "curiosity"
 
 
+class TestReminders:
+    """M11 — reminders are schedule nodes of type='reminder' with
+    when_ts as the fire time. get_due_reminders returns the pending
+    ones whose fire time has arrived; reminders_health surfaces
+    counts + next/last timestamps so the scheduler can be monitored."""
+
+    def test_reminder_requires_when(self, conn):
+        with pytest.raises(ValueError, match="requires a 'when'"):
+            sched.add_node(conn, type="reminder", label="ping")
+
+    def test_get_due_returns_only_past(self, conn):
+        past   = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        future = _iso(datetime.now(timezone.utc) + timedelta(hours=1))
+        a = sched.add_node(conn, type="reminder", label="now-due",  when=past)
+        b = sched.add_node(conn, type="reminder", label="not-yet",  when=future)
+        due = sched.get_due_reminders(conn)
+        ids = [r["id"] for r in due]
+        assert a     in ids
+        assert b not in ids
+
+    def test_get_due_skips_resolved(self, conn):
+        past = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        a = sched.add_node(conn, type="reminder", label="fired",     when=past)
+        b = sched.add_node(conn, type="reminder", label="cancelled", when=past)
+        c = sched.add_node(conn, type="reminder", label="pending",   when=past)
+        sched.resolve(conn, id=a, resolution="fired")
+        sched.resolve(conn, id=b, resolution="cancelled")
+        due_ids = [r["id"] for r in sched.get_due_reminders(conn)]
+        assert c     in due_ids
+        assert a not in due_ids
+        assert b not in due_ids
+
+    def test_fired_resolution_is_accepted(self, conn):
+        past = _iso(datetime.now(timezone.utc) - timedelta(minutes=1))
+        r = sched.add_node(conn, type="reminder", label="x", when=past)
+        assert sched.resolve(conn, id=r, resolution="fired")
+
+    def test_due_sorted_by_when_ascending(self, conn):
+        t1 = _iso(datetime.now(timezone.utc) - timedelta(minutes=10))
+        t2 = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        t3 = _iso(datetime.now(timezone.utc) - timedelta(minutes=1))
+        # Insert out of order
+        sched.add_node(conn, type="reminder", label="b", when=t2)
+        sched.add_node(conn, type="reminder", label="c", when=t3)
+        sched.add_node(conn, type="reminder", label="a", when=t1)
+        due = sched.get_due_reminders(conn)
+        assert [r["label"] for r in due] == ["a", "b", "c"]
+
+    def test_health_counts(self, conn):
+        past   = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        future = _iso(datetime.now(timezone.utc) + timedelta(hours=1))
+        sched.add_node(conn, type="reminder", label="overdue",  when=past)
+        sched.add_node(conn, type="reminder", label="overdue2", when=past)
+        sched.add_node(conn, type="reminder", label="upcoming", when=future)
+        fired = sched.add_node(conn, type="reminder", label="done", when=past)
+        sched.resolve(conn, id=fired, resolution="fired")
+
+        h = sched.reminders_health(conn)
+        assert h["total"]   == 4
+        assert h["pending"] == 3
+        assert h["overdue"] == 2
+        assert h["next_fires_at"] is not None
+        assert h["last_fired"]    is not None
+
+
 class TestDeleteNode:
     def test_delete_existing(self, conn):
         t = sched.add_node(conn, type="task", label="kill me")

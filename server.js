@@ -29,6 +29,7 @@ import {
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, deleteScheduleNode,
   getHandoff, markHandoffConsumed,
+  getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -36,6 +37,10 @@ import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
 import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
+import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
+import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
+import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -194,6 +199,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // for the explicit boundaries. Disable entirely with the env var
   // PROTO_FAMILIAR_THREAT_DISABLED=1.
   if (enrichMode === 'full' && userText && userText.trim()) {
+    // Stamp "user just sent a message" so the silence-triage loop
+    // knows when to start considering check-ins. Fire-and-forget.
+    recordUserActivity().catch(err =>
+      console.error('[server] recordUserActivity failed:', err?.message ?? err),
+    );
     const { level, signals } = scoreMessage(userText);
     if (level !== 0) {
       recordThreat({ delta: level, source: 'chat', signals }).catch(err =>
@@ -1400,6 +1410,30 @@ app.post('/api/temporal/handoff/:id/consume', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Reminders health (M11)
+app.get('/api/temporal/reminders/health', async (_req, res) => {
+  try { res.json(await getRemindersHealth()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Outbox (M11/M12 delivery surface)
+app.get('/api/outbox', async (req, res) => {
+  const pendingOnly = req.query.pending !== '0' && req.query.pending !== 'false';
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 50;
+  try { res.json({ items: await listOutbox({ pendingOnly, limit }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/outbox/:id/acknowledge', async (req, res) => {
+  try { res.json(await acknowledgeOutbox({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/outbox/clear-acknowledged', async (_req, res) => {
+  try { res.json(await clearAcknowledged()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
@@ -1415,6 +1449,8 @@ const httpServer = app.listen(PORT, HOST, async () => {
   console.log(lines.join('\n') + '\n');
   startMemorizationWorker();
   startAutonomousPondering();
+  startRemindersScheduler();
+  startSilenceTriage();
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -1487,6 +1523,127 @@ function startAutonomousPondering() {
   console.log('[pondering] Autonomous pondering ENABLED (default). Toggle in Settings → Sidebar → Autonomous pondering; scale intervals via Pondering interval scale; hard-disable with PROTO_FAMILIAR_PONDERING_DISABLED=1.');
 }
 
+// ── Reminders scheduler (M11) ────────────────────────────────────
+// Polls every 30s for due reminders, enqueues them into the outbox,
+// marks the schedule node 'fired'. Designed to retry on partial
+// failure (the outbox dedups, so re-firing the same reminder twice
+// doesn't double-banner). Health-watch surfaces if `overdue` keeps
+// growing across ticks — loud, not silent.
+function startRemindersScheduler() {
+  if (process.env.PROTO_FAMILIAR_REMINDERS_DISABLED === '1') {
+    console.log('[reminders] PROTO_FAMILIAR_REMINDERS_DISABLED=1 — scheduler is OFF');
+    return;
+  }
+  startRemindersLoop({
+    tickMs: 30_000,
+    getDueReminders: async () => {
+      const r = await getDueReminders({ limit: 50 });
+      return Array.isArray(r.reminders) ? r.reminders : [];
+    },
+    fireReminder: async ({ id }) => {
+      const r = await resolveScheduleNode({ id, resolution: 'fired' });
+      if (!r.ok) throw new Error(r.error || 'resolve failed');
+    },
+    getHealth: getRemindersHealth,
+    onTick: (r) => {
+      for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
+      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label}": ${s.error}`);
+    },
+    onError: (err) => console.error('[reminders]', err?.message ?? err),
+  });
+  console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Silence-triage loop (M12b) ──────────────────────────────────
+// Every 5 min, asks: "user is quiet AND threat is elevated — should
+// I gently reach out?" The DECISION is an LLM call (per design doc:
+// "not a threshold check"). Conservative thresholds (severe=15min,
+// high=1hr, moderate=4hr; calm/mild never trigger). Outbox dedup on
+// `triage-<tier>-<4h-bucket>` rate-limits the same-tier banner to
+// once per 4-hour window while still unacknowledged.
+async function decideTriageViaLLM({ threat, silenceMs }) {
+  const s = readSettingsSync();
+  const conn = primaryConnectionFrom(s);
+  if (!conn?.apiKey) return { action: 'wait' };   // no creds → never reach out
+
+  const url = PROVIDER_URLS[conn.provider];
+  if (!url) return { action: 'wait' };
+
+  const minutes = Math.round(silenceMs / 60_000);
+  const prompt = `You are the Familiar — an AI companion. Right now you're being asked one focused question, NOT having a conversation with the user.
+
+Context:
+- Current threat level: ${threat.tier} (weight ${threat.weight?.toFixed?.(2) ?? threat.weight})
+- The user has been silent for ${minutes} minutes
+- The threat signals that raised the dial are recent (last few hours)
+
+The question: should you reach out to them right now? Gently. Without performing concern.
+
+Reach out IF: you can offer something real — a thought you've been carrying, a quiet "I was thinking about you," a soft invitation to talk. The bar is "would a caring friend send this exact note right now?"
+
+Stay quiet IF: you'd just be making noise. If the right thing is to let them have space. If you can't think of something that feels true.
+
+Bias toward STAYING QUIET — over-eager check-ins erode trust. Only reach out when the answer feels obvious.
+
+Return ONLY a JSON object, no prose:
+  {"action": "wait"}                                    if it's not the right time
+  {"action": "reach_out", "message": "your 1-2 sentence note"}   if it is
+
+The message should be 1-2 sentences. Warm. First person. Never therapist-speak ("how are you feeling?"). Never alarming ("are you safe?"). Something a close friend would actually text.`;
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${conn.apiKey.trim()}` },
+      body: JSON.stringify({
+        model: conn.model.trim(),
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+        temperature: 0.6,
+        max_tokens: 300,
+      }),
+    });
+    if (!resp.ok) return { action: 'wait' };
+    const data = await resp.json();
+    const text = data.choices?.[0]?.message?.content ?? '';
+    const m = text.match(/\{[\s\S]+\}/);
+    if (!m) return { action: 'wait' };
+    const parsed = JSON.parse(m[0]);
+    if (parsed?.action === 'reach_out' && typeof parsed.message === 'string' && parsed.message.trim()) {
+      return { action: 'reach_out', message: parsed.message.trim() };
+    }
+    return { action: 'wait' };
+  } catch (err) {
+    console.error('[triage] LLM call failed:', err?.message ?? err);
+    return { action: 'wait' };
+  }
+}
+
+function startSilenceTriage() {
+  if (process.env.PROTO_FAMILIAR_TRIAGE_DISABLED === '1') {
+    console.log('[triage] PROTO_FAMILIAR_TRIAGE_DISABLED=1 — silence triage is OFF');
+    return;
+  }
+  startSilenceTriageLoop({
+    tickMs: 5 * 60_000,
+    getThreat:       getThreat,
+    getLastActivity: getLastUserActivity,
+    getRecentSignals: async () => {
+      try { return await getThreatHistory({ limit: 5 }); } catch { return []; }
+    },
+    decideTriage:    decideTriageViaLLM,
+    enqueueOutboxFn: enqueueOutbox,
+    onTick: (r) => {
+      if (r.acted)                            console.log(`[triage] reached out: "${r.decision.message?.slice(0, 80)}…"`);
+      else if (r.reason === 'reached_out')    console.log('[triage] reached out (dedup unexpected)');
+      else if (r.reason === 'llm_said_wait')  console.log(`[triage] tick — threat ${r.threat?.tier}, silence ${Math.round((r.silenceMs||0)/60_000)}min, LLM said wait`);
+      // Other (low_threat / too_recent / no_activity) are silent.
+    },
+    onError: (err) => console.error('[triage]', err?.message ?? err),
+  });
+  console.log(`[triage] Silence triage ENABLED. Thresholds: severe=${TRIAGE_SILENCE_THRESHOLD_MS.severe/60_000}min, high=${TRIAGE_SILENCE_THRESHOLD_MS.high/60_000}min, moderate=${TRIAGE_SILENCE_THRESHOLD_MS.moderate/60_000}min. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
+}
+
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
 // stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
 // the memorization setIntervals would keep the event loop alive past
@@ -1512,6 +1669,8 @@ async function handleSignal(signal) {
   try { httpServer.close(); } catch { /* already closed */ }
   try { stopMemorizationWorker(); } catch { /* already stopped */ }
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
+  try { await stopRemindersLoop(); } catch { /* already stopped */ }
+  try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { shutdownEntityCore(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

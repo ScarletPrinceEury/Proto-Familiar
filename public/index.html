@@ -351,6 +351,9 @@
       <!-- ── Chat pane ──────────────────────────────────────── -->
       <main class="chat-pane" id="chat-pane">
 
+        <!-- Outbox banners (M11/M12 — reminders + silence triage deliveries) -->
+        <div id="outbox-banners" class="outbox-banners" aria-live="polite"></div>
+
         <div class="messages-scroller" id="messages-scroller">
           <div class="messages-with-gutter">
             <div id="topic-gutter" class="topic-gutter" aria-hidden="true"></div>
@@ -938,6 +941,7 @@
                   <option value="event">event</option>
                   <option value="task">task</option>
                   <option value="state">state</option>
+                  <option value="reminder">reminder (fires when "when" arrives)</option>
                 </select>
               </label>
               <label style="flex: 1; min-width: 12em">Label

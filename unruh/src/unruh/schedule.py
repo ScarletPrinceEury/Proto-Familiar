@@ -38,11 +38,11 @@ from .db import new_id, now_iso
 # means updating the migration's comment + this set + (probably) the
 # formatter; the DB itself is schema-permissive on these columns. ──
 
-SCHEDULE_NODE_TYPES = {"event", "task", "phase", "state"}
+SCHEDULE_NODE_TYPES = {"event", "task", "phase", "state", "reminder"}
 SCHEDULE_EDGE_KINDS = {
     "causes", "requires", "depends_on", "blocks", "during", "carries_forward",
 }
-RESOLUTIONS = {"done", "cancelled", "carried_forward"}
+RESOLUTIONS = {"done", "cancelled", "carried_forward", "fired"}
 
 DEFAULT_WINDOW_HOURS = 24
 
@@ -69,7 +69,7 @@ def add_node(
         raise ValueError(f"unknown schedule node type {type!r}; expected one of {sorted(SCHEDULE_NODE_TYPES)}")
     if not label or not label.strip():
         raise ValueError("label is required and must be non-empty")
-    if type in {"event", "phase", "state"} and not when:
+    if type in {"event", "phase", "state", "reminder"} and not when:
         raise ValueError(f"node type {type!r} requires a 'when' timestamp")
     if type == "phase" and not end:
         raise ValueError("phase nodes require an 'end' timestamp")
@@ -192,6 +192,91 @@ def delete_node(conn: sqlite3.Connection, *, id: str) -> bool:
         (id,),
     )
     return cur.rowcount > 0
+
+
+# ── Reminders (M11) ────────────────────────────────────────────────────
+
+
+def get_due_reminders(
+    conn: sqlite3.Connection,
+    *,
+    now: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return reminder nodes whose when_ts has arrived and that have
+    not yet been resolved (fired / cancelled / done).
+
+    `now` is an ISO-8601 UTC string; if omitted, the current wall
+    clock is used. Returning a list (not a generator) keeps the MCP
+    JSON shape simple.
+
+    Pure read — does NOT mark anything fired. Callers do that with
+    schedule.resolve(id, 'fired') after delivery succeeds, so a
+    crash mid-delivery leaves the reminder fireable next tick rather
+    than dropping it silently.
+    """
+    now = now or now_iso()
+    rows = conn.execute(
+        """SELECT * FROM nodes
+            WHERE layer = 'schedule'
+              AND type  = 'reminder'
+              AND resolution IS NULL
+              AND when_ts IS NOT NULL
+              AND when_ts <= ?
+            ORDER BY when_ts ASC
+            LIMIT ?""",
+        (now, limit),
+    ).fetchall()
+    return [_node_row_to_dict(row) for row in rows]
+
+
+def reminders_health(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Quick observability surface for the reminders scheduler.
+
+    Reports:
+      - total reminders in the DB
+      - pending (resolution IS NULL)
+      - overdue (resolution IS NULL AND when_ts <= now): if this
+        number grows monotonically, the scheduler is stuck.
+      - next_fires_at: when the next pending reminder will fire,
+        or None.
+      - last_fired: ISO of the most-recently-fired reminder (a sanity
+        check that something actually ran recently).
+
+    The Node-side scheduler calls this on every tick and logs a
+    warning if `overdue` keeps growing across ticks. Surfacing
+    silent-failure was the explicit design-doc concern for M11.
+    """
+    now = now_iso()
+    totals = conn.execute(
+        """SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN resolution IS NULL                          THEN 1 ELSE 0 END) AS pending,
+              SUM(CASE WHEN resolution IS NULL AND when_ts <= ?         THEN 1 ELSE 0 END) AS overdue
+            FROM nodes
+           WHERE layer = 'schedule' AND type = 'reminder'""",
+        (now,),
+    ).fetchone()
+    next_row = conn.execute(
+        """SELECT when_ts FROM nodes
+            WHERE layer = 'schedule' AND type = 'reminder'
+              AND resolution IS NULL AND when_ts IS NOT NULL
+            ORDER BY when_ts ASC LIMIT 1""",
+    ).fetchone()
+    last_row = conn.execute(
+        """SELECT updated_at FROM nodes
+            WHERE layer = 'schedule' AND type = 'reminder'
+              AND resolution = 'fired'
+            ORDER BY updated_at DESC LIMIT 1""",
+    ).fetchone()
+    return {
+        "total":          int(totals["total"]   or 0),
+        "pending":        int(totals["pending"] or 0),
+        "overdue":        int(totals["overdue"] or 0),
+        "next_fires_at":  next_row["when_ts"]    if next_row else None,
+        "last_fired":     last_row["updated_at"] if last_row else None,
+        "now":            now,
+    }
 
 
 # ── Reads ──────────────────────────────────────────────────────────────

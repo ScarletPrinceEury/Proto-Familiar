@@ -585,6 +585,29 @@ export async function deleteScheduleNode({ id }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// ── Reminders wrappers (M11) ─────────────────────────────────────
+
+export async function getDueReminders({ now, limit = 50 } = {}) {
+  if (!unruhClient) return { ok: false, reminders: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'reminders_due',
+      arguments: now ? { now, limit } : { limit },
+    });
+    return parseToolText(r, { ok: false, reminders: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), reminders: [] };
+  }
+}
+
+export async function getRemindersHealth() {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'reminders_health', arguments: {} });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 // ── Handoff wrappers (M9b) ───────────────────────────────────────
 
 export async function getHandoff({ include_consumed = true } = {}) {

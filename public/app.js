@@ -3142,6 +3142,10 @@ function init() {
   // settings get pushed up so the next device sees them.
   syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
 
+  // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
+  // 30s; banners render at the top of the chat when items are pending.
+  startOutboxPolling();
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
@@ -7118,5 +7122,71 @@ async function teConsumeHandoff(id) {
     alert(`Mark-consumed failed: ${err.message}`);
   }
 }
+
+// ── Outbox banners (M11/M12 delivery surface) ─────────────────────
+//
+// Polls /api/outbox every 30s. When an item arrives, renders a gentle
+// banner at the top of the chat. Click ✕ to acknowledge (POST then
+// re-fetch). Reminders use a calm accent color, silence-triage items
+// use a warmer one so the user can distinguish at a glance.
+
+const OUTBOX_POLL_MS = 30_000;
+let _outboxPollTimer = null;
+
+async function fetchOutbox() {
+  try {
+    const r = await fetch('/api/outbox?pending=1');
+    if (!r.ok) return;
+    const data = await r.json();
+    renderOutboxBanners(Array.isArray(data.items) ? data.items : []);
+  } catch { /* network blip; try again next tick */ }
+}
+
+function renderOutboxBanners(items) {
+  const host = $('outbox-banners');
+  if (!host) return;
+  if (!items.length) { host.innerHTML = ''; return; }
+  host.innerHTML = items.map(i => {
+    const icon = i.kind === 'triage' ? '🫂' : '⏰';
+    const kindClass = i.kind === 'triage' ? 'kind-triage' : 'kind-reminder';
+    const ts = teTimeAgo ? teTimeAgo(i.ts) : i.ts;
+    const body = i.body ? `<div class="ob-body">${escapeOutboxText(i.body)}</div>` : '';
+    return `
+      <div class="outbox-banner ${kindClass}" data-id="${escapeOutboxText(i.id)}">
+        <div class="ob-icon">${icon}</div>
+        <div class="ob-content">
+          <div class="ob-title">${escapeOutboxText(i.title)}</div>
+          ${body}
+          <div class="ob-time">${escapeOutboxText(ts)}</div>
+        </div>
+        <button class="ob-dismiss" data-ob-id="${escapeOutboxText(i.id)}" aria-label="Dismiss">✕</button>
+      </div>`;
+  }).join('');
+  host.querySelectorAll('.ob-dismiss').forEach(btn => {
+    btn.addEventListener('click', () => acknowledgeOutboxItem(btn.dataset.obId));
+  });
+}
+
+function escapeOutboxText(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function acknowledgeOutboxItem(id) {
+  try {
+    await fetch(`/api/outbox/${encodeURIComponent(id)}/acknowledge`, { method: 'POST' });
+    fetchOutbox();
+  } catch (err) {
+    console.warn('outbox ack failed', err);
+  }
+}
+
+function startOutboxPolling() {
+  if (_outboxPollTimer) return;
+  fetchOutbox();
+  _outboxPollTimer = setInterval(fetchOutbox, OUTBOX_POLL_MS);
+}
+
 
 
