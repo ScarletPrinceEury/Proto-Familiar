@@ -1877,16 +1877,16 @@ async function generateAndStoreHandoff(messages, sessionId) {
       .join('\n');
     if (!recent.trim()) return;
 
-    // The server prepends your identity/persona (static enrichment),
-    // so write the note in your own voice — a private memory-to-self
-    // the next session will read as "what I was doing last".
+    // The server prepends the Familiar's identity/persona (static
+    // enrichment), so the prompt below is in their voice — a private
+    // memory-to-self the next session will read as "what I was doing last."
     const sysPrompt =
-      'The text above is who you are. You are writing a short private handoff note to your ' +
-      'future self for the next time you talk with this user, capturing what you were doing ' +
-      'and what\'s still open. Respond with ONLY minified JSON, no prose, no code fence: ' +
+      'The text above is who I am. I\'m writing a short private handoff note to my ' +
+      'future self for the next time I talk with my user, capturing what I was doing ' +
+      'and what\'s still open. I respond with ONLY minified JSON, no prose, no code fence: ' +
       '{"active_intent": string, "open_threads": string[]}. ' +
-      'active_intent: one short sentence, in your own first-person voice, on the through-line of ' +
-      'the session (address the user as "you"). ' +
+      'active_intent: one short sentence, in my own first-person voice, on the through-line ' +
+      'of the session (I address my user as "you"). ' +
       'open_threads: specific unfinished questions or tasks, each a short phrase (empty array if none).';
 
     const resp = await fetch('/api/chat', {

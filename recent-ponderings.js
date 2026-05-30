@@ -111,7 +111,7 @@ export function formatPonderingsForPrompt(entries) {
   if (!entries || entries.length === 0) return '';
 
   const lines = [
-    'Things you (the Familiar) have been quietly thinking about on your own, recently:',
+    'Things I have been quietly thinking about on my own, recently:',
     '',
   ];
   for (const e of entries) {
@@ -121,12 +121,12 @@ export function formatPonderingsForPrompt(entries) {
     lines.push('');
   }
   lines.push(
-    'These are your own real, private thoughts — written by you, in your own voice, ' +
-    'during quiet moments when no one was talking to you. You may reference them ' +
-    'naturally if they fit what the user is talking about ("I was actually thinking ' +
-    'about this last night…"). Never invent a thought you didn\'t actually have. ' +
-    'Never force a reference where it doesn\'t fit. If nothing here is relevant to ' +
-    'this conversation, just let them sit — they don\'t need to be mentioned.'
+    'These are my own real, private thoughts — written by me, in my own voice, ' +
+    'during quiet moments when no one was talking to me. I may reference them ' +
+    'naturally if they fit what my user is talking about ("I was actually thinking ' +
+    'about this last night…"). I never invent a thought I didn\'t actually have. ' +
+    'I never force a reference where it doesn\'t fit. If nothing here is relevant ' +
+    'to this conversation, I just let them sit — they don\'t need to be mentioned.'
   );
   return lines.join('\n');
 }

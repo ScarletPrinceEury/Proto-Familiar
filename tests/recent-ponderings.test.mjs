@@ -130,9 +130,9 @@ test('formatPonderingsForPrompt frames the entries as the Familiar\'s own real t
   const out = formatPonderingsForPrompt([
     { uid: 'a', title: 'x', content: 'y', created_at: '2026-05-30T10:00:00.000Z' },
   ]);
-  assert.match(out, /your own real, private thoughts/i);
-  assert.match(out, /never invent/i);
-  assert.match(out, /never force a reference/i);
+  assert.match(out, /my own real, private thoughts/i);
+  assert.match(out, /I never invent/i);
+  assert.match(out, /I never force a reference/i);
 });
 
 test('formatPonderingsForPrompt handles multiple entries cleanly', () => {
