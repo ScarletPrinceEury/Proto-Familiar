@@ -18,7 +18,13 @@
 set -e
 
 DEST="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-REPO_TARBALL="https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/main.tar.gz"
+# BRANCH defaults to `main`. Override to test a feature branch BEFORE
+# it lands on main — e.g.:
+#   BRANCH=claude/implement-unruh-mechanism-NTpoc bash update.sh
+# GitHub's archive endpoint accepts branch names with slashes verbatim;
+# the extracted top-level folder is still globbed by `Proto-Familiar-*`.
+BRANCH="${BRANCH:-main}"
+REPO_TARBALL="https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/${BRANCH}.tar.gz"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mXX %s\033[0m\n' "$*"; exit 1; }
@@ -32,6 +38,10 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+if [ "$BRANCH" != "main" ]; then
+  say "Updating from branch '$BRANCH' (non-default — pass BRANCH=main to switch back)."
+fi
 
 say "Downloading the latest Proto-Familiar…"
 if command -v curl >/dev/null 2>&1; then
