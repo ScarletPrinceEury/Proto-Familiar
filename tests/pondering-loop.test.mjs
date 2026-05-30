@@ -165,3 +165,71 @@ test('runOneTick: missing getInterests / runPonder raises a clear error', async 
   await assert.rejects(runOneTick({ runPonder: async () => null }),  /getInterests is required/);
   await assert.rejects(runOneTick({ getInterests: async () => [] }), /runPonder is required/);
 });
+
+// ── Threat-aware cadence (step 4b) ──────────────────────────────
+
+test('runOneTick: getThreat is passed to computeInterval', async () => {
+  let observedThreat = null;
+  const r = await runOneTick({
+    getInterests:    async () => [{ label: 'x', weight: 5 }],
+    runPonder:       async () => 'pondered',
+    getThreat:       async () => 6,
+    computeInterval: (w, threat) => { observedThreat = threat; return 0; },
+    now:             () => 1000,
+    lastPonderAt:    0,
+  });
+  assert.equal(observedThreat, 6);
+  assert.equal(r.acted,        true);
+});
+
+test('runOneTick: result carries threatLevel for observability', async () => {
+  const r = await runOneTick({
+    getInterests:    async () => [{ label: 'x', weight: 5 }],
+    runPonder:       async () => 'pondered',
+    getThreat:       async () => 4.5,
+    computeInterval: () => 0,
+    now:             () => 1000,
+    lastPonderAt:    0,
+  });
+  assert.equal(r.threatLevel, 4.5);
+});
+
+test('runOneTick: getThreat default = 0 (backward compat — old callers still work)', async () => {
+  const r = await runOneTick({
+    getInterests:    async () => [{ label: 'x', weight: 5 }],
+    runPonder:       async () => 'pondered',
+    computeInterval: (w, t) => { assert.equal(t, 0); return 0; },
+    now:             () => 1000,
+    lastPonderAt:    0,
+  });
+  assert.equal(r.acted,       true);
+  assert.equal(r.threatLevel, 0);
+});
+
+test('runOneTick: high threat shortens cadence — same wait, low threat skips, high threat fires', async () => {
+  // Wait of 5 minutes with weight 5:
+  //   no threat   → mid tier (60 min) → too_soon
+  //   severe (8)  → 60 min × 0.15 = 9 min → too_soon (still)
+  //   severe + larger wait → fires
+  // Use the real computeRequiredInterval.
+  const fiveMin = 5 * 60_000;
+  const tenMin  = 10 * 60_000;
+
+  const tickCalm = await runOneTick({
+    getInterests: async () => [{ label: 'x', weight: 5 }],
+    runPonder:    async () => 'unreached',
+    getThreat:    async () => 0,
+    now:          () => tenMin,
+    lastPonderAt: 0,  // wait = 10min
+  });
+  assert.equal(tickCalm.acted,  false, 'mid-weight + calm threat: 60 min required, 10 min wait → too_soon');
+
+  const tickSevere = await runOneTick({
+    getInterests: async () => [{ label: 'x', weight: 5 }],
+    runPonder:    async () => 'pondered',
+    getThreat:    async () => 8,
+    now:          () => tenMin,
+    lastPonderAt: 0,  // wait = 10min
+  });
+  assert.equal(tickSevere.acted, true, 'mid-weight + severe threat: 9 min required, 10 min wait → fires');
+});

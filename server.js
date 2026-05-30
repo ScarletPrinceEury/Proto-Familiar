@@ -27,6 +27,8 @@ import {
   recordInterest, recordHandoff,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
+import { scoreMessage } from './crisis-signals.js';
+import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -176,6 +178,22 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
+  // ── Crisis-signal detection (step 4b) ─────────────────────────────────
+  // Fire-and-forget: score the current user message for distress markers
+  // and feed the delta into the threat tracker. Gated to the full chat
+  // path (skip on staticOnly handoff summaries and on 'none' enrichment
+  // mode) and to non-empty user text. Errors don't block the chat call.
+  // The detector is a heuristic, not a diagnostic — see crisis-signals.js
+  // for the explicit boundaries. Disable entirely with the env var
+  // PROTO_FAMILIAR_THREAT_DISABLED=1.
+  if (enrichMode === 'full' && userText && userText.trim()) {
+    const { level, signals } = scoreMessage(userText);
+    if (level !== 0) {
+      recordThreat({ delta: level, source: 'chat', signals }).catch(err =>
+        console.error('[server] recordThreat failed:', err?.message ?? err),
+      );
+    }
+  }
   // liveTurn: only the full chat path may reconcile state (consume the
   // surfaced session handoff, demote standing values whose entity-core
   // anchor vanished). 'static' fetches persona only (handoff summariser);
@@ -1261,6 +1279,34 @@ app.post('/api/tailscale', async (req, res) => {
     ipv4: ts?.ipv4 || null,
     available: ts !== null,
   });
+});
+
+// ── Threat / care-check endpoints (step 4b) ─────────────────────────
+// GET    /api/threat          current effective state
+// GET    /api/threat/history  recent audit entries (newest first)
+// POST   /api/threat/reset    manually zero the threat level
+//
+// These are user-facing controls: visibility into what's been
+// recorded, and a one-click off switch beyond the env var. The
+// detector itself can be disabled at the source by setting
+// PROTO_FAMILIAR_THREAT_DISABLED=1.
+app.get('/api/threat', async (_req, res) => {
+  try { res.json(await getThreat()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/threat/history', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 20;
+  try { res.json({ history: await getThreatHistory({ limit }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/threat/reset', async (_req, res) => {
+  try {
+    const r = await resetThreat({ source: 'api_reset' });
+    console.log('[server] threat reset to 0 via /api/threat/reset');
+    res.json(r);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const httpServer = app.listen(PORT, HOST, async () => {

@@ -106,11 +106,25 @@ backing the claim.
 ## Where we are right now
 
 ```
-  [ STEP 1 ]      step 2       step 3       step 4
-  ── 🚧 ──▶      ─ ─ ─ ─ ─    ─ ─ ─ ─ ─    ─ ─ ─ ─ ─
-   building
-   today
+  step 1 ✓    step 2 ✓    step 3' ✓   step 4a ✓   step 4b ✓
+  ───────     ───────     ────────    ────────    ────────
+  think       pick what   reference   wake on     break
+  alone       to think    in chat     own         through
+              about                   cadence     with care
 ```
 
-We do step 1 today, all the way through to a real entry you can read,
-then we pause.
+**All five steps shipped.** See:
+- `docs/threat-detection.md` — comprehensive doc for the threat / care
+  system (step 4b), including the off switches.
+- `pondering.js`, `interest-picker.js`, `recent-ponderings.js`,
+  `pondering-cadence.js`, `pondering-loop.js`, `crisis-signals.js`,
+  `threat-tracker.js` — the spine modules.
+- `scripts/ponder-once.mjs`, `ponder-from-interests.mjs`,
+  `chat-with-ponderings.mjs`, `pondering-loop-demo.mjs`,
+  `threat-demo.mjs` — CLI runners for each step.
+
+Production wiring (server.js / thalamus.js) covers steps 1-3' + 4b.
+Step 4a (autonomous loop) is implemented but not yet started at
+server boot — that's a small follow-up once you've decided the
+default cadence is right and chosen how to gate it (env var vs
+settings toggle).

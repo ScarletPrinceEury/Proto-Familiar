@@ -51,6 +51,7 @@ const DEFAULT_TICK_MS = 60_000; // poll once per minute by default
 export async function runOneTick({
   getInterests,
   runPonder,
+  getThreat       = async () => 0,
   computeInterval = computeRequiredInterval,
   rng             = Math.random,
   now             = Date.now,
@@ -59,25 +60,29 @@ export async function runOneTick({
   if (typeof getInterests !== 'function') throw new Error('getInterests is required');
   if (typeof runPonder    !== 'function') throw new Error('runPonder is required');
 
-  const interests = await getInterests();
+  // Fetch interests + threat in parallel — both are cheap, both feed
+  // the cadence decision, and we want one consistent moment-in-time
+  // view for this tick.
+  const [interests, threatLevel] = await Promise.all([getInterests(), getThreat()]);
+
   if (!Array.isArray(interests) || interests.length === 0) {
-    return { acted: false, reason: 'no_interests', at: now() };
+    return { acted: false, reason: 'no_interests', threatLevel, at: now() };
   }
 
   const topWeight = Math.max(0, ...interests.map(i => Number(i?.weight) || 0));
-  const required  = computeInterval(topWeight);
+  const required  = computeInterval(topWeight, Number(threatLevel) || 0);
   const since     = now() - lastPonderAt;
   if (since < required) {
-    return { acted: false, reason: 'too_soon', sinceMs: since, requiredMs: required, topWeight, at: now() };
+    return { acted: false, reason: 'too_soon', sinceMs: since, requiredMs: required, topWeight, threatLevel, at: now() };
   }
 
   const picked = pickInterest(interests, { rng });
   if (!picked) {
-    return { acted: false, reason: 'no_eligible_pick', at: now() };
+    return { acted: false, reason: 'no_eligible_pick', threatLevel, at: now() };
   }
 
   const result = await runPonder(picked.label, picked);
-  return { acted: true, picked, result, at: now(), topWeight, requiredMs: required };
+  return { acted: true, picked, result, at: now(), topWeight, threatLevel, requiredMs: required };
 }
 
 // ── Singleton lifecycle ───────────────────────────────────────────

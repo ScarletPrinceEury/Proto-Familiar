@@ -29,16 +29,47 @@ export const PONDER_TIER_LABEL = Object.freeze({
 });
 
 /**
- * Required interval (ms) between ponderings given the current top
- * interest weight. Returns Infinity when there's nothing eligible
- * to ponder about — the loop interprets that as "stay quiet."
+ * Threat-tier multipliers applied to the interest-tier base interval.
+ * Higher threat → shorter interval (think about the user more often).
+ * Calm doesn't change the base behaviour at all. Severe collapses
+ * the interval ~7×, so a normally-30-minute ponder cycle becomes ~5
+ * minutes — frequent but not constant.
  */
-export function computeRequiredInterval(topWeight) {
+export const THREAT_CADENCE_MULTIPLIER = Object.freeze({
+  calm:     1.00,
+  mild:     0.80,
+  moderate: 0.50,
+  high:     0.30,
+  severe:   0.15,
+});
+
+function threatMultiplier(threatLevel) {
+  if (!Number.isFinite(threatLevel) || threatLevel <= 0)  return THREAT_CADENCE_MULTIPLIER.calm;
+  if (threatLevel >= 7) return THREAT_CADENCE_MULTIPLIER.severe;
+  if (threatLevel >= 4) return THREAT_CADENCE_MULTIPLIER.high;
+  if (threatLevel >= 2) return THREAT_CADENCE_MULTIPLIER.moderate;
+  if (threatLevel >= 0.5) return THREAT_CADENCE_MULTIPLIER.mild;
+  return THREAT_CADENCE_MULTIPLIER.calm;
+}
+
+/**
+ * Required interval (ms) between ponderings given the current top
+ * interest weight and (optional) current threat level. Returns
+ * Infinity when there's nothing eligible to ponder about — threat
+ * alone never creates a topic, so a calm-but-distressed system still
+ * stays quiet if no interests are accrued.
+ *
+ * @param {number} topWeight   — highest live-interest weight
+ * @param {number} threatLevel — current effective threat (default 0)
+ */
+export function computeRequiredInterval(topWeight, threatLevel = 0) {
   if (!Number.isFinite(topWeight) || topWeight <= 0) return Infinity;
-  if (topWeight >= 8) return PONDER_INTERVAL_MS.high;
-  if (topWeight >= 4) return PONDER_INTERVAL_MS.mid;
-  if (topWeight >= 2) return PONDER_INTERVAL_MS.low;
-  return PONDER_INTERVAL_MS.idle;
+  let base;
+  if (topWeight >= 8)      base = PONDER_INTERVAL_MS.high;
+  else if (topWeight >= 4) base = PONDER_INTERVAL_MS.mid;
+  else if (topWeight >= 2) base = PONDER_INTERVAL_MS.low;
+  else                     base = PONDER_INTERVAL_MS.idle;
+  return Math.round(base * threatMultiplier(threatLevel));
 }
 
 /** Human-readable tier name for the given top weight. For logs / UI. */

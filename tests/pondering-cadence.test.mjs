@@ -5,6 +5,7 @@ import {
   tierForWeight,
   PONDER_INTERVAL_MS,
   PONDER_TIER_LABEL,
+  THREAT_CADENCE_MULTIPLIER,
 } from '../pondering-cadence.js';
 
 test('computeRequiredInterval: zero / negative / non-finite → Infinity (don\'t ponder)', () => {
@@ -16,23 +17,18 @@ test('computeRequiredInterval: zero / negative / non-finite → Infinity (don\'t
   assert.equal(computeRequiredInterval(null),      Infinity);
 });
 
-test('computeRequiredInterval: tier boundaries', () => {
-  // idle: 0 < w < 2
+test('computeRequiredInterval: tier boundaries with no threat', () => {
   assert.equal(computeRequiredInterval(0.5), PONDER_INTERVAL_MS.idle);
   assert.equal(computeRequiredInterval(1.99), PONDER_INTERVAL_MS.idle);
-  // low: 2 <= w < 4
   assert.equal(computeRequiredInterval(2),   PONDER_INTERVAL_MS.low);
   assert.equal(computeRequiredInterval(3.99), PONDER_INTERVAL_MS.low);
-  // mid: 4 <= w < 8
   assert.equal(computeRequiredInterval(4),   PONDER_INTERVAL_MS.mid);
   assert.equal(computeRequiredInterval(7.99), PONDER_INTERVAL_MS.mid);
-  // high: w >= 8
   assert.equal(computeRequiredInterval(8),   PONDER_INTERVAL_MS.high);
   assert.equal(computeRequiredInterval(100), PONDER_INTERVAL_MS.high);
 });
 
 test('computeRequiredInterval: monotonic non-increasing as weight rises', () => {
-  // Higher weight should NEVER give a longer interval.
   const samples = [0.1, 1, 2, 3, 4, 5, 6, 7, 8, 12, 50];
   for (let i = 1; i < samples.length; i++) {
     assert.ok(
@@ -51,6 +47,43 @@ test('tierForWeight: labels match each interval band', () => {
   assert.equal(tierForWeight(100),  PONDER_TIER_LABEL.high);
 });
 
-test('PONDER_INTERVAL_MS is frozen (tuning happens in source, not at runtime)', () => {
+// ── Threat-aware cadence (step 4b) ──────────────────────────────
+
+test('computeRequiredInterval: threat shortens the interval (calm=1.0×, severe=0.15×)', () => {
+  const baseHigh = PONDER_INTERVAL_MS.high;
+  assert.equal(computeRequiredInterval(10, 0),    baseHigh);
+  // mild: 0.8×
+  assert.equal(computeRequiredInterval(10, 0.5),  Math.round(baseHigh * 0.80));
+  assert.equal(computeRequiredInterval(10, 1),    Math.round(baseHigh * 0.80));
+  // moderate: 0.5×
+  assert.equal(computeRequiredInterval(10, 2),    Math.round(baseHigh * 0.50));
+  assert.equal(computeRequiredInterval(10, 3.99), Math.round(baseHigh * 0.50));
+  // high: 0.3×
+  assert.equal(computeRequiredInterval(10, 4),    Math.round(baseHigh * 0.30));
+  assert.equal(computeRequiredInterval(10, 6.99), Math.round(baseHigh * 0.30));
+  // severe: 0.15×
+  assert.equal(computeRequiredInterval(10, 7),    Math.round(baseHigh * 0.15));
+  assert.equal(computeRequiredInterval(10, 999),  Math.round(baseHigh * 0.15));
+});
+
+test('computeRequiredInterval: no interests → Infinity regardless of threat', () => {
+  assert.equal(computeRequiredInterval(0, 9), Infinity);
+  assert.equal(computeRequiredInterval(0, 4), Infinity);
+});
+
+test('computeRequiredInterval: same threat tier applies same multiplier across interest tiers', () => {
+  // Severe threat (0.15×) should produce the same RATIO across all interest tiers.
+  const tiers = [PONDER_INTERVAL_MS.high, PONDER_INTERVAL_MS.mid, PONDER_INTERVAL_MS.low, PONDER_INTERVAL_MS.idle];
+  const weights = [10, 5, 2.5, 1];
+  for (let i = 0; i < weights.length; i++) {
+    assert.equal(computeRequiredInterval(weights[i], 8), Math.round(tiers[i] * 0.15));
+  }
+});
+
+test('THREAT_CADENCE_MULTIPLIER is frozen', () => {
+  assert.throws(() => { THREAT_CADENCE_MULTIPLIER.calm = 0; }, TypeError);
+});
+
+test('PONDER_INTERVAL_MS is frozen', () => {
   assert.throws(() => { PONDER_INTERVAL_MS.high = 1; }, TypeError);
 });

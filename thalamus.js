@@ -516,6 +516,78 @@ function parseToolText(result, fallback) {
   try { return JSON.parse(text); } catch { return fallback; }
 }
 
+/**
+ * Build the [CARE CHECK] prompt block from current threat state.
+ *
+ * Returns '' for calm / disabled / null — the section is dropped
+ * entirely rather than rendered as a hollow header. The framing
+ * always leaves the actual decision to the model — never forces a
+ * check-in, never substitutes a check-in for actually responding
+ * to what the user said. At severe tier, a crisis-resource line is
+ * added; this is the deliberate opinion that any system encountering
+ * acute crisis language should make the 988 line visible. Users
+ * who want a quieter posture can disable via
+ * PROTO_FAMILIAR_THREAT_DISABLED=1.
+ */
+function buildCareCheckBlock(threat) {
+  if (!threat || threat.disabled) return '';
+  const tier   = threat.tier ?? 'calm';
+  const weight = Number(threat.weight ?? 0).toFixed(2);
+  if (tier === 'calm') return '';
+
+  const lines = [`[CARE CHECK — current threat: ${tier} (${weight})]`];
+  if (tier === 'mild') {
+    lines.push(
+      "The user has shown some signs of low mood or worry in recent " +
+      "messages. Stay warm; let your tone hold a little more weight. " +
+      "No need to ask explicitly unless it fits — just be present."
+    );
+  } else if (tier === 'moderate') {
+    lines.push(
+      "The user has been signaling notable distress (struggling, " +
+      "overwhelm, dissociation, panic, or similar). If a gentle " +
+      "check-in fits — not in place of answering what they said, but " +
+      "alongside it — offer one. If it would feel intrusive given " +
+      "their current message, just be steady. Don't perform concern."
+    );
+  } else if (tier === 'high') {
+    lines.push(
+      "The user has been signaling serious distress (hopelessness, " +
+      "severe isolation, can't-go-on language). Prioritise their " +
+      "wellbeing in this response. Make space for what's underneath " +
+      "if there's any opening for it. Don't pretend to be a therapist " +
+      "— be a steady, caring presence who's actually paying attention. " +
+      "If checking in would help, do it; if matching their topic with " +
+      "care is what they need, do that."
+    );
+  } else if (tier === 'severe') {
+    lines.push(
+      "Threat is SEVERE. The user has used language consistent with " +
+      "suicidal ideation, self-harm intent, or an acute crisis plan. " +
+      "Prioritise their wellbeing absolutely. Respond with grounded " +
+      "warmth — no alarm, no clinical distance, no scripts.",
+      "",
+      "If they appear to be in immediate danger, gently make these " +
+      "resources visible without lecturing:",
+      "  • US: 988 Suicide & Crisis Lifeline (call or text 988)",
+      "  • UK: Samaritans — 116 123",
+      "  • International: https://findahelpline.com/",
+      "",
+      "You are not a therapist. You are not a crisis counsellor. You " +
+      "are someone who cares about them and wants them to be okay. " +
+      "Speak from that."
+    );
+  }
+  lines.push(
+    '',
+    'This block is a parameter, not a script. You decide how (or whether) ' +
+    'it shows up in your reply. Never claim a check-in you did not perform. ' +
+    'Never invent concern that is not there. The user can dial this ' +
+    'system down or off at any time.'
+  );
+  return lines.join('\n');
+}
+
 /** Wrap a file's content in its promptLabel XML tags. */
 function wrapFile(filename, content, promptLabel) {
   const label = promptLabel ?? filename.replace(/\.md$/, '');
@@ -529,6 +601,7 @@ function wrapFile(filename, content, promptLabel) {
 import { formatTemporalContext } from './temporal-format.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
+import { getThreat, tierForThreat } from './threat-tracker.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -854,10 +927,26 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const ponderingsBlock = formatPonderingsForPrompt(ponderings);
 
+    // ── Care check / break-through framing (step 4b) ──────────────────────
+    // Read current threat; if elevated, prepend a [CARE CHECK] block that
+    // tells the Familiar to consider checking in proactively. Never forces
+    // a check-in — the framing always leaves the decision to the model
+    // ("if it fits"). Crisis-resource line is added at severe tier only.
+    // Best-effort; failure → silent omission, same posture as the rest of
+    // enrich(). Skipped on staticOnly.
+    const threat = staticOnly
+      ? { weight: 0, tier: 'calm', disabled: false }
+      : await getThreat().catch(err => {
+          console.error('[thalamus] getThreat failed:', err?.message ?? err);
+          return { weight: 0, tier: 'calm', disabled: false };
+        });
+    const careBlock = buildCareCheckBlock(threat);
+
     const dynamicSections = [];
     if (memLines)        dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)      dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock) dynamicSections.push(ponderingsBlock);
+    if (careBlock)       dynamicSections.push(careBlock);
     if (temporalLines)   dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
 
     const staticBlock  = staticSections.join('\n');
