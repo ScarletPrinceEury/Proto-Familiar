@@ -46,6 +46,28 @@ only, whitespace), skip it. Otherwise bump.
   pre-rename installs at `../entity-core-alpha` are still detected as a
   fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`,
   and `scripts/import-entity.js`. Keep both paths working.
+- **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer
+  scripts auto-detect `uv` and run `uv sync` to materialise the venv;
+  Thalamus spawns Unruh as an MCP stdio child the same way it spawns
+  entity-core. On clean shutdown, stdio children get EOF and exit.
+- **Autonomous loops**: three background workers run alongside the
+  HTTP server. Each has a settings/env hard off-switch:
+    - **Pondering** (`pondering-loop.js`) — picks an interest, ponders
+      it, writes to the Familiar's Ponderings tome. Toggle in Settings
+      → "Autonomous pondering"; scale via "Pondering interval scale";
+      hard-disable with `PROTO_FAMILIAR_PONDERING_DISABLED=1`.
+    - **Reminders** (`reminders-loop.js`) — every 30s, scans schedule
+      nodes of `type='reminder'` whose `when_ts` has arrived, enqueues
+      them into `tomes/.outbox.json`, marks them `resolution='fired'`.
+      Hard-disable with `PROTO_FAMILIAR_REMINDERS_DISABLED=1`.
+    - **Silence triage** (`silence-triage-loop.js`) — every 5min,
+      checks "user quiet long enough at current threat tier?" and
+      LLM-decides whether to reach out. Thresholds: severe=15min,
+      high=1h, moderate=4h; calm/mild never trigger. Hard-disable
+      with `PROTO_FAMILIAR_TRIAGE_DISABLED=1`.
+  Also: the **threat-detector** (chat-path crisis-signal scoring)
+  can be silenced with `PROTO_FAMILIAR_THREAT_DISABLED=1` —
+  `resetThreat()` still works even when disabled.
 - **Settings** are stored centrally in `settings.json` (gitignored).
   `SERVER_SYNCED_KEYS` in `public/app.js` is the canonical subset of
   `state` that syncs to the server — add new user-preference fields

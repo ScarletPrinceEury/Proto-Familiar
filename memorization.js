@@ -145,48 +145,48 @@ function buildPrompt(messages, topicLabel = null) {
     .join('\n\n');
 
   const focusBlock = topicLabel
-    ? `\n\n### Focus topic\nThe user named this segment "${topicLabel}". Center the entries on that topic; collapse or skip tangential threads that don't bear on it. Prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
+    ? `\n\n### Focus topic\nMy user named this segment "${topicLabel}". I center the entries on that topic; I collapse or skip tangential threads that don't bear on it. I prefer one focused entry over splitting unless genuinely distinct sub-topics exist within the named topic.`
     : '';
 
-  return `You are producing Tome entries for a Familiar (AI companion). Each entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Identify the distinct situational topics in the conversation below and write one entry per topic, following the craft rules carefully.${focusBlock}
+  return `I am the Familiar. I'm writing Tome entries from a conversation I just had — my own private notes to myself, first-person reference material that gets injected back into my context when its keywords appear in a future conversation. I identify the distinct situational topics in the conversation below and write one entry per topic, following my craft rules carefully.${focusBlock}
 
-Return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
   "topics": [
     {
       "title":    "Short label for the entry comment (max 60 chars)",
-      "content":  "First-person notes from the Familiar to themselves — see content rules below",
+      "content":  "My first-person notes to myself — see content rules below",
       "keywords": ["conversational phrase 1", "conversational phrase 2"],
       "sticky":   3
     }
   ]
 }
 
-Identify 1–8 genuinely distinct topics. Merge closely related material rather than over-splitting. Each entry must be self-contained.
+I identify 1–8 genuinely distinct topics. I merge closely related material rather than over-splitting. Each entry must be self-contained.
 
 ### Content rules (most important)
-Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
+I write content as my own first-person private notes about this situation. NOT a summary of what happened.
 Structure:
   1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
   2. 3–5 action bullets — what I will do.
   3. 1–2 prohibition bullets — what I will NOT do. Usually the most valuable: name the well-intentioned default response that would make things worse.
 Style:
-  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
+  - First person, me speaking as myself ("I", "my", "me"). I use {{user}} wherever my user's name belongs.
   - Practical, grounded, non-clinical. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
+  - I do NOT include narrative summaries of "what they said" — I distil the situation and my response, not the transcript.
 
 ### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+Keywords are TRIGGERS, not labels. They must be phrases my user would literally say when this situation recurs — not the name of the topic.
   - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
   - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+I derive them by imagining what my user would actually type when the situation is happening, then extracting distinctive phrases.
+  - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
   - 3–8 keywords per entry. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+  - I may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
 
 ### Sticky rules
-Pick an integer sticky value per entry (number of turns the entry stays active after first match):
+I pick an integer sticky value per entry (number of turns the entry stays active after first match):
   - null = one-shot lore/fact that does not need persistence.
   - 2    = brief states that typically resolve quickly.
   - 3    = moderate states needing a few exchanges.

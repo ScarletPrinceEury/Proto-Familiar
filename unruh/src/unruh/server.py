@@ -192,6 +192,83 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
         return _err(str(e))
 
 
+@mcp.tool()
+def schedule_update_node(
+    id: str,
+    label: str | None = None,
+    when: str | None = None,
+    end: str | None = None,
+    payload: dict | None = None,
+) -> dict[str, Any]:
+    """Patch a schedule-layer node in place.
+
+    Args:
+        id: node id to update.
+        label: new label (non-empty). Omit / None to leave unchanged.
+        when: new ISO-8601 UTC start. Pass "" (empty string) to clear.
+        end: new ISO-8601 UTC end. Pass "" to clear.
+        payload: new payload dict — REPLACES the existing payload.
+
+    Returns: {ok: True, updated: <bool>}.
+    """
+    try:
+        with get_conn() as conn:
+            updated = sched.update_node(
+                conn, id=id, label=label, when=when, end=end, payload=payload,
+            )
+        return {"ok": True, "updated": updated}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def schedule_delete_node(id: str) -> dict[str, Any]:
+    """Permanently remove a schedule-layer node (and its edges).
+
+    Returns: {ok: True, deleted: <bool>}. Interest-layer nodes are
+    never affected — use interest_demote_standing for those.
+    """
+    with get_conn() as conn:
+        deleted = sched.delete_node(conn, id=id)
+    return {"ok": True, "deleted": deleted}
+
+
+# ── Reminders (M11) ────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """List reminders whose fire time has arrived and that have not
+    been resolved (fired / cancelled / done).
+
+    Pure read — does NOT mark anything fired. The Node-side scheduler
+    marks them via schedule_resolve(id, 'fired') AFTER delivery
+    succeeds, so a crash mid-delivery leaves them fireable next tick.
+
+    Args:
+        now: ISO-8601 UTC timestamp. Default = current wall clock.
+        limit: max reminders to return. Default 50.
+
+    Returns: {ok: True, reminders: [...]}
+    """
+    with get_conn() as conn:
+        due = sched.get_due_reminders(conn, now=now, limit=limit)
+    return {"ok": True, "reminders": due}
+
+
+@mcp.tool()
+def reminders_health() -> dict[str, Any]:
+    """Quick observability surface for the reminders scheduler.
+
+    Returns total / pending / overdue counts, next fires_at, and the
+    most-recent fire timestamp. Surfacing silent-failure was the
+    explicit M11 design concern; if `overdue` grows monotonically
+    across ticks, something is wrong with the Node-side scheduler.
+    """
+    with get_conn() as conn:
+        return {"ok": True, **sched.reminders_health(conn)}
+
+
 # ── Interest layer (M4) ───────────────────────────────────────────────
 
 

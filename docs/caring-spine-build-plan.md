@@ -106,11 +106,32 @@ backing the claim.
 ## Where we are right now
 
 ```
-  [ STEP 1 ]      step 2       step 3       step 4
-  ── 🚧 ──▶      ─ ─ ─ ─ ─    ─ ─ ─ ─ ─    ─ ─ ─ ─ ─
-   building
-   today
+  step 1 ✓    step 2 ✓    step 3' ✓   step 4a ✓   step 4b ✓
+  ───────     ───────     ────────    ────────    ────────
+  think       pick what   reference   wake on     break
+  alone       to think    in chat     own         through
+              about                   cadence     with care
 ```
 
-We do step 1 today, all the way through to a real entry you can read,
-then we pause.
+**All five steps shipped.** See:
+- `docs/threat-detection.md` — comprehensive doc for the threat / care
+  system (step 4b), including the off switches.
+- `pondering.js`, `interest-picker.js`, `recent-ponderings.js`,
+  `pondering-cadence.js`, `pondering-loop.js`, `crisis-signals.js`,
+  `threat-tracker.js` — the spine modules.
+- `scripts/ponder-once.mjs`, `ponder-from-interests.mjs`,
+  `chat-with-ponderings.mjs`, `pondering-loop-demo.mjs`,
+  `threat-demo.mjs` — CLI runners for each step.
+
+Production wiring (server.js / thalamus.js) covers **all five steps,
+end to end**:
+
+- Steps 1–3' are integrated into the chat path (`enrich()`).
+- Step 4a's autonomous loop **boots with the server by default** and
+  is controlled by:
+  - **Settings → Sidebar → Autonomous pondering** (UI toggle, default ON)
+  - **Settings → Pondering interval scale** (1× – 10×; stretches only)
+  - `PROTO_FAMILIAR_PONDERING_DISABLED=1` env var (hard off-switch)
+- Step 4b's detector + tracker + framing is integrated into both the
+  chat path and the autonomous loop (high threat shortens cadence;
+  `[CARE CHECK]` block surfaces in replies).

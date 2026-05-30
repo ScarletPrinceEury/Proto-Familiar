@@ -597,6 +597,25 @@ const state = {
   // mid-thought. It's one extra short generation per session boundary;
   // turn it off if you'd rather not spend that.
   handoffEnabled:          true,
+
+  // Autonomous pondering loop (step 4a). When on, the server wakes
+  // the Familiar on its own cadence during idle periods to think
+  // about whatever's on its mind (highest interest weights), writing
+  // real entries to the Familiar's Ponderings tome. Default on.
+  // The scale multiplier lets the user STRETCH (≥1×) the cadence
+  // to reduce token spend — base tiers are already conservative
+  // (30 min to 6 hr). Off via this toggle, or hard-disable with the
+  // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
+  ponderingEnabled:        true,
+  ponderingIntervalScale:  1,
+
+  // Trusted contacts for silence-triage outreach (M12c). Each entry
+  // is { name, channel: 'discord', webhook: 'https://discord.com/api/webhooks/…' }.
+  // The triage LLM may *suggest* contacting one of these (by name) when
+  // it judges the situation calls for it. The system delivers AND logs
+  // every outbound to the chat outbox — there is no covert contact.
+  // Empty list = the LLM has nothing to suggest, no outbound ever happens.
+  trustedContacts:         [],
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -620,6 +639,8 @@ const SERVER_SYNCED_KEYS = [
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'entityCoreConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
+  'ponderingEnabled', 'ponderingIntervalScale',
+  'trustedContacts',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -690,6 +711,13 @@ function loadPersisted() {
     state.thalamusDynamicDepth = 4;
   }
   if (typeof state.handoffEnabled !== 'boolean') state.handoffEnabled = true;
+  if (typeof state.ponderingEnabled !== 'boolean') state.ponderingEnabled = true;
+  if (typeof state.ponderingIntervalScale !== 'number'
+      || state.ponderingIntervalScale < 1
+      || state.ponderingIntervalScale > 10) {
+    state.ponderingIntervalScale = 1;
+  }
+  if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
   migrateLegacyConnection();
 }
 
@@ -1849,16 +1877,16 @@ async function generateAndStoreHandoff(messages, sessionId) {
       .join('\n');
     if (!recent.trim()) return;
 
-    // The server prepends your identity/persona (static enrichment),
-    // so write the note in your own voice — a private memory-to-self
-    // the next session will read as "what I was doing last".
+    // The server prepends the Familiar's identity/persona (static
+    // enrichment), so the prompt below is in their voice — a private
+    // memory-to-self the next session will read as "what I was doing last."
     const sysPrompt =
-      'The text above is who you are. You are writing a short private handoff note to your ' +
-      'future self for the next time you talk with this user, capturing what you were doing ' +
-      'and what\'s still open. Respond with ONLY minified JSON, no prose, no code fence: ' +
+      'The text above is who I am. I\'m writing a short private handoff note to my ' +
+      'future self for the next time I talk with my user, capturing what I was doing ' +
+      'and what\'s still open. I respond with ONLY minified JSON, no prose, no code fence: ' +
       '{"active_intent": string, "open_threads": string[]}. ' +
-      'active_intent: one short sentence, in your own first-person voice, on the through-line of ' +
-      'the session (address the user as "you"). ' +
+      'active_intent: one short sentence, in my own first-person voice, on the through-line ' +
+      'of the session (I address my user as "you"). ' +
       'open_threads: specific unfinished questions or tasks, each a short phrase (empty array if none).';
 
     const resp = await fetch('/api/chat', {
@@ -2363,6 +2391,11 @@ function readSettingsFromUI() {
     state.thalamusDynamicDepth = Number.isFinite(v) && v >= 1 && v <= 50 ? v : 4;
   }
   if ($('handoff-toggle')) state.handoffEnabled = $('handoff-toggle').checked;
+  if ($('pondering-toggle')) state.ponderingEnabled = $('pondering-toggle').checked;
+  if ($('pondering-scale')) {
+    const n = parseFloat($('pondering-scale').value);
+    state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
+  }
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
@@ -2405,6 +2438,8 @@ function writeSettingsToUI() {
   setIfNotFocused($('model-input'),     'value',   state.model);
   setIfNotFocused($('streaming-toggle'),'checked', state.streaming);
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
+  if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
+  if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
@@ -3117,10 +3152,21 @@ function init() {
   // settings get pushed up so the next device sees them.
   syncSettingsFromServer().catch(err => console.warn('syncSettingsFromServer', err));
 
+  // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
+  // 30s; banners render at the top of the chat when items are pending.
+  startOutboxPolling();
+
+  // Trusted contacts (M12c) — manage list in the sidebar section.
+  if ($('contact-add')) {
+    $('contact-add').addEventListener('click', addTrustedContact);
+    renderTrustedContacts();
+  }
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
-    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle', 'user-name', 'char-name',
+    'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
+    'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
@@ -3327,6 +3373,30 @@ function init() {
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
+  // Temporal editor (Unruh) — M9
+  if ($('temporal-btn')) {
+    $('temporal-btn').addEventListener('click', openTemporalModal);
+    $('temporal-modal-close').addEventListener('click', closeTemporalModal);
+    document.querySelectorAll('[data-temporal-tab]').forEach(el => {
+      el.addEventListener('click', () => teSwitchTab(el.dataset.temporalTab));
+    });
+    $('te-int-refresh').addEventListener('click',    teLoadInterests);
+    $('te-threat-refresh').addEventListener('click', teLoadThreat);
+    $('te-threat-reset').addEventListener('click',   teResetThreat);
+    $('te-pond-refresh').addEventListener('click',   teLoadPonderings);
+    $('te-pond-limit').addEventListener('change',    teLoadPonderings);
+    $('te-sched-refresh').addEventListener('click',  teLoadSchedule);
+    $('te-sched-hours').addEventListener('change',   teLoadSchedule);
+    $('te-sched-add').addEventListener('click',      () => teToggleScheduleForm(true));
+    $('te-sched-form-cancel').addEventListener('click', () => teToggleScheduleForm(false));
+    $('te-sched-form-save').addEventListener('click', teSaveScheduleNode);
+    $('te-routine-refresh').addEventListener('click',     teLoadRoutine);
+    $('te-routine-add').addEventListener('click',         () => teToggleRoutineForm(true));
+    $('te-routine-form-cancel').addEventListener('click', () => teToggleRoutineForm(false));
+    $('te-routine-form-save').addEventListener('click',   teSavePhase);
+    $('te-routine-chat').addEventListener('click',        teStartRoutineConversation);
+    $('te-handoff-refresh').addEventListener('click',     teLoadHandoff);
+  }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
   $('ke-graph-refresh').addEventListener('click', () => {
@@ -6532,5 +6602,734 @@ async function saveLoreEditorEntry() {
     alert(`Failed to save entry: ${err.message}`);
   }
 }
+
+// ── Temporal editor (Unruh inspection / threat / ponderings) — M9 ──
+//
+// Modal mirrors the Knowledge editor pattern (reuses .ke-* CSS).
+// Read-mostly: shows live + standing interests with decay metadata,
+// current threat state + audit history (with reset button), and the
+// Familiar's autonomous ponderings (with per-entry delete). CRUD on
+// interests beyond demote is deferred to a later pass — for now the
+// observable surface is enough for catching bugs.
+
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
+
+function openTemporalModal() {
+  $('temporal-modal').classList.remove('hidden');
+  bindResizableModal('temporal-modal-inner', 'pf-temporal-modal-size');
+  teSwitchTab('interests');
+}
+function closeTemporalModal() {
+  $('temporal-modal').classList.add('hidden');
+}
+
+function teSwitchTab(name) {
+  if (!TE_TABS.includes(name)) return;
+  for (const t of TE_TABS) {
+    const btn  = document.querySelector(`[data-temporal-tab="${t}"]`);
+    const pane = $(`te-pane-${t}`);
+    if (btn)  btn.classList.toggle('ke-tab-active',  t === name);
+    if (pane) pane.classList.toggle('ke-pane-active', t === name);
+  }
+  if      (name === 'interests')  teLoadInterests();
+  else if (name === 'threat')     teLoadThreat();
+  else if (name === 'ponderings') teLoadPonderings();
+  else if (name === 'schedule')   teLoadSchedule();
+  else if (name === 'routine')    teLoadRoutine();
+  else if (name === 'handoff')    teLoadHandoff();
+}
+
+function teEscapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function teTimeAgo(iso) {
+  if (!iso) return 'never';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return iso;
+  const min = ms / 60_000;
+  if (min < 1)  return 'just now';
+  if (min < 60) return `${Math.round(min)} min ago`;
+  const hr = min / 60;
+  if (hr  < 24) return `${hr.toFixed(1)} hr ago`;
+  const day = hr / 24;
+  return `${day.toFixed(1)} days ago`;
+}
+
+// ── Interests tab ─────────────────────────────────────────────────
+
+async function teLoadInterests() {
+  const list = $('te-int-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/temporal/interests?limit=100');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+
+    const live     = Array.isArray(data.live)     ? data.live     : [];
+    const standing = Array.isArray(data.standing) ? data.standing : [];
+
+    $('te-int-summary').textContent = `${live.length} live · ${standing.length} standing`;
+
+    const html = [];
+    if (standing.length) {
+      html.push('<h4 style="margin: 8px 12px 4px 12px">Standing values (always-on)</h4>');
+      for (const s of standing) html.push(teRenderInterest(s, true));
+    }
+    if (live.length) {
+      html.push('<h4 style="margin: 12px 12px 4px 12px">Live interests (decay over time)</h4>');
+      for (const i of live) html.push(teRenderInterest(i, false));
+    }
+    if (!standing.length && !live.length) {
+      html.push('<p class="logs-empty">No interests yet. They accrue as you chat — see thalamus.recordInterest.</p>');
+    }
+    list.innerHTML = html.join('');
+    list.querySelectorAll('.te-int-bump').forEach(btn => {
+      btn.addEventListener('click', () => teBumpInterest(btn.dataset.intLabel));
+    });
+    list.querySelectorAll('.te-int-demote').forEach(btn => {
+      btn.addEventListener('click', () => teDemoteStanding(btn.dataset.intId));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teBumpInterest(label) {
+  const raw = prompt(`Bump weight for "${label}" by how much?\n\nPositive number; typical engagement bumps are 0.5 – 3.0.`, '1');
+  if (raw == null) return;
+  const delta = parseFloat(raw);
+  if (!Number.isFinite(delta) || delta <= 0) { alert('Enter a positive number.'); return; }
+  try {
+    const r = await fetch('/api/temporal/interests/bump', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: label, delta, source: 'manual_ui' }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'bump failed');
+    teLoadInterests();
+  } catch (err) {
+    alert(`Bump failed: ${err.message}`);
+  }
+}
+
+async function teDemoteStanding(id) {
+  if (!confirm('Demote this standing value to a regular live interest?\n\nIt will start decaying like any other live interest from this moment on. The original payload (value_ref, etc.) is preserved.')) return;
+  try {
+    const r = await fetch(`/api/temporal/interests/${encodeURIComponent(id)}/demote`, { method: 'POST' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'demote failed');
+    teLoadInterests();
+  } catch (err) {
+    alert(`Demote failed: ${err.message}`);
+  }
+}
+
+function teRenderInterest(i, isStanding) {
+  const w     = Number(i.weight);
+  const raw   = Number(i.raw_weight);
+  const tier  = teEscapeHtml(i.tier ?? '?');
+  const label = teEscapeHtml(i.label ?? '(no label)');
+  const id    = teEscapeHtml(i.id ?? '');
+  const lt    = teTimeAgo(i.last_touched);
+  const ref   = i.value_ref ? `<div style="font-size: 0.85em; opacity: 0.7">anchor: <code>${teEscapeHtml(i.value_ref)}</code></div>` : '';
+  const decayed = (!isStanding && Number.isFinite(raw) && Number.isFinite(w) && Math.abs(raw - w) > 0.01)
+    ? ` <span style="opacity:0.6">(raw ${raw.toFixed(2)}, decayed)</span>` : '';
+  const actions = isStanding
+    ? `<button class="btn-ghost te-int-demote" data-int-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Demote to live interest (lets it start decaying)">Demote</button>`
+    : `<button class="btn-ghost te-int-bump"   data-int-label="${label}" style="font-size: 0.8em; padding: 2px 8px" title="Manually bump this interest's weight">+ Bump</button>`;
+  return `
+    <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+      <div style="display: flex; gap: 8px; align-items: baseline">
+        <strong style="flex: 1">${label}</strong>
+        <span style="font-family: monospace">${Number.isFinite(w) ? w.toFixed(2) : '?'}${decayed}</span>
+        <span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${tier}</span>
+        ${actions}
+      </div>
+      <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">last touched ${lt}</div>
+      ${ref}
+    </div>`;
+}
+
+// ── Threat tab ────────────────────────────────────────────────────
+
+async function teLoadThreat() {
+  const sum  = $('te-threat-summary');
+  const hist = $('te-threat-history');
+  if (!sum || !hist) return;
+  sum.innerHTML  = '<p class="logs-empty">Loading…</p>';
+  hist.innerHTML = '';
+  try {
+    const [tRes, hRes] = await Promise.all([
+      fetch('/api/threat').then(r => r.json()),
+      fetch('/api/threat/history?limit=50').then(r => r.json()),
+    ]);
+    const tier   = teEscapeHtml(tRes.tier   ?? 'calm');
+    const weight = Number(tRes.weight ?? 0).toFixed(2);
+    const disabled = tRes.disabled
+      ? ' <span style="color: var(--text-warning, #d4a44c)">(detector disabled by env var)</span>'
+      : '';
+    sum.innerHTML = `
+      <div style="display: flex; gap: 16px; align-items: baseline">
+        <div><strong style="font-size: 1.3em">${tier}</strong>${disabled}</div>
+        <div style="font-family: monospace">weight ${weight}</div>
+        <div style="opacity: 0.7">last touched ${teTimeAgo(tRes.last_touched)}</div>
+      </div>`;
+
+    const events = Array.isArray(hRes.history) ? hRes.history : [];
+    if (!events.length) {
+      hist.innerHTML = '<p class="logs-empty">No threat events recorded yet.</p>';
+    } else {
+      hist.innerHTML = events.map(e => {
+        const delta = Number(e.delta).toFixed(2);
+        const sign  = e.delta >= 0 ? '+' : '';
+        const sigs  = (e.signals || [])
+          .map(s => `<code style="font-size: 0.8em">${teEscapeHtml(s.id)}${s.damped ? '*' : ''}</code>`)
+          .join(' ');
+        return `<div style="padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a); font-size: 0.9em">
+          <div style="display: flex; gap: 8px; align-items: baseline">
+            <span style="opacity: 0.6; font-size: 0.85em; min-width: 12em">${teEscapeHtml(e.ts)}</span>
+            <span style="font-family: monospace; min-width: 4em">${sign}${delta}</span>
+            <span style="opacity: 0.7">→ ${Number(e.raw_after).toFixed(2)}</span>
+            <span style="opacity: 0.6; font-size: 0.85em">[${teEscapeHtml(e.source)}]</span>
+          </div>
+          ${sigs ? `<div style="margin-top: 2px; opacity: 0.8">${sigs}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+  } catch (err) {
+    sum.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teResetThreat() {
+  if (!confirm('Reset the threat level to calm (0)?\n\nThis logs a manual_reset audit entry but does not disable the detector. Use the PROTO_FAMILIAR_THREAT_DISABLED env var on the server for that.')) return;
+  try {
+    const r = await fetch('/api/threat/reset', { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    teLoadThreat();
+  } catch (err) {
+    alert(`Reset failed: ${err.message}`);
+  }
+}
+
+// ── Ponderings tab ────────────────────────────────────────────────
+
+async function teLoadPonderings() {
+  const list  = $('te-pond-list');
+  const sum   = $('te-pond-summary');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  const limit = $('te-pond-limit')?.value ?? 25;
+  try {
+    const r = await fetch(`/api/temporal/ponderings?limit=${limit}&sinceDays=365`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const items = Array.isArray(data.ponderings) ? data.ponderings : [];
+    if (sum) sum.textContent = `${items.length} pondering(s)`;
+    if (!items.length) {
+      list.innerHTML = '<p class="logs-empty">No ponderings yet. The autonomous loop writes here when interests accrue and cooldowns elapse.</p>';
+      return;
+    }
+    list.innerHTML = items.map(p => `
+      <div style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <strong style="flex: 1">${teEscapeHtml(p.title || '(untitled)')}</strong>
+          <span style="opacity: 0.7; font-size: 0.85em">${teTimeAgo(p.created_at)}</span>
+          <button class="btn-ghost" data-pond-uid="${teEscapeHtml(p.uid)}" style="font-size: 0.8em; padding: 2px 8px">Delete</button>
+        </div>
+        ${p.topic ? `<div style="font-size: 0.8em; opacity: 0.6; margin: 2px 0">topic: ${teEscapeHtml(p.topic)}</div>` : ''}
+        <div style="white-space: pre-wrap; margin-top: 6px; font-size: 0.92em; line-height: 1.4">${teEscapeHtml(p.content || '')}</div>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-pond-uid]').forEach(btn => {
+      btn.addEventListener('click', () => teDeletePondering(btn.dataset.pondUid));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teDeletePondering(uid) {
+  if (!confirm('Delete this pondering? The on-disk entry is removed; the audit trail is the diff itself.')) return;
+  try {
+    const r = await fetch(`/api/temporal/ponderings/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    teLoadPonderings();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
+
+// ── Schedule tab (M9b) ────────────────────────────────────────────
+
+async function teLoadSchedule() {
+  const list = $('te-sched-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
+  const now   = new Date();
+  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();   // half-window behind
+  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    const nodes = (data.nodes || [])
+      .filter(n => n.type !== 'phase')             // Routine tab handles phases
+      .sort((a, b) => (a.when || '').localeCompare(b.when || ''));
+    if (!nodes.length) {
+      list.innerHTML = '<p class="logs-empty">Nothing scheduled in this window. Use "+ Add" above to create an event or task.</p>';
+      return;
+    }
+    list.innerHTML = nodes.map(n => {
+      const id    = teEscapeHtml(n.id);
+      const label = teEscapeHtml(n.label);
+      const type  = teEscapeHtml(n.type);
+      const when  = n.when ? `<span style="font-family: monospace; font-size: 0.85em; opacity: 0.8">${teEscapeHtml(n.when)}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
+      const end   = n.end  ? `<span style="font-family: monospace; font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(n.end)}</span>` : '';
+      const resolution = n.resolution
+        ? `<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${teEscapeHtml(n.resolution)}</span>`
+        : '';
+      const resolveBtns = n.resolution ? '' : `
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="done"      style="font-size: 0.8em; padding: 2px 8px">✓ done</button>
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="cancelled" style="font-size: 0.8em; padding: 2px 8px">✕ cancel</button>`;
+      return `
+      <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap">
+          <span style="font-size: 0.8em; opacity: 0.6; min-width: 4em">${type}</span>
+          <strong style="flex: 1">${label}</strong>
+          ${resolution}
+          ${resolveBtns}
+          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)">🗑</button>
+        </div>
+        <div style="margin-top: 2px">${when}${end}</div>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-sched-resolve').forEach(btn => {
+      btn.addEventListener('click', () => teResolveSchedule(btn.dataset.id, btn.dataset.resolution));
+    });
+    list.querySelectorAll('.te-sched-delete').forEach(btn => {
+      btn.addEventListener('click', () => teDeleteSchedule(btn.dataset.id));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teResolveSchedule(id, resolution) {
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}/resolve`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ resolution }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'resolve failed');
+    teLoadSchedule();
+  } catch (err) {
+    alert(`Resolve failed: ${err.message}`);
+  }
+}
+
+async function teDeleteSchedule(id) {
+  if (!confirm('Permanently delete this schedule node? Any edges referencing it will also be removed.')) return;
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'delete failed');
+    teLoadSchedule();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
+
+function teToggleScheduleForm(show) {
+  const form = $('te-sched-form');
+  if (!form) return;
+  form.style.display = show ? '' : 'none';
+  if (show) {
+    $('te-sched-label').value = '';
+    $('te-sched-when').value  = '';
+    $('te-sched-end').value   = '';
+    $('te-sched-type').value  = 'event';
+    setTimeout(() => $('te-sched-label')?.focus(), 0);
+  }
+}
+
+async function teSaveScheduleNode() {
+  const type  = $('te-sched-type').value;
+  const label = $('te-sched-label').value.trim();
+  const when  = $('te-sched-when').value.trim() || null;
+  const end   = $('te-sched-end').value.trim()  || null;
+  if (!label) { alert('Label is required.'); return; }
+  try {
+    const r = await fetch('/api/temporal/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ type, label, when, end }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'create failed');
+    teToggleScheduleForm(false);
+    teLoadSchedule();
+  } catch (err) {
+    alert(`Create failed: ${err.message}`);
+  }
+}
+
+// ── Routine tab (M9b) — phase nodes only ──────────────────────────
+
+async function teLoadRoutine() {
+  const list = $('te-routine-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  // Phases span a day; fetch a big window so all phases are visible.
+  const now  = new Date();
+  const from = new Date(now.getTime() - 36 * 60 * 60_000).toISOString();
+  const to   = new Date(now.getTime() + 36 * 60 * 60_000).toISOString();
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    // Phases only. Dedupe by label (the seed re-renders every day) and
+    // keep the latest copy. Sort by when_ts time-of-day.
+    const byLabel = new Map();
+    for (const n of (data.nodes || [])) {
+      if (n.type !== 'phase') continue;
+      const prev = byLabel.get(n.label);
+      if (!prev || (n.when || '') > (prev.when || '')) byLabel.set(n.label, n);
+    }
+    const phases = Array.from(byLabel.values()).sort((a, b) => {
+      const ta = (a.when || '').slice(11);
+      const tb = (b.when || '').slice(11);
+      return ta.localeCompare(tb);
+    });
+
+    $('te-routine-summary').textContent = `${phases.length} phase(s)`;
+    if (!phases.length) {
+      list.innerHTML = '<p class="logs-empty">No routine phases yet. Run <code>uv run unruh seed-routine</code> (in the unruh/ dir) to seed defaults.</p>';
+      return;
+    }
+    list.innerHTML = phases.map(p => {
+      const id      = teEscapeHtml(p.id);
+      const label   = teEscapeHtml(p.label);
+      const texture = teEscapeHtml(p.payload?.texture ?? '');
+      // Show time-of-day only (the date repeats every day for phases).
+      const whenT   = teEscapeHtml((p.when || '').slice(11, 16) || '?');
+      const endT    = teEscapeHtml((p.end  || '').slice(11, 16) || '?');
+      return `
+      <div data-phase-id="${id}" style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <strong style="flex: 1" class="te-phase-label" data-id="${id}" data-field="label">${label}</strong>
+          <span style="font-family: monospace; opacity: 0.85" class="te-phase-time">
+            <span class="te-phase-when" data-id="${id}" data-field="when">${whenT}</span> –
+            <span class="te-phase-end"  data-id="${id}" data-field="end">${endT}</span>
+          </span>
+          <button class="btn-ghost te-phase-edit" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px">Edit</button>
+        </div>
+        ${texture ? `<div style="font-size: 0.9em; opacity: 0.75; margin-top: 4px; font-style: italic">${texture}</div>` : ''}
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-phase-edit').forEach(btn => {
+      btn.addEventListener('click', () => teEditPhase(btn.dataset.id, phases.find(p => p.id === btn.dataset.id)));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teEditPhase(id, phase) {
+  if (!phase) return;
+  const label = prompt('Phase label:', phase.label);
+  if (label == null) return;
+  const whenT = prompt('Start time (HH:MM, 24-hour, UTC):', (phase.when || '').slice(11, 16));
+  if (whenT == null) return;
+  const endT  = prompt('End time (HH:MM, 24-hour, UTC):',   (phase.end  || '').slice(11, 16));
+  if (endT  == null) return;
+  const texture = prompt('Texture (short description of what the Familiar is like in this phase):', phase.payload?.texture ?? '');
+  if (texture == null) return;
+
+  // Re-stamp the date portion of the timestamps with today's date so
+  // the phase keeps cycling daily; Unruh's get_window will template
+  // these into the current day on read.
+  const today = new Date().toISOString().slice(0, 10);
+  const isoOrNull = (t) => /^\d{2}:\d{2}$/.test(t) ? `${today}T${t}:00+00:00` : null;
+  const when = isoOrNull(whenT.trim());
+  const end  = isoOrNull(endT.trim());
+  if (!when || !end) { alert('Times must be HH:MM (e.g. 09:30).'); return; }
+
+  try {
+    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        label: label.trim() || phase.label,
+        when, end,
+        payload: { ...(phase.payload || {}), texture: texture.trim() },
+      }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'update failed');
+    teLoadRoutine();
+  } catch (err) {
+    alert(`Edit failed: ${err.message}`);
+  }
+}
+
+function teToggleRoutineForm(show) {
+  const form = $('te-routine-form');
+  if (!form) return;
+  form.style.display = show ? '' : 'none';
+  if (show) {
+    $('te-routine-label').value   = '';
+    $('te-routine-start').value   = '';
+    $('te-routine-end').value     = '';
+    $('te-routine-texture').value = '';
+    setTimeout(() => $('te-routine-label')?.focus(), 0);
+  }
+}
+
+async function teSavePhase() {
+  const label   = $('te-routine-label').value.trim();
+  const startT  = $('te-routine-start').value.trim();
+  const endT    = $('te-routine-end').value.trim();
+  const texture = $('te-routine-texture').value.trim();
+  if (!label) { alert('Label is required.'); return; }
+  if (!/^\d{1,2}:\d{2}$/.test(startT) || !/^\d{1,2}:\d{2}$/.test(endT)) {
+    alert('Start and end must be HH:MM (e.g. 09:30).');
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const when  = `${today}T${startT.padStart(5, '0')}:00+00:00`;
+  const end   = `${today}T${endT.padStart(5, '0')}:00+00:00`;
+  try {
+    const r = await fetch('/api/temporal/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        type:    'phase',
+        label,
+        when,
+        end,
+        payload: texture ? { texture } : {},
+      }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'create failed');
+    teToggleRoutineForm(false);
+    teLoadRoutine();
+  } catch (err) {
+    alert(`Create failed: ${err.message}`);
+  }
+}
+
+// "Help me figure out my rhythm" — pre-fills the chat composer with
+// a scaffolding prompt that nudges the Familiar to walk the user
+// through their natural daily rhythm. The user can edit / send /
+// scrap before anything goes out. No auto-send. After the
+// conversation, the user comes back to this tab and records what
+// they figured out as phases.
+function teStartRoutineConversation() {
+  const composer = $('user-input') || document.querySelector('#user-input, .composer-input, textarea[name="message"]');
+  const scaffold = (
+    "I'd like your help figuring out my natural daily rhythm — not a productivity " +
+    "schedule, just the times of day that already feel like distinct phases for me " +
+    "(when I wake, when I'm most settled, when I wind down). Ask me one thing at a " +
+    "time so I don't get overwhelmed. When we're done, give me a short bullet list " +
+    "I can use to set up routine phases in the Temporal editor."
+  );
+  if (composer) {
+    composer.value = scaffold;
+    composer.focus();
+    // Trigger the input event so any auto-resize / send-button-enable logic fires.
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    closeTemporalModal();
+  } else {
+    // Composer not found (shouldn't happen) — copy to clipboard as a fallback.
+    navigator.clipboard?.writeText?.(scaffold).catch(() => {});
+    alert('Composer not found. The starter prompt has been copied to your clipboard.');
+  }
+}
+
+// ── Handoff tab (M9b) ─────────────────────────────────────────────
+
+async function teLoadHandoff() {
+  const list = $('te-handoff-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/temporal/handoff');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    // session_get_handoff can return either a single most-recent
+    // handoff object or a list; normalize.
+    const items =
+        Array.isArray(data.handoffs) ? data.handoffs
+      : data.handoff                 ? [data.handoff]
+      : [];
+    $('te-handoff-summary').textContent = `${items.length} handoff(s)`;
+    if (!items.length) {
+      list.innerHTML = '<p class="logs-empty">No session handoffs stored yet. They\'re created at the end of each session by the handoff-summariser (Settings → Session handoff).</p>';
+      return;
+    }
+    list.innerHTML = items.map(h => {
+      const id      = teEscapeHtml(h.id ?? '');
+      const intent  = teEscapeHtml(h.intent ?? '');
+      const threads = Array.isArray(h.open_threads) ? h.open_threads : [];
+      const consumed = h.consumed
+        ? '<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">consumed</span>'
+        : '<span style="font-size: 0.85em; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px; color: var(--text-warning, #d4a44c)">pending</span>';
+      const consumeBtn = h.consumed ? '' : `
+        <button class="btn-ghost te-handoff-consume" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Mark as consumed so it stops surfacing in the next session">Mark consumed</button>`;
+      const threadsHtml = threads.length
+        ? `<ul style="margin: 4px 0 0 0; padding-left: 20px">${threads.map(t => `<li>${teEscapeHtml(typeof t === 'string' ? t : (t.label ?? JSON.stringify(t)))}</li>`).join('')}</ul>`
+        : '';
+      return `
+      <div style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <span style="opacity: 0.6; font-size: 0.85em">${teEscapeHtml(h.created_at ?? '')}</span>
+          <span style="flex: 1"></span>
+          ${consumed}
+          ${consumeBtn}
+        </div>
+        ${intent ? `<div style="margin-top: 6px">${intent}</div>` : ''}
+        ${threadsHtml ? `<div style="margin-top: 6px"><strong style="font-size: 0.9em">Open threads:</strong>${threadsHtml}</div>` : ''}
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.te-handoff-consume').forEach(btn => {
+      btn.addEventListener('click', () => teConsumeHandoff(btn.dataset.id));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teConsumeHandoff(id) {
+  if (!confirm('Mark this handoff as consumed?\n\nIt will stop surfacing at the top of new sessions, but the audit row stays in the DB.')) return;
+  try {
+    const r = await fetch(`/api/temporal/handoff/${encodeURIComponent(id)}/consume`, { method: 'POST' }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'mark-consumed failed');
+    teLoadHandoff();
+  } catch (err) {
+    alert(`Mark-consumed failed: ${err.message}`);
+  }
+}
+
+// ── Outbox banners (M11/M12 delivery surface) ─────────────────────
+//
+// Polls /api/outbox every 30s. When an item arrives, renders a gentle
+// banner at the top of the chat. Click ✕ to acknowledge (POST then
+// re-fetch). Reminders use a calm accent color, silence-triage items
+// use a warmer one so the user can distinguish at a glance.
+
+const OUTBOX_POLL_MS = 30_000;
+let _outboxPollTimer = null;
+
+async function fetchOutbox() {
+  try {
+    const r = await fetch('/api/outbox?pending=1');
+    if (!r.ok) return;
+    const data = await r.json();
+    renderOutboxBanners(Array.isArray(data.items) ? data.items : []);
+  } catch { /* network blip; try again next tick */ }
+}
+
+function renderOutboxBanners(items) {
+  const host = $('outbox-banners');
+  if (!host) return;
+  if (!items.length) { host.innerHTML = ''; return; }
+  host.innerHTML = items.map(i => {
+    const icon = i.kind === 'triage' ? '🫂' : '⏰';
+    const kindClass = i.kind === 'triage' ? 'kind-triage' : 'kind-reminder';
+    const ts = teTimeAgo ? teTimeAgo(i.ts) : i.ts;
+    const body = i.body ? `<div class="ob-body">${escapeOutboxText(i.body)}</div>` : '';
+    return `
+      <div class="outbox-banner ${kindClass}" data-id="${escapeOutboxText(i.id)}">
+        <div class="ob-icon">${icon}</div>
+        <div class="ob-content">
+          <div class="ob-title">${escapeOutboxText(i.title)}</div>
+          ${body}
+          <div class="ob-time">${escapeOutboxText(ts)}</div>
+        </div>
+        <button class="ob-dismiss" data-ob-id="${escapeOutboxText(i.id)}" aria-label="Dismiss">✕</button>
+      </div>`;
+  }).join('');
+  host.querySelectorAll('.ob-dismiss').forEach(btn => {
+    btn.addEventListener('click', () => acknowledgeOutboxItem(btn.dataset.obId));
+  });
+}
+
+function escapeOutboxText(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function acknowledgeOutboxItem(id) {
+  try {
+    await fetch(`/api/outbox/${encodeURIComponent(id)}/acknowledge`, { method: 'POST' });
+    fetchOutbox();
+  } catch (err) {
+    console.warn('outbox ack failed', err);
+  }
+}
+
+function startOutboxPolling() {
+  if (_outboxPollTimer) return;
+  fetchOutbox();
+  _outboxPollTimer = setInterval(fetchOutbox, OUTBOX_POLL_MS);
+}
+
+// ── Trusted contacts (M12c) ───────────────────────────────────────
+
+function renderTrustedContacts() {
+  const list = $('contacts-list');
+  if (!list) return;
+  const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
+  if (!contacts.length) {
+    list.innerHTML = '<p class="field-hint" style="opacity:0.6; margin: 0">No contacts yet. Outreach is disabled.</p>';
+    return;
+  }
+  list.innerHTML = contacts.map((c, i) => {
+    const name    = escapeOutboxText(c.name ?? '?');
+    const channel = escapeOutboxText(c.channel ?? '?');
+    const hint    = c.webhook ? `${c.webhook.slice(0, 32)}…` : '(no webhook)';
+    return `
+      <div style="display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <strong style="flex: 1">${name}</strong>
+        <span style="font-size: 0.85em; opacity: 0.7">${channel}</span>
+        <code style="font-size: 0.75em; opacity: 0.55">${escapeOutboxText(hint)}</code>
+        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact">🗑</button>
+      </div>`;
+  }).join('');
+  list.querySelectorAll('.contact-remove').forEach(btn => {
+    btn.addEventListener('click', () => removeTrustedContact(parseInt(btn.dataset.idx, 10)));
+  });
+}
+
+function addTrustedContact() {
+  const name    = ($('contact-name').value ?? '').trim();
+  const webhook = ($('contact-webhook').value ?? '').trim();
+  if (!name)    { alert('Name is required.'); return; }
+  if (!webhook) { alert('Webhook URL is required.'); return; }
+  if (!/^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) {
+    if (!confirm("This doesn't look like a Discord webhook URL. Add anyway?")) return;
+  }
+  state.trustedContacts = [...(state.trustedContacts || []), { name, channel: 'discord', webhook }];
+  $('contact-name').value    = '';
+  $('contact-webhook').value = '';
+  saveSettings();
+  renderTrustedContacts();
+}
+
+function removeTrustedContact(idx) {
+  if (!confirm('Remove this contact? Your Familiar will no longer be able to reach out to them.')) return;
+  state.trustedContacts = (state.trustedContacts || []).filter((_, i) => i !== idx);
+  saveSettings();
+  renderTrustedContacts();
+}
+
 
 

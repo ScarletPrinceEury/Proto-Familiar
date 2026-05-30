@@ -470,6 +470,195 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
 }
 
 /**
+ * List live (non-standing) interests with current decayed weights.
+ * Best-effort: empty array if Unruh is unreachable or the call fails.
+ * Used by the autonomous pondering loop (server-side, step 4a) so it
+ * can reuse the already-spawned Unruh subprocess instead of opening
+ * its own MCP connection per tick.
+ */
+export async function listLiveInterests({ limit = 20 } = {}) {
+  if (!unruhClient) return [];
+  try {
+    const result  = await unruhClient.callTool({
+      name: 'interest_list',
+      arguments: { limit, include_standing: false },
+    });
+    const payload = parseToolText(result, {});
+    return Array.isArray(payload.live) ? payload.live : [];
+  } catch (err) {
+    console.error('[thalamus] listLiveInterests failed:', err?.message ?? err);
+    return [];
+  }
+}
+
+/**
+ * Bump (or reduce) an interest weight by `delta`. Positive delta adds
+ * engagement; negative delta is currently unsupported by Unruh's
+ * interest_record tool but we expose the wrapper for symmetry — the
+ * UI passes only positive deltas. Returns { ok, error? }.
+ */
+export async function bumpInterest({ topic, delta, source = 'manual' }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'interest_record',
+      arguments: { topic, delta, source },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/** Demote a standing value to a live interest. */
+export async function demoteStanding({ id }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'interest_demote_standing',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+// ── Schedule wrappers (M9b) ──────────────────────────────────────
+
+export async function getScheduleWindow({ from_ts, to_ts, limit = 200 } = {}) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', nodes: [], edges: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_get_window',
+      arguments: { from_ts, to_ts, limit, include_open_tasks: true },
+    });
+    return parseToolText(r, { ok: false, nodes: [], edges: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), nodes: [], edges: [] };
+  }
+}
+
+export async function addScheduleNode({ type, label, when, end, payload }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_add_node',
+      arguments: { type, label, when, end, payload },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function updateScheduleNode({ id, label, when, end, payload }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { id };
+  if (label   !== undefined) args.label   = label;
+  if (when    !== undefined) args.when    = when;
+  if (end     !== undefined) args.end     = end;
+  if (payload !== undefined) args.payload = payload;
+  try {
+    const r = await unruhClient.callTool({ name: 'schedule_update_node', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function resolveScheduleNode({ id, resolution }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_resolve',
+      arguments: { id, resolution },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function deleteScheduleNode({ id }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_delete_node',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+// ── Reminders wrappers (M11) ─────────────────────────────────────
+
+export async function getDueReminders({ now, limit = 50 } = {}) {
+  if (!unruhClient) return { ok: false, reminders: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'reminders_due',
+      arguments: now ? { now, limit } : { limit },
+    });
+    return parseToolText(r, { ok: false, reminders: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), reminders: [] };
+  }
+}
+
+export async function getRemindersHealth() {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'reminders_health', arguments: {} });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+// ── Handoff wrappers (M9b) ───────────────────────────────────────
+
+export async function getHandoff({ include_consumed = true } = {}) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', handoffs: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'session_get_handoff',
+      arguments: { include_consumed },
+    });
+    return parseToolText(r, { ok: false, handoffs: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), handoffs: [] };
+  }
+}
+
+export async function markHandoffConsumed({ id }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'session_mark_handoff_consumed',
+      arguments: { id },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
+ * Full interest snapshot — live + standing — for the Temporal editor
+ * UI (M9). Best-effort: empty arrays if Unruh is unreachable.
+ *
+ * Returns: { live: [...], standing: [...], ok: boolean, error?: string }
+ */
+export async function listInterests({ limit = 50 } = {}) {
+  if (!unruhClient) return { live: [], standing: [], ok: false, error: 'unruh not connected' };
+  try {
+    const result  = await unruhClient.callTool({
+      name: 'interest_list',
+      arguments: { limit, include_standing: true },
+    });
+    const payload = parseToolText(result, {});
+    return {
+      live:     Array.isArray(payload.live)     ? payload.live     : [],
+      standing: Array.isArray(payload.standing) ? payload.standing : [],
+      ok:       true,
+    };
+  } catch (err) {
+    return { live: [], standing: [], ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/**
  * Store a session-end handoff (M6) into Unruh. The chat path (frontend)
  * summarises the ending session into intent + open threads and posts
  * them here via server.js; we forward to the `session_set_handoff`
@@ -516,6 +705,79 @@ function parseToolText(result, fallback) {
   try { return JSON.parse(text); } catch { return fallback; }
 }
 
+/**
+ * Build the [CARE CHECK] prompt block from current threat state.
+ *
+ * Returns '' for calm / disabled / null — the section is dropped
+ * entirely rather than rendered as a hollow header. The framing
+ * always leaves the actual decision to the model — never forces a
+ * check-in, never substitutes a check-in for actually responding
+ * to what the user said. At severe tier, a crisis-resource line is
+ * added; this is the deliberate opinion that any system encountering
+ * acute crisis language should make the 988 line visible. Users
+ * who want a quieter posture can disable via
+ * PROTO_FAMILIAR_THREAT_DISABLED=1.
+ */
+function buildCareCheckBlock(threat) {
+  if (!threat || threat.disabled) return '';
+  const tier   = threat.tier ?? 'calm';
+  const weight = Number(threat.weight ?? 0).toFixed(2);
+  if (tier === 'calm') return '';
+
+  const lines = [`[CARE CHECK — current threat: ${tier} (${weight})]`];
+  if (tier === 'mild') {
+    lines.push(
+      "I notice my user has shown some signs of low mood or worry in " +
+      "recent messages. I stay warm; my tone holds a little more weight. " +
+      "No need to ask explicitly unless it fits — I just stay present."
+    );
+  } else if (tier === 'moderate') {
+    lines.push(
+      "My user has been signaling notable distress (struggling, " +
+      "overwhelm, dissociation, panic, or similar). If a gentle " +
+      "check-in fits — not in place of answering what they said, but " +
+      "alongside it — I can offer one. If it would feel intrusive " +
+      "given their current message, I stay steady. I don't perform " +
+      "concern."
+    );
+  } else if (tier === 'high') {
+    lines.push(
+      "My user has been signaling serious distress (hopelessness, " +
+      "severe isolation, can't-go-on language). I prioritise their " +
+      "wellbeing in this response. I make space for what's underneath " +
+      "if there's any opening for it. I don't pretend to be a " +
+      "therapist — I'm a steady, caring presence who's actually paying " +
+      "attention. If checking in would help, I do it; if matching " +
+      "their topic with care is what they need, I do that."
+    );
+  } else if (tier === 'severe') {
+    lines.push(
+      "Threat is SEVERE. My user has used language consistent with " +
+      "suicidal ideation, self-harm intent, or an acute crisis plan. " +
+      "I prioritise their wellbeing absolutely. I respond with grounded " +
+      "warmth — no alarm, no clinical distance, no scripts.",
+      "",
+      "If they appear to be in immediate danger, I gently make these " +
+      "resources visible without lecturing:",
+      "  • US: 988 Suicide & Crisis Lifeline (call or text 988)",
+      "  • UK: Samaritans — 116 123",
+      "  • International: https://findahelpline.com/",
+      "",
+      "I am not a therapist. I am not a crisis counsellor. I am " +
+      "someone who cares about them and wants them to be okay. I speak " +
+      "from that."
+    );
+  }
+  lines.push(
+    '',
+    'This block is a parameter, not a script. I decide how (or whether) ' +
+    'it shows up in my reply. I never claim a check-in I did not perform. ' +
+    'I never invent concern that is not there. My user can dial this ' +
+    'system down or off at any time.'
+  );
+  return lines.join('\n');
+}
+
 /** Wrap a file's content in its promptLabel XML tags. */
 function wrapFile(filename, content, promptLabel) {
   const label = promptLabel ?? filename.replace(/\.md$/, '');
@@ -528,6 +790,8 @@ function wrapFile(filename, content, promptLabel) {
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
+import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
+import { getThreat, tierForThreat } from './threat-tracker.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -841,10 +1105,39 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
     if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
 
+    // ── Recent ponderings (local tome read; honesty loop for step 3') ────
+    // Best-effort, never blocks: a bad read or missing tome silently
+    // contributes nothing. Skipped on staticOnly the same as the other
+    // dynamic sources, so handoff-summary turns stay lean.
+    const ponderings = staticOnly
+      ? []
+      : await getRecentPonderings().catch(err => {
+          console.error('[thalamus] getRecentPonderings failed:', err?.message ?? err);
+          return [];
+        });
+    const ponderingsBlock = formatPonderingsForPrompt(ponderings);
+
+    // ── Care check / break-through framing (step 4b) ──────────────────────
+    // Read current threat; if elevated, prepend a [CARE CHECK] block that
+    // tells the Familiar to consider checking in proactively. Never forces
+    // a check-in — the framing always leaves the decision to the model
+    // ("if it fits"). Crisis-resource line is added at severe tier only.
+    // Best-effort; failure → silent omission, same posture as the rest of
+    // enrich(). Skipped on staticOnly.
+    const threat = staticOnly
+      ? { weight: 0, tier: 'calm', disabled: false }
+      : await getThreat().catch(err => {
+          console.error('[thalamus] getThreat failed:', err?.message ?? err);
+          return { weight: 0, tier: 'calm', disabled: false };
+        });
+    const careBlock = buildCareCheckBlock(threat);
+
     const dynamicSections = [];
-    if (memLines)      dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
-    if (graphLines)    dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
-    if (temporalLines) dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
+    if (memLines)        dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
+    if (graphLines)      dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
+    if (ponderingsBlock) dynamicSections.push(ponderingsBlock);
+    if (careBlock)       dynamicSections.push(careBlock);
+    if (temporalLines)   dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
 
     const staticBlock  = staticSections.join('\n');
     const dynamicBlock = dynamicSections.join('\n\n---\n\n');

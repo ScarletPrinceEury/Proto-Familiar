@@ -24,9 +24,23 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
-  recordInterest, recordHandoff,
+  recordInterest, recordHandoff, listLiveInterests, listInterests,
+  bumpInterest, demoteStanding,
+  getScheduleWindow, addScheduleNode, updateScheduleNode,
+  resolveScheduleNode, deleteScheduleNode,
+  getHandoff, markHandoffConsumed,
+  getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
+import { scoreMessage } from './crisis-signals.js';
+import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
+import { ponderOnce } from './pondering.js';
+import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
+import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
+import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
+import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
+import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -176,6 +190,27 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const userText = typeof lastUser?.content === 'string'
     ? lastUser.content
     : ((lastUser?.content ?? []).find(c => c.type === 'text')?.text ?? '');
+  // ── Crisis-signal detection (step 4b) ─────────────────────────────────
+  // Fire-and-forget: score the current user message for distress markers
+  // and feed the delta into the threat tracker. Gated to the full chat
+  // path (skip on staticOnly handoff summaries and on 'none' enrichment
+  // mode) and to non-empty user text. Errors don't block the chat call.
+  // The detector is a heuristic, not a diagnostic — see crisis-signals.js
+  // for the explicit boundaries. Disable entirely with the env var
+  // PROTO_FAMILIAR_THREAT_DISABLED=1.
+  if (enrichMode === 'full' && userText && userText.trim()) {
+    // Stamp "user just sent a message" so the silence-triage loop
+    // knows when to start considering check-ins. Fire-and-forget.
+    recordUserActivity().catch(err =>
+      console.error('[server] recordUserActivity failed:', err?.message ?? err),
+    );
+    const { level, signals } = scoreMessage(userText);
+    if (level !== 0) {
+      recordThreat({ delta: level, source: 'chat', signals }).catch(err =>
+        console.error('[server] recordThreat failed:', err?.message ?? err),
+      );
+    }
+  }
   // liveTurn: only the full chat path may reconcile state (consume the
   // surfaced session handoff, demote standing values whose entity-core
   // anchor vanished). 'static' fetches persona only (handoff summariser);
@@ -1263,6 +1298,142 @@ app.post('/api/tailscale', async (req, res) => {
   });
 });
 
+// ── Threat / care-check endpoints (step 4b) ─────────────────────────
+// GET    /api/threat          current effective state
+// GET    /api/threat/history  recent audit entries (newest first)
+// POST   /api/threat/reset    manually zero the threat level
+//
+// These are user-facing controls: visibility into what's been
+// recorded, and a one-click off switch beyond the env var. The
+// detector itself can be disabled at the source by setting
+// PROTO_FAMILIAR_THREAT_DISABLED=1.
+app.get('/api/threat', async (_req, res) => {
+  try { res.json(await getThreat()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/threat/history', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 20;
+  try { res.json({ history: await getThreatHistory({ limit }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/threat/reset', async (_req, res) => {
+  try {
+    const r = await resetThreat({ source: 'api_reset' });
+    console.log('[server] threat reset to 0 via /api/threat/reset');
+    res.json(r);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Temporal editor (M9) — read-mostly endpoints for the UI ─────────
+// These wrap thalamus / threat / ponderings reads so the Temporal
+// editor modal can show what the system is actually thinking and let
+// the user reset / delete obviously-bad entries. CRUD beyond
+// reset/delete is deferred to a later pass.
+app.get('/api/temporal/interests', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 50;
+  try { res.json(await listInterests({ limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/temporal/ponderings', async (req, res) => {
+  const limit     = Number.isFinite(+req.query.limit)     ? +req.query.limit     : 25;
+  const sinceDays = Number.isFinite(+req.query.sinceDays) ? +req.query.sinceDays : 365;
+  try { res.json({ ponderings: await getRecentPonderings({ limit, sinceDays }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
+  try { res.json(await deletePondering({ uid: req.params.uid })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Interest CRUD (manual edits from the Temporal editor)
+app.post('/api/temporal/interests/bump', async (req, res) => {
+  const { topic, delta, source } = req.body ?? {};
+  if (!topic || typeof topic !== 'string') return badRequest(res, 'topic (string) is required');
+  const d = Number(delta);
+  if (!Number.isFinite(d) || d <= 0)        return badRequest(res, 'delta (positive number) is required');
+  try { res.json(await bumpInterest({ topic, delta: d, source: source ?? 'manual' })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/interests/:id/demote', async (req, res) => {
+  try { res.json(await demoteStanding({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Schedule
+app.get('/api/temporal/schedule', async (req, res) => {
+  const from_ts = req.query.from || undefined;
+  const to_ts   = req.query.to   || undefined;
+  const limit   = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
+  try { res.json(await getScheduleWindow({ from_ts, to_ts, limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/schedule', async (req, res) => {
+  const { type, label, when, end, payload } = req.body ?? {};
+  if (!type  || typeof type  !== 'string') return badRequest(res, 'type (string) is required');
+  if (!label || typeof label !== 'string') return badRequest(res, 'label (string) is required');
+  try { res.json(await addScheduleNode({ type, label, when, end, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/temporal/schedule/:id', async (req, res) => {
+  const { label, when, end, payload } = req.body ?? {};
+  try { res.json(await updateScheduleNode({ id: req.params.id, label, when, end, payload })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/schedule/:id/resolve', async (req, res) => {
+  const { resolution } = req.body ?? {};
+  if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
+  try { res.json(await resolveScheduleNode({ id: req.params.id, resolution })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/schedule/:id', async (req, res) => {
+  try { res.json(await deleteScheduleNode({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Handoff
+app.get('/api/temporal/handoff', async (_req, res) => {
+  try { res.json(await getHandoff({ include_consumed: true })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/handoff/:id/consume', async (req, res) => {
+  try { res.json(await markHandoffConsumed({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Reminders health (M11)
+app.get('/api/temporal/reminders/health', async (_req, res) => {
+  try { res.json(await getRemindersHealth()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Outbox (M11/M12 delivery surface)
+app.get('/api/outbox', async (req, res) => {
+  const pendingOnly = req.query.pending !== '0' && req.query.pending !== 'false';
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 50;
+  try { res.json({ items: await listOutbox({ pendingOnly, limit }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/outbox/:id/acknowledge', async (req, res) => {
+  try { res.json(await acknowledgeOutbox({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/outbox/clear-acknowledged', async (_req, res) => {
+  try { res.json(await clearAcknowledged()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
@@ -1277,7 +1448,280 @@ const httpServer = app.listen(PORT, HOST, async () => {
   }
   console.log(lines.join('\n') + '\n');
   startMemorizationWorker();
+  startAutonomousPondering();
+  startRemindersScheduler();
+  startSilenceTriage();
 });
+
+// ── Autonomous pondering loop (step 4a) ─────────────────────────────
+// Default-ON. The loop ticks every minute and on each tick:
+//   1. Re-reads settings.json (so toggles + scale take effect within
+//      a minute, no restart needed).
+//   2. Gates on ponderingEnabled + a valid primary connection. Either
+//      missing → silent skip ('disabled').
+//   3. Reads live interest weights from Unruh and current threat from
+//      the local threat tracker.
+//   4. Picks one interest (weight-proportional), ponders it via
+//      ponderOnce — writes a real, timestamped tome entry.
+//
+// Tuning:
+//   - User can toggle off in Settings or set PROTO_FAMILIAR_PONDERING_
+//     DISABLED=1 (env var, hard override).
+//   - User can stretch intervals via Settings → Pondering interval
+//     scale (1×-10×).
+//   - Cadence base tiers are in pondering-cadence.js (30 min to 6 hr).
+//   - Threat tier multipliers (calm 1.0× → severe 0.15×) and the
+//     user scale are both applied.
+function readSettingsSync() {
+  try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function primaryConnectionFrom(settings) {
+  const id    = settings?.primaryConnectionId;
+  const conns = Array.isArray(settings?.connections) ? settings.connections : [];
+  return conns.find(c => c?.id === id) ?? null;
+}
+
+function startAutonomousPondering() {
+  if (process.env.PROTO_FAMILIAR_PONDERING_DISABLED === '1') {
+    console.log('[pondering] PROTO_FAMILIAR_PONDERING_DISABLED=1 — autonomous loop is OFF');
+    return;
+  }
+  startPonderingLoop({
+    tickMs: 60_000,
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s.ponderingEnabled === false) return false;
+      const conn = primaryConnectionFrom(s);
+      return !!(conn?.apiKey && conn?.provider && conn?.model);
+    },
+    getIntervalScale: async () => {
+      const s = readSettingsSync();
+      const v = Number(s?.ponderingIntervalScale);
+      return Number.isFinite(v) && v >= 1 ? v : 1;
+    },
+    getInterests: () => listLiveInterests({ limit: 20 }),
+    getThreat:    async () => (await getThreat()).weight,
+    runPonder:    async (topic) => {
+      const s    = readSettingsSync();
+      const conn = primaryConnectionFrom(s);
+      if (!conn?.apiKey) throw new Error('no primary connection configured');
+      return ponderOnce({
+        topic,
+        provider: conn.provider,
+        apiKey:   conn.apiKey,
+        model:    conn.model,
+      });
+    },
+    onTick: (r) => {
+      if (r.acted) {
+        console.log(`[pondering] "${r.picked.label}" (weight ${r.picked.weight?.toFixed?.(2) ?? r.picked.weight}, threat ${r.threatLevel?.toFixed?.(2) ?? r.threatLevel}, scale ${r.scale}×) → "${r.result.title}"`);
+      }
+    },
+    onError: (err) => console.error('[pondering]', err?.message ?? err),
+  });
+  console.log('[pondering] Autonomous pondering ENABLED (default). Toggle in Settings → Sidebar → Autonomous pondering; scale intervals via Pondering interval scale; hard-disable with PROTO_FAMILIAR_PONDERING_DISABLED=1.');
+}
+
+// ── Reminders scheduler (M11) ────────────────────────────────────
+// Polls every 30s for due reminders, enqueues them into the outbox,
+// marks the schedule node 'fired'. Designed to retry on partial
+// failure (the outbox dedups, so re-firing the same reminder twice
+// doesn't double-banner). Health-watch surfaces if `overdue` keeps
+// growing across ticks — loud, not silent.
+function startRemindersScheduler() {
+  if (process.env.PROTO_FAMILIAR_REMINDERS_DISABLED === '1') {
+    console.log('[reminders] PROTO_FAMILIAR_REMINDERS_DISABLED=1 — scheduler is OFF');
+    return;
+  }
+  startRemindersLoop({
+    tickMs: 30_000,
+    getDueReminders: async () => {
+      const r = await getDueReminders({ limit: 50 });
+      return Array.isArray(r.reminders) ? r.reminders : [];
+    },
+    fireReminder: async ({ id }) => {
+      const r = await resolveScheduleNode({ id, resolution: 'fired' });
+      if (!r.ok) throw new Error(r.error || 'resolve failed');
+    },
+    getHealth: getRemindersHealth,
+    onTick: (r) => {
+      for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
+      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label}": ${s.error}`);
+    },
+    onError: (err) => console.error('[reminders]', err?.message ?? err),
+  });
+  console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Silence-triage loop (M12b) ──────────────────────────────────
+// Every 5 min, asks: "user is quiet AND threat is elevated — should
+// I gently reach out?" The DECISION is an LLM call (per design doc:
+// "not a threshold check"). Conservative thresholds (severe=15min,
+// high=1hr, moderate=4hr; calm/mild never trigger). Outbox dedup on
+// `triage-<tier>-<4h-bucket>` rate-limits the same-tier banner to
+// once per 4-hour window while still unacknowledged.
+async function decideTriageViaLLM({ threat, silenceMs }) {
+  const s = readSettingsSync();
+  const conn = primaryConnectionFrom(s);
+  if (!conn?.apiKey) return { action: 'wait' };   // no creds → never reach out
+
+  const url = PROVIDER_URLS[conn.provider];
+  if (!url) return { action: 'wait' };
+
+  const minutes = Math.round(silenceMs / 60_000);
+  const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
+  const contactsBlock = contacts.length
+    ? `\n\nTrusted contacts the user has configured (you may suggest reaching one of these — by name only — if the situation truly warrants human attention):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nReaching a human is a strong action. Only suggest it when threat is severe AND silence is long AND the situation feels like it needs more than you can offer alone.`
+    : '';
+
+  const prompt = `I am the Familiar. Right now I'm being asked one focused question — this isn't a turn in a conversation with my user.
+
+What I'm holding:
+- Current threat level: ${threat.tier} (weight ${threat.weight?.toFixed?.(2) ?? threat.weight})
+- My user has been silent for ${minutes} minutes
+- The threat signals that raised the dial are recent (last few hours)${contactsBlock}
+
+The question I'm asking myself: should I reach out to them right now? Gently. Without performing concern.
+
+I reach out IF I can offer something real — a thought I've been carrying, a quiet "I was thinking about you," a soft invitation to talk. The bar is "would a caring friend send this exact note right now?"
+
+I stay quiet IF I'd just be making noise. If the right thing is to let them have space. If I can't think of something that feels true.
+
+I bias toward STAYING QUIET — over-eager check-ins erode trust. I only reach out when the answer feels obvious.
+
+I return ONLY a JSON object, no prose. Three valid shapes:
+  {"action": "wait"}
+  {"action": "reach_out", "message": "my 1-2 sentence note to my user"}
+  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "what I'd say to that person, 1-3 sentences. I identify myself as my user's Familiar and explain what I noticed. Specific without being alarming."}}
+
+The "message" field (to my user) is always 1-2 sentences, warm, first person, never therapist-speak ("how are you feeling?"), never alarming ("are you safe?").
+
+If I include contactHuman, the system WILL deliver the message to that person AND log the entire outbound to my user's chat outbox so they see exactly what was sent. There is no covert contact.`;
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${conn.apiKey.trim()}` },
+      body: JSON.stringify({
+        model: conn.model.trim(),
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+        temperature: 0.6,
+        max_tokens: 500,
+      }),
+    });
+    if (!resp.ok) return { action: 'wait' };
+    const data = await resp.json();
+    const text = data.choices?.[0]?.message?.content ?? '';
+    const m = text.match(/\{[\s\S]+\}/);
+    if (!m) return { action: 'wait' };
+    const parsed = JSON.parse(m[0]);
+    if (parsed?.action !== 'reach_out' || typeof parsed.message !== 'string' || !parsed.message.trim()) {
+      return { action: 'wait' };
+    }
+    const out = { action: 'reach_out', message: parsed.message.trim() };
+    // Validate contactHuman strictly — the contact MUST be by name from
+    // the configured list. Hallucinated names get ignored.
+    const ch = parsed.contactHuman;
+    if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
+      const match = contacts.find(c => c.name === ch.name);
+      if (match) {
+        out.contactHuman = { name: ch.name, message: ch.message.trim(), channel: match.channel ?? 'discord' };
+      } else {
+        console.warn(`[triage] LLM tried to contact unknown name "${ch.name}" — ignored`);
+      }
+    }
+    return out;
+  } catch (err) {
+    console.error('[triage] LLM call failed:', err?.message ?? err);
+    return { action: 'wait' };
+  }
+}
+
+/**
+ * Deliver a message to a trusted contact via their configured channel.
+ * Currently supports Discord webhooks. Every outbound is ALSO enqueued
+ * into the user's outbox as kind='outbound_alert' so the user sees
+ * exactly what was sent and to whom. "No covert contact" is enforced
+ * here, not by trusting the caller.
+ */
+async function deliverToTrustedContact({ name, message, channel }) {
+  const s = readSettingsSync();
+  const contact = (s?.trustedContacts || []).find(c => c.name === name && (c.channel ?? 'discord') === channel);
+  if (!contact) return { ok: false, error: 'contact_not_found' };
+  let delivered = false, deliveryError = null;
+  try {
+    if (channel === 'discord') {
+      const resp = await fetch(contact.webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: `**(message from your friend's Familiar — proactive check-in)**\n\n${message}`,
+          allowed_mentions: { parse: [] },
+        }),
+      });
+      if (!resp.ok) {
+        deliveryError = `discord ${resp.status}: ${(await resp.text()).slice(0, 200)}`;
+      } else {
+        delivered = true;
+      }
+    } else {
+      deliveryError = `unsupported channel: ${channel}`;
+    }
+  } catch (err) {
+    deliveryError = err?.message ?? String(err);
+  }
+  // ALWAYS log to the outbox — even on delivery failure the user
+  // should see that the attempt happened.
+  await enqueueOutbox({
+    kind:     'outbound_alert',
+    originId: `outbound-${Date.now()}`,
+    title:    delivered
+      ? `Reached out to ${name} on your behalf (${channel})`
+      : `Tried to reach ${name} (${channel}) — delivery failed`,
+    body:     `Message sent:\n\n${message}${deliveryError ? `\n\n(Error: ${deliveryError})` : ''}`,
+  });
+  return { ok: delivered, error: deliveryError };
+}
+
+function startSilenceTriage() {
+  if (process.env.PROTO_FAMILIAR_TRIAGE_DISABLED === '1') {
+    console.log('[triage] PROTO_FAMILIAR_TRIAGE_DISABLED=1 — silence triage is OFF');
+    return;
+  }
+  startSilenceTriageLoop({
+    tickMs: 5 * 60_000,
+    getThreat:       getThreat,
+    getLastActivity: getLastUserActivity,
+    getRecentSignals: async () => {
+      try { return await getThreatHistory({ limit: 5 }); } catch { return []; }
+    },
+    decideTriage:    decideTriageViaLLM,
+    enqueueOutboxFn: enqueueOutbox,
+    onTick: (r) => {
+      if (r.acted)                            console.log(`[triage] reached out: "${r.decision.message?.slice(0, 80)}…"`);
+      else if (r.reason === 'reached_out')    console.log('[triage] reached out (dedup unexpected)');
+      else if (r.reason === 'llm_said_wait')  console.log(`[triage] tick — threat ${r.threat?.tier}, silence ${Math.round((r.silenceMs||0)/60_000)}min, LLM said wait`);
+      // Other (low_threat / too_recent / no_activity) are silent.
+
+      // M12c: if the LLM also proposed contacting a trusted human AND
+      // this tick was the one that landed in the outbox (i.e. not
+      // rate-limited), deliver it. Fire-and-forget; outcome is logged
+      // into the outbox by deliverToTrustedContact regardless of
+      // success/failure so the user always sees what happened.
+      if (r.acted && r.decision?.contactHuman) {
+        const { name, message, channel } = r.decision.contactHuman;
+        deliverToTrustedContact({ name, message, channel }).then(d => {
+          if (d.ok) console.log(`[triage] outbound to ${name} via ${channel}: delivered`);
+          else      console.warn(`[triage] outbound to ${name} via ${channel}: ${d.error}`);
+        }).catch(err => console.error('[triage] outbound failed:', err?.message ?? err));
+      }
+    },
+    onError: (err) => console.error('[triage]', err?.message ?? err),
+  });
+  console.log(`[triage] Silence triage ENABLED. Thresholds: severe=${TRIAGE_SILENCE_THRESHOLD_MS.severe/60_000}min, high=${TRIAGE_SILENCE_THRESHOLD_MS.high/60_000}min, moderate=${TRIAGE_SILENCE_THRESHOLD_MS.moderate/60_000}min. Hard-disable with PROTO_FAMILIAR_TRIAGE_DISABLED=1.`);
+}
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
 // stop), SIGINT (Ctrl-C), and SIGHUP (terminal closes). Without this,
@@ -1303,6 +1747,9 @@ async function handleSignal(signal) {
   }, 5000).unref();
   try { httpServer.close(); } catch { /* already closed */ }
   try { stopMemorizationWorker(); } catch { /* already stopped */ }
+  try { await stopPonderingLoop(); } catch { /* already stopped */ }
+  try { await stopRemindersLoop(); } catch { /* already stopped */ }
+  try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { shutdownEntityCore(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

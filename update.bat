@@ -18,7 +18,13 @@ REM install.bat; it does `git pull` for you.
 setlocal EnableExtensions
 set "SCRIPT_DIR=%~dp0"
 set "DEST=%SCRIPT_DIR:~0,-1%"
-set "REPO_ZIP=https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/main.zip"
+REM BRANCH defaults to `main`. Override to test a feature branch BEFORE
+REM it lands on main:
+REM   set BRANCH=claude/implement-unruh-mechanism-NTpoc
+REM   update.bat
+REM GitHub's archive endpoint accepts branch names with slashes verbatim.
+if "%BRANCH%"=="" set "BRANCH=main"
+set "REPO_ZIP=https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/%BRANCH%.zip"
 
 REM A git checkout should update via install.bat's git pull, not an overlay.
 if exist "%DEST%\.git" (
@@ -29,6 +35,10 @@ if exist "%DEST%\.git" (
 
 set "TMP=%TEMP%\pf_update_%RANDOM%%RANDOM%"
 mkdir "%TMP%" 2>nul
+
+if not "%BRANCH%"=="main" (
+  echo Updating from branch "%BRANCH%" ^(non-default - set BRANCH=main to switch back^).
+)
 
 echo Downloading the latest Proto-Familiar...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile '%TMP%\pf.zip' } catch { exit 1 }"
