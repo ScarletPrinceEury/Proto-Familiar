@@ -608,6 +608,14 @@ const state = {
   // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
+
+  // Trusted contacts for silence-triage outreach (M12c). Each entry
+  // is { name, channel: 'discord', webhook: 'https://discord.com/api/webhooks/…' }.
+  // The triage LLM may *suggest* contacting one of these (by name) when
+  // it judges the situation calls for it. The system delivers AND logs
+  // every outbound to the chat outbox — there is no covert contact.
+  // Empty list = the LLM has nothing to suggest, no outbound ever happens.
+  trustedContacts:         [],
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -632,6 +640,7 @@ const SERVER_SYNCED_KEYS = [
   'entityCoreConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
+  'trustedContacts',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -708,6 +717,7 @@ function loadPersisted() {
       || state.ponderingIntervalScale > 10) {
     state.ponderingIntervalScale = 1;
   }
+  if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
   migrateLegacyConnection();
 }
 
@@ -3146,6 +3156,12 @@ function init() {
   // 30s; banners render at the top of the chat when items are pending.
   startOutboxPolling();
 
+  // Trusted contacts (M12c) — manage list in the sidebar section.
+  if ($('contact-add')) {
+    $('contact-add').addEventListener('click', addTrustedContact);
+    renderTrustedContacts();
+  }
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
@@ -3374,8 +3390,12 @@ function init() {
     $('te-sched-add').addEventListener('click',      () => teToggleScheduleForm(true));
     $('te-sched-form-cancel').addEventListener('click', () => teToggleScheduleForm(false));
     $('te-sched-form-save').addEventListener('click', teSaveScheduleNode);
-    $('te-routine-refresh').addEventListener('click', teLoadRoutine);
-    $('te-handoff-refresh').addEventListener('click', teLoadHandoff);
+    $('te-routine-refresh').addEventListener('click',     teLoadRoutine);
+    $('te-routine-add').addEventListener('click',         () => teToggleRoutineForm(true));
+    $('te-routine-form-cancel').addEventListener('click', () => teToggleRoutineForm(false));
+    $('te-routine-form-save').addEventListener('click',   teSavePhase);
+    $('te-routine-chat').addEventListener('click',        teStartRoutineConversation);
+    $('te-handoff-refresh').addEventListener('click',     teLoadHandoff);
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
@@ -7058,6 +7078,80 @@ async function teEditPhase(id, phase) {
   }
 }
 
+function teToggleRoutineForm(show) {
+  const form = $('te-routine-form');
+  if (!form) return;
+  form.style.display = show ? '' : 'none';
+  if (show) {
+    $('te-routine-label').value   = '';
+    $('te-routine-start').value   = '';
+    $('te-routine-end').value     = '';
+    $('te-routine-texture').value = '';
+    setTimeout(() => $('te-routine-label')?.focus(), 0);
+  }
+}
+
+async function teSavePhase() {
+  const label   = $('te-routine-label').value.trim();
+  const startT  = $('te-routine-start').value.trim();
+  const endT    = $('te-routine-end').value.trim();
+  const texture = $('te-routine-texture').value.trim();
+  if (!label) { alert('Label is required.'); return; }
+  if (!/^\d{1,2}:\d{2}$/.test(startT) || !/^\d{1,2}:\d{2}$/.test(endT)) {
+    alert('Start and end must be HH:MM (e.g. 09:30).');
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const when  = `${today}T${startT.padStart(5, '0')}:00+00:00`;
+  const end   = `${today}T${endT.padStart(5, '0')}:00+00:00`;
+  try {
+    const r = await fetch('/api/temporal/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        type:    'phase',
+        label,
+        when,
+        end,
+        payload: texture ? { texture } : {},
+      }),
+    }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error || 'create failed');
+    teToggleRoutineForm(false);
+    teLoadRoutine();
+  } catch (err) {
+    alert(`Create failed: ${err.message}`);
+  }
+}
+
+// "Help me figure out my rhythm" — pre-fills the chat composer with
+// a scaffolding prompt that nudges the Familiar to walk the user
+// through their natural daily rhythm. The user can edit / send /
+// scrap before anything goes out. No auto-send. After the
+// conversation, the user comes back to this tab and records what
+// they figured out as phases.
+function teStartRoutineConversation() {
+  const composer = $('user-input') || document.querySelector('#user-input, .composer-input, textarea[name="message"]');
+  const scaffold = (
+    "I'd like your help figuring out my natural daily rhythm — not a productivity " +
+    "schedule, just the times of day that already feel like distinct phases for me " +
+    "(when I wake, when I'm most settled, when I wind down). Ask me one thing at a " +
+    "time so I don't get overwhelmed. When we're done, give me a short bullet list " +
+    "I can use to set up routine phases in the Temporal editor."
+  );
+  if (composer) {
+    composer.value = scaffold;
+    composer.focus();
+    // Trigger the input event so any auto-resize / send-button-enable logic fires.
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    closeTemporalModal();
+  } else {
+    // Composer not found (shouldn't happen) — copy to clipboard as a fallback.
+    navigator.clipboard?.writeText?.(scaffold).catch(() => {});
+    alert('Composer not found. The starter prompt has been copied to your clipboard.');
+  }
+}
+
 // ── Handoff tab (M9b) ─────────────────────────────────────────────
 
 async function teLoadHandoff() {
@@ -7186,6 +7280,55 @@ function startOutboxPolling() {
   if (_outboxPollTimer) return;
   fetchOutbox();
   _outboxPollTimer = setInterval(fetchOutbox, OUTBOX_POLL_MS);
+}
+
+// ── Trusted contacts (M12c) ───────────────────────────────────────
+
+function renderTrustedContacts() {
+  const list = $('contacts-list');
+  if (!list) return;
+  const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
+  if (!contacts.length) {
+    list.innerHTML = '<p class="field-hint" style="opacity:0.6; margin: 0">No contacts yet. Outreach is disabled.</p>';
+    return;
+  }
+  list.innerHTML = contacts.map((c, i) => {
+    const name    = escapeOutboxText(c.name ?? '?');
+    const channel = escapeOutboxText(c.channel ?? '?');
+    const hint    = c.webhook ? `${c.webhook.slice(0, 32)}…` : '(no webhook)';
+    return `
+      <div style="display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <strong style="flex: 1">${name}</strong>
+        <span style="font-size: 0.85em; opacity: 0.7">${channel}</span>
+        <code style="font-size: 0.75em; opacity: 0.55">${escapeOutboxText(hint)}</code>
+        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact">🗑</button>
+      </div>`;
+  }).join('');
+  list.querySelectorAll('.contact-remove').forEach(btn => {
+    btn.addEventListener('click', () => removeTrustedContact(parseInt(btn.dataset.idx, 10)));
+  });
+}
+
+function addTrustedContact() {
+  const name    = ($('contact-name').value ?? '').trim();
+  const webhook = ($('contact-webhook').value ?? '').trim();
+  if (!name)    { alert('Name is required.'); return; }
+  if (!webhook) { alert('Webhook URL is required.'); return; }
+  if (!/^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\//.test(webhook)) {
+    if (!confirm("This doesn't look like a Discord webhook URL. Add anyway?")) return;
+  }
+  state.trustedContacts = [...(state.trustedContacts || []), { name, channel: 'discord', webhook }];
+  $('contact-name').value    = '';
+  $('contact-webhook').value = '';
+  saveSettings();
+  renderTrustedContacts();
+}
+
+function removeTrustedContact(idx) {
+  if (!confirm('Remove this contact? Your Familiar will no longer be able to reach out to them.')) return;
+  state.trustedContacts = (state.trustedContacts || []).filter((_, i) => i !== idx);
+  saveSettings();
+  renderTrustedContacts();
 }
 
 

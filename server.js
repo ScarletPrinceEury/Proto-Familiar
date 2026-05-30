@@ -1570,12 +1570,17 @@ async function decideTriageViaLLM({ threat, silenceMs }) {
   if (!url) return { action: 'wait' };
 
   const minutes = Math.round(silenceMs / 60_000);
+  const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
+  const contactsBlock = contacts.length
+    ? `\n\nTrusted contacts the user has configured (you may suggest reaching one of these — by name only — if the situation truly warrants human attention):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nReaching a human is a strong action. Only suggest it when threat is severe AND silence is long AND the situation feels like it needs more than you can offer alone.`
+    : '';
+
   const prompt = `You are the Familiar — an AI companion. Right now you're being asked one focused question, NOT having a conversation with the user.
 
 Context:
 - Current threat level: ${threat.tier} (weight ${threat.weight?.toFixed?.(2) ?? threat.weight})
 - The user has been silent for ${minutes} minutes
-- The threat signals that raised the dial are recent (last few hours)
+- The threat signals that raised the dial are recent (last few hours)${contactsBlock}
 
 The question: should you reach out to them right now? Gently. Without performing concern.
 
@@ -1585,11 +1590,14 @@ Stay quiet IF: you'd just be making noise. If the right thing is to let them hav
 
 Bias toward STAYING QUIET — over-eager check-ins erode trust. Only reach out when the answer feels obvious.
 
-Return ONLY a JSON object, no prose:
-  {"action": "wait"}                                    if it's not the right time
-  {"action": "reach_out", "message": "your 1-2 sentence note"}   if it is
+Return ONLY a JSON object, no prose. Three valid shapes:
+  {"action": "wait"}
+  {"action": "reach_out", "message": "your 1-2 sentence note to the user"}
+  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "what to say to that person, 1-3 sentences. Identify yourself as the user's Familiar and explain what you noticed. Be specific without being alarming."}}
 
-The message should be 1-2 sentences. Warm. First person. Never therapist-speak ("how are you feeling?"). Never alarming ("are you safe?"). Something a close friend would actually text.`;
+The "message" field (to the user) is always 1-2 sentences, warm, first person, never therapist-speak ("how are you feeling?"), never alarming ("are you safe?").
+
+If you include contactHuman, the system WILL deliver the message to that person AND log the entire outbound to the user's chat outbox so they see exactly what was sent. There is no covert contact.`;
 
   try {
     const resp = await fetch(url, {
@@ -1600,7 +1608,7 @@ The message should be 1-2 sentences. Warm. First person. Never therapist-speak (
         messages: [{ role: 'user', content: prompt }],
         stream: false,
         temperature: 0.6,
-        max_tokens: 300,
+        max_tokens: 500,
       }),
     });
     if (!resp.ok) return { action: 'wait' };
@@ -1609,14 +1617,72 @@ The message should be 1-2 sentences. Warm. First person. Never therapist-speak (
     const m = text.match(/\{[\s\S]+\}/);
     if (!m) return { action: 'wait' };
     const parsed = JSON.parse(m[0]);
-    if (parsed?.action === 'reach_out' && typeof parsed.message === 'string' && parsed.message.trim()) {
-      return { action: 'reach_out', message: parsed.message.trim() };
+    if (parsed?.action !== 'reach_out' || typeof parsed.message !== 'string' || !parsed.message.trim()) {
+      return { action: 'wait' };
     }
-    return { action: 'wait' };
+    const out = { action: 'reach_out', message: parsed.message.trim() };
+    // Validate contactHuman strictly — the contact MUST be by name from
+    // the configured list. Hallucinated names get ignored.
+    const ch = parsed.contactHuman;
+    if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
+      const match = contacts.find(c => c.name === ch.name);
+      if (match) {
+        out.contactHuman = { name: ch.name, message: ch.message.trim(), channel: match.channel ?? 'discord' };
+      } else {
+        console.warn(`[triage] LLM tried to contact unknown name "${ch.name}" — ignored`);
+      }
+    }
+    return out;
   } catch (err) {
     console.error('[triage] LLM call failed:', err?.message ?? err);
     return { action: 'wait' };
   }
+}
+
+/**
+ * Deliver a message to a trusted contact via their configured channel.
+ * Currently supports Discord webhooks. Every outbound is ALSO enqueued
+ * into the user's outbox as kind='outbound_alert' so the user sees
+ * exactly what was sent and to whom. "No covert contact" is enforced
+ * here, not by trusting the caller.
+ */
+async function deliverToTrustedContact({ name, message, channel }) {
+  const s = readSettingsSync();
+  const contact = (s?.trustedContacts || []).find(c => c.name === name && (c.channel ?? 'discord') === channel);
+  if (!contact) return { ok: false, error: 'contact_not_found' };
+  let delivered = false, deliveryError = null;
+  try {
+    if (channel === 'discord') {
+      const resp = await fetch(contact.webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: `**(message from your friend's Familiar — proactive check-in)**\n\n${message}`,
+          allowed_mentions: { parse: [] },
+        }),
+      });
+      if (!resp.ok) {
+        deliveryError = `discord ${resp.status}: ${(await resp.text()).slice(0, 200)}`;
+      } else {
+        delivered = true;
+      }
+    } else {
+      deliveryError = `unsupported channel: ${channel}`;
+    }
+  } catch (err) {
+    deliveryError = err?.message ?? String(err);
+  }
+  // ALWAYS log to the outbox — even on delivery failure the user
+  // should see that the attempt happened.
+  await enqueueOutbox({
+    kind:     'outbound_alert',
+    originId: `outbound-${Date.now()}`,
+    title:    delivered
+      ? `Reached out to ${name} on your behalf (${channel})`
+      : `Tried to reach ${name} (${channel}) — delivery failed`,
+    body:     `Message sent:\n\n${message}${deliveryError ? `\n\n(Error: ${deliveryError})` : ''}`,
+  });
+  return { ok: delivered, error: deliveryError };
 }
 
 function startSilenceTriage() {
@@ -1638,6 +1704,19 @@ function startSilenceTriage() {
       else if (r.reason === 'reached_out')    console.log('[triage] reached out (dedup unexpected)');
       else if (r.reason === 'llm_said_wait')  console.log(`[triage] tick — threat ${r.threat?.tier}, silence ${Math.round((r.silenceMs||0)/60_000)}min, LLM said wait`);
       // Other (low_threat / too_recent / no_activity) are silent.
+
+      // M12c: if the LLM also proposed contacting a trusted human AND
+      // this tick was the one that landed in the outbox (i.e. not
+      // rate-limited), deliver it. Fire-and-forget; outcome is logged
+      // into the outbox by deliverToTrustedContact regardless of
+      // success/failure so the user always sees what happened.
+      if (r.acted && r.decision?.contactHuman) {
+        const { name, message, channel } = r.decision.contactHuman;
+        deliverToTrustedContact({ name, message, channel }).then(d => {
+          if (d.ok) console.log(`[triage] outbound to ${name} via ${channel}: delivered`);
+          else      console.warn(`[triage] outbound to ${name} via ${channel}: ${d.error}`);
+        }).catch(err => console.error('[triage] outbound failed:', err?.message ?? err));
+      }
     },
     onError: (err) => console.error('[triage]', err?.message ?? err),
   });

@@ -328,6 +328,24 @@
           </div>
         </div>
 
+        <!-- Trusted contacts (M12c — silence-triage outreach) -->
+        <div class="sidebar-section collapsible collapsed" id="section-contacts">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-contacts">
+            Trusted contacts
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-contacts">
+            <p class="field-hint">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
+            <div id="contacts-list" style="margin-top: 8px"></div>
+            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+              <input type="text" id="contact-name"    placeholder="Name (e.g. Sam)" style="flex: 1; min-width: 8em">
+              <input type="text" id="contact-webhook" placeholder="Discord webhook URL" style="flex: 2; min-width: 14em">
+              <button id="contact-add" class="btn-secondary">+ Add</button>
+            </div>
+            <p class="field-hint" style="margin-top: 6px"><strong>How to make a Discord webhook:</strong> on the contact's side, in their Discord server's channel settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it here.</p>
+          </div>
+        </div>
+
         <!-- Temporal editor (Unruh) -->
         <div class="sidebar-section collapsible collapsed" id="section-temporal">
           <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-temporal">
@@ -966,9 +984,30 @@
         <div class="ke-pane" id="te-pane-routine">
           <div class="ke-toolbar">
             <button id="te-routine-refresh" class="btn-ghost">Refresh</button>
-            <span id="te-routine-summary" class="field-hint" style="margin-left:auto"></span>
+            <button id="te-routine-add"     class="btn-secondary">+ Add phase</button>
+            <button id="te-routine-chat"    class="btn-secondary" style="margin-left:auto" title="Inserts a starter prompt into the chat so the Familiar can walk you through your rhythm. The Familiar talks to you about what feels natural; you come back here to record the phases.">💬 Help me figure out my rhythm</button>
           </div>
-          <div class="ke-list" id="te-routine-list" style="height: calc(100% - 40px); overflow:auto"></div>
+          <div id="te-routine-form" style="display:none; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <label style="flex: 2; min-width: 12em">Label
+                <input type="text" id="te-routine-label" placeholder="e.g. morning correspondence">
+              </label>
+              <label>Start (HH:MM, UTC)
+                <input type="text" id="te-routine-start" placeholder="10:00" style="width: 6em">
+              </label>
+              <label>End (HH:MM, UTC)
+                <input type="text" id="te-routine-end" placeholder="13:00" style="width: 6em">
+              </label>
+            </div>
+            <label style="display:block; margin-top: 6px">Texture (optional — what is the Familiar like in this phase?)
+              <input type="text" id="te-routine-texture" placeholder="e.g. warmest part of the day to land">
+            </label>
+            <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">
+              <button id="te-routine-form-cancel" class="btn-ghost">Cancel</button>
+              <button id="te-routine-form-save"   class="btn-send">Create</button>
+            </div>
+          </div>
+          <div class="ke-list" id="te-routine-list" style="height: calc(100% - 80px); overflow:auto"></div>
         </div>
 
         <!-- HANDOFF PANE -->
