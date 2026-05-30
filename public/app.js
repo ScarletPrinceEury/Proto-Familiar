@@ -3353,6 +3353,19 @@ function init() {
   document.querySelectorAll('.ke-tab').forEach(el => {
     el.addEventListener('click', () => keSwitchTab(el.dataset.tab));
   });
+  // Temporal editor (Unruh) — M9
+  if ($('temporal-btn')) {
+    $('temporal-btn').addEventListener('click', openTemporalModal);
+    $('temporal-modal-close').addEventListener('click', closeTemporalModal);
+    document.querySelectorAll('[data-temporal-tab]').forEach(el => {
+      el.addEventListener('click', () => teSwitchTab(el.dataset.temporalTab));
+    });
+    $('te-int-refresh').addEventListener('click',    teLoadInterests);
+    $('te-threat-refresh').addEventListener('click', teLoadThreat);
+    $('te-threat-reset').addEventListener('click',   teResetThreat);
+    $('te-pond-refresh').addEventListener('click',   teLoadPonderings);
+    $('te-pond-limit').addEventListener('change',    teLoadPonderings);
+  }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
   $('ke-graph-refresh').addEventListener('click', () => {
@@ -6559,4 +6572,222 @@ async function saveLoreEditorEntry() {
   }
 }
 
+// ── Temporal editor (Unruh inspection / threat / ponderings) — M9 ──
+//
+// Modal mirrors the Knowledge editor pattern (reuses .ke-* CSS).
+// Read-mostly: shows live + standing interests with decay metadata,
+// current threat state + audit history (with reset button), and the
+// Familiar's autonomous ponderings (with per-entry delete). CRUD on
+// interests beyond demote is deferred to a later pass — for now the
+// observable surface is enough for catching bugs.
+
+const TE_TABS = ['interests', 'threat', 'ponderings'];
+
+function openTemporalModal() {
+  $('temporal-modal').classList.remove('hidden');
+  bindResizableModal('temporal-modal-inner', 'pf-temporal-modal-size');
+  teSwitchTab('interests');
+}
+function closeTemporalModal() {
+  $('temporal-modal').classList.add('hidden');
+}
+
+function teSwitchTab(name) {
+  if (!TE_TABS.includes(name)) return;
+  for (const t of TE_TABS) {
+    const btn  = document.querySelector(`[data-temporal-tab="${t}"]`);
+    const pane = $(`te-pane-${t}`);
+    if (btn)  btn.classList.toggle('ke-tab-active',  t === name);
+    if (pane) pane.classList.toggle('ke-pane-active', t === name);
+  }
+  if      (name === 'interests')  teLoadInterests();
+  else if (name === 'threat')     teLoadThreat();
+  else if (name === 'ponderings') teLoadPonderings();
+}
+
+function teEscapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function teTimeAgo(iso) {
+  if (!iso) return 'never';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return iso;
+  const min = ms / 60_000;
+  if (min < 1)  return 'just now';
+  if (min < 60) return `${Math.round(min)} min ago`;
+  const hr = min / 60;
+  if (hr  < 24) return `${hr.toFixed(1)} hr ago`;
+  const day = hr / 24;
+  return `${day.toFixed(1)} days ago`;
+}
+
+// ── Interests tab ─────────────────────────────────────────────────
+
+async function teLoadInterests() {
+  const list = $('te-int-list');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/temporal/interests?limit=100');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+
+    const live     = Array.isArray(data.live)     ? data.live     : [];
+    const standing = Array.isArray(data.standing) ? data.standing : [];
+
+    $('te-int-summary').textContent = `${live.length} live · ${standing.length} standing`;
+
+    const html = [];
+    if (standing.length) {
+      html.push('<h4 style="margin: 8px 12px 4px 12px">Standing values (always-on)</h4>');
+      for (const s of standing) html.push(teRenderInterest(s, true));
+    }
+    if (live.length) {
+      html.push('<h4 style="margin: 12px 12px 4px 12px">Live interests (decay over time)</h4>');
+      for (const i of live) html.push(teRenderInterest(i, false));
+    }
+    if (!standing.length && !live.length) {
+      html.push('<p class="logs-empty">No interests yet. They accrue as you chat — see thalamus.recordInterest.</p>');
+    }
+    list.innerHTML = html.join('');
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+function teRenderInterest(i, isStanding) {
+  const w     = Number(i.weight);
+  const raw   = Number(i.raw_weight);
+  const tier  = teEscapeHtml(i.tier ?? '?');
+  const label = teEscapeHtml(i.label ?? '(no label)');
+  const lt    = teTimeAgo(i.last_touched);
+  const ref   = i.value_ref ? `<div style="font-size: 0.85em; opacity: 0.7">anchor: <code>${teEscapeHtml(i.value_ref)}</code></div>` : '';
+  // Effective vs raw: when they differ, decay has happened. Show both.
+  const decayed = (!isStanding && Number.isFinite(raw) && Number.isFinite(w) && Math.abs(raw - w) > 0.01)
+    ? ` <span style="opacity:0.6">(raw ${raw.toFixed(2)}, decayed)</span>` : '';
+  return `
+    <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+      <div style="display: flex; gap: 8px; align-items: baseline">
+        <strong style="flex: 1">${label}</strong>
+        <span style="font-family: monospace">${Number.isFinite(w) ? w.toFixed(2) : '?'}${decayed}</span>
+        <span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${tier}</span>
+      </div>
+      <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">last touched ${lt}</div>
+      ${ref}
+    </div>`;
+}
+
+// ── Threat tab ────────────────────────────────────────────────────
+
+async function teLoadThreat() {
+  const sum  = $('te-threat-summary');
+  const hist = $('te-threat-history');
+  if (!sum || !hist) return;
+  sum.innerHTML  = '<p class="logs-empty">Loading…</p>';
+  hist.innerHTML = '';
+  try {
+    const [tRes, hRes] = await Promise.all([
+      fetch('/api/threat').then(r => r.json()),
+      fetch('/api/threat/history?limit=50').then(r => r.json()),
+    ]);
+    const tier   = teEscapeHtml(tRes.tier   ?? 'calm');
+    const weight = Number(tRes.weight ?? 0).toFixed(2);
+    const disabled = tRes.disabled
+      ? ' <span style="color: var(--text-warning, #d4a44c)">(detector disabled by env var)</span>'
+      : '';
+    sum.innerHTML = `
+      <div style="display: flex; gap: 16px; align-items: baseline">
+        <div><strong style="font-size: 1.3em">${tier}</strong>${disabled}</div>
+        <div style="font-family: monospace">weight ${weight}</div>
+        <div style="opacity: 0.7">last touched ${teTimeAgo(tRes.last_touched)}</div>
+      </div>`;
+
+    const events = Array.isArray(hRes.history) ? hRes.history : [];
+    if (!events.length) {
+      hist.innerHTML = '<p class="logs-empty">No threat events recorded yet.</p>';
+    } else {
+      hist.innerHTML = events.map(e => {
+        const delta = Number(e.delta).toFixed(2);
+        const sign  = e.delta >= 0 ? '+' : '';
+        const sigs  = (e.signals || [])
+          .map(s => `<code style="font-size: 0.8em">${teEscapeHtml(s.id)}${s.damped ? '*' : ''}</code>`)
+          .join(' ');
+        return `<div style="padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a); font-size: 0.9em">
+          <div style="display: flex; gap: 8px; align-items: baseline">
+            <span style="opacity: 0.6; font-size: 0.85em; min-width: 12em">${teEscapeHtml(e.ts)}</span>
+            <span style="font-family: monospace; min-width: 4em">${sign}${delta}</span>
+            <span style="opacity: 0.7">→ ${Number(e.raw_after).toFixed(2)}</span>
+            <span style="opacity: 0.6; font-size: 0.85em">[${teEscapeHtml(e.source)}]</span>
+          </div>
+          ${sigs ? `<div style="margin-top: 2px; opacity: 0.8">${sigs}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+  } catch (err) {
+    sum.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teResetThreat() {
+  if (!confirm('Reset the threat level to calm (0)?\n\nThis logs a manual_reset audit entry but does not disable the detector. Use the PROTO_FAMILIAR_THREAT_DISABLED env var on the server for that.')) return;
+  try {
+    const r = await fetch('/api/threat/reset', { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    teLoadThreat();
+  } catch (err) {
+    alert(`Reset failed: ${err.message}`);
+  }
+}
+
+// ── Ponderings tab ────────────────────────────────────────────────
+
+async function teLoadPonderings() {
+  const list  = $('te-pond-list');
+  const sum   = $('te-pond-summary');
+  if (!list) return;
+  list.innerHTML = '<p class="logs-empty">Loading…</p>';
+  const limit = $('te-pond-limit')?.value ?? 25;
+  try {
+    const r = await fetch(`/api/temporal/ponderings?limit=${limit}&sinceDays=365`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const items = Array.isArray(data.ponderings) ? data.ponderings : [];
+    if (sum) sum.textContent = `${items.length} pondering(s)`;
+    if (!items.length) {
+      list.innerHTML = '<p class="logs-empty">No ponderings yet. The autonomous loop writes here when interests accrue and cooldowns elapse.</p>';
+      return;
+    }
+    list.innerHTML = items.map(p => `
+      <div style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+        <div style="display: flex; gap: 8px; align-items: baseline">
+          <strong style="flex: 1">${teEscapeHtml(p.title || '(untitled)')}</strong>
+          <span style="opacity: 0.7; font-size: 0.85em">${teTimeAgo(p.created_at)}</span>
+          <button class="btn-ghost" data-pond-uid="${teEscapeHtml(p.uid)}" style="font-size: 0.8em; padding: 2px 8px">Delete</button>
+        </div>
+        ${p.topic ? `<div style="font-size: 0.8em; opacity: 0.6; margin: 2px 0">topic: ${teEscapeHtml(p.topic)}</div>` : ''}
+        <div style="white-space: pre-wrap; margin-top: 6px; font-size: 0.92em; line-height: 1.4">${teEscapeHtml(p.content || '')}</div>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-pond-uid]').forEach(btn => {
+      btn.addEventListener('click', () => teDeletePondering(btn.dataset.pondUid));
+    });
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+async function teDeletePondering(uid) {
+  if (!confirm('Delete this pondering? The on-disk entry is removed; the audit trail is the diff itself.')) return;
+  try {
+    const r = await fetch(`/api/temporal/ponderings/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    teLoadPonderings();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
 

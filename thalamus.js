@@ -492,6 +492,30 @@ export async function listLiveInterests({ limit = 20 } = {}) {
 }
 
 /**
+ * Full interest snapshot — live + standing — for the Temporal editor
+ * UI (M9). Best-effort: empty arrays if Unruh is unreachable.
+ *
+ * Returns: { live: [...], standing: [...], ok: boolean, error?: string }
+ */
+export async function listInterests({ limit = 50 } = {}) {
+  if (!unruhClient) return { live: [], standing: [], ok: false, error: 'unruh not connected' };
+  try {
+    const result  = await unruhClient.callTool({
+      name: 'interest_list',
+      arguments: { limit, include_standing: true },
+    });
+    const payload = parseToolText(result, {});
+    return {
+      live:     Array.isArray(payload.live)     ? payload.live     : [],
+      standing: Array.isArray(payload.standing) ? payload.standing : [],
+      ok:       true,
+    };
+  } catch (err) {
+    return { live: [], standing: [], ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/**
  * Store a session-end handoff (M6) into Unruh. The chat path (frontend)
  * summarises the ending session into intent + open threads and posts
  * them here via server.js; we forward to the `session_set_handoff`

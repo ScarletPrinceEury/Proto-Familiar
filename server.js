@@ -24,13 +24,14 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
-  recordInterest, recordHandoff, listLiveInterests,
+  recordInterest, recordHandoff, listLiveInterests, listInterests,
   shutdownUnruh, shutdownEntityCore,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
+import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
 import {
   enqueueMemorization,
   listJobs as listMemorizationJobs,
@@ -1309,6 +1310,29 @@ app.post('/api/threat/reset', async (_req, res) => {
     console.log('[server] threat reset to 0 via /api/threat/reset');
     res.json(r);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Temporal editor (M9) — read-mostly endpoints for the UI ─────────
+// These wrap thalamus / threat / ponderings reads so the Temporal
+// editor modal can show what the system is actually thinking and let
+// the user reset / delete obviously-bad entries. CRUD beyond
+// reset/delete is deferred to a later pass.
+app.get('/api/temporal/interests', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 50;
+  try { res.json(await listInterests({ limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/temporal/ponderings', async (req, res) => {
+  const limit     = Number.isFinite(+req.query.limit)     ? +req.query.limit     : 25;
+  const sinceDays = Number.isFinite(+req.query.sinceDays) ? +req.query.sinceDays : 365;
+  try { res.json({ ponderings: await getRecentPonderings({ limit, sinceDays }) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
+  try { res.json(await deletePondering({ uid: req.params.uid })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const httpServer = app.listen(PORT, HOST, async () => {

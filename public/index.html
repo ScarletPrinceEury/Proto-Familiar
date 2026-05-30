@@ -328,6 +328,20 @@
           </div>
         </div>
 
+        <!-- Temporal editor (Unruh) -->
+        <div class="sidebar-section collapsible collapsed" id="section-temporal">
+          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-temporal">
+            Temporal (Unruh)
+            <span class="chevron">▾</span>
+          </button>
+          <div class="section-content" id="content-temporal">
+            <p class="field-hint">Inspect what Unruh is tracking — current interest weights, threat-detection state &amp; audit history, and the Familiar's autonomous ponderings.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="temporal-btn" class="btn-secondary">🕰 Open Temporal editor</button>
+            </div>
+          </div>
+        </div>
+
         <div class="sidebar-footer">
           <span id="version-badge" class="version-badge" title="Server version (from package.json)">Proto-Familiar …</span>
         </div>
@@ -851,6 +865,60 @@
       <div class="modal-footer">
         <button class="btn-ghost" id="lore-editor-cancel">Cancel</button>
         <button class="btn-send" id="lore-editor-save">Save Entry</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Temporal editor modal (Unruh + threat + ponderings) — M9 -->
+  <div class="modal-backdrop hidden" id="temporal-modal" role="dialog" aria-modal="true" aria-labelledby="temporal-modal-title">
+    <div class="modal modal-wide modal-resizable" id="temporal-modal-inner">
+      <div class="modal-header">
+        <h2 class="modal-title" id="temporal-modal-title">Temporal editor — Unruh inspection</h2>
+        <button class="icon-btn modal-close" id="temporal-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="ke-tabs" role="tablist">
+        <button class="ke-tab ke-tab-active" data-temporal-tab="interests"  role="tab">Interests</button>
+        <button class="ke-tab"               data-temporal-tab="threat"     role="tab">Threat</button>
+        <button class="ke-tab"               data-temporal-tab="ponderings" role="tab">Ponderings</button>
+      </div>
+      <div class="modal-body ke-body">
+
+        <!-- INTERESTS PANE -->
+        <div class="ke-pane ke-pane-active" id="te-pane-interests">
+          <div class="ke-toolbar">
+            <button id="te-int-refresh" class="btn-ghost">Refresh</button>
+            <span id="te-int-summary" class="field-hint" style="margin-left:auto"></span>
+          </div>
+          <div class="ke-list" id="te-int-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+        <!-- THREAT PANE -->
+        <div class="ke-pane" id="te-pane-threat">
+          <div class="ke-toolbar">
+            <button id="te-threat-refresh" class="btn-ghost">Refresh</button>
+            <button id="te-threat-reset"   class="btn-secondary" style="margin-left:auto">Reset to calm</button>
+          </div>
+          <div id="te-threat-summary" style="padding: 8px 12px"></div>
+          <div style="padding: 0 12px"><h4 style="margin: 12px 0 6px 0">Audit history (newest first)</h4></div>
+          <div class="ke-list" id="te-threat-history" style="height: calc(100% - 160px); overflow:auto"></div>
+        </div>
+
+        <!-- PONDERINGS PANE -->
+        <div class="ke-pane" id="te-pane-ponderings">
+          <div class="ke-toolbar">
+            <button id="te-pond-refresh" class="btn-ghost">Refresh</button>
+            <label>Show
+              <select id="te-pond-limit">
+                <option value="10">10 most recent</option>
+                <option value="25" selected>25 most recent</option>
+                <option value="100">100 most recent</option>
+              </select>
+            </label>
+            <span id="te-pond-summary" class="field-hint" style="margin-left:auto"></span>
+          </div>
+          <div class="ke-list" id="te-pond-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
       </div>
     </div>
   </div>

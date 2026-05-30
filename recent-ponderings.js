@@ -72,6 +72,33 @@ export async function getRecentPonderings({
 }
 
 /**
+ * Delete one pondering entry from the tome by uid. Returns
+ * { ok, deleted } — deleted=false when the uid isn't present.
+ * Used by the Temporal editor UI (M9) to clean up bad entries.
+ */
+export async function deletePondering({ uid, tomesDir = DEFAULT_TOMES_DIR }) {
+  if (!uid || typeof uid !== 'string') return { ok: false, error: 'uid is required' };
+  let files;
+  try { files = await fsp.readdir(tomesDir); }
+  catch { return { ok: false, error: 'tomes dir not found' }; }
+  for (const f of files) {
+    if (!f.endsWith('.json') || f.startsWith('.')) continue;
+    const file = path.join(tomesDir, f);
+    let tome;
+    try { tome = JSON.parse(await fsp.readFile(file, 'utf8')); }
+    catch { continue; }
+    if (tome?.name !== PONDERINGS_TOME_NAME) continue;
+    if (!tome.entries?.[uid]) return { ok: true, deleted: false };
+    delete tome.entries[uid];
+    const tmp = file + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+    await fsp.rename(tmp, file);
+    return { ok: true, deleted: true };
+  }
+  return { ok: true, deleted: false };
+}
+
+/**
  * Render pondering entries as a prompt-injection block.
  *
  * The framing tells the model these are its own real private thoughts
