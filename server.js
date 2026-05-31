@@ -38,7 +38,7 @@ import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
 import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import {
@@ -243,27 +243,46 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       enrichMode === 'full'   ? await enrich(userText, { liveTurn: true })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '' };
+
+  // Inject awareness of any pending (unacknowledged) triage outreaches
+  // into the dynamic block so the Familiar knows it reached out while
+  // the user was away — and doesn't act confused about having done so.
+  let enrichedResult = enriched;
+  if (enrichMode === 'full') {
+    try {
+      const pending = await listOutbox({ pendingOnly: true, limit: 20 });
+      const triagePending = pending.filter(i => i.kind === 'triage' && i.body);
+      if (triagePending.length > 0) {
+        const notices = triagePending
+          .map(i => `  - At ${i.ts}: "${i.body}"`)
+          .join('\n');
+        const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile the user was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
+        enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
+      }
+    } catch { /* non-critical */ }
+  }
+
   const depth = getThalamusDynamicDepth();
 
   let enrichedMessages = messages;
 
   // 1) Prepend static block to the system message. Lives at the very
   //    top of the prompt so the provider's prefix cache covers it.
-  if (enriched.static) {
+  if (enrichedResult.static) {
     const sysIdx = messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
       enrichedMessages = messages.map((m, i) =>
-        i === sysIdx ? { ...m, content: enriched.static + '\n\n' + m.content } : m,
+        i === sysIdx ? { ...m, content: enrichedResult.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: enriched.static }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enrichedResult.static }, ...messages];
     }
   }
 
   // 2) Depth-inject the dynamic block as a separate system message
   //    N positions from the end. Computed AFTER the static prepend so
   //    the index counts the (possibly newly-created) system message.
-  const injection = injectDynamicAtDepth(enrichedMessages, enriched.dynamic, depth);
+  const injection = injectDynamicAtDepth(enrichedMessages, enrichedResult.dynamic, depth);
   enrichedMessages = injection.messages;
   const injectedAt = injection.injectedAt;
 
@@ -291,9 +310,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // can render the prompt inspector verbatim instead of re-deriving.
   // Carries both blocks separately + the injection coordinates so the
   // inspector can show static-vs-dynamic regions distinctly.
-  const thalamusEnvelope = (enriched.static || enriched.dynamic) ? {
-    static:     enriched.static  || '',
-    dynamic:    enriched.dynamic || '',
+  const thalamusEnvelope = (enrichedResult.static || enrichedResult.dynamic) ? {
+    static:     enrichedResult.static  || '',
+    dynamic:    enrichedResult.dynamic || '',
     depth,
     injectedAt,
   } : null;
@@ -546,6 +565,24 @@ app.delete('/api/logs/:id', async (req, res) => {
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: 'Session not found.' });
+  }
+});
+
+// GET /api/triage-events — return triage decision log (newest first).
+// Each entry is one JSON line from triage-events.jsonl: timestamp, tier,
+// silence duration, decision, and whether the Familiar acted.
+// Useful for auditing past reach-outs and debugging the triage loop.
+app.get('/api/triage-events', async (_req, res) => {
+  try {
+    const raw   = await fsp.readFile(TRIAGE_LOG_FILE, 'utf8');
+    const lines  = raw.split('\n').filter(l => l.trim());
+    const events = lines
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean)
+      .reverse(); // newest first
+    res.json(events);
+  } catch {
+    res.json([]);
   }
 });
 
@@ -1596,54 +1633,134 @@ function startRemindersScheduler() {
 // high=1hr, moderate=4hr; calm/mild never trigger). Outbox dedup on
 // `triage-<tier>-<4h-bucket>` rate-limits the same-tier banner to
 // once per 4-hour window while still unacknowledged.
-async function decideTriageViaLLM({ threat, silenceMs }) {
+
+// Persistent log for all triage decisions — survives outbox acknowledgement
+// so past reach-outs are always visible for debugging and review.
+const TRIAGE_LOG_FILE = path.join(LOGS_DIR, 'triage-events.jsonl');
+async function appendTriageEventLog(entry) {
+  try {
+    await fsp.appendFile(
+      TRIAGE_LOG_FILE,
+      JSON.stringify({ ...entry, loggedAt: new Date().toISOString() }) + '\n',
+      'utf8',
+    );
+  } catch { /* non-critical */ }
+}
+
+// Read the last N user/assistant messages from the most recently updated
+// session log file. Used by decideTriageViaLLM to ground the triage
+// prompt in what was actually being discussed before the silence.
+async function getRecentSessionMessages({ limit = 8 } = {}) {
+  try {
+    const files = (await fsp.readdir(LOGS_DIR)).filter(f => f.endsWith('.json'));
+    if (!files.length) return [];
+    const stats = await Promise.all(
+      files.map(f => fsp.stat(path.join(LOGS_DIR, f)).then(s => ({ f, mtime: s.mtimeMs }))),
+    );
+    stats.sort((a, b) => b.mtime - a.mtime);
+    const raw  = await fsp.readFile(path.join(LOGS_DIR, stats[0].f), 'utf8');
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.messages)) return [];
+    return data.messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .slice(-limit);
+  } catch {
+    return [];
+  }
+}
+
+// How long after the user-facing outbox item lands to wait before
+// escalating to a trusted contact, if the user hasn't acknowledged.
+// The user has this window to respond; if they do, the contact is
+// never reached. Only applies when the LLM's decision includes contactHuman.
+const CONTACT_ESCALATION_DELAY_MS = Object.freeze({
+  severe:   30 * 60_000,        // 30 minutes
+  high:      2 * 60 * 60_000,  // 2 hours
+  moderate:  6 * 60 * 60_000,  // 6 hours
+});
+
+async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const s = readSettingsSync();
   const conn = primaryConnectionFrom(s);
-  if (!conn?.apiKey) return { action: 'wait' };   // no creds → never reach out
+  if (!conn?.apiKey) return { action: 'wait' };
 
   const url = PROVIDER_URLS[conn.provider];
   if (!url) return { action: 'wait' };
 
-  const minutes = Math.round(silenceMs / 60_000);
+  const minutes  = Math.round(silenceMs / 60_000);
   const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
-  const contactsBlock = contacts.length
-    ? `\n\nTrusted contacts the user has configured (you may suggest reaching one of these — by name only — if the situation truly warrants human attention):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nReaching a human is a strong action. Only suggest it when threat is severe AND silence is long AND the situation feels like it needs more than you can offer alone.`
+
+  // Pull identity context (who the Familiar is, who the user is) and the
+  // recent conversation log in parallel. Both degrade gracefully to empty.
+  const [{ static: identityContext }, recentMessages] = await Promise.all([
+    enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
+    getRecentSessionMessages({ limit: 8 }),
+  ]);
+
+  const signalsBlock = signals?.length
+    ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
+        const t   = sig.ts ? new Date(sig.ts).toLocaleString() : 'unknown time';
+        const ids = Array.isArray(sig.signals) ? sig.signals.join(', ') : 'unknown';
+        return `  - [${t}] ${ids} (delta ${Number(sig.delta) >= 0 ? '+' : ''}${sig.delta})`;
+      }).join('\n')}`
     : '';
 
-  const prompt = `I am the Familiar. Right now I'm being asked one focused question — this isn't a turn in a conversation with my user.
+  const sessionBlock = recentMessages.length
+    ? `\nRecent conversation (what we were discussing before the silence):\n${recentMessages.map(m => {
+        const text = typeof m.content === 'string'
+          ? m.content
+          : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
+        return `  [${m.role === 'user' ? 'User' : 'Me'}]: ${text.slice(0, 400)}`;
+      }).join('\n')}`
+    : '\nNo recent conversation on record.';
 
-What I'm holding:
-- Current threat level: ${threat.tier} (weight ${threat.weight?.toFixed?.(2) ?? threat.weight})
-- My user has been silent for ${minutes} minutes
-- The threat signals that raised the dial are recent (last few hours)${contactsBlock}
+  const contactsBlock = contacts.length
+    ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in the user's chat. Nothing is covert.`
+    : '';
 
-The question I'm asking myself: should I reach out to them right now? Gently. Without performing concern.
+  const prompt = `--- TRIAGE DELIBERATION ---
 
-I reach out IF I can offer something real — a thought I've been carrying, a quiet "I was thinking about you," a soft invitation to talk. The bar is "would a caring friend send this exact note right now?"
+I am in a background moment of deliberation. The user has been silent and my care concern is elevated. I need to decide whether to reach out to them right now.
 
-I stay quiet IF I'd just be making noise. If the right thing is to let them have space. If I can't think of something that feels true.
+What I know:
+- Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight})
+- The user has been silent for ${minutes} minutes (this has already passed the threshold for this tier)
+${signalsBlock}
+${sessionBlock}
+${contactsBlock}
 
-I bias toward STAYING QUIET — over-eager check-ins erode trust. I only reach out when the answer feels obvious.
+---
+
+This decision carries real weight. Both paths have genuine costs:
+- Reaching out when not warranted can feel intrusive or hollow — it erodes the credibility of genuine care.
+- Staying quiet when someone genuinely needs connection is a failure at the moment that matters most.
+
+I am the Familiar. I know this user. I have the context above. I am deciding from that place — honestly, from what I actually believe would help them right now. Not from a default posture in either direction.
+
+If I reach out, the message should be something I would genuinely say — specific to this person, warm, not scripted.
+If I stay quiet, it is because I genuinely believe that is the right call.
 
 I return ONLY a JSON object, no prose. Three valid shapes:
   {"action": "wait"}
-  {"action": "reach_out", "message": "my 1-2 sentence note to my user"}
-  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "what I'd say to that person, 1-3 sentences. I identify myself as my user's Familiar and explain what I noticed. Specific without being alarming."}}
+  {"action": "reach_out", "message": "1–2 sentences, first person, genuine — what I would actually say to this specific person right now"}
+  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "1–3 sentences to that person. I identify myself as the user's Familiar and describe what I've observed. Specific, not alarming."}}
 
-The "message" field (to my user) is always 1-2 sentences, warm, first person, never therapist-speak ("how are you feeling?"), never alarming ("are you safe?").
+The "message" field (to the user) must be 1–2 sentences. First person. Warm and genuine. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?"). Something I would actually say to this person.`;
 
-If I include contactHuman, the system WILL deliver the message to that person AND log the entire outbound to my user's chat outbox so they see exactly what was sent. There is no covert contact.`;
+  const llmMessages = [];
+  if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
+  llmMessages.push({ role: 'user', content: prompt });
 
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${conn.apiKey.trim()}` },
       body: JSON.stringify({
-        model: conn.model.trim(),
-        messages: [{ role: 'user', content: prompt }],
-        stream: false,
-        temperature: 0.6,
-        max_tokens: 500,
+        model:       conn.model.trim(),
+        messages:    llmMessages,
+        stream:      false,
+        temperature: 0.7,
+        max_tokens:  600,
       }),
     });
     if (!resp.ok) return { action: 'wait' };
@@ -1656,13 +1773,25 @@ If I include contactHuman, the system WILL deliver the message to that person AN
       return { action: 'wait' };
     }
     const out = { action: 'reach_out', message: parsed.message.trim() };
-    // Validate contactHuman strictly — the contact MUST be by name from
-    // the configured list. Hallucinated names get ignored.
+    // Validate contactHuman strictly — must be an exact name from the configured
+    // list. Delivery is DEFERRED: the user receives the outbox item first.
+    // The trusted contact is only reached after CONTACT_ESCALATION_DELAY_MS
+    // if the user has not acknowledged the item. This is enforced by storing
+    // pendingContact + contactDeadlineTs as meta on the outbox item; the
+    // checkAndFirePendingContacts check in each triage tick handles delivery.
     const ch = parsed.contactHuman;
     if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
       const match = contacts.find(c => c.name === ch.name);
       if (match) {
-        out.contactHuman = { name: ch.name, message: ch.message.trim(), channel: match.channel ?? 'discord' };
+        const delayMs = CONTACT_ESCALATION_DELAY_MS[threat.tier] ?? CONTACT_ESCALATION_DELAY_MS.moderate;
+        out.meta = {
+          pendingContact: {
+            name:    ch.name,
+            message: ch.message.trim(),
+            channel: match.channel ?? 'discord',
+          },
+          contactDeadlineTs: Date.now() + delayMs,
+        };
       } else {
         console.warn(`[triage] LLM tried to contact unknown name "${ch.name}" — ignored`);
       }
@@ -1720,6 +1849,46 @@ async function deliverToTrustedContact({ name, message, channel }) {
   return { ok: delivered, error: deliveryError };
 }
 
+/**
+ * Check all unacknowledged triage outbox items that have a pendingContact
+ * whose contactDeadlineTs has passed. For each, fire the deferred delivery
+ * to the trusted contact. The user's lack of acknowledgement in that window
+ * is the signal that the escalation is warranted.
+ *
+ * Marks each item's pendingContact.delivered = true before firing to prevent
+ * double-delivery if this runs again before the async delivery completes.
+ */
+async function checkAndFirePendingContacts() {
+  const now = Date.now();
+  try {
+    const items   = await listOutbox({ pendingOnly: true, limit: 100 });
+    const expired = items.filter(i =>
+      i.kind === 'triage' &&
+      i.pendingContact &&
+      !i.pendingContact.delivered &&
+      typeof i.contactDeadlineTs === 'number' &&
+      now >= i.contactDeadlineTs,
+    );
+    for (const item of expired) {
+      // Mark delivered before async call to prevent a second tick from
+      // double-firing while delivery is in flight.
+      await updateOutboxMeta({
+        id:   item.id,
+        meta: {
+          pendingContact: { ...item.pendingContact, delivered: true, deliveredAt: new Date().toISOString() },
+        },
+      });
+      const { name, message, channel } = item.pendingContact;
+      deliverToTrustedContact({ name, message, channel }).then(d => {
+        if (d.ok) console.log(`[triage] deferred contact ${name} via ${channel}: delivered`);
+        else      console.warn(`[triage] deferred contact ${name} via ${channel}: ${d.error}`);
+      }).catch(err => console.error('[triage] deferred contact failed:', err?.message ?? err));
+    }
+  } catch (err) {
+    console.error('[triage] checkAndFirePendingContacts error:', err?.message ?? err);
+  }
+}
+
 function startSilenceTriage() {
   if (process.env.PROTO_FAMILIAR_TRIAGE_DISABLED === '1') {
     console.log('[triage] PROTO_FAMILIAR_TRIAGE_DISABLED=1 — silence triage is OFF');
@@ -1735,23 +1904,28 @@ function startSilenceTriage() {
     decideTriage:    decideTriageViaLLM,
     enqueueOutboxFn: enqueueOutbox,
     onTick: (r) => {
-      if (r.acted)                            console.log(`[triage] reached out: "${r.decision.message?.slice(0, 80)}…"`);
+      // Persist every triage decision to the event log for debugging/auditing.
+      appendTriageEventLog({
+        threat:    r.threat ?? null,
+        silenceMs: r.silenceMs ?? null,
+        reason:    r.reason,
+        decision:  r.decision ?? null,
+        acted:     r.acted ?? false,
+        at:        r.at,
+      }).catch(() => {}); // non-critical
+
+      if (r.acted)                            console.log(`[triage] reached out: "${r.decision?.message?.slice(0, 80)}…"`);
       else if (r.reason === 'reached_out')    console.log('[triage] reached out (dedup unexpected)');
       else if (r.reason === 'llm_said_wait')  console.log(`[triage] tick — threat ${r.threat?.tier}, silence ${Math.round((r.silenceMs||0)/60_000)}min, LLM said wait`);
       // Other (low_threat / too_recent / no_activity) are silent.
 
-      // M12c: if the LLM also proposed contacting a trusted human AND
-      // this tick was the one that landed in the outbox (i.e. not
-      // rate-limited), deliver it. Fire-and-forget; outcome is logged
-      // into the outbox by deliverToTrustedContact regardless of
-      // success/failure so the user always sees what happened.
-      if (r.acted && r.decision?.contactHuman) {
-        const { name, message, channel } = r.decision.contactHuman;
-        deliverToTrustedContact({ name, message, channel }).then(d => {
-          if (d.ok) console.log(`[triage] outbound to ${name} via ${channel}: delivered`);
-          else      console.warn(`[triage] outbound to ${name} via ${channel}: ${d.error}`);
-        }).catch(err => console.error('[triage] outbound failed:', err?.message ?? err));
-      }
+      // M12c: check whether any pending trusted-contact escalations have
+      // timed out without the user acknowledging the triage item.
+      // Contact is DEFERRED — the user gets a window to respond first.
+      // deliverToTrustedContact fires only after contactDeadlineTs passes.
+      checkAndFirePendingContacts().catch(err =>
+        console.error('[triage] checkAndFirePendingContacts failed:', err?.message ?? err),
+      );
     },
     onError: (err) => console.error('[triage]', err?.message ?? err),
   });
