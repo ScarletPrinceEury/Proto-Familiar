@@ -405,6 +405,54 @@ const BUILTIN_TOOLS = [
       },
     },
   },
+  // ── Crisis outreach tools ──────────────────────────────────────────────
+  // For when {{user}} is actively present but in clear danger. These are
+  // separate from the silence-triage loop (which fires only when the user
+  // is quiet). These let me act during a live conversation.
+  //
+  // Guidance for when to use these:
+  //   • show_crisis_resources — low friction; appropriate whenever {{user}}
+  //     is in genuine distress, with or without configured contacts. Shows
+  //     crisis lines as a visible banner. Always appropriate; prefer early.
+  //   • get_trusted_contacts — check who is available before escalating.
+  //     Call this once first so I know exact names and can explain my choice.
+  //   • contact_trusted_person — meaningful escalation: a real message goes
+  //     to a real person. I only reach for this when I genuinely believe the
+  //     situation needs human presence that I cannot provide. {{user}} sees
+  //     exactly what I sent in their notifications — nothing is covert.
+  //     False alarms hurt trust and could cause unwarranted alarm. I use my
+  //     judgment from the full conversation, not from a single phrase.
+  {
+    type: 'function',
+    function: {
+      name: 'get_trusted_contacts',
+      description: 'I return the list of trusted contacts {{user}} has configured — people I am authorised to reach in a crisis. I call this before contact_trusted_person to confirm who is available and get the exact name I need to pass. Returns names and channels only (no webhook details).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'contact_trusted_person',
+      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer. Every outbound is ALSO shown as a visible banner in {{user}}\'s chat — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:    { type: 'string', description: 'Exact name of the contact, as returned by get_trusted_contacts.' },
+          message: { type: 'string', description: '1–3 sentences to that person. I identify myself as {{user}}\'s Familiar. I describe what I have observed — specific, honest, not sensationalised.' },
+        },
+        required: ['name', 'message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'show_crisis_resources',
+      description: 'I surface crisis-line and safety-resource information as a visible banner in {{user}}\'s chat. I use this whenever {{user}} is in genuine distress and could benefit from knowing immediate support is available — whether or not they ask for it, and whether or not trusted contacts are configured. Low friction: I prefer this early rather than late.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
 ];
 
 /** Client-side implementations of the built-in tools. */
@@ -698,6 +746,40 @@ const BUILTIN_EXECUTORS = {
       if (!res.ok || data.ok === false) return `Failed to set standing value: ${data.error ?? res.status}`;
       return `"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`;
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
+  },
+
+  // ── Crisis outreach executors ────────────────────────────────────────
+  get_trusted_contacts: () => {
+    const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
+    if (!contacts.length) {
+      return '{{user}} has no trusted contacts configured yet. They can add them in Settings → Trusted Contacts. show_crisis_resources is still available.';
+    }
+    const list = contacts.map(c => `- ${c.name} (via ${c.channel ?? 'discord'})`).join('\n');
+    return `Configured trusted contacts:\n${list}\n\nPass the exact name above to contact_trusted_person.`;
+  },
+
+  contact_trusted_person: async ({ name, message }) => {
+    try {
+      const res = await fetch('/api/contact-trusted-person', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, message }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        return `Could not reach ${name}: ${data.error ?? res.status}. The attempt was logged to the outbox.`;
+      }
+      return `Message delivered to ${name} via ${data.channel ?? 'discord'}. {{user}} can see exactly what was sent in their notification banner.`;
+    } catch (err) { return `Failed to contact ${name}: ${err.message}`; }
+  },
+
+  show_crisis_resources: async () => {
+    try {
+      const res = await fetch('/api/crisis-resources', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to surface crisis resources: ${data.error ?? res.status}`;
+      return 'Crisis resources surfaced as a banner in {{user}}\'s chat.';
+    } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
   },
 };
 

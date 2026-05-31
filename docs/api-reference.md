@@ -284,6 +284,57 @@ This is the audit trail for debugging the silence-triage system — you can see 
 
 ---
 
+## Crisis Outreach (Live Conversation)
+
+These two endpoints back the crisis outreach tools — invoked by the Familiar during an active conversation when the user is present but in danger. They are distinct from the silence-triage loop (which fires only when the user is quiet).
+
+### `POST /api/contact-trusted-person`
+
+Immediately delivers a message to one of the user's configured trusted contacts. Unlike the silence-triage deferred escalation path, delivery is not conditional on the user's acknowledgement — it is intended for situations where the Familiar has judged, during a live exchange, that human presence is needed now.
+
+Every delivery (and every failed attempt) is also written to the outbox as an `outbound_alert` banner so the user can see exactly what was sent.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Exact name of the contact, matching one entry in `settings.json → trustedContacts` |
+| `message` | string | Yes | The message to send. Delivered as-is. |
+
+**Response:**
+
+```json
+{ "ok": true, "channel": "discord" }
+```
+
+On error (contact not found, webhook delivery failure):
+
+```json
+{ "ok": false, "channel": "discord", "error": "discord 400: …" }
+```
+
+Even on delivery failure the attempt is recorded in the outbox.
+
+---
+
+### `POST /api/crisis-resources`
+
+Enqueues a `crisis_resources` outbox banner containing international crisis-line and safety-resource links. The banner appears in the user's chat the next time the outbox is polled.
+
+Deduplicated by a 1-hour bucket key — repeated calls within the same hour return the existing item's id without creating a duplicate.
+
+**Request body:** none required.
+
+**Response:**
+
+```json
+{ "ok": true, "id": "<uuid>", "deduped": false }
+```
+
+`deduped: true` means an identical unacknowledged banner was already in the queue; `id` is the existing item's id.
+
+---
+
 ## Tomes
 
 Tomes are stored as individual JSON files in the `tomes/` directory. Each Tome is independently addressable and can be enabled or disabled. The activation engine aggregates entries from all enabled Tomes.

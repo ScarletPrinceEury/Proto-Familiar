@@ -1501,6 +1501,66 @@ app.post('/api/outbox/clear-acknowledged', async (_req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Crisis outreach (tool-initiated, live conversation) ──────────────────────
+
+// POST /api/contact-trusted-person
+// Called by the contact_trusted_person tool when the Familiar judges that
+// human presence is needed during an active conversation. Looks up the
+// contact by name, delivers immediately (not deferred), and always enqueues
+// an outbound_alert outbox item so the user sees exactly what was sent.
+app.post('/api/contact-trusted-person', async (req, res) => {
+  const { name, message } = req.body ?? {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ ok: false, error: 'name is required' });
+  }
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ ok: false, error: 'message is required' });
+  }
+  const s = readSettingsSync();
+  const contact = (s?.trustedContacts || []).find(c => c.name === name.trim());
+  if (!contact) {
+    return res.status(404).json({ ok: false, error: `No trusted contact named "${name.trim()}" is configured.` });
+  }
+  try {
+    const result = await deliverToTrustedContact({
+      name:    contact.name,
+      message: message.trim(),
+      channel: contact.channel ?? 'discord',
+    });
+    res.json({ ok: result.ok, channel: contact.channel ?? 'discord', error: result.error ?? null });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/crisis-resources
+// Called by the show_crisis_resources tool. Enqueues a crisis-resources
+// outbox banner containing international hotline information. Deduped to
+// one item per hour so repeated model calls during a single crisis don't
+// flood the banner queue.
+app.post('/api/crisis-resources', async (_req, res) => {
+  try {
+    const result = await enqueueOutbox({
+      kind:     'crisis_resources',
+      originId: `crisis-resources-${Math.floor(Date.now() / 3_600_000)}`,
+      title:    'If you need immediate support',
+      body: [
+        '**Crisis resources — always available:**',
+        '',
+        '🆘 **International directory:** https://www.iasp.info/resources/Crisis_Centres/',
+        '🇺🇸 **988 Suicide & Crisis Lifeline (US):** call or text **988**',
+        '🇺🇸 **Crisis Text Line (US):** text HOME to **741741**',
+        '🇬🇧 **Samaritans (UK):** call **116 123** (free, 24/7)',
+        '🇦🇺 **Lifeline (AU):** call **13 11 14**',
+        '🌐 **findahelpline.com** — searchable global directory',
+      ].join('\n'),
+    });
+    res.json({ ok: true, id: result.id, deduped: result.deduped ?? false });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
