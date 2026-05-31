@@ -524,6 +524,29 @@ export async function demoteStanding({ id }) {
   }
 }
 
+/**
+ * Promote a topic to a standing value — an always-on orientation that
+ * bypasses the normal decay. Used when the Familiar (or the user)
+ * wants something to anchor behaviour permanently. weight defaults
+ * to 1.0; value_ref is an opaque pointer to an entity-core identity
+ * fact (M7 bridge validates it on a live turn).
+ */
+export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const args = { topic };
+    if (Number.isFinite(weight)) args.weight = weight;
+    if (value_ref) args.value_ref = value_ref;
+    const r = await unruhClient.callTool({
+      name: 'interest_set_standing',
+      arguments: args,
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
 // ── Schedule wrappers (M9b) ──────────────────────────────────────
 
 export async function getScheduleWindow({ from_ts, to_ts, limit = 200 } = {}) {

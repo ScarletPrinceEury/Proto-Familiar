@@ -25,7 +25,7 @@ import {
   createSnapshot, restoreSnapshot,
   reconnectEntityCore,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
-  bumpInterest, demoteStanding,
+  bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, deleteScheduleNode,
   getHandoff, markHandoffConsumed,
@@ -1361,6 +1361,13 @@ app.post('/api/temporal/interests/bump', async (req, res) => {
 
 app.post('/api/temporal/interests/:id/demote', async (req, res) => {
   try { res.json(await demoteStanding({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/temporal/interests/set-standing', async (req, res) => {
+  const { topic, weight, value_ref } = req.body ?? {};
+  if (!topic || typeof topic !== 'string') return badRequest(res, 'topic (string) is required');
+  try { res.json(await setStandingInterest({ topic, weight, value_ref })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
