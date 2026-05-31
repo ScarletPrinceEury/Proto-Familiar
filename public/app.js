@@ -347,7 +347,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_phase',
-      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase recurs daily — Unruh re-stamps the date on read.',
+      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase is stored once; the schedule layer matches it by time-of-day every day so it recurs automatically without needing to be re-added.',
       parameters: {
         type: 'object',
         properties: {
@@ -685,7 +685,7 @@ const BUILTIN_EXECUTORS = {
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to add reminder: ${data.error ?? res.status}`;
-      return `Reminder set (id: ${data.id}). It will fire as a banner in {{user}}'s chat at the chosen time.`;
+      return `Reminder set (id: ${data.id}). It will fire as a banner in your chat at the chosen time.`;
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
@@ -704,7 +704,7 @@ const BUILTIN_EXECUTORS = {
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to add phase: ${data.error ?? res.status}`;
-      return `Phase added (id: ${data.id}). It will recur daily in {{user}}'s routine.`;
+      return `Phase added (id: ${data.id}). It will appear in your daily routine at that time of day.`;
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -752,7 +752,7 @@ const BUILTIN_EXECUTORS = {
   get_trusted_contacts: () => {
     const contacts = Array.isArray(state.trustedContacts) ? state.trustedContacts : [];
     if (!contacts.length) {
-      return '{{user}} has no trusted contacts configured yet. They can add them in Settings → Trusted Contacts. show_crisis_resources is still available.';
+      return 'No trusted contacts are configured yet. They can be added in Settings → Trusted Contacts. show_crisis_resources is still available.';
     }
     const list = contacts.map(c => `- ${c.name} (via ${c.channel ?? 'discord'})`).join('\n');
     return `Configured trusted contacts:\n${list}\n\nPass the exact name above to contact_trusted_person.`;

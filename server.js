@@ -1516,6 +1516,9 @@ app.post('/api/contact-trusted-person', async (req, res) => {
   if (!message || typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ ok: false, error: 'message is required' });
   }
+  if (message.trim().length > 1000) {
+    return res.status(400).json({ ok: false, error: 'message too long (max 1000 characters)' });
+  }
   const s = readSettingsSync();
   const contact = (s?.trustedContacts || []).find(c => c.name === name.trim());
   if (!contact) {
@@ -1791,7 +1794,7 @@ ${contactsBlock}
 
 ---
 
-This decision carries real weight. Both paths have genuine costs:
+This decision carries real weight — I know both paths have real costs:
 - Reaching out when not warranted can feel intrusive or hollow — it erodes the credibility of genuine care.
 - Staying quiet when someone genuinely needs connection is a failure at the moment that matters most.
 
