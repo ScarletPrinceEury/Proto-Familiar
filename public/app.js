@@ -286,6 +286,125 @@ const BUILTIN_TOOLS = [
       },
     },
   },
+  // ── Temporal tools (Unruh — schedule + interests) ─────────────────────
+  // These let me commit plans during a conversation: schedule an event,
+  // set a reminder, accrue an interest, mark something done. Each one
+  // surfaces in my [Temporal Context] block on subsequent turns, so I
+  // can see what I committed and update if {{user}} changes their mind.
+  //
+  // Time format: ISO 8601. My [Temporal Context] block always carries
+  // "now" as a UTC timestamp; I compute the target moment from there +
+  // any timezone info {{user}} or the temporal context gives me. If
+  // unsure of {{user}}'s timezone, I ask them rather than guess.
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_event',
+      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
+          when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
+          end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
+        },
+        required: ['label', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_task',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
+          when:  { type: 'string', description: 'Optional ISO 8601 deadline. Omit for open-ended tasks.' },
+        },
+        required: ['label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_reminder',
+      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my warm voice, not a bare "Reminder: X."',
+      parameters: {
+        type: 'object',
+        properties: {
+          label:   { type: 'string', description: 'Short label of what the reminder is about.' },
+          when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
+          message: { type: 'string', description: 'Optional longer text shown in the banner body, in my voice.' },
+        },
+        required: ['label', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_phase',
+      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase recurs daily — Unruh re-stamps the date on read.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
+          when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
+          end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
+          texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "warmest part of the day to land").' },
+        },
+        required: ['label', 'when', 'end'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_resolve',
+      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind", "cancelled"; if "didn\'t get to it today", "carried_forward".',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:         { type: 'string', description: 'Schedule node id (from my [Temporal Context]).' },
+          resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
+        },
+        required: ['id', 'resolution'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'interest_bump',
+      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The topic label, as it should appear in my interests block.' },
+          delta: { type: 'number', description: 'Positive weight to add. Typical 0.5–3.0; emphatic 5+.' },
+        },
+        required: ['topic', 'delta'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'interest_set_standing',
+      description: 'I promote a topic to a STANDING VALUE — an always-on orientation that shapes how I show up, immune to the normal decay. I use this rarely, when {{user}} expresses a deep ongoing care that should anchor my behaviour ("my anxiety is real, please never minimize it" / "I value honesty over comfort"). For passing curiosities or interests that should fade if not real, I use interest_bump.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic:  { type: 'string', description: 'The value as it should anchor (e.g. "{{user}}\'s anxiety is real, never minimize").' },
+          weight: { type: 'number', description: 'Optional weight; defaults to 1.0. Standing values bypass decay so this is just initial intensity.' },
+        },
+        required: ['topic'],
+      },
+    },
+  },
 ];
 
 /** Client-side implementations of the built-in tools. */
@@ -471,6 +590,114 @@ const BUILTIN_EXECUTORS = {
       if (!res.ok) return `Failed to delete graph edge: ${data.error ?? res.status}`;
       return `Graph edge ${id} deleted (snapshot saved).`;
     } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
+  },
+
+  // ── Temporal executors (Unruh — schedule + interests) ────────────────
+  // Each one calls a /api/temporal/* endpoint that forwards to the
+  // already-spawned Unruh MCP subprocess. Returns short strings the
+  // model can quote back to {{user}} as confirmation.
+
+  schedule_add_event: async ({ label, when, end }) => {
+    try {
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'event', label, when, end }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add event: ${data.error ?? res.status}`;
+      return `Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`;
+    } catch (err) { return `Failed to add event: ${err.message}`; }
+  },
+
+  schedule_add_task: async ({ label, when }) => {
+    try {
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'task', label, when }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add task: ${data.error ?? res.status}`;
+      return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
+    } catch (err) { return `Failed to add task: ${err.message}`; }
+  },
+
+  schedule_add_reminder: async ({ label, when, message }) => {
+    try {
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type:    'reminder',
+          label,
+          when,
+          payload: message ? { message } : {},
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add reminder: ${data.error ?? res.status}`;
+      return `Reminder set (id: ${data.id}). It will fire as a banner in {{user}}'s chat at the chosen time.`;
+    } catch (err) { return `Failed to add reminder: ${err.message}`; }
+  },
+
+  schedule_add_phase: async ({ label, when, end, texture }) => {
+    try {
+      const res = await fetch('/api/temporal/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type:    'phase',
+          label,
+          when,
+          end,
+          payload: texture ? { texture } : {},
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to add phase: ${data.error ?? res.status}`;
+      return `Phase added (id: ${data.id}). It will recur daily in {{user}}'s routine.`;
+    } catch (err) { return `Failed to add phase: ${err.message}`; }
+  },
+
+  schedule_resolve: async ({ id, resolution }) => {
+    try {
+      const res = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolution }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to resolve: ${data.error ?? res.status}`;
+      if (data.updated === false)        return `No schedule node with id ${id} — it may have been deleted or never existed.`;
+      return `Marked ${id} as ${resolution}.`;
+    } catch (err) { return `Failed to resolve: ${err.message}`; }
+  },
+
+  interest_bump: async ({ topic, delta }) => {
+    try {
+      const res = await fetch('/api/temporal/interests/bump', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, delta, source: 'familiar_tool' }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to bump interest: ${data.error ?? res.status}`;
+      return `Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`;
+    } catch (err) { return `Failed to bump interest: ${err.message}`; }
+  },
+
+  interest_set_standing: async ({ topic, weight }) => {
+    try {
+      const res = await fetch('/api/temporal/interests/set-standing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, weight }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) return `Failed to set standing value: ${data.error ?? res.status}`;
+      return `"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`;
+    } catch (err) { return `Failed to set standing value: ${err.message}`; }
   },
 };
 
