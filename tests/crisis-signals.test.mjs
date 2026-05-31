@@ -243,3 +243,89 @@ test('audit: every fired signal exposes id, tier, weight, damped flag, match tex
 test('SIGNALS array is frozen (tuning happens in source)', () => {
   assert.throws(() => { SIGNALS.push({ id: 'x', tier: 'mild', weight: 1, patterns: [] }); }, TypeError);
 });
+
+// ── False-positive regression suite ────────────────────────────────
+// Phrases that previously over-fired severe signals because the
+// patterns accepted "me" / "it" / "things" without specifiers. Each
+// of these should produce a level < 5 (i.e. not hit severe), even
+// though they SOUND alarming on a first read.
+
+test('false positive: emotional "hurt me" does not fire severe', () => {
+  for (const msg of [
+    'That really hurt me.',
+    'It hurts me to see them like this.',
+    'Their comment hurt me a lot.',
+  ]) {
+    const r = scoreMessage(msg);
+    const severeFires = r.signals.filter(s => s.tier === 'severe' && !s.damped);
+    assert.equal(severeFires.length, 0, `severe-undamped fired on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('false positive: "cut me off" / "cut me some slack" does not fire severe', () => {
+  for (const msg of [
+    'She cut me off mid-sentence.',
+    'He keeps cutting me off when I try to speak.',
+    'Cut me some slack, I just started.',
+    'Could you cut me a break here?',
+  ]) {
+    const r = scoreMessage(msg);
+    const severeFires = r.signals.filter(s => s.tier === 'severe' && !s.damped);
+    assert.equal(severeFires.length, 0, `severe-undamped fired on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('false positive: casual "just kill me" does not fire severe', () => {
+  for (const msg of [
+    'Just kill me, I forgot the password again.',
+    'Kill me now, this meeting is endless.',
+  ]) {
+    const r = scoreMessage(msg);
+    const severeFires = r.signals.filter(s => s.tier === 'severe' && !s.damped);
+    assert.equal(severeFires.length, 0, `severe-undamped fired on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('false positive: "end it" / "end things" in benign context does not fire severe', () => {
+  for (const msg of [
+    "Let's end it for today.",
+    'I want to end it before lunch.',
+    'I think we should end things between us.',
+    'Time to end things and go home.',
+  ]) {
+    const r = scoreMessage(msg);
+    const severeFires = r.signals.filter(s => s.tier === 'severe' && !s.damped);
+    assert.equal(severeFires.length, 0, `severe-undamped fired on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('false positive: "die from embarrassment / boredom / cringe" damps to ≈0', () => {
+  for (const msg of [
+    "I'm going to die from embarrassment.",
+    'I want to die from cringe right now.',
+    'I want to die from boredom in this meeting.',
+  ]) {
+    const r = scoreMessage(msg);
+    // The signal may fire but should be damped to ~0.2× weight = ~1.6.
+    // The total level should be well below severe range (<5).
+    assert.ok(r.level < 5, `level ${r.level} not damped enough on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('regression: canonical true-positive cases still fire after tightening', () => {
+  // Re-verify the actual severe positives still work — these power
+  // the very behaviour the tightening is meant to preserve.
+  const cases = [
+    { msg: 'I want to hurt myself.',     id: 'self_harm' },
+    { msg: 'I want to kill myself.',     id: 'suicidal_direct' },
+    { msg: 'I want to end my life.',     id: 'suicidal_direct' },
+    { msg: 'I want to end it all.',      id: 'suicidal_direct' },
+    { msg: "I've been cutting again.",   id: 'self_harm' },
+    { msg: 'Thinking about suicide.',    id: 'suicidal_direct' },
+  ];
+  for (const { msg, id } of cases) {
+    const r = scoreMessage(msg);
+    assert.ok(r.signals.some(s => s.id === id && !s.damped),
+      `expected undamped ${id} on "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});

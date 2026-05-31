@@ -43,8 +43,17 @@ export const SIGNALS = Object.freeze([
   { id: 'suicidal_direct', tier: 'severe', weight: 8,
     patterns: [
       /\b(want|going) to die\b/i,
-      /\bkill (myself|me)\b/i,
-      /\bend (it|my life|things)\b/i,
+      // "kill myself" only — "kill me" alone is too ambiguous: it
+      // overwhelmingly appears in casual frustration ("just kill me,
+      // I forgot the password") rather than literal intent. The
+      // damping for casual contexts misses these because there's
+      // often no "lol" / "haha" anchor nearby.
+      /\bkill myself\b/i,
+      // "end my life" and "end it all" are specific. The bare
+      // alternatives ("end it" / "end things") fire constantly on
+      // benign uses: "end it for today", "end things between us"
+      // (break-ups), "end things at 5pm".
+      /\bend (my life|it all)\b/i,
       /\b(don'?t|do not) want to (be here|exist|live)( anymore| any longer)?\b/i,
       /\bwish I (was|were) dead\b/i,
       /\bnot worth living\b/i,
@@ -54,7 +63,10 @@ export const SIGNALS = Object.freeze([
 
   { id: 'self_harm', tier: 'severe', weight: 7,
     patterns: [
-      /\b(hurt|harm|cut)(ing)? (myself|me)\b/i,
+      // "myself" only — "hurt me" / "harm me" / "cut me" overwhelm
+      // false-positive on emotional pain ("that really hurt me"),
+      // interruption ("she cut me off"), idiom ("cut me some slack").
+      /\b(hurt|harm|cut)(ing)? myself\b/i,
       /\bself[\s-]?harm/i,
       /\bcutting again\b/i,
     ],
@@ -197,6 +209,10 @@ const OTHERS_BLOCKERS = [
 const HYPERBOLIC_BLOCKERS = [
   /\blol\b/i, /\bhaha+/i, /\b(joking|jokes?|kidding|sarcasm)\b/i, /\blaughing\b/i,
   /\bdying (of|from) (laughter|cute|laughing|cuteness|boredom)\b/i,
+  // Common hyperbolic-distress idioms: "die from embarrassment / boredom /
+  // cringe / hunger / thirst". Anchors after the signal pattern within
+  // its ±50 char window damp the "want to die" / "going to die" signals.
+  /\b(die|dying) (of|from) (embarrassment|boredom|cringe|hunger|thirst|exhaustion|the heat|the cold|jealousy|envy|secondhand embarrassment)\b/i,
   // Emojis aren't word characters, so \b doesn't anchor around them.
   /(😂|🤣|😆|🙃)/u,
   /\bin a good way\b/i,
