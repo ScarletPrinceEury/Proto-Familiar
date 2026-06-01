@@ -698,6 +698,30 @@ export async function listInterests({ limit = 50 } = {}) {
 }
 
 /**
+ * List all bookmark nodes with their M8 surfacing metadata.
+ * Used by the temporal editor UI to display bookmark tracking state.
+ *
+ * @param {{ limit?: number }} [opts]
+ * @returns {Promise<{ bookmarks: any[], ok: boolean, error?: string }>}
+ */
+export async function listBookmarks({ limit = 100 } = {}) {
+  if (!unruhClient) return { bookmarks: [], ok: false, error: 'unruh not connected' };
+  try {
+    const result  = await unruhClient.callTool({
+      name: 'interest_list_bookmarks',
+      arguments: { limit },
+    });
+    const payload = parseToolText(result, {});
+    return {
+      bookmarks: Array.isArray(payload.bookmarks) ? payload.bookmarks : [],
+      ok:        true,
+    };
+  } catch (err) {
+    return { bookmarks: [], ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/**
  * Store a session-end handoff (M6) into Unruh. The chat path (frontend)
  * summarises the ending session into intent + open threads and posts
  * them here via server.js; we forward to the `session_set_handoff`
@@ -887,12 +911,23 @@ function identitySection(files, order) {
  *   staticOnly — fetch only the identity layer (persona), skipping
  *                memory / graph / temporal. Used by the handoff
  *                summariser so its note is in voice without the bloat.
+ *   lastUserMessageAt — ISO-8601 timestamp of the most recent user
+ *                message BEFORE this turn. Used for idle-mode detection
+ *                (M8): if the user has been quiet longer than
+ *                IDLE_THRESHOLD_MS, temporal_context is called with
+ *                mode='idle' so due bookmarks are surfaced. Pass null
+ *                (or omit) to skip idle detection.
+ *
+ * Returns { static, dynamic, surfacedBookmarks } where surfacedBookmarks
+ * is the list of bookmark objects from temporal_context (non-empty only
+ * in idle mode). server.js uses this list after the LLM response to call
+ * reportSurfacingOutcomes() with the actual response text.
  *
  * @param {string} userMessage
- * @returns {Promise<{ static: string, dynamic: string }>}
+ * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false } = {}) {
-  const EMPTY = { static: '', dynamic: '' };
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null } = {}) {
+  const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [] };
   if (!mcpClient && !unruhClient) return EMPTY;
 
   try {
@@ -930,9 +965,19 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // the background — Promise.race doesn't cancel — but it can no longer
     // delay the response. If timeouts become common, that's a signal for
     // the next milestone to add real cancellation or a query budget.
+    //
+    // M8 idle-mode: if lastUserMessageAt is set and the user has been quiet
+    // longer than IDLE_THRESHOLD_MS, pass mode='idle' so Unruh returns due
+    // bookmarks alongside the standard interests block.
+    const nowTs = new Date().toISOString();
+    const isIdle = !staticOnly
+      && lastUserMessageAt != null
+      && (Date.now() - new Date(lastUserMessageAt).getTime()) >= IDLE_THRESHOLD_MS;
+    if (isIdle) console.log(`[thalamus] idle mode active (last user msg: ${lastUserMessageAt})`);
+    const unruhArgs = { now: nowTs, ...(isIdle ? { mode: 'idle' } : {}) };
     const unruhPromise = (unruhClient && !staticOnly)
       ? Promise.race([
-          unruhClient.callTool({ name: 'temporal_context', arguments: { now: new Date().toISOString() } }),
+          unruhClient.callTool({ name: 'temporal_context', arguments: unruhArgs }),
           new Promise((_, reject) => setTimeout(
             () => reject(new Error(`temporal_context timed out after ${UNRUH_CALL_TIMEOUT_MS}ms`)),
             UNRUH_CALL_TIMEOUT_MS,
@@ -1199,14 +1244,62 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       console.log(`[thalamus] enrich() static=${staticBlock.length}ch dynamic=${dynamicBlock.length}ch`);
     }
 
-    return { static: staticBlock, dynamic: dynamicBlock };
+    // M8: surface the bookmark list so server.js can call
+    // reportSurfacingOutcomes() after the response comes back.
+    const surfacedBookmarks = Array.isArray(temporalPayload?.bookmarks)
+      ? temporalPayload.bookmarks
+      : [];
+    if (surfacedBookmarks.length > 0) {
+      console.log(`[thalamus] idle mode: surfacing ${surfacedBookmarks.length} bookmark(s): ${surfacedBookmarks.map(b => b.label).join(', ')}`);
+    }
+
+    return { static: staticBlock, dynamic: dynamicBlock, surfacedBookmarks };
   } catch (err) {
     console.error('[thalamus] enrich failed:', err.message);
-    return { static: '', dynamic: '' };
+    return { static: '', dynamic: '', surfacedBookmarks: [] };
   }
 }
 
 // ── Write operations ──────────────────────────────────────────────────────────
+
+/**
+ * Report whether the user engaged with bookmarks surfaced during idle mode
+ * (M8). Called by server.js after the LLM response is complete: it scans
+ * the response text for each bookmark's topic label and records 'engaged'
+ * if the model mentioned it, 'ignored' otherwise.
+ *
+ * Fire-and-forget: surfacing outcome is valuable signal but not critical
+ * path. A failure here just means the adaptive interval isn't updated for
+ * this turn — the bookmark will resurface normally on the next idle cycle.
+ *
+ * @param {{ responseText: string, bookmarks: any[] }} args
+ */
+export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
+  if (!unruhClient || !Array.isArray(bookmarks) || bookmarks.length === 0) return;
+  if (typeof responseText !== 'string' || !responseText) return;
+  const now = new Date().toISOString();
+  const lowerResponse = responseText.toLowerCase();
+  for (const bm of bookmarks) {
+    if (!bm?.id) continue;
+    // Engagement signal: did the response text mention the topic label or
+    // the bookmark's own label? A false positive (model coincidentally used
+    // the word) is acceptable — it still means the topic was contextually
+    // relevant. A false negative is also fine — the bookmark resurfaces
+    // sooner (ignored path decreases the interval).
+    const topicMatch = bm.topic_label && lowerResponse.includes(bm.topic_label.toLowerCase());
+    const labelMatch = bm.label && lowerResponse.includes(bm.label.toLowerCase());
+    const outcome    = (topicMatch || labelMatch) ? 'engaged' : 'ignored';
+    console.log(`[thalamus] surfacing outcome for bookmark "${bm.label}" (topic: "${bm.topic_label ?? '?'}"): ${outcome}`);
+    try {
+      await unruhClient.callTool({
+        name: 'interest_report_surfacing_outcome',
+        arguments: { bookmark_id: bm.id, outcome, now },
+      });
+    } catch (err) {
+      console.error('[thalamus] interest_report_surfacing_outcome failed:', err?.message ?? err);
+    }
+  }
+}
 
 /**
  * Create a new memory entry in entity-core.

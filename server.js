@@ -31,6 +31,7 @@ import {
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownEntityCore,
+  reportSurfacingOutcomes, listBookmarks,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
@@ -154,7 +155,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt } = req.body;
   // Enrichment mode:
   //   true / undefined → full (identity + memory + graph + temporal),
   //                      and consume any surfaced session handoff.
@@ -240,9 +241,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
-    : { static: '', dynamic: '' };
+    : { static: '', dynamic: '', surfacedBookmarks: [] };
 
   // Inject awareness of any pending (unacknowledged) triage outreaches
   // into the dynamic block so the Familiar knows it reached out while
@@ -326,6 +327,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       try {
         const parsed = JSON.parse(text);
         parsed._thalamus = thalamusEnvelope;
+        // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+        if (enriched.surfacedBookmarks?.length > 0) {
+          const responseText = parsed.choices?.[0]?.message?.content ?? '';
+          reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
+            .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+        }
         return res.send(JSON.stringify(parsed));
       } catch { /* upstream returned non-JSON — pass through unchanged */ }
     }
@@ -353,12 +360,43 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     res.write(`data: ${JSON.stringify({ _thalamus: thalamusEnvelope })}\n\n`);
   }
 
+  // M8 idle-mode outcome reporting (streaming path): accumulate the full
+  // response text in memory as SSE chunks arrive, then report outcomes
+  // after the stream closes. Only active when bookmarks were surfaced.
+  const streamBookmarks = enriched.surfacedBookmarks ?? [];
+  let accumulatedText = '';
+
   const reader = upstream.body.getReader();
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) { res.end(); break; }
-      res.write(Buffer.from(value));
+      if (done) {
+        res.end();
+        // Report outcomes with whatever text was accumulated. Fire-and-forget.
+        if (streamBookmarks.length > 0 && accumulatedText) {
+          reportSurfacingOutcomes({ responseText: accumulatedText, bookmarks: streamBookmarks })
+            .catch(err => console.error('[server] reportSurfacingOutcomes (streaming) failed:', err?.message ?? err));
+        }
+        break;
+      }
+      const chunk = Buffer.from(value);
+      res.write(chunk);
+      // Extract text content from SSE delta chunks for outcome detection.
+      // Each chunk may contain multiple `data: {...}\n\n` events. We only
+      // need the assistant text, so parse each line's `choices[0].delta.content`.
+      if (streamBookmarks.length > 0) {
+        const chunkStr = chunk.toString('utf8');
+        for (const line of chunkStr.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]') continue;
+          try {
+            const evt = JSON.parse(jsonStr);
+            const delta = evt?.choices?.[0]?.delta?.content;
+            if (typeof delta === 'string') accumulatedText += delta;
+          } catch { /* malformed line — skip */ }
+        }
+      }
     }
   } catch (err) {
     if (!res.writableEnded) res.end();
@@ -1395,6 +1433,12 @@ app.post('/api/threat/reset', async (_req, res) => {
 app.get('/api/temporal/interests', async (req, res) => {
   const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 50;
   try { res.json(await listInterests({ limit })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/temporal/bookmarks', async (req, res) => {
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 100;
+  try { res.json(await listBookmarks({ limit })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

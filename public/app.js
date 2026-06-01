@@ -2046,6 +2046,10 @@ async function sendMessage(userInput) {
   // and reset the 3-hour inactivity countdown.
   const now = new Date().toISOString();
   elapsedTime       = lastMessage ? (Date.now() - new Date(lastMessage).getTime()) : 0;
+  // M8: capture the previous timestamp BEFORE overwriting so the server
+  // can compute idle duration server-side. Sent as lastUserMessageAt in
+  // round-0 bodies.
+  const prevUserMessageAt = lastMessage;
   lastMessage       = now;
   state.lastMessage = now;
   saveSettings();
@@ -2066,9 +2070,9 @@ async function sendMessage(userInput) {
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput, userTimestamp);
+      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput, userTimestamp);
+      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
     }
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
@@ -2261,7 +2265,7 @@ async function generateAndStoreHandoff(messages, sessionId) {
  * during the attempt and are returned so the caller can roll them back on a
  * failed attempt before retrying. Throws on HTTP / network / abort errors.
  */
-async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput) {
+async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];   // tool_call + tool_result messages to commit
   const toolUseEls  = domArtifacts; // shared array — caller can roll back on error
   let   currentMsgs = apiMessages;
@@ -2295,6 +2299,12 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
         // tracker / re-stamp last-activity.
         ...(round === 0 && typeof userInput === 'string' && userInput.trim()
             ? { userMessage: userInput }
+            : {}),
+        // M8: send the previous user-message timestamp on round 0 so the
+        // server can compute idle duration for bookmark surfacing. Omit on
+        // tool-round follow-ups (same as userMessage above).
+        ...(round === 0 && prevUserMessageAt
+            ? { lastUserMessageAt: prevUserMessageAt }
             : {}),
         ...extraPayload,
       }),
@@ -2392,7 +2402,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
   return { content: finalContent, pendingMsgs, finalShell };
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
   const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
@@ -2416,7 +2426,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput);
+        result = await attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         // Roll back any tool-use blocks added during this failed attempt.
@@ -2478,7 +2488,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp) {
   throw lastError || new Error('Request failed and no fallback connections succeeded.');
 }
 
-async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput) {
+async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt) {
   const pendingMsgs = [];
   let   currentMsgs = apiMessages;
   let   finalContent = '';
@@ -2507,6 +2517,10 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
         // server-side extraction picks the wrong message.
         ...(round === 0 && typeof userInput === 'string' && userInput.trim()
             ? { userMessage: userInput }
+            : {}),
+        // M8: send the previous user-message timestamp on round 0 only.
+        ...(round === 0 && prevUserMessageAt
+            ? { lastUserMessageAt: prevUserMessageAt }
             : {}),
         ...extraPayload,
       }),
@@ -2557,7 +2571,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifa
   return { content: finalContent, pendingMsgs, timestamp: finalTimestamp };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
   const activeTools = state.toolsEnabled ? getActiveTools() : [];
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
@@ -2581,7 +2595,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp) {
       const domArtifacts = [];
       let result;
       try {
-        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput);
+        result = await attemptNonStreamingOnce(conn, apiMessages, activeTools, domArtifacts, userInput, prevUserMessageAt);
       } catch (err) {
         if (err.name === 'AbortError') { clearRetryStatus(); throw err; }
         for (const el of domArtifacts) el.remove?.();
@@ -7088,16 +7102,21 @@ async function teLoadInterests() {
   if (!list) return;
   list.innerHTML = '<p class="logs-empty">Loading…</p>';
   try {
-    const r = await fetch('/api/temporal/interests?limit=100');
+    const [r, rb] = await Promise.all([
+      fetch('/api/temporal/interests?limit=100'),
+      fetch('/api/temporal/bookmarks?limit=100'),
+    ]);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    const bmData = rb.ok ? await rb.json() : { bookmarks: [] };
 
-    const live     = Array.isArray(data.live)     ? data.live     : [];
-    const standing = Array.isArray(data.standing) ? data.standing : [];
+    const live      = Array.isArray(data.live)           ? data.live           : [];
+    const standing  = Array.isArray(data.standing)       ? data.standing       : [];
+    const bookmarks = Array.isArray(bmData.bookmarks)    ? bmData.bookmarks    : [];
 
     const intSummary = $('te-int-summary');
-    if (intSummary) intSummary.textContent = `${live.length} live · ${standing.length} standing`;
+    if (intSummary) intSummary.textContent = `${live.length} live · ${standing.length} standing · ${bookmarks.length} bookmarks`;
 
     const html = [];
     if (standing.length) {
@@ -7108,7 +7127,11 @@ async function teLoadInterests() {
       html.push('<h4 style="margin: 12px 12px 4px 12px">Live interests (decay over time)</h4>');
       for (const i of live) html.push(teRenderInterest(i, false));
     }
-    if (!standing.length && !live.length) {
+    if (bookmarks.length) {
+      html.push('<h4 style="margin: 12px 12px 4px 12px">Bookmarks (idle surfacing)</h4>');
+      for (const bm of bookmarks) html.push(teRenderBookmark(bm));
+    }
+    if (!standing.length && !live.length && !bookmarks.length) {
       html.push('<p class="logs-empty">No interests yet. They accrue as you chat — see thalamus.recordInterest.</p>');
     }
     list.innerHTML = html.join('');
@@ -7175,6 +7198,46 @@ function teRenderInterest(i, isStanding) {
       </div>
       <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">last touched ${lt}</div>
       ${ref}
+    </div>`;
+}
+
+function teRenderBookmark(bm) {
+  const label       = teEscapeHtml(bm.label ?? '(no label)');
+  const topicLabel  = teEscapeHtml(bm.topic_label ?? '');
+  const resource    = bm.payload?.resource ? teEscapeHtml(bm.payload.resource) : null;
+  const note        = bm.payload?.note     ? teEscapeHtml(bm.payload.note)     : null;
+  const interval    = Number.isFinite(Number(bm.resurface_after_hours))
+    ? `resurfaces after ${Number(bm.resurface_after_hours).toFixed(0)}h`
+    : '';
+  const lastSurfaced = bm.last_surfaced_at
+    ? `last surfaced ${teTimeAgo(bm.last_surfaced_at)}`
+    : 'never surfaced';
+  const outcome = bm.last_surfacing_outcome
+    ? `<span style="padding: 1px 6px; border-radius: 3px; font-size: 0.8em; background: ${bm.last_surfacing_outcome === 'engaged' ? 'rgba(80,180,80,0.18)' : 'rgba(180,80,80,0.18)'}; border: 1px solid var(--border-subtle, #2a2a2a)">${teEscapeHtml(bm.last_surfacing_outcome)}</span>`
+    : `<span style="padding: 1px 6px; border-radius: 3px; font-size: 0.8em; opacity: 0.5; border: 1px solid var(--border-subtle, #2a2a2a)">pending</span>`;
+  const topicRow = topicLabel
+    ? `<div style="font-size: 0.85em; opacity: 0.7">topic: ${topicLabel}</div>`
+    : '';
+  const resourceRow = resource
+    ? `<div style="font-size: 0.85em; opacity: 0.7">resource: <code>${resource}</code></div>`
+    : '';
+  const noteRow = note
+    ? `<div style="font-size: 0.85em; opacity: 0.7">note: ${note}</div>`
+    : '';
+  const ignores = Number(bm.consecutive_ignores) > 0
+    ? `<span style="opacity: 0.6; font-size: 0.85em">${bm.consecutive_ignores} consecutive ignore(s)</span>`
+    : '';
+  return `
+    <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
+      <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap">
+        <strong style="flex: 1">${label}</strong>
+        ${outcome}
+        ${ignores}
+      </div>
+      ${topicRow}
+      ${resourceRow}
+      ${noteRow}
+      <div style="font-size: 0.85em; opacity: 0.7; margin-top: 2px">${lastSurfaced} · ${interval}</div>
     </div>`;
 }
 
