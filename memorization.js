@@ -18,18 +18,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
+import { PROVIDER_URLS } from './providers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR  = path.join(__dirname, 'tomes');
 const QUEUE_FILE = path.join(TOMES_DIR, '.memorization-queue.json');
 
 mkdirSync(TOMES_DIR, { recursive: true });
-
-const PROVIDER_URLS = {
-  nanogpt:     'https://nano-gpt.com/api/v1/chat/completions',
-  zai:         'https://api.z.ai/api/paas/v4/chat/completions',
-  'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
-};
 
 const MAX_ATTEMPTS    = 5;
 const BACKOFF_MS      = [5_000, 30_000, 120_000, 600_000, 1_800_000]; // 5s, 30s, 2m, 10m, 30m

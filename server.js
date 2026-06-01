@@ -753,7 +753,8 @@ app.delete('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   try {
-    await fsp.unlink(path.join(TOMES_DIR, `${id}.json`));
+    const filePath = await findTomeFile(id);
+    await fsp.unlink(filePath);
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: 'Tome not found.' });
