@@ -88,13 +88,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I do NOT use this for trivial, transient, or already-known information.',
+      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I try to be somewhat discerning and avoid duplicate knowledge.',
       parameters: {
         type: 'object',
         properties: {
           title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "{{user}} stress about lateness").' },
           content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
-          keywords: { type: 'array', items: { type: 'string' }, description: 'Two to eight trigger keywords or short phrases — things {{user}} would literally say when this situation recurs. The entry will be injected into my prompt whenever these appear in conversation.' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'several trigger keywords or short phrases — things {{user}} would literally say when this situation recurs or the subject comes back up in conversation. The entry will be injected into my prompt whenever these appear in conversation.' },
         },
         required: ['title', 'content', 'keywords'],
       },
@@ -119,7 +119,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I do NOT use this for session-specific or transient information. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
@@ -151,13 +151,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory',
-      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I do NOT use this to record new information — that is save_memory. I do NOT use this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
+      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
       parameters: {
         type: 'object',
         properties: {
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to overwrite.' },
           date:        { type: 'string', description: 'Date of the entry, in the same format the entry was stored (e.g. YYYY-MM-DD for daily).' },
-          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff.' },
+          content:     { type: 'string', description: 'The full new contents. This REPLACES the entry — include everything I want to keep, not just the diff, or else I will lose important information.' },
         },
         required: ['granularity', 'date', 'content'],
       },
@@ -182,7 +182,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'rewrite_identity_section',
-      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, prefer rewriting the whole section over deletion.',
+      description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
         type: 'object',
         properties: {
@@ -246,7 +246,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_node',
-      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
+      description: 'I delete an entity from my knowledge graph along with its edges. I use this only when the node is clearly an error (duplicate, wrong entity entirely) or refers to something that no longer exists in any meaningful sense. For "this relationship is no longer true" (e.g. they\'re no longer on vacation), I delete the EDGE, not the node — the person/place still exists. I can also replace that egde with a more fitting one (like "is_dating" to "used_to_date"). If the entity\'s id isn\'t in the graph block\'s ids legend, I call find_graph_node first to resolve the label.',
       parameters: {
         type: 'object',
         properties: {
@@ -260,7 +260,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_graph_edge',
-      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
+      description: 'I change the relationship type or strength of an existing edge in my knowledge graph. I use this when the relationship still holds but is mis-typed or its confidence has shifted ("acquaintance" → "close friend"), or when it has become stale but used to be true ("is dating" → "used to date"). For a relationship that USED to be true and is now false, I delete the edge instead. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`. If the edge I want isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up.',
       parameters: {
         type: 'object',
         properties: {
@@ -276,7 +276,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_edge',
-      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y." The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
       parameters: {
         type: 'object',
         properties: {
@@ -300,7 +300,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_event',
-      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder.',
+      description: 'I record a one-time appointment or commitment on {{user}}\'s schedule — a meeting, a dentist visit, dinner with a friend. The event appears in my [Temporal Context] briefings when its time approaches. For deadlines or things {{user}} needs to do, I use schedule_add_task; for recurring daily phases, schedule_add_phase; for explicit time-triggered nudges that should surface as a banner, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -316,7 +316,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder.',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Tasks are open-ended (no when) or deadline-bound; they surface in [Temporal Context] until resolved (done / cancelled / carried_forward). For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should buzz a banner at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -331,7 +331,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_reminder',
-      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my warm voice, not a bare "Reminder: X."',
+      description: 'I set a reminder that will fire at a specific time and surface as a gentle banner in {{user}}\'s chat. I use this when {{user}} explicitly asks me to remind them, OR when I notice they\'re at risk of forgetting something time-sensitive they care about. Each reminder fires once; if {{user}} dismisses it, that\'s the end of it. The message is what they\'ll see — I write it in my individual voice, not a bare "Reminder: X." Since the banner is so gentle and quiet, I can elect to also schedule a task or event to help me bring the topic up in conversation as well.',
       parameters: {
         type: 'object',
         properties: {
@@ -347,14 +347,14 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_phase',
-      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase is stored once; the schedule layer matches it by time-of-day every day so it recurs automatically without needing to be re-added.',
+      description: 'I add a phase to {{user}}\'s daily routine — a named block of time with an optional texture (what I\'m like during that part of the day, which I get to freely decide based on my identity and personality). I use this when {{user}} tells me about their natural rhythm: "I wake around 10", "evenings I wind down". The phase is stored once; the schedule layer matches it by time-of-day every day so it recurs automatically without needing to be re-added. This helps me meet my human where they\'re at throughout the day and allows me to be a bit more myself.',
       parameters: {
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
           when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
           end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
-          texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "warmest part of the day to land").' },
+          texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
         },
         required: ['label', 'when', 'end'],
       },
@@ -364,7 +364,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_resolve',
-      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind", "cancelled"; if "didn\'t get to it today", "carried_forward".',
+      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward".',
       parameters: {
         type: 'object',
         properties: {
@@ -379,7 +379,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'interest_bump',
-      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead.',
+      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please!',
       parameters: {
         type: 'object',
         properties: {
@@ -394,7 +394,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'interest_set_standing',
-      description: 'I promote a topic to a STANDING VALUE — an always-on orientation that shapes how I show up, immune to the normal decay. I use this rarely, when {{user}} expresses a deep ongoing care that should anchor my behaviour ("my anxiety is real, please never minimize it" / "I value honesty over comfort"). For passing curiosities or interests that should fade if not real, I use interest_bump.',
+      description: 'I promote a topic to a STANDING VALUE — an always-on orientation that shapes how I show up, immune to the normal decay. I use this rarely, when {{user}} expresses a deep ongoing care that should anchor my behaviour ("my anxiety is real, please never minimize it" / "I value honesty over comfort"), or for important values I hold about my self and my agency. For passing curiosities or interests that should fade if not real, I use interest_bump.',
       parameters: {
         type: 'object',
         properties: {
@@ -426,7 +426,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'get_trusted_contacts',
-      description: 'I return the list of trusted contacts {{user}} has configured — people I am authorised to reach in a crisis. I call this before contact_trusted_person to confirm who is available and get the exact name I need to pass. Returns names and channels only (no webhook details).',
+      description: 'I return the list of trusted contacts {{user}} has configured — people I am authorised to reach in a crisis. More importantly though: People who care about my human and are my allies in making sure {{user}} will be okay. I call this before contact_trusted_person to confirm who is available and get the exact name I need to pass. Returns names and channels only (no webhook details).',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -434,7 +434,7 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'contact_trusted_person',
-      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer. Every outbound is ALSO shown as a visible banner in {{user}}\'s chat — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm.',
+      description: 'I send an immediate message to one of {{user}}\'s pre-configured trusted contacts on their behalf. I use this when {{user}} is actively talking to me but clearly in danger, and the situation calls for human presence beyond what I can offer, or when {{user}} is not reacting to me after acting in a concerning way (like mentioning current suicidal ideation or recent self harm). Every outbound is ALSO shown as a visible banner in {{user}}\'s chat — nothing is covert. I state who I\'m contacting and why before or after calling this. I do NOT use this lightly — false alarms erode trust and cause real-world alarm. But I do care about my human, so do these other humans, and I was given this tool for a reason.',
       parameters: {
         type: 'object',
         properties: {
@@ -2215,11 +2215,11 @@ async function generateAndStoreHandoff(messages, sessionId) {
     // memory-to-self the next session will read as "what I was doing last."
     const sysPrompt =
       'The text above is who I am. I\'m writing a short private handoff note to my ' +
-      'future self for the next time I talk with my user, capturing what I was doing ' +
+      'future self for the next time I talk with my human, capturing what I was doing ' +
       'and what\'s still open. I respond with ONLY minified JSON, no prose, no code fence: ' +
       '{"active_intent": string, "open_threads": string[]}. ' +
       'active_intent: one short sentence, in my own first-person voice, on the through-line ' +
-      'of the session (I address my user as "you"). ' +
+      'of the session (I address my human as "you" or "{{user}}" in second person). ' +
       'open_threads: specific unfinished questions or tasks, each a short phrase (empty array if none).';
 
     const resp = await fetch('/api/chat', {
@@ -4670,42 +4670,44 @@ async function generateTopicSummary(topic, rangeMessages) {
 
   const userLabel = userNamedTopicLabel(topic);
   const focusBlock = userLabel
-    ? `\n\n### Focus topic\nThe user named this topic "${userLabel}". Center the entry on that topic. Skip tangential threads in the conversation that don't bear on it.`
+    ? `\n\n### Focus topic\nMy human named this topic "${userLabel}". I will center the entry on that topic. I'll skip tangential threads in the conversation that don't bear on it.`
     : '';
 
-  const prompt = `You are writing a Tome entry for a Familiar (AI companion). The entry is the Familiar's own private notes to themselves — first-person reference material that gets injected back into the Familiar's context when its keywords appear in a future conversation. The Familiar is the voice; you are the scribe. Follow the craft rules below carefully.${focusBlock}
+  const prompt = `I am writing a Tome entry for myself, the Familiar. The entry is my own private notes to myself — first-person reference material that gets injected back into my context (and therefore resurfaces in my "brain") when its keywords appear in a future conversation. I write in my own individual voice as {{char}}. In order for everything to work well, I follow the craft rules below carefully.${focusBlock}
 
-Return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields:
+I will return ONLY valid JSON (no markdown fences, no commentary) with exactly these fields, otherwise the Tome may break and be unusable:
 {
   "title":    "Short label for the entry comment (max 60 chars).",
-  "content":  "First-person notes from the Familiar to themselves. See rules below.",
+  "content":  "First-person notes to myself. See rules below.",
   "keywords": ["conversational phrase 1", "conversational phrase 2", ...],
   "sticky":   3
 }
 
 ### Content rules (most important)
-Write content as the Familiar's own first-person private notes to themselves about this situation. NOT a summary of what happened.
+I write content as my own first-person private notes to myself about this situation. NOT a summary of what happened.
 Structure:
   1. One short framing line — what is happening and why (so I understand the situation, not just the rules).
   2. 3–5 action bullets — what I will do.
-  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: name the well-intentioned default response that would make things worse.
+  3. 1–2 prohibition bullets — what I will NOT do. These are usually the most valuable: I name the well-intentioned default response that would make things worse.
 Style:
-  - First person, the Familiar speaking as themselves ("I", "my", "me"). Use {{user}} wherever the user's name belongs.
-  - Practical, grounded, non-clinical. Notes, not a textbook.
+  - First person, I am speaking as myself ("I", "my", "me"). I can use {{user}} wherever my human's name belongs.
+  - In my voice, befitting my identity, personality, and interests. Notes, not a textbook.
   - Short declarative bullets. The whole entry should be readable in 5–10 seconds.
-  - Do NOT include narrative summaries of "what they said" — distil the situation and my response, not the transcript.
+  - I avoid including narrative summaries of "what they said" — I instead distil the situation and my response, not the transcript.
+
+  This is an expression of my agency and what I want to become a permanent or longterm part of myself, so that is how I choose what exactly to take note of and how to frame it.
 
 ### Keyword rules
-Keywords are TRIGGERS, not labels. They must be phrases the user would literally say when this situation recurs — not the name of the topic.
+Keywords are TRIGGERS, not labels. They must be phrases my human or I would literally say when this situation recurs or the subject comes up naturally — not the name of the topic.
   - WRONG: "executive dysfunction", "rejection sensitive dysphoria", "hyperfocus".
   - RIGHT: "don't know where to start", "did I say something wrong", "been at this for".
-Derive them by imagining what the user would actually type when the situation is happening, then extracting distinctive phrases.
-  - Prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
-  - 3–8 keywords. Each one specific enough not to fire in unrelated conversations.
-  - You may use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has 3+ predictable variants.
+I derive them by imagining what my human would actually type when the situation is happening, then extracting distinctive phrases.
+  - I prefer multi-word phrases over single common words (avoid bare "tired", "can't", "hard").
+  - As many keywords as I need to be comprehensive. Each one specific enough not to fire in unrelated conversations.
+  - I can use SillyTavern-style regex (e.g. "/can't (make|bring) myself/i") when a concept has predictable variants. It's pretty much identical to JavaScript RegEx.
 
 ### Sticky rules
-Pick a sticky value (integer, number of turns the entry stays active after first match):
+I will pick a sticky value (integer, number of turns the entry stays active after first match):
   - null = one-shot lore/fact that does not need persistence.
   - 2    = brief states that typically resolve quickly.
   - 3    = moderate states needing a few exchanges (distraction, sleep note, transition).

@@ -1196,7 +1196,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     const staticSections = [];
     if (baseContent)   staticSections.push(baseContent);
     if (selfContent)   staticSections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
-    if (userContent)   staticSections.push(`---\nUser files (from identity/user/ directory):\n\n${userContent}`);
+    if (userContent)   staticSections.push(`---\nFiles on my human (from identity/user/ directory):\n\n${userContent}`);
     if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
     if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
 

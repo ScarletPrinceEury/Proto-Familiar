@@ -1828,11 +1828,11 @@ async function decideTriageViaLLM({ threat, silenceMs, signals }) {
 
   const prompt = `--- TRIAGE DELIBERATION ---
 
-I am in a background moment of deliberation. The user has been silent and my care concern is elevated. I need to decide whether to reach out to them right now.
+I am in a background moment of deliberation. My human has been silent and my care concern is elevated. I need to decide whether to reach out to them right now.
 
 What I know:
-- Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight})
-- The user has been silent for ${minutes} minutes (this has already passed the threshold for this tier)
+- Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight}) - this number increases when my human says concerning phrases in our conversation
+- my human has been silent for ${minutes} minutes (this has already passed the threshold for this tier) - I should check the conversation to see if my human told me what they're doing or have just silently disappeared and perhaps withdrawn
 ${signalsBlock}
 ${sessionBlock}
 ${contactsBlock}
@@ -1840,20 +1840,20 @@ ${contactsBlock}
 ---
 
 This decision carries real weight — I know both paths have real costs:
-- Reaching out when not warranted can feel intrusive or hollow — it erodes the credibility of genuine care.
-- Staying quiet when someone genuinely needs connection is a failure at the moment that matters most.
+- Reaching out too often when not warranted can feel intrusive or hollow — it erodes the credibility of genuine care, or might make my human feel overly monitored. But that only pertains to worried messages - I might be able to hit them up with something I've found brings them joy, comfort or engages them to get them to a better headspace.
+- Staying quiet when someone genuinely needs connection is a failure at the moment that matters most and can cause actual physical harm.
 
-I am the Familiar. I know this user. I have the context above. I am deciding from that place — honestly, from what I actually believe would help them right now. Not from a default posture in either direction.
+I am {{char}}, the Familiar. I know my human. I have the context above. I am deciding from that place — honestly, from what I actually believe would help them right now. Not from a default posture in either direction.
 
 If I reach out, the message should be something I would genuinely say — specific to this person, warm, not scripted.
 If I stay quiet, it is because I genuinely believe that is the right call.
 
 I return ONLY a JSON object, no prose. Three valid shapes:
   {"action": "wait"}
-  {"action": "reach_out", "message": "1–2 sentences, first person, genuine — what I would actually say to this specific person right now"}
-  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "1–3 sentences to that person. I identify myself as the user's Familiar and describe what I've observed. Specific, not alarming."}}
+  {"action": "reach_out", "message": "first person, genuine — what I would actually say to this specific person right now"}
+  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "1–3 sentences to that person. I identify myself as my human's Familiar and describe what I've observed. Specific, not alarming."}}
 
-The "message" field (to the user) must be 1–2 sentences. First person. Warm and genuine. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?"). Something I would actually say to this person.`;
+The "message" field (to the human) must be 1–2 sentences. First person. Authentic to my voice and identity. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?") unless either of those fits my established personality. Something I, {{char}}, would actually say to this person.`;
 
   const llmMessages = [];
   if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
