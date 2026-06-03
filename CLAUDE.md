@@ -183,6 +183,42 @@ If a problem is real enough to fix at all, it's worth fixing properly. When I pr
 
 The versioning rules upstream already capture part of this (every meaningful change bumps; don't sneak fixes under the line). This section extends it to **proposal framing** — what I suggest *before* any commit lands.
 
+## ⚠️ Ride existing requests; gate in code
+
+Every LLM request costs tokens and latency. The default move when a
+new capability seems to need "ask the LLM if/when/how" is to add a
+new request. **Resist this.** A system that adds a new request per
+feature inflates linearly with capability; a system that *folds
+new judgments into calls that already happen* compounds.
+
+**The order of operations for any feature that needs LLM judgment:**
+
+1. **Can a hard gate handle it in cheap code?** Threat tier, quiet
+   hours, dedup windows, time-of-day filters, pattern-match
+   classification — these answer most *"should this happen?"*
+   questions for free. The LLM only sees candidates that survived
+   the gates.
+2. **Can it ride an existing LLM call?** Chat turns, pondering
+   ticks, silence-triage checks, reminder compositions are calls
+   the system already makes. New judgments (surface-eligibility,
+   framing, micro-step selection, reflection over outcomes) should
+   be injected into those existing prompts when possible, not spun
+   out as standalone calls.
+3. **Only if neither works, add a new request.** And when you do,
+   give it a self-set cool-down (the silence-triage `nextCheckInMs`
+   pattern) so it doesn't fire on a fixed cadence regardless of
+   need.
+
+**Pure-code tagging beats LLM classification** when the labels are
+crisp (engaged / ignored / deferred / completed). Keep the LLM for
+the *interpretation* of patterns across many tagged events, not the
+labelling of each one. Outcome records, response classes, dedup
+keys — these are data, not judgments.
+
+This is the difference between a system that compounds — more
+capability without more request volume — and one that linearly
+inflates token cost with every feature.
+
 ## Token-conscious operation (the human is on Claude Pro)
 
 The human running this session has a fixed weekly token budget. Anything I run that returns output to my context — `Bash`, `WebSearch`, `WebFetch`, `Read` — costs them. Spend tokens where they verify something that **could** be wrong; don't spend them where they verify something that obviously isn't different.
