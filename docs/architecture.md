@@ -93,6 +93,7 @@ ponderings injection, care-check framing) and as background loops
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
+├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── memorization.js          Persistent per-session memorization queue + worker
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
@@ -385,11 +386,10 @@ Within `dynamic`, the order is deliberate:
 
 Open schedule items don't speak for themselves — the Familiar needs to
 decide whether *this* moment is the moment to raise one, and how. The
-surface pipeline rides the existing chat-turn LLM call rather than
-spinning up a new request per task (see CLAUDE.md "Ride existing
-requests; gate in code"). Slice 1 covers the opportunistic-on-chat-turn
-trigger; slices 2+ add care-driven riding silence-triage and outcome-
-backed reflection mode for the pondering loop.
+surface pipeline rides existing LLM calls rather than spinning up a
+new request per task (see CLAUDE.md "Ride existing requests; gate in
+code"). All three triggers — opportunistic, triggered, care-driven —
+plus the reflection loop net zero new LLM requests.
 
 ```
 temporalPayload.schedule.window   ←  open tasks/events/reminders
@@ -414,23 +414,79 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
    surfacedTasks list returned alongside surfacedBookmarks
                 │
                 ▼
-   ── DEDUP STATE WRITE (fire-and-forget) ──
-   tomes/.surface-history.json (local file, slice-1 storage —
-   migrates to schedule-node payload.surfacing_history in slice 2)
+   ── EVENT RECORD (fire-and-forget) ──
+   Append to tomes/.surface-events.json with full event record
+   (state_snapshot, stakes_tier, confidence, outcome=null). The
+   tagger fills in outcome later when the schedule resolves.
 ```
+
+**Triggers** (all rides, zero new LLM calls):
+
+| Trigger | When | Riding | Carrier |
+|---|---|---|---|
+| Opportunistic | User just sent a chat message | Chat-turn enrich call | `[Surface candidates]` block in `dynamic` |
+| Triggered | Reminder hits its `when_ts` | Pure-code firing (set at creation by the Familiar) | Banner via outbox |
+| Care-driven | Silence-triage decided to reach out | The triage LLM call that's already happening | "Candidate tasks I could touch on" block in triage prompt |
 
 **`stakes_tier`** controls surfacing pressure:
 - `external_obligation` — real-world clock + external consequences (paperwork, deadlines, appointments). Bypasses quiet-hours and dedup. Surfaces under high threat.
 - `personal_wellbeing` — internal, reversible, person-specific decay (meals, hygiene, exercise). Respects all soft gates.
 - `purely_optional` — only matters if {{user}} cares. Lowest surfacing pressure.
 
-Inferred from label by `inferStakesTier()` in `surface-context.js` at task creation if not set explicitly. Overridable via the `stakes_tier` arg on `schedule_add_task` / `schedule_add_reminder` (Familiar sets at creation) and via the temporal editor's Stakes dropdown ({{user}} can correct).
+Inferred from label by `inferStakesTier()` in `surface-context.js`. Overridable by the Familiar at creation (BUILTIN_TOOLS `stakes_tier` arg) and by {{user}} in the temporal editor (Stakes dropdown).
 
-**`consequence_model`** is per-task free-text (e.g. "loses UC payment for the month") attached to the schedule node payload. Informs framing when the task surfaces. Set at creation, editable in the temporal editor (slice 2).
+**`consequence_model`** is per-task free-text attached to the schedule node payload, informing framing when the task surfaces.
 
-**`what_lapses_cost.md`** lives at `entity-core/custom/what_lapses_cost.md` (slice 2 — Familiar writes via reflection-loop pondering when patterns emerge). For slice 1 the file may not exist; pipeline is null-tolerant.
+## Reflection loop (slice 2)
 
-Files: `surface-context.js`, `docs/consequence-priors.md`.
+The pondering loop has a *mode*: when 5+ tagged surface outcomes have accumulated since the last reflection, the next pondering tick reflects on them instead of pondering an interest. **Same LLM call, different topic shape — zero new requests.**
+
+```
+pondering-loop.runOneTick()
+   │
+   ▼
+shouldReflectNow()  ← reads tomes/.surface-events.json,
+                      counts events with outcome ≠ null whose
+                      outcome_at > last_reflection_at. ≥ 5 → true.
+   │
+   ▼ (true)
+getReflectionInput()  ← projects fresh outcomes + current
+                        what_lapses_cost.md content + identity
+                        anchor into the reflection prompt input
+   │
+   ▼
+runPonder(input, { mode: 'reflection' })
+   │ ponderOnce() dispatches via buildPonderPrompt(input.mode === 'reflection')
+   ▼
+LLM returns:
+  { title, content, what_lapses_cost_update: null | { heading, content } }
+   │
+   ├── Pondering tome write (scope: 'reflection')
+   ├── markReflected(now) — resets fresh-outcome window
+   └── If what_lapses_cost_update present:
+       updateIdentitySection({ category: 'custom',
+                               filename: 'what_lapses_cost.md',
+                               heading, content })   ← via entity-core MCP
+```
+
+**Outcome tagging** is pure-code, runs at chat-turn entry as a fire-and-forget pass over `tomes/.surface-events.json`:
+
+| Schedule signal | Outcome |
+|---|---|
+| `resolution === 'done'` | `engaged_and_completed` |
+| `resolution === 'cancelled'` | `cancelled` |
+| `resolution === 'carried_forward'` | `deferred` |
+| `resolution === 'fired'` (reminder) | `fired` |
+| unresolved + offered > 24h ago | `unresponded` |
+| unresolved + < 24h | left null, re-checked next turn |
+
+Once tagged, an event's `outcome` is immutable — the LLM later reasons about a stable record, not a moving target.
+
+**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to entity-core's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
+
+**`what_lapses_cost.md`** lives at `entity-core/custom/what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
+
+Files: `surface-context.js`, `surface-events.js`, `docs/consequence-priors.md`.
 
 `injectDynamicAtDepth(messages, dynamicContent, depth)` in `server.js`
 is a pure helper; `tests/depth-inject.test.mjs` guards the

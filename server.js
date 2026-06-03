@@ -37,6 +37,11 @@ import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
+import {
+  shouldReflectNow,
+  getNewOutcomesSinceLastReflection,
+  markReflected,
+} from './surface-events.js';
 import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
@@ -1691,19 +1696,69 @@ function startAutonomousPondering() {
     },
     getInterests: () => listLiveInterests({ limit: 20 }),
     getThreat:    async () => (await getThreat()).weight,
-    runPonder:    async (topic) => {
+    // Reflection-mode trigger — when 5+ tagged surface outcomes have
+    // accumulated since the last reflection, this tick reflects on
+    // them instead of pondering an interest. Same LLM call, different
+    // input shape; the result still writes to the ponderings tome,
+    // and if the LLM lifted a pattern to identity-layer confidence
+    // an additional updateIdentitySection() lands.
+    shouldReflect: async () => shouldReflectNow(),
+    getReflectionInput: async () => {
+      const outcomes = await getNewOutcomesSinceLastReflection();
+      const id = await getIdentityAll().catch(() => ({}));
+      const file = (id?.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
+      const existingNotes = file?.content ?? '';
+      // Project events down to the fields reflection actually needs.
+      // Keeps the prompt tight and stops drifting state-snapshot
+      // additions from blowing up token cost.
+      const projected = outcomes.map(e => ({
+        task_label:     e.task_label,
+        stakes_tier:    e.stakes_tier,
+        confidence:     e.confidence,
+        offered_at:     e.offered_at,
+        outcome:        e.outcome,
+        outcome_at:     e.outcome_at,
+        state_snapshot: e.state_snapshot,
+      }));
+      return { mode: 'reflection', outcomes: projected, existingNotes };
+    },
+    runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
       const s    = readSettingsSync();
       const conn = primaryConnectionFrom(s);
       if (!conn?.apiKey) throw new Error('no primary connection configured');
-      return ponderOnce({
+      const result = await ponderOnce({
         topic,
         provider: conn.provider,
         apiKey:   conn.apiKey,
         model:    conn.model,
       });
+      // Reflection follow-through: if the LLM proposed an
+      // identity-layer update, write it. Mark the reflection so
+      // future shouldReflectNow() calls measure freshness from
+      // here. Both fire-and-forget — pondering tome write already
+      // succeeded, so reflection counts as "done" regardless.
+      if (result?.mode === 'reflection') {
+        markReflected()
+          .catch(err => console.error('[pondering] markReflected failed:', err?.message ?? err));
+        const upd = result.what_lapses_cost_update;
+        if (upd?.heading && upd?.content) {
+          updateIdentitySection({
+            category: 'custom',
+            filename: 'what_lapses_cost.md',
+            heading:  upd.heading,
+            content:  upd.content,
+          })
+            .then(r => console.log(`[pondering] reflection → ${r.ok ? 'wrote' : 'failed to write'} ${upd.heading} to what_lapses_cost.md`))
+            .catch(err => console.error('[pondering] what_lapses_cost write failed:', err?.message ?? err));
+        }
+      }
+      return result;
     },
     onTick: (r) => {
-      if (r.acted) {
+      if (!r.acted) return;
+      if (r.mode === 'reflection') {
+        console.log(`[pondering] reflection → "${r.result.title}"${r.result.what_lapses_cost_update ? ' (proposed identity-layer update)' : ''}`);
+      } else {
         console.log(`[pondering] "${r.picked.label}" (weight ${r.picked.weight?.toFixed?.(2) ?? r.picked.weight}, threat ${r.threatLevel?.toFixed?.(2) ?? r.threatLevel}, scale ${r.scale}×) → "${r.result.title}"`);
       }
     },
@@ -1835,6 +1890,50 @@ async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in my human's chat. Nothing is covert.`
     : '';
 
+  // Care-driven surface: if I'm already deliberating about whether
+  // to reach out, an open task I could touch on (if it fits the
+  // moment) might be the right doorway. Pull eligible candidates
+  // from the same pipeline the chat-turn block uses, but with
+  // triage's current state. The LLM still decides — these are
+  // candidates, not directives. Empty block if nothing's eligible.
+  let candidateTasksBlock = '';
+  try {
+    const { selectSurfaceCandidates } = await import('./surface-context.js');
+    const { getRecentOfferTimes }     = await import('./surface-events.js');
+    // I already have temporal_context loaded as part of enrich() in
+    // many call sites, but triage is async + standalone here, so
+    // fetch a fresh window directly. Cheap — no LLM call.
+    const fromIso = new Date(Date.now() - 24 * 3600_000).toISOString();
+    const toIso   = new Date(Date.now() + 7 * 24 * 3600_000).toISOString();
+    const win = await getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] }));
+    const nodes = Array.isArray(win) ? win : (Array.isArray(win?.nodes) ? win.nodes : []);
+    const openItems = nodes
+      .filter(item => item
+        && (item.type === 'task' || item.type === 'event' || item.type === 'reminder')
+        && !item.resolution);
+    if (openItems.length > 0) {
+      const surfacingHistory = await getRecentOfferTimes();
+      const candidates = await selectSurfaceCandidates({
+        openTasks: openItems,
+        threat,
+        routinePhaseLabel: '',  // triage runs across phases; don't filter
+        personModel: '',
+        surfacingHistory,
+        now: Date.now(),
+        maxCandidates: 2,
+      });
+      if (candidates.length > 0) {
+        const lines = candidates.map(c => {
+          const stakes = c.stakesTier === 'external_obligation' ? ' [external stakes]' : '';
+          return `  - ${c.label}${stakes}`;
+        }).join('\n');
+        candidateTasksBlock = `\nOpen tasks I could touch on if it fits this reach-out (NOT a list I should mention — only if one of these genuinely opens a door to {{user}} right now):\n${lines}`;
+      }
+    }
+  } catch (err) {
+    console.error('[triage] candidate tasks lookup failed:', err?.message ?? err);
+  }
+
   const prompt = `--- TRIAGE DELIBERATION ---
 
 I am in a background moment of deliberation. My human has been silent and my care concern is elevated. I need to decide whether to reach out to them right now.
@@ -1845,6 +1944,7 @@ What I know:
 ${signalsBlock}
 ${sessionBlock}
 ${contactsBlock}
+${candidateTasksBlock}
 
 ---
 

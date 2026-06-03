@@ -292,44 +292,24 @@ function truncate(text, max) {
   return s.slice(0, max) + '…';
 }
 
-// ── Dedup state (local file, slice-1 storage) ─────────────────────
+// ── Dedup state (slice-2 storage) ─────────────────────────────────
 //
-// Slice 1 holds "when did I last offer this task?" timestamps in a
-// local JSON file so the dedup gate survives restarts. Slice 2 will
-// migrate this onto the schedule node payload (payload.surfacing_
-// history) once the reflection-loop infrastructure lands and per-
-// task pattern analysis becomes meaningful — at that point the data
-// belongs WITH the task it describes. For now, the local file is
-// the right shape: cheap, auditable (Eury can read it), no Unruh
-// roundtrip per surfacing offer.
-
-const HISTORY_PATH = path.resolve(__dirname, 'tomes', '.surface-history.json');
-const HISTORY_RETENTION_MS = 14 * 24 * 3600 * 1000;
+// The dedup gate reads the most-recent offer time per task from the
+// surface-events file (see surface-events.js). Slice 1 held this in
+// a separate `.surface-history.json`; slice 2 consolidates it into
+// the richer event stream so reflection has one place to look. The
+// loadSurfacingHistory shim below stays as a no-op import for any
+// caller that still reaches for it — the real source is now
+// getRecentOfferTimes() in surface-events.js.
 
 export async function loadSurfacingHistory() {
-  try {
-    const raw = await fs.readFile(HISTORY_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+  // Re-export under the slice-1 name for any caller that still
+  // imports it; routes to the event-store-backed offer map.
+  const { getRecentOfferTimes } = await import('./surface-events.js');
+  return getRecentOfferTimes();
 }
 
-export async function recordSurfacingOffers(offerIds, now = Date.now()) {
-  if (!Array.isArray(offerIds) || offerIds.length === 0) return;
-  const history = await loadSurfacingHistory();
-  for (const id of offerIds) {
-    if (id) history[id] = now;
-  }
-  // Prune so the file doesn't grow forever.
-  const cutoff = now - HISTORY_RETENTION_MS;
-  for (const [k, v] of Object.entries(history)) {
-    if (typeof v !== 'number' || v < cutoff) delete history[k];
-  }
-  try {
-    await fs.writeFile(HISTORY_PATH, JSON.stringify(history, null, 2), 'utf8');
-  } catch (err) {
-    console.error('[surface-context] recordSurfacingOffers write failed:', err?.message ?? err);
-  }
-}
+// recordSurfacingOffers is removed — callers now use
+// recordSurfaceOffers() from surface-events.js, which captures the
+// full event record (state snapshot, confidence, etc.) rather than
+// just a timestamp.

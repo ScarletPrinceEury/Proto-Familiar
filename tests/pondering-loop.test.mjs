@@ -303,3 +303,47 @@ test('runOneTick: high threat shortens cadence — same wait, low threat skips, 
   });
   assert.equal(tickSevere.acted, true, 'mid-weight + severe threat: 9 min required, 10 min wait → fires');
 });
+
+// ── Reflection-mode trigger (slice 2) ──────────────────────────────
+
+test('runOneTick: shouldReflect=true → reflection mode, runPonder gets the reflection input', async () => {
+  const calls = [];
+  const r = await runOneTick({
+    getInterests:  async () => [{ label: 'x', weight: 5 }],
+    runPonder:     async (input, opts) => { calls.push({ input, opts }); return { mode: 'reflection', ok: true }; },
+    shouldReflect: async () => true,
+    getReflectionInput: async () => ({ mode: 'reflection', outcomes: [{ a: 1 }], existingNotes: 'prior' }),
+    now:           () => 60 * 60_000,
+    lastPonderAt:  0,
+  });
+  assert.equal(r.acted, true);
+  assert.equal(r.mode, 'reflection');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].input.mode, 'reflection');
+  assert.deepEqual(calls[0].input.outcomes, [{ a: 1 }]);
+});
+
+test('runOneTick: shouldReflect=false → falls through to interest pick', async () => {
+  const r = await runOneTick({
+    getInterests:  async () => [{ label: 'pondering-topic', weight: 5 }],
+    runPonder:     async (label /* string */) => ({ pondered: label }),
+    shouldReflect: async () => false,
+    getReflectionInput: async () => { throw new Error('should not be called'); },
+    now:           () => 60 * 60_000,
+    lastPonderAt:  0,
+  });
+  assert.equal(r.acted, true);
+  assert.equal(r.mode, 'pondering');
+  assert.equal(r.picked.label, 'pondering-topic');
+});
+
+test('runOneTick: missing reflection callbacks → normal pondering (no error)', async () => {
+  const r = await runOneTick({
+    getInterests: async () => [{ label: 'x', weight: 5 }],
+    runPonder:    async (label) => ({ pondered: label }),
+    now:          () => 60 * 60_000,
+    lastPonderAt: 0,
+  });
+  assert.equal(r.acted, true);
+  assert.equal(r.mode, 'pondering');
+});

@@ -885,9 +885,12 @@ import { getThreat, tierForThreat } from './threat-tracker.js';
 import {
   selectSurfaceCandidates,
   formatSurfaceCandidatesBlock,
-  loadSurfacingHistory,
-  recordSurfacingOffers,
 } from './surface-context.js';
+import {
+  recordSurfaceOffers,
+  getRecentOfferTimes,
+  tagOutcomes,
+} from './surface-events.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -1277,6 +1280,17 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         const windowItems = Array.isArray(temporalPayload?.schedule?.window)
           ? temporalPayload.schedule.window
           : [];
+
+        // Outcome tagger runs first — past offers may have closed
+        // out (task resolved, cancelled, etc.) since I last looked,
+        // and I want those tagged before reflection thresholds get
+        // re-evaluated. Pure-code, fire-and-forget, no LLM call.
+        if (liveTurn && windowItems.length > 0) {
+          tagOutcomes({ windowItems })
+            .then(r => { if (r?.tagged) console.log(`[thalamus] tagged ${r.tagged} surface outcome(s)`); })
+            .catch(err => console.error('[thalamus] tagOutcomes failed:', err?.message ?? err));
+        }
+
         const openItems = windowItems.filter(item =>
           item
           && (item.type === 'task' || item.type === 'event' || item.type === 'reminder')
@@ -1286,7 +1300,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           const routinePhaseLabel = temporalPayload?.schedule?.phase?.label || '';
           const lapsesFile = (id.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
           const personModel = lapsesFile?.content?.trim() ?? '';
-          const surfacingHistory = await loadSurfacingHistory();
+          const surfacingHistory = await getRecentOfferTimes();
           const nowMs = Date.now();
 
           const candidates = await selectSurfaceCandidates({
@@ -1301,12 +1315,17 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           if (candidates.length > 0) {
             surfaceCandidatesBlock = formatSurfaceCandidatesBlock(candidates);
             surfacedTasks = candidates.map(c => ({ id: c.id, label: c.label }));
-            // Record the offers so the dedup window holds across turns.
-            // Live-turn only — debug-prompt previews and handoff summaries
-            // mustn't burn the dedup budget. Fire-and-forget.
+            // Record the offers (full event records: state snapshot,
+            // stakes, confidence) so reflection can correlate.
+            // Live-turn only — debug-prompt previews and handoff
+            // summaries mustn't burn the dedup budget.
             if (liveTurn) {
-              recordSurfacingOffers(surfacedTasks.map(t => t.id), nowMs)
-                .catch(err => console.error('[thalamus] recordSurfacingOffers failed:', err?.message ?? err));
+              const stateSnapshot = {
+                threat_tier:   threat?.tier ?? 'calm',
+                routine_phase: routinePhaseLabel,
+              };
+              recordSurfaceOffers(candidates, stateSnapshot, nowMs)
+                .catch(err => console.error('[thalamus] recordSurfaceOffers failed:', err?.message ?? err));
             }
             console.log(`[thalamus] surface candidates: ${candidates.map(c => `${c.label}(${c.stakesTier},${c.confidence})`).join(', ')}`);
           }
