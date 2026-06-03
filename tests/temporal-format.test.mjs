@@ -200,17 +200,70 @@ test('resolved items grouped under "Recently resolved" header (not mixed with up
   assert.match(out, /Recently resolved in this window:[\s\S]*past-thing \[done\]/);
 });
 
-test('past-date phases in window do NOT pollute the briefing (Routine surface owns them)', () => {
-  // get_window may return phase rows whose stored when_ts is from the
-  // day they were added; the formatter must skip them so the
-  // briefing doesn't fill up with yesterday's morning-correspondence
-  // ghost entries.
+test('past-date phase rows in schedule.window do NOT pollute the schedule sections', () => {
+  // The "Routine" section (payload.routine) is the right surface for
+  // phases — they recur daily by design. If a phase happens to leak
+  // through schedule.window (stored date in the past), the schedule
+  // block must skip it so we don't double-render.
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
-      { type: 'phase', label: 'morning correspondence', when: '2026-05-01T06:00:00Z', end: '2026-05-01T10:00:00Z' },
+      { type: 'phase', label: 'leaked-from-window', when: '2026-05-01T06:00:00Z', end: '2026-05-01T10:00:00Z' },
     ]},
+    // No routine block — this asserts the schedule-side skip, not the rhythm rendering.
   });
-  assert.equal(out.includes('morning correspondence'), false);
+  assert.equal(out.includes('leaked-from-window'), false);
+});
+
+test("today's rhythm: phases surface regardless of stored date (recur daily)", () => {
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [] },
+    routine: [
+      // Stored on different past dates — should all surface anyway.
+      { id: 'p1', label: 'early morning',          when: '2026-05-01T06:00:00Z', end: '2026-05-01T10:00:00Z',
+        payload: { texture: 'before {{user}} wakes' } },
+      { id: 'p2', label: 'morning correspondence', when: '2026-03-14T10:00:00Z', end: '2026-03-14T13:00:00Z' },
+      { id: 'p3', label: 'late night',             when: '2026-02-02T23:00:00Z', end: '2026-02-03T06:00:00Z' },
+    ],
+  });
+  assert.match(out, /Today's rhythm:/);
+  assert.match(out, /early morning/);
+  assert.match(out, /morning correspondence/);
+  assert.match(out, /late night/);
+  assert.match(out, /before \{\{user\}\} wakes/);
+});
+
+test("today's rhythm: current phase is marked '← I am here'", () => {
+  const out = formatTemporalContext({
+    schedule: {
+      phase: { id: 'p2', label: 'morning correspondence', when: '2026-03-14T10:00:00Z', end: '2026-03-14T13:00:00Z' },
+      window: [],
+    },
+    routine: [
+      { id: 'p1', label: 'early morning',          when: '2026-05-01T06:00:00Z', end: '2026-05-01T10:00:00Z' },
+      { id: 'p2', label: 'morning correspondence', when: '2026-03-14T10:00:00Z', end: '2026-03-14T13:00:00Z' },
+      { id: 'p3', label: 'afternoon work',         when: '2026-03-14T13:00:00Z', end: '2026-03-14T18:00:00Z' },
+    ],
+  });
+  // The current phase carries the marker; others do not.
+  assert.match(out, /morning correspondence.*← I am here/);
+  assert.equal(/early morning.*← I am here/.test(out), false);
+  assert.equal(/afternoon work.*← I am here/.test(out), false);
+});
+
+test("today's rhythm: phases sorted by local time-of-day, not by stored date", () => {
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [] },
+    routine: [
+      // Insertion order deliberately scrambled vs. time-of-day.
+      { id: 'late',  label: 'late night',      when: '2026-05-01T23:00:00Z', end: '2026-05-02T06:00:00Z' },
+      { id: 'early', label: 'early morning',   when: '2026-05-01T06:00:00Z', end: '2026-05-01T10:00:00Z' },
+      { id: 'noon',  label: 'morning correspondence', when: '2026-05-01T10:00:00Z', end: '2026-05-01T13:00:00Z' },
+    ],
+  });
+  const iEarly = out.indexOf('early morning');
+  const iNoon  = out.indexOf('morning correspondence');
+  const iLate  = out.indexOf('late night');
+  assert.ok(iEarly < iNoon && iNoon < iLate, `order should be early→noon→late, got ${iEarly}/${iNoon}/${iLate}`);
 });
 
 test('renders resolution badge on resolved items', () => {

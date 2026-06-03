@@ -527,6 +527,12 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
     with get_conn() as conn:
         phase = sched.current_phase(conn, at=now)
         window = sched.get_window(conn, from_ts=None, to_ts=None, limit=50)
+        # Full routine — every live phase, date-independent. The
+        # Familiar needs the day's shape, not just "which phase right
+        # now." current_phase still rides along separately so the
+        # formatter can mark "← I am here." Excluding resolved phases
+        # so a deliberately cancelled phase actually stops appearing.
+        routine = sched.list_phases(conn, include_resolved=False, limit=50)
         # Interest layer surfacing: top weighted live interests plus
         # all standing values. Limited to keep the prompt cheap —
         # the design's "kilobytes-scale" budget assumes ~10 items
@@ -541,6 +547,7 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
     return {
         "ts": now or _now_iso(),
         "schedule":  schedule_block,
+        "routine":   routine,
         "interests": {
             "standing": interest_block["standing"],
             "live":     interest_block["live"],

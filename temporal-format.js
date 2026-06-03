@@ -80,8 +80,38 @@ export function formatTemporalContext(payload) {
     blocks.push(handoffLines.join('\n'));
   }
 
+  // ── Today's rhythm ───────────────────────────────────────────────
+  // The full set of live phases, rendered with their HH:MM ranges in
+  // local TZ. Phases recur daily — the stored date is an artifact of
+  // insertion, so we sort by minute-of-day and ignore the calendar
+  // portion entirely. The current phase (computed by Unruh's
+  // current_phase against time-of-day) is marked "← I am here" so
+  // the Familiar can orient inside the day's shape, not just know
+  // "what right now."
   const schedule = payload.schedule ?? {};
   const phase = schedule.phase;
+  const routine = Array.isArray(payload.routine) ? payload.routine : [];
+  if (routine.length) {
+    const rhythm = routine
+      .slice()
+      .map(p => {
+        const d = new Date(p.when || 0);
+        const mins = Number.isFinite(d.getTime())
+          ? d.getHours() * 60 + d.getMinutes()
+          : -1;
+        return { p, mins };
+      })
+      .sort((a, b) => a.mins - b.mins)
+      .map(({ p }) => {
+        const start = formatLocalTime(p.when, { timeOnly: true });
+        const end   = formatLocalTime(p.end,  { timeOnly: true });
+        const here  = phase && p.id === phase.id ? '  ← I am here' : '';
+        const texture = p.payload?.texture ? ` — ${p.payload.texture}` : '';
+        return `  ${start}–${end}  ${p.label ?? p.id}${texture}${here}`;
+      });
+    blocks.push(["Today's rhythm:", ...rhythm].join('\n'));
+  }
+
   const window = schedule.window ?? [];
   if (phase || window.length) {
     // Group window items so the Familiar reads them as distinct
