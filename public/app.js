@@ -1653,8 +1653,13 @@ function _buildApiMessagesInner(userInput) {
   msgs.push({ role: 'user', content: userInput });
 
   // ── Post-history prompt ───────────────────────────────────────
+  // role:'system' rather than role:'user' so it's semantically a
+  // priming directive (not a {{user}} turn), and so the "last
+  // role:'user' in the array" extraction server-side picks up
+  // {{user}}'s actual input. (The chat path also sends an explicit
+  // userMessage field for the same reason — belt-and-suspenders.)
   if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'user', content: applyNameVars(state.postHistoryPrompt.trim()) });
+    msgs.push({ role: 'system', content: applyNameVars(state.postHistoryPrompt.trim()) });
 
   lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
@@ -3694,8 +3699,13 @@ function init() {
   });
   $('topic-name-start-btn').addEventListener('click', () => {
     const label = $('topic-name-input').value.trim() || `Topic ${state.topics.length + 1}`;
+    // Capture the retroactive start index BEFORE closeTopicNameModal()
+    // nulls it. Without this, the per-message "▷ Topic start" button
+    // started the topic at state.messages.length (the very bottom of
+    // the chat) regardless of which message I clicked on.
+    const retroStartIdx = _retroStartIndex;
     closeTopicNameModal();
-    startTopic(label);
+    startTopic(label, retroStartIdx);
   });
 
   // Summary modal
@@ -7490,27 +7500,31 @@ async function teLoadRoutine() {
   const list = $('te-routine-list');
   if (!list) return;
   list.innerHTML = '<p class="logs-empty">Loading…</p>';
-  // Phases span a day; fetch a big window so all phases are visible.
-  const now  = new Date();
-  const from = new Date(now.getTime() - 36 * 60 * 60_000).toISOString();
-  const to   = new Date(now.getTime() + 36 * 60 * 60_000).toISOString();
   try {
-    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
+    // Date-independent endpoint — phases recur daily, but their stored
+    // when_ts carries the date they were added. Using the windowed
+    // /api/temporal/schedule endpoint silently hid every phase the day
+    // after it was created. /api/temporal/phases ignores the date and
+    // returns all live phases.
+    const r = await fetch('/api/temporal/phases');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
-    // Phases only. Dedupe by label (the seed re-renders every day) and
-    // keep the latest copy. Sort by when_ts time-of-day.
+    // Dedupe by label (multiple edits to the same phase produce
+    // multiple rows; keep the latest by when_ts string).
     const byLabel = new Map();
-    for (const n of (data.nodes || [])) {
-      if (n.type !== 'phase') continue;
+    for (const n of (data.phases || [])) {
       const prev = byLabel.get(n.label);
       if (!prev || (n.when || '') > (prev.when || '')) byLabel.set(n.label, n);
     }
     const phases = Array.from(byLabel.values()).sort((a, b) => {
-      const ta = (a.when || '').slice(11);
-      const tb = (b.when || '').slice(11);
-      return ta.localeCompare(tb);
+      // Sort by local time-of-day, not by raw UTC HH:MM in the
+      // ISO string (slicing the ISO returns UTC hours, which lie
+      // in any non-UTC timezone).
+      const da = new Date(a.when || 0); const db = new Date(b.when || 0);
+      const ta = da.getHours() * 60 + da.getMinutes();
+      const tb = db.getHours() * 60 + db.getMinutes();
+      return ta - tb;
     });
 
     const routineSummary = $('te-routine-summary');
@@ -7604,10 +7618,12 @@ async function teSavePhase() {
   const texture = $('te-routine-texture').value.trim();
   if (!label)          { alert('Label is required.'); return; }
   if (!startT || !endT) { alert('Both start and end times are required.'); return; }
-  // Phases recur daily. We stamp today's local date + the local HH:MM,
-  // then convert to ISO UTC so the absolute moment is unambiguous.
-  // Unruh re-templates the date portion on read so the cycle keeps
-  // landing on the right day regardless.
+  // Phases recur daily — the date in when_ts is just an artifact of
+  // when this row was inserted. teLoadRoutine uses /api/temporal/phases
+  // (date-independent) to surface them, and Unruh's current_phase()
+  // compares only the HH:MM:SS portion when deciding which phase is
+  // active right now. We still stamp today's date for ordering /
+  // audit purposes.
   const when = teLocalTimeTodayToIsoUtc(startT);
   const end  = teLocalTimeTodayToIsoUtc(endT);
   if (!when || !end) { alert('Could not parse the times. Use HH:MM (the picker should fill this).'); return; }

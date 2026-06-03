@@ -80,10 +80,63 @@ export function formatTemporalContext(payload) {
     blocks.push(handoffLines.join('\n'));
   }
 
+  // ── Today's rhythm ───────────────────────────────────────────────
+  // The full set of live phases, rendered with their HH:MM ranges in
+  // local TZ. Phases recur daily — the stored date is an artifact of
+  // insertion, so we sort by minute-of-day and ignore the calendar
+  // portion entirely. The current phase (computed by Unruh's
+  // current_phase against time-of-day) is marked "← I am here" so
+  // the Familiar can orient inside the day's shape, not just know
+  // "what right now."
   const schedule = payload.schedule ?? {};
   const phase = schedule.phase;
+  const routine = Array.isArray(payload.routine) ? payload.routine : [];
+  if (routine.length) {
+    const rhythm = routine
+      .slice()
+      .map(p => {
+        const d = new Date(p.when || 0);
+        const mins = Number.isFinite(d.getTime())
+          ? d.getHours() * 60 + d.getMinutes()
+          : -1;
+        return { p, mins };
+      })
+      .sort((a, b) => a.mins - b.mins)
+      .map(({ p }) => {
+        const start = formatLocalTime(p.when, { timeOnly: true });
+        const end   = formatLocalTime(p.end,  { timeOnly: true });
+        const here  = phase && p.id === phase.id ? '  ← I am here' : '';
+        const texture = p.payload?.texture ? ` — ${p.payload.texture}` : '';
+        return `  ${start}–${end}  ${p.label ?? p.id}${texture}${here}`;
+      });
+    blocks.push(["Today's rhythm:", ...rhythm].join('\n'));
+  }
+
   const window = schedule.window ?? [];
   if (phase || window.length) {
+    // Group window items so the Familiar reads them as distinct
+    // categories with different weight: upcoming (time-anchored,
+    // unresolved), open tasks ({{user}} committed to these, no time
+    // yet, not done), resolved (recently terminal — usually noise
+    // but useful when the Familiar wants to acknowledge a finish).
+    const upcoming  = [];
+    const openTasks = [];
+    const reminders = [];
+    const resolved  = [];
+    for (const item of window) {
+      // Skip the phase that's already shown as "Current phase" — no
+      // need to repeat it as a separate line.
+      if (item.type === 'phase' && phase && item.id === phase.id) continue;
+      // Other phases (past/future date stamps) — skip; they live in
+      // their own Routine surface, not the briefing.
+      if (item.type === 'phase') continue;
+      if (item.resolution) { resolved.push(item); continue; }
+      if (item.type === 'reminder') { reminders.push(item); continue; }
+      if (item.when || item.end) { upcoming.push(item); continue; }
+      // type=='task' with no when_ts → open task on the radar.
+      openTasks.push(item);
+    }
+
     const schedLines = [];
     if (phase) {
       const phaseLabel = phase.label ?? phase.id ?? phase;
@@ -93,15 +146,40 @@ export function formatTemporalContext(payload) {
       const texturePart = phase.payload?.texture ? ` — ${phase.payload.texture}` : '';
       schedLines.push(`Current phase: ${phaseLabel}${span}${texturePart}`);
     }
-    for (const item of window) {
-      // Skip the phase that's already shown as "Current phase" — no
-      // need to repeat it as a separate line in the window list.
-      if (item.type === 'phase' && phase && item.id === phase.id) continue;
-      const when = item.when ?? item.fires_at ?? '';
-      const label = item.label ?? item.id ?? '';
-      const resolution = item.resolution ? ` [${item.resolution}]` : '';
-      const whenText = when ? `${formatLocalTime(when)} — ` : '';
-      schedLines.push(`  ${whenText}${label}${resolution}`);
+    if (upcoming.length) {
+      schedLines.push('Upcoming in this window:');
+      for (const item of upcoming) {
+        const when = item.when ?? item.fires_at ?? '';
+        const whenText = when ? `${formatLocalTime(when)} — ` : '';
+        const type = item.type ? `[${item.type}] ` : '';
+        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}`);
+      }
+    }
+    if (reminders.length) {
+      schedLines.push('Reminders set to fire:');
+      for (const item of reminders) {
+        const when = item.when ?? item.fires_at ?? '';
+        const whenText = when ? `${formatLocalTime(when)} — ` : '';
+        schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''}`);
+      }
+    }
+    if (openTasks.length) {
+      // Framing here matters: bare labels read as informational
+      // background. Named under "open" with the bonded-human marker
+      // primes the Familiar to feel them as commitments {{user}} is
+      // counting on them to hold.
+      schedLines.push("Open tasks I'm keeping on my radar for {{user}} (no completion confirmed):");
+      for (const item of openTasks) {
+        schedLines.push(`  - ${item.label ?? item.id ?? ''}`);
+      }
+    }
+    if (resolved.length) {
+      schedLines.push('Recently resolved in this window:');
+      for (const item of resolved) {
+        const when = item.when ?? item.fires_at ?? '';
+        const whenText = when ? `${formatLocalTime(when)} — ` : '';
+        schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''} [${item.resolution}]`);
+      }
     }
     if (schedLines.length) blocks.push(schedLines.join('\n'));
   }

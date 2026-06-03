@@ -388,6 +388,33 @@ def get_window(
     return {"nodes": nodes, "edges": edges, "from": from_ts, "to": to_ts}
 
 
+def list_phases(
+    conn: sqlite3.Connection,
+    *,
+    include_resolved: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return every phase node, regardless of stored date.
+
+    Phases recur daily by design — `current_phase()` already matches
+    on time-of-day only — but `get_window()` honours the calendar
+    date in `when_ts` / `end_ts`, so the day after I add a phase
+    its row falls outside any reasonable window. Callers that want
+    the routine surface (the M9 Routine tab, briefing layers
+    rendering "today's rhythm") should use this instead.
+
+    Resolved phases excluded by default so a cancelled phase stops
+    showing up; pass include_resolved=True to surface them too.
+    """
+    sql = (
+        "SELECT * FROM nodes WHERE layer = 'schedule' AND type = 'phase'"
+        + ("" if include_resolved else " AND resolution IS NULL")
+        + " ORDER BY when_ts ASC LIMIT ?"
+    )
+    rows = conn.execute(sql, (limit,)).fetchall()
+    return [_node_row_to_dict(r) for r in rows]
+
+
 def current_phase(
     conn: sqlite3.Connection,
     *,
