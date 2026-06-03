@@ -3699,8 +3699,13 @@ function init() {
   });
   $('topic-name-start-btn').addEventListener('click', () => {
     const label = $('topic-name-input').value.trim() || `Topic ${state.topics.length + 1}`;
+    // Capture the retroactive start index BEFORE closeTopicNameModal()
+    // nulls it. Without this, the per-message "▷ Topic start" button
+    // started the topic at state.messages.length (the very bottom of
+    // the chat) regardless of which message I clicked on.
+    const retroStartIdx = _retroStartIndex;
     closeTopicNameModal();
-    startTopic(label);
+    startTopic(label, retroStartIdx);
   });
 
   // Summary modal
