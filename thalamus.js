@@ -18,8 +18,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
 import os from 'os';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -142,6 +143,130 @@ function resolveDenoBinary() {
 // surface (PUT /api/settings) but we read it here at spawn time to pick
 // up the API-key designation for entity-core. Read is sync and small.
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+// ── Tome / state-file coordination ─────────────────────────────────
+//
+// Thalamus is the central coordination node — everything that
+// retrieves, injects, or mutates state goes through here so callers
+// don't have to invent their own queuing. Before this section
+// existed, three modules (pondering.js, memorization.js,
+// surface-events.js) each had a private copy of the same mutex
+// pattern keyed differently, and server.js writeTome had no lock at
+// all. That meant the pondering-loop could not coordinate with a
+// concurrent /api/temporal/ponderings DELETE — both writers held
+// no key in common, both did read-modify-write on the same file,
+// the later write clobbered the earlier one. Now all writers route
+// through withLock(filePath) here.
+//
+// Key convention:
+//   - FILE-scope (absolute file path) — serialises read-modify-write
+//     on a specific file. The right key for tome writes, settings
+//     PUT, and any caller that does its own atomic .tmp+rename.
+//   - DIR-scope  (absolute directory path) — serialises directory
+//     scans plus first-time creation, so two parallel
+//     find-or-create-by-name calls can't make two different files.
+
+const _locks = new Map();
+
+/**
+ * Run `fn` with exclusive access to `key`. Concurrent calls with the
+ * same key serialise; concurrent calls with different keys run in
+ * parallel. Returns whatever `fn` returns. Errors propagate.
+ */
+export function withLock(key, fn) {
+  const prev = _locks.get(key) ?? Promise.resolve();
+  let release;
+  const next = new Promise(r => { release = r; });
+  const chained = prev.then(() => next);
+  _locks.set(key, chained);
+  const run = (async () => {
+    await prev;
+    try { return await fn(); }
+    finally {
+      release();
+      if (_locks.get(key) === chained) _locks.delete(key);
+    }
+  })();
+  return run;
+}
+
+/** Locked read of a tome JSON file. Returns null on missing/corrupt. */
+export async function readTomeFile(filePath) {
+  return withLock(filePath, async () => {
+    try {
+      const raw = await fsp.readFile(filePath, 'utf8');
+      return JSON.parse(raw);
+    } catch { return null; }
+  });
+}
+
+/**
+ * Atomically write a tome JSON file under the per-file lock. Use this
+ * for whole-file creates / replacements. For read-modify-write, use
+ * modifyTomeFile() so the read and the write run under the same
+ * lock acquisition.
+ */
+export async function writeTomeFile(filePath, tome) {
+  return withLock(filePath, async () => {
+    const tmp = filePath + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+    await fsp.rename(tmp, filePath);
+  });
+}
+
+/**
+ * Locked read-modify-write. Reads the file, calls modifyFn(tome) which
+ * can mutate in-place OR return a replacement, then atomically writes
+ * back. Use this for every endpoint or loop that edits an existing
+ * tome — it's the only way to make the read and the write a single
+ * atomic unit against other writers.
+ */
+export async function modifyTomeFile(filePath, modifyFn) {
+  return withLock(filePath, async () => {
+    let tome;
+    try {
+      tome = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+    } catch (err) {
+      throw new Error(`modifyTomeFile: cannot read ${filePath}: ${err?.message ?? err}`);
+    }
+    const out = await modifyFn(tome);
+    const next = out ?? tome;
+    const tmp = filePath + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
+    await fsp.rename(tmp, filePath);
+    return next;
+  });
+}
+
+/**
+ * Find a tome by `tome.name` in `tomesDir`, or create it from
+ * `defaultStruct` if no such tome exists. Returns { tome, file }.
+ * Scan and create run under a DIR-scope lock so two parallel calls
+ * with the same name can't produce duplicate tomes. The create write
+ * is atomic (.tmp + rename) so a crash mid-creation leaves no
+ * file rather than a corrupt one.
+ */
+export async function findOrCreateTomeByName(tomesDir, name, defaultStruct) {
+  return withLock(tomesDir, async () => {
+    mkdirSync(tomesDir, { recursive: true });
+    const files = await fsp.readdir(tomesDir);
+    for (const f of files) {
+      if (!f.endsWith('.json') || f.startsWith('.')) continue;
+      try {
+        const raw = await fsp.readFile(path.join(tomesDir, f), 'utf8');
+        const t = JSON.parse(raw);
+        if (t?.name === name) return { tome: t, file: path.join(tomesDir, f) };
+      } catch { /* skip corrupt */ }
+    }
+    const newId = defaultStruct.id ?? randomUUID();
+    const tome = { ...defaultStruct, id: newId };
+    const file = path.join(tomesDir, `${newId}.json`);
+    const tmp = file + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+    await fsp.rename(tmp, file);
+    return { tome, file };
+  });
+}
 
 // Despite the name, entity-core's ENTITY_CORE_LLM_BASE_URL env var is
 // actually the FULL endpoint including /chat/completions — its

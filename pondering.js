@@ -17,7 +17,6 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { promises as fsp, mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PROVIDER_URLS } from './providers.js';
 
@@ -30,56 +29,24 @@ export const PONDERINGS_TOME_DESC =
   "into chat context; written here so the user can find and read them. Each " +
   "entry is a real, timestamped record of an actual moment of thinking.";
 
-// ── Locks ────────────────────────────────────────────────────────
-
-// Per-directory mutex chain. Keyed by tomesDir so tests using a temp
-// directory don't contend with production traffic on the default path.
-const _locks = new Map();
-function withDirLock(tomesDir, fn) {
-  const prev = _locks.get(tomesDir) ?? Promise.resolve();
-  let release;
-  const next = new Promise(r => { release = r; });
-  const chained = prev.then(() => next);
-  _locks.set(tomesDir, chained);
-  const run = (async () => {
-    await prev;
-    try { return await fn(); }
-    finally {
-      release();
-      // If nothing else queued after us, drop the entry so the map doesn't grow.
-      if (_locks.get(tomesDir) === chained) _locks.delete(tomesDir);
-    }
-  })();
-  return run;
-}
-
 // ── Tome helpers ─────────────────────────────────────────────────
+//
+// All coordination (locking + atomic write) is owned by thalamus.
+// findOrCreatePonderingsTome is now a thin name-aware wrapper around
+// thalamus.findOrCreateTomeByName, and the entry write inside
+// ponderOnce uses thalamus.modifyTomeFile — both keyed by the file's
+// absolute path, so a concurrent recent-ponderings.deletePondering
+// or server.js writeTome on the same file serialises against this
+// write rather than clobbering it.
+
+import { findOrCreateTomeByName, modifyTomeFile } from './thalamus.js';
 
 export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
-  return withDirLock(tomesDir, async () => {
-    mkdirSync(tomesDir, { recursive: true });
-    const files = await fsp.readdir(tomesDir);
-    for (const f of files) {
-      if (!f.endsWith('.json') || f.startsWith('.')) continue;
-      try {
-        const raw = await fsp.readFile(path.join(tomesDir, f), 'utf8');
-        const t = JSON.parse(raw);
-        if (t?.name === PONDERINGS_TOME_NAME) {
-          return { tome: t, file: path.join(tomesDir, f) };
-        }
-      } catch { /* skip corrupt */ }
-    }
-    const id = randomUUID();
-    const tome = {
-      id,
-      name:        PONDERINGS_TOME_NAME,
-      description: PONDERINGS_TOME_DESC,
-      enabled:     true,
-      entries:     {},
-    };
-    const file = path.join(tomesDir, `${id}.json`);
-    await fsp.writeFile(file, JSON.stringify(tome, null, 2), 'utf8');
-    return { tome, file };
+  return findOrCreateTomeByName(tomesDir, PONDERINGS_TOME_NAME, {
+    name:        PONDERINGS_TOME_NAME,
+    description: PONDERINGS_TOME_DESC,
+    enabled:     true,
+    entries:     {},
   });
 }
 
@@ -254,16 +221,18 @@ export async function ponderOnce({
 
   const { file } = await findOrCreatePonderingsTome(tomesDir);
 
-  return await withDirLock(tomesDir, async () => {
-    const raw   = await fsp.readFile(file, 'utf8');
-    const fresh = JSON.parse(raw);
-    const uid   = randomUUID();
-    const now   = new Date().toISOString();
-
-    const topicPondered = isReflection
-      ? `[reflection on ${(topic.outcomes ?? []).length} surface outcome(s)]`
-      : topic;
-
+  // Hand the read-modify-write off to thalamus. modifyTomeFile holds
+  // the per-file lock across read + write so a concurrent
+  // /api/temporal/ponderings DELETE or /api/tomes/:id PUT on the same
+  // file serialises against this write rather than clobbering it.
+  const uid = randomUUID();
+  const now = new Date().toISOString();
+  const topicPondered = isReflection
+    ? `[reflection on ${(topic.outcomes ?? []).length} surface outcome(s)]`
+    : topic;
+  let tomeId;
+  await modifyTomeFile(file, (fresh) => {
+    tomeId = fresh.id;
     fresh.entries[uid] = {
       uid,
       comment:             title,
@@ -296,19 +265,15 @@ export async function ponderOnce({
       topic_id:            null,
       topic_pondered:      topicPondered,
     };
-
-    const tmp = file + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(fresh, null, 2), 'utf8');
-    await fsp.rename(tmp, file);
-
-    return {
-      uid,
-      title,
-      content,
-      tomeFile: file,
-      tomeId:   fresh.id,
-      mode:     isReflection ? 'reflection' : 'pondering',
-      what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
-    };
   });
+
+  return {
+    uid,
+    title,
+    content,
+    tomeFile: file,
+    tomeId,
+    mode:     isReflection ? 'reflection' : 'pondering',
+    what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
+  };
 }

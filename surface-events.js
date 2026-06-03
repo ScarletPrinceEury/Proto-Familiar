@@ -12,7 +12,7 @@
 // layer) belong to the human's continuity; the raw behavioural stream
 // belongs to this instance.
 //
-// Concurrency: every read-modify-write goes through `withDirLock` so
+// Concurrency: every read-modify-write goes through `withLock` so
 // fire-and-forget callers (chat-turn tagOutcomes, recordSurfaceOffers
 // queued in parallel, markReflected during a pondering tick) can't
 // race each other into lost data. Pattern mirrors pondering.js.
@@ -55,28 +55,12 @@ export const OUTCOMES = Object.freeze({
 
 // ── Locks ────────────────────────────────────────────────────────
 //
-// Per-tomesDir mutex chain. Mirrors the pondering.js pattern: every
-// writer awaits the previous queued op for the same dir. Tests using
-// mkdtempSync get their own lock chain so production traffic isn't
-// blocked by test serialisation.
+// Routed through thalamus's withLock so the events file shares one
+// coordination point with the tome writers. Tests pass a fresh
+// tomesDir per test (mkdtempSync) — different key, no contention
+// with production traffic.
 
-const _locks = new Map();
-function withDirLock(tomesDir, fn) {
-  const prev = _locks.get(tomesDir) ?? Promise.resolve();
-  let release;
-  const next = new Promise(r => { release = r; });
-  const chained = prev.then(() => next);
-  _locks.set(tomesDir, chained);
-  const run = (async () => {
-    await prev;
-    try { return await fn(); }
-    finally {
-      release();
-      if (_locks.get(tomesDir) === chained) _locks.delete(tomesDir);
-    }
-  })();
-  return run;
-}
+import { withLock } from './thalamus.js';
 
 // ── File I/O ─────────────────────────────────────────────────────
 
@@ -106,7 +90,7 @@ export async function loadSurfaceEvents(tomesDir = DEFAULT_TOMES_DIR) {
  * Atomic write: serialise to a `.tmp` file, then rename onto the
  * target. The rename is atomic at the filesystem level, so a reader
  * never sees a partial file even if the writer crashes mid-write.
- * Must run inside withDirLock; the public mutators all do.
+ * Must run inside withLock; the public mutators all do.
  */
 async function saveSurfaceEvents(store, tomesDir = DEFAULT_TOMES_DIR) {
   try {
@@ -144,7 +128,7 @@ function pruneEvents(store) {
  * I offered — used later by reflection to correlate state with
  * outcome.
  *
- * Serialised through withDirLock so concurrent offers + tagger
+ * Serialised through withLock so concurrent offers + tagger
  * runs can't lose data.
  */
 export async function recordSurfaceOffers(
@@ -154,7 +138,7 @@ export async function recordSurfaceOffers(
   tomesDir = DEFAULT_TOMES_DIR,
 ) {
   if (!Array.isArray(candidates) || candidates.length === 0) return;
-  return withDirLock(tomesDir, async () => {
+  return withLock(tomesDir, async () => {
     const store = await loadSurfaceEvents(tomesDir);
     for (const c of candidates) {
       if (!c?.id) continue;
@@ -215,11 +199,11 @@ function resolutionToOutcome(resolution) {
  * temporal_context payload the chat turn already loaded, so this
  * adds zero MCP calls.
  *
- * Serialised through withDirLock so a concurrent recordSurfaceOffers
+ * Serialised through withLock so a concurrent recordSurfaceOffers
  * can't clobber tag writes.
  */
 export async function tagOutcomes({ windowItems, now = Date.now(), tomesDir = DEFAULT_TOMES_DIR } = {}) {
-  return withDirLock(tomesDir, async () => {
+  return withLock(tomesDir, async () => {
     const store = await loadSurfaceEvents(tomesDir);
     if (!store.events?.length) return { tagged: 0, skipped: 0 };
 
@@ -296,10 +280,10 @@ export async function shouldReflectNow({ minOutcomes = 5, tomesDir = DEFAULT_TOM
 /**
  * Mark a reflection as having happened — subsequent fresh-outcome
  * queries will only see events tagged AFTER this moment. Serialised
- * through withDirLock so it can't race a concurrent tagger run.
+ * through withLock so it can't race a concurrent tagger run.
  */
 export async function markReflected(nowMs = Date.now(), tomesDir = DEFAULT_TOMES_DIR) {
-  return withDirLock(tomesDir, async () => {
+  return withLock(tomesDir, async () => {
     const store = await loadSurfaceEvents(tomesDir);
     store.last_reflection_at = nowMs;
     await saveSurfaceEvents(store, tomesDir);

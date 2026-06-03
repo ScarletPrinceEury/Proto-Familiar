@@ -20,6 +20,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { PONDERINGS_TOME_NAME } from './pondering.js';
+import { withLock } from './thalamus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -81,21 +82,32 @@ export async function deletePondering({ uid, tomesDir = DEFAULT_TOMES_DIR }) {
   let files;
   try { files = await fsp.readdir(tomesDir); }
   catch { return { ok: false, error: 'tomes dir not found' }; }
+  // First pass: locate the file path (read-only, no lock needed). The
+  // ponderings tome is unique by name; if name lookup fails we're done.
+  let targetFile = null;
   for (const f of files) {
     if (!f.endsWith('.json') || f.startsWith('.')) continue;
     const file = path.join(tomesDir, f);
     let tome;
     try { tome = JSON.parse(await fsp.readFile(file, 'utf8')); }
     catch { continue; }
-    if (tome?.name !== PONDERINGS_TOME_NAME) continue;
+    if (tome?.name === PONDERINGS_TOME_NAME) { targetFile = file; break; }
+  }
+  if (!targetFile) return { ok: true, deleted: false };
+  // Read-modify-write under the per-file lock so a concurrent
+  // pondering-loop write (which now also goes through withLock on the
+  // same file path) can't clobber the delete.
+  return withLock(targetFile, async () => {
+    let tome;
+    try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+    catch { return { ok: false, error: 'tome unreadable' }; }
     if (!tome.entries?.[uid]) return { ok: true, deleted: false };
     delete tome.entries[uid];
-    const tmp = file + '.tmp';
+    const tmp = targetFile + '.tmp';
     await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
-    await fsp.rename(tmp, file);
+    await fsp.rename(tmp, targetFile);
     return { ok: true, deleted: true };
-  }
-  return { ok: true, deleted: false };
+  });
 }
 
 /**
