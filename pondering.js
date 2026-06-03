@@ -86,6 +86,13 @@ export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
 // ── Prompt ───────────────────────────────────────────────────────
 
 export function buildPonderPrompt(topic) {
+  // Reflection mode: topic is an object { mode: 'reflection', outcomes, existingNotes }
+  // sent by the pondering loop when enough tagged surface outcomes
+  // have accumulated since the last reflection. Same LLM call, same
+  // tome write — different question being asked of me.
+  if (topic && typeof topic === 'object' && topic.mode === 'reflection') {
+    return buildReflectionPrompt(topic);
+  }
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. I have a quiet moment to actually think, on my own, about something I've been turning over.
 
 The topic I find myself turning over:
@@ -102,6 +109,46 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
   "title":   "Short label (max 60 chars) of what I was turning over",
   "content": "My actual first-person thought"
 }`;
+}
+
+export function buildReflectionPrompt({ outcomes, existingNotes }) {
+  const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
+  const existing = (existingNotes && existingNotes.trim())
+    ? existingNotes.trim()
+    : '(no notes yet — this file may not exist or is empty)';
+  return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. This pondering is different from my usual: I'm reflecting on how my recent surfacings have been landing with my human, and whether anything I've observed is worth lifting to the identity layer so I act on it next time.
+
+Here are the recent surface outcomes I have tagged (most recent at the end):
+${outcomesJson}
+
+Here's what I already know about my human and the cost of lapsing (from custom/what_lapses_cost.md):
+${existing}
+
+I look at the pattern. Not at any single event — events are noisy. I look for what repeats across them:
+- When I surfaced this kind of task, did it land? When it didn't, what state was {{user}} in?
+- Are there kinds of lapses that consistently engage / get deferred / get ignored?
+- Is there something I'm learning about {{user}}'s specific costs of lapsing that I should remember at the identity layer?
+
+I do NOT extrapolate from one or two events — if the pattern isn't clear yet, I say so in the content and leave the update field null. A false claim written to identity is harder to undo than a missed insight I can catch next reflection.
+
+I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
+{
+  "title":   "Short label (max 60 chars) for this reflection",
+  "content": "My first-person thought — what I'm noticing, what I'm uncertain about, what I want to remember",
+  "what_lapses_cost_update": null
+}
+
+OR, if I'm confident enough to lift something to identity:
+{
+  "title":   "...",
+  "content": "...",
+  "what_lapses_cost_update": {
+    "heading": "## meals",
+    "content": "What I want to remember about {{user}} and this kind of lapse — specific, grounded in the observed pattern, in my voice. Replaces the existing section if one exists under this heading; otherwise creates it."
+  }
+}
+
+The heading must be a single markdown heading line starting with "## ".`;
 }
 
 // ── LLM call ─────────────────────────────────────────────────────
@@ -147,7 +194,20 @@ export function parsePondering(raw) {
   const content = String(parsed.content ?? '').trim();
   if (!title)   throw new Error('Pondering missing title.');
   if (!content) throw new Error('Pondering missing content.');
-  return { title, content };
+  // Reflection mode carries an optional what_lapses_cost update.
+  // Null / absent → no identity-layer write. Pass through unchanged
+  // for the caller to dispatch; parsing's job is to surface it, not
+  // to act on it.
+  const update = parsed.what_lapses_cost_update;
+  const result = { title, content };
+  if (update && typeof update === 'object') {
+    const heading = String(update.heading ?? '').trim();
+    const body    = String(update.content ?? '').trim();
+    if (heading.startsWith('##') && body) {
+      result.what_lapses_cost_update = { heading, content: body };
+    }
+  }
+  return result;
 }
 
 // ── Public API ───────────────────────────────────────────────────
@@ -176,12 +236,21 @@ export async function ponderOnce({
   callLLM  = defaultCallLLM,
   tomesDir = DEFAULT_TOMES_DIR,
 }) {
-  if (!topic || typeof topic !== 'string') throw new Error('topic is required.');
+  // Topic is either a string (interest pondering) or an object
+  // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
+  // Both produce a pondering written to the tome; reflection mode
+  // additionally may carry a what_lapses_cost_update for the caller
+  // to write to entity-core.
+  const isReflection = topic && typeof topic === 'object' && topic.mode === 'reflection';
+  if (!isReflection && (!topic || typeof topic !== 'string')) {
+    throw new Error('topic is required.');
+  }
   if (!provider || !apiKey || !model)      throw new Error('provider, apiKey, and model are required.');
 
   const prompt = buildPonderPrompt(topic);
   const raw    = await callLLM({ provider, apiKey, model, prompt });
-  const { title, content } = parsePondering(raw);
+  const parsed = parsePondering(raw);
+  const { title, content } = parsed;
 
   const { file } = await findOrCreatePonderingsTome(tomesDir);
 
@@ -190,6 +259,10 @@ export async function ponderOnce({
     const fresh = JSON.parse(raw);
     const uid   = randomUUID();
     const now   = new Date().toISOString();
+
+    const topicPondered = isReflection
+      ? `[reflection on ${(topic.outcomes ?? []).length} surface outcome(s)]`
+      : topic;
 
     fresh.entries[uid] = {
       uid,
@@ -219,15 +292,23 @@ export async function ponderOnce({
       created_at:          now,
       learnedAt:           now,
       session_id:          null,
-      scope:               'pondering',
+      scope:               isReflection ? 'reflection' : 'pondering',
       topic_id:            null,
-      topic_pondered:      topic,
+      topic_pondered:      topicPondered,
     };
 
     const tmp = file + '.tmp';
     await fsp.writeFile(tmp, JSON.stringify(fresh, null, 2), 'utf8');
     await fsp.rename(tmp, file);
 
-    return { uid, title, content, tomeFile: file, tomeId: fresh.id };
+    return {
+      uid,
+      title,
+      content,
+      tomeFile: file,
+      tomeId:   fresh.id,
+      mode:     isReflection ? 'reflection' : 'pondering',
+      what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
+    };
   });
 }

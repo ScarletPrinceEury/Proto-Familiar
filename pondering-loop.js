@@ -58,6 +58,13 @@ export async function runOneTick({
   rng              = Math.random,
   now              = Date.now,
   lastPonderAt     = 0,
+  // Slice 2: reflection-mode hooks. Optional — when both are
+  // provided, the loop checks shouldReflectNow() right before the
+  // interest pick; on true, it dispatches runPonder() with the
+  // reflection payload instead of the weighted interest pick.
+  // Same LLM call, different question being asked.
+  shouldReflect    = null,    // async () => boolean
+  getReflectionInput = null,  // async () => { mode:'reflection', outcomes, existingNotes }
 }) {
   if (typeof getInterests !== 'function') throw new Error('getInterests is required');
   if (typeof runPonder    !== 'function') throw new Error('runPonder is required');
@@ -90,13 +97,28 @@ export async function runOneTick({
     return { acted: false, reason: 'too_soon', sinceMs: since, requiredMs: required, topWeight, threatLevel, scale, at: now() };
   }
 
+  // Reflection mode check — runs before the weighted interest pick.
+  // If enough tagged surface outcomes have accumulated since the
+  // last reflection, this tick reflects instead of pondering an
+  // interest. Same LLM call, different topic shape.
+  if (typeof shouldReflect === 'function' && typeof getReflectionInput === 'function') {
+    let reflect = false;
+    try { reflect = !!(await shouldReflect()); }
+    catch (err) { /* if the check fails, just fall through to interest pondering */ }
+    if (reflect) {
+      const input = await getReflectionInput();
+      const result = await runPonder(input, { mode: 'reflection' });
+      return { acted: true, mode: 'reflection', result, at: now(), threatLevel, scale, requiredMs: required };
+    }
+  }
+
   const picked = pickInterest(interests, { rng });
   if (!picked) {
     return { acted: false, reason: 'no_eligible_pick', threatLevel, scale, at: now() };
   }
 
   const result = await runPonder(picked.label, picked);
-  return { acted: true, picked, result, at: now(), topWeight, threatLevel, scale, requiredMs: required };
+  return { acted: true, mode: 'pondering', picked, result, at: now(), topWeight, threatLevel, scale, requiredMs: required };
 }
 
 // ── Singleton lifecycle ───────────────────────────────────────────

@@ -322,6 +322,15 @@ const BUILTIN_TOOLS = [
         properties: {
           label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
           when:  { type: 'string', description: 'Optional ISO 8601 deadline. Omit for open-ended tasks.' },
+          stakes_tier: {
+            type: 'string',
+            enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
+            description: 'What kind of cost lapsing this task carries. external_obligation = real-world clock + external consequences (money, job, legal, missed appointment). personal_wellbeing = internal/reversible, person-specific decay curve (meals, hygiene, exercise). purely_optional = only matters if {{user}} cares (creative project, hobby). I set this when I know it, so my surfacing pressure later matches the real stakes. Omit only if I genuinely can\'t tell.',
+          },
+          consequence_model: {
+            type: 'string',
+            description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
+          },
         },
         required: ['label'],
       },
@@ -338,6 +347,15 @@ const BUILTIN_TOOLS = [
           label:   { type: 'string', description: 'Short label of what the reminder is about.' },
           when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
           message: { type: 'string', description: 'Optional longer text shown in the banner body, in my voice.' },
+          stakes_tier: {
+            type: 'string',
+            enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
+            description: 'What kind of cost lapsing this carries. External obligations (deadlines, paperwork, appointments) get firmer framing in the banner; personal_wellbeing stays gentle. I bake the right weight into the message at creation time because the fire is pure-code, no LLM at fire time.',
+          },
+          consequence_model: {
+            type: 'string',
+            description: 'Optional free-text note on what specifically happens if {{user}} misses this. Informs how I word the banner message now.',
+          },
         },
         required: ['label', 'when'],
       },
@@ -658,12 +676,18 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
-  schedule_add_task: async ({ label, when }) => {
+  schedule_add_task: async ({ label, when, stakes_tier, consequence_model }) => {
     try {
+      const payload = {};
+      if (stakes_tier) payload.stakes_tier = stakes_tier;
+      if (consequence_model) payload.consequence_model = consequence_model;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'task', label, when }),
+        body: JSON.stringify({
+          type: 'task', label, when,
+          ...(Object.keys(payload).length ? { payload } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to add task: ${data.error ?? res.status}`;
@@ -671,8 +695,12 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add task: ${err.message}`; }
   },
 
-  schedule_add_reminder: async ({ label, when, message }) => {
+  schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model }) => {
     try {
+      const payload = {};
+      if (message) payload.message = message;
+      if (stakes_tier) payload.stakes_tier = stakes_tier;
+      if (consequence_model) payload.consequence_model = consequence_model;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -680,7 +708,7 @@ const BUILTIN_EXECUTORS = {
           type:    'reminder',
           label,
           when,
-          payload: message ? { message } : {},
+          payload,
         }),
       });
       const data = await res.json();
@@ -7454,6 +7482,8 @@ function teToggleScheduleForm(show) {
     $('te-sched-when').value  = '';
     $('te-sched-end').value   = '';
     $('te-sched-type').value  = 'event';
+    const stakes = $('te-sched-stakes');
+    if (stakes) stakes.value = '';
     setTimeout(() => $('te-sched-label')?.focus(), 0);
   }
 }
@@ -7480,11 +7510,16 @@ async function teSaveScheduleNode() {
     alert(`A "${type}" needs a "When" time. Tasks are the only type that can be open-ended.`);
     return;
   }
+  const stakesTier = $('te-sched-stakes')?.value || '';
+  const payload = stakesTier ? { stakes_tier: stakesTier } : undefined;
   try {
     const r = await fetch('/api/temporal/schedule', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ type, label, when, end }),
+      body:    JSON.stringify({
+        type, label, when, end,
+        ...(payload ? { payload } : {}),
+      }),
     }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'create failed');
     teToggleScheduleForm(false);

@@ -150,3 +150,110 @@ test('ponderOnce validates required inputs', async () => {
   await assert.rejects(ponderOnce({ topic: 't', provider: 'nanogpt',  model: 'm', callLLM: fakeLLM() }), /apiKey/i);
   await assert.rejects(ponderOnce({ topic: 't', provider: 'nanogpt', apiKey: 'k', callLLM: fakeLLM() }), /model/i);
 });
+
+// ── Reflection mode (slice 2) ───────────────────────────────────────
+
+test('buildPonderPrompt: reflection mode embeds outcomes JSON + existing notes', () => {
+  const prompt = buildPonderPrompt({
+    mode: 'reflection',
+    outcomes: [{ task_label: 'submit form', outcome: 'engaged_and_completed' }],
+    existingNotes: '## meals\nPrior note about meals.',
+  });
+  assert.match(prompt, /reflecting on how my recent surfacings/i);
+  assert.match(prompt, /submit form/);
+  assert.match(prompt, /Prior note about meals/);
+  assert.match(prompt, /what_lapses_cost_update/);
+});
+
+test('parsePondering: reflection JSON with null update', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 'reflection title',
+    content: 'reflection body',
+    what_lapses_cost_update: null,
+  }));
+  assert.equal(r.title, 'reflection title');
+  assert.equal(r.content, 'reflection body');
+  assert.equal(r.what_lapses_cost_update, undefined);
+});
+
+test('parsePondering: reflection JSON with a valid update', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    what_lapses_cost_update: {
+      heading: '## meals',
+      content: 'observed pattern',
+    },
+  }));
+  assert.deepEqual(r.what_lapses_cost_update, {
+    heading: '## meals',
+    content: 'observed pattern',
+  });
+});
+
+test('parsePondering: reflection JSON with malformed update → dropped', () => {
+  // heading missing ## prefix
+  const r1 = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    what_lapses_cost_update: { heading: 'meals', content: 'x' },
+  }));
+  assert.equal(r1.what_lapses_cost_update, undefined);
+
+  // empty content
+  const r2 = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    what_lapses_cost_update: { heading: '## meals', content: '' },
+  }));
+  assert.equal(r2.what_lapses_cost_update, undefined);
+});
+
+test('ponderOnce: reflection mode writes scope=reflection and returns update', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: {
+        mode: 'reflection',
+        outcomes: [{ task_label: 'eat lunch', outcome: 'unresponded' }],
+        existingNotes: '',
+      },
+      provider: 'nanogpt',
+      apiKey:   'fake',
+      model:    'fake',
+      callLLM:  async () => JSON.stringify({
+        title: 'meals notice',
+        content: 'meals keep getting unresponded',
+        what_lapses_cost_update: {
+          heading: '## meals',
+          content: 'Eury tends to ignore meal nudges in the afternoon.',
+        },
+      }),
+      tomesDir: dir,
+    });
+    assert.equal(result.mode, 'reflection');
+    assert.deepEqual(result.what_lapses_cost_update, {
+      heading: '## meals',
+      content: 'Eury tends to ignore meal nudges in the afternoon.',
+    });
+    // Tome write: scope must be 'reflection'
+    const raw  = await fsp.readFile(result.tomeFile, 'utf8');
+    const tome = JSON.parse(raw);
+    const entry = Object.values(tome.entries)[0];
+    assert.equal(entry.scope, 'reflection');
+    assert.match(entry.topic_pondered, /^\[reflection on 1 surface outcome/);
+  } finally { cleanup(); }
+});
+
+test('ponderOnce: reflection mode tolerates a null update', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: { mode: 'reflection', outcomes: [], existingNotes: '' },
+      provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 't', content: 'c', what_lapses_cost_update: null,
+      }),
+      tomesDir: dir,
+    });
+    assert.equal(result.mode, 'reflection');
+    assert.equal(result.what_lapses_cost_update, null);
+  } finally { cleanup(); }
+});

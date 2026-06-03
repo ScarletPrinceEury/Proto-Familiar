@@ -15,6 +15,9 @@ tomes/.outbox.json.tmp
 # Silence-triage last-activity stamp (M12b).
 tomes/.last-activity.json
 tomes/.last-activity.json.tmp
+# Surface-events stream (slice 2) — per-embodiment record of offers + outcomes.
+tomes/.surface-events.json
+tomes/.surface-events.json.tmp
 # User-generated tomes (Session Memories, Familiar's Ponderings, etc.)
 # use UUID filenames. Shipped tomes use human-readable "*-Tome.json".
 tomes/????????-????-????-????-????????????.json

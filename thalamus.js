@@ -882,6 +882,15 @@ import { formatTemporalContext } from './temporal-format.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
 import { getThreat, tierForThreat } from './threat-tracker.js';
+import {
+  selectSurfaceCandidates,
+  formatSurfaceCandidatesBlock,
+} from './surface-context.js';
+import {
+  recordSurfaceOffers,
+  getRecentOfferTimes,
+  tagOutcomes,
+} from './surface-events.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -954,7 +963,7 @@ function identitySection(files, order) {
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
 export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null } = {}) {
-  const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [] };
+  const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   if (!mcpClient && !unruhClient) return EMPTY;
 
   try {
@@ -1254,12 +1263,85 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const careBlock = buildCareCheckBlock(threat);
 
+    // ── Surface candidates (the consumer side of the personalization
+    //    layer). Picks open schedule items that pass the hard gates
+    //    (threat tier, routine phase, dedup window), attaches the
+    //    consequence-priors block + person-model excerpt, and renders
+    //    them as a candidate block I'll read alongside everything
+    //    else. Awareness, not directive — I decide in my own voice
+    //    whether anything fits this moment.
+    //
+    //    Skipped on staticOnly (handoff-summary turns don't surface
+    //    candidates — wrong context, wrong moment).
+    let surfaceCandidatesBlock = '';
+    let surfacedTasks = [];
+    if (!staticOnly) {
+      try {
+        const windowItems = Array.isArray(temporalPayload?.schedule?.window)
+          ? temporalPayload.schedule.window
+          : [];
+
+        // Outcome tagger runs first — past offers may have closed
+        // out (task resolved, cancelled, etc.) since I last looked,
+        // and I want those tagged before reflection thresholds get
+        // re-evaluated. Pure-code, fire-and-forget, no LLM call.
+        if (liveTurn && windowItems.length > 0) {
+          tagOutcomes({ windowItems })
+            .then(r => { if (r?.tagged) console.log(`[thalamus] tagged ${r.tagged} surface outcome(s)`); })
+            .catch(err => console.error('[thalamus] tagOutcomes failed:', err?.message ?? err));
+        }
+
+        const openItems = windowItems.filter(item =>
+          item
+          && (item.type === 'task' || item.type === 'event' || item.type === 'reminder')
+          && !item.resolution
+        );
+        if (openItems.length > 0) {
+          const routinePhaseLabel = temporalPayload?.schedule?.phase?.label || '';
+          const lapsesFile = (id.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
+          const personModel = lapsesFile?.content?.trim() ?? '';
+          const surfacingHistory = await getRecentOfferTimes();
+          const nowMs = Date.now();
+
+          const candidates = await selectSurfaceCandidates({
+            openTasks: openItems,
+            threat,
+            routinePhaseLabel,
+            personModel,
+            surfacingHistory,
+            now: nowMs,
+          });
+
+          if (candidates.length > 0) {
+            surfaceCandidatesBlock = formatSurfaceCandidatesBlock(candidates);
+            surfacedTasks = candidates.map(c => ({ id: c.id, label: c.label }));
+            // Record the offers (full event records: state snapshot,
+            // stakes, confidence) so reflection can correlate.
+            // Live-turn only — debug-prompt previews and handoff
+            // summaries mustn't burn the dedup budget.
+            if (liveTurn) {
+              const stateSnapshot = {
+                threat_tier:   threat?.tier ?? 'calm',
+                routine_phase: routinePhaseLabel,
+              };
+              recordSurfaceOffers(candidates, stateSnapshot, nowMs)
+                .catch(err => console.error('[thalamus] recordSurfaceOffers failed:', err?.message ?? err));
+            }
+            console.log(`[thalamus] surface candidates: ${candidates.map(c => `${c.label}(${c.stakesTier},${c.confidence})`).join(', ')}`);
+          }
+        }
+      } catch (err) {
+        console.error('[thalamus] surface-candidate assembly failed:', err?.message ?? err);
+      }
+    }
+
     const dynamicSections = [];
-    if (memLines)        dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
-    if (graphLines)      dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
-    if (ponderingsBlock) dynamicSections.push(ponderingsBlock);
-    if (careBlock)       dynamicSections.push(careBlock);
-    if (temporalLines)   dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
+    if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
+    if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
+    if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
+    if (careBlock)              dynamicSections.push(careBlock);
+    if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
+    if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
 
     const staticBlock  = staticSections.join('\n');
     const dynamicBlock = dynamicSections.join('\n\n---\n\n');
@@ -1280,10 +1362,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       console.log(`[thalamus] idle mode: surfacing ${surfacedBookmarks.length} bookmark(s): ${surfacedBookmarks.map(b => b.label).join(', ')}`);
     }
 
-    return { static: staticBlock, dynamic: dynamicBlock, surfacedBookmarks };
+    return { static: staticBlock, dynamic: dynamicBlock, surfacedBookmarks, surfacedTasks };
   } catch (err) {
     console.error('[thalamus] enrich failed:', err.message);
-    return { static: '', dynamic: '', surfacedBookmarks: [] };
+    return { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   }
 }
 
