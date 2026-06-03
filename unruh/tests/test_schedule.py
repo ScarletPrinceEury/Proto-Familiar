@@ -262,6 +262,66 @@ class TestReminders:
         assert h["last_fired"]    is not None
 
 
+class TestListPhases:
+    """list_phases is date-independent — returns every phase regardless
+    of when_ts. This was added to fix the Routine-tab regression where
+    phases stamped on a previous date disappeared from get_window."""
+
+    def _phase(self, conn, label: str, when: str, end: str):
+        return sched.add_node(conn, type="phase", label=label, when=when, end=end)
+
+    def test_returns_all_phases_regardless_of_date(self, conn):
+        old   = _iso(datetime.now(timezone.utc) - timedelta(days=30))
+        older = _iso(datetime.now(timezone.utc) - timedelta(days=365))
+        oldend   = _iso(datetime.now(timezone.utc) - timedelta(days=30) + timedelta(hours=4))
+        olderend = _iso(datetime.now(timezone.utc) - timedelta(days=365) + timedelta(hours=4))
+        self._phase(conn, "morning",   old, oldend)
+        self._phase(conn, "afternoon", older, olderend)
+        phases = sched.list_phases(conn)
+        labels = sorted(p["label"] for p in phases)
+        assert labels == ["afternoon", "morning"]
+
+    def test_excludes_resolved_by_default(self, conn):
+        a = self._phase(conn, "morning",  _iso(datetime.now(timezone.utc)),
+                                          _iso(datetime.now(timezone.utc) + timedelta(hours=4)))
+        b = self._phase(conn, "evening",  _iso(datetime.now(timezone.utc) + timedelta(hours=8)),
+                                          _iso(datetime.now(timezone.utc) + timedelta(hours=12)))
+        sched.resolve(conn, id=a, resolution="cancelled")
+        phases = sched.list_phases(conn)
+        labels = [p["label"] for p in phases]
+        assert labels == ["evening"]
+        assert b in [p["id"] for p in phases]
+
+    def test_include_resolved_surfaces_them(self, conn):
+        a = self._phase(conn, "morning",  _iso(datetime.now(timezone.utc)),
+                                          _iso(datetime.now(timezone.utc) + timedelta(hours=4)))
+        sched.resolve(conn, id=a, resolution="cancelled")
+        phases = sched.list_phases(conn, include_resolved=True)
+        assert any(p["label"] == "morning" for p in phases)
+
+    def test_does_not_return_other_node_types(self, conn):
+        sched.add_node(conn, type="task", label="laundry")
+        sched.add_node(conn, type="event", label="dentist",
+                       when=_iso(datetime.now(timezone.utc) + timedelta(days=2)))
+        self._phase(conn, "morning",
+                    _iso(datetime.now(timezone.utc)),
+                    _iso(datetime.now(timezone.utc) + timedelta(hours=4)))
+        phases = sched.list_phases(conn)
+        assert all(p["type"] == "phase" for p in phases)
+        assert len(phases) == 1
+
+    def test_does_not_return_interest_layer_nodes(self, conn):
+        # Mimic an interest-layer phase-typed row (shouldn't exist, but
+        # defensively confirm the layer guard.)
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, payload_json, created_at, updated_at) "
+            "VALUES ('iv', 'interest', 'phase', 'never-active', '{}', ?, ?)",
+            (now_iso(), now_iso()),
+        )
+        phases = sched.list_phases(conn)
+        assert phases == []
+
+
 class TestDeleteNode:
     def test_delete_existing(self, conn):
         t = sched.add_node(conn, type="task", label="kill me")

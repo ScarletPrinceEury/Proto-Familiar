@@ -27,7 +27,7 @@ import {
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
-  resolveScheduleNode, deleteScheduleNode,
+  resolveScheduleNode, deleteScheduleNode, listPhases,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
   shutdownUnruh, shutdownEntityCore,
@@ -1508,6 +1508,15 @@ app.post('/api/temporal/schedule/:id/resolve', async (req, res) => {
 
 app.delete('/api/temporal/schedule/:id', async (req, res) => {
   try { res.json(await deleteScheduleNode({ id: req.params.id })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Phases (Routine tab) — date-independent; schedule_get_window's
+// time filter misses phases stamped on previous calendar days.
+app.get('/api/temporal/phases', async (req, res) => {
+  const includeResolved = req.query.includeResolved === '1' || req.query.includeResolved === 'true';
+  const limit = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
+  try { res.json(await listPhases({ includeResolved, limit })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

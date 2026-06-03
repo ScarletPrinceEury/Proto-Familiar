@@ -624,6 +624,24 @@ export async function deleteScheduleNode({ id }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/**
+ * List every phase node — date-independent. Phases recur daily; the
+ * standard get_window query filters by calendar date and misses
+ * phases stamped on previous days, which the Routine tab needs.
+ */
+export async function listPhases({ includeResolved = false, limit = 200 } = {}) {
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', phases: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_list_phases',
+      arguments: { include_resolved: includeResolved, limit },
+    });
+    return parseToolText(r, { ok: false, phases: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), phases: [] };
+  }
+}
+
 // ── Reminders wrappers (M11) ─────────────────────────────────────
 
 export async function getDueReminders({ now, limit = 50 } = {}) {

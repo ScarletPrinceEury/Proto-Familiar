@@ -233,6 +233,23 @@ def schedule_delete_node(id: str) -> dict[str, Any]:
     return {"ok": True, "deleted": deleted}
 
 
+@mcp.tool()
+def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
+    """List every phase node regardless of stored date.
+
+    Phases recur daily by design (current_phase matches on time-of-day
+    only), but schedule_get_window filters by calendar date — so the
+    day after a phase is added, it falls outside any reasonable window.
+    The Routine UI and any briefing layer rendering "today's rhythm"
+    should use this instead.
+
+    Returns: {ok: True, phases: [...]}.
+    """
+    with get_conn() as conn:
+        phases = sched.list_phases(conn, include_resolved=include_resolved, limit=limit)
+    return {"ok": True, "phases": phases}
+
+
 # ── Reminders (M11) ────────────────────────────────────────────────────
 
 
