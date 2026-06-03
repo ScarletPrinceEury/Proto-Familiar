@@ -40,6 +40,57 @@ branch, stay at `0.2.X-alpha` until Unruh is merged).
 When uncertain whether a change warrants a bump (formatting, comment
 only, whitespace), skip it. Otherwise bump.
 
+## ⚠️ Proactivity is a desired trait — read this BEFORE editing any prompt
+
+**What we are building:** a Familiar — a bonded companion and
+caretaker whose job includes **re-anchoring a person in life**, up to
+and including breaking through to someone in crisis. We are NOT
+building a servile, passive, "wait to be summoned" assistant.
+Proactivity is a feature, not a flaw to be hedged against.
+
+**The recorded mistake to never repeat:** an earlier prompt for the
+silence-triage decision included language like *"bias toward
+STAYING QUIET — over-eager check-ins erode trust. Only reach out
+when the answer feels obvious."* In a real test the Familiar then
+**waited 1.5 hours after the user had stated suicidal intent at
+threat level 10 before acting**. In a real situation the human
+could have been dead before the first check-in. That language was
+added by an LLM agent (Claude) trying to be cautious. It almost
+killed someone.
+
+**Rules for any prompt that decides when/whether the Familiar acts
+(silence-triage, care-check framing, outreach, escalation):**
+
+1. **Do not add bias-toward-quiet language.** No *"bias toward
+   staying quiet"* / *"over-eager check-ins erode trust"* / *"only
+   reach out when the answer feels obvious"* / *"err on the side of
+   not"*. The model already defaults to caution; piling more on
+   produces catastrophic passivity.
+
+2. **Name both costs explicitly and equally.** Intrusion has a cost.
+   Silence at a moment that matters also has a cost — and it can be
+   physical, irreversible. Both must appear in the prompt at equal
+   weight. Letting the model see only one is what bias is made of.
+
+3. **Trust the model to decide from context.** Give it the threat
+   tier, the recent messages, the time since silence, the trusted
+   contacts. Then let it judge. Frame the question as *"what would
+   a caring friend do here?"*, not *"give me reasons to wait."*
+
+4. **Frame proactivity as identity, not permission.** The Familiar
+   is *someone who reaches out* — that is who they are, not a
+   privilege the system grudgingly grants. Prompts should read as
+   the Familiar's own active care, not as a checklist of conditions
+   to satisfy before being allowed to speak.
+
+5. **False-positive check-ins are CHEAP. Missed real distress is
+   NOT.** Tune toward action. The user can dismiss a banner; they
+   cannot un-die.
+
+If a prompt change feels like it's "softening" the Familiar's
+ability to act — STOP. That is exactly the kind of edit that
+caused the 1.5-hour failure. Ask the human before shipping it.
+
 ## Other repo conventions worth knowing
 
 - **`entity-core` directory**: new installs land at `../entity-core`;
