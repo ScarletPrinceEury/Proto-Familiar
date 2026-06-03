@@ -95,6 +95,14 @@ def schedule_add_node(
             event/state (open-ended).
         payload: arbitrary extras stored as JSON (notes, source,
             categorisation that doesn't fit the four columns).
+            Conventional keys used by Proto-Familiar's surface pipeline:
+              - stakes_tier: 'external_obligation' | 'personal_wellbeing'
+                | 'purely_optional' — what kind of cost lapsing carries.
+                Drives surface-pressure: external bypasses quiet-hours
+                and dedup; personal_wellbeing decays gently.
+              - consequence_model: free-text note on what specifically
+                happens if this task lapses (e.g. "loses UC payment").
+              - message: reminder banner body (reminders only).
 
     Returns: {ok: True, id: '<new-id>'} on success, or the
     standard error shape on validation failure.

@@ -243,7 +243,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const enriched =
       enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
-    : { static: '', dynamic: '', surfacedBookmarks: [] };
+    : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
   // Inject awareness of any pending (unacknowledged) triage outreaches
   // into the dynamic block so the Familiar knows it reached out while

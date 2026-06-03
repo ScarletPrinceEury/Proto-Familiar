@@ -92,6 +92,7 @@ ponderings injection, care-check framing) and as background loops
 ├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
+├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── memorization.js          Persistent per-session memorization queue + worker
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
@@ -130,6 +131,9 @@ ponderings injection, care-check framing) and as background loops
 │                            temporal editor, outbox banner polling, BUILTIN_TOOLS definitions
 │
 └── docs/                    This documentation (incl. research/ for design-input notes)
+    ├── architecture.md      You are here
+    ├── consequence-priors.md Generic curves for what lapsing costs (read by surface-context.js)
+    └── research/            Design-input notes (task-handling, personalization-and-tracking)
 ```
 
 ## Component responsibilities
@@ -375,6 +379,58 @@ Within `dynamic`, the order is deliberate:
 3. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop)
 4. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
 5. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests
+6. **`[Surface candidates]`** — open schedule items that survived the hard gates (threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. See "Surface pipeline" below.
+
+## Surface pipeline (the consumer side of personalization)
+
+Open schedule items don't speak for themselves — the Familiar needs to
+decide whether *this* moment is the moment to raise one, and how. The
+surface pipeline rides the existing chat-turn LLM call rather than
+spinning up a new request per task (see CLAUDE.md "Ride existing
+requests; gate in code"). Slice 1 covers the opportunistic-on-chat-turn
+trigger; slices 2+ add care-driven riding silence-triage and outcome-
+backed reflection mode for the pondering loop.
+
+```
+temporalPayload.schedule.window   ←  open tasks/events/reminders
+                │
+                ▼
+   ── HARD GATES (pure code, no LLM) ──
+   threat tier (severe → none; high → external_obligation only)
+   routine phase (quiet_routine pattern → external_obligation only)
+   dedup window (6h, bypassed by external_obligation)
+                │
+                ▼
+   ── CONTEXT ASSEMBLY (per candidate) ──
+   stakes_tier  ← payload.stakes_tier OR inferStakesTier(label)
+   priorsBlock  ← matched section from docs/consequence-priors.md
+   personModel  ← entity-core custom/what_lapses_cost.md (raw)
+   taskSpecific ← payload.consequence_model
+   confidence   ← high/medium/low based on what info is present
+                │
+                ▼
+   ── PROMPT BLOCK ──
+   [Surface candidates] block appended to enriched dynamic
+   surfacedTasks list returned alongside surfacedBookmarks
+                │
+                ▼
+   ── DEDUP STATE WRITE (fire-and-forget) ──
+   tomes/.surface-history.json (local file, slice-1 storage —
+   migrates to schedule-node payload.surfacing_history in slice 2)
+```
+
+**`stakes_tier`** controls surfacing pressure:
+- `external_obligation` — real-world clock + external consequences (paperwork, deadlines, appointments). Bypasses quiet-hours and dedup. Surfaces under high threat.
+- `personal_wellbeing` — internal, reversible, person-specific decay (meals, hygiene, exercise). Respects all soft gates.
+- `purely_optional` — only matters if {{user}} cares. Lowest surfacing pressure.
+
+Inferred from label by `inferStakesTier()` in `surface-context.js` at task creation if not set explicitly. Overridable via the `stakes_tier` arg on `schedule_add_task` / `schedule_add_reminder` (Familiar sets at creation) and via the temporal editor's Stakes dropdown ({{user}} can correct).
+
+**`consequence_model`** is per-task free-text (e.g. "loses UC payment for the month") attached to the schedule node payload. Informs framing when the task surfaces. Set at creation, editable in the temporal editor (slice 2).
+
+**`what_lapses_cost.md`** lives at `entity-core/custom/what_lapses_cost.md` (slice 2 — Familiar writes via reflection-loop pondering when patterns emerge). For slice 1 the file may not exist; pipeline is null-tolerant.
+
+Files: `surface-context.js`, `docs/consequence-priors.md`.
 
 `injectDynamicAtDepth(messages, dynamicContent, depth)` in `server.js`
 is a pure helper; `tests/depth-inject.test.mjs` guards the

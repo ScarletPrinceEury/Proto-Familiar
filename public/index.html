@@ -971,6 +971,14 @@
               <label>End (optional)
                 <input type="datetime-local" id="te-sched-end">
               </label>
+              <label title="What kind of cost lapsing this carries. External = real-world clock (paperwork, deadlines, appointments). Wellbeing = personal/reversible decay. Optional = only matters if you care.">Stakes
+                <select id="te-sched-stakes">
+                  <option value="">(auto-infer from label)</option>
+                  <option value="external_obligation">external — real-world clock</option>
+                  <option value="personal_wellbeing">wellbeing — personal/reversible</option>
+                  <option value="purely_optional">optional — only if I care</option>
+                </select>
+              </label>
             </div>
             <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">
               <button id="te-sched-form-cancel" class="btn-ghost">Cancel</button>
