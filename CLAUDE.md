@@ -254,6 +254,51 @@ If a prompt change feels like it's "softening" the Familiar's
 ability to act — STOP. That is exactly the kind of edit that
 caused the 1.5-hour failure. Ask the human before shipping it.
 
+## ⚠️ Robust > cheap — never lead with the "cheapest meaningful fix"
+
+What we are building serves a person's continuity and care over
+time. Cheap fixes paper over the problem and accrue into a brittle
+system that fails the human at the moment they most need it not to.
+
+**The priority order for any proposal or implementation, in this
+order:**
+
+1. **Robust** — handles the problem space, not just the symptom
+   that triggered the report. If floating tasks have no aging
+   signal, the fix is real aging semantics, not a *"created N days
+   ago"* string tacked onto one render path.
+2. **Sustainable** — no tribal-knowledge workarounds; a future
+   audit pass doesn't find load-bearing duct tape under a clever
+   inline patch. State that should persist persists. Behaviour
+   that should be observable is observable.
+3. **User-accessible** — the result is something the bonded human
+   AND the Familiar can see, reason about, and adjust through
+   surfaces they can reach. Internal-only fixes are half-fixes.
+
+**Cost-bias anti-patterns to catch in my own framing:**
+
+- ❌ *"The cheapest meaningful fix is…"*
+- ❌ *"Surgical minimum…"*
+- ❌ *"Smallest change that closes the symptom…"*
+- ❌ *"Quick patch for now; revisit later."* — "later" rarely comes.
+- ❌ *"We can defer the harder version."* — sometimes correct,
+  often a cover for choosing the lazy one.
+- ❌ Token / line-count framing as the *primary* virtue. Brevity
+  is a side-effect of clarity, not a goal that supersedes
+  correctness.
+
+If a problem is real enough to fix at all, it's worth fixing
+properly. When I propose options to the human, the default frame
+must be the **robust** one, explicitly named. I don't bury robust
+solutions under *"but the cheap version is also possible"* as if
+they were equivalent — that lets me drift toward under-solving
+while looking like I gave the human a choice.
+
+The versioning rules upstream already capture part of this (every
+meaningful change bumps; don't sneak fixes under the line). This
+section extends it to **proposal framing** — what I suggest
+*before* any commit lands.
+
 ## Other repo conventions worth knowing
 
 - **`entity-core` directory**: new installs land at `../entity-core`;
