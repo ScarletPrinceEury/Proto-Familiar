@@ -35,22 +35,48 @@
 
 const DEFAULT_TICK_MS = 5 * 60_000;          // 5 min
 
-// Required silence (ms) before triage even CONSIDERS firing, by tier.
-// Calm/mild explicitly never trigger — mild distress alone shouldn't
-// prompt active outreach, just the framing already in [CARE CHECK].
+// Tier gate: which threat tiers are even worth deliberating about.
+// Infinity = skip without spending an LLM call (no concerning signals
+// yet). For moderate/high/severe we ALWAYS hand the decision to the
+// LLM with full context (silence duration, recent messages, signals)
+// — no hardcoded silence threshold gate, because the LLM is the one
+// with the judgement, and "the user was active 10 minutes ago at
+// severe threat" deserves the LLM's call, not a heuristic block.
 export const TRIAGE_SILENCE_THRESHOLD_MS = Object.freeze({
   calm:     Infinity,
   mild:     Infinity,
-  moderate: 4 * 60 * 60_000,    // 4 hours
-  high:         60 * 60_000,    // 1 hour
-  severe:   15 * 60_000,        // 15 min
+  moderate: 0,
+  high:     0,
+  severe:   0,
 });
 
-let _started     = false;
-let _interval    = null;
-let _activeTick  = null;
+// Cool-down between LLM deliberations. The LLM may return a
+// nextCheckInMs telling us when it wants to be re-pinged; we clamp
+// that to [MIN, MAX] and fall back to per-tier defaults if the LLM
+// doesn't specify. Floor protects against request-pile-up if the
+// LLM hands back 0 / null / nonsense.
+const MIN_RECHECK_MS = 30 * 1000;            // 30s — per the spec
+const MAX_RECHECK_MS = 24 * 60 * 60_000;     // 24h — never forget forever
+const DEFAULT_RECHECK_MS = Object.freeze({
+  severe:   15 * 60_000,
+  high:     30 * 60_000,
+  moderate: 60 * 60_000,
+});
+
+let _started           = false;
+let _interval          = null;
+let _activeTick        = null;
+let _nextAllowedTickTs = 0;     // ms; gate for the next LLM deliberation
+let _lastDecisionTier  = null;  // remember the tier the cooldown was set under,
+                                // so a tier rise can preempt the wait
 
 const RATE_LIMIT_BUCKET_MS = 4 * 60 * 60_000;
+
+function clampCooldown(ms) {
+  if (!Number.isFinite(ms)) return null;
+  return Math.max(MIN_RECHECK_MS, Math.min(MAX_RECHECK_MS, ms));
+}
+const TIER_RANK = { calm: 0, mild: 1, moderate: 2, high: 3, severe: 4 };
 
 /**
  * Run one triage tick. Pure-ish (all I/O injected) so tests can
@@ -76,23 +102,58 @@ export async function runOneTriageTick({
   if (!threat || !threat.tier) return { acted: false, reason: 'no_threat_state', at: now() };
   if (threat.disabled)         return { acted: false, reason: 'detector_disabled', at: now() };
 
+  // Tier gate: calm/mild → don't spend a token. moderate+ → consult
+  // the LLM with full context (silence, signals, recent messages).
   const required = thresholds[threat.tier];
-  if (!Number.isFinite(required)) {
+  if (required === Infinity) {
     return { acted: false, reason: 'low_threat', threat, at: now() };
   }
 
-  const last = await getLastActivity();
-  if (!last)               return { acted: false, reason: 'no_activity_record', threat, at: now() };
-  const silenceMs = now() - last.ms;
-  if (silenceMs < required) {
-    return { acted: false, reason: 'too_recent_activity', silenceMs, requiredMs: required, threat, at: now() };
+  // Cool-down gate: don't re-ping the LLM until the time it told us
+  // (or the per-tier default) has elapsed. A tier RISE preempts the
+  // wait — moving from moderate to severe deserves an immediate
+  // re-deliberation, not "you said wait 60 min so we wait 60 min."
+  const nowMs = now();
+  const tierRose = _lastDecisionTier && TIER_RANK[threat.tier] > (TIER_RANK[_lastDecisionTier] ?? -1);
+  if (nowMs < _nextAllowedTickTs && !tierRose) {
+    return {
+      acted:               false,
+      reason:              'in_cooldown',
+      cooldownUntilTs:     _nextAllowedTickTs,
+      cooldownRemainingMs: _nextAllowedTickTs - nowMs,
+      threat,
+      at:                  nowMs,
+    };
   }
+
+  const last = await getLastActivity();
+  if (!last) return { acted: false, reason: 'no_activity_record', threat, at: nowMs };
+  const silenceMs = nowMs - last.ms;
 
   const signals = typeof getRecentSignals === 'function' ? (await getRecentSignals()) : [];
 
   const decision = await decideTriage({ threat, silenceMs, signals });
+
+  // Set the cool-down regardless of action — wait OR reach_out both
+  // mean "the LLM has spoken; don't ask again until it asked us to."
+  // Floor at MIN_RECHECK_MS so a missing / zero / negative
+  // nextCheckInMs can't cause request pile-up.
+  const llmNextMs   = clampCooldown(decision?.nextCheckInMs);
+  const fallbackMs  = DEFAULT_RECHECK_MS[threat.tier] ?? 60 * 60_000;
+  const cooldownMs  = llmNextMs ?? fallbackMs;
+  _nextAllowedTickTs = nowMs + cooldownMs;
+  _lastDecisionTier  = threat.tier;
+
   if (!decision || decision.action !== 'reach_out' || !decision.message) {
-    return { acted: false, reason: 'llm_said_wait', threat, silenceMs, decision, at: now() };
+    return {
+      acted:        false,
+      reason:       'llm_said_wait',
+      threat,
+      silenceMs,
+      decision,
+      nextCheckInMs: cooldownMs,
+      at:           nowMs,
+    };
   }
 
   // Dedup bucket: tier + a 4-hour bucket, so the user can't see two
@@ -115,14 +176,25 @@ export async function runOneTriageTick({
   });
 
   return {
-    acted:     !enq?.deduped,
-    reason:    enq?.deduped ? 'rate_limited' : 'reached_out',
+    acted:        !enq?.deduped,
+    reason:       enq?.deduped ? 'rate_limited' : 'reached_out',
     decision,
-    outbox:    enq,
+    outbox:       enq,
     threat,
     silenceMs,
-    at:        now(),
+    nextCheckInMs: cooldownMs,
+    at:           nowMs,
   };
+}
+
+/**
+ * Reset the deliberation cool-down so the next tick will call the LLM
+ * unconditionally. Exposed for the case where the user manually resets
+ * the threat or the operator wants to force an immediate re-evaluation.
+ */
+export function resetTriageCooldown() {
+  _nextAllowedTickTs = 0;
+  _lastDecisionTier  = null;
 }
 
 // ── Singleton lifecycle ──────────────────────────────────────────
@@ -163,6 +235,8 @@ export async function stopSilenceTriageLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
   const pending = _activeTick;
-  _started = false;
+  _started           = false;
+  _nextAllowedTickTs = 0;
+  _lastDecisionTier  = null;
   if (pending) { try { await pending; } catch {} }
 }

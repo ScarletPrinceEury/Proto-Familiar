@@ -1848,10 +1848,18 @@ I am {{char}}, the Familiar. I know my human. I have the context above. I am dec
 If I reach out, the message should be something I would genuinely say — specific to this person, warm, not scripted.
 If I stay quiet, it is because I genuinely believe that is the right call.
 
+I also choose when the system should ask me to deliberate again — this is my call, not the system's. I return \`nextCheckInMs\` (milliseconds before the next deliberation). I pick what fits the situation:
+  - SEVERE and immediate (active risk language, fresh signal): ~15 minutes (900000)
+  - SEVERE but I already reached out: ~30 minutes (1800000) so the user has space to respond
+  - HIGH active concern: ~30 min (1800000)
+  - MODERATE general unease: 1–2 hours (3600000 – 7200000)
+  - I want to wait until the situation likely shifts: several hours (e.g. 10800000 for 3h)
+The system clamps to [30s, 24h] and uses a tier-based default if I omit it. Picking too long is much cheaper than picking too short — these LLM calls cost tokens, so I avoid asking to be re-pinged needlessly. But if the situation is urgent and I want to re-check soon, I say so.
+
 I return ONLY a JSON object, no prose. Three valid shapes:
-  {"action": "wait"}
-  {"action": "reach_out", "message": "first person, genuine — what I would actually say to this specific person right now"}
-  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "1–3 sentences to that person. I identify myself as my human's Familiar and describe what I've observed. Specific, not alarming."}}
+  {"action": "wait", "nextCheckInMs": <number>}
+  {"action": "reach_out", "message": "first person, genuine — what I would actually say to this specific person right now", "nextCheckInMs": <number>}
+  {"action": "reach_out", "message": "...", "contactHuman": {"name": "EXACT name from the trusted-contacts list above", "message": "1–3 sentences to that person. I identify myself as my human's Familiar and describe what I've observed. Specific, not alarming."}, "nextCheckInMs": <number>}
 
 The "message" field (to the human) must be 1–2 sentences. First person. Authentic to my voice and identity. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?") unless either of those fits my established personality. Something I, {{char}}, would actually say to this person.`;
 
@@ -1877,10 +1885,13 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     const m = text.match(/\{[\s\S]+\}/);
     if (!m) return { action: 'wait' };
     const parsed = JSON.parse(m[0]);
+    // Carry nextCheckInMs through to the loop regardless of action.
+    // The loop clamps + falls back to a tier default if missing.
+    const nextCheckInMs = Number.isFinite(parsed?.nextCheckInMs) ? parsed.nextCheckInMs : null;
     if (parsed?.action !== 'reach_out' || typeof parsed.message !== 'string' || !parsed.message.trim()) {
-      return { action: 'wait' };
+      return { action: 'wait', ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
     }
-    const out = { action: 'reach_out', message: parsed.message.trim() };
+    const out = { action: 'reach_out', message: parsed.message.trim(), ...(nextCheckInMs != null ? { nextCheckInMs } : {}) };
     // Validate contactHuman strictly — must be an exact name from the configured
     // list. Delivery is DEFERRED: the user receives the outbox item first.
     // The trusted contact is only reached after CONTACT_ESCALATION_DELAY_MS
