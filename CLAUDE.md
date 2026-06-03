@@ -299,6 +299,40 @@ meaningful change bumps; don't sneak fixes under the line). This
 section extends it to **proposal framing** — what I suggest
 *before* any commit lands.
 
+## Token-conscious operation (the human is on Claude Pro)
+
+The human running this session has a fixed weekly token budget.
+Anything I run that returns output to my context — `Bash`,
+`WebSearch`, `WebFetch`, `Read` — costs them. Spend tokens where
+they verify something that **could** be wrong; don't spend them
+where they verify something that obviously isn't different.
+
+**Test runs in particular.** A 200+ test suite returns hundreds of
+lines even with grep filtering. Run tests when:
+
+- ✅ I changed runtime code (`*.js`, `*.mjs`, `*.py` outside `tests/`).
+- ✅ I changed an import, an API shape, or a shared utility.
+- ✅ I changed test code itself.
+- ✅ I'm verifying a fix the human just reported.
+
+Do NOT run tests when:
+
+- ❌ Only docs / research / CLAUDE.md changed.
+- ❌ Only a comment or a string that no test asserts on changed.
+- ❌ I just bumped the version field in `package.json`.
+- ❌ I'm at the end of a long doc-writing chain and reflexively
+  reaching for a final test run.
+
+Same posture for `node --check`, `bash -n`, syntax probes,
+`grep -c`, "smoke test the server boots" — only when there's a real
+risk of breakage. If uncertain, ask the human ("worth running tests?")
+rather than spending the budget speculatively.
+
+This is operational hygiene that compounds. A 30-message session
+that runs the test suite once per turn for no reason costs an order
+of magnitude more than a session that runs it twice — both produce
+the same code.
+
 ## Other repo conventions worth knowing
 
 - **`docs/architecture.md` is part of the working code, not optional
