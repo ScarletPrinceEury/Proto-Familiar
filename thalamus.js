@@ -901,14 +901,26 @@ export async function recordHandoff({ intent, threads, sessionId } = {}) {
   }
 }
 
-connect().catch(err => {
-  console.error('[thalamus] Failed to start entity-core:', err.message);
-});
-
-connectUnruh().catch(err => {
-  console.error('[thalamus] Failed to start Unruh:', err.message);
-  scheduleUnruhReconnect();
-});
+/**
+ * Spawn the MCP children (entity-core + Unruh). Idempotent — safe to
+ * call multiple times; the underlying connect functions guard against
+ * double-spawn. Server.js calls this once during boot. Importing
+ * thalamus to get the lock primitive or a tome I/O helper does NOT
+ * trigger MCP startup (tests, scripts, and other Proto-Familiar
+ * modules can pull from here without dragging in Deno/Python deps).
+ */
+let _started = false;
+export function startThalamus() {
+  if (_started) return;
+  _started = true;
+  connect().catch(err => {
+    console.error('[thalamus] Failed to start entity-core:', err.message);
+  });
+  connectUnruh().catch(err => {
+    console.error('[thalamus] Failed to start Unruh:', err.message);
+    scheduleUnruhReconnect();
+  });
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

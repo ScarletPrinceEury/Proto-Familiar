@@ -14,6 +14,7 @@ import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
 import {
+  startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
@@ -1657,6 +1658,13 @@ app.post('/api/crisis-resources', async (_req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// Start the MCP children (entity-core + Unruh) at server boot rather
+// than as a thalamus.js import side-effect. Tests and other importers
+// of thalamus's coordination helpers (withLock, modifyTomeFile, etc.)
+// don't need — and shouldn't trigger — Deno/Python spawning just to
+// get the lock primitive.
+startThalamus();
 
 const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
