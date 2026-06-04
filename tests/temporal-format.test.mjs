@@ -147,14 +147,17 @@ test('renders phase span using start–end times', () => {
 
 test('does not repeat the current phase in the window list', () => {
   const t = (h) => { const d = new Date(); d.setHours(h, 0, 0, 0); return d.toISOString(); };
-  const phase = { id: 'p1', label: 'morning', when: t(10), end: t(13) };
+  // Phase label chosen to NOT collide with relativeTime's time-of-day
+  // buckets ("this morning at HH:MM" etc.) — using a domain-y label
+  // so the regex below only counts the phase row.
+  const phase = { id: 'p1', label: 'correspondence-block', when: t(10), end: t(13) };
   const out = formatTemporalContext({
     schedule: { phase, window: [
       { ...phase, type: 'phase' },         // current phase — should be filtered
       { id: 'e1', label: 'event 1', when: t(11) },
     ]},
   });
-  assert.equal(out.match(/morning/g)?.length, 1, 'current phase should appear exactly once');
+  assert.equal(out.match(/correspondence-block/g)?.length, 1, 'current phase should appear exactly once');
   assert.match(out, /event 1/);
 });
 
