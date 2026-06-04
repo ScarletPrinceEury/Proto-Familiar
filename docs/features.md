@@ -158,7 +158,27 @@ A sibling Python MCP module (`unruh/`, alpha) adds a `[Temporal Context]` block 
 
 ### Schedule
 
-Events, tasks, phases, and states on a timeline. The block shows the **current phase** (e.g. "morning correspondence") plus an upcoming **window** of events/tasks, rendered in your local timezone as landmarks ("today 14:00 — Chen's appointment") rather than ISO timestamps. Seed a default daily rhythm with `cd unruh && uv run python -m unruh seed-routine`.
+Events, tasks, phases, reminders, and states on a timeline. The block shows the **current phase** (e.g. "morning correspondence") plus an upcoming **window** of events/tasks, rendered in your local timezone as natural phrasing ("tomorrow at 10am — Chen's appointment" / "in 30 minutes — take meds") rather than ISO timestamps. Seed a default daily rhythm with `cd unruh && uv run python -m unruh seed-routine`.
+
+**Recurrence.** Events, tasks, reminders, and phases all accept a `payload.recurrence` rule so a single anchor entry repeats on its own rhythm: daily, weekly, monthly, yearly, every N units (`interval`), with an optional cut-off date (`until`). Six presets in the schedule-add form's **Repeats** dropdown cover the common cases; advanced patterns like "last Friday of every month" or "first Monday" work via `bysetpos` + `byweekday` (the Familiar can set these directly from chat through the `recurrence` arg on `schedule_add_*` BUILTIN_TOOLS). Occurrences expand at read-time so adding "weekly cleaning every Sunday" costs the same as a one-time task. Month-clamp handled: Jan 31 monthly recurrences stay at end-of-month rather than overflowing; Feb 29 yearly recurrences drop to Feb 28 in non-leap years.
+
+**Per-occurrence resolution.** Marking "this week's cleaning done" doesn't kill next week — `payload.resolutions = { "YYYY-MM-DD": "done" }` is keyed by local date, the expander filters resolved occurrences, the rest of the series stays alive. The Schedule tab's ✓ done / ✕ cancel buttons auto-detect occurrences (they carry a recurring tag) and route to the per-occurrence endpoint; the Familiar's `schedule_resolve` BUILTIN_TOOL accepts an optional `occurrence_date` for the same purpose.
+
+**Calendar view.** The Schedule tab has a **List / Calendar** view toggle in its toolbar (mirrors the Knowledge Editor's graph List/Map pattern). Calendar view shows a month grid (Monday-start, 6×7 cells); each day cell renders up to 3 events with type-coded colors and a "+N more" footer for overflow. Today's day-number gets a circle highlight; out-of-month days dim. **Click a day** to open the create-schedule form pre-filled to that date at 9am. Recurring events render on their actual occurrence dates with a `↻` prefix; resolved occurrences strike through. Phases stay in the Routine tab so daily-recurring phases don't clutter the grid.
+
+### Time perception
+
+Every reference to a timestamped event in the Familiar's context gets re-rendered through `relative-time.js` at prompt-assembly time, recomputed per turn against `Date.now()`. A memory written yesterday reads as "yesterday" today and "two days ago" tomorrow without anyone re-writing the memory. Schedule items, RAG memories, ponderings, and the session handoff all flow through this same helper, so the Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30 minutes" / "this morning at 9am" instead of ISO arithmetic.
+
+After all dynamic context and the chat history (and any post-history prompt), server.js appends a final **`[Now]` block** as the very last system message — the freshest values for care reasoning, immediately before the model's response slot:
+
+```
+[Now]
+Now: 2:30pm on Thursday, June 4.
+Before this, my human last sent a message at 2:18pm, which was 12 minutes ago.
+```
+
+The line names both the absolute clock time of the prior message AND the elapsed interval, so the Familiar can correlate the two without arithmetic (e.g. "at 4pm, which was a day ago" is unambiguously yesterday's 4pm).
 
 ### Interests
 
