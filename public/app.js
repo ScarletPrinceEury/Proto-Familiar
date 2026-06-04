@@ -1624,38 +1624,61 @@ function applyNameVars(text) {
  * strips client-only fields (timestamp, _toolName) and ensures
  * the shape is correct for each role.
  */
-// Pretty-print a message timestamp as a [HH:MM] tag for prepending to
-// LLM-visible content. Uses 24h local time so the Familiar reads them
-// at a glance and the tag stays compact (5 chars + brackets). The tag
-// is ONLY ever attached to the temporary message objects built for
-// the upstream API call; state.messages keeps clean content, and any
-// [HH:MM] the model echoes back is stripped before save (see
-// stripLeadingTimestamp below). So the user never sees these tags in
-// chat — they exist purely for the model's per-turn time perception.
+// Pretty-print a message timestamp as a tag for prepending to LLM-
+// visible content. Uses 24h local time and uncommon bracket chars
+// (⫸ U+2AF8 / ⫷ U+2AF7) so the LLM is unlikely to spontaneously
+// generate them — the previous "[HH:MM]" format was common enough in
+// natural text that the model started mimicking it back into its
+// own responses, which then accumulated turn-over-turn when
+// toApiMessage re-stamped the content.
+//
+// The tag is ONLY ever attached to the temporary message objects
+// built for the upstream API call; state.messages keeps clean
+// content. Any tag the model echoes back into its response (rare,
+// given the chars) is stripped both at UI render and BEFORE the
+// next turn's re-stamp, so accumulation can't compound.
+const TS_OPEN  = '⫸';
+const TS_CLOSE = '⫷';
+
 function fmtMsgTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
   if (!Number.isFinite(d.getTime())) return '';
-  return `[${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}]`;
+  return `${TS_OPEN}${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}${TS_CLOSE}`;
+}
+
+// Global strip for the new bracket format. Matches anywhere in the
+// content, not just leading — the rolling-accumulation bug Eury
+// found put multiple snippets at the head, but the LLM could in
+// principle echo them mid-prose too.
+const TIMESTAMP_RE_NEW = new RegExp(`${TS_OPEN}\\d{1,2}:\\d{2}${TS_CLOSE}\\s*`, 'g');
+
+// Legacy [HH:MM] support — old chat history (from before this commit)
+// has square-bracket stamps the model echoed into its responses,
+// often piled at the leading edge. We strip them iteratively from
+// the START of content only, never globally, so a user message that
+// legitimately writes "see you at [3:30]" mid-sentence isn't mangled.
+const TIMESTAMP_RE_LEGACY = /^\s*\[\d{1,2}:\d{2}\]\s*/;
+
+function stripDisplayTimestamps(content) {
+  if (typeof content !== 'string') return content;
+  let out = content.replace(TIMESTAMP_RE_NEW, '');
+  while (TIMESTAMP_RE_LEGACY.test(out)) out = out.replace(TIMESTAMP_RE_LEGACY, '');
+  return out;
 }
 
 function stampContent(content, ts) {
   if (typeof content !== 'string' || !content) return content;
+  // STRIP first, THEN re-stamp. The authoritative source of the
+  // timestamp the LLM should see is the message's `timestamp` field
+  // (set when the turn landed); any tag already in the content
+  // string is an echoed artifact from a previous turn, redundant at
+  // best and accumulation-causing at worst. Cleaning before
+  // re-stamping guarantees exactly one canonical tag per message,
+  // derived from the canonical source, no compounding across turns.
+  const cleaned = stripDisplayTimestamps(content);
   const tag = fmtMsgTime(ts);
-  return tag ? `${tag} ${content}` : content;
-}
-
-// Inverse of stampContent: if the model echoed a leading [HH:MM] tag
-// back into its response (mirroring what it saw in history), strip
-// it before we save the message to state.messages. Keeps the chat
-// UI clean, keeps memorization-captured content clean, keeps
-// RAG-indexed assistant text clean. Matches a single leading tag
-// only; tags appearing mid-content are left alone (those are
-// genuine references the model chose to write).
-const TIMESTAMP_PREFIX_RE = /^\s*\[\d{1,2}:\d{2}\]\s*/;
-function stripLeadingTimestamp(content) {
-  if (typeof content !== 'string') return content;
-  return content.replace(TIMESTAMP_PREFIX_RE, '');
+  return tag ? `${tag} ${cleaned}` : cleaned;
 }
 
 function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
@@ -2055,7 +2078,7 @@ function renderAllMessages() {
     if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       const content = typeof msg.content === 'string' ? msg.content.trim() : '';
       if (content) {
-        const html = renderMarkdown(stripLeadingTimestamp(content));
+        const html = renderMarkdown(stripDisplayTimestamps(content));
         const { el, copyBtn } = createMessageEl('assistant', html, msg.timestamp);
         el.dataset.msgIndex = String(i);
         const captured = msg.content;
@@ -2083,7 +2106,7 @@ function renderAllMessages() {
     // timestamp element, so the tag in the message body is just noise
     // to the human reader. Memorization and RAG still see the raw
     // content via state.messages, so they keep the temporal signal.
-    const displayContent = stripLeadingTimestamp(msg.content ?? '');
+    const displayContent = stripDisplayTimestamps(msg.content ?? '');
     const html = msg.role === 'user'
       ? esc(displayContent).replace(/\n/g, '<br>')
       : renderMarkdown(displayContent);
@@ -2464,7 +2487,7 @@ async function attemptStreamingOnce(conn, apiMessages, activeTools, domArtifacts
               shell = appendAssistantShell(new Date().toISOString());
             }
             fullContent += delta.content;
-            shell.bubble.innerHTML = renderMarkdown(stripLeadingTimestamp(fullContent));
+            shell.bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(fullContent));
             scrollToBottom();
           }
 
@@ -2576,7 +2599,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       if (!shell) {
         setTyping(false);
         shell = appendAssistantShell(new Date().toISOString());
-        shell.bubble.innerHTML = renderMarkdown(stripLeadingTimestamp(content));
+        shell.bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
@@ -2738,7 +2761,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       }
 
       const { el: shellEl, bubble, copyBtn } = appendAssistantShell(timestamp);
-      bubble.innerHTML = renderMarkdown(stripLeadingTimestamp(content));
+      bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
       state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp });

@@ -400,7 +400,12 @@ Surfaces using `relativeTime()` / `relativeDay()`:
 | Handoff | temporal-format.js | "Last session (**ended last Tuesday at 9pm**):" |
 | Chat-turn messages | public/app.js buildApiMessages | "[14:30] hi" (every user + assistant message in history) |
 
-The chat-turn message stamps use a compact `[HH:MM]` tag rather than full relative phrasing — the relative anchor is in the `[Now]` block, so each message just needs a marker the Familiar can correlate.
+The chat-turn message stamps use a compact `⫸HH:MM⫷` tag (U+2AF8 / U+2AF7) rather than full relative phrasing — the relative anchor is in the `[Now]` block, so each message just needs a marker the Familiar can correlate. The uncommon bracket chars matter: the earlier `[HH:MM]` format was common enough in natural text that the LLM started mimicking it back into its own responses, which then *accumulated* turn-over-turn when `toApiMessage` re-stamped the content (pile grew by one stamp per turn). Two defenses make accumulation impossible:
+
+1. `stampContent` strips ALL existing `⫸HH:MM⫷` patterns from the content before prepending the fresh canonical tag. The authoritative source is the message's `timestamp` field — the content's tag is treated as disposable LLM-echo, never preserved.
+2. UI render sites globally strip the same pattern so the user never sees them in chat. A small backward-compat sweep iteratively strips leading legacy `[HH:MM]` tags from pre-fix-era history (leading-only there, so mid-content references the user may have written stay intact).
+
+Result: the LLM always sees exactly one canonical stamp per message every turn; the user sees none.
 
 ## Recurrence (events / tasks / reminders / phases that repeat)
 
