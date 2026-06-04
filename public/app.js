@@ -307,6 +307,7 @@ const BUILTIN_TOOLS = [
           label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
           when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
           end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
+          recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
         },
         required: ['label', 'when'],
       },
@@ -331,6 +332,7 @@ const BUILTIN_TOOLS = [
             type: 'string',
             description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
           },
+          recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
         },
         required: ['label'],
       },
@@ -356,6 +358,7 @@ const BUILTIN_TOOLS = [
             type: 'string',
             description: 'Optional free-text note on what specifically happens if {{user}} misses this. Informs how I word the banner message now.',
           },
+          recurrence: { type: 'object', description: 'Optional. Repeats this reminder on a schedule. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST fire time — subsequent fires recur on the same weekday / day-of-month / month-and-day. Examples: {freq:"weekly"} for a regular reminder; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of each month".' },
         },
         required: ['label', 'when'],
       },
@@ -373,6 +376,7 @@ const BUILTIN_TOOLS = [
           when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
           end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
           texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
+          recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
         },
         required: ['label', 'when', 'end'],
       },
@@ -663,12 +667,16 @@ const BUILTIN_EXECUTORS = {
   // already-spawned Unruh MCP subprocess. Returns short strings the
   // model can quote back to {{user}} as confirmation.
 
-  schedule_add_event: async ({ label, when, end }) => {
+  schedule_add_event: async ({ label, when, end, recurrence }) => {
     try {
+      const payload = recurrence ? { recurrence } : {};
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'event', label, when, end }),
+        body: JSON.stringify({
+          type: 'event', label, when, end,
+          ...(Object.keys(payload).length ? { payload } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to add event: ${data.error ?? res.status}`;
@@ -676,11 +684,12 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
-  schedule_add_task: async ({ label, when, stakes_tier, consequence_model }) => {
+  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence }) => {
     try {
       const payload = {};
       if (stakes_tier) payload.stakes_tier = stakes_tier;
       if (consequence_model) payload.consequence_model = consequence_model;
+      if (recurrence) payload.recurrence = recurrence;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -695,12 +704,13 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add task: ${err.message}`; }
   },
 
-  schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model }) => {
+  schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model, recurrence }) => {
     try {
       const payload = {};
       if (message) payload.message = message;
       if (stakes_tier) payload.stakes_tier = stakes_tier;
       if (consequence_model) payload.consequence_model = consequence_model;
+      if (recurrence) payload.recurrence = recurrence;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -717,8 +727,11 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
-  schedule_add_phase: async ({ label, when, end, texture }) => {
+  schedule_add_phase: async ({ label, when, end, texture, recurrence }) => {
     try {
+      const payload = {};
+      if (texture) payload.texture = texture;
+      if (recurrence) payload.recurrence = recurrence;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -727,7 +740,7 @@ const BUILTIN_EXECUTORS = {
           label,
           when,
           end,
-          payload: texture ? { texture } : {},
+          payload,
         }),
       });
       const data = await res.json();
@@ -7552,7 +7565,27 @@ function teToggleScheduleForm(show) {
     $('te-sched-type').value  = 'event';
     const stakes = $('te-sched-stakes');
     if (stakes) stakes.value = '';
+    const repeat = $('te-sched-repeat');
+    if (repeat) repeat.value = '';
     setTimeout(() => $('te-sched-label')?.focus(), 0);
+  }
+}
+
+// Map the UI repeat presets to payload.recurrence objects the
+// expander understands. Kept tiny: the dropdown only offers the
+// patterns the bare-minimum spec called out. Custom RRULEs / nth-
+// weekday with weekday-not-Friday-or-Sunday are advanced enough
+// that the Familiar's BUILTIN_TOOL is the right entry point, not
+// a casual UI selector.
+function teRepeatToRecurrence(preset) {
+  switch (preset) {
+    case 'daily':            return { freq: 'daily' };
+    case 'weekly':           return { freq: 'weekly' };
+    case 'monthly':          return { freq: 'monthly' };
+    case 'yearly':           return { freq: 'yearly' };
+    case 'monthly_last_fri': return { freq: 'monthly', bysetpos: -1, byweekday: 5 };
+    case 'monthly_last_sun': return { freq: 'monthly', bysetpos: -1, byweekday: 0 };
+    default:                 return null;
   }
 }
 
@@ -7579,14 +7612,19 @@ async function teSaveScheduleNode() {
     return;
   }
   const stakesTier = $('te-sched-stakes')?.value || '';
-  const payload = stakesTier ? { stakes_tier: stakesTier } : undefined;
+  const repeatPreset = $('te-sched-repeat')?.value || '';
+  const recurrence = teRepeatToRecurrence(repeatPreset);
+  const payload = {};
+  if (stakesTier)  payload.stakes_tier = stakesTier;
+  if (recurrence)  payload.recurrence  = recurrence;
+  const hasPayload = Object.keys(payload).length > 0;
   try {
     const r = await fetch('/api/temporal/schedule', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
         type, label, when, end,
-        ...(payload ? { payload } : {}),
+        ...(hasPayload ? { payload } : {}),
       }),
     }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'create failed');

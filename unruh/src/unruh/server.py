@@ -242,6 +242,24 @@ def schedule_delete_node(id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def schedule_list_recurring(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
+    """List every schedule node whose payload carries a `recurrence`
+    rule, regardless of stored when_ts.
+
+    Recurring nodes anchor on their first occurrence — the rest are
+    computed at read-time by the JS-side expander in recurrence.js.
+    schedule_get_window only catches nodes whose stored when_ts falls
+    inside the window, so this surfaces the anchors the JS side needs
+    to expand for "today's rhythm" / "upcoming this week" rendering.
+
+    Returns: {ok: True, nodes: [...]}.
+    """
+    with get_conn() as conn:
+        nodes = sched.list_recurring(conn, include_resolved=include_resolved, limit=limit)
+    return {"ok": True, "nodes": nodes}
+
+
+@mcp.tool()
 def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
     """List every phase node regardless of stored date.
 

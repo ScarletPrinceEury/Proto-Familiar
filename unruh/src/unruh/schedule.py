@@ -415,6 +415,38 @@ def list_phases(
     return [_node_row_to_dict(r) for r in rows]
 
 
+def list_recurring(
+    conn: sqlite3.Connection,
+    *,
+    include_resolved: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return every schedule node whose payload carries a `recurrence`
+    rule, regardless of stored when_ts.
+
+    Recurring nodes anchor on their FIRST occurrence — the rest are
+    computed at read-time by the JS-side expander in recurrence.js.
+    `get_window` only catches nodes whose stored when_ts falls inside
+    the window, which means a "weekly cleaning" anchored months ago
+    is invisible to it. Callers assembling the temporal context (or
+    Routine surface) should pull recurring nodes through here and
+    let the expander generate the relevant occurrences.
+
+    Resolved nodes excluded by default; the resolution on a recurring
+    anchor applies to the whole rule (i.e. cancelling the series).
+    Per-occurrence resolution isn't tracked yet — pass
+    include_resolved=True if surfacing them anyway is useful.
+    """
+    sql = (
+        "SELECT * FROM nodes WHERE layer = 'schedule'"
+        + " AND json_extract(payload_json, '$.recurrence') IS NOT NULL"
+        + ("" if include_resolved else " AND resolution IS NULL")
+        + " ORDER BY when_ts ASC LIMIT ?"
+    )
+    rows = conn.execute(sql, (limit,)).fetchall()
+    return [_node_row_to_dict(r) for r in rows]
+
+
 def current_phase(
     conn: sqlite3.Connection,
     *,
