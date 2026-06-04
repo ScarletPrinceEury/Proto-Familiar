@@ -107,22 +107,31 @@ test('falls back to id when label missing', () => {
   assert.match(out, /node-42/);
 });
 
-test('formats ISO timestamps as local-TZ HH:MM (today)', () => {
+test('renders timed items with relative-time phrasing the Familiar can perceive', () => {
+  // An item later today renders with a time-of-day bucket ("tonight at
+  // 10pm") rather than a bare ISO; the renderer recomputes against
+  // Date.now() per call so the relative phrasing stays current.
   const today = new Date();
   today.setHours(22, 0, 0, 0);
   const out = formatTemporalContext({
     schedule: { phase: null, window: [{ when: today.toISOString(), label: 'cat play' }] },
   });
-  assert.match(out, /22:00 — cat play/);
+  // The label is preserved alongside SOME relative phrasing — the
+  // exact words depend on what "now" is during the test, but it
+  // should be human-readable (contain "at", "in", "ago", "today",
+  // "tonight", "tomorrow" — not just an ISO).
+  assert.match(out, /cat play/);
+  assert.match(out, /(at \d|in \d|\d minutes? ago|just now|moment|tonight|this evening|this afternoon|this morning)/i);
 });
 
-test('formats ISO timestamps as "tomorrow HH:MM" when applicable', () => {
+test('renders tomorrow items in tomorrow-relative phrasing', () => {
   const tomorrow = new Date(Date.now() + 86_400_000);
   tomorrow.setHours(14, 0, 0, 0);
   const out = formatTemporalContext({
     schedule: { phase: null, window: [{ when: tomorrow.toISOString(), label: 'Chen' }] },
   });
-  assert.match(out, /tomorrow 14:00 — Chen/);
+  assert.match(out, /Chen/);
+  assert.match(out, /tomorrow at 2pm/);
 });
 
 test('renders phase span using start–end times', () => {

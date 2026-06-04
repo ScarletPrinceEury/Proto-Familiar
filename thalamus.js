@@ -586,6 +586,7 @@ export function shutdownEntityCore() {
  * @returns {Promise<boolean>} true if the bump landed
  */
 export async function recordInterest({ topic, delta, source = 'chat' }) {
+  await startThalamus();
   if (!unruhClient) return false;
   if (!topic || typeof topic !== 'string' || !topic.trim()) return false;
   if (typeof delta !== 'number' || !Number.isFinite(delta) || delta <= 0) return false;
@@ -611,6 +612,7 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
  * its own MCP connection per tick.
  */
 export async function listLiveInterests({ limit = 20 } = {}) {
+  await startThalamus();
   if (!unruhClient) return [];
   try {
     console.log(`[thalamus] → unruh: interest_list (limit=${limit})`);
@@ -635,6 +637,7 @@ export async function listLiveInterests({ limit = 20 } = {}) {
  * UI passes only positive deltas. Returns { ok, error? }.
  */
 export async function bumpInterest({ topic, delta, source = 'manual' }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     console.log(`[thalamus] → unruh: interest_record/bump (topic="${topic}", delta=${delta})`);
@@ -652,6 +655,7 @@ export async function bumpInterest({ topic, delta, source = 'manual' }) {
 
 /** Demote a standing value to a live interest. */
 export async function demoteStanding({ id }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     console.log(`[thalamus] → unruh: interest_demote_standing (id=${id})`);
@@ -675,6 +679,7 @@ export async function demoteStanding({ id }) {
  * fact (M7 bridge validates it on a live turn).
  */
 export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const args = { topic };
@@ -696,6 +701,7 @@ export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
 // ── Schedule wrappers (M9b) ──────────────────────────────────────
 
 export async function getScheduleWindow({ from_ts, to_ts, limit = 200 } = {}) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected', nodes: [], edges: [] };
   try {
     console.log(`[thalamus] → unruh: schedule_get_window (limit=${limit})`);
@@ -711,6 +717,7 @@ export async function getScheduleWindow({ from_ts, to_ts, limit = 200 } = {}) {
 }
 
 export async function addScheduleNode({ type, label, when, end, payload }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({
@@ -722,6 +729,7 @@ export async function addScheduleNode({ type, label, when, end, payload }) {
 }
 
 export async function updateScheduleNode({ id, label, when, end, payload }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   const args = { id };
   if (label   !== undefined) args.label   = label;
@@ -735,6 +743,7 @@ export async function updateScheduleNode({ id, label, when, end, payload }) {
 }
 
 export async function resolveScheduleNode({ id, resolution }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({
@@ -746,6 +755,7 @@ export async function resolveScheduleNode({ id, resolution }) {
 }
 
 export async function deleteScheduleNode({ id }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({
@@ -762,6 +772,7 @@ export async function deleteScheduleNode({ id }) {
  * phases stamped on previous days, which the Routine tab needs.
  */
 export async function listPhases({ includeResolved = false, limit = 200 } = {}) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected', phases: [] };
   try {
     const r = await unruhClient.callTool({
@@ -777,6 +788,7 @@ export async function listPhases({ includeResolved = false, limit = 200 } = {}) 
 // ── Reminders wrappers (M11) ─────────────────────────────────────
 
 export async function getDueReminders({ now, limit = 50 } = {}) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, reminders: [] };
   try {
     const r = await unruhClient.callTool({
@@ -790,6 +802,7 @@ export async function getDueReminders({ now, limit = 50 } = {}) {
 }
 
 export async function getRemindersHealth() {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'reminders_health', arguments: {} });
@@ -800,6 +813,7 @@ export async function getRemindersHealth() {
 // ── Handoff wrappers (M9b) ───────────────────────────────────────
 
 export async function getHandoff({ include_consumed = true } = {}) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected', handoffs: [] };
   try {
     const r = await unruhClient.callTool({
@@ -813,6 +827,7 @@ export async function getHandoff({ include_consumed = true } = {}) {
 }
 
 export async function markHandoffConsumed({ id }) {
+  await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({
@@ -830,6 +845,7 @@ export async function markHandoffConsumed({ id }) {
  * Returns: { live: [...], standing: [...], ok: boolean, error?: string }
  */
 export async function listInterests({ limit = 50 } = {}) {
+  await startThalamus();
   if (!unruhClient) return { live: [], standing: [], ok: false, error: 'unruh not connected' };
   try {
     const result  = await unruhClient.callTool({
@@ -855,6 +871,7 @@ export async function listInterests({ limit = 50 } = {}) {
  * @returns {Promise<{ bookmarks: any[], ok: boolean, error?: string }>}
  */
 export async function listBookmarks({ limit = 100 } = {}) {
+  await startThalamus();
   if (!unruhClient) return { bookmarks: [], ok: false, error: 'unruh not connected' };
   try {
     const result  = await unruhClient.callTool({
@@ -884,6 +901,7 @@ export async function listBookmarks({ limit = 100 } = {}) {
  * @returns {Promise<boolean>}
  */
 export async function recordHandoff({ intent, threads, sessionId } = {}) {
+  await startThalamus();
   if (!unruhClient) return false;
   try {
     await unruhClient.callTool({
@@ -902,24 +920,37 @@ export async function recordHandoff({ intent, threads, sessionId } = {}) {
 }
 
 /**
- * Spawn the MCP children (entity-core + Unruh). Idempotent — safe to
- * call multiple times; the underlying connect functions guard against
- * double-spawn. Server.js calls this once during boot. Importing
- * thalamus to get the lock primitive or a tome I/O helper does NOT
- * trigger MCP startup (tests, scripts, and other Proto-Familiar
- * modules can pull from here without dragging in Deno/Python deps).
+ * Spawn the MCP children (entity-core + Unruh) and return a promise
+ * that resolves once both connection attempts have settled (resolved
+ * OR rejected — failures are logged + scheduled for reconnect, not
+ * re-thrown). Idempotent: the first caller triggers spawn; every
+ * subsequent caller gets the same cached promise back.
+ *
+ * Importing thalamus to get the lock primitive or a tome I/O helper
+ * does NOT trigger MCP startup. Tests, scripts, and other modules
+ * that only need local-state coordination can pull from here without
+ * dragging in Deno/Python deps.
+ *
+ * Server.js calls this once at boot as an eager warm-up. Every
+ * MCP-dependent exported function also awaits it at the top, so a
+ * script that imports `enrich` directly will trigger the spawn on
+ * its first call instead of getting a silent empty fallback.
  */
-let _started = false;
+let _startPromise = null;
 export function startThalamus() {
-  if (_started) return;
-  _started = true;
-  connect().catch(err => {
-    console.error('[thalamus] Failed to start entity-core:', err.message);
-  });
-  connectUnruh().catch(err => {
-    console.error('[thalamus] Failed to start Unruh:', err.message);
-    scheduleUnruhReconnect();
-  });
+  if (_startPromise) return _startPromise;
+  _startPromise = (async () => {
+    await Promise.allSettled([
+      connect().catch(err => {
+        console.error('[thalamus] Failed to start entity-core:', err.message);
+      }),
+      connectUnruh().catch(err => {
+        console.error('[thalamus] Failed to start Unruh:', err.message);
+        scheduleUnruhReconnect();
+      }),
+    ]);
+  })();
+  return _startPromise;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1023,6 +1054,7 @@ function wrapFile(filename, content, promptLabel) {
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
+import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
 import { getThreat, tierForThreat } from './threat-tracker.js';
@@ -1108,6 +1140,7 @@ function identitySection(files, order) {
  */
 export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
+  await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
 
   // Return-state hoisted to function scope so the outer catch — if it
@@ -1233,14 +1266,20 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     }
 
     // ── Memories ──────────────────────────────────────────────────────────
+    // Each memory's date gets a relative-date phrasing alongside the
+    // raw "granularity/date" reference so the Familiar perceives WHEN
+    // each memory is from in human terms, not as ISO arithmetic.
     let memLines = '';
     try {
       const mem = parseToolText(memResult, {});
+      const memNow = Date.now();
       memLines = (mem.results ?? [])
         .map((r, i) => {
           const score  = ((r.score ?? r.vectorScore ?? 0) * 100).toFixed(0);
           const source = [r.granularity, r.date].filter(Boolean).join('/');
-          return `[${i + 1}] (from ${source}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
+          const rel    = r.date ? relativeDay(r.date, memNow) : '';
+          const when   = rel ? `${source}, ${rel}` : source;
+          return `[${i + 1}] (from ${when}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
         })
         .filter(s => s.length > 5)
         .join('\n\n');
@@ -1531,7 +1570,33 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Time anchor ────────────────────────────────────────────────
+    // Always-present "Now" block at the head of dynamic content so the
+    // Familiar re-orients in time at every turn. Includes the absolute
+    // wall-clock for sentry reasoning AND a relative phrasing of when
+    // my human last sent a message (when lastUserMessageAt is known).
+    // The relative phrasing recomputes per turn — that's the whole
+    // point: a memory from yesterday morning reads as "yesterday"
+    // today and "two days ago" tomorrow, without anyone re-writing it.
+    let timeAnchorBlock = '';
+    try {
+      const nowMs = Date.now();
+      const lines = [
+        `Now: ${clockTime(nowMs)} on ${dayAndDate(nowMs)}.`,
+      ];
+      if (lastUserMessageAt) {
+        const lastMs = new Date(lastUserMessageAt).getTime();
+        if (Number.isFinite(lastMs)) {
+          lines.push(`My human last sent a message ${relativeTime(lastMs, nowMs)}.`);
+        }
+      }
+      timeAnchorBlock = `[Now]\n${lines.join('\n')}`;
+    } catch (err) {
+      console.error('[thalamus] time anchor assembly failed:', err?.message ?? err);
+    }
+
     const dynamicSections = [];
+    if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
@@ -1547,6 +1612,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // content this turn. If something stops contributing without an
     // error log alongside, that's the trail.
     const presence = [
+      timeAnchorBlock   ? 'time'      : null,
       baseContent       ? 'base'      : null,
       selfContent       ? 'self'      : null,
       userContent       ? 'user'      : null,
@@ -1607,6 +1673,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
  * @param {{ responseText: string, bookmarks: any[] }} args
  */
 export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
+  await startThalamus();
   if (!unruhClient || !Array.isArray(bookmarks) || bookmarks.length === 0) return;
   if (typeof responseText !== 'string' || !responseText) return;
   const now = new Date().toISOString();
@@ -1639,6 +1706,7 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 export async function createMemory({ content, granularity = 'daily', date, instanceId = 'proto-familiar' }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -1660,6 +1728,7 @@ export async function createMemory({ content, granularity = 'daily', date, insta
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 export async function appendIdentity({ category, filename, content }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     await mcpClient.callTool({
@@ -1681,6 +1750,7 @@ export async function appendIdentity({ category, filename, content }) {
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 export async function updateIdentitySection({ category, filename, heading, content }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     await mcpClient.callTool({
@@ -1706,6 +1776,7 @@ export async function updateIdentitySection({ category, filename, heading, conte
 const PROTO_INSTANCE_ID = 'proto-familiar';
 
 async function callTool(name, args = {}) {
+  await startThalamus();
   if (!mcpClient) throw new Error('entity-core not connected');
   const t0 = Date.now();
   console.log(`[thalamus] → entity-core: ${name}`);
@@ -1791,6 +1862,7 @@ export async function listSnapshots() {
 // ── Writes (auto-snapshot before destructive) ────────────────────────────────
 
 export async function updateMemory({ granularity, date, content, editedBy = PROTO_INSTANCE_ID }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`memory_update ${granularity}/${date}`);
   try {
@@ -1804,6 +1876,7 @@ export async function updateMemory({ granularity, date, content, editedBy = PROT
 }
 
 export async function deleteMemory({ granularity, date, instanceId, slug }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`memory_delete ${granularity}/${date}`);
   try {
@@ -1817,6 +1890,7 @@ export async function deleteMemory({ granularity, date, instanceId, slug }) {
 }
 
 export async function rewriteIdentitySection({ category, filename, section, content, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`identity_rewrite_section ${category}/${filename}#${section}`);
   try {
@@ -1830,6 +1904,7 @@ export async function rewriteIdentitySection({ category, filename, section, cont
 }
 
 export async function createGraphNode({ label, type, description, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     const args = { instanceId };
@@ -1846,6 +1921,7 @@ export async function createGraphNode({ label, type, description, instanceId = P
 }
 
 export async function createGraphEdge({ fromId, toId, type, weight, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     const args = { fromId, toId, instanceId };
@@ -1861,6 +1937,7 @@ export async function createGraphEdge({ fromId, toId, type, weight, instanceId =
 }
 
 export async function updateGraphNode({ id, label, description, type, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`graph_node_update ${id}`);
   try {
@@ -1878,6 +1955,7 @@ export async function updateGraphNode({ id, label, description, type, instanceId
 }
 
 export async function deleteGraphNode({ id, permanent = false }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`graph_node_delete ${id}`);
   try {
@@ -1891,6 +1969,7 @@ export async function deleteGraphNode({ id, permanent = false }) {
 }
 
 export async function updateGraphEdge({ id, type, weight, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`graph_edge_update ${id}`);
   try {
@@ -1907,6 +1986,7 @@ export async function updateGraphEdge({ id, type, weight, instanceId = PROTO_INS
 }
 
 export async function deleteGraphEdge({ id }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   await autoSnapshot(`graph_edge_delete ${id}`);
   try {
@@ -1922,6 +2002,7 @@ export async function deleteGraphEdge({ id }) {
 // ── Snapshots (used by the Knowledge editor's safety-net UI) ────────────────
 
 export async function createSnapshot() {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     const result = await callTool('snapshot_create', {});
@@ -1932,6 +2013,7 @@ export async function createSnapshot() {
 }
 
 export async function restoreSnapshot({ snapshotId }) {
+  await startThalamus();
   if (!mcpClient) return { ok: false, error: 'entity-core not connected' };
   try {
     const result = await callTool('snapshot_restore', { snapshotId });

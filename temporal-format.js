@@ -1,3 +1,5 @@
+import { relativeTime } from './relative-time.js';
+
 /**
  * Pure renderer for Unruh's temporal_context payload.
  *
@@ -72,7 +74,14 @@ export function formatTemporalContext(payload) {
 
   const handoff = payload.handoff ?? {};
   if (handoff.intent || (handoff.open_threads ?? []).length) {
-    const handoffLines = ['Last session:'];
+    // When the handoff carries a timestamp we render it as "ended
+    // yesterday at 9pm" so the Familiar feels the gap between
+    // sessions, not just the contents.
+    const rel = handoff.ended_at || handoff.created_at || handoff.ts
+      ? relativeTime(handoff.ended_at || handoff.created_at || handoff.ts, Date.now())
+      : '';
+    const header = rel ? `Last session (ended ${rel}):` : 'Last session:';
+    const handoffLines = [header];
     if (handoff.intent) handoffLines.push(`  intent — ${handoff.intent}`);
     for (const thread of handoff.open_threads ?? []) {
       handoffLines.push(`  open — ${typeof thread === 'string' ? thread : thread.label ?? thread.id}`);
@@ -137,6 +146,18 @@ export function formatTemporalContext(payload) {
       openTasks.push(item);
     }
 
+    // Each timed item is rendered through relativeTime() so the
+    // Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30
+    // minutes" rather than an ISO timestamp. Recomputed every turn
+    // against `nowMs`, which is the same moment used for "Now" at the
+    // top of dynamic — the model perceives a consistent present.
+    const nowMs = Date.now();
+    const renderWhen = (whenIso) => {
+      if (!whenIso) return '';
+      const rel = relativeTime(whenIso, nowMs);
+      return rel || formatLocalTime(whenIso);
+    };
+
     const schedLines = [];
     if (phase) {
       const phaseLabel = phase.label ?? phase.id ?? phase;
@@ -149,8 +170,8 @@ export function formatTemporalContext(payload) {
     if (upcoming.length) {
       schedLines.push('Upcoming in this window:');
       for (const item of upcoming) {
-        const when = item.when ?? item.fires_at ?? '';
-        const whenText = when ? `${formatLocalTime(when)} — ` : '';
+        const when = renderWhen(item.when ?? item.fires_at ?? '');
+        const whenText = when ? `${when} — ` : '';
         const type = item.type ? `[${item.type}] ` : '';
         schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}`);
       }
@@ -158,8 +179,8 @@ export function formatTemporalContext(payload) {
     if (reminders.length) {
       schedLines.push('Reminders set to fire:');
       for (const item of reminders) {
-        const when = item.when ?? item.fires_at ?? '';
-        const whenText = when ? `${formatLocalTime(when)} — ` : '';
+        const when = renderWhen(item.when ?? item.fires_at ?? '');
+        const whenText = when ? `${when} — ` : '';
         schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''}`);
       }
     }
@@ -176,8 +197,8 @@ export function formatTemporalContext(payload) {
     if (resolved.length) {
       schedLines.push('Recently resolved in this window:');
       for (const item of resolved) {
-        const when = item.when ?? item.fires_at ?? '';
-        const whenText = when ? `${formatLocalTime(when)} — ` : '';
+        const when = renderWhen(item.when ?? item.fires_at ?? '');
+        const whenText = when ? `${when} — ` : '';
         schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''} [${item.resolution}]`);
       }
     }

@@ -21,6 +21,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { PONDERINGS_TOME_NAME } from './pondering.js';
 import { withLock } from './thalamus.js';
+import { relativeTime } from './relative-time.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -126,9 +127,13 @@ export function formatPonderingsForPrompt(entries) {
     'Things I have been quietly thinking about on my own, recently:',
     '',
   ];
+  // Render each pondering with relative-time framing — recomputed per
+  // turn so a thought from this morning reads as "this morning" right
+  // now and "yesterday morning" tomorrow.
+  const now = Date.now();
   for (const e of entries) {
-    const stamp = e.created_at.replace('T', ' ').slice(0, 16) + ' UTC';
-    lines.push(`— ${stamp} · "${e.title}"`);
+    const rel = relativeTime(e.created_at, now);
+    lines.push(`— ${rel || e.created_at} · "${e.title}"`);
     lines.push(e.content);
     lines.push('');
   }
