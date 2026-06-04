@@ -124,6 +124,11 @@ def resolve(
 
     Returns True if the row was updated, False if no node with that
     id exists (caller can decide whether to treat that as an error).
+
+    For recurring nodes this resolves the WHOLE SERIES (the anchor's
+    own resolution column). To resolve a single occurrence of a
+    recurring node, use resolve_occurrence() instead — it writes into
+    payload.resolutions and leaves the series alive.
     """
     if resolution not in RESOLUTIONS:
         raise ValueError(f"unknown resolution {resolution!r}; expected one of {sorted(RESOLUTIONS)}")
@@ -132,6 +137,54 @@ def resolve(
         (resolution, now_iso(), id),
     )
     return cur.rowcount > 0
+
+
+def resolve_occurrence(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    occurrence_date: str,
+    resolution: str,
+) -> bool:
+    """Mark a single occurrence of a recurring node resolved.
+
+    Writes into payload.resolutions (a map of {YYYY-MM-DD: resolution})
+    instead of touching the node's own `resolution` column. The
+    JS-side expander (recurrence.js) filters resolved
+    occurrence-dates out when generating the temporal-context window,
+    so "this Sunday's cleaning got done" hides this Sunday without
+    affecting next Sunday.
+
+    Raises ValueError if the node doesn't carry a recurrence rule
+    (per-occurrence resolution is meaningless for one-time entries —
+    use resolve() for those). Returns True if the write succeeded,
+    False if the node id wasn't found.
+    """
+    if resolution not in RESOLUTIONS:
+        raise ValueError(f"unknown resolution {resolution!r}; expected one of {sorted(RESOLUTIONS)}")
+    if not occurrence_date or not isinstance(occurrence_date, str):
+        raise ValueError("occurrence_date is required (YYYY-MM-DD)")
+    row = conn.execute(
+        "SELECT payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    ).fetchone()
+    if row is None:
+        return False
+    payload = json.loads(row["payload_json"] or "{}")
+    if not payload.get("recurrence"):
+        raise ValueError(
+            f"node {id} has no recurrence rule; use resolve() for one-time nodes"
+        )
+    resolutions = payload.get("resolutions") or {}
+    if not isinstance(resolutions, dict):
+        resolutions = {}
+    resolutions[occurrence_date] = resolution
+    payload["resolutions"] = resolutions
+    conn.execute(
+        "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(payload), now_iso(), id),
+    )
+    return True
 
 
 def update_node(
@@ -408,6 +461,38 @@ def list_phases(
     """
     sql = (
         "SELECT * FROM nodes WHERE layer = 'schedule' AND type = 'phase'"
+        + ("" if include_resolved else " AND resolution IS NULL")
+        + " ORDER BY when_ts ASC LIMIT ?"
+    )
+    rows = conn.execute(sql, (limit,)).fetchall()
+    return [_node_row_to_dict(r) for r in rows]
+
+
+def list_recurring(
+    conn: sqlite3.Connection,
+    *,
+    include_resolved: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return every schedule node whose payload carries a `recurrence`
+    rule, regardless of stored when_ts.
+
+    Recurring nodes anchor on their FIRST occurrence — the rest are
+    computed at read-time by the JS-side expander in recurrence.js.
+    `get_window` only catches nodes whose stored when_ts falls inside
+    the window, which means a "weekly cleaning" anchored months ago
+    is invisible to it. Callers assembling the temporal context (or
+    Routine surface) should pull recurring nodes through here and
+    let the expander generate the relevant occurrences.
+
+    Resolved nodes excluded by default; the resolution on a recurring
+    anchor applies to the whole rule (i.e. cancelling the series).
+    Per-occurrence resolution isn't tracked yet — pass
+    include_resolved=True if surfacing them anyway is useful.
+    """
+    sql = (
+        "SELECT * FROM nodes WHERE layer = 'schedule'"
+        + " AND json_extract(payload_json, '$.recurrence') IS NOT NULL"
         + ("" if include_resolved else " AND resolution IS NULL")
         + " ORDER BY when_ts ASC LIMIT ?"
     )

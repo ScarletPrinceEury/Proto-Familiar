@@ -984,6 +984,17 @@
                   <option value="purely_optional">optional — only if I care</option>
                 </select>
               </label>
+              <label title="How often this repeats. Daily / weekly / monthly / yearly anchor on the day-of-week / day-of-month / month-and-day of the 'When' timestamp. 'Last Friday' picks the last Friday of every month.">Repeats
+                <select id="te-sched-repeat">
+                  <option value="">never (one-time)</option>
+                  <option value="daily">daily</option>
+                  <option value="weekly">weekly (same weekday)</option>
+                  <option value="monthly">monthly (same day-of-month)</option>
+                  <option value="yearly">yearly (same date)</option>
+                  <option value="monthly_last_fri">monthly — last Friday</option>
+                  <option value="monthly_last_sun">monthly — last Sunday</option>
+                </select>
+              </label>
             </div>
             <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">
               <button id="te-sched-form-cancel" class="btn-ghost">Cancel</button>

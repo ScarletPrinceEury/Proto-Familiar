@@ -754,6 +754,24 @@ export async function resolveScheduleNode({ id, resolution }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/**
+ * Resolve a single occurrence of a recurring node. Writes into the
+ * anchor's payload.resolutions map (keyed by local-TZ YYYY-MM-DD); the
+ * series stays alive. The JS-side expander filters resolved
+ * occurrence-dates out of the temporal-context window.
+ */
+export async function resolveScheduleOccurrence({ id, occurrence_date, resolution }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_resolve_occurrence',
+      arguments: { id, occurrence_date, resolution },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 export async function deleteScheduleNode({ id }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
@@ -782,6 +800,27 @@ export async function listPhases({ includeResolved = false, limit = 200 } = {}) 
     return parseToolText(r, { ok: false, phases: [] });
   } catch (err) {
     return { ok: false, error: err?.message ?? String(err), phases: [] };
+  }
+}
+
+/**
+ * Read every schedule node whose payload carries a `recurrence` rule.
+ * Used by enrich() to fetch the anchor nodes so the JS-side expander
+ * (recurrence.js) can generate occurrences within the temporal window.
+ * get_window can't find these on its own — their stored when_ts is
+ * the FIRST occurrence, often months or years in the past.
+ */
+export async function listRecurring({ includeResolved = false, limit = 200 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', nodes: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_list_recurring',
+      arguments: { include_resolved: includeResolved, limit },
+    });
+    return parseToolText(r, { ok: false, nodes: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), nodes: [] };
   }
 }
 
@@ -1055,6 +1094,7 @@ function wrapFile(filename, content, promptLabel) {
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
+import { expandWindow } from './recurrence.js';
 import { resolveEntityCoreRef, identityHasContent } from './entity-ref.js';
 import { getRecentPonderings, formatPonderingsForPrompt } from './recent-ponderings.js';
 import { getThreat, tierForThreat } from './threat-tracker.js';
@@ -1400,6 +1440,36 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let temporalLines = '';
     try {
       temporalPayload = parseToolText(temporalResult, null);
+      // Recurrence expansion. Recurring nodes anchor on their first
+      // occurrence (often months ago) and are invisible to
+      // get_window, so we fetch them through a separate MCP call and
+      // expand them in-process into the same window the temporal
+      // payload was scoped to. Roughly: last 24h → next 7 days,
+      // mirroring Unruh's default window. The merged items go back
+      // into schedule.window so formatTemporalContext renders them
+      // the same way as anchor-in-window nodes.
+      if (!staticOnly && temporalPayload?.schedule) {
+        try {
+          const recurResp = await listRecurring();
+          const recurNodes = Array.isArray(recurResp?.nodes) ? recurResp.nodes : [];
+          if (recurNodes.length > 0) {
+            const nowMs = Date.now();
+            const fromMs = nowMs - 24 * 3600_000;
+            const toMs   = nowMs + 7 * 24 * 3600_000;
+            const expanded = expandWindow(recurNodes, fromMs, toMs);
+            // Merge into schedule.window — drop the recurring ANCHOR
+            // node from the merged set if it's also there (avoids
+            // showing both "the anchor stamped 6mo ago" AND today's
+            // occurrence), then add the expanded occurrences.
+            const anchorIds = new Set(recurNodes.map(n => n.id));
+            const existing = (temporalPayload.schedule.window ?? [])
+              .filter(item => !anchorIds.has(item?.id));
+            temporalPayload.schedule.window = [...existing, ...expanded];
+          }
+        } catch (err) {
+          console.error('[thalamus] recurrence expansion failed:', err?.message ?? err);
+        }
+      }
       temporalLines = formatTemporalContext(temporalPayload);
     } catch (err) {
       console.error('[thalamus] temporal assembly failed (defaulting to empty):', err?.message ?? err);

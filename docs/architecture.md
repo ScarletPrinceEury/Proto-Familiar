@@ -92,6 +92,7 @@ ponderings injection, care-check framing) and as background loops
 ├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
 ├── relative-time.js         Natural-English relative phrasing for every timestamped surface (memories, ponderings, schedule, handoff, "Now")
+├── recurrence.js            Recurrence-rule expansion — turns one "weekly cleaning" anchor into occurrences within the temporal window
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
@@ -400,6 +401,58 @@ Surfaces using `relativeTime()` / `relativeDay()`:
 | Chat-turn messages | public/app.js buildApiMessages | "[14:30] hi" (every user + assistant message in history) |
 
 The chat-turn message stamps use a compact `[HH:MM]` tag rather than full relative phrasing — the relative anchor is in the `[Now]` block, so each message just needs a marker the Familiar can correlate.
+
+## Recurrence (events / tasks / reminders / phases that repeat)
+
+Schedule nodes carry an optional `payload.recurrence` rule that turns one anchored entry into a series of occurrences without storing every occurrence separately:
+
+```js
+payload.recurrence = {
+  freq: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  interval?: 2,                              // every N units (default 1)
+  until?:    '2026-12-31',                   // cut-off date
+  bysetpos?: -1 | 1 | 2 | 3 | 4,             // monthly only — "last" or "Nth"
+  byweekday?: 0..6,                          // 0=Sun, 5=Fri — pairs with bysetpos
+}
+```
+
+Common patterns:
+
+| Need | Rule |
+|---|---|
+| Weekly cleaning every Sunday | `{ freq: 'weekly' }` anchored on a Sunday |
+| Biweekly therapy | `{ freq: 'weekly', interval: 2 }` |
+| Rent on the 1st of every month | `{ freq: 'monthly' }` anchored on the 1st |
+| Birthday | `{ freq: 'yearly' }` |
+| Last Friday of every month | `{ freq: 'monthly', bysetpos: -1, byweekday: 5 }` |
+| First Monday of every month | `{ freq: 'monthly', bysetpos: 1, byweekday: 1 }` |
+
+**Expansion flow** (read-time, no stored occurrences):
+
+```
+enrich()  ─► temporal_context  (Unruh)  → schedule.window (anchor-in-window items only)
+       │
+       ├─► listRecurring()    (Unruh)  → recurring anchors (any when_ts, including past)
+       │
+       └─► expandWindow(recurringAnchors, now-24h, now+7d)  (recurrence.js)
+                                      ↓
+                       merge into schedule.window
+                                      ↓
+                       formatTemporalContext()  (temporal-format.js)
+```
+
+Recurring anchors are dropped from the merged window if they'd otherwise appear (avoids both "the anchor stamped months ago" AND "today's occurrence" rendering).
+
+**Per-occurrence resolution.** `payload.resolutions` is a map `{ "YYYY-MM-DD": "done"|"cancelled"|"carried_forward" }` keyed by local-TZ date. The expander filters out any occurrence whose date is in the map. Writers:
+- `schedule_resolve_occurrence` MCP tool / `schedule_resolve` BUILTIN_TOOL with `occurrence_date` arg
+- HTTP `POST /api/temporal/schedule/:id/resolve_occurrence`
+- Temporal-editor "✓ done" / "✕ cancel" buttons auto-route to the per-occurrence endpoint when the item is an expanded occurrence (carries `__occurrence_of`).
+
+The anchor's own `resolution` column still works — it cancels the WHOLE series rather than one occurrence. Use `schedule_resolve` without `occurrence_date` to end recurrence entirely.
+
+UI: the temporal-editor schedule-create form has a **Repeats** dropdown with the common presets. The Familiar's `schedule_add_*` BUILTIN_TOOLS accept a `recurrence` object so the model can set arbitrary rules — including the "last Friday" pattern — directly from chat.
+
+Bounded: the expander caps at 50 occurrences per anchor (overflow guard against malformed rules) and handles month-clamp edge cases (Jan 31 → Feb 28 instead of overflowing to March 3; Feb 29 → Feb 28 in non-leap years).
 
 ## Surface pipeline (the consumer side of personalization)
 

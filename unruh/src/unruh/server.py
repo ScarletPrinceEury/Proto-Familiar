@@ -201,6 +201,35 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def schedule_resolve_occurrence(id: str, occurrence_date: str, resolution: str) -> dict[str, Any]:
+    """Mark a single occurrence of a recurring schedule node resolved.
+
+    For recurring nodes (weekly cleaning, monthly bill, yearly
+    birthday) this resolves THIS specific occurrence without killing
+    the series — payload.resolutions[occurrence_date] = resolution.
+    The JS-side expander hides resolved occurrences from the temporal
+    context window. Next occurrence still surfaces normally.
+
+    Args:
+        id: anchor node id (the original recurring node).
+        occurrence_date: 'YYYY-MM-DD' local-TZ date of the specific
+            occurrence being resolved.
+        resolution: 'done' | 'cancelled' | 'carried_forward'.
+
+    Returns: {ok: True, updated: <bool>}. Raises if the node has no
+    recurrence rule (use schedule_resolve for one-time entries).
+    """
+    try:
+        with get_conn() as conn:
+            updated = sched.resolve_occurrence(
+                conn, id=id, occurrence_date=occurrence_date, resolution=resolution,
+            )
+        return {"ok": True, "updated": updated}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def schedule_update_node(
     id: str,
     label: str | None = None,
@@ -239,6 +268,24 @@ def schedule_delete_node(id: str) -> dict[str, Any]:
     with get_conn() as conn:
         deleted = sched.delete_node(conn, id=id)
     return {"ok": True, "deleted": deleted}
+
+
+@mcp.tool()
+def schedule_list_recurring(include_resolved: bool = False, limit: int = 200) -> dict[str, Any]:
+    """List every schedule node whose payload carries a `recurrence`
+    rule, regardless of stored when_ts.
+
+    Recurring nodes anchor on their first occurrence — the rest are
+    computed at read-time by the JS-side expander in recurrence.js.
+    schedule_get_window only catches nodes whose stored when_ts falls
+    inside the window, so this surfaces the anchors the JS side needs
+    to expand for "today's rhythm" / "upcoming this week" rendering.
+
+    Returns: {ok: True, nodes: [...]}.
+    """
+    with get_conn() as conn:
+        nodes = sched.list_recurring(conn, include_resolved=include_resolved, limit=limit)
+    return {"ok": True, "nodes": nodes}
 
 
 @mcp.tool()

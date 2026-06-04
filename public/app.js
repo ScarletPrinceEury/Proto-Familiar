@@ -307,6 +307,7 @@ const BUILTIN_TOOLS = [
           label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
           when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
           end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
+          recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
         },
         required: ['label', 'when'],
       },
@@ -331,6 +332,7 @@ const BUILTIN_TOOLS = [
             type: 'string',
             description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
           },
+          recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
         },
         required: ['label'],
       },
@@ -356,6 +358,7 @@ const BUILTIN_TOOLS = [
             type: 'string',
             description: 'Optional free-text note on what specifically happens if {{user}} misses this. Informs how I word the banner message now.',
           },
+          recurrence: { type: 'object', description: 'Optional. Repeats this reminder on a schedule. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST fire time — subsequent fires recur on the same weekday / day-of-month / month-and-day. Examples: {freq:"weekly"} for a regular reminder; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of each month".' },
         },
         required: ['label', 'when'],
       },
@@ -373,6 +376,7 @@ const BUILTIN_TOOLS = [
           when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
           end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
           texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
+          recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
         },
         required: ['label', 'when', 'end'],
       },
@@ -382,12 +386,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_resolve',
-      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward".',
+      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward". For recurring nodes (weekly cleaning, monthly bill, yearly birthday), passing the optional `occurrence_date` resolves ONLY that specific occurrence — the rest of the series stays alive. Without `occurrence_date`, the whole series is cancelled/done.',
       parameters: {
         type: 'object',
         properties: {
-          id:         { type: 'string', description: 'Schedule node id (from my [Temporal Context]).' },
+          id:         { type: 'string', description: 'Schedule node id (from my [Temporal Context]). For a recurring occurrence, this is the anchor node\'s id.' },
           resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
+          occurrence_date: { type: 'string', description: 'Optional. For recurring nodes only. "YYYY-MM-DD" (local-TZ) date of the specific occurrence to resolve — e.g. resolve THIS Sunday\'s cleaning without affecting next Sunday. Omit to resolve the entire series.' },
         },
         required: ['id', 'resolution'],
       },
@@ -663,12 +668,16 @@ const BUILTIN_EXECUTORS = {
   // already-spawned Unruh MCP subprocess. Returns short strings the
   // model can quote back to {{user}} as confirmation.
 
-  schedule_add_event: async ({ label, when, end }) => {
+  schedule_add_event: async ({ label, when, end, recurrence }) => {
     try {
+      const payload = recurrence ? { recurrence } : {};
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'event', label, when, end }),
+        body: JSON.stringify({
+          type: 'event', label, when, end,
+          ...(Object.keys(payload).length ? { payload } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to add event: ${data.error ?? res.status}`;
@@ -676,11 +685,12 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
-  schedule_add_task: async ({ label, when, stakes_tier, consequence_model }) => {
+  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence }) => {
     try {
       const payload = {};
       if (stakes_tier) payload.stakes_tier = stakes_tier;
       if (consequence_model) payload.consequence_model = consequence_model;
+      if (recurrence) payload.recurrence = recurrence;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -695,12 +705,13 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add task: ${err.message}`; }
   },
 
-  schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model }) => {
+  schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model, recurrence }) => {
     try {
       const payload = {};
       if (message) payload.message = message;
       if (stakes_tier) payload.stakes_tier = stakes_tier;
       if (consequence_model) payload.consequence_model = consequence_model;
+      if (recurrence) payload.recurrence = recurrence;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -717,8 +728,11 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
-  schedule_add_phase: async ({ label, when, end, texture }) => {
+  schedule_add_phase: async ({ label, when, end, texture, recurrence }) => {
     try {
+      const payload = {};
+      if (texture) payload.texture = texture;
+      if (recurrence) payload.recurrence = recurrence;
       const res = await fetch('/api/temporal/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -727,7 +741,7 @@ const BUILTIN_EXECUTORS = {
           label,
           when,
           end,
-          payload: texture ? { texture } : {},
+          payload,
         }),
       });
       const data = await res.json();
@@ -736,17 +750,29 @@ const BUILTIN_EXECUTORS = {
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
-  schedule_resolve: async ({ id, resolution }) => {
+  schedule_resolve: async ({ id, resolution, occurrence_date }) => {
     try {
-      const res = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}/resolve`, {
+      // If occurrence_date is supplied AND the node is recurring,
+      // resolve THIS occurrence only — keeps the rest of the series
+      // alive. Without occurrence_date, the whole node (or whole
+      // series for a recurring one) is resolved.
+      const url = occurrence_date
+        ? `/api/temporal/schedule/${encodeURIComponent(id)}/resolve_occurrence`
+        : `/api/temporal/schedule/${encodeURIComponent(id)}/resolve`;
+      const body = occurrence_date
+        ? { occurrence_date, resolution }
+        : { resolution };
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resolution }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) return `Failed to resolve: ${data.error ?? res.status}`;
       if (data.updated === false)        return `No schedule node with id ${id} — it may have been deleted or never existed.`;
-      return `Marked ${id} as ${resolution}.`;
+      return occurrence_date
+        ? `Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`
+        : `Marked ${id} as ${resolution}.`;
     } catch (err) { return `Failed to resolve: ${err.message}`; }
   },
 
@@ -7490,14 +7516,28 @@ async function teLoadSchedule() {
       const resolution = n.resolution
         ? `<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${teEscapeHtml(n.resolution)}</span>`
         : '';
+      // For expanded occurrences of a recurring node, the resolve
+      // buttons carry the occurrence date so the handler can hit the
+      // per-occurrence endpoint (resolves THIS instance only, leaves
+      // the rest of the series alive).
+      const isOccurrence = !!n.__occurrence_of;
+      const occDate = isOccurrence && n.when
+        ? new Date(n.when).getFullYear() + '-' + String(new Date(n.when).getMonth() + 1).padStart(2, '0') + '-' + String(new Date(n.when).getDate()).padStart(2, '0')
+        : '';
+      const occAttrs = isOccurrence
+        ? ` data-occurrence-date="${teEscapeHtml(occDate)}"`
+        : '';
+      const recurringTag = isOccurrence
+        ? ' <span style="font-size:0.7em;opacity:0.6;padding:1px 4px;border:1px solid var(--border-subtle,#2a2a2a);border-radius:3px">recurring</span>'
+        : '';
       const resolveBtns = n.resolution ? '' : `
-        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="done"      style="font-size: 0.8em; padding: 2px 8px">✓ done</button>
-        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="cancelled" style="font-size: 0.8em; padding: 2px 8px">✕ cancel</button>`;
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="done"${occAttrs}      style="font-size: 0.8em; padding: 2px 8px">✓ done</button>
+        <button class="btn-ghost te-sched-resolve" data-id="${id}" data-resolution="cancelled"${occAttrs} style="font-size: 0.8em; padding: 2px 8px">✕ cancel</button>`;
       return `
       <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
         <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap">
           <span style="font-size: 0.8em; opacity: 0.6; min-width: 4em">${type}</span>
-          <strong style="flex: 1">${label}</strong>
+          <strong style="flex: 1">${label}${recurringTag}</strong>
           ${resolution}
           ${resolveBtns}
           <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)">🗑</button>
@@ -7506,7 +7546,11 @@ async function teLoadSchedule() {
       </div>`;
     }).join('');
     list.querySelectorAll('.te-sched-resolve').forEach(btn => {
-      btn.addEventListener('click', () => teResolveSchedule(btn.dataset.id, btn.dataset.resolution));
+      btn.addEventListener('click', () => teResolveSchedule(
+        btn.dataset.id,
+        btn.dataset.resolution,
+        btn.dataset.occurrenceDate || null,
+      ));
     });
     list.querySelectorAll('.te-sched-delete').forEach(btn => {
       btn.addEventListener('click', () => teDeleteSchedule(btn.dataset.id));
@@ -7516,12 +7560,22 @@ async function teLoadSchedule() {
   }
 }
 
-async function teResolveSchedule(id, resolution) {
+async function teResolveSchedule(id, resolution, occurrenceDate = null) {
+  // If the item is an expanded occurrence (the resolve button carries
+  // data-occurrence-date), route to the per-occurrence endpoint —
+  // resolves THIS occurrence only and leaves the rest of the series
+  // alive. Otherwise the regular resolve hits the whole node.
   try {
-    const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}/resolve`, {
+    const url = occurrenceDate
+      ? `/api/temporal/schedule/${encodeURIComponent(id)}/resolve_occurrence`
+      : `/api/temporal/schedule/${encodeURIComponent(id)}/resolve`;
+    const body = occurrenceDate
+      ? { occurrence_date: occurrenceDate, resolution }
+      : { resolution };
+    const r = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ resolution }),
+      body:    JSON.stringify(body),
     }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'resolve failed');
     teLoadSchedule();
@@ -7552,7 +7606,27 @@ function teToggleScheduleForm(show) {
     $('te-sched-type').value  = 'event';
     const stakes = $('te-sched-stakes');
     if (stakes) stakes.value = '';
+    const repeat = $('te-sched-repeat');
+    if (repeat) repeat.value = '';
     setTimeout(() => $('te-sched-label')?.focus(), 0);
+  }
+}
+
+// Map the UI repeat presets to payload.recurrence objects the
+// expander understands. Kept tiny: the dropdown only offers the
+// patterns the bare-minimum spec called out. Custom RRULEs / nth-
+// weekday with weekday-not-Friday-or-Sunday are advanced enough
+// that the Familiar's BUILTIN_TOOL is the right entry point, not
+// a casual UI selector.
+function teRepeatToRecurrence(preset) {
+  switch (preset) {
+    case 'daily':            return { freq: 'daily' };
+    case 'weekly':           return { freq: 'weekly' };
+    case 'monthly':          return { freq: 'monthly' };
+    case 'yearly':           return { freq: 'yearly' };
+    case 'monthly_last_fri': return { freq: 'monthly', bysetpos: -1, byweekday: 5 };
+    case 'monthly_last_sun': return { freq: 'monthly', bysetpos: -1, byweekday: 0 };
+    default:                 return null;
   }
 }
 
@@ -7579,14 +7653,19 @@ async function teSaveScheduleNode() {
     return;
   }
   const stakesTier = $('te-sched-stakes')?.value || '';
-  const payload = stakesTier ? { stakes_tier: stakesTier } : undefined;
+  const repeatPreset = $('te-sched-repeat')?.value || '';
+  const recurrence = teRepeatToRecurrence(repeatPreset);
+  const payload = {};
+  if (stakesTier)  payload.stakes_tier = stakesTier;
+  if (recurrence)  payload.recurrence  = recurrence;
+  const hasPayload = Object.keys(payload).length > 0;
   try {
     const r = await fetch('/api/temporal/schedule', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
         type, label, when, end,
-        ...(payload ? { payload } : {}),
+        ...(hasPayload ? { payload } : {}),
       }),
     }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'create failed');
@@ -7640,6 +7719,21 @@ async function teLoadRoutine() {
       const id      = teEscapeHtml(p.id);
       const label   = teEscapeHtml(p.label);
       const texture = teEscapeHtml(p.payload?.texture ?? '');
+      // Phases recur daily by default — that's the original Routine
+      // contract. A payload.recurrence on a phase overrides that
+      // (e.g. "weekly Sunday review block", "monthly retrospective").
+      // Surface the cadence as a small tag so users can see at a
+      // glance which phases land every day vs. only some days.
+      const recur = p.payload?.recurrence;
+      const recurLabel = !recur ? 'daily'
+        : recur.freq === 'daily'   ? (recur.interval > 1 ? `every ${recur.interval} days` : 'daily')
+        : recur.freq === 'weekly'  ? (recur.interval > 1 ? `every ${recur.interval} weeks` : 'weekly')
+        : recur.freq === 'monthly' ? (recur.bysetpos === -1 ? 'monthly (last weekday)' : 'monthly')
+        : recur.freq === 'yearly'  ? 'yearly'
+        : recur.freq || 'recurring';
+      const recurTag = recurLabel === 'daily'
+        ? ''
+        : ` <span style="font-size:0.7em;opacity:0.7;padding:1px 5px;border:1px solid var(--border-subtle,#2a2a2a);border-radius:3px">${teEscapeHtml(recurLabel)}</span>`;
       // Show time-of-day in the USER'S local TZ (storage is UTC).
       // Slicing the raw ISO string would print UTC hours and lie to
       // anyone not in UTC.
@@ -7648,7 +7742,7 @@ async function teLoadRoutine() {
       return `
       <div data-phase-id="${id}" style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
         <div style="display: flex; gap: 8px; align-items: baseline">
-          <strong style="flex: 1" class="te-phase-label" data-id="${id}" data-field="label">${label}</strong>
+          <strong style="flex: 1" class="te-phase-label" data-id="${id}" data-field="label">${label}${recurTag}</strong>
           <span style="font-family: monospace; opacity: 0.85" class="te-phase-time">
             <span class="te-phase-when" data-id="${id}" data-field="when">${whenT}</span> –
             <span class="te-phase-end"  data-id="${id}" data-field="end">${endT}</span>
