@@ -117,13 +117,18 @@ test('formatPonderingsForPrompt returns empty string for no entries', () => {
   assert.equal(formatPonderingsForPrompt(null),      '');
 });
 
-test('formatPonderingsForPrompt embeds title, content, and timestamp', () => {
+test('formatPonderingsForPrompt embeds title, content, and a relative-time framing', () => {
+  // Timestamps are rendered via relativeTime so the Familiar perceives
+  // WHEN each thought happened ("yesterday", "this morning", "last
+  // Tuesday at 3pm") rather than as an ISO. The exact phrasing
+  // depends on Date.now() at test time — assert on a flexible regex
+  // that's true for any sensible relative-time output.
   const out = formatPonderingsForPrompt([
     { uid: 'a', title: 'On honesty', content: 'thinking about it', created_at: '2026-05-30T03:14:00.000Z' },
   ]);
   assert.match(out, /On honesty/);
   assert.match(out, /thinking about it/);
-  assert.match(out, /2026-05-30 03:14/);
+  assert.match(out, /(at \d|ago|in \d|today|yesterday|tomorrow|last |this |next |week)/i);
 });
 
 test('formatPonderingsForPrompt frames the entries as the Familiar\'s own real thoughts', () => {
