@@ -171,6 +171,7 @@ ack/cancel — see `memorization.js`.
 - `POST /api/temporal/schedule` — add event/task/state/phase/reminder
 - `PATCH /api/temporal/schedule/:id` — partial update
 - `POST /api/temporal/schedule/:id/resolve` — mark done/cancelled/etc.
+- `POST /api/temporal/schedule/:id/resolve_occurrence` — resolve ONE occurrence of a recurring node (leaves the series alive)
 - `DELETE /api/temporal/schedule/:id` — hard delete (edges cascade)
 - `GET /api/temporal/phases` — **date-independent** routine surface
 - `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
@@ -300,7 +301,16 @@ per-Tome write mutex, idempotent enqueue on
 - **Temporal editor modal** — six tabs (Interests / Threat /
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
   applicable. The Routine tab hits `/api/temporal/phases` so phases
-  on past dates surface (they recur).
+  on past dates surface (they recur). The Schedule tab has a **view
+  toggle** (mirrors the Knowledge-Editor graph List/Map pattern):
+  - **List** — the existing linear schedule view with windowed
+    look-ahead (default 48h, configurable).
+  - **Calendar** — month-grid view, Monday-start, 6×7 cells.
+    Clicking a day opens the create form pre-filled to that date.
+    Recurring nodes expand server-side so occurrences render on
+    their actual dates; phases stay in the Routine tab to avoid
+    cluttering daily-recurring rows. Iconography: recurring
+    occurrences prefix with ↻, resolved ones strike through.
 - **Local-time helpers** for the time pickers: convert between
   `<input type="time">` + `<input type="datetime-local">` and ISO UTC
   via real local-time semantics, not string-slicing.
