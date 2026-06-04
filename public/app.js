@@ -104,11 +104,11 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones.',
+      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected.',
       parameters: {
         type: 'object',
         properties: {
-          content:     { type: 'string', description: 'Memory content I write in first-person perspective. I use bullet points prefixed with [chat:auto] for individual facts.' },
+          content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
         },
         required: ['content', 'granularity'],

@@ -74,56 +74,30 @@ async function persistQueue() {
   }
 }
 
-// ── Tome helpers (parallel to server.js but standalone) ─────────
+// ── Tome helpers (delegated to thalamus's coordination layer) ────
+//
+// Both findOrCreateSessionMemoriesTome and the per-tome lock used to
+// live here as private helpers. They now route through thalamus —
+// findOrCreateTomeByName for the dir-scope find-or-create, and
+// modifyTomeFile (used in processJob below) for the per-file
+// RMW. This means a concurrent HTTP /api/tomes/:id edit and a
+// memorization tick serialise against each other through the same
+// per-path key, which they couldn't before.
 
-// Process-wide mutex so concurrent callers (worker tick + HTTP endpoint)
-// can't both fail the scan and each create a new file.
-let _sessionMemoriesLock = Promise.resolve();
+import { findOrCreateTomeByName, modifyTomeFile } from './thalamus.js';
 
 export function findOrCreateSessionMemoriesTome() {
-  const run = _sessionMemoriesLock.then(async () => {
-    const files = await fsp.readdir(TOMES_DIR);
-    for (const f of files) {
-      if (!f.endsWith('.json') || f.startsWith('.')) continue;
-      try {
-        const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-        const t = JSON.parse(raw);
-        if (t?.name === TOME_NAME) return { tome: t, file: path.join(TOMES_DIR, f) };
-      } catch { /* skip corrupt */ }
-    }
-    const id = randomUUID();
-    const tome = {
-      id,
-      name:        TOME_NAME,
-      description: TOME_DESCRIPTION,
-      enabled:     true,
-      entries:     {},
-    };
-    const file = path.join(TOMES_DIR, `${id}.json`);
-    await fsp.writeFile(file, JSON.stringify(tome, null, 2), 'utf8');
-    return { tome, file };
+  return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
+    name:        TOME_NAME,
+    description: TOME_DESCRIPTION,
+    enabled:     true,
+    entries:     {},
   });
-  // Chain the lock on the run (swallowing rejection) so a failure doesn't
-  // permanently break the lock.
-  _sessionMemoriesLock = run.catch(() => {});
-  return run;
 }
 
-// Per-tome mutex so concurrent jobs writing to the same tome don't clobber each other.
-const _tomeLocks = new Map();
-async function withTomeLock(file, fn) {
-  const prev = _tomeLocks.get(file) ?? Promise.resolve();
-  let release;
-  const next = new Promise(r => { release = r; });
-  _tomeLocks.set(file, prev.then(() => next));
-  await prev;
-  try {
-    return await fn();
-  } finally {
-    release();
-    if (_tomeLocks.get(file) === prev.then(() => next)) _tomeLocks.delete(file);
-  }
-}
+// withTomeLock removed — callers below now use modifyTomeFile() from
+// thalamus directly, which encapsulates lock + atomic write in one
+// helper.
 
 // ── Prompt ───────────────────────────────────────────────────────
 
@@ -244,12 +218,13 @@ async function processJob(job) {
 
   let created = 0;
   let tomeId  = tome.id;
-  await withTomeLock(file, async () => {
-    // Re-read inside the lock so concurrent jobs see each other's writes.
-    const raw   = await fsp.readFile(file, 'utf8');
-    const fresh = JSON.parse(raw);
-    const now   = new Date().toISOString();
-
+  // Thalamus's modifyTomeFile holds the per-file lock across read +
+  // write so a concurrent HTTP /api/tomes/:id edit or any other
+  // writer on the same file serialises against this — fixes the
+  // cross-loop race where memorization's own withTomeLock and
+  // server.js writeTome held different keys.
+  await modifyTomeFile(file, (fresh) => {
+    const now = new Date().toISOString();
     for (const t of topics) {
       const title   = (t.title   ?? '').trim();
       const content = (t.content ?? '').trim();
@@ -296,9 +271,6 @@ async function processJob(job) {
       created++;
     }
     tomeId = fresh.id;
-    const tmp = file + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(fresh, null, 2), 'utf8');
-    await fsp.rename(tmp, file);
   });
 
   if (!created) throw new Error('No valid topics produced.');
@@ -309,11 +281,15 @@ function pickNextJob(now) {
   return _queue.find(j => j.status === 'pending' && (!j.nextAttemptAt || j.nextAttemptAt <= now));
 }
 
-let _ticking = false;
+// Track the in-flight tick promise so stopMemorizationWorker can
+// await it on shutdown. Mirrors the pattern in pondering-loop.js,
+// reminders-loop.js, silence-triage-loop.js — without this, a
+// SIGTERM during a processJob can leave the tome write half-done
+// and the queue file out of sync with what actually persisted.
+let _activeTick = null;
 async function tick() {
-  if (_ticking) return;
-  _ticking = true;
-  try {
+  if (_activeTick) return _activeTick;
+  _activeTick = (async () => {
     await loadQueue();
     const now = Date.now();
     const job = pickNextJob(now);
@@ -341,8 +317,11 @@ async function tick() {
       }
     }
     await persistQueue();
+  })();
+  try {
+    return await _activeTick;
   } finally {
-    _ticking = false;
+    _activeTick = null;
   }
 }
 
@@ -374,13 +353,35 @@ export function startMemorizationWorker() {
 // Stop the worker cleanly so process exit can complete. Called by
 // server.js's SIGTERM/SIGINT handler. Without this, the setIntervals
 // here keep the event loop alive past server.close().
-export function stopMemorizationWorker() {
+//
+// Awaits any in-flight tick so a processJob mid-tome-write isn't
+// left torn between persistQueue calls — matches the pattern in
+// pondering-loop / reminders-loop / silence-triage-loop.
+export async function stopMemorizationWorker() {
   if (_tickInterval)  { clearInterval(_tickInterval);  _tickInterval  = null; }
   if (_pruneInterval) { clearInterval(_pruneInterval); _pruneInterval = null; }
+  const pending = _activeTick;
   _started = false;
+  if (pending) { try { await pending; } catch { /* surfaced via job.lastError already */ } }
 }
 
 // ── Public API used by server endpoints ─────────────────────────
+
+// L4 (audit, deferred): the load → dedup-check → push → persist
+// sequence below is not wrapped in a lock. If two POST /api/memorize
+// arrive within the same microtask window — say both fire from a
+// chat-turn-end (server-side) and a sendBeacon (browser-side) for
+// the same session — they can both see "not present yet" before
+// either persistQueue runs, and we end up with two near-duplicate
+// jobs. The originId-style dedup that exists on outbox isn't here.
+//
+// Symptom to watch for: same session getting memorized twice with
+// slightly different message ranges, or two parallel "processing"
+// jobs of the same scope showing up in the queue.
+//
+// If this turns up in live testing, fix is: wrap the body in
+// withLock(QUEUE_FILE, ...) from thalamus so the load + dedup +
+// push + persist run as one atomic unit.
 
 export async function enqueueMemorization({ sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model }) {
   await loadQueue();

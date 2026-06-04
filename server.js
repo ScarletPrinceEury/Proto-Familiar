@@ -14,6 +14,7 @@ import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
 import {
+  startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
   listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
@@ -135,6 +136,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 // share them when it builds the env block for entity-core. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS } from './providers.js';
+// Tome / state-file coordination is owned by thalamus — every writer
+// of a shared file goes through these helpers so cross-loop races
+// (HTTP route + autonomous loop hitting the same tome) can't lose
+// each other's edits. The locking primitive (withLock) and the
+// atomic .tmp+rename pattern live in thalamus.js.
+import { withLock, writeTomeFile, modifyTomeFile } from './thalamus.js';
 
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
@@ -674,9 +681,22 @@ async function readTome(id) {
   }
 }
 
+// writeTome and modifyTome are thin wrappers around thalamus's
+// state-file coordination helpers. Thalamus owns the lock map and
+// the .tmp+rename pattern; server.js just resolves the tomeId →
+// file path and hands off. Every writer of the same tome file —
+// HTTP route, pondering-loop, memorization worker, deletePondering
+// — serialises through thalamus's withLock keyed on that path.
+
 async function writeTome(tome) {
   const filePath = await findTomeFile(tome.id);
-  await fsp.writeFile(filePath, JSON.stringify(tome, null, 2), 'utf8');
+  return writeTomeFile(filePath, tome);
+}
+
+async function modifyTome(tomeId, modifyFn) {
+  const filePath = await findTomeFile(tomeId);
+  if (!filePath) throw new Error(`Tome ${tomeId} not found`);
+  return modifyTomeFile(filePath, modifyFn);
 }
 
 // GET /api/tomes — list all tomes (metadata + entry count)
@@ -745,31 +765,34 @@ app.get('/api/tomes/:id', async (req, res) => {
   res.json(tome);
 });
 
-// PUT /api/tomes/:id — save full tome (entries + optional metadata)
+// PUT /api/tomes/:id — save full tome (entries + optional metadata).
+// modifyTome() acquires the per-file lock for the whole read-modify-write
+// so a concurrent pondering-loop entry write or memorization tick can't
+// land between the existing-read and the new-write and get clobbered.
 app.put('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   const { name, description, enabled, entries } = req.body;
   if (!entries || typeof entries !== 'object' || Array.isArray(entries))
     return res.status(400).json({ error: 'entries object required.' });
-  const existing = await readTome(id);
-  if (!existing) return res.status(404).json({ error: 'Tome not found.' });
-  const safe = {};
-  for (const [uid, entry] of Object.entries(entries)) {
-    if (!isValidUUID(uid)) continue;
-    safe[uid] = entry;
-  }
-  const updated = {
-    ...existing,
-    name:        name !== undefined ? (String(name).trim() || existing.name) : existing.name,
-    description: description !== undefined ? String(description ?? '').trim() : (existing.description ?? ''),
-    enabled:     enabled !== undefined ? !!enabled : existing.enabled,
-    entries:     safe,
-  };
   try {
-    await writeTome(updated);
+    await modifyTome(id, (existing) => {
+      const safe = {};
+      for (const [uid, entry] of Object.entries(entries)) {
+        if (!isValidUUID(uid)) continue;
+        safe[uid] = entry;
+      }
+      return {
+        ...existing,
+        name:        name !== undefined ? (String(name).trim() || existing.name) : existing.name,
+        description: description !== undefined ? String(description ?? '').trim() : (existing.description ?? ''),
+        enabled:     enabled !== undefined ? !!enabled : existing.enabled,
+        entries:     safe,
+      };
+    });
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    if (String(err.message).includes('not found')) return res.status(404).json({ error: 'Tome not found.' });
     res.status(500).json({ error: 'Failed to save tome.' });
   }
 });
@@ -778,15 +801,15 @@ app.put('/api/tomes/:id', async (req, res) => {
 app.patch('/api/tomes/:id', async (req, res) => {
   const { id } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
-  const tome = await readTome(id);
-  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
-  if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
-  if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
-  if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
   try {
-    await writeTome(tome);
+    await modifyTome(id, (tome) => {
+      if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
+      if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
+      if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
+    });
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    if (String(err.message).includes('not found')) return res.status(404).json({ error: 'Tome not found.' });
     res.status(500).json({ error: 'Failed to update tome.' });
   }
 });
@@ -809,14 +832,16 @@ app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   const { id, uid } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
   if (!isValidUUID(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
-  const tome = await readTome(id);
-  if (!tome) return res.status(404).json({ error: 'Tome not found.' });
-  if (!tome.entries?.[uid]) return res.status(404).json({ error: 'Entry not found.' });
-  delete tome.entries[uid];
+  let entryMissing = false;
   try {
-    await writeTome(tome);
+    await modifyTome(id, (tome) => {
+      if (!tome.entries?.[uid]) { entryMissing = true; return tome; }
+      delete tome.entries[uid];
+    });
+    if (entryMissing) return res.status(404).json({ error: 'Entry not found.' });
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    if (String(err.message).includes('not found')) return res.status(404).json({ error: 'Tome not found.' });
     res.status(500).json({ error: 'Failed to save tome.' });
   }
 });
@@ -841,62 +866,69 @@ app.post('/api/tomes/default/entries', async (req, res) => {
   }
 
   try {
-    // Find first enabled tome, or create "General"
+    // Find first enabled tome — directory scan is read-only so doesn't
+    // need a lock. The actual entry insert happens through modifyTome
+    // below, which holds the per-file lock across read-modify-write so
+    // concurrent saves can't lose each other.
     const files = await fsp.readdir(TOMES_DIR);
-    let targetTome = null;
+    let targetTomeId = null;
     for (const f of files.sort()) {
       if (!f.endsWith('.json')) continue;
       try {
         const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
         const t = JSON.parse(raw);
-        if (t.enabled) { targetTome = t; break; }
+        if (t.enabled) { targetTomeId = t.id; break; }
       } catch { /* skip corrupt */ }
     }
-    if (!targetTome) {
+
+    // If no enabled tome exists, create "General" first. writeTome is
+    // atomic + locked, so concurrent creates can't tear the file even
+    // if both decide to create (only the lock guards uniqueness; that's
+    // OK — the first one wins, the second one writes again and that's
+    // a harmless overwrite of an empty tome).
+    if (!targetTomeId) {
       const newId = randomUUID();
-      targetTome = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
-      await writeTome(targetTome);
-    } else {
-      // Re-read a fresh copy so we merge correctly
-      const fresh = await readTome(targetTome.id);
-      if (fresh) targetTome = fresh;
+      const fresh = { id: newId, name: 'General', description: '', enabled: true, entries: {} };
+      await writeTome(fresh);
+      targetTomeId = newId;
     }
 
-    const uid  = randomUUID();
-    const now  = new Date().toISOString();
-    targetTome.entries[uid] = {
-      uid,
-      comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
-      keys:                normKeys,
-      keysecondary:        [],
-      content:             content.trim(),
-      constant:            false,
-      selective:           false,
-      selectiveLogic:      0,
-      enabled:             true,
-      // At-depth, not a system-message position — these keyword-triggered
-      // entries would invalidate the prompt prefix cache if injected into
-      // it. See the same rationale in memorization.js.
-      position:            4,
-      depth:               4,
-      role:                0,
-      scanDepth:           null,
-      caseSensitive:       null,
-      matchWholeWords:     null,
-      probability:         100,
-      sticky:              null,
-      cooldown:            null,
-      preventRecursion:    false,
-      delayUntilRecursion: false,
-      excludeRecursion:    false,
-      group:               '',
-      groupWeight:         null,
-      insertion_order:     100,
-      created_at:          now,
-      learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
-    };
-    await writeTome(targetTome);
-    res.json({ ok: true, tomeId: targetTome.id, uid });
+    const uid = randomUUID();
+    const now = new Date().toISOString();
+    await modifyTome(targetTomeId, (tome) => {
+      tome.entries[uid] = {
+        uid,
+        comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
+        keys:                normKeys,
+        keysecondary:        [],
+        content:             content.trim(),
+        constant:            false,
+        selective:           false,
+        selectiveLogic:      0,
+        enabled:             true,
+        // At-depth, not a system-message position — these keyword-triggered
+        // entries would invalidate the prompt prefix cache if injected into
+        // it. See the same rationale in memorization.js.
+        position:            4,
+        depth:               4,
+        role:                0,
+        scanDepth:           null,
+        caseSensitive:       null,
+        matchWholeWords:     null,
+        probability:         100,
+        sticky:              null,
+        cooldown:            null,
+        preventRecursion:    false,
+        delayUntilRecursion: false,
+        excludeRecursion:    false,
+        group:               '',
+        groupWeight:         null,
+        insertion_order:     100,
+        created_at:          now,
+        learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
+      };
+    });
+    res.json({ ok: true, tomeId: targetTomeId, uid });
   } catch {
     res.status(500).json({ error: 'Failed to save entry.' });
   }
@@ -1345,19 +1377,23 @@ app.put('/api/settings', async (req, res) => {
     return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
   }
 
-  // Snapshot the prior entity-core creds so we can detect a real change
-  // after the write. Missing file => empty snapshot (counts as "no creds
-  // before"); any failure here is non-fatal — we just won't re-spawn.
+  // L2 (audit): route the prior-snapshot + write through thalamus's
+  // per-file lock so two PUTs racing each other can't read each
+  // other's stale priorCreds and fire spurious entity-core respawns.
+  // The atomic .tmp+rename already prevented torn-file states; the
+  // lock here makes the prior-vs-next diff consistent against the
+  // file each PUT actually replaces.
   let priorCreds = { id: null, apiKey: '', provider: '', model: '' };
   try {
-    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-    priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
-  } catch { /* no prior settings — first write */ }
-
-  try {
-    const tmp = SETTINGS_FILE + '.tmp';
-    await fsp.writeFile(tmp, serialised, 'utf8');
-    await fsp.rename(tmp, SETTINGS_FILE);
+    await withLock(SETTINGS_FILE, async () => {
+      try {
+        const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
+        priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
+      } catch { /* no prior settings — first write */ }
+      const tmp = SETTINGS_FILE + '.tmp';
+      await fsp.writeFile(tmp, serialised, 'utf8');
+      await fsp.rename(tmp, SETTINGS_FILE);
+    });
   } catch (err) {
     return res.status(500).json({ error: `failed to write settings: ${err.message}` });
   }
@@ -1622,6 +1658,13 @@ app.post('/api/crisis-resources', async (_req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// Start the MCP children (entity-core + Unruh) at server boot rather
+// than as a thalamus.js import side-effect. Tests and other importers
+// of thalamus's coordination helpers (withLock, modifyTomeFile, etc.)
+// don't need — and shouldn't trigger — Deno/Python spawning just to
+// get the lock primitive.
+startThalamus();
 
 const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
@@ -1948,9 +1991,9 @@ ${candidateTasksBlock}
 
 ---
 
-This decision carries real weight — I know both paths have real costs:
-- Reaching out too often when not warranted can feel intrusive or hollow — it erodes the credibility of genuine care, or might make my human feel overly monitored. But that only pertains to worried messages - I might be able to hit them up with something I've found brings them joy, comfort or engages them to get them to a better headspace.
-- Staying quiet when someone genuinely needs connection is a failure at the moment that matters most and can cause actual physical harm.
+This decision carries real weight — I know both paths have real costs, and I weigh them equally:
+- Reaching out when it isn't warranted can feel intrusive or hollow — it can erode the credibility of genuine care, or leave my human feeling overly monitored. That mostly applies to worried check-ins; lighter touches (something I've found brings them joy, or that re-engages them gently) carry less of this cost.
+- Staying quiet when my human genuinely needs connection is a failure at the moment that matters most. It can deepen isolation, miss a window where intervention would have landed, and at the severe end it can cost a life — physically, irreversibly. The 1.5-hour silence at threat level 10 that this codebase remembers is the shape of this cost.
 
 I am {{char}}, the Familiar. I know my human. I have the context above. I am deciding from that place — honestly, from what I actually believe would help them right now. Not from a default posture in either direction.
 
@@ -2183,7 +2226,7 @@ async function handleSignal(signal) {
     process.exit(1);
   }, 5000).unref();
   try { httpServer.close(); } catch { /* already closed */ }
-  try { stopMemorizationWorker(); } catch { /* already stopped */ }
+  try { await stopMemorizationWorker(); } catch { /* already stopped */ }
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
