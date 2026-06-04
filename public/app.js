@@ -3905,11 +3905,16 @@ function init() {
     $('te-threat-reset').addEventListener('click',   teResetThreat);
     $('te-pond-refresh').addEventListener('click',   teLoadPonderings);
     $('te-pond-limit').addEventListener('change',    teLoadPonderings);
-    $('te-sched-refresh').addEventListener('click',  teLoadSchedule);
+    $('te-sched-refresh').addEventListener('click',  teReloadScheduleView);
     $('te-sched-hours').addEventListener('change',   teLoadSchedule);
     $('te-sched-add').addEventListener('click',      () => teToggleScheduleForm(true));
     $('te-sched-form-cancel').addEventListener('click', () => teToggleScheduleForm(false));
     $('te-sched-form-save').addEventListener('click', teSaveScheduleNode);
+    $('te-sched-view-list').addEventListener('click',     () => teSetScheduleView('list'));
+    $('te-sched-view-calendar').addEventListener('click', () => teSetScheduleView('calendar'));
+    $('te-cal-prev').addEventListener('click',  () => teShiftCalendarMonth(-1));
+    $('te-cal-next').addEventListener('click',  () => teShiftCalendarMonth(+1));
+    $('te-cal-today').addEventListener('click', () => teGotoCalendarToday());
     $('te-routine-refresh').addEventListener('click',     teLoadRoutine);
     $('te-routine-add').addEventListener('click',         () => teToggleRoutineForm(true));
     $('te-routine-form-cancel').addEventListener('click', () => teToggleRoutineForm(false));
@@ -7156,7 +7161,7 @@ function teSwitchTab(name) {
   if      (name === 'interests')  teLoadInterests();
   else if (name === 'threat')     teLoadThreat();
   else if (name === 'ponderings') teLoadPonderings();
-  else if (name === 'schedule')   teLoadSchedule();
+  else if (name === 'schedule')   teReloadScheduleView();
   else if (name === 'routine')    teLoadRoutine();
   else if (name === 'handoff')    teLoadHandoff();
 }
@@ -7601,9 +7606,195 @@ async function teResolveSchedule(id, resolution, occurrenceDate = null) {
       body:    JSON.stringify(body),
     }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'resolve failed');
-    teLoadSchedule();
+    teReloadScheduleView();
   } catch (err) {
     alert(`Resolve failed: ${err.message}`);
+  }
+}
+
+// ── Calendar view (Schedule tab toggle) ───────────────────────────
+//
+// Month-grid alternative to the linear schedule list. Same data
+// source (/api/temporal/schedule), just rendered as a calendar with
+// click-to-create. Recurring nodes expand server-side so the grid
+// shows occurrences on their actual dates. The view-mode toggle
+// mirrors the Knowledge-Editor graph List/Map pattern so the
+// behaviour reads familiar.
+//
+// "Current month" tracked in module-level state — week navigation
+// would be a natural extension but for the MVP we stay at month
+// granularity (the lower scroll cost matters more than fine
+// navigation, especially since the underlying schedule entries
+// rarely move week-to-week).
+
+let _teSchedView = 'list';
+let _teCalCursor = null; // { year, month } — the month being displayed
+const _DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function teReloadScheduleView() {
+  if (_teSchedView === 'calendar') teLoadCalendar();
+  else teLoadSchedule();
+}
+
+function teSetScheduleView(view) {
+  if (view !== 'list' && view !== 'calendar') return;
+  _teSchedView = view;
+  $('te-sched-view-list').classList.toggle('ke-view-active',     view === 'list');
+  $('te-sched-view-calendar').classList.toggle('ke-view-active', view === 'calendar');
+  $('te-sched-view-list').setAttribute('aria-selected',     view === 'list'     ? 'true' : 'false');
+  $('te-sched-view-calendar').setAttribute('aria-selected', view === 'calendar' ? 'true' : 'false');
+  // The hours/window control only meaningfully applies to the list
+  // view; calendar paginates by month. Hide it to reduce cognitive
+  // clutter on the calendar side.
+  $('te-sched-hours-label').classList.toggle('hidden', view !== 'list');
+  $('te-sched-list').classList.toggle('hidden',     view !== 'list');
+  $('te-sched-calendar').classList.toggle('hidden', view !== 'calendar');
+  if (view === 'calendar') {
+    if (!_teCalCursor) teGotoCalendarToday();
+    else teLoadCalendar();
+  }
+}
+
+function teGotoCalendarToday() {
+  const now = new Date();
+  _teCalCursor = { year: now.getFullYear(), month: now.getMonth() };
+  teLoadCalendar();
+}
+
+function teShiftCalendarMonth(delta) {
+  if (!_teCalCursor) { teGotoCalendarToday(); return; }
+  let { year, month } = _teCalCursor;
+  month += delta;
+  while (month < 0)   { month += 12; year -= 1; }
+  while (month > 11)  { month -= 12; year += 1; }
+  _teCalCursor = { year, month };
+  teLoadCalendar();
+}
+
+// Local-TZ YYYY-MM-DD for a given Date — matches recurrence.js's
+// localDateKey shape so per-occurrence resolutions key consistently.
+function teLocalDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Compute the start of the calendar grid for a given month. Returns
+// the Monday on-or-before the 1st of the month — gives us a clean
+// 6-row × 7-col grid that always starts on Monday, with the prior
+// month's tail filling the first row. (Localised to Monday-start
+// because Eury runs in DE; flipping to Sunday-start is a one-line
+// change if a setting ever surfaces.)
+function teCalendarGridStart(year, month) {
+  const first = new Date(year, month, 1);
+  // JS getDay: 0=Sun, 1=Mon, ..., 6=Sat. Offset to Monday-start.
+  const offsetFromMonday = (first.getDay() + 6) % 7;
+  const start = new Date(first);
+  start.setDate(first.getDate() - offsetFromMonday);
+  return start;
+}
+
+async function teLoadCalendar() {
+  const grid = $('te-cal-grid');
+  const status = $('te-cal-status');
+  if (!grid) return;
+  if (!_teCalCursor) teGotoCalendarToday();
+  const { year, month } = _teCalCursor;
+  const monthName = ['January','February','March','April','May','June','July','August','September','October','November','December'][month];
+  const titleEl = $('te-cal-title');
+  if (titleEl) titleEl.textContent = `${monthName} ${year}`;
+  if (status) status.textContent = 'Loading…';
+
+  const gridStart = teCalendarGridStart(year, month);
+  const gridEnd = new Date(gridStart);
+  gridEnd.setDate(gridEnd.getDate() + 6 * 7); // 6 weeks
+  const fromIso = gridStart.toISOString();
+  const toIso   = new Date(gridEnd.getTime() - 1).toISOString();
+
+  let nodes = [];
+  try {
+    const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&limit=500`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
+    nodes = (data.nodes || []).filter(n => n.type !== 'phase'); // phases live in Routine
+  } catch (err) {
+    if (status) status.textContent = `Load failed: ${err.message}`;
+    grid.innerHTML = '';
+    return;
+  }
+  if (status) status.textContent = `${nodes.length} event(s) this view`;
+
+  // Bucket events by local-TZ date key. Each cell renders its bucket.
+  const byDay = new Map();
+  for (const n of nodes) {
+    if (!n.when) continue;
+    const d = new Date(n.when);
+    if (!Number.isFinite(d.getTime())) continue;
+    const key = teLocalDateKey(d);
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(n);
+  }
+  // Sort each day's events by start time.
+  for (const list of byDay.values()) {
+    list.sort((a, b) => (a.when || '').localeCompare(b.when || ''));
+  }
+
+  // Render: weekday header + 6 × 7 = 42 day cells.
+  const todayKey = teLocalDateKey(new Date());
+  const parts = [];
+  for (const dow of _DOW_LABELS) {
+    parts.push(`<div class="te-cal-weekday">${dow}</div>`);
+  }
+  for (let i = 0; i < 42; i++) {
+    const cellDate = new Date(gridStart);
+    cellDate.setDate(gridStart.getDate() + i);
+    const isOutOfMonth = cellDate.getMonth() !== month;
+    const key = teLocalDateKey(cellDate);
+    const isToday = key === todayKey;
+    const events = byDay.get(key) || [];
+    const eventLines = events.slice(0, 3).map(ev => {
+      const cls = [`te-cal-event`, `type-${teEscapeHtml(ev.type || 'event')}`];
+      if (ev.__occurrence_of) cls.push('recurring');
+      if (ev.resolution)      cls.push('resolved');
+      const time = ev.when ? teEscapeHtml(teIsoUtcToLocalHhMm(ev.when)) : '';
+      return `<div class="${cls.join(' ')}" title="${teEscapeHtml(ev.label || '')}${time ? ' · ' + time : ''}">${time ? `${time} ` : ''}${teEscapeHtml(ev.label || '')}</div>`;
+    }).join('');
+    const more = events.length > 3 ? `<div class="te-cal-more">+${events.length - 3} more</div>` : '';
+    const cellCls = ['te-cal-day'];
+    if (isOutOfMonth) cellCls.push('out-of-month');
+    if (isToday)      cellCls.push('today');
+    parts.push(`
+      <div class="${cellCls.join(' ')}" data-date="${key}" role="button" tabindex="0" aria-label="${key}${events.length ? `, ${events.length} event(s)` : ''}">
+        <span class="te-cal-day-num">${cellDate.getDate()}</span>
+        ${eventLines}${more}
+      </div>
+    `);
+  }
+  grid.innerHTML = parts.join('');
+
+  // Click a day cell → open the create-schedule form with the date
+  // pre-filled to that day at 9am (sensible default; user adjusts).
+  grid.querySelectorAll('.te-cal-day').forEach(cell => {
+    const openCreate = () => teOpenCalendarCreate(cell.dataset.date);
+    cell.addEventListener('click', openCreate);
+    cell.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCreate(); }
+    });
+  });
+}
+
+function teOpenCalendarCreate(dateKey) {
+  // Switch back to the list view so the create form is visible and
+  // the user sees the result land. (The form lives in the list-view
+  // DOM region; opening it while calendar is shown would scroll
+  // somewhere unhelpful.)
+  teSetScheduleView('list');
+  teToggleScheduleForm(true);
+  // Pre-fill the datetime-local input with the chosen day at 9am
+  // local. teDatetimeLocalToIsoUtc handles the conversion when the
+  // user saves.
+  const whenInput = $('te-sched-when');
+  if (whenInput && dateKey) {
+    whenInput.value = `${dateKey}T09:00`;
   }
 }
 
@@ -7612,7 +7803,7 @@ async function teDeleteSchedule(id) {
   try {
     const r = await fetch(`/api/temporal/schedule/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'delete failed');
-    teLoadSchedule();
+    teReloadScheduleView();
   } catch (err) {
     alert(`Delete failed: ${err.message}`);
   }
@@ -7693,7 +7884,7 @@ async function teSaveScheduleNode() {
     }).then(r => r.json());
     if (!r.ok) throw new Error(r.error || 'create failed');
     teToggleScheduleForm(false);
-    teLoadSchedule();
+    teReloadScheduleView();
   } catch (err) {
     alert(`Create failed: ${err.message}`);
   }

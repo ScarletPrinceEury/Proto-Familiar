@@ -952,10 +952,14 @@
         <div class="ke-pane" id="te-pane-schedule">
           <div class="ke-toolbar">
             <button id="te-sched-refresh" class="btn-ghost">Refresh</button>
-            <label>Window (hours)
+            <label id="te-sched-hours-label">Window (hours)
               <input type="number" id="te-sched-hours" value="48" min="1" max="720" step="1" style="width: 5em">
             </label>
             <button id="te-sched-add" class="btn-secondary" style="margin-left:auto">+ Add event / task</button>
+            <div class="ke-view-toggle" role="tablist" aria-label="Schedule view mode">
+              <button id="te-sched-view-list"     class="ke-view-btn ke-view-active" data-sched-view="list"     role="tab" aria-selected="true">List</button>
+              <button id="te-sched-view-calendar" class="ke-view-btn"                data-sched-view="calendar" role="tab" aria-selected="false">Calendar</button>
+            </div>
           </div>
           <div id="te-sched-form" style="display:none; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
             <div style="display: flex; gap: 8px; flex-wrap: wrap">
@@ -1002,6 +1006,18 @@
             </div>
           </div>
           <div class="ke-list" id="te-sched-list" style="height: calc(100% - 80px); overflow:auto"></div>
+          <div class="te-cal hidden" id="te-sched-calendar">
+            <div class="te-cal-header">
+              <button id="te-cal-prev"  class="btn-ghost" aria-label="Previous month">‹</button>
+              <button id="te-cal-today" class="btn-ghost">Today</button>
+              <button id="te-cal-next"  class="btn-ghost" aria-label="Next month">›</button>
+              <span id="te-cal-title" class="te-cal-title"></span>
+              <span id="te-cal-status" class="field-hint" style="margin-left:auto"></span>
+            </div>
+            <div class="te-cal-grid" id="te-cal-grid">
+              <!-- weekday header row + 6 weeks rendered in JS -->
+            </div>
+          </div>
         </div>
 
         <!-- ROUTINE PANE -->
