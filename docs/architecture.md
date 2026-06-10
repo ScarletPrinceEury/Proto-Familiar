@@ -326,6 +326,12 @@ per-Tome write mutex, idempotent enqueue on
   the message). Auto-acked after injection. Per-poll cap of 5 items
   so an upgrade-day backlog doesn't dump a wall of historical
   messages all at once.
+  - **Design note (future):** The `#outbox-banners` div is still in
+    `index.html` as an inert host. If pondering activity or the
+    Familiar's in-progress thinking is ever made visible, the banner
+    surface is the right place for it — ephemeral, non-intrusive,
+    doesn't pollute the chat log. Reminders and triage stay as chat
+    messages; pondering/thinking visibility would use banners.
 - **Trusted contacts** UI for M12c (Discord webhook list).
 - **Topic system** — gutter bars, "▷ Topic start" / "■ Topic end"
   buttons per-message, summarizer modal.
