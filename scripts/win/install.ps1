@@ -23,7 +23,7 @@
 #   Windows reinstall that left user dirs intact) silently skipped
 #   making the Desktop / Start Menu shortcuts.
 #
-# Robustness layer (added in 0.4.0-alpha — bluebell-tester install
+# Robustness layer (added in 0.3.2-alpha — bluebell-tester install
 # silently failed with "logs are empty"):
 #   * Every install run appends to .proto-familiar-install.log via
 #     Start-Transcript, so a closed console / killed PS child still
@@ -390,6 +390,20 @@ if ($updateMode) {
 }
 Write-Host "Project: $projectRoot"
 Write-Host "Install log: $($script:installLog)"
+
+# Surface the recommended location once in the banner if the user is
+# somewhere other than %LOCALAPPDATA%\Proto-Familiar. We don't push the
+# OneDrive auto-relocate offer outside its specific case — moving a
+# folder a user deliberately chose to put somewhere is overreach — but
+# we do want new users to see the recommended path at least once
+# without having to dig through docs.
+$recommendedRoot = Join-Path $env:LOCALAPPDATA "Proto-Familiar"
+if (-not $projectRoot.Equals($recommendedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Host ""
+    Write-Host "Tip: recommended Windows install path is $recommendedRoot" -ForegroundColor DarkGray
+    Write-Host "     (outside OneDrive, short, user-writable). Current location works" -ForegroundColor DarkGray
+    Write-Host "     as long as it isn't OneDrive-synced — pre-flight checks below." -ForegroundColor DarkGray
+}
 Write-Host ""
 
 # Pre-flight runs in both modes — same silent killers can break an

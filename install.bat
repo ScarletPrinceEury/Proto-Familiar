@@ -26,7 +26,7 @@ REM Shortcut creation is idempotent and runs in both modes — it skips
 REM each .lnk if it already exists, so update mode no longer silently
 REM leaves shortcuts missing.
 REM
-REM Robustness wrapper (added 0.4.0-alpha): the first invocation
+REM Robustness wrapper (added 0.3.2-alpha): the first invocation
 REM re-execs self with all output teed to .proto-familiar-install.log
 REM and pops a Windows MessageBox at the end with status + log path.
 REM This way "logs are empty" stops being a failure mode — even if the
