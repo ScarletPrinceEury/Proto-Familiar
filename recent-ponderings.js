@@ -23,12 +23,14 @@ import { PONDERINGS_TOME_NAME } from './pondering.js';
 import { withLock } from './thalamus.js';
 import { relativeTime } from './relative-time.js';
 
-// Tool routing hint — shown in the deferred-intents block so the Familiar
-// knows which tool to call without having to reason about kind→tool mapping.
+// Routing hints for the deferred-intents block. Storage kinds map to a
+// filing tool; 'tell' is a conversational intent — no tool, just a prompt
+// to mention it when the moment fits.
 const KIND_TOOL = {
   tome:     'save_to_tome',
   memory:   'save_memory',
   identity: 'update_identity',
+  tell:     null,
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -276,9 +278,13 @@ export function formatDeferredIntentsBlock(intents) {
 
   for (let i = 0; i < intents.length; i++) {
     const { uid, kind, summary, index } = intents[i];
-    const tool = KIND_TOOL[kind] ?? 'save_to_tome';
     lines.push(`${i + 1}. [${kind}] ${summary}`);
-    lines.push(`   → ${tool} — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
+    if (kind === 'tell') {
+      lines.push(`   → mention when the moment fits — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
+    } else {
+      const tool = KIND_TOOL[kind] ?? 'save_to_tome';
+      lines.push(`   → ${tool} — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
+    }
   }
 
   return lines.join('\n');

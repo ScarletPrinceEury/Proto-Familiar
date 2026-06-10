@@ -535,3 +535,42 @@ test('formatDeferredIntentsBlock: renders routing hints and uid/index for each i
   assert.match(block, /uid="ghi".*index=2/);
   assert.match(block, /acknowledge_deferred_intent/);
 });
+
+// ── tell kind ─────────────────────────────────────────────────────────────
+
+test('parsePondering: wants_to_save accepts tell kind', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [
+      { kind: 'tell', summary: 'I want to ask how the DnD session went' },
+    ],
+  }));
+  assert.deepEqual(r.wants_to_save, [
+    { kind: 'tell', summary: 'I want to ask how the DnD session went' },
+  ]);
+});
+
+test('formatDeferredIntentsBlock: tell renders as conversational hint, not tool call', () => {
+  const block = formatDeferredIntentsBlock([
+    { uid: 'abc', kind: 'tell',     summary: 'ask how the DnD session went', index: 0 },
+    { uid: 'def', kind: 'identity', summary: 'Melian dislikes sudden plan changes', index: 1 },
+  ]);
+  // tell: no tool name, just the conversational instruction
+  assert.match(block, /\[tell\].*ask how the DnD session went/);
+  assert.match(block, /mention when the moment fits/);
+  assert.doesNotMatch(block, /save_to_tome.*index=0/);
+  assert.doesNotMatch(block, /save_memory.*index=0/);
+  assert.doesNotMatch(block, /update_identity.*index=0/);
+  // storage kind still renders its tool
+  assert.match(block, /\[identity\].*Melian dislikes sudden plan changes/);
+  assert.match(block, /update_identity/);
+  // both carry acknowledge call
+  assert.match(block, /acknowledge_deferred_intent\(uid="abc", index=0\)/);
+  assert.match(block, /acknowledge_deferred_intent\(uid="def", index=1\)/);
+});
+
+test('buildPonderPrompt: documents tell kind in wants_to_save schema', () => {
+  const prompt = buildPonderPrompt('checking in on my human');
+  assert.match(prompt, /"tell"/);
+  assert.match(prompt, /conversational intent/i);
+});

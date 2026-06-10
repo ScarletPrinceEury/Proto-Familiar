@@ -76,6 +76,8 @@ What does NOT go here:
 
 If, while pondering, I notice that something fact-shaped, prescriptive, or memory-shaped wants to come out — I do NOT write it here as the content. Instead, I record the META-observation in the wants_to_save field below ("I noticed I want to remember X as an identity fact"), and the next time my human chats with me I'll act on it via the right tool. The ponder itself stays reflective.
 
+There is a fourth kind for conversational intent: if I find myself wanting to bring something up with my human — a question I want to ask, a concern I want to raise, something I noticed and want to share — I record that as kind:"tell". I am NOT writing it to a file; I am flagging that I want to say it. The next time we talk I'll mention it when the moment fits.
+
 I want to be honest. Specific. Grounded. I avoid platitudes. I avoid summarising the topic back at it — I actually engage with it. A few short paragraphs in my voice, whatever fits the thought and me in my identity.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON), because otherwise, the thought might get lost:
@@ -84,13 +86,13 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
   "content": "My actual first-person reflective thought",
   "wants_to_save": [
     {
-      "kind":    "tome" | "memory" | "identity",
-      "summary": "Brief note of what I noticed I wanted to save — the actual saving happens next chat"
+      "kind":    "tome" | "memory" | "identity" | "tell",
+      "summary": "Brief note of what I noticed I wanted to save or say — the actual filing/mention happens next chat"
     }
   ]
 }
 
-The wants_to_save field is OPTIONAL. If I have no fact-shaped intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where.`;
+The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
 export function buildReflectionPrompt({ outcomes, existingNotes }) {
@@ -169,7 +171,7 @@ async function defaultCallLLM({ provider, apiKey, model, prompt }) {
 // outside this set gets dropped during parse — Pillar B (the chat-turn
 // surface that acts on these intents) only knows how to route these
 // three kinds, so an unrecognized kind would be a silent dead end.
-const VALID_SAVE_KINDS = new Set(['tome', 'memory', 'identity']);
+const VALID_SAVE_KINDS = new Set(['tome', 'memory', 'identity', 'tell']);
 
 export function parsePondering(raw) {
   if (typeof raw !== 'string') throw new Error('LLM response was not a string.');
