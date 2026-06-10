@@ -43,7 +43,7 @@ import {
   getNewOutcomesSinceLastReflection,
   markReflected,
 } from './surface-events.js';
-import { getRecentPonderings, deletePondering } from './recent-ponderings.js';
+import { getRecentPonderings, deletePondering, markIntentActedOn } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox, updateOutboxMeta } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, TRIAGE_SILENCE_THRESHOLD_MS } from './silence-triage-loop.js';
@@ -1015,9 +1015,27 @@ const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearl
 const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
 const VALID_FILENAME_RE           = /^[\w]+\.md$/;
 
+// Derive a filesystem-safe slug from a human title or memory bullet.
+// Entity-core stores significant memories as `YYYY-MM-DD_slug.md`. Without
+// a slug, every significant save lands at `YYYY-MM-DD.md` and collides with
+// the previous one — which triggers entity-core's merge-and-dedup path and
+// destroys content (same root cause as the daily-memory wipe in aba6b8a,
+// but worse here because the file format itself disagrees on the key).
+function deriveMemorySlug(input, maxLen = 60) {
+  const slug = String(input ?? '')
+    .toLowerCase()
+    .replace(/^[\s\-*•]+/, '')      // strip leading bullet markers
+    .split(/\r?\n/)[0]              // first line only
+    .replace(/[^a-z0-9]+/g, '-')    // non-alphanumeric → hyphen
+    .replace(/^-+|-+$/g, '')        // trim hyphens at the ends
+    .slice(0, maxLen)
+    .replace(/-+$/g, '');           // trim again after truncation
+  return slug || null;
+}
+
 // POST /api/entity/memory — write a new memory entry to entity-core
 app.post('/api/entity/memory', async (req, res) => {
-  const { content, granularity = 'daily', date } = req.body;
+  const { content, granularity = 'daily', date, title } = req.body;
   if (!content || typeof content !== 'string' || !content.trim())
     return res.status(400).json({ error: 'content is required.' });
   if (content.length > 8192)
@@ -1025,7 +1043,18 @@ app.post('/api/entity/memory', async (req, res) => {
   if (!VALID_MEMORY_GRANULARITIES.has(granularity))
     return res.status(400).json({ error: `granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.` });
 
-  const result = await createMemory({ content: content.trim(), granularity, date });
+  // Significant memories MUST be uniquely slugged or they collide with
+  // each other (and with restored backups) on the date-only filename
+  // and entity-core's merge step destroys them. Derive from the title
+  // if the Familiar provided one, otherwise from the content's first
+  // line. Last resort: a timestamp suffix so a save never silently
+  // fails for lack of slugable characters.
+  let slug;
+  if (granularity === 'significant') {
+    slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
+  }
+
+  const result = await createMemory({ content: content.trim(), granularity, date, slug });
   if (!result.ok) return res.status(502).json({ error: result.error ?? 'entity-core unavailable' });
   res.json({ ok: true });
 });
@@ -1112,14 +1141,20 @@ app.delete('/api/entity/memories/:granularity/:date', async (req, res) => {
 // the original; the recency-decay scoring will demote it naturally over
 // time while preserving the audit trail.
 app.post('/api/entity/memories/supersede', async (req, res) => {
-  const { content, granularity = 'daily', supersedes } = req.body;
+  const { content, granularity = 'daily', supersedes, title } = req.body;
   if (typeof content !== 'string' || !content.trim()) return badRequest(res, 'content required');
   if (!VALID_MEMORY_GRANULARITIES.has(granularity))   return badRequest(res, 'invalid granularity');
   const today = new Date().toISOString().slice(0, 10);
   const body  = supersedes
     ? `[supersedes ${supersedes.granularity ?? 'memory'}/${supersedes.date ?? '?'}]\n${content.trim()}`
     : content.trim();
-  const result = await createMemory({ content: body, granularity, date: today });
+  // Same slug rule as POST /api/entity/memory — significant memories
+  // need a unique filename or entity-core's merge step destroys them.
+  let slug;
+  if (granularity === 'significant') {
+    slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
+  }
+  const result = await createMemory({ content: body, granularity, date: today, slug });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json({ ok: true, date: today });
 });
@@ -1513,6 +1548,21 @@ app.get('/api/temporal/ponderings', async (req, res) => {
 
 app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
   try { res.json(await deletePondering({ uid: req.params.uid })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/ponderings/intents/acted-on — mark a deferred intent as filed.
+// Called by the acknowledge_deferred_intent LLM tool after the Familiar
+// has acted on the intent via save_to_tome / save_memory / update_identity,
+// so it stops resurfacing in the deferred-intents block (Pillar B).
+app.post('/api/ponderings/intents/acted-on', async (req, res) => {
+  const { uid, index } = req.body;
+  if (!isValidUUID(uid)) return res.status(400).json({ error: 'uid must be a valid UUID' });
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  try { res.json(await markIntentActedOn({ uid, index: idx })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

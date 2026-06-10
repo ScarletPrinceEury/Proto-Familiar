@@ -104,12 +104,13 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected.',
+      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected. Significant memories are different: each one is a named, standalone milestone (e.g. "the night they told me about their sister", "first meeting"), stored in its own file. I always pass a short `title` when saving a significant memory so it gets its own filename and does not overwrite a previous one.',
       parameters: {
         type: 'object',
         properties: {
           content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
           granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
+          title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity, ignored for the others. A few words that name the milestone (e.g. "first meeting", "{{user}}\'s grandmother", "the night of the crisis call"). Used to generate the file slug so each significant memory lives in its own file.' },
         },
         required: ['content', 'granularity'],
       },
@@ -128,6 +129,21 @@ const BUILTIN_TOOLS = [
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'acknowledge_deferred_intent',
+      description: 'I call this after I have filed a deferred intent from my free time — one that appeared in the [Deferred intents from my free time] block — using save_to_tome, save_memory, or update_identity. It marks the intent as acted on so it stops appearing in my working context. I call this once per intent, right after the filing tool call.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid:   { type: 'string', description: 'UUID of the pondering entry that carried the intent (shown in the deferred-intents block).' },
+          index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+        },
+        required: ['uid', 'index'],
       },
     },
   },
@@ -402,11 +418,11 @@ const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'interest_bump',
-      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please!',
+      description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please — but I keep the LABEL short and tag-like, because long propositional labels turn ponderings into fact-cards (see topic param).',
       parameters: {
         type: 'object',
         properties: {
-          topic: { type: 'string', description: 'The topic label, as it should appear in my interests block.' },
+          topic: { type: 'string', description: 'Short, tag-like label (1-5 words) for the topic — what I would title a chip or tag with. The pondering loop later picks topics by weight and asks me to journal about them, so the label needs to be something I can think ABOUT, not a fully-formed claim that I would just be repeating back. Good: "ice skating", "the DnD group", "Melian\'s old friend group", "love languages", "my own agency". Bad (these turn ponderings into tome-cards): "Melian\'s love language: frequent \'I love you\'", "Melian\'s insecurity about being loved back", "the night Melian told me about her sister". Specific factual content like the bad examples belongs in save_to_tome / save_memory / update_identity — the interest layer just tracks what I find myself drawn to thinking about, not the content of what I already know.' },
           delta: { type: 'number', description: 'Positive weight to add. Typical 0.5–3.0; emphatic 5+.' },
         },
         required: ['topic', 'delta'],
@@ -512,12 +528,12 @@ const BUILTIN_EXECUTORS = {
     }
   },
 
-  save_memory: async ({ content, granularity }) => {
+  save_memory: async ({ content, granularity, title }) => {
     try {
       const res = await fetch('/api/entity/memory', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, granularity }),
+        body: JSON.stringify({ content, granularity, title }),
       });
       const data = await res.json();
       if (!res.ok) return `Failed to save memory: ${data.error ?? res.status}`;
@@ -539,6 +555,22 @@ const BUILTIN_EXECUTORS = {
       return data.ok ? 'Identity file updated.' : `Identity update failed: ${data.error ?? 'unknown error'}`;
     } catch (err) {
       return `Failed to update identity: ${err.message}`;
+    }
+  },
+
+  acknowledge_deferred_intent: async ({ uid, index }) => {
+    try {
+      const res = await fetch('/api/ponderings/intents/acted-on', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ uid, index }),
+      });
+      const data = await res.json();
+      if (!res.ok) return `Failed to acknowledge intent: ${data.error ?? res.status}`;
+      if (data.alreadyDone) return 'Intent was already marked as filed.';
+      return data.ok ? 'Deferred intent marked as filed.' : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) {
+      return `Failed to acknowledge intent: ${err.message}`;
     }
   },
 

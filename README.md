@@ -29,6 +29,14 @@ The one-click installer handles every prerequisite on supported platforms (auto-
 
 ### Quick Start (one double-click)
 
+> **Windows install location:** put Proto-Familiar at **`%LOCALAPPDATA%\Proto-Familiar`** (e.g. `C:\Users\<you>\AppData\Local\Proto-Familiar`). It's outside OneDrive, short enough to dodge Windows' 260-char path limit, and writable without admin. **Don't unzip into `Documents\` or `Desktop\`** — Win11 syncs both to OneDrive by default, which locks files during `npm install` and breaks the installer. If you've already landed under OneDrive, the installer detects this and offers to relocate for you, but going straight to the right place is one less step.
+>
+> Easiest setup (PowerShell):
+> ```powershell
+> git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git "$env:LOCALAPPDATA\Proto-Familiar"
+> & "$env:LOCALAPPDATA\Proto-Familiar\Proto-Familiar.vbs"
+> ```
+
 | OS | First-run | Launch | Stop |
 |---|---|---|---|
 | **Windows** | Double-click `Proto-Familiar.vbs`. The installer auto-installs Node, Deno, Git, and uv via `winget` (no admin needed — `--scope user`); when winget is missing or fails, each tool falls back to its official one-liner or download page. Then runs `npm install`, clones entity-core, syncs Unruh's Python venv, and creates Desktop + Start Menu shortcuts (idempotently — re-running picks up anything missing without overwriting what's there). | Double-click the **Proto-Familiar** Desktop shortcut (or `Proto-Familiar.vbs`). A tray icon appears; the browser opens automatically. Left-click the icon to re-open the browser. | Right-click the tray icon → **Quit**. Cleanly stops Proto-Familiar, entity-core, and Unruh. |
