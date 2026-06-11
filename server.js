@@ -62,6 +62,10 @@ import {
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
   deriveMemorySlug,
+  // Channel adapters — enqueueAndDispatch pushes every user-facing
+  // outbox item to the configured push channels (e.g. the human's own
+  // Discord webhook) and records per-channel delivery state.
+  enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
 import { expandWindow } from './recurrence.js';
 import {
@@ -289,8 +293,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const pending = await listOutbox({ pendingOnly: true, limit: 20 });
       const triagePending = pending.filter(i => i.kind === 'triage' && i.body);
       if (triagePending.length > 0) {
+        const pushConfigured = activePushAdapters().length > 0;
         const notices = triagePending
-          .map(i => `  - At ${i.ts}: "${i.body}"`)
+          .map(i => `  - At ${i.ts}: "${i.body}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`)
           .join('\n');
         const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile my human was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
         enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
@@ -2130,6 +2135,10 @@ function startRemindersScheduler() {
   }
   startRemindersLoop({
     tickMs: 30_000,
+    // enqueueAndDispatch: the fired reminder also pushes to the human's
+    // own push channel (when configured), so a closed tab no longer
+    // means a silently missed reminder.
+    enqueueOutboxFn: enqueueAndDispatch,
     getDueReminders: async () => {
       const r = await getDueReminders({ limit: 50 });
       return Array.isArray(r.reminders) ? r.reminders : [];
@@ -2173,7 +2182,10 @@ function startSilenceTriage() {
       try { return await getThreatHistory({ limit: 5 }); } catch { return []; }
     },
     decideTriage:    decideTriageViaLLM,
-    enqueueOutboxFn: enqueueOutbox,
+    // enqueueAndDispatch: the check-in also pushes to the human's own
+    // push channel (when configured) and records delivery state — the
+    // escalation deadline counts from confirmed delivery.
+    enqueueOutboxFn: enqueueAndDispatch,
     onTick: (r) => {
       // Persist every triage decision to the event log for debugging/auditing.
       appendTriageEventLog({

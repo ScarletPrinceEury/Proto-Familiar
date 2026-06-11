@@ -131,17 +131,189 @@ export async function getRecentSessionMessages({ limit = 8 } = {}) {
   }
 }
 
+// ── Channel adapters (push delivery) ─────────────────────────────
+//
+// The outbox used to be drained only by the browser polling
+// /api/outbox — if no tab was open, delivery silently didn't happen.
+// That converted "deferred escalation with a user veto window" into
+// "delayed escalation the user never saw." Push adapters close the
+// gap: every enqueued item is ALSO pushed to each configured push
+// channel, and the per-channel outcome is recorded on the item as
+// `delivery: { '<adapter>': { status, at, error? } }` so "did my human
+// actually receive this" is observable — by the code (escalation
+// deadlines) and by the Familiar (delivery notes in prompts).
+//
+// Adapter contract: { name, deliver(item) → { ok, error? } }. A
+// failing adapter records its failure and never blocks the others.
+// The browser surface stays pull-based (polling + chat injection);
+// its confirmation signal is the acknowledge.
+
+const DISCORD_CONTENT_LIMIT = 1900; // hard API limit is 2000; leave headroom
+
+/** POST one message to a Discord webhook. The shared primitive under
+ *  both the user's own push channel and trusted-contact delivery. */
+export async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
+  try {
+    const resp = await fetchFn(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: String(content).slice(0, DISCORD_CONTENT_LIMIT),
+        allowed_mentions: { parse: [] },
+      }),
+    });
+    if (!resp.ok) {
+      return { ok: false, error: `discord ${resp.status}: ${(await resp.text()).slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+// How an outbox item reads when pushed to my human's own Discord.
+function formatItemForPush({ kind, title, body }) {
+  const lead = kind === 'reminder'        ? '⏰'
+             : kind === 'triage'          ? '💭'
+             : kind === 'outbound_alert'  ? '📤'
+             : kind === 'crisis_resources' ? '🆘'
+             : '📨';
+  const head = title ? `${lead} **${title}**` : lead;
+  return body ? `${head}\n\n${body}` : head;
+}
+
+/** The push adapters that are actually configured right now.
+ *  Today: 'discord-dm' when Settings carries the bonded human's own
+ *  webhook (userDiscordWebhook). Future channels slot in here the way
+ *  modules slot into thalamus. */
+export function activePushAdapters({ readSettings = readSettingsSync, fetchFn = fetch } = {}) {
+  const adapters = [];
+  const s = readSettings();
+  const hook = typeof s?.userDiscordWebhook === 'string' ? s.userDiscordWebhook.trim() : '';
+  if (hook) {
+    adapters.push({
+      name: 'discord-dm',
+      deliver: async (item) => sendDiscordWebhook(hook, formatItemForPush(item), fetchFn),
+    });
+  }
+  return adapters;
+}
+
+/**
+ * Push one outbox item through every configured push adapter and
+ * record the per-channel outcome on the item. Never throws; a failing
+ * adapter is recorded as failed and the rest still run.
+ */
+export async function dispatchOutboxPush(item, {
+  adapters,
+  updateMetaFn = updateOutboxMeta,
+  now          = Date.now,
+} = {}) {
+  const active = adapters ?? activePushAdapters();
+  if (!active.length || !item?.id) return { delivery: null };
+  const delivery = {};
+  for (const adapter of active) {
+    try {
+      const r = await adapter.deliver(item);
+      delivery[adapter.name] = {
+        status: r?.ok ? 'delivered' : 'failed',
+        at:     new Date(now()).toISOString(),
+        ...(r?.error ? { error: String(r.error).slice(0, 300) } : {}),
+      };
+    } catch (err) {
+      delivery[adapter.name] = {
+        status: 'failed',
+        at:     new Date(now()).toISOString(),
+        error:  String(err?.message ?? err).slice(0, 300),
+      };
+    }
+  }
+  try { await updateMetaFn({ id: item.id, meta: { delivery } }); }
+  catch (err) { console.warn('[cerebellum] failed to record delivery meta:', err?.message ?? err); }
+  for (const [name, rec] of Object.entries(delivery)) {
+    if (rec.status === 'delivered') console.log(`[cerebellum] pushed outbox ${item.id.slice?.(0, 8) ?? item.id} via ${name}`);
+    else console.warn(`[cerebellum] push via ${name} FAILED for ${item.id.slice?.(0, 8) ?? item.id}: ${rec.error}`);
+  }
+  return { delivery };
+}
+
+/**
+ * Enqueue an outbox item AND push it to the configured push channels.
+ * The default enqueuer for everything user-facing (reminders, triage,
+ * outbound-alert mirrors, crisis resources). Dedup short-circuits the
+ * push — an item the user already has pending isn't re-pushed.
+ */
+export async function enqueueAndDispatch(args, deps = {}) {
+  const enq = await enqueueOutbox(args);
+  if (!enq?.deduped && enq?.id) {
+    await dispatchOutboxPush({ ...args, id: enq.id }, deps);
+  }
+  return enq;
+}
+
+/**
+ * One line of delivery state for prompts the Familiar reads — both the
+ * chat-path [PENDING CHECK-IN NOTICES] block and the triage
+ * deliberation use this, so a failed push is VISIBLE to the Familiar
+ * and it can weigh "they never saw me" against "they're ignoring me."
+ */
+export function formatDeliveryNote(item, { hasPushChannel } = {}) {
+  const d = item?.delivery?.['discord-dm'];
+  if (d?.status === 'delivered') return "(delivered to my human's Discord)";
+  if (d?.status === 'failed')    return `(Discord push FAILED — ${d.error ?? 'unknown error'} — my human has NOT been notified outside this app)`;
+  const pushConfigured = hasPushChannel !== undefined ? hasPushChannel : activePushAdapters().length > 0;
+  if (!pushConfigured) return '(no push channel configured — my human sees this only with the app open)';
+  return '(push delivery pending)';
+}
+
 // ── Trusted-contact escalation ───────────────────────────────────
 
-// How long after the user-facing outbox item lands to wait before
-// escalating to a trusted contact, if the user hasn't acknowledged.
-// The user has this window to respond; if they do, the contact is
-// never reached. Only applies when the LLM's decision includes contactHuman.
+// How long my human has to acknowledge the check-in before the trusted
+// contact is reached. If they acknowledge in the window, the contact
+// is never contacted. Only applies when the LLM's decision includes
+// contactHuman.
+//
+// The clock starts at FIRST CONFIRMED PUSH DELIVERY of the check-in
+// (my human can only veto what they could have seen), falling back to
+// enqueue time when no push channel is configured or the push failed —
+// a dead adapter can never block escalation forever. Items created
+// before 0.5.0-alpha carry a precomputed contactDeadlineTs (enqueue
+// clock) and are honored as-is.
 export const CONTACT_ESCALATION_DELAY_MS = Object.freeze({
   severe:   30 * 60_000,        // 30 minutes
   high:      2 * 60 * 60_000,  // 2 hours
   moderate:  6 * 60 * 60_000,  // 6 hours
 });
+
+// If a push channel is configured but no delivery record has landed
+// this long after enqueue (crash between enqueue and dispatch, adapter
+// hung), fall back to the enqueue clock rather than waiting forever.
+export const DISPATCH_GRACE_MS = 10 * 60_000;
+
+/**
+ * When does this triage item's escalation deadline expire?
+ * Returns a ms timestamp, or null when the clock hasn't started yet
+ * (push configured, delivery still pending, inside the grace window).
+ */
+export function contactDeadlineFor(item, { pushConfigured, now = Date.now } = {}) {
+  // Pre-0.5.0 items: precomputed deadline, enqueue clock.
+  if (typeof item.contactDeadlineTs === 'number') return item.contactDeadlineTs;
+  const delay = item.contactDelayMs;
+  if (typeof delay !== 'number') return null;
+
+  const d = item.delivery?.['discord-dm'];
+  if (d?.status === 'delivered') {
+    const at = Date.parse(d.at);
+    if (Number.isFinite(at)) return at + delay;
+  }
+  const enq = Date.parse(item.ts);
+  if (!Number.isFinite(enq)) return null;
+  if (d?.status === 'failed' || !pushConfigured) return enq + delay;
+  // Push configured but no record yet — give dispatch a grace window,
+  // then fall back to the enqueue clock.
+  if (now() - enq > DISPATCH_GRACE_MS) return enq + delay;
+  return null;
+}
 
 /**
  * Deliver a message to a trusted contact via their configured channel.
@@ -157,35 +329,27 @@ export async function deliverToTrustedContact({
   name, message, channel,
   readSettings    = readSettingsSync,
   fetchFn         = fetch,
-  enqueueOutboxFn = enqueueOutbox,
+  enqueueOutboxFn = enqueueAndDispatch,
 }) {
   const s = readSettings();
   const contact = (s?.trustedContacts || []).find(c => c.name === name && (c.channel ?? 'discord') === channel);
   if (!contact) return { ok: false, error: 'contact_not_found' };
   let delivered = false, deliveryError = null;
-  try {
-    if (channel === 'discord') {
-      const resp = await fetchFn(contact.webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: `**(message from your friend's Familiar — proactive check-in)**\n\n${message}`,
-          allowed_mentions: { parse: [] },
-        }),
-      });
-      if (!resp.ok) {
-        deliveryError = `discord ${resp.status}: ${(await resp.text()).slice(0, 200)}`;
-      } else {
-        delivered = true;
-      }
-    } else {
-      deliveryError = `unsupported channel: ${channel}`;
-    }
-  } catch (err) {
-    deliveryError = err?.message ?? String(err);
+  if (channel === 'discord') {
+    const r = await sendDiscordWebhook(
+      contact.webhook,
+      `**(message from your friend's Familiar — proactive check-in)**\n\n${message}`,
+      fetchFn,
+    );
+    delivered     = r.ok;
+    deliveryError = r.error ?? null;
+  } else {
+    deliveryError = `unsupported channel: ${channel}`;
   }
   // ALWAYS log to the outbox — even on delivery failure the user
-  // should see that the attempt happened.
+  // should see that the attempt happened. The default enqueuer also
+  // pushes the mirror to the user's own push channel, so an escalation
+  // is never invisible just because the app is closed.
   await enqueueOutboxFn({
     kind:     'outbound_alert',
     originId: `outbound-${Date.now()}`,
@@ -211,17 +375,17 @@ export async function checkAndFirePendingContacts({
   listOutboxFn       = listOutbox,
   updateOutboxMetaFn = updateOutboxMeta,
   deliverFn          = deliverToTrustedContact,
+  hasPushChannel     = () => activePushAdapters().length > 0,
 } = {}) {
   const nowMs = now();
   try {
     const items   = await listOutboxFn({ pendingOnly: true, limit: 100 });
-    const expired = items.filter(i =>
-      i.kind === 'triage' &&
-      i.pendingContact &&
-      !i.pendingContact.delivered &&
-      typeof i.contactDeadlineTs === 'number' &&
-      nowMs >= i.contactDeadlineTs,
-    );
+    const pushConfigured = !!hasPushChannel();
+    const expired = items.filter(i => {
+      if (i.kind !== 'triage' || !i.pendingContact || i.pendingContact.delivered) return false;
+      const deadline = contactDeadlineFor(i, { pushConfigured, now });
+      return typeof deadline === 'number' && nowMs >= deadline;
+    });
     for (const item of expired) {
       // Mark delivered before async call to prevent a second tick from
       // double-firing while delivery is in flight.
@@ -302,6 +466,24 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in my human's chat. Nothing is covert.`
     : '';
 
+  // Check-ins I already sent that are still unacknowledged, WITH their
+  // delivery state — a failed push means my human likely never saw me,
+  // which is very different from them ignoring me, and I weigh the two
+  // differently.
+  let pendingBlock = '';
+  try {
+    const pushConfigured = activePushAdapters().length > 0;
+    const pendingCheckins = (await listOutbox({ pendingOnly: true, limit: 20 }))
+      .filter(i => i.kind === 'triage' && i.body);
+    if (pendingCheckins.length > 0) {
+      const lines = pendingCheckins.map(i => {
+        const when = i.ts ? relativeTime(i.ts, nowMs) : 'unknown time';
+        return `  - [${when}] "${i.body.slice(0, 200)}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`;
+      }).join('\n');
+      pendingBlock = `\nCheck-ins I already sent that my human has NOT yet acknowledged:\n${lines}\nIf a delivery FAILED or there is no push channel, my human may simply never have seen me — silence after an undelivered message is not the same signal as silence after a delivered one.`;
+    }
+  } catch { /* non-critical — deliberate without it */ }
+
   // Care-driven surface: if I'm already deliberating about whether
   // to reach out, an open task I could touch on (if it fits the
   // moment) might be the right doorway. Pull eligible candidates
@@ -358,6 +540,7 @@ What I know:
 ${signalsBlock}
 ${sessionBlock}
 ${contactsBlock}
+${pendingBlock}
 ${candidateTasksBlock}
 
 ---
@@ -418,9 +601,11 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     // Validate contactHuman strictly — must be an exact name from the configured
     // list. Delivery is DEFERRED: the user receives the outbox item first.
     // The trusted contact is only reached after CONTACT_ESCALATION_DELAY_MS
-    // if the user has not acknowledged the item. This is enforced by storing
-    // pendingContact + contactDeadlineTs as meta on the outbox item; the
-    // checkAndFirePendingContacts check in each triage tick handles delivery.
+    // counted from confirmed push delivery (enqueue time as fallback — see
+    // contactDeadlineFor) if the user has not acknowledged the item. This is
+    // enforced by storing pendingContact + contactDelayMs as meta on the
+    // outbox item; the checkAndFirePendingContacts check in each triage
+    // tick handles delivery.
     const ch = parsed.contactHuman;
     if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
       const match = contacts.find(c => c.name === ch.name);
@@ -432,7 +617,7 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
             message: ch.message.trim(),
             channel: match.channel ?? 'discord',
           },
-          contactDeadlineTs: Date.now() + delayMs,
+          contactDelayMs: delayMs,
         };
       } else {
         console.warn(`[triage] LLM tried to contact unknown name "${ch.name}" — ignored`);
@@ -492,7 +677,7 @@ export function deriveMemorySlug(input, maxLen = 60) {
 // Used by both the show_crisis_resources executor and the
 // POST /api/crisis-resources route.
 export async function enqueueCrisisResources() {
-  return await enqueueOutbox({
+  return await enqueueAndDispatch({
     kind:     'crisis_resources',
     originId: `crisis-resources-${Math.floor(Date.now() / 3_600_000)}`,
     title:    'If you need immediate support',

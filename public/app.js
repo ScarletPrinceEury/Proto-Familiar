@@ -212,6 +212,14 @@ const state = {
   // every outbound to the chat outbox — there is no covert contact.
   // Empty list = the LLM has nothing to suggest, no outbound ever happens.
   trustedContacts:         [],
+
+  // The bonded human's OWN Discord webhook (push notifications). When
+  // set, every outbox delivery (reminders, check-ins, outbound-alert
+  // mirrors, crisis resources) is ALSO pushed there, so nothing stays
+  // silent just because no tab is open. Delivery state is recorded per
+  // item; the trusted-contact escalation deadline counts from confirmed
+  // delivery. Empty = in-app delivery only.
+  userDiscordWebhook:      '',
 };
 
 // ── Persistence ──────────────────────────────────────────────────
@@ -236,7 +244,7 @@ const SERVER_SYNCED_KEYS = [
   'entityCoreConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
-  'trustedContacts',
+  'trustedContacts', 'userDiscordWebhook',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -2106,6 +2114,8 @@ function readSettingsFromUI() {
     const n = parseInt(retriesEl.value, 10);
     state.maxEmptyRetries = Number.isFinite(n) && n >= 0 ? n : 0;
   }
+  const udwEl = $('user-discord-webhook');
+  if (udwEl) state.userDiscordWebhook = udwEl.value.trim();
   // Keep the primary connection in sync with the live Connection-section fields.
   syncFieldsToPrimaryConnection();
   saveSettings();
@@ -2139,6 +2149,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('post-history-prompt'),'value',   state.postHistoryPrompt);
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
+  setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
   setIfNotFocused($('tome-recursive'),        'checked', state.tomeRecursive ?? false);
   setIfNotFocused($('tome-max-recursion'),    'value',   state.tomeMaxRecursionSteps ?? 3);
@@ -2873,6 +2884,7 @@ function init() {
     'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
+    'user-discord-webhook',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',

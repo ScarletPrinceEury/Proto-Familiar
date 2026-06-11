@@ -200,6 +200,13 @@ ack/cancel — see `memorization.js`.
 - `GET /api/outbox[?pending=1&limit=N]` — UI polls this; pending items are injected as assistant chat messages in the active session (since 0.3.9-alpha; before, they rendered as banners)
 - `POST /api/outbox/:id/acknowledge` — fired automatically by the client after each item is rendered into chat
 - `POST /api/outbox/clear-acknowledged`
+- Since 0.5.0-alpha every user-facing enqueue goes through
+  `cerebellum.enqueueAndDispatch`, which ALSO pushes the item to each
+  configured push channel (today: the human's own Discord webhook,
+  Settings → Trusted contacts → "My Discord webhook") and records the
+  per-channel outcome on the item as
+  `delivery: { 'discord-dm': { status, at, error? } }`. The browser
+  stays pull-based; its confirmation signal is the acknowledge.
 
 **Settings + Tailscale gate:** as before.
 
@@ -264,15 +271,33 @@ Currently owns:
   recent conversation with relative times, threat signals, trusted
   contacts, candidate tasks), calls the primary connection, parses the
   `wait` / `reach_out` / `contactHuman` decision.
+- **Channel adapters (push delivery)** — `activePushAdapters()` returns
+  the configured push channels (today: `discord-dm` from the human's
+  own webhook); `dispatchOutboxPush()` runs every adapter (a failing
+  one never blocks the rest) and records per-channel
+  `delivery: { status, at, error? }` on the item;
+  `enqueueAndDispatch()` is the default enqueuer for everything
+  user-facing. `formatDeliveryNote()` renders one line of delivery
+  state into the prompts the Familiar reads — a failed push is visible
+  to it, so "they never saw me" and "they're ignoring me" are
+  distinguishable signals. `sendDiscordWebhook()` is the shared
+  primitive under both the user push channel and trusted-contact
+  delivery.
 - **`deliverToTrustedContact({name, message, channel})`** — Discord
   webhook delivery with the "no covert contact" invariant enforced
   structurally: every outbound to a third party mirrors an
-  `outbound_alert` into the user's outbox, even on delivery failure.
-- **`checkAndFirePendingContacts()`** — escalation deadlines: fires
-  deferred trusted-contact deliveries whose `contactDeadlineTs` passed
-  without user acknowledgement. Marks `delivered` *before* the async
-  fire (double-delivery guard). All I/O injectable; covered by
-  deterministic clock tests in `tests/cerebellum.test.mjs`.
+  `outbound_alert` into the user's outbox (and out the push channel),
+  even on delivery failure.
+- **`checkAndFirePendingContacts()` + `contactDeadlineFor()`** —
+  escalation deadlines. The acknowledgement clock starts at FIRST
+  CONFIRMED push delivery of the check-in (the human can only veto
+  what they could have seen), falling back to the enqueue time when no
+  push channel is configured, the push failed, or no delivery record
+  lands within `DISPATCH_GRACE_MS` — a dead adapter can never block
+  escalation forever. Pre-0.5.0 items with a precomputed
+  `contactDeadlineTs` are honored as-is. Marks `delivered` *before*
+  the async fire (double-delivery guard). All I/O injectable; covered
+  by deterministic clock tests in `tests/cerebellum.test.mjs`.
 - **`CONTACT_ESCALATION_DELAY_MS`** — the per-tier acknowledgement
   window (severe 30min / high 2h / moderate 6h).
 - **Triage event log** — `appendTriageEventLog` / `readTriageEvents`
@@ -333,10 +358,15 @@ Health-watch warns when `overdue` climbs across consecutive ticks.
 on tier (calm/mild = no-op) and cool-down (LLM-controlled
 `nextCheckInMs`, clamped to [30s, 24h], with per-tier defaults if
 omitted). Tier-rise preempts the cool-down. The LLM call IS the
-decision — `wait` is honored. On `reach_out`, posts to outbox; if
-`contactHuman` is included AND the name matches a configured trusted
-contact, schedules a deferred Discord-webhook delivery (held until
-the user acknowledges or `CONTACT_ESCALATION_DELAY_MS` elapses).
+decision — `wait` is honored. On `reach_out`, posts to outbox (and out
+the push channel via `enqueueAndDispatch`); if `contactHuman` is
+included AND the name matches a configured trusted contact, schedules
+a deferred Discord-webhook delivery (held until the user acknowledges
+or `CONTACT_ESCALATION_DELAY_MS` elapses — counted from confirmed push
+delivery; see cerebellum's `contactDeadlineFor`). The deliberation
+prompt includes the Familiar's still-unacknowledged check-ins with
+their delivery state, so a failed push reads as "they may never have
+seen me," not as silence.
 
 **`outbox.js`** — `tomes/.outbox.json` persistent queue. `enqueueOutbox`
 dedups on `(kind, originId)` while unacknowledged. `listOutbox`

@@ -304,3 +304,164 @@ test('runToolCallLoop: no tool calls means a single round and no toolRounds', as
   assert.equal(toolRounds.length, 0);
   assert.equal(data.choices[0].message.content, 'done');
 });
+
+// ── Channel adapters + delivery records ──────────────────────────
+
+import {
+  dispatchOutboxPush,
+  enqueueAndDispatch,
+  activePushAdapters,
+  formatDeliveryNote,
+  contactDeadlineFor,
+  DISPATCH_GRACE_MS,
+} from '../cerebellum.js';
+
+test('dispatchOutboxPush records per-adapter outcomes; a failing adapter never blocks the next one', async () => {
+  const metas = [];
+  const { delivery } = await dispatchOutboxPush(
+    { id: 'i1', kind: 'triage', title: 't', body: 'b' },
+    {
+      adapters: [
+        { name: 'broken',     deliver: async () => { throw new Error('boom'); } },
+        { name: 'discord-dm', deliver: async () => ({ ok: true }) },
+      ],
+      updateMetaFn: async ({ id, meta }) => { metas.push([id, meta]); },
+      now: () => 1_000,
+    },
+  );
+  assert.equal(delivery.broken.status, 'failed');
+  assert.match(delivery.broken.error, /boom/);
+  assert.equal(delivery['discord-dm'].status, 'delivered');
+  // The outcome is persisted on the item — the observable record.
+  assert.equal(metas.length, 1);
+  assert.equal(metas[0][0], 'i1');
+  assert.deepEqual(Object.keys(metas[0][1].delivery).sort(), ['broken', 'discord-dm']);
+});
+
+test('dispatchOutboxPush with no adapters is a quiet no-op', async () => {
+  const { delivery } = await dispatchOutboxPush(
+    { id: 'i1', kind: 'reminder', title: 't' },
+    { adapters: [], updateMetaFn: async () => { throw new Error('should not be called'); } },
+  );
+  assert.equal(delivery, null);
+});
+
+test('activePushAdapters: discord-dm appears only when userDiscordWebhook is set', () => {
+  assert.equal(activePushAdapters({ readSettings: () => ({}) }).length, 0);
+  assert.equal(activePushAdapters({ readSettings: () => ({ userDiscordWebhook: '   ' }) }).length, 0);
+  const a = activePushAdapters({ readSettings: () => ({ userDiscordWebhook: 'https://discord.test/me' }) });
+  assert.equal(a.length, 1);
+  assert.equal(a[0].name, 'discord-dm');
+});
+
+test('the discord-dm adapter posts the item to the user webhook', async () => {
+  const calls = [];
+  const [adapter] = activePushAdapters({
+    readSettings: () => ({ userDiscordWebhook: 'https://discord.test/me' }),
+    fetchFn: async (url, opts) => { calls.push([url, JSON.parse(opts.body)]); return { ok: true }; },
+  });
+  const r = await adapter.deliver({ kind: 'reminder', title: 'water the plants', body: 'they are thirsty' });
+  assert.equal(r.ok, true);
+  assert.equal(calls[0][0], 'https://discord.test/me');
+  assert.match(calls[0][1].content, /water the plants/);
+  assert.match(calls[0][1].content, /they are thirsty/);
+  // Never ping roles/users from a webhook push.
+  assert.deepEqual(calls[0][1].allowed_mentions, { parse: [] });
+});
+
+test('formatDeliveryNote covers delivered / failed / none-configured / pending', () => {
+  assert.match(formatDeliveryNote({ delivery: { 'discord-dm': { status: 'delivered', at: 'x' } } }), /delivered to my human's Discord/);
+  const failed = formatDeliveryNote({ delivery: { 'discord-dm': { status: 'failed', at: 'x', error: 'discord 404' } } });
+  assert.match(failed, /FAILED/);
+  assert.match(failed, /discord 404/);
+  assert.match(formatDeliveryNote({}, { hasPushChannel: false }), /no push channel configured/);
+  assert.match(formatDeliveryNote({}, { hasPushChannel: true }), /pending/);
+});
+
+// ── Escalation deadline from confirmed delivery ──────────────────
+
+const T0 = Date.parse('2026-06-11T12:00:00Z');
+
+function newStyleItem(overrides = {}) {
+  return {
+    id:   'n1',
+    kind: 'triage',
+    ts:   new Date(T0).toISOString(),
+    pendingContact: { name: 'Sam', message: 'm', channel: 'discord' },
+    contactDelayMs: 30 * 60_000,
+    ...overrides,
+  };
+}
+
+test('contactDeadlineFor: clock starts at confirmed push delivery, not enqueue', () => {
+  const deliveredAt = T0 + 10 * 60_000; // pushed 10 min after enqueue
+  const item = newStyleItem({ delivery: { 'discord-dm': { status: 'delivered', at: new Date(deliveredAt).toISOString() } } });
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true }), deliveredAt + 30 * 60_000);
+});
+
+test('contactDeadlineFor: failed push falls back to the enqueue clock', () => {
+  const item = newStyleItem({ delivery: { 'discord-dm': { status: 'failed', at: 'x', error: 'e' } } });
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true }), T0 + 30 * 60_000);
+});
+
+test('contactDeadlineFor: no push channel configured falls back to the enqueue clock', () => {
+  assert.equal(contactDeadlineFor(newStyleItem(), { pushConfigured: false }), T0 + 30 * 60_000);
+});
+
+test('contactDeadlineFor: push pending inside the grace window holds the clock; after grace it falls back', () => {
+  const item = newStyleItem(); // push configured, no delivery record yet
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, now: () => T0 + 60_000 }), null);
+  assert.equal(
+    contactDeadlineFor(item, { pushConfigured: true, now: () => T0 + DISPATCH_GRACE_MS + 1 }),
+    T0 + 30 * 60_000,
+  );
+});
+
+test('contactDeadlineFor: pre-0.5.0 items with precomputed contactDeadlineTs are honored as-is', () => {
+  const item = newStyleItem({ contactDelayMs: undefined, contactDeadlineTs: 123_456 });
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true }), 123_456);
+});
+
+test('checkAndFirePendingContacts honors the delivered-at clock end-to-end', async () => {
+  const deliveredAt = T0 + 10 * 60_000;
+  const item = newStyleItem({ delivery: { 'discord-dm': { status: 'delivered', at: new Date(deliveredAt).toISOString() } } });
+  const deliveries = [];
+  // 35 min after enqueue = 25 min after delivery: NOT yet expired
+  let r = await checkAndFirePendingContacts({
+    now: () => T0 + 35 * 60_000,
+    listOutboxFn:       async () => [item],
+    updateOutboxMetaFn: async () => {},
+    deliverFn:          async (a) => { deliveries.push(a); return { ok: true }; },
+    hasPushChannel:     () => true,
+  });
+  assert.equal(r.fired, 0);
+  // 41 min after enqueue = 31 min after delivery: expired
+  r = await checkAndFirePendingContacts({
+    now: () => T0 + 41 * 60_000,
+    listOutboxFn:       async () => [item],
+    updateOutboxMetaFn: async () => {},
+    deliverFn:          async (a) => { deliveries.push(a); return { ok: true }; },
+    hasPushChannel:     () => true,
+  });
+  assert.equal(r.fired, 1);
+  assert.equal(deliveries.length, 1);
+});
+
+test('enqueueAndDispatch: dedup short-circuits the push', async () => {
+  // Same (kind, originId) twice — second enqueue dedups, so the adapter
+  // must run exactly once. Uses a temp outbox dir via the real enqueue.
+  const { mkdtempSync, rmSync } = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'cereb-dispatch-'));
+  let pushes = 0;
+  const deps = {
+    adapters: [{ name: 'discord-dm', deliver: async () => { pushes++; return { ok: true }; } }],
+    updateMetaFn: async () => {},
+  };
+  try {
+    await enqueueAndDispatch({ kind: 'reminder', originId: 'r1', title: 'x', tomesDir: dir }, deps);
+    await enqueueAndDispatch({ kind: 'reminder', originId: 'r1', title: 'x', tomesDir: dir }, deps);
+    assert.equal(pushes, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
