@@ -835,8 +835,10 @@ handler awaits each loop's `stop*()` before closing the MCP children.
   in detail, off-switches, every signal pattern.
 - [`docs/caring-spine-build-plan.md`](caring-spine-build-plan.md) — the
   per-step build path that landed the spine.
-- [`docs/unruh-design.md`](unruh-design.md),
-  [`docs/unruh-implementation-plan.md`](unruh-implementation-plan.md)
-  — temporal-context module.
+- [`docs/cerebellum-design.md`](cerebellum-design.md) — the motor
+  module's design rationale: the efferent symmetry, the thalamus
+  boundary, tool dispatch, channel adapters, the escalation veto
+  window.
+- [`docs/unruh-design.md`](unruh-design.md) — temporal-context module.
 - [`docs/research/`](research/) — research notes that feed future
   design decisions (task-handling obstacles, etc.).
