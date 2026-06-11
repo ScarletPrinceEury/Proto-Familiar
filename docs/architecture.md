@@ -33,9 +33,14 @@ Browser (public/)
     ▼
 server.js  (Express, Node 18+, ESM)
     │
-    │  ── cognitive bridge (per-request enrichment) ──────────────
+    │  ── cognitive bridge (per-request enrichment, INWARD) ──────
     ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)    — identity / memory / graph
     │                     ──►  Unruh        (Python via uv, MCP) — schedule / interests / handoff / routine
+    │
+    │  ── motor module (action + delivery, OUTWARD) ───────────────
+    ├── cerebellum.js       ── triage deliberation, trusted-contact delivery,
+    │                          escalation deadlines (uses thalamus's wrappers
+    │                          for every MCP write — never its own connection)
     │
     │  ── caring spine (per-request + autonomous) ─────────────────
     ├── crisis-signals.js   ── pattern detector run on each user msg
@@ -80,6 +85,7 @@ ponderings injection, care-check framing) and as background loops
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
 ├── thalamus.js              MCP bridge — entity-core + Unruh, plus all the helper wrappers
+├── cerebellum.js            Motor module — triage deliberation, trusted-contact delivery, escalation deadlines, triage event log
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
 ├── pondering.js             Pure `ponderOnce()` primitive — LLM call + tome write
@@ -222,6 +228,44 @@ stdio MCP children. Exposes:
 - **Standing-value bridge (M7):** on every liveTurn, reconciles
   standing values whose `value_ref` points at a now-gone entity-core
   identity fact (demotes them to live interests).
+
+### `cerebellum.js` — the motor module (outbound counterpart to Thalamus)
+
+Thalamus owns everything flowing inward; cerebellum owns everything
+flowing outward — the Familiar's actions and deliveries. The boundary
+is strict: Thalamus assembles context and never executes actions;
+cerebellum executes actions and never assembles prompt context.
+Cerebellum never opens its own MCP connections — every write to
+identity / memory / temporal state goes through thalamus.js's exported
+wrappers (the single enforcement point for "writes go through
+entity-core's MCP").
+
+Currently owns:
+
+- **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
+  deliberation: assembles the [Now]-anchored prompt (identity context,
+  recent conversation with relative times, threat signals, trusted
+  contacts, candidate tasks), calls the primary connection, parses the
+  `wait` / `reach_out` / `contactHuman` decision.
+- **`deliverToTrustedContact({name, message, channel})`** — Discord
+  webhook delivery with the "no covert contact" invariant enforced
+  structurally: every outbound to a third party mirrors an
+  `outbound_alert` into the user's outbox, even on delivery failure.
+- **`checkAndFirePendingContacts()`** — escalation deadlines: fires
+  deferred trusted-contact deliveries whose `contactDeadlineTs` passed
+  without user acknowledgement. Marks `delivered` *before* the async
+  fire (double-delivery guard). All I/O injectable; covered by
+  deterministic clock tests in `tests/cerebellum.test.mjs`.
+- **`CONTACT_ESCALATION_DELAY_MS`** — the per-tier acknowledgement
+  window (severe 30min / high 2h / moderate 6h).
+- **Triage event log** — `appendTriageEventLog` / `readTriageEvents`
+  on `logs/triage-events.jsonl`.
+- **`readSettingsSync` / `primaryConnectionFrom`** — the single
+  settings-reader implementation, imported by server.js.
+
+These are the highest-stakes code paths in the system. Behavioral
+changes here (not relocations) require explicitly asking the human
+before shipping — see CLAUDE.md.
 
 ### Caring-spine modules
 
