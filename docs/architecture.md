@@ -33,9 +33,15 @@ Browser (public/)
     ▼
 server.js  (Express, Node 18+, ESM)
     │
-    │  ── cognitive bridge (per-request enrichment) ──────────────
+    │  ── cognitive bridge (per-request enrichment, INWARD) ──────
     ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)    — identity / memory / graph
     │                     ──►  Unruh        (Python via uv, MCP) — schedule / interests / handoff / routine
+    │
+    │  ── motor module (action + delivery, OUTWARD) ───────────────
+    ├── cerebellum.js       ── tool registry + executors + tool-call loop,
+    │                          triage deliberation, trusted-contact delivery,
+    │                          escalation deadlines (uses thalamus's wrappers
+    │                          for every MCP write — never its own connection)
     │
     │  ── caring spine (per-request + autonomous) ─────────────────
     ├── crisis-signals.js   ── pattern detector run on each user msg
@@ -80,6 +86,7 @@ ponderings injection, care-check framing) and as background loops
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
 ├── thalamus.js              MCP bridge — entity-core + Unruh, plus all the helper wrappers
+├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
 ├── pondering.js             Pure `ponderOnce()` primitive — LLM call + tome write
@@ -131,7 +138,8 @@ ponderings injection, care-check framing) and as background loops
 │   ├── index.html           App shell — sidebar, chat pane, Temporal editor modal, all modals
 │   ├── style.css            All styling — dark/light themes, modal/tab styles
 │   └── app.js               All frontend logic — state, API calls, rendering, topics, Tomes,
-│                            temporal editor, outbox delivery polling, BUILTIN_TOOLS definitions
+│                            temporal editor, outbox delivery polling (tool registry + execution
+│                            moved server-side to cerebellum.js in 0.4.0-alpha)
 │
 └── docs/                    This documentation (incl. research/ for design-input notes)
     ├── architecture.md      You are here
@@ -151,7 +159,11 @@ lifecycle of the autonomous loops:
   (fire-and-forget timestamp) + `scoreMessage()` → `recordThreat()`
   on the user text, then `thalamus.enrich()` to assemble static +
   dynamic context. Returns the `_thalamus` envelope so the prompt
-  inspector can show what was actually injected.
+  inspector can show what was actually injected. With
+  `runToolLoop: true` (sent by the app when tools are enabled) the
+  server also runs the multi-round tool-call loop here, executing via
+  cerebellum and emitting `_toolRound` SSE events / a `_toolRounds`
+  response array — see "Data flow" below.
 - `POST /api/debug-prompt` — offline preview (no upstream call).
 - `POST /api/interest/engage` — fire-and-forget engagement bump.
 - `POST /api/session/handoff` — store session-end intent for the
@@ -188,6 +200,13 @@ ack/cancel — see `memorization.js`.
 - `GET /api/outbox[?pending=1&limit=N]` — UI polls this; pending items are injected as assistant chat messages in the active session (since 0.3.9-alpha; before, they rendered as banners)
 - `POST /api/outbox/:id/acknowledge` — fired automatically by the client after each item is rendered into chat
 - `POST /api/outbox/clear-acknowledged`
+- Since 0.4.0-alpha every user-facing enqueue goes through
+  `cerebellum.enqueueAndDispatch`, which ALSO pushes the item to each
+  configured push channel (today: the human's own Discord webhook,
+  Settings → Trusted contacts → "My Discord webhook") and records the
+  per-channel outcome on the item as
+  `delivery: { 'discord-dm': { status, at, error? } }`. The browser
+  stays pull-based; its confirmation signal is the acknowledge.
 
 **Settings + Tailscale gate:** as before.
 
@@ -222,6 +241,73 @@ stdio MCP children. Exposes:
 - **Standing-value bridge (M7):** on every liveTurn, reconciles
   standing values whose `value_ref` points at a now-gone entity-core
   identity fact (demotes them to live interests).
+
+### `cerebellum.js` — the motor module (outbound counterpart to Thalamus)
+
+Thalamus owns everything flowing inward; cerebellum owns everything
+flowing outward — the Familiar's actions and deliveries. The boundary
+is strict: Thalamus assembles context and never executes actions;
+cerebellum executes actions and never assembles prompt context.
+Cerebellum never opens its own MCP connections — every write to
+identity / memory / temporal state goes through thalamus.js's exported
+wrappers (the single enforcement point for "writes go through
+entity-core's MCP").
+
+Currently owns:
+
+- **Tool dispatch** — `BUILTIN_TOOLS` (the full registry of tool
+  definitions, first-person descriptions, raw `{{user}}`/`{{char}}`
+  macros) + `TOOL_EXECUTORS` (server-side implementations; writes ride
+  thalamus's wrappers) + `executeToolCall()` (never throws — failures
+  become structured strings into the loop) + `composeActiveTools()`
+  (built-ins + the user's advertise-only custom tools) +
+  `runToolCallLoop()` (the non-streaming multi-round loop; the
+  streaming variant lives in /api/chat because it is SSE transport).
+  `initCerebellumTools()` receives the tome-storage capability from
+  server.js at boot so `save_to_tome` works without cerebellum ever
+  importing server.js.
+- **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
+  deliberation: assembles the [Now]-anchored prompt (identity context,
+  recent conversation with relative times, threat signals, trusted
+  contacts, candidate tasks), calls the primary connection, parses the
+  `wait` / `reach_out` / `contactHuman` decision.
+- **Channel adapters (push delivery)** — `activePushAdapters()` returns
+  the configured push channels (today: `discord-dm` from the human's
+  own webhook); `dispatchOutboxPush()` runs every adapter (a failing
+  one never blocks the rest) and records per-channel
+  `delivery: { status, at, error? }` on the item;
+  `enqueueAndDispatch()` is the default enqueuer for everything
+  user-facing. `formatDeliveryNote()` renders one line of delivery
+  state into the prompts the Familiar reads — a failed push is visible
+  to it, so "they never saw me" and "they're ignoring me" are
+  distinguishable signals. `sendDiscordWebhook()` is the shared
+  primitive under both the user push channel and trusted-contact
+  delivery.
+- **`deliverToTrustedContact({name, message, channel})`** — Discord
+  webhook delivery with the "no covert contact" invariant enforced
+  structurally: every outbound to a third party mirrors an
+  `outbound_alert` into the user's outbox (and out the push channel),
+  even on delivery failure.
+- **`checkAndFirePendingContacts()` + `contactDeadlineFor()`** —
+  escalation deadlines. The acknowledgement clock starts at FIRST
+  CONFIRMED push delivery of the check-in (the human can only veto
+  what they could have seen), falling back to the enqueue time when no
+  push channel is configured, the push failed, or no delivery record
+  lands within `DISPATCH_GRACE_MS` — a dead adapter can never block
+  escalation forever. Pre-0.4.0 items with a precomputed
+  `contactDeadlineTs` are honored as-is. Marks `delivered` *before*
+  the async fire (double-delivery guard). All I/O injectable; covered
+  by deterministic clock tests in `tests/cerebellum.test.mjs`.
+- **`CONTACT_ESCALATION_DELAY_MS`** — the per-tier acknowledgement
+  window (severe 30min / high 2h / moderate 6h).
+- **Triage event log** — `appendTriageEventLog` / `readTriageEvents`
+  on `logs/triage-events.jsonl`.
+- **`readSettingsSync` / `primaryConnectionFrom`** — the single
+  settings-reader implementation, imported by server.js.
+
+These are the highest-stakes code paths in the system. Behavioral
+changes here (not relocations) require explicitly asking the human
+before shipping — see CLAUDE.md.
 
 ### Caring-spine modules
 
@@ -272,10 +358,15 @@ Health-watch warns when `overdue` climbs across consecutive ticks.
 on tier (calm/mild = no-op) and cool-down (LLM-controlled
 `nextCheckInMs`, clamped to [30s, 24h], with per-tier defaults if
 omitted). Tier-rise preempts the cool-down. The LLM call IS the
-decision — `wait` is honored. On `reach_out`, posts to outbox; if
-`contactHuman` is included AND the name matches a configured trusted
-contact, schedules a deferred Discord-webhook delivery (held until
-the user acknowledges or `CONTACT_ESCALATION_DELAY_MS` elapses).
+decision — `wait` is honored. On `reach_out`, posts to outbox (and out
+the push channel via `enqueueAndDispatch`); if `contactHuman` is
+included AND the name matches a configured trusted contact, schedules
+a deferred Discord-webhook delivery (held until the user acknowledges
+or `CONTACT_ESCALATION_DELAY_MS` elapses — counted from confirmed push
+delivery; see cerebellum's `contactDeadlineFor`). The deliberation
+prompt includes the Familiar's still-unacknowledged check-ins with
+their delivery state, so a failed push reads as "they may never have
+seen me," not as silence.
 
 **`outbox.js`** — `tomes/.outbox.json` persistent queue. `enqueueOutbox`
 dedups on `(kind, originId)` while unacknowledged. `listOutbox`
@@ -295,14 +386,17 @@ per-Tome write mutex, idempotent enqueue on
 ### `public/app.js` — frontend (one file)
 
 - **State + persistence** as before.
-- **BUILTIN_TOOLS** — the LLM-callable tool definitions including the
-  seven temporal-write tools (`schedule_add_event/task/reminder/phase`,
-  `schedule_resolve`, `interest_bump`, `interest_set_standing`) plus
-  the knowledge-editing tools.
-- **buildApiMessages** — assembles the request. Now sends an explicit
-  `userMessage` field on round 0 (avoids the "post-history prompt
-  shadows the actual user input" bug); post-history prompt is
-  `role: 'system'` not `'user'`.
+- **Tool rendering only** (since 0.4.0-alpha) — the registry and the
+  executors live server-side in cerebellum.js. The app sends
+  `runToolLoop: true` + custom tools + session metadata, renders the
+  `_toolRound` / `_toolRounds` records as collapsible blocks, and
+  persists the same assistant-tool_calls / tool message shapes in
+  history as before, so old sessions render identically.
+- **buildApiMessages** — assembles the request. Sends an explicit
+  `userMessage` field (avoids the "post-history prompt shadows the
+  actual user input" bug); post-history prompt is `role: 'system'`
+  not `'user'`. One /api/chat request per user message — the server
+  runs all tool rounds inside it.
 - **Temporal editor modal** — six tabs (Interests / Threat /
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
   applicable. The Routine tab hits `/api/temporal/phases` so phases
@@ -380,10 +474,37 @@ Prompt assembly (see "Prompt assembly" below)
 fetch(providerURL, enrichedPayload)
        │
        ▼  SSE stream or JSON
-Tool calls?
-   ├── YES → execute client-side (incl. schedule_add_task etc.) → re-send (up to 5 rounds)
+Tool calls?  (server-side loop since 0.4.0-alpha)
+   ├── YES → cerebellum.executeToolCall() per call → append results →
+   │         re-call provider (up to 5 rounds, all inside the one
+   │         /api/chat request; the [Now] time anchor is re-appended
+   │         as the LAST message every round). Each round is streamed
+   │         to the client as a `_toolRound` SSE event (or returned as
+   │         the `_toolRounds` array when non-streaming) so the chat
+   │         renders the collapsible tool blocks without executing
+   │         anything.
    └── NO  → render assistant message → save to localStorage + server
 ```
+
+The browser opts in by sending `runToolLoop: true` plus its custom
+tools and session metadata; the built-in registry is composed
+server-side (`cerebellum.composeActiveTools`). Direct `/api/chat`
+callers that pass their own `tools` array keep the legacy passthrough
+(single round, results handled by the caller). Enrichment runs ONCE
+per user message — tool rounds reuse it — and the internal provider
+re-calls never count against the 20 req/min chat rate limit.
+
+### Custom tools — advertise-only (needs addressing post-MVP)
+
+The Settings → Custom tools JSON array is appended to the advertised
+tool list, but **no executor exists**: calls return a structured
+"not implemented" notice into the loop. This is a deliberate pre-MVP
+posture — useful for prototyping what the Familiar *would* do with a
+tool — and it is flagged in the Settings UI. A real extension point
+needs a decision about where user-supplied executors run (server-side
+JS modules? declarative HTTP templates?) and what their security
+boundary is. Until then: keep them advertised, keep the disclaimer,
+don't silently drop the feature.
 
 ## Prompt assembly (cache-aware)
 
@@ -607,6 +728,64 @@ load-bearing invariant *"messages[0..injectedAt-1] is the same
 reference as the input"* — without it, the prefix-cache claim is
 hollow.
 
+## Significant memories — the composite-key contract (regression guard)
+
+This contract broke once already, silently, as a side effect of a fix.
+Read this before touching ANYTHING that addresses a memory by date.
+
+**The entity-core contract** (source of truth: `packages/entity-core/src/tools/memory.ts` in Psycheros):
+
+- Significant memories are stored **one named file per milestone**:
+  `data/memories/significant/{date}_{slug}.md`
+  (e.g. `2026-06-11_why-melian-trusts-me.md`). The slug is mandatory in
+  practice — two slugless saves on the same date collide on `{date}.md`
+  and entity-core's merge-and-dedup destroys content (the original
+  "significant memories disappearing" bug).
+- `memory_list` returns significant entries with a **composite** `date`
+  field: `` slug ? `${date}_${slug}` : date ``.
+- `memory_read` / `memory_update` / `memory_delete` do **NOT** accept
+  the composite form — they validate `date` against
+  `/^\d{4}(-W\d{2}|(-\d{2})?(-\d{2})?)$/` and take `slug` as a
+  **separate optional parameter**. An update that reaches entity-core
+  without a slug relies on its fall-back-to-existing-slug behaviour to
+  avoid writing a bare `{date}.md` that *shadows* the real
+  `{date}_{slug}.md`.
+
+So the identifier a consumer **sees** (from listings) is not the
+identifier the write tools **accept**. Every seam between the two must
+split the composite key.
+
+**The single splitting point:** `cerebellum.parseMemoryKey(key)` →
+`{ date, slug | null }` or `null`. Splits at the FIRST underscore
+(dates never contain one; slugs may), and rejects slugs containing
+dots or slashes so a key can never smuggle path segments. Do not
+re-implement this split anywhere else.
+
+**The seams that must honor the contract** (all wired as of 0.4.1-alpha):
+
+| Seam | What it does |
+|---|---|
+| `GET/PUT/DELETE /api/entity/memories/:granularity/:date` (server.js) | Accepts the composite `:date`, splits via `parseMemoryKey`, passes `date` + `slug` separately to thalamus. **Never reintroduce a plain-date regex here.** |
+| `thalamus.readMemory` / `updateMemory` / `deleteMemory` | Pass `slug` through to entity-core's tools. `updateMemory` without the slug is the shadow-file hazard. |
+| `update_memory` / `delete_memory` executors (cerebellum.js) | Split the model-supplied key; their tool descriptions teach the `YYYY-MM-DD_slug` addressing. |
+| `save_memory` executor | Auto-derives the slug (`deriveMemorySlug`) and returns the composite key in its confirmation so the Familiar knows the address of what it just wrote. |
+| Knowledge editor (app.js) | Deliberately dumb: sends back whatever key the list returned. Keep it that way. |
+
+**How it broke the first time** (so it isn't repeated): originally,
+significant saves had no slugs — listings returned plain dates and the
+editor worked, but same-date saves destroyed each other. The slug fix
+(0.3.x) made *writes* safe, which changed what `memory_list` returns —
+and the read/edit/delete seams, still validating plain dates, started
+rejecting every new entry with `invalid date format` (found
+2026-06-11, fixed in 0.4.1-alpha). The lesson: the date+slug contract
+spans multiple seams across two repos; a change to how memories are
+*written* is also a change to how they are *addressed*, and every seam
+in the table above must move together.
+
+**The guard:** the `parseMemoryKey` suite + executor-hint tests in
+`tests/cerebellum.test.mjs`. If a refactor makes those tests awkward,
+that is the contract talking — update all seams together or stop.
+
 ## Autonomous loops — when and what
 
 | Loop | Cadence | Off-switch | What it does |
@@ -656,8 +835,10 @@ handler awaits each loop's `stop*()` before closing the MCP children.
   in detail, off-switches, every signal pattern.
 - [`docs/caring-spine-build-plan.md`](caring-spine-build-plan.md) — the
   per-step build path that landed the spine.
-- [`docs/unruh-design.md`](unruh-design.md),
-  [`docs/unruh-implementation-plan.md`](unruh-implementation-plan.md)
-  — temporal-context module.
+- [`docs/cerebellum-design.md`](cerebellum-design.md) — the motor
+  module's design rationale: the efferent symmetry, the thalamus
+  boundary, tool dispatch, channel adapters, the escalation veto
+  window.
+- [`docs/unruh-design.md`](unruh-design.md) — temporal-context module.
 - [`docs/research/`](research/) — research notes that feed future
   design decisions (task-handling obstacles, etc.).

@@ -26,6 +26,10 @@ Process:
 When a major in-flight feature (e.g. Unruh) has its own dedicated branch and is the *only* thing the MINOR slot is being held for, do **not** bump MINOR mid-flight for ancillary work. Everything else — new endpoints, UX reworks, even refactors — bumps PATCH only. The minor slot is reserved for the feature's completion. The branch name
 itself signals which feature owns the next minor (e.g. on the `Unruh` branch, stay at `0.2.X-alpha` until Unruh is merged).
 
+### One milestone = one minor
+
+The MINOR number names a **milestone**, not a feature count: 0.2 = pre-Unruh, 0.3 = Unruh, 0.4 = Cerebellum. Multiple features that are all parts of the *same* milestone share ONE minor bump — the milestone landing is the `0.X.0`; everything else inside it (sub-features, follow-ups, fixes) bumps PATCH. Don't bump minor twice in one delivery push just because the table says "feature = minor"; ask "is this a new milestone, or more of the current one?" (The cerebellum push originally went 0.4.0 → 0.5.0 for server-side tools and channel adapters separately — both were Cerebellum, and the human collapsed them back to 0.4.x. That's the precedent.)
+
 When uncertain whether a change warrants a bump (formatting, comment only, whitespace), skip it. Otherwise bump.
 
 ## Entity-as-subject — the design value under everything
@@ -160,6 +164,27 @@ threat level 10 before acting**. In a real situation the human could have been d
 
 If a prompt change feels like it's "softening" the Familiar's ability to act — STOP. That is exactly the kind of edit that caused the 1.5-hour failure. Ask the human before shipping it.
 
+## ⚠️ Safety-critical code requires human sign-off
+
+The proactivity section above protects *prompts*. This section protects the *code* in the same paths. Any **behavioral** change — not a relocation, not a comment, not a rename — in these files requires explicitly asking the human before shipping:
+
+- `crisis-signals.js` — what counts as a distress signal, the tier weights, the damping rules.
+- `threat-tracker.js` — decay rate, caps, the off-switch semantics.
+- `silence-triage-loop.js` — tier gates, cool-down clamps, when deliberation fires.
+- `cerebellum.js` — the triage deliberation prompt, trusted-contact delivery, escalation deadlines (`contactDeadlineFor`, `CONTACT_ESCALATION_DELAY_MS`), the no-covert-contact mirror.
+- The `[CARE CHECK]` assembly in `thalamus.js`.
+
+A pure relocation with byte-identical behavior is fine (add tests while you're in there). But if a change alters **when or whether the Familiar can act on a human's safety** — STOP and ask. The same failure mode that produced the 1.5-hour silence can be introduced in code as easily as in a prompt: a stricter gate, a longer clamp, a "sensible" extra condition. The human signs off on those, not you.
+
+## ⚠️ Graceful degradation is a rule, not a habit
+
+The codebase implements this consistently (Promise.allSettled fan-out in thalamus, per-loop kill switches, tools that degrade when entity-core is down) — but consistency by habit erodes. So it's a rule:
+
+- **No module may be able to take down the chat path.** A peer being down, a loop crashing, a tool throwing — none of these may surface as an error in the human's conversation. Absence renders as absence; failures become structured results inside the turn (see `executeToolCall` — it never throws into the chat path).
+- **Every new background loop ships with a hard off-switch** (env var) **in the same commit** — the `PROTO_FAMILIAR_*_DISABLED=1` pattern. No loop goes out with "we can add the switch later."
+- **Every new peer or channel adapter must fail independently.** One adapter failing never blocks the others (see `dispatchOutboxPush`); one MCP peer down never takes the other's context with it.
+- **Failures that matter are observable.** Delivery state is recorded on the item; triage decisions land in the event log; degraded peers log loudly at boot. Silent failure is the failure mode this whole section exists to prevent.
+
 ## ⚠️ Robust > cheap — never lead with the "cheapest meaningful fix"
 
 What we are building serves a person's continuity and care over time. Cheap fixes paper over the problem and accrue into a brittle system that fails the human at the moment they most need it not to.
@@ -245,6 +270,7 @@ the same code.
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.
 - **`entity-core` directory**: new installs land at `../entity-core`; pre-rename installs at `../entity-core-alpha` are still detected as a fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`, and `scripts/import-entity.js`. Keep both paths working.
+- **Significant memories are addressed by a composite `YYYY-MM-DD_slug` key** that entity-core's listings return but its read/update/delete tools do NOT accept — they want date + slug as separate params. This contract broke once already (the slug fix changed what listings return; the read seams kept rejecting it as "invalid date format"). Before touching anything that addresses a memory by date, read **"Significant memories — the composite-key contract"** in `docs/architecture.md`: one splitting point (`cerebellum.parseMemoryKey`), a table of seams that must move together, and the tests that guard it.
 - **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer scripts auto-detect `uv` and run `uv sync` to materialise the venv; Thalamus spawns Unruh as an MCP stdio child the same way it spawns entity-core. On clean shutdown, stdio children get EOF and exit.
 - **Autonomous loops**: three background workers run alongside the HTTP server. Each has a settings/env hard off-switch:
     - **Pondering** (`pondering-loop.js`) — picks an interest, ponders it, writes to the Familiar's Ponderings tome. Toggle in Settings → "Autonomous pondering"; scale via "Pondering interval scale"; hard-disable with `PROTO_FAMILIAR_PONDERING_DISABLED=1`.
