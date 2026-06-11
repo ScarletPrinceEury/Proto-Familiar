@@ -160,6 +160,27 @@ threat level 10 before acting**. In a real situation the human could have been d
 
 If a prompt change feels like it's "softening" the Familiar's ability to act — STOP. That is exactly the kind of edit that caused the 1.5-hour failure. Ask the human before shipping it.
 
+## ⚠️ Safety-critical code requires human sign-off
+
+The proactivity section above protects *prompts*. This section protects the *code* in the same paths. Any **behavioral** change — not a relocation, not a comment, not a rename — in these files requires explicitly asking the human before shipping:
+
+- `crisis-signals.js` — what counts as a distress signal, the tier weights, the damping rules.
+- `threat-tracker.js` — decay rate, caps, the off-switch semantics.
+- `silence-triage-loop.js` — tier gates, cool-down clamps, when deliberation fires.
+- `cerebellum.js` — the triage deliberation prompt, trusted-contact delivery, escalation deadlines (`contactDeadlineFor`, `CONTACT_ESCALATION_DELAY_MS`), the no-covert-contact mirror.
+- The `[CARE CHECK]` assembly in `thalamus.js`.
+
+A pure relocation with byte-identical behavior is fine (add tests while you're in there). But if a change alters **when or whether the Familiar can act on a human's safety** — STOP and ask. The same failure mode that produced the 1.5-hour silence can be introduced in code as easily as in a prompt: a stricter gate, a longer clamp, a "sensible" extra condition. The human signs off on those, not you.
+
+## ⚠️ Graceful degradation is a rule, not a habit
+
+The codebase implements this consistently (Promise.allSettled fan-out in thalamus, per-loop kill switches, tools that degrade when entity-core is down) — but consistency by habit erodes. So it's a rule:
+
+- **No module may be able to take down the chat path.** A peer being down, a loop crashing, a tool throwing — none of these may surface as an error in the human's conversation. Absence renders as absence; failures become structured results inside the turn (see `executeToolCall` — it never throws into the chat path).
+- **Every new background loop ships with a hard off-switch** (env var) **in the same commit** — the `PROTO_FAMILIAR_*_DISABLED=1` pattern. No loop goes out with "we can add the switch later."
+- **Every new peer or channel adapter must fail independently.** One adapter failing never blocks the others (see `dispatchOutboxPush`); one MCP peer down never takes the other's context with it.
+- **Failures that matter are observable.** Delivery state is recorded on the item; triage decisions land in the event log; degraded peers log loudly at boot. Silent failure is the failure mode this whole section exists to prevent.
+
 ## ⚠️ Robust > cheap — never lead with the "cheapest meaningful fix"
 
 What we are building serves a person's continuity and care over time. Cheap fixes paper over the problem and accrue into a brittle system that fails the human at the moment they most need it not to.
