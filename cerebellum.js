@@ -277,7 +277,7 @@ export function formatDeliveryNote(item, { hasPushChannel } = {}) {
 // (my human can only veto what they could have seen), falling back to
 // enqueue time when no push channel is configured or the push failed —
 // a dead adapter can never block escalation forever. Items created
-// before 0.5.0-alpha carry a precomputed contactDeadlineTs (enqueue
+// before 0.4.0-alpha carry a precomputed contactDeadlineTs (enqueue
 // clock) and are honored as-is.
 export const CONTACT_ESCALATION_DELAY_MS = Object.freeze({
   severe:   30 * 60_000,        // 30 minutes
@@ -296,7 +296,7 @@ export const DISPATCH_GRACE_MS = 10 * 60_000;
  * (push configured, delivery still pending, inside the grace window).
  */
 export function contactDeadlineFor(item, { pushConfigured, now = Date.now } = {}) {
-  // Pre-0.5.0 items: precomputed deadline, enqueue clock.
+  // Pre-0.4.0 items: precomputed deadline, enqueue clock.
   if (typeof item.contactDeadlineTs === 'number') return item.contactDeadlineTs;
   const delay = item.contactDelayMs;
   if (typeof delay !== 'number') return null;

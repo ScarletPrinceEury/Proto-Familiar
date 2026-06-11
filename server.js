@@ -1364,7 +1364,7 @@ app.delete('/api/entity/memories/:granularity/:date', async (req, res) => {
   const key = parseMemoryKey(date);
   if (!key) return badRequest(res, 'invalid date format');
   // An explicit ?slug= query wins over the composite key's slug (the
-  // pre-0.5.3 calling convention some callers still use).
+  // pre-0.4.1 calling convention some callers still use).
   const slug = req.query.slug || key.slug || undefined;
   const result = await deleteMemory({ granularity, date: key.date, instanceId: req.query.instanceId, slug });
   if (!result.ok) return gatewayDown(res, result.error);

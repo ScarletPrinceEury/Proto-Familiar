@@ -200,7 +200,7 @@ ack/cancel — see `memorization.js`.
 - `GET /api/outbox[?pending=1&limit=N]` — UI polls this; pending items are injected as assistant chat messages in the active session (since 0.3.9-alpha; before, they rendered as banners)
 - `POST /api/outbox/:id/acknowledge` — fired automatically by the client after each item is rendered into chat
 - `POST /api/outbox/clear-acknowledged`
-- Since 0.5.0-alpha every user-facing enqueue goes through
+- Since 0.4.0-alpha every user-facing enqueue goes through
   `cerebellum.enqueueAndDispatch`, which ALSO pushes the item to each
   configured push channel (today: the human's own Discord webhook,
   Settings → Trusted contacts → "My Discord webhook") and records the
@@ -294,7 +294,7 @@ Currently owns:
   what they could have seen), falling back to the enqueue time when no
   push channel is configured, the push failed, or no delivery record
   lands within `DISPATCH_GRACE_MS` — a dead adapter can never block
-  escalation forever. Pre-0.5.0 items with a precomputed
+  escalation forever. Pre-0.4.0 items with a precomputed
   `contactDeadlineTs` are honored as-is. Marks `delivered` *before*
   the async fire (double-delivery guard). All I/O injectable; covered
   by deterministic clock tests in `tests/cerebellum.test.mjs`.
@@ -727,6 +727,64 @@ is a pure helper; `tests/depth-inject.test.mjs` guards the
 load-bearing invariant *"messages[0..injectedAt-1] is the same
 reference as the input"* — without it, the prefix-cache claim is
 hollow.
+
+## Significant memories — the composite-key contract (regression guard)
+
+This contract broke once already, silently, as a side effect of a fix.
+Read this before touching ANYTHING that addresses a memory by date.
+
+**The entity-core contract** (source of truth: `packages/entity-core/src/tools/memory.ts` in Psycheros):
+
+- Significant memories are stored **one named file per milestone**:
+  `data/memories/significant/{date}_{slug}.md`
+  (e.g. `2026-06-11_why-melian-trusts-me.md`). The slug is mandatory in
+  practice — two slugless saves on the same date collide on `{date}.md`
+  and entity-core's merge-and-dedup destroys content (the original
+  "significant memories disappearing" bug).
+- `memory_list` returns significant entries with a **composite** `date`
+  field: `` slug ? `${date}_${slug}` : date ``.
+- `memory_read` / `memory_update` / `memory_delete` do **NOT** accept
+  the composite form — they validate `date` against
+  `/^\d{4}(-W\d{2}|(-\d{2})?(-\d{2})?)$/` and take `slug` as a
+  **separate optional parameter**. An update that reaches entity-core
+  without a slug relies on its fall-back-to-existing-slug behaviour to
+  avoid writing a bare `{date}.md` that *shadows* the real
+  `{date}_{slug}.md`.
+
+So the identifier a consumer **sees** (from listings) is not the
+identifier the write tools **accept**. Every seam between the two must
+split the composite key.
+
+**The single splitting point:** `cerebellum.parseMemoryKey(key)` →
+`{ date, slug | null }` or `null`. Splits at the FIRST underscore
+(dates never contain one; slugs may), and rejects slugs containing
+dots or slashes so a key can never smuggle path segments. Do not
+re-implement this split anywhere else.
+
+**The seams that must honor the contract** (all wired as of 0.4.1-alpha):
+
+| Seam | What it does |
+|---|---|
+| `GET/PUT/DELETE /api/entity/memories/:granularity/:date` (server.js) | Accepts the composite `:date`, splits via `parseMemoryKey`, passes `date` + `slug` separately to thalamus. **Never reintroduce a plain-date regex here.** |
+| `thalamus.readMemory` / `updateMemory` / `deleteMemory` | Pass `slug` through to entity-core's tools. `updateMemory` without the slug is the shadow-file hazard. |
+| `update_memory` / `delete_memory` executors (cerebellum.js) | Split the model-supplied key; their tool descriptions teach the `YYYY-MM-DD_slug` addressing. |
+| `save_memory` executor | Auto-derives the slug (`deriveMemorySlug`) and returns the composite key in its confirmation so the Familiar knows the address of what it just wrote. |
+| Knowledge editor (app.js) | Deliberately dumb: sends back whatever key the list returned. Keep it that way. |
+
+**How it broke the first time** (so it isn't repeated): originally,
+significant saves had no slugs — listings returned plain dates and the
+editor worked, but same-date saves destroyed each other. The slug fix
+(0.3.x) made *writes* safe, which changed what `memory_list` returns —
+and the read/edit/delete seams, still validating plain dates, started
+rejecting every new entry with `invalid date format` (found
+2026-06-11, fixed in 0.4.1-alpha). The lesson: the date+slug contract
+spans multiple seams across two repos; a change to how memories are
+*written* is also a change to how they are *addressed*, and every seam
+in the table above must move together.
+
+**The guard:** the `parseMemoryKey` suite + executor-hint tests in
+`tests/cerebellum.test.mjs`. If a refactor makes those tests awkward,
+that is the contract talking — update all seams together or stop.
 
 ## Autonomous loops — when and what
 

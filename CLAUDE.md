@@ -26,6 +26,10 @@ Process:
 When a major in-flight feature (e.g. Unruh) has its own dedicated branch and is the *only* thing the MINOR slot is being held for, do **not** bump MINOR mid-flight for ancillary work. Everything else — new endpoints, UX reworks, even refactors — bumps PATCH only. The minor slot is reserved for the feature's completion. The branch name
 itself signals which feature owns the next minor (e.g. on the `Unruh` branch, stay at `0.2.X-alpha` until Unruh is merged).
 
+### One milestone = one minor
+
+The MINOR number names a **milestone**, not a feature count: 0.2 = pre-Unruh, 0.3 = Unruh, 0.4 = Cerebellum. Multiple features that are all parts of the *same* milestone share ONE minor bump — the milestone landing is the `0.X.0`; everything else inside it (sub-features, follow-ups, fixes) bumps PATCH. Don't bump minor twice in one delivery push just because the table says "feature = minor"; ask "is this a new milestone, or more of the current one?" (The cerebellum push originally went 0.4.0 → 0.5.0 for server-side tools and channel adapters separately — both were Cerebellum, and the human collapsed them back to 0.4.x. That's the precedent.)
+
 When uncertain whether a change warrants a bump (formatting, comment only, whitespace), skip it. Otherwise bump.
 
 ## Entity-as-subject — the design value under everything
@@ -266,6 +270,7 @@ the same code.
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.
 - **`entity-core` directory**: new installs land at `../entity-core`; pre-rename installs at `../entity-core-alpha` are still detected as a fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`, and `scripts/import-entity.js`. Keep both paths working.
+- **Significant memories are addressed by a composite `YYYY-MM-DD_slug` key** that entity-core's listings return but its read/update/delete tools do NOT accept — they want date + slug as separate params. This contract broke once already (the slug fix changed what listings return; the read seams kept rejecting it as "invalid date format"). Before touching anything that addresses a memory by date, read **"Significant memories — the composite-key contract"** in `docs/architecture.md`: one splitting point (`cerebellum.parseMemoryKey`), a table of seams that must move together, and the tests that guard it.
 - **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer scripts auto-detect `uv` and run `uv sync` to materialise the venv; Thalamus spawns Unruh as an MCP stdio child the same way it spawns entity-core. On clean shutdown, stdio children get EOF and exit.
 - **Autonomous loops**: three background workers run alongside the HTTP server. Each has a settings/env hard off-switch:
     - **Pondering** (`pondering-loop.js`) — picks an interest, ponders it, writes to the Familiar's Ponderings tome. Toggle in Settings → "Autonomous pondering"; scale via "Pondering interval scale"; hard-disable with `PROTO_FAMILIAR_PONDERING_DISABLED=1`.

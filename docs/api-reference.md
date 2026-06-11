@@ -293,7 +293,7 @@ This is the audit trail for debugging the silence-triage system — you can see 
 | `llm_said_wait` | LLM deliberated and chose not to reach out this tick |
 | `acted` / (empty `reason` with `acted: true`) | The Familiar reached out |
 
-**`decision`** is `null` for ticks where the LLM wasn't called (low_threat / no_activity / too_recent / reached_out). For LLM-driven ticks it contains at minimum `{ action: "wait" | "reach_out", message }`. When the LLM proposed a deferred trusted-contact escalation, `decision.meta.pendingContact` holds `{ name, message, channel }` and `decision.meta.contactDelayMs` is the acknowledgement window in ms — the deadline clock starts at confirmed push delivery of the check-in, falling back to enqueue time (see `contactDeadlineFor` in cerebellum.js). Events logged before 0.5.0-alpha carry the old precomputed `contactDeadlineTs` instead.
+**`decision`** is `null` for ticks where the LLM wasn't called (low_threat / no_activity / too_recent / reached_out). For LLM-driven ticks it contains at minimum `{ action: "wait" | "reach_out", message }`. When the LLM proposed a deferred trusted-contact escalation, `decision.meta.pendingContact` holds `{ name, message, channel }` and `decision.meta.contactDelayMs` is the acknowledgement window in ms — the deadline clock starts at confirmed push delivery of the check-in, falling back to enqueue time (see `contactDeadlineFor` in cerebellum.js). Events logged before 0.4.0-alpha carry the old precomputed `contactDeadlineTs` instead.
 
 ---
 
@@ -737,7 +737,7 @@ The endpoints below back the **Knowledge editor** modal in the sidebar and the L
 
 #### Memory
 
-The `:date` segment accepts what `memory_list` actually returns: a plain date (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `YYYY-Www`) — or, for **significant** memories, the composite key `YYYY-MM-DD_slug` (one named file per milestone, e.g. `2026-06-11_why-melian-trusts-me`). The server splits the composite into the separate `date` + `slug` parameters entity-core's read/update/delete tools expect (since 0.5.3-alpha; before that, slugged keys were rejected with `invalid date format`).
+The `:date` segment accepts what `memory_list` actually returns: a plain date (`YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `YYYY-Www`) — or, for **significant** memories, the composite key `YYYY-MM-DD_slug` (one named file per milestone, e.g. `2026-06-11_why-melian-trusts-me`). The server splits the composite into the separate `date` + `slug` parameters entity-core's read/update/delete tools expect (since 0.4.1-alpha; before that, slugged keys were rejected with `invalid date format`).
 
 | Method & path | Purpose | Body / query |
 |---|---|---|
