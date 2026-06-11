@@ -66,22 +66,42 @@ Three capabilities, in order of importance:
 
 ## Data model
 
-### Registry storage — `village.json` (Proto-Familiar local, gitignored)
+### Registry storage — hybrid (entity-core canonical, local mirror for gating)
 
-The registry lives in Proto-Familiar, NOT entity-core. This is a
-deliberate exception to "state defaults to entity-core," for one
-safety-critical reason: **the gate must work when entity-core is down.**
-Gating is enforcement infrastructure for this embodiment, in the same
-class as the Tailscale gate and the threat tracker — if resolving "who
-may know what" required a live MCP round-trip, a degraded peer would
-either break chat (violates graceful degradation) or skip the gate
-(violates fail-closed). A local file does neither.
+**Decided 2026-06-11.** The registry is canonical in entity-core (the
+Village is part of the entity's world, and other embodiments should see
+the same Village), with a local mirror (`village.json`, gitignored) that
+is what Thalamus and Cerebellum actually read at runtime.
 
-What stays in entity-core: everything the Familiar *knows about* these
-people — relationship history, memories, graph nodes. The registry holds
-only routing + gating data: aliases, category membership, grant sets.
-The two link by name/graph-node reference, and the registry is the
-boring one.
+Why the mirror exists: **the gate must work when entity-core is down.**
+If resolving "who may know what" required a live MCP round-trip, a
+degraded peer would either break chat (violates graceful degradation)
+or skip the gate (violates fail-closed). The mirror makes the gate a
+local file read.
+
+Sync contract:
+
+- **Writes are write-through.** Every registry mutation goes to
+  entity-core first (via thalamus.js wrappers — single enforcement
+  point, as always), then to the mirror. If entity-core is down, the
+  write lands in the mirror with a `syncPending` flag and is replayed
+  on reconnect (same spirit as the outbox retry pattern).
+- **Boot pulls.** On startup, Proto-Familiar fetches the canonical copy
+  and overwrites the mirror if the canonical one is newer. Conflicts
+  resolve canonical-wins (the mirror is a cache, not a fork).
+- **Reads never touch MCP.** Gating reads the mirror, full stop. A
+  stale mirror is acceptable (it's the ward's own recent edits at
+  worst); an unavailable gate is not.
+- Storage mechanism in entity-core: a custom identity file holding the
+  registry JSON (written through `rewriteIdentitySection`/custom
+  category) — exact shape to be finalized in V1 against entity-core's
+  actual MCP surface.
+
+What stays in entity-core *as knowledge* (unchanged): everything the
+Familiar knows about these people — relationship history, memories,
+graph nodes. The registry holds only routing + gating data: aliases,
+category membership, grant sets. The two link by name/graph-node
+reference, and the registry is the boring one.
 
 ```json
 {
@@ -152,7 +172,8 @@ The gate operates on *classes of context*, mapping onto the blocks
 | Class | Today's source | Notes |
 |---|---|---|
 | `identityCore` | static block: Familiar self files | The Familiar's own personality — generally safe everywhere; the Familiar is themselves in every room. |
-| `identitySensitive` | static block: user/relationship files | Orientation, gender identity, health, legal name. **Outing risk lives here.** Gated at file level first (coarse), section level later. |
+| `identityBasic` | static block: user/relationship files, unmarked sections | Whole user/relationship files are **denied by default** for any non-ward audience; this grant admits their unmarked sections. |
+| `identitySensitive` | static block: sections marked sensitive | Orientation, gender identity, health, legal name. **Outing risk lives here.** Section-level from the start (decided 2026-06-11): a section carries a `<!-- gate: sensitive -->` marker (convention finalized in V3); marked sections additionally require this grant on top of `identityBasic`. Two-tier and fail-closed: no grant → no file; `identityBasic` only → file minus marked sections. |
 | `memoriesAll` / `memoriesShared` | RAG memory search | `shared` = only memories originating from sessions this audience attended. |
 | `graph` | knowledge graph excerpt | Contains relationship facts about third parties — gate whole block initially. |
 | `location` | user identity files / memories mentioning location | Doxxing risk. Mechanically: location-class content never fetched for ungated audiences. |
@@ -338,9 +359,9 @@ landing; sub-features inside it bump patch.
 
 | # | Scope | Notes |
 |---|---|---|
-| **V1** | Village registry: `village.json` store + `village.js` module, `/api/village/*` CRUD, Village UI tab, built-in categories, trustedContacts migration | No behavior change yet — pure data layer + UI |
-| **V2** | Session schema: location + participants fields, audience resolution module + tests, conversation-map (location→session) | Existing sessions untouched (absent fields = ward-private) |
-| **V3** | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | **Safety-critical: human sign-off on the gate semantics before merge** |
+| **V1** | Village registry: `village.js` module (local mirror + entity-core write-through sync + boot pull), `/api/village/*` CRUD, Village UI tab, built-in categories, trustedContacts migration | No behavior change yet — pure data layer + UI |
+| **V2** | Session schema: location + participants fields, audience resolution module + tests, conversation-map (location→session), web-session audience selector ("Chen is sitting next to me") | Existing sessions untouched (absent fields = ward-private) |
+| **V3** | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | **Safety-critical: human sign-off on the gate semantics before merge** |
 | **V4** | Discord gateway adapter: bot connect/resume, router, DM policy, guild mention-reply, per-location sessions end-to-end | The testbed the rest was built for |
 | **V5** | Per-location connections + rate limits | Small, additive |
 | **V6** | Village actions: `relay_message`, check-on-ward requests outside triage, ward double-check flows for commitments | Touches outreach surface — sign-off rule applies |
@@ -351,17 +372,14 @@ first external door opens in V4. Opening Discord before the gate exists
 would mean every guild channel sees ward-private context — the one
 sequencing mistake this design exists to prevent.
 
-## Open questions (need ward decisions)
+## Decisions (ward, 2026-06-11)
 
-1. **Registry home** — this doc proposes Proto-Familiar-local for
-   fail-closed gating (exception to the entity-core default). Confirm?
-2. **Static identity gating granularity** — V3 gates user/relationship
-   identity *files* coarsely (a file is in or out per category).
-   Section-level tagging (e.g. `#sensitive` markers inside files) is
-   more precise but needs entity-core cooperation. Coarse first?
-3. **Guild reply policy default** — reply only when @-mentioned
-   (recommended default), or also on name-match / free participation
-   per location?
-4. **Web UI sessions with villagers present** — out of scope for 0.5
-   (web stays ward-private), or should the ward be able to mark a web
-   session "Chen is sitting next to me"? (Cheap to add to V2 if wanted.)
+1. **Registry home: hybrid.** Canonical in entity-core, local mirror
+   for gating. See "Registry storage" above for the sync contract.
+2. **Identity gating: section-level from the start.** Two-tier
+   `identityBasic` / `identitySensitive` with in-file section markers;
+   convention finalized in V3. Fail-closed at both tiers.
+3. **Guild reply policy: only when @-mentioned** by default; the ward
+   can loosen specific locations.
+4. **Web-session audience: yes, in V2.** The ward can mark a browser
+   session as having villagers present, applying the same gates.
