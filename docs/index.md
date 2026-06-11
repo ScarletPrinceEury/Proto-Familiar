@@ -15,6 +15,7 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 | [Entity-Core](entity-core.md) | Identity layer, memory enrichment, and MCP bridge |
 | [Unruh — Design](unruh-design.md) | The temporal-context module: schedule + interest layers, weights and decay, proactive messaging |
 | [Cerebellum — Design](cerebellum-design.md) | The motor module: tool dispatch, the server-side loop, channel adapters, escalation and the veto window |
+| [Village Support — Design](village-support-design.md) | The 0.5 milestone: villager registry, audience-gated knowledge, multi-channel sessions, Discord gateway |
 | [Tomes](tomes.md) | World Info engine — multi-tome knowledge bases, activation, injection, recursion, groups |
 | [How to Write a Good Tome](tome-writing-guide.md) | Craft guide for authoring Tome entries — keyword design, content wording, trigger types |
 | [Sessions & Memorization](sessions.md) | Session lifecycle, logging, and automatic memory extraction |

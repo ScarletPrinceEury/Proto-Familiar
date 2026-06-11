@@ -103,6 +103,8 @@ ponderings injection, care-check framing) and as background loops
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
+├── village.js               Village registry (V1) — categories/grant sets, villagers/aliases, locations; local mirror + entity-core write-through sync (see docs/village-support-design.md)
+├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
 ├── memorization.js          Persistent per-session memorization queue + worker
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
@@ -190,6 +192,12 @@ ack/cancel — see `memorization.js`.
 - `GET /api/temporal/reminders/health` — observability on the loop
 - `GET /api/temporal/ponderings[?limit&sinceDays]` + DELETE
 - `POST /api/ponderings/intents/acted-on` — mark a deferred intent as filed (body: `{ uid, index }`); called by the `acknowledge_deferred_intent` LLM tool
+
+**Village surface (V1 — registry only; gating lands in V3):**
+- `GET /api/village` — full registry (categories + villagers + locations, normalized)
+- `POST /api/village/categories` + `PATCH /api/village/categories/:id` + `DELETE /api/village/categories/:id?reassignTo=` — built-ins not deletable; Strangers locked
+- `POST /api/village/villagers` + `PATCH /api/village/villagers/:id` + `DELETE /api/village/villagers/:id`
+- `POST|PATCH|DELETE /api/village/locations` — keyed by body `key` (location keys contain `:`)
 
 **Threat surface:**
 - `GET /api/threat` — current tier + weight + last_touched + disabled
@@ -466,6 +474,13 @@ thalamus.enrich(userMessage, { liveTurn: true })
    │     └── handoff (session-end note)                   │  - interests
    ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
    └── getThreat()           ──► local file read          ┘  - [Temporal Context]
+       │
+       │  injection-guard.js is available but NOT applied to entity-core /
+       │  Unruh content — those are trusted first-party systems. The guard
+       │  is reserved for genuinely external ingestion points (web search
+       │  results, Discord / channel-adapter messages) that do not yet exist.
+       │  When those are built, sanitizeExternal() goes on the inbound
+       │  boundary of each adapter, not on the recall path of own memory.
        │
        ▼
 Prompt assembly (see "Prompt assembly" below)
