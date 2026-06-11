@@ -5018,22 +5018,34 @@ function closeKnowledgeModal() {
 // Restore a persisted size for a `.modal-resizable` element and persist
 // future resizes. Idempotent — repeat calls re-apply the saved size but
 // only install one ResizeObserver per element.
+// On touch/mobile the CSS media query handles sizing; skip the restore
+// so a desktop-sized localStorage value can't override it via inline style.
 const _resizableBound = new WeakSet();
+const _isMobileViewport = () => window.matchMedia('(max-width: 767px)').matches;
 function bindResizableModal(elId, storageKey) {
   const el = $(elId);
   if (!el) return;
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (raw) {
-      const { w, h } = JSON.parse(raw);
-      if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
-      if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
-    }
-  } catch {/* ignore */}
+  if (_isMobileViewport()) {
+    // Strip any inline size so the CSS media-query rules take full control.
+    // Without this a desktop-saved localStorage value (written as inline style
+    // on a previous open) would override the `width: 100%; height: 88vh` rules.
+    el.style.removeProperty('width');
+    el.style.removeProperty('height');
+  } else {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const { w, h } = JSON.parse(raw);
+        if (typeof w === 'number' && w > 0) el.style.width  = `${w}px`;
+        if (typeof h === 'number' && h > 0) el.style.height = `${h}px`;
+      }
+    } catch {/* ignore */}
+  }
   if (_resizableBound.has(el) || typeof ResizeObserver === 'undefined') return;
   _resizableBound.add(el);
   let saveT = 0;
   const ro = new ResizeObserver(entries => {
+    if (_isMobileViewport()) return; // don't overwrite desktop size with mobile layout dims
     clearTimeout(saveT);
     saveT = setTimeout(() => {
       const r = entries[0]?.contentRect;
