@@ -1,9 +1,8 @@
 # Village Support — design
 
-> Status: DESIGN — not yet implemented. This document is the contract for
-> the 0.5 milestone. Read it before touching any Village code; update it
-> in the same commit as any architectural change (same rule as
-> architecture.md).
+> Status: V1–V3 implemented (0.4.21-alpha). V4+ remain design-phase.
+> Read this before touching any Village code; update it in the same commit
+> as any architectural change (same rule as architecture.md).
 
 ## What it is
 
@@ -361,7 +360,7 @@ landing; sub-features inside it bump patch.
 |---|---|---|
 | **V1** | Village registry: `village.js` module (local mirror + entity-core write-through sync + boot pull), `/api/village/*` CRUD, Village UI tab, built-in categories, trustedContacts migration | No behavior change yet — pure data layer + UI |
 | **V2** | Session schema: location + participants fields, audience resolution module + tests, conversation-map (location→session), web-session audience selector ("Chen is sitting next to me") | Existing sessions untouched (absent fields = ward-private) |
-| **V3** | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | **Safety-critical: human sign-off on the gate semantics before merge** |
+| **V3** ✅ | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | Human sign-off obtained 2026-06-11; shipped 0.4.21-alpha |
 | **V4** | Discord gateway adapter: bot connect/resume, router, DM policy, guild mention-reply, per-location sessions end-to-end | The testbed the rest was built for |
 | **V5** | Per-location connections + rate limits | Small, additive |
 | **V6** | Village actions: `relay_message`, check-on-ward requests outside triage, ward double-check flows for commitments | Touches outreach surface — sign-off rule applies |
@@ -383,3 +382,59 @@ sequencing mistake this design exists to prevent.
    can loosen specific locations.
 4. **Web-session audience: yes, in V2.** The ward can mark a browser
    session as having villagers present, applying the same gates.
+
+### V3 gate decisions (human-approved 2026-06-11, shipped 0.4.21-alpha)
+
+5. **Fail-closed sentinel.** `WARD_PRIVATE = null` is the sentinel for
+   "no audience" (today's behavior). Distinct from `{}` (strangers floor
+   → everything denied). The empty-audience → ward-private rule means all
+   existing sessions with no participants are unchanged.
+6. **Intersection/union rule.** Multi-category villager → union of their
+   category grants (most-permissive per key). Room audience → intersection
+   across all participants (most-restrictive per key). Scalar grants
+   (memories/schedule/contacts) use ordered ladders; unknown values snap to
+   the floor.
+7. **Section markers.** In-file `<!-- gate: CLASS -->` … `<!-- /gate -->`
+   blocks gate sub-sections without file fragmentation. Known classes:
+   `sensitive` → `identitySensitive`, `health` → `health`,
+   `location` → `location`. Unknown class → fail-closed (strip).
+   Markers are stripped server-side before the LLM sees them; in ward-private
+   sessions they appear as inert HTML comments. No conflict with entity-core
+   memory/node/edge creation (markers are in identity files, not in anything
+   that feeds memorization prompts).
+8. **Full grant vocabulary.** `identityBasic`, `identitySensitive`,
+   `health`, `location`, `memories` (none/shared/all), `graph`,
+   `schedule` (none/coarse/full), `wardPresence`, `contacts`
+   (none/care-visible/all). `careState` is hardcoded never-grantable —
+   it never appears in category grants, and ponderings/deferredIntents/
+   surfaceCandidates/careCheck blocks are skipped for any gated session.
+9. **Gate-before-fetch.** Ungranted classes are never queried —
+   `memory_search`, `graph_node_search`, and `temporal_context` are skipped
+   entirely when the audience doesn't grant them. Content never enters the
+   process, can't leak via formatting bugs, and we don't pay tokens for it.
+   Identity user/rel/custom files are excluded entirely if `identityBasic`
+   is absent, with per-section stripping applied inside when it is present.
+
+### Section marker convention for identity files
+
+To gate a section in an identity file, wrap it:
+```
+<!-- gate: health -->
+Medical details, diagnosis history, treatment notes, etc.
+<!-- /gate -->
+```
+
+```
+<!-- gate: sensitive -->
+Legal name, orientation, gender identity, other sensitive personal data.
+<!-- /gate -->
+```
+
+```
+<!-- gate: location -->
+Physical address, frequent locations, daily movement patterns.
+<!-- /gate -->
+```
+
+Multiple markers may appear in the same file. Content outside any marker
+is controlled by `identityBasic` (the whole-file gate).

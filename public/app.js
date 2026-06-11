@@ -1734,6 +1734,11 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       // M8: previous user-message timestamp so the server can compute
       // idle duration for bookmark surfacing.
       ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      // V3: session audience for knowledge gating. Only sent when there
+      // are actual participants or a location set.
+      ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
+          ? { sessionAudience: state.sessionAudience }
+          : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -1929,6 +1934,9 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
           ? { userMessage: userInput }
           : {}),
       ...(prevUserMessageAt ? { lastUserMessageAt: prevUserMessageAt } : {}),
+      ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
+          ? { sessionAudience: state.sessionAudience }
+          : {}),
       ...toolLoopPayload(),
     }),
   });

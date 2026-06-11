@@ -85,6 +85,7 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
+import { resolveAudience, WARD_PRIVATE } from './audience.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -196,7 +197,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -283,13 +284,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         .catch(err => console.error('[threat]   record threw:', err?.message ?? err));
     }
   }
+  // V3: resolve session audience to an effective grants object before
+  // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
+  // rather than blocking the chat. Audience only applies on the full path.
+  let audienceGrants = WARD_PRIVATE;
+  if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
+    try {
+      const registry = await getVillageRegistry();
+      audienceGrants = resolveAudience(sessionAudience, registry);
+    } catch (err) {
+      console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
+    }
+  }
+
   // liveTurn: only the full chat path may reconcile state (consume the
   // surfaced session handoff, demote standing values whose entity-core
   // anchor vanished). 'static' fetches persona only (handoff summariser);
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
