@@ -610,7 +610,7 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
     if (ch && typeof ch.name === 'string' && typeof ch.message === 'string' && ch.message.trim()) {
       const match = contacts.find(c => c.name === ch.name);
       if (match) {
-        const delayMs = CONTACT_ESCALATION_DELAY_MS[threat.tier] ?? CONTACT_ESCALATION_DELAY_MS.moderate;
+        const delayMs = CONTACT_ESCALATION_DELAY_MS[threat.tier] ?? CONTACT_ESCALATION_DELAY_MS.severe;
         out.meta = {
           pendingContact: {
             name:    ch.name,
@@ -1564,6 +1564,7 @@ export async function runToolCallLoop({
   executeTool = executeToolCall,
   toolCtx     = {},
   maxRounds   = MAX_TOOL_ROUNDS,
+  signal,
 }) {
   if (typeof callUpstream !== 'function') throw new Error('callUpstream is required');
   let currentMsgs    = baseMessages;
@@ -1571,6 +1572,7 @@ export async function runToolCallLoop({
   let   data         = null;
 
   for (let round = 0; round <= maxRounds; round++) {
+    if (signal?.aborted) break;
     const payloadMessages = timeAnchor
       ? [...currentMsgs, { role: 'system', content: timeAnchor }]
       : currentMsgs;
