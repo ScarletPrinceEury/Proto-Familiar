@@ -1,11 +1,18 @@
 # Proto-Familiar canonical-self store — design (milestone: "Phylactery")
 
-Status: **proposal / not yet built.** This doc is the shape we react to before any code
-lands. It unifies several things we'd been circling — autonomous memorization, the
-outgoing-message filter (third security gate), the `memories: 'shared'` unlock, richer
-person records, and a caretaker-grade memory schema — under **one** capability:
-Proto-Familiar owning its entire canonical self in a single, RAG-based, audience-aware,
-in-tree store that **replaces entity-core**.
+Status: **build spec — design locked, ready to build.** The shaping is done; this doc is the
+instruction the implementation follows. It unifies several things we'd been circling —
+autonomous memorization, the outgoing-message filter (third security gate), the
+`memories: 'shared'` unlock, richer person records, and a caretaker-grade memory schema — under
+**one** capability: Proto-Familiar owning its entire canonical self in a single, RAG-based,
+audience-aware, in-tree store that **replaces entity-core**.
+
+**How to read it as a build instruction:** §1–§3 are the *what & why* (decision, current state,
+target shape); §4 is the **build sequence** (pillars A–I, dependency-sorted); §5–§8 are the
+per-area specs those pillars implement; §9 is the decided/open ledger — the "open" items are
+human-sign-off **knobs**, each gated to the pillar that consumes it, **none blocking Pillar A**;
+§10 is the rationale. Anywhere the Familiar reads a prompt or tool description, the text is
+first-person per CLAUDE.md — that convention is not optional in this milestone.
 
 Naming note: named by the human — **Phylactery**. A phylactery is the vessel that holds a
 soul, and here that's literal: Phylactery holds the *whole* canonical self — identity, the
@@ -414,7 +421,16 @@ dynamic injects) may sit above it, or the cached prefix breaks earlier than the 
 ## 4. Pillars (one milestone, phased)
 
 Per CLAUDE.md a milestone owns one MINOR slot; landing = `0.6.0`, sub-features bump PATCH.
-(Working assumption — human confirms the slot.)
+(Working assumption — human confirms the slot, §9.)
+
+**Build order (dependency-sorted): A → B → G → (C, F) → (D, E) → H → I.** `A` stands up the
+service and is the **only hard prerequisite** for everything else — it can start now. `B` puts it
+in thalamus's slot (and stops spawning entity-core). `G` lands the villager / `remember` layer
+*before* `C`, because `C`'s memorization runs the `remember` retention gate. `C` (live
+memorization) and `F` (one-time migration) both fill the store and can overlap. `D` (outgoing
+filter) and `E` (`shared` unlock) ride a populated, tagged store, so they come after data exists.
+`H` wires the lifecycle loops (consolidation, hygiene, export). `I` repoints the knowledge-manager
+UI and surfaces the new fields. Each pillar ships its off-switch in the same commit (CLAUDE.md).
 
 - **A. Stand up the service.** `./phylactery/` MCP server reimplementing entity-core's whole
   job: SQLite + `sqlite-vec` store, local embedder (`sentence-transformers` /
@@ -1104,6 +1120,36 @@ people new things is normal and good; the hard gate stays the `audience` check. 
 `knownTo` answers "does this person know *this fact*?" — the same epistemic humility, at two
 scopes.
 
+### 8.6 Record field reference (the canonical record shape)
+
+A build-time index of the fields a Phylactery record carries, with the section that defines each
+(this table points; it does not redefine — the cited section is authoritative). A `narrative`
+record is the common case; `tracker_def` / `tracker_entry` add their own fields (§8.1).
+
+| Field | On | Meaning | Spec |
+|---|---|---|---|
+| `id` | all | stable id; **rides in on every recall/search result** so the Familiar can act on a record | §3 |
+| `kind` | all | `narrative` \| `tracker_def` \| `tracker_entry` | §8.1 |
+| `register` | narrative | episodic (default) \| `me` \| `ward` — the graduation axis, **separate from granularity** | §3 hygiene |
+| `granularity` | episodic narrative | `daily…significant` — the rollup tier (unchanged from entity-core) | §2, §3 |
+| `content` | narrative | embedded free text (the recalled body) | §3 |
+| `audience` | all | min audience level allowed to hear it (`ward-private` or category id) — disclosure gate | §3 |
+| `subjects` | narrative | villagerId(s) the fact is about — drives `mem_purge_by_villager` and conditional surfacing | §3 deletion |
+| `createdAt` / `updatedAt` | all | timestamps | §3 |
+| `careWeight` | all | `high` (floor + pin) \| `low` \| unset — salience; gates decay **and** graduation | §8.2 |
+| `confidence` | all | 0–1 | §8.2 |
+| `provenance` | narrative | `told-directly` \| `inferred` \| `observed-pattern` | §8.2 |
+| `lastConfirmedAt` | narrative | recency-of-confirmation; powers "as of last month" / re-ask | §8.2 |
+| `source` | all | `{ author, via, at, originalId? }` — authorship/provenance; observability, not a gate | §8.2 |
+| `knownTo` | narrative | `[{ who, since?, source? }]` — who already knows (epistemic, not policy) | §8.5 |
+| *embedding* | narrative | 384-dim `all-MiniLM-L6-v2` vector (local) | §3 |
+| `composite key` | significant narrative | `YYYY-MM-DD_slug` addressing — **preserved as-is** | §6 seam inventory |
+
+The villager dossier (`remember`, `relationToFamiliar`, `pronouns`, `relationToWard`,
+`commStyleNotes`, `notes`, `graphNodeId`) lives on the **Village record**, not the memory
+record — linked by `subjects` / `villagerId` (§7). The graph node carries only
+`properties.villagerId` (§7).
+
 ---
 
 ## 9. Open decisions (human sign-off)
@@ -1139,9 +1185,10 @@ scopes.
 - **Identity & ward hygiene (§3 "Ongoing operation"):** the always-injected `identity` + `ward`
   blocks are drained by a **Familiar-led, ward-consulted** audit (rides consolidation) that
   graduates no-longer-front-of-mind detail into two new terminal memory categories, `me` and
-  `ward` (siblings to `significant`). Graduated records decay, never auto-delete, and can be
-  pulled back; **care-critical (`careWeight: high`) is pinned and never graduates.** The `user`
-  identity block is **renamed `ward`** (applied at migration, §6 Phase 1).
+  `ward` (a separate `register` axis — see the next item — not granularity tiers). Graduated
+  records decay, never auto-delete, and can be pulled back; **care-critical (`careWeight: high`)
+  is pinned and never graduates.** The `user` identity block is **renamed `ward`** (applied at
+  migration, §6 Phase 1).
 - **`me` / `ward` typing (§3 hygiene):** a **separate axis** from granularity — a distinct record
   field (working name `register`), *not* values in `VALID_MEMORY_GRANULARITIES`. The granularity
   enum stays `daily…significant` untouched; episodic memory is addressed by granularity, graduated
@@ -1163,6 +1210,8 @@ scopes.
 4. **Reliability bar (§3):** as the canonical-self store, Phylactery being down is more serious
    than a peer outage. Confirm "degrade to absent = run without self-memory, turn still
    succeeds" is the intended posture, and whether a stricter health/restart policy is wanted.
+   *(Recommended: keep degrade-to-absent as the floor — never fail the turn — plus auto-restart
+   with backoff on the spawn, as entity-core had, so absence is brief rather than silent.)*
 5. **Filter threshold + retry budget (§5):** similarity cutoff, rewrite-loop count, and the
    safe-refusal fallback wording.
 6. **`remember` category taxonomy (§7):** confirm the starting set.
@@ -1183,6 +1232,13 @@ scopes.
     Dynamic-injection depth stays at the current default of **4** (decided — salience/flow knob,
     not a cache knob). The `me` / `ward` graduation thresholds (when a block is "too large") ride
     the same consolidation-cadence knob as item 8.
+
+**Gating to pillars:** none of the open items block **Pillar A** (stand up the service) — its
+schema, stack, and storage shape are all decided. Each open knob is due before the pillar that
+consumes it ships: items 2–3 before **F** (migration), 5 before **D** (filter), 6 before **C/G**
+(`remember`), 7 before **G**, 8 + 11 before **H** (lifecycle), 9 before **H**'s export, 10 is
+**post-milestone**. Build can start; the knobs land just-in-time.
+
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
 ship only with explicit human approval of the behaviour. **The graduation-eligibility rule
