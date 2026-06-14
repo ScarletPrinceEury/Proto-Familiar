@@ -475,6 +475,46 @@ then removes the handled IDs from the local file.
 
 **Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
 
+### Migration: entity-core → Phylactery (Pillar F)
+
+One-time, snapshot-first, idempotent conversion run via:
+
+```
+npm run import-entity -- --from /path/to/entity-core [--yes]
+```
+
+`scripts/import-entity.js` resolves the source data directory (accepts
+both an entity-core root with `src/` + `data/`, or a bare data dir with
+`self/` / `memories/` / `graph.db`), confirms with the operator, then
+invokes the Python migration module:
+
+```
+cd phylactery/ && uv run python -m phylactery.migrate_from_entity_core \
+    --source <sourceDataDir>
+```
+
+`phylactery/src/phylactery/migrate_from_entity_core.py` phases:
+
+- **Phase 0** — Snapshots Phylactery before any writes (recovery baseline via
+  `snapshot.auto_snapshot`). Safe to run multiple times: already-migrated records
+  (matched by `source_json.originalId`) are skipped.
+- **Phase 1a** — Identity `.md` files from `self/`, `user/` (→ `'ward'` category),
+  `relationship/`, `custom/` are inserted into `identity_files` with
+  `audience='ward-private'`.
+- **Phase 1b** — Memory `.md` files from all five tiers (`daily/weekly/monthly/
+  yearly/significant/`) are inserted into `memories`, date-key preserved, with
+  `audience='ward-private'`.
+- **Phase 1c** — `graph.db` nodes and edges are inserted into `graph_nodes` /
+  `graph_edges` with `audience='ward-private'`. Schema columns are probed
+  gracefully; missing `graph.db` or unrecognised schema is skipped with a warning.
+- **Phase 2** — Prints `type='person'` nodes for manual villager-match review.
+  No auto-merge of person nodes ↔ villagers.
+
+The `identity_files.category` rename (`'user'` → `'ward'`) is enforced at
+migration time (Phase 1a) and by SQL migration `0003_pillar_f_ward_rename.sql`
+for any pre-existing rows. After migration, entity-core is not started;
+Phylactery is the sole canonical store.
+
 ### `public/app.js` — frontend (one file)
 
 - **State + persistence** as before.

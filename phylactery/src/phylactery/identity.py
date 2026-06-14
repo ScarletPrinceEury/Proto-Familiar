@@ -19,13 +19,13 @@ from phylactery.db import get_conn, new_id, now_iso
 from phylactery.snapshot import auto_snapshot
 
 # Canonical file orderings (mirrors entity-core's context.ts + CLAUDE.md).
-# 'user' becomes 'ward' at the Pillar F rename — preserved here for compat.
+# 'user' was renamed to 'ward' at Pillar F — rename complete.
 SELF_ORDER = [
     "base_instructions.md",
     "my_identity.md", "my_persona.md", "my_personhood.md",
     "my_wants.md", "my_mechanics.md",
 ]
-USER_ORDER = [
+WARD_ORDER = [
     "user_identity.md", "user_life.md", "user_beliefs.md",
     "user_preferences.md", "user_patterns.md", "user_notes.md",
 ]
@@ -35,11 +35,11 @@ RELATIONSHIP_ORDER = [
 
 _ORDER_MAP: dict[str, list[str]] = {
     "self": SELF_ORDER,
-    "user": USER_ORDER,
+    "ward": WARD_ORDER,
     "relationship": RELATIONSHIP_ORDER,
 }
 
-VALID_CATEGORIES = {"self", "user", "relationship", "custom"}
+VALID_CATEGORIES = {"self", "ward", "relationship", "custom"}
 
 
 def _sort_key(filename: str, order: list[str]) -> tuple[int, str]:
@@ -65,7 +65,7 @@ def get_all(conn: sqlite3.Connection | None = None, audience: str = "ward-privat
             "SELECT category, filename, content, prompt_label FROM identity_files ORDER BY sort_order, filename"
         ).fetchall()
 
-        buckets: dict[str, list[dict]] = {"self": [], "user": [], "relationship": [], "custom": []}
+        buckets: dict[str, list[dict]] = {"self": [], "ward": [], "relationship": [], "custom": []}
         for r in rows:
             cat = r["category"]
             if cat not in buckets:

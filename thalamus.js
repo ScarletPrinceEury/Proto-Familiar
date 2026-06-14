@@ -4,7 +4,7 @@
  * Mirrors Psycheros's context-building approach (src/entity/context.ts +
  * src/rag/context-builder.ts):
  *
- *   1. All identity categories (self, user, relationship, custom), each file
+ *   1. All identity categories (self, ward, relationship, custom), each file
  *      wrapped in its promptLabel XML tags and sorted in canonical order.
  *   2. base_instructions.md placed first if present (no section header).
  *   3. Relevant memories formatted with score and source.
@@ -296,7 +296,7 @@ const SELF_ORDER = [
   'my_identity.md', 'my_persona.md', 'my_personhood.md',
   'my_wants.md', 'my_mechanics.md',
 ];
-const USER_ORDER = [
+const WARD_ORDER = [
   'user_identity.md', 'user_life.md', 'user_beliefs.md',
   'user_preferences.md', 'user_patterns.md', 'user_notes.md',
 ];
@@ -1275,7 +1275,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           ...f,
           content: stripGatedSections(f.content ?? '', audience),
         }));
-        userContent = identitySection(applyMarkers(id.user ?? []), USER_ORDER);
+        userContent = identitySection(applyMarkers(id.ward ?? []), WARD_ORDER);
         relContent  = identitySection(applyMarkers(id.relationship ?? []), RELATIONSHIP_ORDER);
         // village-registry.md is the canonical Village registry (routing +
         // gating data synced from village.js) — machine state, not identity
@@ -1515,7 +1515,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     const staticSections = [];
     if (baseContent)   staticSections.push(baseContent);
     if (selfContent)   staticSections.push(`---\nMy self files (from identity/self/ directory):\n\n${selfContent}`);
-    if (userContent)   staticSections.push(`---\nFiles on my human (from identity/user/ directory):\n\n${userContent}`);
+    if (userContent)   staticSections.push(`---\nFiles on my human (from identity/ward/ directory):\n\n${userContent}`);
     if (relContent)    staticSections.push(`---\nRelationship files (from identity/relationship/ directory):\n\n${relContent}`);
     if (custContent)   staticSections.push(`---\nCustom files (from identity/custom/ directory):\n\n${custContent}`);
 

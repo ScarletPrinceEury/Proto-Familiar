@@ -669,7 +669,7 @@ export const MAX_TOOL_ROUNDS = 5;
 // Validation shared by the HTTP routes (server.js) and the executors
 // below — one source of truth for what counts as a valid write.
 export const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
-export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
+export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'ward', 'relationship', 'custom']);
 export const VALID_FILENAME_RE           = /^[\w]+\.md$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -804,11 +804,11 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: ward, filename: ward_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
+          category: { type: 'string', enum: ['ward', 'relationship'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
@@ -916,7 +916,7 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['self', 'user', 'relationship', 'custom'], description: 'Identity file category.' },
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'Target filename, e.g. user_notes.md.' },
           section:  { type: 'string', description: 'The markdown heading of the section to rewrite (without leading #s), e.g. "Sleep patterns".' },
           content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },

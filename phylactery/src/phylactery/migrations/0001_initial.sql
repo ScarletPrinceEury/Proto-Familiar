@@ -11,12 +11,12 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 -- ── Identity files (always-injected; not vector-retrieved) ────────────────────
--- Category 'user' in entity-core will become 'ward' at the Pillar F rename.
--- Until then, code and data use 'user' for back-compat.
+-- Category 'user' was renamed to 'ward' at Pillar F.
+-- All new records use 'ward'; migration 0003 converted existing rows.
 
 CREATE TABLE IF NOT EXISTS identity_files (
   id           TEXT PRIMARY KEY,
-  category     TEXT NOT NULL,   -- 'self' | 'user' | 'relationship' | 'custom'
+  category     TEXT NOT NULL,   -- 'self' | 'ward' | 'relationship' | 'custom'
   filename     TEXT NOT NULL,
   content      TEXT NOT NULL DEFAULT '',
   prompt_label TEXT,            -- XML tag for prompt wrapping (e.g. 'my_identity')

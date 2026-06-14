@@ -661,14 +661,15 @@ function toggleFallback(id, enabled) {
 }
 
 /**
- * Designate (or clear) the connection whose API key entity-core uses.
+ * Designate (or clear) the connection whose API key Phylactery uses.
  * Single-select: setting this on one connection clears it from any
  * other. Setting it to the currently-designated id clears the
  * designation entirely (so the same toggle button works for both
  * directions). server.js compares old vs new on PUT /api/settings and
- * respawns entity-core when this (or the pointed-at connection's key)
+ * respawns Phylactery when this (or the pointed-at connection's key)
  * changes — so the user sees the new key take effect on the next
  * chat message, no restart required.
+ * (Function name kept as setEntityCoreConnection until Pillar I.)
  */
 function setEntityCoreConnection(id) {
   if (state.entityCoreConnectionId === id) {
@@ -720,7 +721,7 @@ function renderConnectionsList() {
     info.className = 'conn-info';
     const primaryBadge   = isPrimary    ? '<span class="conn-badge">primary</span>' : '';
     const fallbackBadge  = (!isPrimary && isFallback) ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '';
-    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">entity-core</span>' : '';
+    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">Phylactery</span>' : '';
     info.innerHTML =
       `<div class="conn-name">${esc(conn.name)}${primaryBadge}${fallbackBadge}${entityBadge}</div>` +
       `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
@@ -744,20 +745,20 @@ function renderConnectionsList() {
     fbBtn.addEventListener('click', () => toggleFallback(conn.id, !isFallback));
     actions.appendChild(fbBtn);
 
-    // Entity-core designation: single-select across all connections. Tells
-    // the server which API key to pass to the entity-core child process
+    // Phylactery designation: single-select across all connections. Tells
+    // the server which API key to pass to the Phylactery child process
     // via ENTITY_CORE_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
-    // Independent of primary/fallback — you can point entity-core at any
+    // Independent of primary/fallback — you can point Phylactery at any
     // connection regardless of how the chat path uses it.
     const ecBtn = document.createElement('button');
     ecBtn.type = 'button';
-    ecBtn.textContent = isEntityCore ? '✓ entity-core' : '+ entity-core';
+    ecBtn.textContent = isEntityCore ? ‘✓ Phylactery’ : ‘+ Phylactery’;
     ecBtn.title = isEntityCore
-      ? 'Currently the API key source for entity-core (click to clear)'
-      : 'Use this connection’s API key for entity-core';
-    ecBtn.setAttribute('aria-label', isEntityCore
-      ? `Clear entity-core API-key designation from "${conn.name}"`
-      : `Use "${conn.name}" as entity-core API-key source`);
+      ? ‘Currently the API key source for Phylactery (click to clear)’
+      : ‘Use this connection\’s API key for Phylactery’;
+    ecBtn.setAttribute(‘aria-label’, isEntityCore
+      ? `Clear Phylactery API-key designation from "${conn.name}"`
+      : `Use "${conn.name}" as Phylactery API-key source`);
     ecBtn.setAttribute('aria-pressed', isEntityCore ? 'true' : 'false');
     ecBtn.addEventListener('click', () => setEntityCoreConnection(conn.id));
     actions.appendChild(ecBtn);
@@ -6246,7 +6247,7 @@ async function keLoadIdentity() {
     const data = await res.json();
     list.innerHTML = '';
     let any = false;
-    for (const category of ['self', 'user', 'relationship', 'custom']) {
+    for (const category of ['self', 'ward', 'relationship', 'custom']) {
       const files = data[category] ?? [];
       if (!files.length) continue;
       const header = document.createElement('div');
