@@ -349,7 +349,10 @@ until reviewed)? Safety-vs-utility — yours.
 7. **Caretaker extensions (§11): DECIDED** — all of 11.1–11.5 incorporated ✔, including
    `relationToFamiliar` (stance toward the Familiar; `unaware` as the floor) and
    `knownTo` (who's aware of a fact — an *awareness aid*, not a fourth hard gate).
-   Remaining detail: starting tracker types + care-profile field list.
+   11.1 tracker model DECIDED: ward-defined, Familiar-as-collaborator; blueprint
+   (`tracker_def`) + data (`tracker_entry`) two-record split; `dimensions` array for
+   multi-axis; six primitive shapes as building blocks. Setup UI / ingestion is a later
+   sub-feature. Remaining: care-profile field list (§11.3).
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the
 three gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the
@@ -464,35 +467,164 @@ the dignity / entity-as-subject stance, not bolted onto it.
 Phylactery isn't only recall — it's the substrate for the Familiar's *caretaker* role.
 A few shape decisions now keep that future open without building it all today.
 
-### 11.1 Two record kinds: narrative + tracker (forward-compatible NOW)
+### 11.1 Ward-defined trackers: blueprint + data (forward-compatible NOW)
 
 Reserve a `kind` discriminator on every Phylactery record from day one:
 
 - `kind: "narrative"` — the default RAG record (free-text, embedded, semantically
   recalled). Everything in §3 above.
-- `kind: "tracker"` — **structured, typed, time-stamped state.** The home for pantry
-  contents, mood, meds, hydration, sleep, symptoms, spending, energy/"spoons" —
-  anything tracked *over time* or *as inventory*.
+- `kind: "tracker_def"` — **a blueprint**, created collaboratively by the Familiar and
+  the ward. Defines *what* is tracked, *how* an entry looks, and *what to call things*.
+  Stable once created; queried to understand how to read entries.
+- `kind: "tracker_entry"` — **one data point** against a specific blueprint. Time-stamped,
+  sourced, optionally annotated. Many entries to one definition.
 
 Why here (not Unruh, not the graph): a tracker is *remembered state about the ward's
-life*, so it shares Phylactery's audience-tagging, persistence, and surface-into-
-context machinery. Unruh stays **temporal/scheduled** — a tracker can *spawn* an Unruh
-reminder ("milk expires tomorrow") but the inventory itself is Phylactery state. The
-graph stays **relational**.
+life*, so it shares Phylactery's audience-tagging, persistence, and surface-into-context
+machinery. Unruh stays **temporal/scheduled** — a tracker can *spawn* an Unruh reminder
+("milk expires tomorrow") but the inventory itself is Phylactery state. The graph stays
+**relational**.
 
-Tracker shape (sketch — full feature is later; reserving the shape is now):
+#### Design principle: the ward defines, the Familiar helps build
+
+Different people need fundamentally different trackers — and for some wards, the *shape*
+of a tracker matters as much as its existence. An ED-aware food tracker probably logs
+"ate breakfast" (boolean) rather than calories (would be harmful); a hygiene tracker for
+someone who struggles with executive function tracks *which specific tasks* matter to
+that person; a pantry tracker needs items and quantities; a mood tracker worth anything
+needs to capture the environmental factors that correlate for *this* person, not a
+generic scale.
+
+No fixed taxonomy can cover this. The robust structure is: **primitive schema shapes are
+building blocks the Familiar offers**, and the tracker itself is a contract the ward and
+Familiar design together, in the Familiar's own voice and with the ward's actual needs.
+
+The collaborative setup goes something like:
+1. Ward: "I'd like to track my mood / pantry / how often I shower / etc."
+2. Familiar asks what would be useful to capture — dimensions, scale, which tasks, what
+   unit makes sense — as many questions as needed, because questions are cheap and
+   a wrong schema wastes real data.
+3. Together they arrive at a definition. Familiar creates the `tracker_def` record.
+4. Entries are added against that definition over time.
+
+**But an open question is its own kind of barrier.** Many wards — especially
+neurodivergent ones — can be overwhelmed by a blank canvas. The Familiar should read
+this and shift: if the ward seems uncertain, *offer scaffolding first*. A menu of
+common starting points to anchor from is not a fixed taxonomy — it's a set of worked
+examples the ward can accept, modify, or reject:
+
+> *"Want me to suggest a few common ones? I can show you what other people track and
+> you can tell me which feel close, or use them as a jumping-off point."*
+
+Suggested example groups (not exhaustive — extensible over time):
+
+| Group | Examples |
+|---|---|
+| Wellbeing | mood (ordinal), energy/spoons (ordinal), anxiety level (ordinal), pain (ordinal) |
+| Sleep | hours slept (scalar), sleep quality (ordinal), wake time (event-log) |
+| Self-care | meals (boolean per slot, or event-log), hydration (scalar), hygiene tasks (boolean checklist), meds taken (boolean) |
+| Environment | weather (categorical), social contact (boolean), location (categorical) |
+| Practical | pantry / what's in the house (inventory), finances (scalar), errands done (event-log) |
+| Progress | habit streaks (boolean), goals worked on (event-log), wins (event-log) |
+
+The example groups exist for *the ward to browse* when they can't name what they want.
+They're also a reference for the Familiar when helping design dimensions — if a ward
+says "something like a mood tracker but also the weather," the Familiar already knows
+those are two dimensions (ordinal + categorical) and what a good prompt for each looks
+like.
+
+Ward can mix and match across groups, or start from an example and discard everything
+except the shape. The Familiar should not push any particular tracker — its job is
+to help the ward find what's useful to *them*, including knowing when the blank-canvas
+approach isn't working and pivoting to examples without making the ward feel bad about
+needing them.
+
+This is the Familiar acting as a thoughtful collaborator, not a form-filling wizard.
+The ward should be able to adjust the definition later (add a dimension, relabel a scale)
+— and the Familiar should notice when a definition isn't serving them well and ask.
+
+#### Blueprint schema (`tracker_def`)
 
 ```
-{ kind: "tracker", name: "mood",   trackerType: "ordinal",   subject: "ward",
-  scale: "1-5", entries: [{ value, at, source, note? }],      audience: "ward-private" }
-{ kind: "tracker", name: "pantry", trackerType: "inventory", subject: "ward",
-  items: [{ label, qty, unit, expiresAt?, addedAt }],          audience: … }
+{
+  kind: "tracker_def",
+  id: "tracker-<uuid>",
+  name: "my meals",                 // ward-chosen name
+  purpose: "make sure I've eaten today",   // why — helps the Familiar surface it usefully
+  subject: "ward",                  // who is being tracked
+  audience: "ward-private",         // disclosure gate (same as narrative records)
+
+  // single-dimension tracker
+  dataShape: "event-log",           // the primitive (see below)
+  unit?: "…",                       // label for the value if relevant
+
+  // OR — multi-axis tracker (any of the examples above)
+  dimensions?: [
+    { id: "mood",   label: "Mood",    shape: "ordinal",
+      scale: { min: 1, max: 10, lowLabel?: "awful", highLabel?: "great" } },
+    { id: "energy", label: "Energy",  shape: "ordinal",  scale: { min: 1, max: 5 } },
+    { id: "sleep",  label: "Sleep hrs", shape: "scalar" },
+    { id: "weather", label: "Weather", shape: "categorical",
+      options: ["sunny","overcast","rain","storm"] },
+    { id: "social", label: "Saw people", shape: "boolean" }
+  ],
+
+  prompt?: "How's your mood today? (1–10)",  // what the Familiar asks when logging
+  cadence?: "daily",                // optional prompting rhythm (feeds Unruh reminders)
+
+  careWeight?: "high",              // §11.2 — flags care-critical trackers (meds, meals)
+}
 ```
 
-`trackerType` candidates: `scalar | ordinal | inventory | event-log | boolean`.
-Building the tracking UI / ingestion is a later sub-feature; **the only commitment now
-is the `kind` field + the tracker shape, so narrative records never have to be migrated
-to make room.**
+`dataShape` / `shape` primitives — the building blocks the Familiar offers when helping
+a ward design their tracker:
+
+| Primitive | Use it for |
+|---|---|
+| `boolean` | yes/no (took meds, ate a meal, showered) |
+| `ordinal` | rated scale (mood 1–10, pain 1–5) |
+| `scalar` | freeform number (hours slept, coffees, steps) |
+| `categorical` | pick-one label (weather, context, activity type) |
+| `event-log` | "this happened" with optional freeform note (no value pressure) |
+| `inventory` | item list with quantities (pantry, meds on hand) |
+
+These are *shapes the Familiar knows how to work with*, not a menu of tracker types.
+The ward doesn't pick a shape — the Familiar picks the right shape(s) based on what
+the ward describes wanting to track.
+
+#### Entry schema (`tracker_entry`)
+
+```
+{
+  kind: "tracker_entry",
+  trackerId: "tracker-<uuid>",     // which definition this belongs to
+  at: "<ISO timestamp>",
+
+  // single-dimension:
+  value?: <number | boolean | string>,
+  item?: { label, qty, unit, expiresAt? },   // inventory delta
+
+  // multi-axis:
+  values?: { [dimensionId]: <number | boolean | string> },
+
+  source: "self-report" | "familiar-observed" | "inferred",
+  note?: "rough day but got through it",     // freeform annotation
+  confidence?: 0.0–1.0,                      // §11.2 caretaker metadata
+}
+```
+
+#### Scope of the commitment right now
+
+The full setup flow (UI, guided conversation, tracker-awareness in the Familiar's
+prompts) is a later sub-feature. **The only commitment now is:**
+
+- The `kind` discriminator: `narrative`, `tracker_def`, `tracker_entry`
+- The two-record model (blueprint + data) so entries never need retrofitting
+- The `dimensions` array so multi-axis trackers work from day one
+- The primitive shapes table above — named and stable so the Familiar can refer to them
+
+No tracker UI, no setup conversation scaffolding, no entry ingestion flow — those ship
+when the tracking sub-feature lands. The schema is locked so they land on solid ground.
 
 ### 11.2 Caretaker-grade metadata on every record — recommended
 
@@ -588,8 +720,12 @@ be a safety-critical sign-off decision, per CLAUDE.md.)
 exist?"; `knownTo` answers "does this person know *this fact*?" — the same epistemic
 humility, at two scopes.
 
-**Decided with the human:** 11.1–11.5 are all in. 11.1 (`kind` + tracker shape), 11.2
-(caretaker metadata), and 11.5 (`knownTo`) land in the Phylactery record schema from
-the start; 11.3 (ward care-profile) and 11.4 (both relationship axes, incl.
-`relationToFamiliar` with `unaware` as the floor) are part of the person/ward records —
-linking to Unruh / cerebellum where noted rather than duplicating.
+**Decided with the human:** 11.1–11.5 are all in. 11.1 (`kind` discriminator +
+`tracker_def` / `tracker_entry` two-record model + `dimensions` array + six primitive
+shapes — ward-defined, Familiar-as-collaborator), 11.2 (caretaker metadata: `provenance`,
+`confidence`, `careWeight`), and 11.5 (`knownTo`) land in the Phylactery record schema
+from day one. 11.3 (ward care-profile) and 11.4 (both relationship axes on villager,
+incl. `relationToFamiliar` with `unaware` as the floor) are part of the person/ward
+records — linking to Unruh / cerebellum where noted rather than duplicating. Tracker
+setup UI and entry ingestion are later sub-features; the schema is locked now so they
+land on solid ground.
