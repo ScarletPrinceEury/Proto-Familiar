@@ -214,6 +214,57 @@ What Deno/TS would have bought — a line-for-line port of entity-core's exact c
 we *extend* the design (audience tags, gating) regardless, and recall precision rides on the
 embedding model + scoring approach, both of which port cleanly.
 
+### Ongoing operation (write · consolidate · prune · back up)
+
+How the store lives over time. Guiding rule (CLAUDE.md "ride existing requests; gate in
+code"): cheap code does the crisp work, the LLM is folded into calls that already happen, and
+nothing fires on a blind fixed cadence.
+
+**Writing (memorization).** Rides the existing memorization worker, moved fully server-side
+(today it's browser-enqueued, so Discord/autonomous turns are never memorized). Triggers:
+session end + idle rollover, for **web and Discord** alike. The single extraction pass that
+already pulls topics also stamps each candidate with its `audience` (from the session's room
+tag), its `remember` category + subject villager (§7 retention gate), and caretaker metadata
+(§8.2) — no new per-turn request. Off-switch: `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
+
+**Consolidating.** Phylactery runs its **own** internal scheduler (mirroring entity-core's
+5-min cron, in Python/asyncio) — the service owns its data lifecycle rather than a JS loop
+reaching in. It rolls lower tiers up (daily→weekly→…→significant), summarizing with the
+**designated connection** (the only LLM use on the maintenance side; passed at spawn as
+entity-core's was). **Self-paced + gated:** a tier consolidates only when it has accumulated
+enough to be worth a pass, not on a fixed beat regardless of need. Off-switch:
+`PROTO_FAMILIAR_CONSOLIDATE_DISABLED=1`. Degrades safely — if it can't run, memory just stays
+un-rolled-up; never an error in the chat path.
+
+**Pruning / reevaluation (keeping the graph honest).** Three layers, cheapest first:
+- *Cheap code (no LLM):* dedup by stable id; merge nodes with identical canonical name +
+  `villagerId`; **decay** — low-`careWeight`, old, never-recalled records fade in retrieval
+  weight. `careWeight` (§8.2) shields care-critical facts: a film preference fades, a med
+  allergy never does.
+- *Judgment, folded into consolidation (no new loop):* the consolidation pass also flags
+  likely-duplicate nodes and **contradictions** ("X moved to Berlin" vs "X lives in Munich").
+  It does **not** silently auto-merge people — ambiguous merges surface to the ward, the same
+  irreversibility rule as migration (§6 Phase 2). Contradictions lower `confidence` / flag for
+  re-confirmation rather than guessing which is current.
+- *Natural re-confirmation, riding the chat turn (no request at all):* a fact carried into
+  context with an old `lastConfirmedAt` lets the Familiar simply *ask* ("are you still seeing
+  Dr. Okafor?") — reevaluation as ordinary care, backed by the metadata. Non-hesitant per §7
+  and CLAUDE.md: asking is welcome, silence is the failure mode.
+
+**Backing up / exporting (single file).** The store is SQLite + `sqlite-vec` — already one
+file. Export formalizes that into a portable, self-contained backup:
+- **Canonical export = `VACUUM INTO` a single `.sqlite` file** — atomic, lossless, inspectable
+  with any SQLite tool, restored by dropping it in place. Carries *everything*: identity,
+  graph, all memory, trackers, and the embeddings (same model = same 384-dim space, so vectors
+  travel as-is, no re-embed).
+- **Optional human-readable export** (JSON/JSONL + vectors) for archival/diffing — heavier,
+  later.
+- **User-accessible:** a "back up / restore my Familiar" surface; the same file moves a
+  Familiar between devices or seeds a fresh install. It's the user-facing face of Pillar A's
+  snapshot machinery, and the same artifact migration (§6 Phase 0) writes.
+- *Sensitivity:* the file is the whole ward-private self. Optional passphrase
+  encryption-at-rest for exports is an open decision (§9) — flagged, not yet specced.
+
 ---
 
 ## 4. Pillars (one milestone, phased)
@@ -245,13 +296,17 @@ Per CLAUDE.md a milestone owns one MINOR slot; landing = `0.6.0`, sub-features b
   same-or-lower-sensitivity records. The whole self is tagged, so the widening is uniformly
   safe.
 - **F. Migration — "convert current Familiars."** §6. One-time full conversion: snapshot →
-  convert entity-core (identity + graph + all tiers) into Phylactery → graph reconciliation
-  (dedup, villager links) → tome import → audience backfill → retire entity-core. Plus
-  external-source import via entity-loom.
+  convert entity-core (read its SQLite directly; identity + graph + all tiers, embeddings
+  carried over) into Phylactery → graph reconciliation (dedup, villager links) → tome import →
+  audience backfill → retire entity-core. Foreign-source import (entity-loom) is later/optional.
 - **G. Richer entity nodes + `remember` consent.** §7. Person-nodes link to a Village villager
   dossier (`properties.villagerId`); the villager gains pronouns / comm-style / freeform notes
   and a per-category `remember` retention gate — the *write-time* consent axis completing the
   store→recall→speak pipeline.
+- **H. Lifecycle & backup.** §3 "Ongoing operation." Server-side memorization triggers (web +
+  Discord); Phylactery's internal consolidation scheduler; the cheap-code hygiene pass (dedup /
+  decay) with consolidation-folded merge+contradiction detection; and the single-file
+  export/restore surface. Each background piece ships with its off-switch in the same commit.
 
 ---
 
@@ -309,13 +364,19 @@ recoverable copy.) entity-core's own snapshot tool captures its store; that snap
 rollback if conversion goes wrong, and is retained after retirement.
 
 ### Phase 1 — Convert the canonical self (entity-core → Phylactery)
-Read entity-core via its MCP (`identity_get_all`, `graph_*`, `memory_list/read`) and write the
-converted form into Phylactery:
+**Read entity-core's SQLite store directly** — we know its schema from source, so import needs
+no Deno runtime and works on a bare data dir (important for adopting a Psycheros-built core
+that doesn't run here). Spawning entity-core's MCP one last time (`identity_get_all`, `graph_*`,
+`memory_list/read`) is the fallback if the on-disk schema ever drifts. Write the converted form
+into Phylactery:
 - **Identity + user-identity** → Phylactery identity records (always-injected surface).
 - **Graph** (nodes/edges/properties) → Phylactery's graph store, structure preserved (`type`,
-  `properties`, edges). Re-embed node/memory content into the 384-dim space.
+  `properties`, edges).
 - **All memory tiers** (daily → significant) → Phylactery memory records, tier and timestamps
   carried over. Phylactery's consolidation takes over going forward.
+- **Embeddings carry over as-is.** entity-core stores 384-dim `all-MiniLM-L6-v2` vectors — the
+  *same* model/space Phylactery uses — so existing vectors are copied directly, not recomputed.
+  (Re-embed only records that lack a vector.)
 - entity-core's existing **confidence / lastConfirmedAt** fields map onto Phylactery's
   caretaker metadata (§8.2) — no information lost.
 Re-runnable and idempotent (dedup-upsert by stable id); adds only what's missing.
@@ -358,19 +419,23 @@ Once conversion is verified:
   longer read at runtime.
 
 ### Phase 6 — External sources ("feed logs in / merge other entity-cores")
-Leaning on entity-loom rather than hand-rolling parsers:
-- **An existing entity-core from another app (e.g. Psycheros):** run it through Phases 0–1 —
-  the same whole-self conversion — to fold its identity + graph + memory into Phylactery.
-  (One-time adoption, not an ongoing link; PF is the sole author afterward.)
-- **A foreign companion export** (ChatGPT, Claude, SillyTavern, character cards):
-  **entity-loom v0.3.6** converts these to an entity-core import package —
-  confidence-thresholded (`>= 0.7`), dedup-upsert, concrete-type-restricted extraction. Run
-  entity-loom → its package → Phase 1 conversion → Phases 2–4.
-- **Raw chat logs:** entity-loom's parsers exist; route through entity-loom, or build a
-  Phylactery-native importer that reuses those parsers. Same confidence-threshold posture.
+**An existing entity-core (e.g. from Psycheros) needs no entity-loom** — it's just Phase 1
+again (read its SQLite, convert, fold in). entity-loom only ever mattered for *foreign,
+non-entity-core* sources, and since we no longer consume entity-core packages natively, its role
+shrinks:
+- **A foreign companion export** (ChatGPT, Claude, SillyTavern, character cards) or **raw chat
+  logs:** these still need real parsing. Two paths —
+  - *Interim:* run **entity-loom v0.3.6** (foreign export → entity-core package,
+    confidence-thresholded `>= 0.7`, dedup-upsert, concrete-type extraction) → feed the package
+    through Phase 1. Reuses entity-loom wholesale at the cost of an entity-core-package hop.
+  - *Destination:* lift entity-loom's **parsers** (the export-format readers) into a
+    Phylactery-native importer that writes Phylactery directly — dropping the entity-core
+    intermediate entirely, keeping its posture (confidence threshold, dedup-upsert). We own it,
+    same as everything else.
+- Foreign import is a **later/optional** sub-feature — not on the milestone's critical path.
+  The core migration (existing entity-cores + tome) doesn't touch entity-loom at all.
 
-*Precedent: entity-loom is Psycheros's own import wizard; we borrow its posture
-(confidence-thresholded, dedup-upsert) rather than reinventing extraction.*
+*Open: interim entity-loom hop vs. native parser lift — §9.*
 
 ---
 
@@ -742,6 +807,15 @@ scopes.
 6. **`remember` category taxonomy (§7):** confirm the starting set.
 7. **Ward care-profile field list (§8.3):** confirm fields vs. what links out to
    Unruh/cerebellum.
+8. **Consolidation cadence + thresholds (§3 "Ongoing operation"):** the tick interval and the
+   "enough accumulated to roll up" threshold per tier (default toward entity-core's 5-min tick,
+   gated by volume).
+9. **Export format + encryption (§3 "Ongoing operation"):** single `.sqlite` only (recommended)
+   vs. also a JSON/JSONL human-readable export; and whether exports get optional passphrase
+   encryption-at-rest (the file is the whole ward-private self).
+10. **Foreign-source import (§6 Phase 6):** interim entity-loom hop vs. lifting its parsers into
+    a Phylactery-native importer — and whether foreign import is in this milestone at all
+    (proposed: later/optional, off the critical path).
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
