@@ -41,15 +41,20 @@ Two facts shape it:
 
 The answer is: **adopt entity-core's RAG architecture in a new PF-owned, in-tree
 MCP memory specialist** — *not* fork entity-core's code, and *not* mature the tome
-lorebook. Two layers in the original question pull opposite ways:
+lorebook. The original question splits along a line that the human has now ruled on
+(see §2.5 — the "B′" decision):
 
-- **Identity** (self / user / relationship prose, the knowledge graph, relationship
-  history) is the *actual shared self* — canonical, maintained upstream, working
-  well. **Identity stays in entity-core, untouched.**
-- **Memory** is where every stuck item lives, and where we want both (a) precise RAG
-  retrieval and (b) native audience tags + timestamps that entity-core structurally
-  can't give us. **PF owns this, as its own specialist, modeled on entity-core's
-  proven RAG.**
+- **The canonical self stays in entity-core, untouched.** Identity, user-identity, the
+  relational **graph**, and the distilled **significant / biographical** memory tier are
+  the *actual shared self* — canonical, the multi-embodiment spine, working well. PF is a
+  **consumer** of these (per CLAUDE.md), never their owner.
+- **Lived, operational memory moves to Phylactery.** The episodic tiers
+  (daily / weekly / monthly / yearly), situational facts, and trackers are where every
+  stuck item lives, and where we want both (a) precise RAG retrieval and (b) native
+  audience tags + timestamps that entity-core structurally can't give us. **PF owns this**,
+  as its own specialist, modeled on entity-core's proven RAG. Items that distill into
+  something biographically significant are **promoted up** into entity-core's significant
+  tier — one-directional, never duplicated (see §2.5).
 
 This is precisely the Unruh precedent: PF already ships a sophisticated MCP
 specialist in-tree (`./unruh/`) for temporal context, spawned and supervised by
@@ -70,11 +75,14 @@ thalamus exactly like entity-core. Phylactery is its sibling for memory.
   what it's good at (see §3); the Familiar's autonomous memory moves to RAG.
 - **Reject — a sidecar index keyed by entity-core memory keys.** "Load-bearing duct
   tape" — a second store of truth for the *same* fact that must track entity-core's
-  consolidation/deletes/slug rewrites. We never mirror entity-core memories.
+  consolidation/deletes/slug rewrites. We never **mirror** entity-core memories. (Under
+  B′ we *move* operational episodic memory out of entity-core and *promote* significant
+  distillate back in — both one-copy operations, never a live two-copy mirror.)
 
 The line that keeps us honest: entity-core and Phylactery split by **responsibility**
-(canonical-self vs. gated/situational memory), **never** holding two copies of one
-fact.
+(canonical self vs. lived/gated memory), **never** holding two copies of one fact. A
+memory lives its operational life in exactly one store; promotion moves the distillate,
+it doesn't fork it.
 
 ---
 
@@ -114,19 +122,71 @@ first two into a new specialist.
 
 ---
 
+## 2.5 The memory-ownership line — DECIDED ("B′")
+
+The pivotal question once Phylactery exists: *how much of entity-core's memory does it
+take over?* Decided with the human — **option B′**, and that PF is the **effective sole
+author** of episodic memory (no other live embodiment writing to this entity-core, so
+moving memory out strands nobody).
+
+**What B′ means:**
+
+| Layer | Owner | Why |
+|---|---|---|
+| Identity, user-identity | **entity-core** | The shared self / multi-embodiment spine. PF is a consumer. |
+| Relational graph (nodes/edges) | **entity-core** | The canonical relational web; villager dossier *links* in via `properties.villagerId`. |
+| **Significant / biographical** memory tier | **entity-core** | The distilled self — who the entity *is*. Stays near identity. |
+| **Operational episodic** tiers (daily/weekly/monthly/yearly) | **Phylactery** | Lived memory — needs audience tags + the outgoing filter. Gateable by construction. |
+| Situational facts, trackers | **Phylactery** | Same — disclosure-sensitive, time-stamped, filterable. |
+
+**The promotion path (one-directional, no duplication):** an experience lands in
+Phylactery (taggable, gateable, filterable) and lives its operational life there —
+consolidating daily→weekly→… as entity-core does. When consolidation distills something
+**biographically significant *and* ward-private-safe-as-canonical-self**, that distillate
+is written **up** into entity-core's significant tier via entity-core's own MCP. The
+operational traces in Phylactery age out normally; the significant memory now lives in
+exactly one place (entity-core). A memory that is significant **but disclosure-sensitive**
+does *not* promote — it stays a long-lived, high-`careWeight` Phylactery record, because
+only Phylactery can gate it. So "every gateable memory is in Phylactery" stays true.
+
+**Why B′ over the alternatives** (named so a future audit sees the reasoning, not just
+the outcome):
+
+- **vs. A (split by sensitivity, the doc's earlier default):** A leaves the §6 wrinkle
+  permanent — a whole class of episodic memory sits un-taggable in entity-core where the
+  outgoing filter structurally can't see it, papered over by the fetch-gate assumption
+  never changing. B′ kills the wrinkle for the *bulk* of memory by construction.
+- **vs. C (pure overlay):** C never makes existing memory precise-or-gateable — it
+  half-solves the exact thing Phylactery is for.
+- **The residual wrinkle under B′ is small and well-matched:** only the *significant*
+  tier in entity-core is un-gateable, and that's the canonical-self, most-ward-private
+  material the fetch-gate guarantee (§6c) was built for. The promotion gate's
+  "ward-private-safe-as-canonical-self" check keeps disclosure-sensitive items out of it.
+
+**Cost, named honestly (robust > cheap):** B′ is the bigger build — Phylactery must
+reimplement entity-core's tiered consolidation, plus the promotion path — and the bigger
+migration (§7 extracts episodic memory *out* of entity-core, not just the local tome).
+That cost buys the only option where lived memory is gateable end to end.
+
+---
+
 ## 3. Target architecture
 
 ```
         entity-core (Deno/TS MCP)        Unruh (Python MCP)
-        canonical identity + graph       temporal: schedule,
-        + ward-private-safe memory       interests, reminders
-              ▲                                 ▲
+        canonical self: identity +       temporal: schedule,
+        graph + significant tier         interests, reminders
+              ▲     ▲                           ▲
+              │     │ promote significant       │
+              │     │ distillate (one-way)      │
+              │     │                           │
               │            thalamus             │
               │      (spawn · enrich ·          │
               │   allSettled · degrade)         │
               │                                 │
               │        Phylactery (NEW, in-tree MCP)
-              │        RAG memory · audience-native ·
+              │        lived memory: episodic tiers + situational
+              │        + trackers · RAG · audience-native ·
               └──────  timestamped · gated at query time
                          ▲ write              ▼ read (semantic + gated)
                   autonomous memorization   web · Discord · outgoing filter
@@ -156,11 +216,15 @@ basis, supervised by thalamus exactly like entity-core and Unruh:
   is null; ships with `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1` in the same commit
   (the established rule for every new peer/loop).
 
-**Responsibility split (the contract):**
-- **entity-core** — canonical self: identity, knowledge graph, ward-private-safe
-  memory. Unchanged. Still fetch-gated (shared rooms don't pull it).
-- **Phylactery** — memory needing disclosure metadata: precise RAG recall +
-  per-record audience tag, gated per room *and* checkable on the way out.
+**Responsibility split (the contract — per the B′ decision, §2.5):**
+- **entity-core** — canonical self: identity, user-identity, the knowledge graph, and
+  the **significant / biographical** memory tier (the distilled self). The episodic
+  tiers no longer accumulate here; they receive only *promoted* significant distillate
+  from Phylactery. Still fetch-gated (shared rooms don't pull it).
+- **Phylactery** — all **lived/operational memory**: the episodic tiers
+  (daily/weekly/monthly/yearly), situational facts, and trackers. Precise RAG recall +
+  per-record audience tag, gated per room *and* checkable on the way out. Consolidates
+  its own tiers and promotes significant distillate up to entity-core.
 - **Tomes / World Info** — **retained, repurposed.** No longer the Familiar's
   autonomous memory. They become the **human-authored lorebook** (curated,
   keyword-triggered injection — the SillyTavern-familiar feature). Autonomous memory
@@ -207,25 +271,29 @@ PATCH. (Working assumption — human confirms the slot.)
 - **A. Stand up the service.** `./phylactery/` MCP server: SQLite + `sqlite-vec` data
   store, local embedder (`sentence-transformers` / `all-MiniLM-L6-v2`, 384-dim), RAG
   `mem_search`, schema with native `audience` + timestamps. Model the record / tier /
-  consolidation shape on entity-core's source.
+  consolidation shape on entity-core's source — and per B′ (§2.5), Phylactery owns the
+  **operational episodic tiers** (daily/weekly/monthly/yearly), so its consolidation and
+  the **promotion path** (significant distillate → entity-core) ship here too.
 - **B. Thalamus integration.** Spawn as a third stdio child (clone the entity-core /
   Unruh lifecycle: connect, reconnect/backoff, EOF shutdown, off-switch). Query in
   `enrich()` alongside the others (`allSettled`), passing the room `audienceTag` so
   results are gated at source. **This is what finally gives Discord & autonomous
   turns precise local memory.**
 - **C. Autonomous memorization + routing.** Server-side enqueue at session end / idle
-  rollover for **web and Discord** (worker exists; add triggers). Routing folded into
-  the *existing* memorization LLM call (no new request): disclosure-sensitive memory →
-  Phylactery (tagged with the session's `audienceTag`); ward-private-safe canonical
-  facts → entity-core; shared-room content (`audienceTag !== 'ward-private'`) →
-  Phylactery only, never entity-core. The `remember` retention gate (§10) runs here.
-  See §6 for the sensitivity rule.
+  rollover for **web and Discord** (worker exists; add triggers). Under B′, **all** lived
+  memory lands in Phylactery (tagged with the session's `audienceTag`) — entity-core is no
+  longer a write target at memorization time; it receives only *promoted* significant
+  distillate later, via Phylactery's consolidation (§2.5), gated by the
+  ward-private-safe-as-canonical-self check. The `remember` retention gate (§10) runs here.
+  See §6 for how this dissolves the old routing wrinkle.
 - **D. Outgoing message filter (third gate).** §5.
 - **E. `memories: 'shared'` unlock.** With Phylactery records tagged and gated at
   query time, `fetchEligibility` stops gating `'shared'` OFF and instead lets the
   shared ladder return same-or-lower-sensitivity Phylactery records. entity-core
   stays fetch-gated; the widening is safe because it targets the tagged store.
-- **F. Migration — "convert current Familiars."** §7.
+- **F. Migration — "convert current Familiars."** §7. Multi-phase under B′: snapshot →
+  graph reconciliation (in-place via entity-core MCP) → episodic extraction into
+  Phylactery → tome import → audience backfill → external-source import (entity-loom).
 - **G. Richer entity nodes + `remember` consent.** §10. Person-nodes link to a
   Village villager dossier (`properties.villagerId`); the villager gains pronouns /
   comm-style / freeform notes and a per-category `remember` retention gate — the
@@ -271,64 +339,117 @@ the intentional exception so a future audit doesn't "fix" it back to first perso
 
 ---
 
-## 6. The sensitivity wrinkle (open design point)
+## 6. The sensitivity wrinkle — mostly resolved by B′
 
-Routing sends *passive contextual facts* toward entity-core, but entity-core can't be
-tagged, so the outgoing filter can't see facts that live only there
-(e.g. "{{user}}'s therapist is …").
+The original worry: routing sends *passive contextual facts* toward entity-core, but
+entity-core can't be tagged, so the outgoing filter can't see facts that live only there
+(e.g. "{{user}}'s therapist is …"). **B′ (§2.5) dissolves most of this by construction:**
+operational episodic + situational facts no longer accumulate in entity-core — they live
+in Phylactery, tagged, where the filter *can* see them. The only thing entity-core
+receives is *promoted significant distillate*, gated at promotion time by a
+"ward-private-safe-as-canonical-self" check.
 
-Resolutions, preferred first:
+What remains, and how it's covered:
 
-- **(b) — recommended.** Routing key is **sensitivity**, not topic-class.
-  *Disclosure-sensitive* facts — passive or not — live in **Phylactery** (RAG, can
-  hold contextual facts) with a restrictive tag. Only *ward-private-safe* canonical
-  facts go to entity-core.
-- **(c) — structural guarantee.** entity-core is fetch-gated: shared rooms never pull
-  it, ward-private rooms have no one to leak to. So the outgoing filter only ever
-  needs to cover Phylactery. Lean on this as the backstop.
-- **(a) — last resort.** A tag-only "gate marker" record in Phylactery for a fact
-  that must live in entity-core *and* be gated. Edges toward the sidecar trap — avoid
-  unless (b)/(c) prove insufficient.
+- **(b) — the routing rule, still load-bearing.** The routing key is **sensitivity**, not
+  topic-class. A *disclosure-sensitive* fact — even a significant, biographical one —
+  stays in **Phylactery** with a restrictive tag and does **not** promote. Promotion to
+  entity-core happens only for distillate that is significant *and* safe as canonical
+  self. So nothing disclosure-sensitive ever lands where it can't be gated.
+- **(c) — structural guarantee, the backstop.** entity-core is fetch-gated: shared rooms
+  never pull it, ward-private rooms have no one to leak to. The residual un-taggable set
+  is now only the significant/biographical tier — the most ward-private material, which
+  is exactly what (c) was built to cover.
+- **(a) — last resort, now effectively unneeded.** A tag-only "gate marker" in Phylactery
+  for a fact that must live in entity-core *and* be gated. B′'s promotion gate means this
+  case shouldn't arise; keep it named only as the escape hatch, not the plan.
 
-**Recommendation:** adopt **(b)** as the routing rule, lean on **(c)** as the
-guarantee. Decide before Phase C.
+**Net:** the wrinkle shrinks from "a whole class of episodic memory" to "the slow-moving,
+ward-private significant tier," covered by (c). The promotion gate (b) is the place to get
+the sign-off right (§8) — it's where a sensitive fact could wrongly graduate into the
+un-gateable tier.
 
 ---
 
-## 7. Migration — converting current Familiars
+## 7. Migration — converting current Familiars (B′)
 
-Existing installs have a populated *Session Memories* tome with no audience tags and
-no embeddings. Converting a Familiar means **importing that local memory into
-Phylactery** (embedding + tagging it), not just stamping a field.
+Under B′ this is **not** a single tome import. An existing install has three things that
+must be reconciled: a populated *Session Memories* tome (no tags, no embeddings), a
+populated **entity-core** (identity + graph + tiered memory, where the episodic tiers now
+belong in Phylactery), and a Village registry that the graph isn't yet linked to.
+Converting a Familiar walks all three. Nothing is destructive; everything is
+snapshot-first, idempotent, and re-runnable.
 
-**Scope:** local tome memory → Phylactery. We do **not** extract or mirror
-entity-core memories — entity-core stays canonical.
+**Scope line (unchanged in spirit):** we never run a live *mirror* of entity-core. We
+*move* the operational episodic tiers out (one copy, now in Phylactery) and *leave* the
+canonical self (identity, graph, significant tier) in place. entity-core stays canonical
+for what B′ says it owns.
 
-**Mechanism:**
-1. **Snapshot first.** Copy before mutating. (The branch name
-   *"memories-disappearing"* is a standing reminder: never touch memory without a
-   recoverable copy.)
-2. **Import** each Session-Memories entry: embed its `content`, carry over its
-   timestamps, write a Phylactery record.
-3. **Backfill a default audience.** Safe floor = **`ward-private`** — assume legacy
-   notes are private until reviewed. Consequence: legacy memory won't surface in
-   shared rooms until re-tagged. Conservative but leak-safe.
-4. **Bulk re-tag affordance** so the conservative default isn't a life sentence
-   (user-accessible).
-5. **Optional, opt-in LLM classification** to *suggest* tags per record (rides the
-   memorization prompt pattern). Off by default — token budget.
-6. **Idempotent + non-destructive.** The source tome is preserved (it becomes/stays
-   human-authored lore per §3); import is re-runnable and only adds missing records.
+### Phase 0 — Snapshot everything
+Copy the tome, the entity-core data dir, and the Village registry before mutating a byte.
+(The branch name *"memories-disappearing"* is the standing reminder: never touch memory
+without a recoverable copy.) entity-core's own snapshot tool is used for its store.
 
-*Precedent: entity-loom v0.3.6 — Psycheros's own import wizard — converts foreign
-companion exports into an import package using confidence-thresholded
-(`confidence >= 0.7`), dedup-upsert, concrete-type-restricted extraction. Our
-tome→Phylactery import is narrower, but borrows that posture (and its parsers exist
-if we ever want to import raw chat history into Phylactery).*
+### Phase 1 — Graph reconciliation (in place, via entity-core's MCP)
+Real installs have organically-grown graphs: duplicate person-nodes, nodes that predate
+the Village registry, no `villagerId` links. This phase *rebuilds/consolidates the nodes*
+— but **in place through entity-core's own `node_update` / `node_merge` tools**, never by
+copying the graph into Phylactery.
 
-**Open question for the human:** keep `ward-private` as the legacy default
-(leak-safe, recommended), or default broader (immediately useful, disclosure-permissive
-until reviewed)? Safety-vs-utility — yours.
+1. Match existing `type:"person"` nodes ↔ Village villagers by name/alias.
+2. **Ambiguous or duplicate matches are surfaced to the ward, not auto-merged** — fusing
+   two real people is exactly the irreversible mistake to refuse to guess at.
+3. For confident matches: backfill `properties.villagerId`; merge clear duplicates.
+4. Unmatched person-nodes → offer to register them as villagers (default
+   `relationToFamiliar: "unaware"`, §11.4).
+The reconciliation log is observable and the pass is re-runnable.
+
+### Phase 2 — Episodic extraction (the B′-specific move)
+Pull entity-core's **operational** episodic tiers (daily/weekly/monthly/yearly) **out**
+into Phylactery: embed each record's content, carry timestamps, write a Phylactery
+`narrative` record. **Leave the `significant` tier in entity-core** — that's the distilled
+self B′ keeps canonical. After verification, the extracted operational tiers can be
+cleared from entity-core (so memory isn't double-stored), or left read-only as a fallback
+until the human is satisfied — human's call (open decision below). Phylactery's own
+consolidation takes over from here; future significant distillate *promotes back up* per
+§2.5.
+
+### Phase 3 — Tome import
+Import each *Session Memories* entry: embed its `content`, carry timestamps, write a
+Phylactery `narrative` record. The source tome is **preserved** — it becomes/stays the
+human-authored lorebook (§3). Re-runnable, adds only missing records.
+
+### Phase 4 — Audience backfill + re-tag affordance
+Everything imported in Phases 2–3 lands with a default `audience`. Safe floor =
+**`ward-private`** — assume legacy memory is private until reviewed (leak-safe; the
+consequence is it won't surface in shared rooms until re-tagged).
+- **Bulk re-tag affordance** so the conservative default isn't a life sentence
+  (user-accessible — ward and Familiar can both adjust).
+- **Optional, opt-in LLM classification** to *suggest* tags per record (rides the
+  memorization prompt pattern). Off by default — token budget.
+
+### Phase 5 — External sources ("feed logs in / merge other entity-cores")
+Three tiers, leaning on entity-loom rather than hand-rolling parsers:
+- **An existing entity-core from another app (e.g. Psycheros):** PF just **points at it**
+  — entity-core is already a sibling clone, so identity + graph come for free. Its
+  episodic tiers then run through Phases 1–2 like any other install. (B′ assumes PF is
+  the sole *ongoing* author; a one-time adoption of a Psycheros-built core is exactly
+  this path.)
+- **A foreign companion export** (ChatGPT, Claude, SillyTavern, character cards):
+  **entity-loom v0.3.6** already converts these to an entity-core import package —
+  confidence-thresholded (`>= 0.7`), dedup-upsert, concrete-type-restricted extraction.
+  Run entity-loom → import → Phases 1–4.
+- **Raw chat logs:** entity-loom's parsers exist; route through entity-loom, or build a
+  Phylactery-native importer that reuses those parsers. Same confidence-threshold posture.
+
+*Precedent: entity-loom is Psycheros's own import wizard; we borrow its posture
+(confidence-thresholded, dedup-upsert) rather than reinventing extraction.*
+
+**Open decisions for the human (added to §8):**
+- Legacy audience default: keep **`ward-private`** (leak-safe, recommended) vs. broader.
+- Phase 2 disposition: after extraction, **clear** the operational tiers from entity-core
+  (single source of truth, recommended) vs. **leave read-only** as a fallback for a grace
+  period.
 
 ---
 
@@ -338,15 +459,24 @@ until reviewed)? Safety-vs-utility — yours.
    (proposed)
 2. **Stack (§3): DECIDED — Python / uv** (matches Unruh; lets Phylactery run the
    *same* local embedding model entity-core uses). ✔
-3. **Legacy audience default (§7):** `ward-private` floor (recommended) vs. broader.
-4. **Routing key (§6):** sensitivity-based **(b)** (recommended) vs. topic-class.
-5. **Filter threshold + retry budget (§5):** similarity cutoff, rewrite-loop count,
+3. **Memory-ownership line (§2.5): DECIDED — B′** ✔. Phylactery owns lived/operational
+   episodic memory + situational + trackers; entity-core keeps identity + graph +
+   significant tier; significant distillate promotes one-way up. **PF is effective sole
+   author** of episodic memory (no live co-embodiment to strand) ✔.
+4. **Routing key (§6): DECIDED — sensitivity-based (b)** ✔, now reinforced by B′: only
+   ward-private-safe-as-canonical-self distillate promotes to entity-core; everything
+   disclosure-sensitive stays gateable in Phylactery.
+5. **Legacy audience default (§7):** `ward-private` floor (recommended) vs. broader.
+6. **Phase 2 disposition (§7):** after episodic extraction, **clear** entity-core's
+   operational tiers (single source of truth, recommended) vs. **leave read-only** for a
+   grace period.
+7. **Filter threshold + retry budget (§5):** similarity cutoff, rewrite-loop count,
    and the safe-refusal fallback wording.
-6. **`remember` consent model (§10): DECIDED** — dossier on the Village villager ✔;
+8. **`remember` consent model (§10): DECIDED** — dossier on the Village villager ✔;
    `ask` = **hybrid** (the Familiar's own read *plus* freely asking the ward; asking
    is welcome, never a reason to go silent) ✔. Remaining: confirm the starting category
    taxonomy.
-7. **Caretaker extensions (§11): DECIDED** — all of 11.1–11.5 incorporated ✔, including
+9. **Caretaker extensions (§11): DECIDED** — all of 11.1–11.5 incorporated ✔, including
    `relationToFamiliar` (stance toward the Familiar; `unaware` as the floor) and
    `knownTo` (who's aware of a fact — an *awareness aid*, not a fourth hard gate).
    11.1 tracker model DECIDED: ward-defined, Familiar-as-collaborator; blueprint
