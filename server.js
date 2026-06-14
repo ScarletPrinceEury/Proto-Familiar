@@ -77,6 +77,17 @@ import {
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
+import {
+  getRegistry as getVillageRegistry,
+  upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
+  upsertVillager, deleteVillager,
+  upsertLocation as upsertVillageLocation, deleteLocation as deleteVillageLocation,
+  migrateTrustedContacts, seedDefaultCategories,
+  initVillageSync, bootSync as villageBootSync,
+} from './village.js';
+import { resolveAudience, WARD_PRIVATE } from './audience.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus } from './discord-gateway.js';
+import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -188,7 +199,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -275,13 +286,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         .catch(err => console.error('[threat]   record threw:', err?.message ?? err));
     }
   }
+  // V3: resolve session audience to an effective grants object before
+  // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
+  // rather than blocking the chat. Audience only applies on the full path.
+  let audienceGrants = WARD_PRIVATE;
+  if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
+    try {
+      const registry = await getVillageRegistry();
+      audienceGrants = resolveAudience(sessionAudience, registry);
+    } catch (err) {
+      console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
+    }
+  }
+
   // liveTurn: only the full chat path may reconcile state (consume the
   // surfaced session handoff, demote standing values whose entity-core
   // anchor vanished). 'static' fetches persona only (handoff summariser);
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
@@ -2091,6 +2115,188 @@ app.post('/api/crisis-resources', async (_req, res) => {
   }
 });
 
+// ── Village registry (V1 of Village Support) ────────────────────────
+// CRUD for categories / villagers / locations. The registry's local
+// mirror (village.json) is what gating will read; mutations write
+// through to entity-core (canonical) via the sync wired in
+// startVillageSync() below. Validation errors surface as 400s.
+
+const villageError = (res, err) => {
+  const msg = err?.message ?? String(err);
+  const status = /unknown|required|locked|built-in|reassignTo/.test(msg) ? 400 : 500;
+  res.status(status).json({ error: msg });
+};
+
+// GET /api/discord/status — gateway observability (Village V4).
+// Lets the ward see connection state, the bot identity, the last
+// error, and turn/failure counters without reading server logs.
+app.get('/api/discord/status', (_req, res) => {
+  res.json(getDiscordStatus());
+});
+
+// Knock list (V4.x) — contact attempts from unregistered people,
+// captured by the gateway so the ward can register villagers without
+// hunting platform IDs by hand. Metadata only; never message content.
+app.get('/api/village/knocks', async (_req, res) => {
+  res.json(await listKnocks());
+});
+
+app.delete('/api/village/knocks/:platform/:id', async (req, res) => {
+  const result = await dismissKnock({ platform: req.params.platform, id: req.params.id });
+  if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
+// Location knock list (V4.x) — unregistered Discord channels the
+// Familiar has spoken in. Metadata only; never message content.
+app.get('/api/village/location-knocks', async (_req, res) => {
+  res.json(await listLocationKnocks());
+});
+
+// Location keys contain ':' so they ride the body, not the path.
+app.delete('/api/village/location-knocks', async (req, res) => {
+  const { key } = req.body ?? {};
+  const result = await dismissLocationKnock({ key });
+  if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
+app.get('/api/village', async (_req, res) => {
+  try { res.json(await getVillageRegistry()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/village/categories', async (req, res) => {
+  const { name, grants } = req.body ?? {};
+  try { res.json(await upsertVillageCategory({ name, grants })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/categories/:id', async (req, res) => {
+  const { name, grants } = req.body ?? {};
+  try { res.json(await upsertVillageCategory({ id: req.params.id, name, grants })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/categories/:id', async (req, res) => {
+  try { res.json(await deleteVillageCategory({ id: req.params.id, reassignTo: req.query.reassignTo })); }
+  catch (err) { villageError(res, err); }
+});
+
+// A saved villager's aliases settle any matching knocks — the person
+// is registered now, so the "knocked on the door" entry has served its
+// purpose. Fire-and-forget; a missed dismissal just leaves a stale row
+// the ward can dismiss by hand.
+function reconcileKnocks(villager) {
+  for (const a of villager?.aliases ?? []) {
+    dismissKnock({ platform: a.platform, id: a.id }).catch(() => {});
+  }
+}
+
+// A saved location settles any matching location knock.
+function reconcileLocationKnock(location) {
+  if (location?.key) dismissLocationKnock({ key: location.key }).catch(() => {});
+}
+
+app.post('/api/village/villagers', async (req, res) => {
+  const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
+  try {
+    const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage });
+    reconcileKnocks(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/villagers/:id', async (req, res) => {
+  const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
+  try {
+    const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage });
+    reconcileKnocks(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/villagers/:id', async (req, res) => {
+  try { res.json(await deleteVillager({ id: req.params.id })); }
+  catch (err) { villageError(res, err); }
+});
+
+app.post('/api/village/locations', async (req, res) => {
+  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  try {
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    reconcileLocationKnock(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.patch('/api/village/locations', async (req, res) => {
+  // Location keys contain ':' and '/' so they ride the body, not the path.
+  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  try {
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    reconcileLocationKnock(saved);
+    res.json(saved);
+  }
+  catch (err) { villageError(res, err); }
+});
+
+app.delete('/api/village/locations', async (req, res) => {
+  const { key } = req.body ?? {};
+  try { res.json(await deleteVillageLocation({ key })); }
+  catch (err) { villageError(res, err); }
+});
+
+// Wires the hybrid sync (entity-core canonical, local mirror) and runs
+// the boot reconciliation + trusted-contacts migration. Degrades
+// gracefully: entity-core down → mirror stays authoritative for
+// gating, writes accumulate as syncPending and replay on next boot.
+async function startVillageSync() {
+  initVillageSync({
+    push: async (json) => {
+      const content = '```json\n' + json + '\n```';
+      const result = await rewriteIdentitySection({
+        category: 'custom', filename: 'village-registry.md', section: 'Registry', content,
+      });
+      if (result.ok) return result;
+      // Section may not exist yet (first sync) — create file + section.
+      return appendIdentity({
+        category: 'custom', filename: 'village-registry.md',
+        content: `## Registry\n\n${content}`,
+      });
+    },
+    pull: async () => {
+      try {
+        const id = await getIdentityAll();
+        const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
+        const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
+        return m ? JSON.parse(m[1]) : null;
+      } catch (err) {
+        console.warn('[village] canonical pull failed:', err?.message ?? err);
+        return null;
+      }
+    },
+  });
+  try {
+    await villageBootSync();
+    const { added } = await seedDefaultCategories();
+    if (added > 0) console.log(`[village] seeded ${added} default category/categories`);
+    const reg = await getVillageRegistry();
+    if (reg.villagers.length === 0) {
+      const contacts = readSettingsSync()?.trustedContacts;
+      if (Array.isArray(contacts) && contacts.length > 0) {
+        const { imported } = await migrateTrustedContacts(contacts);
+        if (imported > 0) console.log(`[village] migrated ${imported} trusted contact(s) into Emergency Contacts`);
+      }
+    }
+  } catch (err) {
+    console.error('[village] boot sync failed (mirror stays authoritative):', err?.message ?? err);
+  }
+}
+
 // Start the MCP children (entity-core + Unruh) at server boot rather
 // than as a thalamus.js import side-effect. Tests and other importers
 // of thalamus's coordination helpers (withLock, modifyTomeFile, etc.)
@@ -2120,6 +2326,11 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startAutonomousPondering();
   startRemindersScheduler();
   startSilenceTriage();
+  startVillageSync();
+  // Discord gateway (Village V4). Supervisor idles until the ward sets
+  // a bot token + enables the toggle in Settings; follows settings
+  // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
+  startDiscordGateway();
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2355,6 +2566,7 @@ async function handleSignal(signal) {
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
+  try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownEntityCore(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

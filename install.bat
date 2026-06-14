@@ -92,7 +92,7 @@ if exist "%ENTITY_CORE_DIR_NEW%" (
 )
 REM Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
 set "ENTITY_CORE_REPO=https://github.com/PsycherosAI/Psycheros.git"
-set "ENTITY_CORE_TAG=entity-core-v0.3.2"
+set "ENTITY_CORE_TAG=entity-core-v0.4.0"
 set "BACKUP_ROOT=%SCRIPT_DIR%\.pf-backups"
 
 REM --- Detect mode ---
@@ -175,8 +175,13 @@ if errorlevel 1 (
     echo Node.js not found - installing LTS via winget ^(per-user, no admin needed^)...
     winget install --id OpenJS.NodeJS.LTS --scope user --silent --accept-source-agreements --accept-package-agreements
     REM Refresh PATH so the just-installed node is reachable in this session.
-    for /f "tokens=2 delims==" %%a in ('"set PATH 2>nul"') do set "OLDPATH=%%a"
-    set "PATH=%LOCALAPPDATA%\Programs\nodejs;%ProgramFiles%\nodejs;%PATH%"
+    REM Re-read the persisted PATH (winget writes its change to the User
+    REM PATH) and prime the WinGet Links shim dir. Node LTS now ships from
+    REM winget as an archive/portable package shimmed under
+    REM %LOCALAPPDATA%\Microsoft\WinGet\Links — the old MSI-only paths
+    REM missed it, which dead-ended the install even though Node was fine.
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')" 2^>nul`) do set "PATH=%%P"
+    set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%LOCALAPPDATA%\Programs\nodejs;%ProgramFiles%\nodejs;%PATH%"
     where node >nul 2>nul
     if errorlevel 1 (
       echo [ERROR] Node.js install ran but node still isn't on PATH.
@@ -202,7 +207,10 @@ if errorlevel 1 (
   if "!HAVE_WINGET!"=="1" (
     echo Git not found - installing via winget...
     winget install --id Git.Git --scope user --silent --accept-source-agreements --accept-package-agreements
-    set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
+    REM Same PATH-refresh shape as the Node step: re-read the persisted
+    REM PATH plus the WinGet Links shim dir, then the classic Git cmd dir.
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')" 2^>nul`) do set "PATH=%%P"
+    set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\Git\cmd;%PATH%"
   ) else (
     echo [WARN] Git not found and winget unavailable - entity-core clone will be skipped.
     echo        Install Git from https://git-scm.com/download/win to enable it.

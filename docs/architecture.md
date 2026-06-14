@@ -54,6 +54,11 @@ server.js  (Express, Node 18+, ESM)
     ├── outbox.js           ── persistent delivery queue (reminders, triage, alerts)
     ├── last-activity.js    ── timestamps user activity for the silence loop
     │
+    │  ── village (audience gating + external presence) ───────────
+    ├── village.js          ── registry: categories/grants, villagers, locations
+    ├── audience.js         ── grant resolution + section-marker gate (V3)
+    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4)
+    │
     │  ── classical infrastructure ──────────────────────────────
     ├── memorization.js     ── per-session memorization queue + worker
     ├── temporal-format.js  ── pure renderer for Unruh's payload
@@ -103,6 +108,11 @@ ponderings injection, care-check framing) and as background loops
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
+├── village.js               Village registry (V1) — categories/grant sets, villagers/aliases, locations; local mirror + entity-core write-through sync (see docs/village-support-design.md)
+├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
+├── discord-gateway.js       Discord gateway adapter (V4) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
+├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
+├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
 ├── memorization.js          Persistent per-session memorization queue + worker
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
@@ -191,6 +201,14 @@ ack/cancel — see `memorization.js`.
 - `GET /api/temporal/ponderings[?limit&sinceDays]` + DELETE
 - `POST /api/ponderings/intents/acted-on` — mark a deferred intent as filed (body: `{ uid, index }`); called by the `acknowledge_deferred_intent` LLM tool
 
+**Village surface (V1 — registry only; gating lands in V3):**
+- `GET /api/village` — full registry (categories + villagers + locations, normalized)
+- `POST /api/village/categories` + `PATCH /api/village/categories/:id` + `DELETE /api/village/categories/:id?reassignTo=` — built-ins not deletable; Strangers locked
+- `POST /api/village/villagers` + `PATCH /api/village/villagers/:id` + `DELETE /api/village/villagers/:id` — saving a villager auto-dismisses knocks matching their aliases
+- `POST|PATCH|DELETE /api/village/locations` — keyed by body `key` (location keys contain `:`)
+- `GET /api/village/knocks` + `DELETE /api/village/knocks/:platform/:id` — pending contact attempts from unregistered people (captured by the Discord gateway; identity metadata only, never message content)
+- `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters
+
 **Threat surface:**
 - `GET /api/threat` — current tier + weight + last_touched + disabled
 - `GET /api/threat/history?limit=N` — audit trail
@@ -215,6 +233,10 @@ ack/cancel — see `memorization.js`.
 - `startAutonomousPondering()` — Settings-toggleable + env-var off-switch
 - `startRemindersScheduler()`
 - `startSilenceTriage()`
+- `startVillageSync()` — village registry boot reconciliation + default-category seeding
+- `startDiscordGateway()` — supervisor idles until Settings carry a bot
+  token + the toggle; follows Settings changes within 30s; hard
+  off-switch `PROTO_FAMILIAR_DISCORD_DISABLED=1`
 
 Each loop has a `stop*()` function called from the SIGTERM /
 SIGINT / SIGHUP handler so clean shutdown awaits any in-flight tick.
@@ -224,11 +246,16 @@ SIGINT / SIGHUP handler so clean shutdown awaits any in-flight tick.
 Spawns and reconnects entity-core (Deno) + Unruh (Python via uv) as
 stdio MCP children. Exposes:
 
-- **`enrich(userMessage, { liveTurn, staticOnly })`** — the central
-  per-request call. Fans out to identity + memory + graph (entity-core)
-  + temporal_context (Unruh) + local-disk reads (recent ponderings,
-  threat state). Returns `{ static, dynamic }`. See [Prompt
-  assembly](#prompt-assembly) below for what goes where.
+- **`enrich(userMessage, { liveTurn, staticOnly, lastUserMessageAt, audience })`**
+  — the central per-request call. Fans out to identity + memory + graph
+  (entity-core) + temporal_context (Unruh) + local-disk reads (recent
+  ponderings, threat state). Returns `{ static, dynamic }`. The
+  `audience` option (Village V3) is the resolved grant object from
+  `audience.js`; when present, ungranted knowledge classes are never
+  fetched (gate-before-fetch) and ward-private blocks (ponderings,
+  deferred intents, care check, surface candidates) are skipped
+  entirely. Absent/null audience = ward-private = full context. See
+  [Prompt assembly](#prompt-assembly) below for what goes where.
 - **Interest helpers:** `recordInterest`, `bumpInterest`, `demoteStanding`,
   `setStandingInterest`, `listLiveInterests`, `listInterests`.
 - **Schedule helpers:** `getScheduleWindow`, `addScheduleNode`,
@@ -375,6 +402,29 @@ for the triage loop's pending-contact deferral.
 
 **`last-activity.js`** — single timestamp in `tomes/.last-activity.json`
 stamped from the chat path; consumed by the silence-triage loop.
+Discord ward messages stamp it too — the Familiar's sense of "my human
+was just here" follows the human, not a particular window.
+
+**`discord-gateway.js`** — autonomous singleton (Village V4). A
+supervisor tick (30s) compares Settings (`discordEnabled`,
+`discordBotToken`) against the live connection and starts / stops /
+restarts to match — no server restart needed. The gateway itself is a
+native-WebSocket client (Node ≥ 22) implementing identify / heartbeat /
+resume / backoff; fatal close codes (bad token, missing privileged
+intents) park it until Settings change. Inbound `MESSAGE_CREATE` flows
+through `classifyMessage()` (pure, tested): ward DM → ward-private
+turn; registered-villager DM → gated turn; guild → reply only when
+@-mentioned or replied-to, with the location ceiling ALWAYS in the
+audience (unassigned room = Strangers). Each location is a session in
+`logs/` (rotated after 6h idle; map in `tomes/.discord-map.json`),
+participants accumulate, and the audience is re-resolved per turn from
+the accumulated list. Ward messages also run crisis-signal scoring +
+threat recording (`source: 'discord'`). Discord turns carry NO tools
+and never consume handoffs (`liveTurn: false`). Memorization of
+Discord sessions is deferred until memories carry audience tags (see
+village-support-design.md). Off-switch:
+`PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
+`GET /api/discord/status`.
 
 ### `memorization.js` — session memorization
 
@@ -466,6 +516,13 @@ thalamus.enrich(userMessage, { liveTurn: true })
    │     └── handoff (session-end note)                   │  - interests
    ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
    └── getThreat()           ──► local file read          ┘  - [Temporal Context]
+       │
+       │  injection-guard.js is available but NOT applied to entity-core /
+       │  Unruh content — those are trusted first-party systems. The guard
+       │  is reserved for genuinely external ingestion points (web search
+       │  results, Discord / channel-adapter messages) that do not yet exist.
+       │  When those are built, sanitizeExternal() goes on the inbound
+       │  boundary of each adapter, not on the recall path of own memory.
        │
        ▼
 Prompt assembly (see "Prompt assembly" below)

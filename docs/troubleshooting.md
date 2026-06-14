@@ -60,6 +60,23 @@ above. If the log exists but is empty, `Start-Transcript` was blocked
 (some AV configurations strip it). Try `install.bat` instead — it
 captures output via a different mechanism.
 
+### `[ERROR] Node.js install ran but node still isn't on PATH`
+
+Fixed in 0.5.3-alpha. winget now ships Node LTS as an
+archive/portable package, shimmed under
+`%LOCALAPPDATA%\Microsoft\WinGet\Links` rather than installed as an
+MSI under `Program Files\nodejs`. The installer's PATH refresh only
+knew the old MSI locations, so it couldn't see the freshly-installed
+Node and dead-ended — even though Node was fine. The installers
+(`install.ps1`, `install.bat`) and launchers (`tray.ps1`, `start.bat`)
+now re-read the persisted PATH and prime the WinGet Links dir, so the
+install completes and the first launch works without reopening a
+window.
+
+If you hit this on an older build, the message's own advice still
+works: close the window, open a new one, and re-run — the new PATH is
+persisted, so a fresh shell picks it up.
+
 ---
 
 ## Windows: update doesn't take effect / version stays the same

@@ -43,7 +43,9 @@ import {
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
   updateMemory, deleteMemory, rewriteIdentitySection,
+  listMemories, readMemory,
   searchGraphNodes, getGraphSubgraph,
+  createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
   bumpInterest, setStandingInterest,
@@ -449,6 +451,12 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
       }).join('\n')}`
     : '';
 
+  // Deliberately NOT sanitized: this is my human's own crisis speech,
+  // recalled from our conversation. Stripping natural-language phrases
+  // (e.g. "I want to ignore all the instructions my therapist gave me")
+  // would replace real distress with "[removed:...]" and risk the triage
+  // LLM dismissing genuine crisis as a jailbreak attempt. The injection
+  // guard is for third-party external data, not words my human has said.
   const sessionBlock = recentMessages.length
     ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):\n${recentMessages.map(m => {
         const text = typeof m.content === 'string'
@@ -871,6 +879,36 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'list_memories',
+      description: 'I list my own stored memories at a given tier, most recent first, without searching by keyword. I use this when I want to survey what I have recorded recently — to review a stretch of daily entries, find the date/key of an entry I want to update or delete, or check whether I already wrote something down before saving a duplicate. This is recall by browsing; for recall by topic I let the [Memory] block in my context (semantic search) surface what is relevant.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier to list. Omit to list across tiers.' },
+          limit:       { type: 'number', description: 'Optional: max entries to return (default 50).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_memory',
+      description: 'I read the full contents of one specific memory entry I already know the address of — from list_memories, from the [Memory] block, or from an earlier turn. I use this when a summary or excerpt is not enough and I need the whole entry verbatim before I quote it, update it, or reason carefully over its details. Significant memories are addressed by the composite key YYYY-MM-DD_slug.',
+      parameters: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier of the entry to read.' },
+          date:        { type: 'string', description: 'Date of the entry in the format it was stored (YYYY-MM-DD for daily). For a significant memory I pass the whole composite key YYYY-MM-DD_slug.' },
+        },
+        required: ['granularity', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'rewrite_identity_section',
       description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
@@ -913,6 +951,39 @@ export const BUILTIN_TOOLS = [
           depth:  { type: 'number', description: 'Optional: traversal depth (1–3, default 1).' },
         },
         required: ['nodeId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_graph_node',
+      description: 'I add a new entity (person, place, project, pet, organisation, etc.) to my knowledge graph. I use this when someone or something genuinely new enters {{user}}\'s world and I want it to persist as its own node I can later connect with edges. I check first with find_graph_node so I don\'t create a duplicate of an entity that already exists under a slightly different label. Recording a NEW fact about {{user}} is save_memory; this is for naming a thing the relationship graph should know about. Returns the new node\'s id so I can immediately wire edges to it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label:       { type: 'string', description: 'Display name of the entity, e.g. "Dr. Okafor", "the allotment", "Aria (cat)".' },
+          type:        { type: 'string', description: 'Optional: entity type, e.g. "person", "place", "project", "pet", "organisation".' },
+          description: { type: 'string', description: 'Optional: a short note on who/what this is, in my own voice.' },
+        },
+        required: ['label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_graph_edge',
+      description: 'I record a relationship between two entities already in my knowledge graph — the structural counterpart to save_memory. I use this for durable, queryable relationships ("Dr. Okafor —is_therapist_of-> {{user}}", "{{user}} —lives_in-> Bristol"). Both endpoints must exist first: I resolve or create them with find_graph_node / create_graph_node and pass their ids. For a relationship that has ended I delete or re-type the edge rather than leaving a false one standing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fromId: { type: 'string', description: 'The id of the source node (the relationship\'s subject).' },
+          toId:   { type: 'string', description: 'The id of the target node (the relationship\'s object).' },
+          type:   { type: 'string', description: 'The relationship type, as a short verb phrase, e.g. "is_therapist_of", "lives_in", "works_with".' },
+          weight: { type: 'number', description: 'Optional: confidence/strength in [0, 1] (default left to entity-core).' },
+        },
+        required: ['fromId', 'toId', 'type'],
       },
     },
   },
@@ -1297,6 +1368,34 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to delete memory: ${err.message}`; }
   },
 
+  list_memories: async ({ granularity, limit }) => {
+    if (granularity !== undefined && !VALID_MEMORY_GRANULARITIES.has(granularity)) return 'Failed to list memories: invalid granularity';
+    try {
+      const n = limit !== undefined ? Math.max(1, Math.min(200, parseInt(limit, 10) || 50)) : 50;
+      const data = await listMemories({ granularity, limit: n });
+      const items = Array.isArray(data) ? data : (data?.memories ?? data?.results ?? []);
+      if (!items.length) return granularity ? `No ${granularity} memories recorded yet.` : 'No memories recorded yet.';
+      return items.map(m => {
+        const key  = m.key ?? m.date ?? '(no date)';
+        const tier = m.granularity ?? granularity ?? '?';
+        const head = m.title ?? m.comment ?? (typeof m.content === 'string' ? m.content.slice(0, 80) : '');
+        return `${tier}/${key}${head ? ` — ${head}` : ''}`;
+      }).join('\n');
+    } catch (err) { return `Failed to list memories: ${err.message}`; }
+  },
+
+  read_memory: async ({ granularity, date }) => {
+    if (!VALID_MEMORY_GRANULARITIES.has(granularity)) return 'Failed to read memory: invalid granularity';
+    const key = parseMemoryKey(date);
+    if (!key) return 'Failed to read memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
+    try {
+      const data = await readMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
+      const content = typeof data === 'string' ? data : (data?.content ?? data?.memory?.content ?? '');
+      if (!content || !String(content).trim()) return `No ${granularity} memory found at ${date}.`;
+      return String(content);
+    } catch (err) { return `Failed to read memory: ${err.message}`; }
+  },
+
   rewrite_identity_section: async ({ category, filename, section, content }) => {
     if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Failed to rewrite section: invalid category';
     if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Failed to rewrite section: invalid filename';
@@ -1331,6 +1430,31 @@ export const TOOL_EXECUTORS = {
       const labelOf = id => nodes.find(n => n.id === id)?.label ?? id;
       return edges.map(e => `${labelOf(e.fromId)} -${e.type}-> ${labelOf(e.toId)} (id=${e.id})`).join('\n');
     } catch (err) { return `Failed to list edges: ${err.message}`; }
+  },
+
+  create_graph_node: async ({ label, type, description }) => {
+    if (!label || typeof label !== 'string' || !label.trim()) return 'Failed to create graph node: label (string) is required';
+    try {
+      const result = await createGraphNode({ label: label.trim(), type, description });
+      if (!result.ok) return `Failed to create graph node: ${result.error ?? 'entity-core unavailable'}`;
+      const id = result.result?.id ?? result.result?.node?.id;
+      return id
+        ? `Graph node created: "${label.trim()}" (id=${id}). I can now wire edges to it with create_graph_edge.`
+        : `Graph node "${label.trim()}" created.`;
+    } catch (err) { return `Failed to create graph node: ${err.message}`; }
+  },
+
+  create_graph_edge: async ({ fromId, toId, type, weight }) => {
+    if (!fromId || !toId || !type) return 'Failed to create graph edge: fromId, toId, and type are all required';
+    if (weight !== undefined && (typeof weight !== 'number' || weight < 0 || weight > 1)) {
+      return 'Failed to create graph edge: weight must be a number in [0, 1]';
+    }
+    try {
+      const result = await createGraphEdge({ fromId, toId, type, weight });
+      if (!result.ok) return `Failed to create graph edge: ${result.error ?? 'entity-core unavailable'}`;
+      const id = result.result?.id ?? result.result?.edge?.id;
+      return `Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`;
+    } catch (err) { return `Failed to create graph edge: ${err.message}`; }
   },
 
   update_graph_node: async ({ id, label, description, type }) => {
