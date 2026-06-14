@@ -346,9 +346,10 @@ until reviewed)? Safety-vs-utility — yours.
    `ask` = **hybrid** (the Familiar's own read *plus* freely asking the ward; asking
    is welcome, never a reason to go silent) ✔. Remaining: confirm the starting category
    taxonomy.
-7. **Caretaker extensions (§11):** lock the `kind` + tracker shape (11.1) and caretaker
-   metadata (11.2) into the schema now (recommended, cheap forward-compat); pick from
-   the ward care-profile (11.3) and relationship-care (11.4) menus.
+7. **Caretaker extensions (§11): DECIDED** — all of 11.1–11.4 incorporated ✔, including
+   `relationToFamiliar` (a villager's stance toward the Familiar — driving posture,
+   identity-anchored — with `unaware`/never-heard-of-me as the default for new
+   contacts). Remaining detail: starting tracker types + care-profile field list.
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the
 three gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the
@@ -400,7 +401,8 @@ permission policy live on the Village villager record — NOT in entity-core
 
 ### Villager dossier fields (extends the existing record)
 Already present: `name`, `aliases`, category membership (= disclosure permissions).
-Add: `pronouns`, `relationToWard`, `commStyleNotes`, freeform `notes` (gift ideas,
+Add: `pronouns`, `relationToWard` (their bond with the human), **`relationToFamiliar`**
+(their stance toward *me* — see §11.4), `commStyleNotes`, freeform `notes` (gift ideas,
 important deeds), `graphNodeId` (the link), and the **`remember`** sub-structure below.
 
 ### The `remember` consent model (the retention gate)
@@ -505,7 +507,7 @@ A caretaker must know *how solid* a memory is and *how much it matters*:
   triggers) so retrieval prioritises them and they **resist decay**. A film preference
   may fade; a med allergy must not.
 
-### 11.3 A richer ward care-profile — candidate
+### 11.3 A richer ward care-profile — incorporated
 
 The ward is the centre of the role and benefits from more than a villager dossier:
 
@@ -519,15 +521,37 @@ The ward is the centre of the role and benefits from more than a villager dossie
 - **Support map** — who's safe to reach in crisis. *Overlap note:* link to cerebellum
   trusted-contacts + village categories, don't duplicate.
 
-### 11.4 Relationship-care fields on villager dossiers — candidate
+### 11.4 Relationship fields on villager dossiers — incorporated
 
-Helping the ward tend their relationships:
+Two relational axes, because a villager relates both to the ward *and* to the Familiar:
 
+**How they relate to the ward** (helping the ward tend their relationships):
 - **care valence** — is this person a *support* or a *stressor* for the ward?
 - **contact cadence / last-meaningful-contact** — so the Familiar can nudge ("you've
   not spoken to your sister in a while").
 - **per-person sensitive topics / boundaries** — "don't raise the divorce with Mum."
 
-**Recommendation:** lock 11.1 (the `kind` + tracker shape) and 11.2 (caretaker
-metadata) into the schema now — cheap forward-compat the caretaker role leans on.
-Treat 11.3 / 11.4 as menus to pick from.
+**How they relate to the Familiar** (`relationToFamiliar` — drives *my* posture):
+- A coarse `stance` hint plus freeform notes. Candidate stances: `unaware` (never heard
+  of me — the **default** for any new/unregistered contact) / `warm` / `neutral` /
+  `tolerates-for-ward` / `wary-of-ai` / `hostile`. Notes carry nuance ("keeps it short,
+  not too peppy"; "happily banters about anime in the group chat").
+- **`unaware` is the floor, and it matters:** with someone who doesn't know I exist I
+  don't barge in with familiarity — I introduce myself or stay light, mindful I'm a new
+  presence to them. (Pairs with the knock system: a freshly-knocked person starts here.)
+- Stance calibrates *approach*, not identity: someone who merely tolerates AI for the
+  ward's sake gets a measured, unobtrusive me; someone who chatters happily gets the
+  warmer, more playful me. **Anchored to my own character** (CLAUDE.md's "room for
+  personality") — a grumpy Familiar stays grumpy, just reads the room; never flattened
+  into a generic people-pleaser.
+- Orthogonal to the disclosure gate: stance is *tone*, the audience category is *what
+  they may hear*. High-trust-but-AI-wary and chatty-but-low-clearance both exist; the
+  two axes never collapse into each other.
+- The entity-as-subject stance in data: the Familiar is *someone who has their own
+  relationships* — including not-yet-relationships — not a tool with one uniform face.
+
+**Decided with the human:** all of 11.1–11.4 are in. 11.1 (the `kind` + tracker shape)
+and 11.2 (caretaker metadata) land in the schema from the start; 11.3 (ward
+care-profile) and 11.4 (both relationship axes, incl. `relationToFamiliar` with
+`unaware` as the floor) are part of the person/ward records — linking to Unruh /
+cerebellum where noted rather than duplicating.
