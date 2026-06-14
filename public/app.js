@@ -7796,6 +7796,23 @@ const VL_STRANGERS = 'strangers';
 const VL_EMERGENCY = 'emergency-contacts';
 const VL_TABS      = ['people', 'categories', 'locations'];
 
+const VL_REL_FAM_LABELS = {
+  unaware:             'Unaware of the Familiar',
+  warm:                'Warm',
+  neutral:             'Neutral',
+  'tolerates-for-ward':'Tolerates (for the ward)',
+  'wary-of-ai':        'Wary of AI',
+  hostile:             'Hostile',
+};
+
+const VL_REMEMBER_CATS = [
+  { key: 'basics',           label: 'Basic info',       default: true  },
+  { key: 'emotional_content',label: 'Emotional content',default: 'ask' },
+  { key: 'health_info',      label: 'Health info',      default: 'ask' },
+  { key: 'relationships',    label: 'Relationships',    default: 'ask' },
+  { key: 'whereabouts',      label: 'Whereabouts',      default: 'ask' },
+];
+
 let _vlReg  = null;   // local registry cache; null = needs reload
 let _vlSelP = null;   // selected villager id
 let _vlSelC = null;   // selected category id
@@ -8009,6 +8026,19 @@ function vlStartNewPerson() {
   vlOpenDetail('vl-people-detail');
 }
 
+function vlRememberRowHtml(cat, currentVal) {
+  const val = currentVal !== undefined ? currentVal : cat.default;
+  const opts = [
+    { v: true,   cls: 'vl-rem-free',  label: 'Free'  },
+    { v: 'ask',  cls: 'vl-rem-ask',   label: 'Ask'   },
+    { v: false,  cls: 'vl-rem-never', label: 'Never' },
+  ];
+  const btns = opts.map(o =>
+    `<button class="vl-rem-btn ${o.cls}${o.v === val ? ' vl-rem-on' : ''}" data-cat="${esc(cat.key)}" data-val="${o.v}" type="button">${o.label}</button>`
+  ).join('');
+  return `<div class="vl-rem-row"><span class="vl-rem-label">${esc(cat.label)}</span><div class="vl-rem-toggle">${btns}</div></div>`;
+}
+
 function vlRenderPersonDetail(villager) {
   const detail = $('vl-people-detail');
   const reg = _vlReg;
@@ -8023,6 +8053,19 @@ function vlRenderPersonDetail(villager) {
 
   const aliasRows = (villager?.aliases ?? []).map((a, i) => vlAliasRowHtml(i, a.platform, a.id, a.handle ?? '')).join('');
 
+  const relFamOptions = Object.entries(VL_REL_FAM_LABELS).map(([val, label]) => {
+    const sel = (villager?.relationToFamiliar ?? 'unaware') === val ? ' selected' : '';
+    return `<option value="${esc(val)}"${sel}>${esc(label)}</option>`;
+  }).join('');
+
+  const remRows = VL_REMEMBER_CATS.map(cat =>
+    vlRememberRowHtml(cat, villager?.remember?.[cat.key])
+  ).join('');
+
+  const graphNodeHtml = (!isNew && villager.graphNodeId)
+    ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Graph node: <code>${esc(villager.graphNodeId)}</code></div>`
+    : '';
+
   detail.innerHTML = `
     <div class="vl-detail-head">${isNew ? 'Add person' : esc(villager.name)}</div>
     <div>
@@ -8030,8 +8073,20 @@ function vlRenderPersonDetail(villager) {
       <input type="text" id="vl-p-name" value="${isNew ? '' : esc(villager.name)}" placeholder="e.g. Chen" style="width:100%">
     </div>
     <div>
+      <div class="vl-field-label">Pronouns <span class="field-hint">(optional)</span></div>
+      <input type="text" id="vl-p-pronouns" value="${isNew ? '' : esc(villager.pronouns ?? '')}" placeholder="e.g. she/her, they/them" style="width:100%">
+    </div>
+    <div>
       <div class="vl-field-label">Categories <span class="field-hint">(can overlap)</span></div>
       <div class="vl-cat-toggles" id="vl-p-cat-toggles">${catToggles || '<span class="vl-chip-dim">No categories defined yet.</span>'}</div>
+    </div>
+    <div>
+      <div class="vl-field-label">Relation to the ward</div>
+      <input type="text" id="vl-p-rel-ward" value="${isNew ? '' : esc(villager.relationToWard ?? '')}" placeholder="e.g. college roommate, therapist" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Stance toward me <span class="field-hint">(how they relate to the Familiar)</span></div>
+      <select id="vl-p-rel-fam" style="width:100%">${relFamOptions}</select>
     </div>
     <div>
       <div class="vl-field-label">Platform aliases <span class="field-hint">(matched by stable ID, not handle)</span></div>
@@ -8042,6 +8097,19 @@ function vlRenderPersonDetail(villager) {
       <div class="vl-field-label">Connection note</div>
       <input type="text" id="vl-p-conn" value="${isNew ? '' : esc(villager.connection ?? '')}" placeholder="How do you know them?" style="width:100%">
     </div>
+    <div>
+      <div class="vl-field-label">Communication style <span class="field-hint">(optional)</span></div>
+      <input type="text" id="vl-p-comm" value="${isNew ? '' : esc(villager.commStyleNotes ?? '')}" placeholder="e.g. direct, uses sarcasm, prefers short messages" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Notes <span class="field-hint">(optional)</span></div>
+      <textarea id="vl-p-notes" placeholder="Anything else worth knowing…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.notes ?? '')}</textarea>
+    </div>
+    <div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person)</span></div>
+      <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
+    </div>
+    ${graphNodeHtml}
     <div class="vl-actions">
       <button class="btn-send" id="vl-p-save" type="button">${isNew ? 'Add person' : 'Save'}</button>
       ${!isNew ? `<button class="btn-danger" id="vl-p-del" type="button">Delete</button>` : ''}
@@ -8065,6 +8133,14 @@ function vlRenderPersonDetail(villager) {
   detail.querySelectorAll('.vl-alias-rm').forEach(btn =>
     btn.addEventListener('click', () => btn.closest('.vl-alias-row').remove())
   );
+  detail.querySelectorAll('.vl-rem-toggle').forEach(group => {
+    group.querySelectorAll('.vl-rem-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('.vl-rem-btn').forEach(b => b.classList.remove('vl-rem-on'));
+        btn.classList.add('vl-rem-on');
+      });
+    });
+  });
   $('vl-p-save').addEventListener('click', () => vlSavePerson(villager?.id ?? null));
   $('vl-p-del')?.addEventListener('click', () => vlDeletePerson(villager.id));
   vlBindBackBtn('vl-p-back', 'vl-people-detail');
@@ -8092,12 +8168,23 @@ async function vlSavePerson(id) {
     }))
     .filter(a => a.platform && a.id);
   const connection = $('vl-p-conn').value.trim();
+  const pronouns = $('vl-p-pronouns')?.value.trim() || undefined;
+  const relationToWard = $('vl-p-rel-ward')?.value.trim() || undefined;
+  const relationToFamiliar = $('vl-p-rel-fam')?.value || 'unaware';
+  const commStyleNotes = $('vl-p-comm')?.value.trim() || undefined;
+  const notes = $('vl-p-notes')?.value.trim() || undefined;
+  const remember = {};
+  document.querySelectorAll('#vl-p-remember .vl-rem-btn.vl-rem-on').forEach(btn => {
+    const rawVal = btn.dataset.val;
+    remember[btn.dataset.cat] = rawVal === 'true' ? true : rawVal === 'false' ? false : 'ask';
+  });
   status.textContent = 'Saving…';
   try {
     const r = await fetch(
       id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
       { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, categoryIds, aliases, connection }) },
+        body: JSON.stringify({ name, categoryIds, aliases, connection,
+          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, remember }) },
     );
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

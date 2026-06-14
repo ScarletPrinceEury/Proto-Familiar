@@ -2893,6 +2893,31 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .vl-note { font-size: 0.78rem; color: var(--text-dim); line-height: 1.5; }
 .vl-status { font-size: 0.82rem; min-height: 1.1em; }
 
+/* Memory consent grid (Pillar G) */
+.vl-rem-grid { display: flex; flex-direction: column; gap: 5px; }
+.vl-rem-row  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vl-rem-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  min-width: 9em;
+  flex-shrink: 0;
+}
+.vl-rem-toggle { display: flex; gap: 3px; }
+.vl-rem-btn {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 100px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+}
+.vl-rem-btn:hover { border-color: var(--accent); color: var(--text); }
+.vl-rem-free.vl-rem-on  { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.vl-rem-ask.vl-rem-on   { background: color-mix(in srgb, orange 18%, transparent); color: #c97c00; border-color: #c97c00; }
+.vl-rem-never.vl-rem-on { background: color-mix(in srgb, var(--danger, #c0392b) 15%, transparent); color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
+
 /* Knock list (V4.x) — pending unregistered contacts above the grid */
 .vl-knocks {
   margin: 0 0 10px;

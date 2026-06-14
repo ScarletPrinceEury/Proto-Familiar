@@ -2199,9 +2199,11 @@ function reconcileLocationKnock(location) {
 }
 
 app.post('/api/village/villagers', async (req, res) => {
-  const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
+  const { name, categoryIds, categoryId, aliases, connection, triage,
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember } = req.body ?? {};
   try {
-    const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage });
+    const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage,
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember });
     reconcileKnocks(saved);
     res.json(saved);
   }
@@ -2209,9 +2211,11 @@ app.post('/api/village/villagers', async (req, res) => {
 });
 
 app.patch('/api/village/villagers/:id', async (req, res) => {
-  const { name, categoryIds, categoryId, aliases, connection, triage } = req.body ?? {};
+  const { name, categoryIds, categoryId, aliases, connection, triage,
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember } = req.body ?? {};
   try {
-    const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage });
+    const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage,
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember });
     reconcileKnocks(saved);
     res.json(saved);
   }
