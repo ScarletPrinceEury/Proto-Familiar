@@ -251,6 +251,31 @@ un-rolled-up; never an error in the chat path.
   Dr. Okafor?") — reevaluation as ordinary care, backed by the metadata. Non-hesitant per §7
   and CLAUDE.md: asking is welcome, silence is the failure mode.
 
+**Deleting (right to be forgotten).** The ward may ask at any time — directly, or via the
+Familiar relaying a third party's request — that the Familiar stop holding certain information.
+Three purge paths, each mapped to an MCP tool:
+
+- **By record id** (`mem_delete(id)`) — the ward (or the Familiar) knows exactly which record.
+- **By villagerId** (`mem_purge_by_villager(villagerId)`) — "forget everything you have on
+  Nici." Deletes all memory records (narrative + tracker entries) whose `subjects` includes that
+  villagerId; zeroes the graph node's `properties` (the skeleton may remain as a relational
+  placeholder — a person still existed in the ward's life even if the Familiar no longer holds
+  facts about them).
+- **By topic / category** (`mem_purge_by_topic(villagerId?, category)`) — "forget Nici's health
+  information." Deletes records matching a villagerId + `remember` category combo; finer-grained
+  than the full-villager purge.
+
+All three paths are **hard deletes**, not soft-flag. The request is a consent revocation; it
+must be honored as written, not silently retained as "remembered as deleted." Cascades:
+embeddings delete with their record (a dangling vector is a privacy bug); `knownTo` entries
+referencing the purged fact are removed from other records; `tracker_entry` rows cascade-delete
+when their `tracker_def` is deleted. The tools return a count; the Familiar reads it aloud ("I
+let go of X records about Nici"). All purge ops are **logged to the event log** — not because
+we doubt the ward, but because being seen to do what it said is part of the trust.
+
+Not in scope: undo / soft delete — this is a consent revocation, not an accident. The `remember`
+gate (§7) handles *future* retention; the purge handles *past* records; both apply together.
+
 **Backing up / exporting (single file).** The store is SQLite + `sqlite-vec` — already one
 file. Export formalizes that into a portable, self-contained backup:
 - **Canonical export = `VACUUM INTO` a single `.sqlite` file** — atomic, lossless, inspectable
@@ -518,6 +543,27 @@ true / false / ask. No new request per fact; no LLM call for the gate itself.
 - Category taxonomy starts small and extensible — e.g. `basics, emotional_content, health_info,
   relationships, whereabouts` — grown as needed; the classifier rides memorization either way.
 
+**Extraction granularity (the extraction prompt contract).**
+The memorization pass calls the LLM once at session end and receives a *list of candidate
+facts*, not a blob. The prompt contract:
+
+1. **One output per distinct claimable fact.** If a single utterance contains
+   multiple category-crossing facts ("Nici was upset about her breakup and her doctor put her on
+   new meds"), the extraction must produce *two* records: one `emotional_content`, one
+   `health_info`. This is the only way the `remember` gate can apply per-category policy
+   independently. A multi-category blob is a prompt bug, not a downstream edge case.
+2. **Minimum granularity = one `remember` category per output.** Encoded in the prompt's output
+   schema — the LLM returns a JSON array; each element has `content`, `category`, `subjects`,
+   `confidence`. The gate reads `category` to look up `villager.remember`.
+3. **Ambiguous or inseparable cases** — a fact that can't be expressed without spanning two
+   categories: err toward the *more restrictive* category. Assign it the higher-sensitivity
+   label so the gate is conservative. Both categories may appear in `tags`; the `remember` gate
+   fires on the one in `category`.
+4. **Low-confidence extractions** (`confidence < 0.4`) → skip silently; don't write, don't ask.
+   Too speculative to be actionable.
+5. **`ask`-flagged items** in the same pass: the Familiar surfaces them in-turn openly. Batch
+   multiple `ask` items into one question per session — not a per-fact permission dialog.
+
 **User-accessible:** edited in the Village editor alongside the disclosure categories, so both
 permission axes sit in one place the ward (and the Familiar) can see and adjust.
 
@@ -669,9 +715,10 @@ wanting to track.
   // multi-axis:
   values?: { [dimensionId]: <number | boolean | string> },
 
-  source: "self-report" | "familiar-observed" | "inferred",
+  observedAs: "self-report" | "familiar-observed" | "inferred",   // how the data was collected
   note?: "rough day but got through it",     // freeform annotation
   confidence?: 0.0–1.0,                      // §8.2 caretaker metadata
+  // source (authorship) inherited from all-records schema — see §8.2
 }
 ```
 
@@ -699,7 +746,36 @@ A caretaker must know *how solid* a memory is and *how much it matters*:
   Familiar say "as of last month" or re-confirm a stale fact rather than assert it cold.
 - **`careWeight` / salience** — flags care-critical facts (allergies, meds, crisis triggers) so
   retrieval prioritises them and they **resist decay**. A film preference may fade; a med
-  allergy must not.
+  allergy must not. **Mechanism:** retrieval weight is a function of recency + access frequency.
+  For `careWeight: "high"`, a **floor** is placed on retrieval weight — no matter how old or
+  seldom-accessed, the record's score never drops below `CARE_WEIGHT_FLOOR` (tunable constant,
+  default `0.5` on a 0–1 scale). Effect: a high-careWeight record may not lead the ranking if
+  the query is unrelated, but it never ages out and will always surface when semantically
+  relevant. Three cardinalities a code path checks: `"high"` → apply floor, flag as
+  care-critical in the result set; `"low"` → normal decay, eligible for archival; unset →
+  normal decay (the default for narrative records). (If a fourth level — `"critical"`,
+  floor = 1.0, exempt from any lazy-load path — is wanted, it's an §9 open item.)
+
+- **`source` — authorship and provenance.** Every Phylactery record carries a `source` object
+  identifying which embodiment wrote it and how it arrived:
+
+  ```
+  source: {
+    author: "proto-familiar" | "migration:entity-core" | "import:entity-loom" | "<embodiment-id>",
+    via:    "memorization" | "consolidation" | "manual" | "import" | "migration",
+    at:     "<ISO timestamp>",  // when written (explicit even if redundant with record.createdAt)
+    originalId?: "<ec-id>",     // migration records — entity-core's original id
+  }
+  ```
+
+  *Why now, not later:* migration (§6 Phase 1) will write thousands of records; without
+  `source.author`, there is no audit path separating the Familiar's own recall from migrated
+  state. A future embodiment reading this store needs to know if a fact was authored by it or
+  another instance — to calibrate trust or flag a conflict. `source` is cheap to stamp at
+  ingestion time and expensive to reconstruct afterward. It does not gate anything; it is
+  observability. The Familiar can read it: "this came from migration, confirmed by you last June
+  — want me to re-verify?" The tracker_entry's existing observation-source field is named
+  `observedAs` (how the data was collected) to keep the two concepts clearly distinct.
 
 ### 8.3 A richer ward care-profile
 
@@ -793,6 +869,19 @@ scopes.
 - **Caretaker extensions (§8):** all of 8.1–8.5 incorporated, including `relationToFamiliar`
   (`unaware` as the floor), `knownTo` (awareness aid, not a fourth hard gate), and the
   ward-defined tracker model (blueprint + data, `dimensions`, six primitive shapes).
+- **Deletion / right-to-be-forgotten (§3):** three hard-delete paths (by id, by villagerId, by
+  topic+category); cascades to embeddings, `knownTo` refs, tracker entries; logged, counted,
+  reported to the ward. No soft-delete, no undo path.
+- **`source` authorship on all records (§8.2):** structured tag — `author`, `via`, `at`,
+  `originalId?`; stamped at ingestion; distinct from tracker_entry's `observedAs`
+  (observation method). Not a gate — observability for audit and multi-embodiment trust.
+- **`remember` extraction granularity (§7):** prompt contract is per-fact, one `category` per
+  output; multi-category utterances are split; ambiguous → more restrictive category; `< 0.4`
+  confidence → skip; `ask` items batched into one in-turn question per session.
+- **`careWeight` decay mechanism (§8.2):** floor-based — `"high"` records can never score
+  below `CARE_WEIGHT_FLOOR` (default 0.5) regardless of age; `"low"` / unset decay normally.
+  Optional `"critical"` level (floor = 1.0) flagged as still-open if the human wants to nail
+  it before code.
 
 **Still open**
 1. **Milestone slot:** `0.6.x`? (proposed)
