@@ -489,13 +489,14 @@ the gate.
 5. **No handoff consumption, no surface dedup burn.** Discord turns run
    `enrich(..., { liveTurn: false })` — they read context but never
    consume the web session's handoff or burn surfacing dedup budgets.
-6. **Memorization of Discord sessions is DEFERRED.** Sessions land in
-   `logs/` (visible in the UI like any session) but are not enqueued
-   for memorization yet: memories created without audience tags from a
-   public room would enter the ward-private RAG pool and leak back out
-   through any `memories: true` audience. Tagging-at-creation is the
-   prerequisite (it also unlocks `memories: 'shared'`); that work is
-   the natural V4.x follow-up.
+6. **Memorization of Discord sessions is DEFERRED** *(building block now
+   in place — see decision 10)*. Sessions land in `logs/` (visible in
+   the UI like any session) but are not enqueued for memorization yet:
+   memories created without audience tags from a public room would enter
+   the ward-private RAG pool and leak back out through any `memories:
+   true` audience. Tagging-at-creation is the prerequisite (it also
+   unlocks `memories: 'shared'`). The room-level audience tag (decision
+   10) is the first half of that prerequisite.
 7. **One location = one session**, rotated after 6h idle; the
    conversation map persists in `tomes/.discord-map.json`.
    Observability: `GET /api/discord/status` + the Settings panel
@@ -515,3 +516,25 @@ the gate.
    is capped at 50, least-recently-seen evicted, so spam can't grow it
    unboundedly. Knocking grants nothing — binding is always the ward's
    explicit act in the UI.
+9. **Location knock list (0.5.2-alpha).** The same pattern for PLACES:
+   when the Familiar speaks in a guild channel with no `locations` entry,
+   the channel key + platform metadata is captured
+   (`tomes/.village-location-knocks.json`) so the Locations tab can offer
+   one-click registration. Same privacy/cap discipline as the people
+   knock list; saving a location auto-settles its knock.
+10. **Room audience tag (0.5.5-alpha).** Every Discord session is stamped
+   with `audienceTag` — a durable label of the room's audience computed
+   by `audience.audienceTagFor()`: scan the present users, resolve each
+   against the registry, and take the **lowest permission level in the
+   room** (a room is only as private as its least-trusted occupant; one
+   stranger floors it to `strangers`). A multi-category villager is
+   represented by their most-permissive category; the location's assigned
+   category joins the comparison as one more candidate, so the ceiling can
+   only ever *lower* the tag (a guild channel's silent/future readers are
+   covered by the ceiling, not by who has spoken). Ward DMs → the
+   `ward-private` sentinel — the only tag the future memorization sweep
+   will treat as safe to route into entity-core; every shared-room tag is
+   quarantined to the local Session Memories tome. The scan uses the
+   ACCUMULATED participants (readable, not just active), same basis as the
+   gate. This is the first half of the tagging-at-creation prerequisite
+   that unblocks `memories: 'shared'` and Discord memorization (decision 6).

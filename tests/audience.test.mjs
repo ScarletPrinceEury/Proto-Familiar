@@ -11,6 +11,8 @@ import {
   isGranted,
   stripGatedSections,
   fetchEligibility,
+  audienceTagFor,
+  AUDIENCE_TAG_WARD_PRIVATE,
 } from '../audience.js';
 
 // ── resolveAudience helpers ───────────────────────────────────────
@@ -433,4 +435,65 @@ describe('MARKER_GRANT_MAP', () => {
   });
   it('health maps to health', () => assert.equal(MARKER_GRANT_MAP.health, 'health'));
   it('location maps to location', () => assert.equal(MARKER_GRANT_MAP.location, 'location'));
+});
+
+// ── audienceTagFor — durable room-audience label ──────────────────
+
+describe('audienceTagFor', () => {
+  const reg = makeRegistry();
+
+  it('null audience (ward-private session) → ward-private', () => {
+    assert.equal(audienceTagFor(null, reg), AUDIENCE_TAG_WARD_PRIVATE);
+    assert.equal(AUDIENCE_TAG_WARD_PRIVATE, 'ward-private');
+  });
+
+  it('empty audience (no location, no participants) → ward-private', () => {
+    assert.equal(audienceTagFor({ location: null, participants: [] }, reg), AUDIENCE_TAG_WARD_PRIVATE);
+  });
+
+  it('a single known participant → their own permission level', () => {
+    // A DM with a friend is tagged at the friend level (scan the present
+    // user, compare to the database, take their level).
+    assert.equal(audienceTagFor({ location: null, participants: [{ id: 'v-alice' }] }, reg), 'cat-friends');
+    assert.equal(audienceTagFor({ location: null, participants: [{ id: 'v-bob' }] }, reg), 'cat-acquaint');
+  });
+
+  it('multiple participants → the LOWEST permission level present', () => {
+    // friend + acquaintance → acquaintance (the more restrictive of the two).
+    assert.equal(
+      audienceTagFor({ location: null, participants: [{ id: 'v-alice' }, { id: 'v-bob' }] }, reg),
+      'cat-acquaint',
+    );
+  });
+
+  it('any unknown user present floors the whole room to strangers', () => {
+    assert.equal(
+      audienceTagFor({ location: null, participants: [{ id: 'v-alice' }, { id: 'nobody' }] }, reg),
+      'strangers',
+    );
+  });
+
+  it('multi-category villager is represented by their most-permissive category', () => {
+    // Charlie ∈ {friends, acquaintances}; alone, the room is friends-level.
+    assert.equal(audienceTagFor({ location: null, participants: [{ id: 'v-multi' }] }, reg), 'cat-friends');
+  });
+
+  it('the location ceiling can only ever LOWER the tag', () => {
+    // A friend speaking in a public (strangers) channel → strangers.
+    assert.equal(audienceTagFor({ location: 'loc:public', participants: [{ id: 'v-alice' }] }, reg), 'strangers');
+    // A friend in a friends-ceiling channel stays at friends.
+    assert.equal(audienceTagFor({ location: 'loc:private', participants: [{ id: 'v-alice' }] }, reg), 'cat-friends');
+  });
+
+  it('unassigned / unknown location → strangers floor (fail-closed)', () => {
+    assert.equal(audienceTagFor({ location: 'loc:unset', participants: [] }, reg), 'strangers');
+    assert.equal(audienceTagFor({ location: 'loc:does-not-exist', participants: [] }, reg), 'strangers');
+  });
+
+  it('location pointing at a category that no longer exists → strangers floor', () => {
+    const r = makeRegistry({
+      locations: [{ key: 'loc:orphan', label: 'Orphan', assignedCategoryId: 'cat-deleted' }],
+    });
+    assert.equal(audienceTagFor({ location: 'loc:orphan', participants: [] }, r), 'strangers');
+  });
 });
