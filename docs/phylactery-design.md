@@ -304,6 +304,64 @@ file. Export formalizes that into a portable, self-contained backup:
 - *Sensitivity:* the file is the whole ward-private self. Optional passphrase
   encryption-at-rest for exports is an open decision (§9) — flagged, not yet specced.
 
+### Context economy (output projection + cache-aware placement)
+
+The caretaker-grade richness (§8: `source`, `confidence`, `knownTo`, `careWeight`,
+`relationToFamiliar`, tracker `dimensions`) makes per-record payloads fat. If recall serialized
+*whole* records into every turn, the context would bloat fast — and per CLAUDE.md
+token-consciousness, that cost compounds. The governing principle:
+
+> **Storage shape ≠ retrieval shape ≠ context shape. Store rich, return thin, project per need.**
+
+Most of that richness is **machinery** — it drives gating, decay, dedup, and the outgoing
+filter (§5); the Familiar almost never needs to *read* it to converse. **Guardrail: this is an
+output optimization, never a storage one.** A future pass must not "optimize" by dropping fields
+from the store or from the code paths that consume them — only from the prompt projection.
+
+**The levers (cheapest / highest-impact first):**
+- **List thin, read fat (two-phase).** Recall / `mem_search` return a *projection* — `id` +
+  one-line content/summary + a why-relevant tag — not the fat record. The full record (all
+  metadata, full text) is fetched only when a path actually needs it, via `mem_read(id)`. Reuses
+  the id-surfacing already specced (§3 tool surface): the Familiar greps thin, reads fat only
+  when warranted. Most turns never need fat.
+- **Metadata stays server-side by default.** `audience`, `careWeight`, `source`, raw `confidence`
+  numbers, `knownTo` lists, embeddings, `originalId` — none render. When staleness matters it
+  rides as a compact prose tag the Familiar reads naturally (*"(as of last month)"*,
+  *"(unconfirmed)"*), not a JSON blob with ISO timestamps.
+- **Conditional surfacing.** `knownTo` materializes only when composing *to* a specific person;
+  `relationToFamiliar` only when that villager is in the room. Not dumped wholesale every turn.
+- **Trackers return aggregates, not logs.** A `tracker_def` with 200 `tracker_entry` rows never
+  dumps 200 rows — default projection is latest entry + a tiny rollup (*"mood ~6 this week,
+  trending up"*). Full series fetched only on explicit demand ("show me this month"). Highest-
+  volume record type, so the largest single saver.
+- **Prefer the consolidated tier for background.** Consolidation already rolls daily→…→
+  significant into summaries; detail scales *inversely* with age/relevance — recent/relevant
+  pulls the raw record, old/background pulls the rolled-up one-liner, not the dailies behind it.
+- **Token-budgeted assembly (code, not an LLM call).** The Phylactery slice of `enrich()` gets a
+  token budget; it fills highest-relevance-first until the budget is hit, degrading deeper hits
+  to summaries. Keep `k` tight; the `careWeight` floor (§8.2) guarantees care-critical facts
+  survive a tight budget.
+- **Identity is the one always-on cost.** It's injected wholesale every turn (the static
+  prefix), so identity records must stay **curated and bounded** — not allowed to grow unbounded.
+
+Net per-turn Phylactery output ≈ `identity (bounded) + top-k thin projections + tracker
+rollups`, with fat reads and full series strictly on demand.
+
+**Cache-aware placement (already built — keep depth 4).** `thalamus.js` already splits
+enrichment into a `static` block (base instructions + identity → top of the system message, in
+the upstream LLM's cached prefix) and a `dynamic` block (RAG memory + graph + temporal),
+depth-injected by `injectDynamicAtDepth()` at a user-set depth (`thalamusDynamicDepth`, 1–50,
+**default 4**). Prefix caching reuses a contiguous run from the top up to the first change, so:
+everything *above* the per-turn dynamic block is cached; the block + everything *below* it
+reprocess each turn. **Depth is a salience/flow knob, not a cache knob** — *smaller* depth caches
+*more* (the volatile block sits lower, leaving a longer stable prefix); a *larger* depth keeps
+recent dialogue contiguous near generation at the cost of reprocessing those messages. Depth 4
+performs well and stays. The real efficiency lever is the projection work above: a *thin* dynamic
+block means the reprocessed region is small at any depth — projection and depth are
+complementary, and projection is the unambiguous win. **Constraint:** the dynamic block must
+remain the *highest* volatile element — nothing else volatile (no per-turn timestamps, other
+dynamic injects) may sit above it, or the cached prefix breaks earlier than the injection point.
+
 ---
 
 ## 4. Pillars (one milestone, phased)
@@ -919,6 +977,11 @@ scopes.
 10. **Foreign-source import (§6 Phase 6):** interim entity-loom hop vs. lifting its parsers into
     a Phylactery-native importer — and whether foreign import is in this milestone at all
     (proposed: later/optional, off the critical path).
+11. **Context-economy knobs (§3 "Context economy"):** default `k` for thin recall, the Phylactery
+    slice's per-turn token budget in `enrich()`, and whether *any* metadata field is allowed to
+    surface in the default projection (proposed: none — staleness only, as a compact prose tag).
+    Dynamic-injection depth stays at the current default of **4** (decided — salience/flow knob,
+    not a cache knob).
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
