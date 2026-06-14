@@ -263,10 +263,12 @@ see §6 Phase 1) — sit in the static prefix every turn (§3 "Context economy")
 they accumulate detail that is *true and worth keeping* but no longer earns a place in
 front-of-mind-every-turn. The fix is a real drain, not manual restraint:
 
-- **Two new terminal memory categories: `me` and `ward`** — siblings to `significant` (not rollup
-  tiers in the daily→…→significant chain; a *destination*). Graduated identity / ward-profile
-  facts land here as ordinary `narrative` records, RAG-recalled when relevant instead of injected
-  always.
+- **Two new terminal memory categories: `me` and `ward`** — a *destination*, not rollup tiers.
+  They're a **separate axis from granularity** (decided, §9): a distinct record field (working
+  name `register`), *not* new values in `VALID_MEMORY_GRANULARITIES` — that enum stays
+  `daily…significant` untouched. Episodic lived-memory is addressed by granularity; graduated
+  identity is `register: me | ward`. Graduated facts land here as ordinary `narrative` records,
+  RAG-recalled when relevant instead of injected always.
 - **The audit is Familiar-led and regular.** I periodically review my `identity` and `ward`
   blocks and graduate anything that doesn't need constant surfacing into `me` / `ward`. The heavy
   lifting (spotting over-threshold blocks, proposing candidates) **rides the consolidation pass**
@@ -587,10 +589,9 @@ MCP via `callTool`. Repointing is mechanical but must not be forgotten:
   surface and front-end stay structurally; only the data layer underneath moves.
 - **Phylactery must expose the Map's data source** — a full-graph dump (every node + deduplicated
   edges), the `graph/full` equivalent (a Pillar A2 requirement, noted there).
-- **Re-label and de-assume entity-core specifics:** the modal's "Knowledge (entity-core)" label
-  becomes Phylactery; the Memories tab's reliance on entity-core's composite-key /
-  granularity+date addressing (CLAUDE.md "composite-key contract") is re-checked against
-  Phylactery's record addressing.
+- **Re-label entity-core specifics:** the modal's "Knowledge (entity-core)" label becomes
+  Phylactery. The Memories tab's composite-key / granularity+date addressing **carries over
+  unchanged** (the contract is preserved, §9) — no re-work there.
 - **This is also where the new fields become user-accessible.** The editor gains controls for the
   `audience` tag (incl. the §6 Phase 4 bulk re-tag), the villager `remember` consent map (§7,
   edited alongside disclosure categories in the Village editor), `careWeight` (§8.2), and the
@@ -619,8 +620,13 @@ composite-key contract treatment — list them so none is discovered in the fiel
   'custom']` array (~:6246); the `/api/entity/identity/:category` path; and `entity-ref.js` /
   `tests`. **All move together** — like the composite-key contract.
 - **Standing-value ref scheme.** `entity-ref.js` resolves refs of the form
-  `entity-core:self/my_wants.md#section` (guarded by `entity-ref.test.mjs`). The `entity-core:`
-  scheme migrates to a store-neutral / `phylactery:` form — a seam plus its test.
+  `entity-core:self/my_wants.md#section` (guarded by `entity-ref.test.mjs`). The ref *structure* is
+  **preserved**; only the source token migrates — `entity-core:` → `phylactery:`, with
+  `entity-core:` kept as a **legacy alias** so existing stored refs still resolve (seam + test).
+- **Composite-key contract — preserved (decided, §9).** entity-core's `YYYY-MM-DD_slug` addressing
+  for significant memories carries over **unchanged**: `cerebellum.parseMemoryKey` and its five
+  seams stay as-is. This is the one seam that *doesn't* move — called out so no one "migrates" a
+  format that's fine.
 - **Consolidation LLM-key plumbing.** `entityCoreConnectionId` (settings, synced) →
   `loadEntityCoreEnv()` → the `ENTITY_CORE_LLM_API_KEY/BASE_URL/MODEL/PROVIDER` env vars (and ZAI
   aliases) passed at spawn (`thalamus.js` ~:307–336), plus the **`entity-core` badge / "✓ entity-core"
@@ -1136,6 +1142,15 @@ scopes.
   `ward` (siblings to `significant`). Graduated records decay, never auto-delete, and can be
   pulled back; **care-critical (`careWeight: high`) is pinned and never graduates.** The `user`
   identity block is **renamed `ward`** (applied at migration, §6 Phase 1).
+- **`me` / `ward` typing (§3 hygiene):** a **separate axis** from granularity — a distinct record
+  field (working name `register`), *not* values in `VALID_MEMORY_GRANULARITIES`. The granularity
+  enum stays `daily…significant` untouched; episodic memory is addressed by granularity, graduated
+  identity by `register: me | ward`.
+- **Memory addressing format (§6 seam inventory):** **preserve** entity-core's `YYYY-MM-DD_slug`
+  composite-key contract as-is — `cerebellum.parseMemoryKey` and its five seams carry over
+  unchanged (the format is fine; no migration of the addressing scheme). The `entity-ref.js` ref
+  *structure* is preserved too; only the source token migrates (`entity-core:` → `phylactery:`,
+  with `entity-core:` kept as a **legacy alias** so existing stored refs still resolve).
 - **Knowledge-manager repoint (Pillar I / §6 Phase 5):** the `/api/entity/*` surface + thalamus
   helpers + the front-end editor/Map repoint to Phylactery, and the editor becomes the
   user-accessible home for audience / `remember` / `careWeight` / deletion controls.
@@ -1168,16 +1183,6 @@ scopes.
     Dynamic-injection depth stays at the current default of **4** (decided — salience/flow knob,
     not a cache knob). The `me` / `ward` graduation thresholds (when a block is "too large") ride
     the same consolidation-cadence knob as item 8.
-12. **`me` / `ward` typing (§3 hygiene / seam inventory):** are the two new categories **values in
-    the granularity enumeration** (`VALID_MEMORY_GRANULARITIES`, joining daily…significant — then
-    every validator, tool description, and server check must add them) or a **separate axis** from
-    granularity? They aren't rollup tiers, which argues for a separate axis; decide before the
-    schema locks.
-13. **Memory addressing format (§6 seam inventory):** does Phylactery preserve entity-core's
-    `YYYY-MM-DD_slug` composite-key contract (so `cerebellum.parseMemoryKey` and its 5 seams stay
-    as-is) or adopt a new addressing scheme (then all five move together, with the test guard
-    updated)? The `entity-ref.js` `entity-core:` ref scheme rides this decision.
-
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
 ship only with explicit human approval of the behaviour. **The graduation-eligibility rule
