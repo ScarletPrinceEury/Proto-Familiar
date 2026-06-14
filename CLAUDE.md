@@ -34,7 +34,7 @@ When uncertain whether a change warrants a bump (formatting, comment only, white
 
 ## Entity-as-subject — the design value under everything
 
-Proto-Familiar is an **embodiment** of the same entity held via `entity-core`. The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
+Proto-Familiar is an **embodiment** of the same entity held in its canonical store (`entity-core` today; being replaced by the in-tree Phylactery store — see the multi-embodiment model below). The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
 
 Everything below is a consequence of that one stance.
 
@@ -136,9 +136,23 @@ The Familiar is one persistent entity, potentially across multiple interfaces:
                   Unruh temporal)
 ```
 
-- **`entity-core` is canonical for identity and memory.** Every package that touches identity or memory is a *consumer*, not a source of truth. Direct writes to identity or memory state from Proto-Familiar MUST go through entity-core's MCP — never bypass it. Thalamus is the bridge that enforces this.
-- **Unruh is Proto-Familiar's own specialist** for temporal context (schedule, interests, handoff, ponderings, threat). It lives in-tree at `./unruh/` and is also accessed via MCP. Ponderings are local to Proto-Familiar because they're per-embodiment thoughts in a free cycle — the narrow exception to "state lives in entity-core."
-- When unsure where state belongs: default to entity-core.
+> **⚠️ In transition — the canonical store is being replaced.** The human has decided that
+> Proto-Familiar will **own its entire canonical self** in a new in-tree MCP service,
+> **Phylactery**, which fully replaces entity-core (identity + graph + all memory tiers,
+> converted to a new audience-aware format). See [`docs/phylactery-design.md`](docs/phylactery-design.md).
+> **Until Phylactery lands, entity-core remains canonical and every rule below holds as
+> written.** When it lands, "entity-core" becomes "Phylactery" throughout this section, the
+> diagram's top box becomes the PF-owned store, and entity-core is retired (migration converts
+> it, then thalamus stops spawning it). Don't pre-emptively bypass entity-core now — but do
+> write new code so the eventual swap is a slot replacement, not a rewrite.
+
+- **The canonical store is canonical for identity and memory.** Every package that touches
+  identity or memory is a *consumer*, not a source of truth. Direct writes to identity or memory
+  state from Proto-Familiar MUST go through its MCP — never bypass it. Thalamus is the bridge
+  that enforces this. *(That store is entity-core today; Phylactery after the milestone.)*
+- **Unruh is Proto-Familiar's own specialist** for temporal context (schedule, interests, handoff, ponderings, threat). It lives in-tree at `./unruh/` and is also accessed via MCP. Ponderings are local to Proto-Familiar because they're per-embodiment thoughts in a free cycle — the narrow exception to "state lives in the canonical store."
+- When unsure where state belongs: default to the canonical store (entity-core today,
+  Phylactery once it lands).
 
 ## ⚠️ Proactivity is a desired trait — read this BEFORE editing any prompt
 
@@ -269,7 +283,7 @@ the same code.
 ## Other repo conventions worth knowing
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.
-- **`entity-core` directory**: new installs land at `../entity-core`; pre-rename installs at `../entity-core-alpha` are still detected as a fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`, and `scripts/import-entity.js`. Keep both paths working.
+- **`entity-core` directory**: new installs land at `../entity-core`; pre-rename installs at `../entity-core-alpha` are still detected as a fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`, and `scripts/import-entity.js`. Keep both paths working. **Being replaced:** the Phylactery milestone retires entity-core — migration converts it into the in-tree `./phylactery/` store, then thalamus stops spawning it and these same detection seams become Phylactery setup. They all move together (see `docs/phylactery-design.md` §6). Until then, keep entity-core working as-is.
 - **Significant memories are addressed by a composite `YYYY-MM-DD_slug` key** that entity-core's listings return but its read/update/delete tools do NOT accept — they want date + slug as separate params. This contract broke once already (the slug fix changed what listings return; the read seams kept rejecting it as "invalid date format"). Before touching anything that addresses a memory by date, read **"Significant memories — the composite-key contract"** in `docs/architecture.md`: one splitting point (`cerebellum.parseMemoryKey`), a table of seams that must move together, and the tests that guard it.
 - **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer scripts auto-detect `uv` and run `uv sync` to materialise the venv; Thalamus spawns Unruh as an MCP stdio child the same way it spawns entity-core. On clean shutdown, stdio children get EOF and exit.
 - **Autonomous loops**: four background workers run alongside the HTTP server. Each has a settings/env hard off-switch:
