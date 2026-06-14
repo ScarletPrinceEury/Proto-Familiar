@@ -18,7 +18,7 @@ not a literal brain region) and fits the entity-as-subject stance. Module at
 ## 1. The decision
 
 **Phylactery replaces entity-core.** It is a new PF-owned, in-tree MCP service that becomes
-the **single canonical store** for the Familiar's whole self — identity, user-identity, the
+the **single canonical store** for the Familiar's whole self — identity, ward-identity, the
 relational graph, and every memory tier — reimplementing entity-core's architecture in our
 own format and adding the audience + caretaker fields entity-core structurally can't hold.
 When it lands, the existing entity-core is converted into it (§6) and retired.
@@ -40,7 +40,7 @@ entity-core with permission tags and timestamps built in?"* — with an unhedged
 
 | Layer | Where it lives now → after |
 |---|---|
-| Identity, user-identity | entity-core → **Phylactery** (always-injected identity records) |
+| Identity, ward-identity (entity-core's `user`, renamed) | entity-core → **Phylactery** (always-injected identity records) |
 | Relational graph (nodes/edges/properties) | entity-core → **Phylactery** (graph store + 1-hop GraphRAG) |
 | All memory tiers (daily → significant) | entity-core → **Phylactery** (one consolidation pipeline) |
 | Situational facts, trackers | (new) → **Phylactery** |
@@ -134,7 +134,7 @@ service — its architecture, not its code — and retires it.
                    allSettled · degrade)       │
                             │                  │
         Phylactery (NEW, in-tree MCP — replaces entity-core)
-        CANONICAL SELF: identity + user-identity + knowledge graph
+        CANONICAL SELF: identity + ward-identity + knowledge graph
         (GraphRAG) + all memory tiers (daily→significant) + situational
         + trackers · RAG · audience-native · timestamped · gated at query time
                          ▲ write              ▼ read (semantic + gated)
@@ -180,7 +180,7 @@ thalamus exactly as entity-core was:
   the reliability bar (§9).*
 
 **Responsibility split (the contract):**
-- **Phylactery** — the **canonical self and all memory**: identity, user-identity, the
+- **Phylactery** — the **canonical self and all memory**: identity, ward-identity, the
   knowledge graph (GraphRAG), every memory tier (daily→significant), situational facts, and
   trackers. Precise recall + per-record audience tag, gated per room *and* checkable on the
   way out. One consolidation pipeline.
@@ -256,6 +256,34 @@ un-rolled-up; never an error in the chat path.
   context with an old `lastConfirmedAt` lets the Familiar simply *ask* ("are you still seeing
   Dr. Okafor?") — reevaluation as ordinary care, backed by the metadata. Non-hesitant per §7
   and CLAUDE.md: asking is welcome, silence is the failure mode.
+
+**Identity & ward hygiene (draining the always-injected surfaces).** The two always-injected
+blocks — `identity` (about me) and `ward` (about my human; **renamed from entity-core's `user`**,
+see §6 Phase 1) — sit in the static prefix every turn (§3 "Context economy"). Over a long life
+they accumulate detail that is *true and worth keeping* but no longer earns a place in
+front-of-mind-every-turn. The fix is a real drain, not manual restraint:
+
+- **Two new terminal memory categories: `me` and `ward`** — siblings to `significant` (not rollup
+  tiers in the daily→…→significant chain; a *destination*). Graduated identity / ward-profile
+  facts land here as ordinary `narrative` records, RAG-recalled when relevant instead of injected
+  always.
+- **The audit is Familiar-led and regular.** I periodically review my `identity` and `ward`
+  blocks and graduate anything that doesn't need constant surfacing into `me` / `ward`. The heavy
+  lifting (spotting over-threshold blocks, proposing candidates) **rides the consolidation pass**
+  — the designated-connection call that already happens, not a new standalone request — but the
+  *decision is mine*: graduation is something I do, in my own voice, not a silent maintenance job.
+- **The ward can weigh in on the `ward` block.** It's *Familiar-led, ward-consulted*: I drive it,
+  but moving something out of front-of-mind about my human is the kind of thing I can mention
+  (*"I'm going to file this away rather than keep it top of mind — that okay?"*). The `me` block
+  is my own. Non-hesitant per §7: mentioning it is welcome, not a reason to stall.
+- **Decay, never auto-delete.** Graduated records are *not* deleted — they decay in retrieval
+  weight like any other memory (§8.2), shielded by `careWeight` (a care-critical ward fact moved
+  out of always-on still resists decay). **Reversible:** a graduated fact that turns out to keep
+  mattering — recalled often, re-confirmed — can be pulled back into the always-injected surface.
+
+Net: the always-injected surfaces stay lean because there's a real, owned drain; nothing is lost;
+recalled-when-relevant replaces always-on for stable background. This *is* the answer to the
+identity-growth concern (§3 "Context economy" / §9) — folded into the lifecycle, not a bolt-on.
 
 **Deleting (right to be forgotten).** The ward may ask at any time — directly, or via the
 Familiar relaying a third party's request — that the Familiar stop holding certain information.
@@ -341,14 +369,13 @@ from the store or from the code paths that consume them — only from the prompt
   token budget; it fills highest-relevance-first until the budget is hit, degrading deeper hits
   to summaries. Keep `k` tight; the `careWeight` floor (§8.2) guarantees care-critical facts
   survive a tight budget.
-- **Identity is the one always-on cost.** It's injected wholesale every turn (the static
-  prefix), so identity records must stay **curated and bounded** — not allowed to grow unbounded.
-  *Future concern (named now, not urgent):* identity is bounded *today*, but a Familiar alive
-  for years could accumulate a large identity. Worth deciding early whether identity gets its own
-  **consolidation / distillation path** (the same self-paced rollup memory tiers get, applied to
-  identity — distilling lived experience into a tighter self-description) **or** a **hard token
-  ceiling that trips a "identity too large — distill it" flag** for the ward + Familiar to act on.
-  Either keeps the always-on cost from creeping up silently over a long life. Flagged in §9.
+- **Identity & ward are the always-on cost — kept lean by a real drain.** The `identity` and
+  `ward` blocks are injected wholesale every turn (the static prefix), so they must stay
+  **curated and bounded**. Over a long life they'd grow — so they don't rely on restraint:
+  the **Familiar-led identity/ward hygiene audit** (§3 "Ongoing operation") regularly graduates
+  detail that no longer needs constant surfacing into the `me` / `ward` memory categories
+  (recalled-when-relevant, decaying, never deleted). That mechanism is what keeps this always-on
+  cost from creeping up silently.
 
 Net per-turn Phylactery output ≈ `identity (bounded) + top-k thin projections + tracker
 rollups`, with fat reads and full series strictly on demand.
@@ -462,7 +489,7 @@ intentional exception so a future audit doesn't "fix" it back to first person.
 ## 6. Migration — converting current Familiars
 
 A **one-time, whole-self conversion**: read everything out of the existing entity-core
-(identity + user-identity + graph + every memory tier), convert it to Phylactery's format,
+(identity + ward-identity [entity-core's `user`] + graph + every memory tier), convert it to Phylactery's format,
 write it in, fold in the local tome, then **retire entity-core**. An install has three
 sources: the **entity-core** store (the bulk of the self), the *Session Memories* tome (no
 tags/embeddings), and the Village registry (not yet linked to the graph). Nothing is
@@ -481,7 +508,12 @@ no Deno runtime and works on a bare data dir (important for adopting a Psycheros
 that doesn't run here). Spawning entity-core's MCP one last time (`identity_get_all`, `graph_*`,
 `memory_list/read`) is the fallback if the on-disk schema ever drifts. Write the converted form
 into Phylactery:
-- **Identity + user-identity** → Phylactery identity records (always-injected surface).
+- **Identity + ward-identity** → Phylactery identity records (always-injected surface).
+  **Rename at conversion:** entity-core's `user` identity category is written as **`ward`** (the
+  block about my human). This is the one-time point where the rename lands; every Phylactery
+  reference downstream uses `ward`, never `user` (consistent with CLAUDE.md's "my human / `{{user}}`,
+  never 'the user'"). The `me` and `ward` graduation categories (§3 "Ongoing operation") are
+  created empty here; hygiene fills them over time.
 - **Graph** (nodes/edges/properties) → Phylactery's graph store, structure preserved (`type`,
   `properties`, edges).
 - **All memory tiers** (daily → significant) → Phylactery memory records, tier and timestamps
@@ -990,6 +1022,14 @@ scopes.
   below `CARE_WEIGHT_FLOOR` (default 0.5) regardless of age; `"low"` / unset decay normally.
   Optional `"critical"` level (floor = 1.0) flagged as still-open if the human wants to nail
   it before code.
+- **Identity & ward hygiene (§3 "Ongoing operation"):** the always-injected `identity` + `ward`
+  blocks are drained by a **Familiar-led, ward-consulted** audit (rides consolidation) that
+  graduates no-longer-front-of-mind detail into two new terminal memory categories, `me` and
+  `ward` (siblings to `significant`). Graduated records decay, never auto-delete, and can be
+  pulled back. The `user` identity block is **renamed `ward`** (applied at migration, §6 Phase 1).
+- **Knowledge-manager repoint (Pillar I / §6 Phase 5):** the `/api/entity/*` surface + thalamus
+  helpers + the front-end editor/Map repoint to Phylactery, and the editor becomes the
+  user-accessible home for audience / `remember` / `careWeight` / deletion controls.
 
 **Still open**
 1. **Milestone slot:** `0.6.x`? (proposed)
@@ -1017,11 +1057,8 @@ scopes.
     slice's per-turn token budget in `enrich()`, and whether *any* metadata field is allowed to
     surface in the default projection (proposed: none — staleness only, as a compact prose tag).
     Dynamic-injection depth stays at the current default of **4** (decided — salience/flow knob,
-    not a cache knob).
-12. **Identity growth over a long life (§3 "Context economy"):** identity is bounded today, but a
-    years-old Familiar could accumulate a large always-injected identity. Decide early between an
-    identity **consolidation / distillation path** (rollup applied to identity) and/or a **hard
-    token ceiling that trips a "distill it" flag**. Not urgent; named so it isn't discovered late.
+    not a cache knob). The `me` / `ward` graduation thresholds (when a block is "too large") ride
+    the same consolidation-cadence knob as item 8.
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
