@@ -457,7 +457,9 @@ Per CLAUDE.md a milestone owns one MINOR slot; landing = `0.6.0`, sub-features b
   the new fields the rest of the doc promises — audience re-tagging (§6 Phase 4), the `remember`
   consent map (§7), `careWeight` (§8.2), and the deletion / purge paths (§3). Without this pillar
   those "user-accessible" promises float; this is where the ward (and the Familiar) actually
-  see and adjust them.
+  see and adjust them. Also carries the **prompt-inspector relabel + connection-designation
+  relabel** and the **doc-migration checklist** — see the §6 Phase 5 *seam inventory* for the full
+  list of code/UI/doc seams that move with the repoint.
 
 ---
 
@@ -594,6 +596,53 @@ MCP via `callTool`. Repointing is mechanical but must not be forgotten:
   edited alongside disclosure categories in the Village editor), `careWeight` (§8.2), and the
   deletion / purge paths (§3 — by record id from the editor, by villager / topic). Without these,
   the doc's repeated "user-accessible" promises have no surface; this pillar is that surface.
+
+#### Seam inventory — everything that moves with the repoint (from a codebase audit)
+
+A full audit (June 2026) found the repoint is wider than "swap the spawn." These are the seams
+that **must move together**; a half-migrated install is the failure mode. Modeled on the
+composite-key contract treatment — list them so none is discovered in the field.
+
+- **MCP lifecycle + every `callTool` site.** `thalamus.js` holds the `mcpClient` global, `connect`
+  / `scheduleEntityCoreReconnect` / `reconnectEntityCore` / `shutdownEntityCore`, and **~24
+  `callTool` sites + their helper wrappers** (`listMemories`, `readMemory`, `getIdentityAll`,
+  `listGraphNodes`, `searchGraphNodes`, `getGraphSubgraph`, `getFullGraph`, `createMemory`,
+  `appendIdentity`, `updateIdentitySection`, `rewriteIdentitySection`, `createGraphNode/Edge`,
+  `update/deleteGraphNode/Edge`, `create/listSnapshots`, `restoreSnapshot`). All repoint to
+  Phylactery; the enrich-path calls (`identity_get_all`, `memory_search`, `graph_node_search`,
+  `graph_subgraph`) too.
+- **The `user` → `ward` identity-category rename is a code-wide seam set, not just data.** It is
+  hardcoded at: `cerebellum.js` `VALID_IDENTITY_CATEGORIES` (~:670) and the `write_identity_file`
+  / `rewrite_identity_section` tool-schema enums (~:809, ~:917); `thalamus.js` the default file
+  list (`user_identity.md`…, ~:361), the `id.user ?? []` read accessor (~:1340), and the
+  static-context label (~:1580); `public/app.js` the hardcoded `['self','user','relationship',
+  'custom']` array (~:6246); the `/api/entity/identity/:category` path; and `entity-ref.js` /
+  `tests`. **All move together** — like the composite-key contract.
+- **Standing-value ref scheme.** `entity-ref.js` resolves refs of the form
+  `entity-core:self/my_wants.md#section` (guarded by `entity-ref.test.mjs`). The `entity-core:`
+  scheme migrates to a store-neutral / `phylactery:` form — a seam plus its test.
+- **Consolidation LLM-key plumbing.** `entityCoreConnectionId` (settings, synced) →
+  `loadEntityCoreEnv()` → the `ENTITY_CORE_LLM_API_KEY/BASE_URL/MODEL/PROVIDER` env vars (and ZAI
+  aliases) passed at spawn (`thalamus.js` ~:307–336), plus the **`entity-core` badge / "✓ entity-core"
+  designation button** in `public/app.js` (~:723, ~:754). Repoint + relabel to Phylactery.
+- **Auto-snapshot-before-destructive invariant.** `thalamus.js` `autoSnapshot()` fires a snapshot
+  before *every* destructive op (memory/identity/graph update+delete). **Phylactery must preserve
+  this** — it's the code-level expression of the "memories-disappearing" rule and underpins the
+  deletion/purge paths (§3). (Hard deletes still hard-delete; the snapshot is the recoverable
+  floor under them.)
+- **Deno removal seam set.** Retiring entity-core's Deno child removes Deno entirely: the
+  installer clone/tag/`deno cache` steps (`install.{sh,bat}`) **and** the `~/.deno/bin` PATH
+  priming in the launchers (`start.sh`, `start.bat`, `Proto-Familiar.command`) all drop or become
+  Phylactery/`uv` setup. `scripts/import-entity.js` + the `import-entity` npm script become the
+  Phylactery conversion tooling (Phase 1).
+- **Prompt Inspector relabel + opportunity.** The inspector color-codes the prompt "by source
+  (entity-core, lore, base)" with "Entity-Core (static/dynamic)" labels and a "No entity-core
+  block" fallback (`public/app.js` ~:2520, ~:2575; `index.html` ~:28). Relabel to Phylactery —
+  and it's the natural surface to *also* expose the new audience tag + thin-projection visibility.
+- **Doc-migration surface** (per the architecture.md-same-commit rule): `docs/entity-core.md`
+  (retire / fold into a Phylactery doc), `docs/architecture.md` (thalamus, composite-key, tier
+  sections), `README` + `docs/getting-started.md` (drop the "Deno 2+ required" line), and passing
+  references in `api-reference`, `features`, `troubleshooting`, and `wiki/`.
 
 ### Phase 6 — External sources ("feed logs in / merge other entity-cores")
 **An existing entity-core (e.g. from Psycheros) needs no entity-loom** — it's just Phase 1
@@ -1119,6 +1168,15 @@ scopes.
     Dynamic-injection depth stays at the current default of **4** (decided — salience/flow knob,
     not a cache knob). The `me` / `ward` graduation thresholds (when a block is "too large") ride
     the same consolidation-cadence knob as item 8.
+12. **`me` / `ward` typing (§3 hygiene / seam inventory):** are the two new categories **values in
+    the granularity enumeration** (`VALID_MEMORY_GRANULARITIES`, joining daily…significant — then
+    every validator, tool description, and server check must add them) or a **separate axis** from
+    granularity? They aren't rollup tiers, which argues for a separate axis; decide before the
+    schema locks.
+13. **Memory addressing format (§6 seam inventory):** does Phylactery preserve entity-core's
+    `YYYY-MM-DD_slug` composite-key contract (so `cerebellum.parseMemoryKey` and its 5 seams stay
+    as-is) or adopt a new addressing scheme (then all five move together, with the test guard
+    updated)? The `entity-ref.js` `entity-core:` ref scheme rides this decision.
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the three
 gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the `remember` gate
