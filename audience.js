@@ -172,6 +172,98 @@ export function resolveAudience(sessionAudience, registry) {
   return effective;
 }
 
+// ── Audience tag (durable room-audience label) ────────────────────
+//
+// A stable identifier for "who this room is readable by", stamped onto
+// a session so memories derived from it never mix ward-private content
+// with content from a shared room.
+//
+// How it works (the design): scan the present users, compare each to
+// the registry, and tag the room with the LOWEST permission level in
+// it — a room is only as private as its least-trusted occupant. One
+// stranger present drops the whole room to strangers.
+//
+//   - No audience set (ward-private session) → 'ward-private'. This is
+//     the only tag the memorization sweep treats as safe to route into
+//     entity-core; everything else stays in the local tome.
+//   - Otherwise: each participant resolves to the category that
+//     represents their access (their most-permissive category, since
+//     multi-category membership unions). Unknown users fall to the
+//     strangers floor. The tag is the least-permissive of those.
+//   - The location's assigned category joins the comparison as one more
+//     candidate, so it can only ever LOWER the tag — a public channel's
+//     full readership isn't enumerable from who has spoken, so its
+//     ceiling still caps the room (unassigned → strangers floor).
+//
+// This is the building block the fetchEligibility 'shared' ladder waits
+// on (see the note there): once memories carry this tag, a 'shared'
+// grant can filter to same-audience memories instead of gating OFF.
+export const AUDIENCE_TAG_WARD_PRIVATE = 'ward-private';
+
+// Permission score for a grant set: higher = more access. Used only to
+// rank categories against each other so the room can be tagged with its
+// least-permissive occupant. Scalar grants score by ladder position;
+// boolean grants score 1 when granted. The strangers floor ({}) → 0.
+function permissionScore(grants) {
+  let score = 0;
+  for (const [k, v] of Object.entries(grants ?? {})) {
+    const ladder = GRANT_LADDERS[k];
+    if (ladder) {
+      const i = ladder.indexOf(v);
+      score += i === -1 ? 0 : i;
+    } else if (v === true) {
+      score += 1;
+    }
+  }
+  return score;
+}
+
+// The category that represents a villager's access level — their
+// most-permissive category (membership unions, so the max is their
+// effective level). Unknown villager / unknown category → strangers.
+function representativeCategory(villager, categoryMap) {
+  const ids = (villager?.categoryIds?.length) ? villager.categoryIds : [CATEGORY_STRANGERS];
+  let best = CATEGORY_STRANGERS;
+  let bestScore = -1;
+  for (const id of ids) {
+    const cat = categoryMap.get(id);
+    const s = cat ? permissionScore(cat.grants) : 0;
+    if (s > bestScore) { bestScore = s; best = cat ? id : CATEGORY_STRANGERS; }
+  }
+  return best;
+}
+
+export function audienceTagFor(sessionAudience, registry) {
+  if (!sessionAudience) return AUDIENCE_TAG_WARD_PRIVATE;
+  const { location = null, participants = [] } = sessionAudience;
+  if (!participants.length && !location) return AUDIENCE_TAG_WARD_PRIVATE;
+
+  const categoryMap = new Map((registry?.categories ?? []).map(c => [c.id, c]));
+
+  // Scan present users → the category that represents each one's access.
+  const candidates = (participants ?? []).map(p =>
+    representativeCategory(resolveParticipant(p, registry), categoryMap),
+  );
+
+  // The location ceiling joins as one more candidate (only ever lowers).
+  if (location) {
+    const loc = (registry?.locations ?? []).find(l => l.key === location);
+    const catId = loc?.assignedCategoryId;
+    candidates.push(catId && categoryMap.has(catId) ? catId : CATEGORY_STRANGERS);
+  }
+
+  if (!candidates.length) return AUDIENCE_TAG_WARD_PRIVATE;
+
+  // Lowest permission level in the room wins (most restrictive).
+  let tag = candidates[0];
+  let min = permissionScore(categoryMap.get(tag)?.grants);
+  for (const id of candidates.slice(1)) {
+    const s = permissionScore(categoryMap.get(id)?.grants);
+    if (s < min) { min = s; tag = id; }
+  }
+  return tag;
+}
+
 // ── Grant check ───────────────────────────────────────────────────
 
 /**

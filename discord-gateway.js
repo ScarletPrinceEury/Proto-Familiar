@@ -35,7 +35,7 @@ import { randomUUID } from 'crypto';
 
 import { enrich, withLock } from './thalamus.js';
 import { getRegistry } from './village.js';
-import { resolveAudience } from './audience.js';
+import { resolveAudience, audienceTagFor } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -252,6 +252,7 @@ async function sessionForLocation(locationKey, locationLabel, kind) {
       endedAt: null,
       provider: null,
       model: null,
+      audienceTag: null,
       messages: [],
       location: { platform: 'discord', key: locationKey, label: locationLabel, kind },
       participants: [],
@@ -408,6 +409,18 @@ async function handleTurn(gw, msg, decision) {
         registry,
       );
 
+  // Durable audience tag for the room — the LOWEST permission level
+  // among everyone present ('ward-private' only for the ward's own DMs).
+  // Scanned from the ACCUMULATED participants (readable, not just active,
+  // same basis as the gate above), so a stranger who spoke earlier still
+  // floors the room now. Stamped on the session so the memorization
+  // sweep can route ward-private content into entity-core while
+  // quarantining shared-room content to the local tome.
+  const audienceTag = audienceTagFor(
+    decision.audience === null ? null : { location: decision.audience.location, participants: session.participants },
+    registry,
+  );
+
   const enriched = await enrich(content, { audience: audienceGrants, liveTurn: false })
     .catch(err => {
       console.error('[discord] enrich failed (degrading to bare turn):', err?.message ?? err);
@@ -451,15 +464,16 @@ async function handleTurn(gw, msg, decision) {
     { id: randomUUID(), role: 'user',      content: userContent, timestamp: nowIso },
     { id: randomUUID(), role: 'assistant', content: reply,       timestamp: new Date().toISOString() },
   ];
-  session.provider  = conn.provider;
-  session.model     = conn.model;
-  session.updatedAt = new Date().toISOString();
+  session.provider    = conn.provider;
+  session.model       = conn.model;
+  session.audienceTag = audienceTag;
+  session.updatedAt   = new Date().toISOString();
   await writeSessionLog(session);
   await touchLocation(decision.locationKey, session.sessionId);
 
   gw.status.turns += 1;
   gw.status.lastTurnAt = session.updatedAt;
-  console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}${audienceGrants === null ? ', ward-private' : ', gated'})`);
+  console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
 }
 
 // ── Gateway connection ────────────────────────────────────────────

@@ -192,6 +192,21 @@ function Start-Server {
         # Reclaim before we launch a new one.
         Stop-StrayServerProcesses
     }
+    # Node may have just been installed by the bundled installer in this
+    # same VBS session. The VBS that spawned us inherited its PATH before
+    # the install ran, so our PATH predates the new Node entry. Re-read the
+    # persisted PATH and prime the WinGet Links shim dir (where winget now
+    # puts Node LTS — it ships as an archive package, not an MSI) so the
+    # very first launch right after install works without a reboot.
+    $env:PATH = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+                [System.Environment]::GetEnvironmentVariable('Path','User') + ';' + $env:PATH
+    foreach ($nodeDir in @((Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
+                           (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
+                           (Join-Path $env:ProgramFiles  'nodejs'))) {
+        if ((Test-Path $nodeDir) -and ($env:PATH -notlike "*$nodeDir*")) {
+            $env:PATH = "$nodeDir;$env:PATH"
+        }
+    }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Node.js is not on PATH. Run the installer (double-click Proto-Familiar.vbs while node_modules is missing, or run scripts\win\install.ps1).",

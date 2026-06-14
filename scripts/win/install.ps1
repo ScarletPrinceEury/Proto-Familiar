@@ -77,10 +77,25 @@ try {
 }
 
 function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
+# Re-read the persisted PATH (winget writes its modification to the User
+# PATH registry value) and prime the dirs a just-installed tool lands in
+# but that aren't reliably visible in this same session yet. The WinGet
+# Links dir is where winget shims archive/portable packages — Node LTS
+# now ships that way (it used to be an MSI under Programs\nodejs), so a
+# fresh winget Node install dead-ended every refresh that only knew the
+# old MSI locations. Adding Links here makes the installer recover Node
+# in-session without the "open a new window and re-run" dance.
 function Update-EnvPath {
-    $env:Path = `
-        [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + `
+    $registry = @(
+        [System.Environment]::GetEnvironmentVariable("Path","Machine"),
         [System.Environment]::GetEnvironmentVariable("Path","User")
+    ) | Where-Object { $_ }
+    $known = @(
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),  # winget archive/portable shims (Node LTS, etc.)
+        (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),         # Node MSI, per-user
+        (Join-Path $env:ProgramFiles  'nodejs')                  # Node MSI, machine-wide
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    $env:Path = (($registry + $known) -join ';')
 }
 function Step($msg)  { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Ok($msg)    { Write-Host "    $msg" -ForegroundColor Green }
