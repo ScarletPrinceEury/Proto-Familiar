@@ -163,9 +163,15 @@ thalamus exactly as entity-core was:
   records the room is cleared for. Gating happens *inside* the store, not bolted on after.
 - **MCP tool surface** (covers entity-core's surface, audience-aware): identity get/set,
   `graph_*` (node/edge create/update/merge/search), `mem_search(query, audienceTag, k)`,
-  `mem_create(content, audience, …)`, `mem_list`, `mem_read`, snapshots, and a
-  filter-support query for the outgoing gate (`mem_search_restricted(draft, roomTag)` →
+  `mem_create(content, audience, …)`, `mem_list`, `mem_read`, `mem_delete(id)` /
+  `mem_purge_by_villager` / `mem_purge_by_topic` (deletion — see "Ongoing operation"), snapshots,
+  and a filter-support query for the outgoing gate (`mem_search_restricted(draft, roomTag)` →
   records above the room's level that semantically match a drafted reply).
+  **Every record a recall or search returns carries its `id`** (the way entity-core's
+  `memory_search` returns scored records, not bare strings) — so the Familiar can act on a
+  specific memory (delete, re-tag, re-confirm) by referencing what it was just given, never by
+  memorizing ids. This is the CLAUDE.md reachability rule in the schema: the id is an output the
+  Familiar can hold, not a hidden key it can't name.
 - **Graceful degradation + off-switch:** `enrich()` degrades to absent if the client is null;
   ships with `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1` in the same commit (the rule for every
   peer/loop). *Caveat: as the canonical-self store, Phylactery being absent degrades the turn
@@ -255,7 +261,15 @@ un-rolled-up; never an error in the chat path.
 Familiar relaying a third party's request — that the Familiar stop holding certain information.
 Three purge paths, each mapped to an MCP tool:
 
-- **By record id** (`mem_delete(id)`) — the ward (or the Familiar) knows exactly which record.
+- **By record id** (`mem_delete(id)`) — but *the Familiar never memorizes ids*; they are an
+  **output of recall/search**, not something it holds. Per the CLAUDE.md reachability rule, this
+  path is only real because ids ride in on results: every record returned by `enrich()` recall
+  **or** `mem_search` carries its `id` alongside its content. So the flow is **search → confirm →
+  delete** — when the fact isn't already in context, the Familiar runs `mem_search`, gets
+  candidates *with ids*, shows the ward (*"I found these three — this one?"*), and deletes by the
+  returned id. The ward-confirmation step is required, not ceremony: RAG match is fuzzy and a
+  delete is irreversible, so a single-record purge passes through the ward's eyes (same posture as
+  §6 Phase 2's "don't auto-merge people").
 - **By villagerId** (`mem_purge_by_villager(villagerId)`) — "forget everything you have on
   Nici." Deletes all memory records (narrative + tracker entries) whose `subjects` includes that
   villagerId; zeroes the graph node's `properties` (the skeleton may remain as a relational
