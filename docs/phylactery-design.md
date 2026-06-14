@@ -346,10 +346,10 @@ until reviewed)? Safety-vs-utility — yours.
    `ask` = **hybrid** (the Familiar's own read *plus* freely asking the ward; asking
    is welcome, never a reason to go silent) ✔. Remaining: confirm the starting category
    taxonomy.
-7. **Caretaker extensions (§11): DECIDED** — all of 11.1–11.4 incorporated ✔, including
-   `relationToFamiliar` (a villager's stance toward the Familiar — driving posture,
-   identity-anchored — with `unaware`/never-heard-of-me as the default for new
-   contacts). Remaining detail: starting tracker types + care-profile field list.
+7. **Caretaker extensions (§11): DECIDED** — all of 11.1–11.5 incorporated ✔, including
+   `relationToFamiliar` (stance toward the Familiar; `unaware` as the floor) and
+   `knownTo` (who's aware of a fact — an *awareness aid*, not a fourth hard gate).
+   Remaining detail: starting tracker types + care-profile field list.
 
 Everything touching *when/whether the Familiar may store, recall, or disclose* (the
 three gates) falls under the CLAUDE.md safety-critical sign-off rule — §5 and the
@@ -550,8 +550,46 @@ Two relational axes, because a villager relates both to the ward *and* to the Fa
 - The entity-as-subject stance in data: the Familiar is *someone who has their own
   relationships* — including not-yet-relationships — not a tool with one uniform face.
 
-**Decided with the human:** all of 11.1–11.4 are in. 11.1 (the `kind` + tracker shape)
-and 11.2 (caretaker metadata) land in the schema from the start; 11.3 (ward
-care-profile) and 11.4 (both relationship axes, incl. `relationToFamiliar` with
-`unaware` as the floor) are part of the person/ward records — linking to Unruh /
-cerebellum where noted rather than duplicating.
+### 11.5 `knownTo` — who's aware of what (epistemic state)
+
+A distinct axis from `audience`: not *who may hear* a fact (a **policy** — the
+disclosure gate) but *who already knows* it (a **fact about the world**). A caretaker
+moving through a social graph needs both, because they come apart constantly.
+
+- **Shape:** a list on the Phylactery record — `knownTo: [{ who, since?, source? }]`,
+  where `who` is a villagerId / `"ward"` / `"familiar"` and `source` ∈ `told-them` /
+  `they-told-me` / `inferred`. Absence = "no record that they know" (not proof they
+  don't).
+- **Lives on the Phylactery record, not the entity-core node.** Who-knows-what is PF
+  embodiment state, not canonical-self data — it stays in PF's layer (the record links
+  to a graph node / villager by id). It sits right beside `audience`: the two
+  audience-facing facts about a memory — *may-hear* and *already-knows*.
+
+**Why it earns its place (social caretaking):**
+- **Surprises & secrets** — the case `audience` *cannot* express. "Ward is planning a
+  surprise for Sam — `knownTo: [ward, familiar]`." The Familiar must never be the one
+  who spoils it to Sam. That's a per-*individual* secret, not a per-*category*
+  permission.
+- **Not condescending / not repetitive** — don't "reveal" to someone what they already
+  know; don't re-explain across turns ("I told Sarah on the 3rd").
+- **Leak detection** — if someone references a fact and they're *not* in `knownTo`,
+  that's a signal: the model's stale, or something got out. Update it, or quietly flag
+  to the ward.
+
+**Awareness aid first — NOT a fourth hard gate.** The Familiar mainly *reasons* with
+`knownTo` (avoid spoiling, avoid repeating, notice surprises). It may also *feed* the
+outgoing filter as a signal ("about to tell someone not in `knownTo` something
+sensitive" → weigh it), but it does **not** become a blunt gate that stops the Familiar
+ever telling anyone anything new — telling people new things is normal and good; the
+hard gate stays the `audience` check. (Hardening `knownTo` into a real gate later would
+be a safety-critical sign-off decision, per CLAUDE.md.)
+
+**Pairs with `relationToFamiliar`.** `unaware` answers "does this person know *I*
+exist?"; `knownTo` answers "does this person know *this fact*?" — the same epistemic
+humility, at two scopes.
+
+**Decided with the human:** 11.1–11.5 are all in. 11.1 (`kind` + tracker shape), 11.2
+(caretaker metadata), and 11.5 (`knownTo`) land in the Phylactery record schema from
+the start; 11.3 (ward care-profile) and 11.4 (both relationship axes, incl.
+`relationToFamiliar` with `unaware` as the floor) are part of the person/ward records —
+linking to Unruh / cerebellum where noted rather than duplicating.
