@@ -31,6 +31,10 @@ const PKG_VERSION = (() => {
   catch { return 'unknown'; }
 })();
 
+// Consent-pending tracking file — written by memorization.js, read here so the
+// Familiar sees pending ask-gate items without an extra MCP call every turn.
+const CONSENT_PENDING_FILE = path.join(__dirname, 'tomes', '.consent-pending.json');
+
 // Phylactery — the canonical in-tree self-store. Ships at ./phylactery/
 // (subdirectory, same pattern as Unruh). Launched via `uv run python -m
 // phylactery` with cwd set to phylactery/ so its ./data/ resolves.
@@ -1667,12 +1671,40 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       console.error('[thalamus] time anchor assembly failed:', err?.message ?? err);
     }
 
+    // ── Consent-pending block (Pillar C ask-gate) ─────────────────────────
+    // Read the local file — cheap, no MCP round-trip — and inject a block
+    // so I know to ask my human before the session ends. Only for ward-private
+    // sessions (consent is between me and my human, not a shared room).
+    let consentPendingBlock = '';
+    if (!staticOnly && !gated) {
+      try {
+        const cpRaw = await fsp.readFile(CONSENT_PENDING_FILE, 'utf8').catch(() => null);
+        if (cpRaw) {
+          const cpItems = JSON.parse(cpRaw);
+          if (Array.isArray(cpItems) && cpItems.length > 0) {
+            const lines = [
+              `[PENDING MEMORY CONSENT — ${cpItems.length} memory record(s) from a recent session are waiting for my human's approval before I keep them permanently.]`,
+              'Items:',
+              ...cpItems.map((x, i) =>
+                `  ${i + 1}. About ${x.villagerName || 'someone'} (${x.category ?? 'unknown category'}): ${x.brief ?? ''}  [id: ${x.id}]`
+              ),
+              'If my human says to keep them, I call memory_confirm_consent with the id(s); if not, memory_drop_pending.',
+            ];
+            consentPendingBlock = lines.join('\n');
+          }
+        }
+      } catch {
+        /* best-effort — no consent block on parse error */
+      }
+    }
+
     const dynamicSections = [];
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
+    if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
     if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
@@ -1693,11 +1725,12 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       custContent            ? 'cust'     : null,
       memLines               ? 'mem'      : null,
       graphLines             ? 'graph'    : null,
-      ponderingsBlock        ? 'pondering': null,
-      deferredIntentsBlock   ? 'intents'  : null,
-      careBlock              ? 'care'     : null,
-      temporalLines          ? 'temporal' : null,
-      surfaceCandidatesBlock ? 'surface'  : null,
+      ponderingsBlock        ? 'pondering'  : null,
+      deferredIntentsBlock   ? 'intents'    : null,
+      consentPendingBlock    ? 'consent'    : null,
+      careBlock              ? 'care'       : null,
+      temporalLines          ? 'temporal'   : null,
+      surfaceCandidatesBlock ? 'surface'    : null,
     ].filter(Boolean).join(',');
     if (totalChars === 0) {
       console.warn('[thalamus] enrich() produced no content — identity files may be empty and no memories found');
@@ -1800,6 +1833,54 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
     console.error('[thalamus] createMemory failed:', err.message);
     return { ok: false, error: err.message };
   }
+}
+
+/**
+ * Full-field memory create — used by the memorization worker (Pillar C).
+ * Accepts audience, subjects, category, consent_pending, confidence.
+ * Returns { ok, id?, error? }.
+ */
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0 }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
+    if (slug) args.slug = slug;
+    if (category) args.category = category;
+    const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
+    // Parse the returned string to extract the id (format: "Memory saved id=<id>.")
+    const text = raw?.content?.find(c => c.type === 'text')?.text ?? '';
+    const idMatch = text.match(/id=([a-f0-9]+)/);
+    const id = idMatch?.[1] ?? null;
+    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}`);
+    return { ok: true, id };
+  } catch (err) {
+    console.error('[thalamus] createMemoryFull failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Confirm consent for the given memory IDs (Pillar C ask-path).
+ * Returns { ok, confirmed }.
+ */
+export async function confirmConsentMemories(ids) {
+  return callTool('memory_confirm_consent', { ids }).catch(err => {
+    console.warn('[thalamus] confirmConsentMemories failed:', err?.message ?? err);
+    return { ok: false };
+  });
+}
+
+/**
+ * Drop (hard-delete) consent-pending memories the ward declined (Pillar C).
+ * Returns { ok, dropped }.
+ */
+export async function dropPendingMemories(ids) {
+  return callTool('memory_drop_pending', { ids }).catch(err => {
+    console.warn('[thalamus] dropPendingMemories failed:', err?.message ?? err);
+    return { ok: false };
+  });
 }
 
 /**

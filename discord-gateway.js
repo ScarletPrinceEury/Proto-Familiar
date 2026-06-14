@@ -20,9 +20,10 @@
 //     participants — fail-closed, an unassigned room is Strangers.
 //   - No tools on Discord turns (V4): the gate bounds what I know;
 //     no tool surface bounds what a prompt-injection could do.
-//   - Memorization of Discord sessions is DEFERRED until memories
-//     carry audience tags — enqueueing untagged memories from public
-//     rooms would poison the ward-private RAG pool (see design doc).
+//   - Memorization: when a session idles past SESSION_IDLE_ROTATE_MS
+//     and a fresh session is created, the old session is enqueued for
+//     autonomous memorization (Pillar C). The stored audienceTag on the
+//     session log gates what context each fact carries into Phylactery.
 //
 // Transport: native WebSocket (Node ≥ 22; stable global). If the
 // runtime lacks it, the adapter logs loudly and stays down — degraded,
@@ -37,6 +38,7 @@ import { enrich, withLock } from './thalamus.js';
 import { getRegistry } from './village.js';
 import { resolveAudience, audienceTagFor } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
+import { enqueueMemorization } from './memorization.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
@@ -242,9 +244,29 @@ async function sessionForLocation(locationKey, locationLabel, kind) {
     const map = await readMap();
     const entry = map[locationKey];
     const nowMs = Date.now();
-    if (entry?.sessionId && (nowMs - new Date(entry.lastTurnAt ?? 0).getTime()) < SESSION_IDLE_ROTATE_MS) {
-      const log = await readSessionLog(entry.sessionId);
-      if (log) return log;
+    if (entry?.sessionId) {
+      const elapsedMs = nowMs - new Date(entry.lastTurnAt ?? 0).getTime();
+      if (elapsedMs < SESSION_IDLE_ROTATE_MS) {
+        const log = await readSessionLog(entry.sessionId);
+        if (log) return log;
+      } else {
+        // session idled out — memorize it before rotating
+        const oldLog = await readSessionLog(entry.sessionId);
+        if (oldLog?.messages?.length >= 2) {
+          const settings = readSettingsSync();
+          const conn = primaryConnectionFrom(settings);
+          if (conn?.apiKey && conn?.model) {
+            enqueueMemorization({
+              sessionId: oldLog.sessionId,
+              messages:  oldLog.messages,
+              provider:  conn.provider,
+              apiKey:    conn.apiKey,
+              model:     conn.model,
+              audienceTag: oldLog.audienceTag ?? 'ward-private',
+            }).catch(err => console.warn('[discord] memorize on rotate failed:', err.message));
+          }
+        }
+      }
     }
     const fresh = {
       sessionId: randomUUID(),

@@ -145,19 +145,37 @@ def memory_create(
     granularity: str,
     date: Optional[str] = None,
     slug: Optional[str] = None,
+    audience: Optional[str] = None,
+    subjects: Optional[list[str]] = None,
+    care_weight: Optional[str] = None,
+    category: Optional[str] = None,
+    consent_pending: Optional[bool] = None,
+    confidence: Optional[float] = None,
     instanceId: Optional[str] = None,
 ) -> str:
-    """Store a new memory at the given granularity tier.
+    """Store a new per-fact memory at the given granularity tier.
     For non-significant tiers, appends to the same-date file.
     For significant, slug is derived from content if omitted.
+    audience defaults to ward-private; subjects is a list of villager IDs;
+    category is the remember-taxonomy bucket; consent_pending marks records
+    awaiting ward approval (the ask path).
     """
-    result = mem.create(content, granularity, date_key=date, slug=slug, conn=_c())
+    result = mem.create(
+        content, granularity, date_key=date, slug=slug,
+        audience=audience or "ward-private",
+        subjects=subjects or [],
+        care_weight=care_weight,
+        category=category,
+        consent_pending=bool(consent_pending),
+        confidence=float(confidence) if confidence is not None else 1.0,
+        conn=_c(),
+    )
     if not result.get("ok"):
         return f"Memory save failed: {result.get('error', 'unknown')}"
     dk = result.get("dateKey", "")
     if granularity == "significant":
-        return f"Memory saved (significant/{dk})."
-    return "Memory saved."
+        return f"Memory saved (significant/{dk}) id={result.get('id', '')}."
+    return f"Memory saved id={result.get('id', '')}."
 
 
 @mcp.tool()
@@ -226,6 +244,45 @@ def memory_delete(
     if not result.get("ok"):
         return f"Delete failed: {result.get('error', 'unknown')}"
     return f"Memory deleted: {result.get('deleted')}. (Snapshot created before deletion.)"
+
+
+@mcp.tool()
+def memory_list_consent_pending() -> dict[str, Any]:
+    """I use this to list memory records I stored with consent_pending=true —
+    facts about a villager whose remember setting is 'ask'. I surface these
+    to my human and ask whether to keep them; then call memory_confirm_consent
+    or memory_drop_pending based on the answer.
+    Returns { items: [{ id, category, subjects, brief }] }.
+    """
+    items = mem.list_consent_pending(conn=_c())
+    return {"items": items}
+
+
+@mcp.tool()
+def memory_confirm_consent(ids: list[str]) -> str:
+    """I use this to confirm that my human consents to keeping memory records
+    I flagged as consent_pending. Clears the pending flag; records become
+    permanent. Call after my human says yes to the pending-consent question.
+    """
+    if not ids:
+        return "No ids provided."
+    result = mem.confirm_consent(ids, conn=_c())
+    n = result.get("confirmed", 0)
+    return f"Consent confirmed for {n} record(s). They are now stored permanently."
+
+
+@mcp.tool()
+def memory_drop_pending(ids: list[str]) -> str:
+    """I use this to delete memory records my human has declined to keep.
+    Hard-deletes consent_pending records by id — no undo, no soft-delete,
+    because this is consent revocation. Call after my human says no.
+    Auto-snapshots first so an accidental drop can be recovered.
+    """
+    if not ids:
+        return "No ids provided."
+    result = mem.drop_pending(ids, conn=_c())
+    n = result.get("dropped", 0)
+    return f"Dropped {n} consent-pending record(s). (Snapshot created before deletion.)"
 
 
 # ── Knowledge graph ───────────────────────────────────────────────────────────

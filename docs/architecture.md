@@ -61,13 +61,14 @@ server.js  (Express, Node 18+, ESM)
     ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4)
     │
     │  ── classical infrastructure ──────────────────────────────
-    ├── memorization.js     ── per-session memorization queue + worker
+    ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
     ├── temporal-format.js  ── pure renderer for Unruh's payload
     ├── providers.js        ── shared chat-completions URL map
     │
     ├── logs/               session JSON files (git-ignored)
     └── tomes/              per-Tome JSON files + state caches
         ├── .memorization-queue.json   (git-ignored)
+        ├── .consent-pending.json      (git-ignored) — pending consent IDs for Phylactery
         ├── .threat-state.json{,.tmp}  (git-ignored)
         ├── .outbox.json{,.tmp}        (git-ignored)
         └── .last-activity.json{,.tmp} (git-ignored)
@@ -438,12 +439,41 @@ village-support-design.md). Off-switch:
 `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
 `GET /api/discord/status`.
 
-### `memorization.js` — session memorization
+### `memorization.js` — autonomous per-fact memorization (Pillar C)
 
-Unchanged from the original design. Persistent queue at
-`tomes/.memorization-queue.json`, 5-second tick, exponential backoff,
-per-Tome write mutex, idempotent enqueue on
+Persistent queue at `tomes/.memorization-queue.json`, 5-second tick,
+exponential backoff, idempotent enqueue on
 `sessionId+scope+topicId+messageRange`.
+
+**Extraction** uses a per-fact format: LLM returns
+`{facts: [{content, category, subjects, confidence}]}` where `category`
+∈ `basics | emotional_content | health_info | relationships | whereabouts`.
+Facts with `confidence < 0.4` are silently skipped.
+
+**`remember` gate** (per villager, per category):
+- `true` → store freely in Phylactery
+- `false` → drop silently
+- `ask` (or no `remember` map on the villager) → store immediately with
+  `consent_pending=1` and record the ID in `tomes/.consent-pending.json`
+
+When multiple villagers are subjects of a fact, the most restrictive
+gate wins (`false > ask > true`). Default when no villager map exists:
+`basics=true`, all others=`ask`.
+
+**Consent flow:** `thalamus.enrich()` reads `.consent-pending.json` cheaply
+(no MCP round-trip) and injects a `[PENDING MEMORY CONSENT]` block when
+non-empty. The Familiar calls `memory_confirm_consent(ids)` or
+`memory_drop_pending(ids)` (both in `BUILTIN_TOOLS`); `pruneConsentPending(ids)`
+then removes the handled IDs from the local file.
+
+**Triggers:**
+- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon).
+  Always `audienceTag: 'ward-private'`.
+- Discord: `discord-gateway.sessionForLocation()` enqueues the old session
+  when idle rotation fires (session has been quiet ≥ `SESSION_IDLE_ROTATE_MS`).
+  `audienceTag` comes from the stored session log.
+
+**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
 
 ### `public/app.js` — frontend (one file)
 

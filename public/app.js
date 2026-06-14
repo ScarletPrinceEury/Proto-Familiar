@@ -2409,6 +2409,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     provider:     state.provider,
     apiKey:       state.apiKey,
     model:        state.model,
+    audienceTag:  'ward-private',
   };
   try {
     const resp = await fetch('/api/memorize', {
@@ -2445,6 +2446,7 @@ function memorizeViaBeacon(messages, sessionId, opts = {}) {
     provider:     state.provider,
     apiKey:       state.apiKey,
     model:        state.model,
+    audienceTag:  'ward-private',
   };
   try {
     const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
@@ -3964,12 +3966,13 @@ async function runAutoSummarize(session) {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        sessionId: session.sessionId,
-        scope:     'session',
+        sessionId:   session.sessionId,
+        scope:       'session',
         messages,
-        provider:  state.provider,
-        apiKey:    state.apiKey,
-        model:     state.model,
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        audienceTag: 'ward-private',
       }),
     });
     if (!resp.ok) throw new Error(await resp.text().catch(() => `HTTP ${resp.status}`));

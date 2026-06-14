@@ -49,8 +49,10 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
   bumpInterest, setStandingInterest,
+  confirmConsentMemories, dropPendingMemories,
 } from './thalamus.js';
 import { markIntentActedOn } from './recent-ponderings.js';
+import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
 
@@ -1238,6 +1240,47 @@ export const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  // ── Phylactery consent tools ───────────────────────────────────────────
+  // When I autonomously extracted facts from a session and one or more of
+  // them had an `ask` remember gate, they were stored with consent_pending=1
+  // so my human could review them. The [PENDING MEMORY CONSENT] block in
+  // my context lists them — I use these tools to confirm or discard.
+  {
+    type: 'function',
+    function: {
+      name: 'memory_confirm_consent',
+      description: 'I call this after my human says yes to keeping memory records I flagged as pending consent. The records become permanent — consent_pending is cleared and they enter the normal recall pool. I pass the ids shown in the [PENDING MEMORY CONSENT] block. I confirm only the ones my human approved; I drop the ones they declined using memory_drop_pending.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of memory record IDs (from the [PENDING MEMORY CONSENT] block) to confirm as permanently stored.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memory_drop_pending',
+      description: 'I call this to discard memory records my human does not want stored — ones I flagged as pending consent and they declined, or that I judge should be dropped outright. The records are deleted (an auto-snapshot is taken first so nothing is truly unrecoverable). I pass the ids shown in the [PENDING MEMORY CONSENT] block.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of memory record IDs (from the [PENDING MEMORY CONSENT] block) to discard permanently.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
 ];
 
 /**
@@ -1336,6 +1379,22 @@ export const TOOL_EXECUTORS = {
       if (data.alreadyDone) return 'Intent was already marked as filed.';
       return data.ok ? 'Deferred intent marked as filed.' : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
+  },
+
+  memory_confirm_consent: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of memory record IDs.';
+    const result = await confirmConsentMemories(ids);
+    pruneConsentPending(ids).catch(() => {});
+    const n = result?.confirmed ?? ids.length;
+    return `Consent confirmed for ${n} record(s). They are now stored permanently.`;
+  },
+
+  memory_drop_pending: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of memory record IDs.';
+    const result = await dropPendingMemories(ids);
+    pruneConsentPending(ids).catch(() => {});
+    const n = result?.dropped ?? ids.length;
+    return `Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`;
   },
 
   // ── Knowledge-editing executors ────────────────────────────────────

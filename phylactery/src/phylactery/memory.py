@@ -118,6 +118,11 @@ def create(
     slug: str | None = None,
     source_author: str = _INSTANCE_ID,
     audience: str = "ward-private",
+    subjects: list[str] | None = None,
+    care_weight: str | None = None,
+    category: str | None = None,
+    consent_pending: bool = False,
+    confidence: float = 1.0,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     if granularity not in VALID_GRANULARITIES:
@@ -128,6 +133,7 @@ def create(
     try:
         now = now_iso()
         rec_id = new_id()
+        subj_json = json.dumps(subjects or [])
 
         if granularity == "significant":
             if not slug:
@@ -157,10 +163,13 @@ def create(
 
             conn.execute("""
                 INSERT INTO memories(id,kind,register,granularity,date_key,slug,content,
-                    audience,source_json,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    audience,subjects_json,care_weight,category,consent_pending,
+                    confidence,source_json,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (rec_id, "narrative", "episodic", granularity, dk, slug,
-                  content, audience, source, now, now))
+                  content, audience, subj_json, care_weight, category,
+                  1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
+                  source, now, now))
 
         _upsert_embedding(conn, rec_id, content)
         return {"ok": True, "id": rec_id, "dateKey": dk}
@@ -306,3 +315,82 @@ def _delete_embedding(conn: sqlite3.Connection, record_id: str) -> None:
         conn.execute("DELETE FROM memory_vecs WHERE memory_id=?", (record_id,))
     except Exception:
         pass
+
+
+# ── Consent flow (Pillar C) ───────────────────────────────────────────────────
+
+def list_consent_pending(conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Return thin projections of all consent_pending=1 records."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, category, subjects_json, content FROM memories "
+            "WHERE consent_pending=1 AND kind='narrative' ORDER BY created_at ASC",
+        ).fetchall()
+        results = []
+        for r in rows:
+            subjects = []
+            try:
+                subjects = json.loads(r["subjects_json"] or "[]")
+            except Exception:
+                pass
+            results.append({
+                "id": r["id"],
+                "category": r["category"],
+                "subjects": subjects,
+                "brief": (r["content"] or "")[:120],
+            })
+        return results
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def confirm_consent(ids: list[str], conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Clear consent_pending flag for the given record IDs. Ward said yes."""
+    if not ids:
+        return {"ok": True, "confirmed": 0}
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        placeholders = ",".join("?" * len(ids))
+        with conn:
+            result = conn.execute(
+                f"UPDATE memories SET consent_pending=0, updated_at=? WHERE id IN ({placeholders}) AND consent_pending=1",
+                [now_iso()] + list(ids),
+            )
+        return {"ok": True, "confirmed": result.rowcount}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def drop_pending(ids: list[str], conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Hard-delete consent_pending records. Ward said no — honour the refusal."""
+    if not ids:
+        return {"ok": True, "dropped": 0}
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        auto_snapshot(conn)
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"SELECT id FROM memories WHERE id IN ({placeholders}) AND consent_pending=1",
+            list(ids),
+        ).fetchall()
+        rec_ids = [r["id"] for r in rows]
+        if not rec_ids:
+            return {"ok": True, "dropped": 0}
+        with conn:
+            p2 = ",".join("?" * len(rec_ids))
+            conn.execute(f"DELETE FROM memories WHERE id IN ({p2})", rec_ids)
+        for rid in rec_ids:
+            _delete_embedding(conn, rid)
+        return {"ok": True, "dropped": len(rec_ids)}
+    finally:
+        if own_conn:
+            conn.close()
