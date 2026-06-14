@@ -20,9 +20,8 @@ The server's responsibilities:
 
 1. **Proxy LLM requests** so the user's API key never leaves localhost.
 2. **Enrich every request** with cognitive-module context: identity +
-   memory + graph from Phylactery (currently entity-core, being migrated),
-   temporal context + ponderings + care-check framing from Unruh + the
-   caring-spine modules.
+   memory + graph from Phylactery, temporal context + ponderings +
+   care-check framing from Unruh + the caring-spine modules.
 3. **Run autonomous loops** for the proactive surfaces — pondering,
    reminders, silence-triage — that fire without a human request.
 4. **Persist** session logs, Tomes, ponderings, outbox items,
@@ -35,10 +34,9 @@ Browser (public/)
     ▼
 server.js  (Express, Node 18+, ESM)
     │
-    │  ── cognitive bridge (per-request enrichment, INWARD) ──────
-    ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)    — identity / memory / graph  ← being replaced
-    │                     ──►  Phylactery   (Python via uv, MCP) — identity / memory / graph (Pillar A built; Pillar B repoints thalamus)
-    │                     ──►  Unruh        (Python via uv, MCP) — schedule / interests / handoff / routine
+    │  ── cognitive bridge (per-request enrichment, INWARD) ────────
+    ├── thalamus.js       ──►  Phylactery  (Python via uv, stdio MCP) — identity / memory / graph / snapshots
+    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / routine
     │
     │  ── motor module (action + delivery, OUTWARD) ───────────────
     ├── cerebellum.js       ── tool registry + executors + tool-call loop,
@@ -77,8 +75,8 @@ server.js  (Express, Node 18+, ESM)
 
 Thalamus is a **plural-peer mediator**: each cognitive module is a
 separate stdio MCP child spawned at boot. Failures degrade
-independently — entity-core down doesn't take Unruh out, and vice
-versa — and `enrich()` fans out across whichever peers are connected
+independently — Phylactery down doesn't take Unruh out, and vice
+versa — and `enrich()` fans out across whichever peers are live
 via `Promise.allSettled`. Empty sub-blocks render as nothing in the
 prompt; the LLM only sees scaffolding when there's content.
 
@@ -93,7 +91,7 @@ ponderings injection, care-check framing) and as background loops
 ```
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
-├── thalamus.js              MCP bridge — entity-core + Unruh, plus all the helper wrappers
+├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
@@ -111,19 +109,27 @@ ponderings injection, care-check framing) and as background loops
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
-├── village.js               Village registry (V1) — categories/grant sets, villagers/aliases, locations; local mirror + entity-core write-through sync (see docs/village-support-design.md)
+├── village.js               Village registry (V1) — categories/grant sets, villagers/aliases, locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md)
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
 ├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
 ├── memorization.js          Persistent per-session memorization queue + worker
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
-├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
+├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge; ref format unchanged until Pillar I)
 ├── package.json
 ├── .gitignore
 │
 ├── logs/                    Session JSON files (auto-created, git-ignored)
 ├── tomes/                   Per-Tome JSON files (auto-created, git-ignored on UUID names)
+│
+├── phylactery/              In-tree Python module (Phylactery — canonical self-store)
+│   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
+│   ├── src/phylactery/server.py  FastMCP server (25 tools: identity / memory / graph / snapshots)
+│   ├── src/phylactery/identity.py + memory.py + graph.py + consolidate.py
+│   ├── src/phylactery/snapshot.py + audience.py + embed.py + db.py
+│   ├── data/                SQLite database + snapshots (auto-created, git-ignored)
+│   └── tests/               pytest contract tests
 │
 ├── unruh/                   In-tree Python module (Unruh — temporal context)
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock

@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Proto-Familiar installer (macOS / Linux)
 #
-# Fresh install: installs Node deps, auto-installs Deno + uv (if
-#   missing), clones entity-core (release tag) as a sibling directory,
-#   pre-caches its Deno module graph, syncs Unruh's Python venv from
-#   unruh/uv.lock, and registers a desktop entry on Linux.
+# Fresh install: installs Node deps, auto-installs uv (if missing),
+#   syncs Phylactery's Python venv from phylactery/uv.lock, syncs
+#   Unruh's Python venv from unruh/uv.lock, and registers a desktop
+#   entry on Linux.
 #
 # Update mode: triggered automatically when node_modules/ already exists.
-#   Pulls latest Proto-Familiar (git pull --ff-only), refreshes
-#   entity-core to the pinned tag, re-runs idempotent npm install +
-#   deno cache + uv sync. Re-runs Node / Deno / uv checks (and
-#   auto-installs anything missing) in both modes so the system catches
-#   up to new requirements.
+#   Pulls latest Proto-Familiar (git pull --ff-only), re-runs idempotent
+#   npm install + uv sync (Phylactery + Unruh). Re-runs Node / uv checks
+#   (and auto-installs anything missing) in both modes so the system
+#   catches up to new requirements.
 #
 # Desktop entry creation is idempotent and runs in both modes: it
 # creates the entry only when it doesn't already exist, so a fresh
@@ -20,32 +19,16 @@
 # shortcut.
 #
 # User-data safety: BEFORE any git operation in update mode the installer
-# takes a defensive copy of tomes/, logs/, and entity-core's data/ into
+# takes a defensive copy of tomes/, logs/, and phylactery/data/ into
 # .pf-backups/<timestamp>/ inside the project root. Independent of git's
 # own protections (untracked files left alone, --ff-only refusing
-# dirty-conflict merges, entity-core's data/ being gitignored), this
-# gives a clear recovery path if anything goes sideways.
+# dirty-conflict merges, phylactery/data/ being gitignored), this gives
+# a clear recovery path if anything goes sideways.
 
 set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PARENT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
-# Resolve the entity-core sibling checkout. New installs land in
-# `entity-core/`; older installs from before the rename used
-# `entity-core-alpha/` and we keep using that in place to avoid silent
-# directory moves.
-ENTITY_CORE_DIR_NEW="$PARENT_DIR/entity-core"
-ENTITY_CORE_DIR_LEGACY="$PARENT_DIR/entity-core-alpha"
-if [ -d "$ENTITY_CORE_DIR_NEW" ]; then
-  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_NEW"
-elif [ -d "$ENTITY_CORE_DIR_LEGACY" ]; then
-  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_LEGACY"
-else
-  ENTITY_CORE_DIR="$ENTITY_CORE_DIR_NEW"
-fi
-# The release lives at https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
-ENTITY_CORE_REPO="https://github.com/PsycherosAI/Psycheros.git"
-ENTITY_CORE_TAG="entity-core-v0.4.0"
 BACKUP_ROOT="$SCRIPT_DIR/.pf-backups"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -77,17 +60,10 @@ if [ "$MODE" = "update" ]; then
   STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
   BACKUP_DIR="$BACKUP_ROOT/$STAMP"
   ANYTHING_BACKED_UP=0
-  # Directories. Explicitly probe BOTH the new entity-core dir and the
-  # pre-rename entity-core-alpha so a user with leftover legacy data
-  # still gets it backed up (resolved $ENTITY_CORE_DIR only points at
-  # one of them).
   for src in \
     "$SCRIPT_DIR/tomes" \
     "$SCRIPT_DIR/logs" \
-    "$ENTITY_CORE_DIR_NEW/packages/entity-core/data" \
-    "$ENTITY_CORE_DIR_NEW/data" \
-    "$ENTITY_CORE_DIR_LEGACY/packages/entity-core/data" \
-    "$ENTITY_CORE_DIR_LEGACY/data"; do
+    "$SCRIPT_DIR/phylactery/data"; do
     if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
       mkdir -p "$BACKUP_DIR"
       rel="$(echo "$src" | sed "s|^$PARENT_DIR/||")"
@@ -112,7 +88,7 @@ if [ "$MODE" = "update" ]; then
   done
   if [ "$ANYTHING_BACKED_UP" = "1" ]; then
     say "User data backed up to $BACKUP_DIR/"
-    say "  (tomes/, logs/, entity-core data/, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
+    say "  (tomes/, logs/, phylactery/data/, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
   fi
 fi
 
@@ -144,90 +120,9 @@ if [ "$NODE_MAJOR" -lt 18 ]; then
 fi
 say "Node.js $(node -v) found."
 
-# --- Deno check (auto-install if missing, in both modes) ----------------
-# Look in PATH first, then in the common install location the official
-# script writes to. We add ~/.deno/bin to PATH for the rest of this run
-# so post-install steps see it without needing a shell restart; start.sh
-# does the same probe at launch time.
-if [ -d "$HOME/.deno/bin" ]; then PATH="$HOME/.deno/bin:$PATH"; fi
-if command -v deno >/dev/null 2>&1; then
-  say "Deno $(deno --version | head -n1) found."
-  HAVE_DENO=1
-else
-  if command -v curl >/dev/null 2>&1; then
-    say "Deno not found — installing via the official script (writes to ~/.deno)..."
-    if curl -fsSL https://deno.land/install.sh | sh -s -- --yes >/dev/null 2>&1; then
-      PATH="$HOME/.deno/bin:$PATH"
-      if command -v deno >/dev/null 2>&1; then
-        say "Deno $(deno --version | head -n1) installed."
-        HAVE_DENO=1
-      else
-        warn "Deno install ran but 'deno' is still not on PATH. Open a new terminal and re-run, or install manually from https://deno.com/."
-        HAVE_DENO=0
-      fi
-    else
-      warn "Deno auto-install failed. entity-core will be disabled until you install Deno 2+ from https://deno.com/."
-      HAVE_DENO=0
-    fi
-  else
-    warn "Neither 'deno' nor 'curl' available. entity-core needs Deno 2+; install from https://deno.com/ if you want the identity layer."
-    HAVE_DENO=0
-  fi
-fi
-
 # --- npm install (idempotent; fast when nothing changed) ----------------
 say "Running npm install..."
 ( cd "$SCRIPT_DIR" && npm install )
-
-# --- entity-core: clone (install) or refresh to pinned tag (update) ----
-# Note: entity-core's runtime data/ directory is gitignored at both the
-# workspace root and the package root, so `git checkout <tag>` never
-# touches user identity files, memory markdown, or the SQLite store.
-if [ -d "$ENTITY_CORE_DIR" ]; then
-  if [ "$MODE" = "update" ] && [ -d "$ENTITY_CORE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-    say "Refreshing entity-core to tag $ENTITY_CORE_TAG..."
-    if ! ( cd "$ENTITY_CORE_DIR" && git fetch --tags --depth 1 origin "refs/tags/$ENTITY_CORE_TAG:refs/tags/$ENTITY_CORE_TAG" 2>/dev/null && git checkout --quiet "$ENTITY_CORE_TAG" ); then
-      warn "Could not refresh entity-core to $ENTITY_CORE_TAG (local changes or network). Keeping current checkout."
-    fi
-  else
-    say "entity-core already present at $ENTITY_CORE_DIR — skipping clone."
-  fi
-else
-  if command -v git >/dev/null 2>&1; then
-    say "Cloning entity-core ($ENTITY_CORE_TAG) into $ENTITY_CORE_DIR ..."
-    if git clone --depth 1 --branch "$ENTITY_CORE_TAG" "$ENTITY_CORE_REPO" "$ENTITY_CORE_DIR"; then
-      say "entity-core cloned at tag $ENTITY_CORE_TAG."
-    else
-      warn "Tag clone failed; falling back to default branch."
-      git clone --depth 1 "$ENTITY_CORE_REPO" "$ENTITY_CORE_DIR" || warn "Clone failed. You can clone it manually later."
-    fi
-  else
-    warn "git not found — skipping entity-core clone. Install git or place entity-core at $ENTITY_CORE_DIR manually."
-  fi
-fi
-
-# --- entity-core dependency pre-cache (idempotent) ---------------------
-# Psycheros is a Deno workspace; entity-core lives at packages/entity-core/
-# (older releases kept it at the repo root). Probe both; the workspace
-# path wins. `deno cache` only fetches what's missing, so this is safe
-# to re-run in update mode after a tag bump.
-ENTITY_CORE_PKG_DIR=""
-if [ -f "$ENTITY_CORE_DIR/packages/entity-core/src/mod.ts" ]; then
-  ENTITY_CORE_PKG_DIR="$ENTITY_CORE_DIR/packages/entity-core"
-elif [ -f "$ENTITY_CORE_DIR/src/mod.ts" ]; then
-  ENTITY_CORE_PKG_DIR="$ENTITY_CORE_DIR"
-fi
-
-if [ -n "$ENTITY_CORE_PKG_DIR" ] && [ "$HAVE_DENO" = "1" ]; then
-  say "Caching entity-core dependencies (only fetches what's new)..."
-  if ( cd "$ENTITY_CORE_PKG_DIR" && deno cache src/mod.ts >/dev/null 2>&1 ); then
-    say "entity-core dependencies cached."
-  else
-    warn "deno cache failed — first server start will download deps before entity-core comes up."
-  fi
-elif [ -n "$ENTITY_CORE_PKG_DIR" ]; then
-  warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
-fi
 
 # --- uv check (auto-install if missing, in both modes) -----------------
 # uv is the Python package/runtime manager Unruh uses. The official
@@ -259,6 +154,25 @@ else
     warn "Neither 'uv' nor 'curl' available. Unruh needs uv; install from https://docs.astral.sh/uv/."
     HAVE_UV=0
   fi
+fi
+
+# --- Phylactery dependency sync (idempotent; fast when nothing changed) -
+# Materialises phylactery/.venv from phylactery/uv.lock. Also applies
+# pending DB migrations so a schema change is in place before first start.
+if [ "$HAVE_UV" = "1" ] && [ -f "$SCRIPT_DIR/phylactery/pyproject.toml" ]; then
+  say "Syncing Phylactery dependencies (only fetches what's new)..."
+  if ( cd "$SCRIPT_DIR/phylactery" && uv sync --quiet ); then
+    say "Phylactery dependencies synced."
+    if ( cd "$SCRIPT_DIR/phylactery" && uv run --no-sync python -c "from phylactery.db import get_conn; get_conn().close()" >/dev/null 2>&1 ); then
+      say "Phylactery database up to date."
+    else
+      warn "Phylactery DB migration step skipped — it will apply on first start."
+    fi
+  else
+    warn "uv sync failed for Phylactery — identity layer will be disabled until this is resolved."
+  fi
+elif [ -f "$SCRIPT_DIR/phylactery/pyproject.toml" ]; then
+  warn "Skipping Phylactery dep sync (uv not available). Identity layer will be disabled until uv is installed."
 fi
 
 # --- Unruh dependency sync (idempotent; fast when nothing changed) -----
@@ -357,9 +271,6 @@ esac
 echo "  Stop:          ./stop.sh  (or close the launcher window on macOS)"
 echo "  Trouble?       see docs/troubleshooting.md"
 echo
-if [ "$HAVE_DENO" = "0" ]; then
-  warn "Reminder: install Deno before first start if you want entity-core enrichment."
-fi
 if [ "${HAVE_UV:-0}" = "0" ]; then
-  warn "Reminder: install uv before first start if you want Unruh (temporal context)."
+  warn "Reminder: install uv before first start if you want Phylactery (identity layer) and Unruh (temporal context)."
 fi

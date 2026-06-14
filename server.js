@@ -24,14 +24,14 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
-  reconnectEntityCore,
+  reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode, listPhases, listRecurring,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
-  shutdownUnruh, shutdownEntityCore,
+  shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -1762,12 +1762,12 @@ function injectDynamicAtDepth(messages, dynamicContent, depth) {
   };
 }
 
-// Resolve the fields entity-core actually cares about from a settings
-// snapshot, so we can tell whether a settings PUT changed any of them.
-// Anything else (UI prefs, system prompts, etc.) doesn't require an
-// entity-core respawn and shouldn't trigger one.
-function entityCoreCredsSnapshot(settings) {
-  const id = settings?.entityCoreConnectionId ?? null;
+// Resolve the fields Phylactery cares about from a settings snapshot,
+// so we can tell whether a settings PUT changed any of them. Anything
+// else (UI prefs, system prompts, etc.) doesn't require a Phylactery
+// respawn and shouldn't trigger one.
+function phylacteryCredsSnapshot(settings) {
+  const id = settings?.entityCoreConnectionId ?? null; // field name unchanged until Pillar I
   if (!id) return { id: null, apiKey: '', provider: '', model: '' };
   const conn = (settings.connections ?? []).find(c => c?.id === id);
   if (!conn) return { id, apiKey: '', provider: '', model: '' };
@@ -1778,7 +1778,7 @@ function entityCoreCredsSnapshot(settings) {
     model:    conn.model    ?? '',
   };
 }
-function entityCoreCredsEqual(a, b) {
+function phylacteryCredsEqual(a, b) {
   return a.id === b.id && a.apiKey === b.apiKey && a.provider === b.provider && a.model === b.model;
 }
 
@@ -1796,7 +1796,7 @@ app.put('/api/settings', async (req, res) => {
 
   // L2 (audit): route the prior-snapshot + write through thalamus's
   // per-file lock so two PUTs racing each other can't read each
-  // other's stale priorCreds and fire spurious entity-core respawns.
+  // other's stale priorCreds and fire spurious Phylactery respawns.
   // The atomic .tmp+rename already prevented torn-file states; the
   // lock here makes the prior-vs-next diff consistent against the
   // file each PUT actually replaces.
@@ -1805,7 +1805,7 @@ app.put('/api/settings', async (req, res) => {
     await withLock(SETTINGS_FILE, async () => {
       try {
         const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-        priorCreds = entityCoreCredsSnapshot(JSON.parse(raw));
+        priorCreds = phylacteryCredsSnapshot(JSON.parse(raw));
       } catch { /* no prior settings — first write */ }
       const tmp = SETTINGS_FILE + '.tmp';
       await fsp.writeFile(tmp, serialised, 'utf8');
@@ -1815,14 +1815,14 @@ app.put('/api/settings', async (req, res) => {
     return res.status(500).json({ error: `failed to write settings: ${err.message}` });
   }
 
-  // If the entity-core API-key designation changed (different connection
+  // If the Phylactery API-key designation changed (different connection
   // picked, or the same connection's key/provider/model edited), respawn
   // the child so it picks up the new env. Fire-and-forget so the PUT
   // returns quickly; reconnect logs itself.
-  const nextCreds = entityCoreCredsSnapshot(settings);
-  if (!entityCoreCredsEqual(priorCreds, nextCreds)) {
-    console.log('[server] entity-core API-key designation changed — respawning');
-    reconnectEntityCore().catch(err => console.error('[server] reconnectEntityCore failed:', err.message));
+  const nextCreds = phylacteryCredsSnapshot(settings);
+  if (!phylacteryCredsEqual(priorCreds, nextCreds)) {
+    console.log('[server] Phylactery API-key designation changed — respawning');
+    reconnectPhylactery().catch(err => console.error('[server] reconnectPhylactery failed:', err.message));
   }
 
   return res.json({ ok: true });
@@ -2567,7 +2567,7 @@ async function handleSignal(signal) {
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
-  try { shutdownEntityCore(); } catch { /* already disconnected */ }
+  try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.
   setTimeout(() => process.exit(0), 250).unref();

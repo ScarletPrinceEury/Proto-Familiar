@@ -1,21 +1,21 @@
 # Proto-Familiar Windows installer
 #
-# Fresh install: auto-installs Node, Deno, Git, and uv. winget is the
+# Fresh install: auto-installs Node, Git, and uv. winget is the
 #   preferred path (silent, per-user, no admin) but each tool has a
-#   fallback path when winget is absent/broken — Deno + uv via their
-#   official PowerShell one-liners, Node + Git via opening the
-#   download page and waiting for the user to confirm. Then runs
-#   `npm install`, clones entity-core (release tag), pre-caches its
-#   Deno module graph, syncs Unruh's Python venv, and creates Desktop
-#   + Start Menu shortcuts.
+#   fallback path when winget is absent/broken — uv via its official
+#   PowerShell one-liner, Node + Git via opening the download page
+#   and waiting for the user to confirm. Then runs `npm install`,
+#   syncs Phylactery's Python venv from phylactery\uv.lock, syncs
+#   Unruh's Python venv from unruh\uv.lock, and creates Desktop +
+#   Start Menu shortcuts.
 #
 # Update mode: triggered automatically when node_modules\ already exists.
-#   Takes a defensive backup of tomes\, logs\, entity-core data\, and
+#   Takes a defensive backup of tomes\, logs\, phylactery\data\, and
 #   .proto-familiar-config.json into .pf-backups\<timestamp>\ BEFORE
 #   any git op runs, then pulls latest Proto-Familiar
-#   (`git pull --ff-only`), refreshes entity-core to the pinned tag,
-#   and re-runs the idempotent npm install + deno cache + uv sync.
-#   Node / Deno / Git / uv auto-install still runs if any is missing.
+#   (`git pull --ff-only`), and re-runs the idempotent npm install +
+#   uv sync (Phylactery + Unruh).
+#   Node / Git / uv auto-install still runs if any is missing.
 #
 # Shortcut creation runs in BOTH modes — it's idempotent (skip if the
 #   .lnk already exists). Previously gated on install-mode only, which
@@ -39,24 +39,7 @@
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$parentDir   = Split-Path -Parent $projectRoot
-# Resolve the entity-core sibling checkout. New installs land in
-# `entity-core\`; older installs from before the rename used
-# `entity-core-alpha\` and we keep using that in place to avoid silent
-# directory moves.
-$entityCoreDirNew    = Join-Path $parentDir "entity-core"
-$entityCoreDirLegacy = Join-Path $parentDir "entity-core-alpha"
-if (Test-Path $entityCoreDirNew) {
-    $entityCoreDir = $entityCoreDirNew
-} elseif (Test-Path $entityCoreDirLegacy) {
-    $entityCoreDir = $entityCoreDirLegacy
-} else {
-    $entityCoreDir = $entityCoreDirNew
-}
-# Release page: https://github.com/PsycherosAI/Psycheros/releases/tag/<tag>
-$entityCoreRepo = "https://github.com/PsycherosAI/Psycheros.git"
-$entityCoreTag  = "entity-core-v0.4.0"
-$backupRoot    = Join-Path $projectRoot ".pf-backups"
+$backupRoot  = Join-Path $projectRoot ".pf-backups"
 
 # ── Install log + run state ────────────────────────────────────────
 # Single source of truth for the install transcript path. Every run
@@ -434,18 +417,12 @@ $backupDir = $null
 if ($updateMode) {
     $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $backupDir = Join-Path $backupRoot $stamp
-    # Probe BOTH the new entity-core dir and the pre-rename legacy
-    # entity-core-alpha so leftover data from before the rename still
-    # gets backed up.
     $sources = @(
-        @{ Path = (Join-Path $projectRoot "tomes"); Rel = "tomes"; IsFile = $false },
-        @{ Path = (Join-Path $projectRoot "logs");  Rel = "logs";  IsFile = $false },
-        @{ Path = (Join-Path $entityCoreDirNew    "packages\entity-core\data"); Rel = "entity-core\packages\entity-core\data";       IsFile = $false },
-        @{ Path = (Join-Path $entityCoreDirNew    "data");                       Rel = "entity-core\data";                            IsFile = $false },
-        @{ Path = (Join-Path $entityCoreDirLegacy "packages\entity-core\data"); Rel = "entity-core-alpha\packages\entity-core\data"; IsFile = $false },
-        @{ Path = (Join-Path $entityCoreDirLegacy "data");                       Rel = "entity-core-alpha\data";                      IsFile = $false },
+        @{ Path = (Join-Path $projectRoot "tomes");              Rel = "tomes";              IsFile = $false },
+        @{ Path = (Join-Path $projectRoot "logs");               Rel = "logs";               IsFile = $false },
+        @{ Path = (Join-Path $projectRoot "phylactery\data");    Rel = "phylactery\data";    IsFile = $false },
         @{ Path = (Join-Path $projectRoot ".proto-familiar-config.json"); Rel = ".proto-familiar-config.json"; IsFile = $true },
-        @{ Path = (Join-Path $projectRoot "settings.json");                Rel = "settings.json";                IsFile = $true }
+        @{ Path = (Join-Path $projectRoot "settings.json");               Rel = "settings.json";               IsFile = $true }
     )
     foreach ($s in $sources) {
         if (-not (Test-Path $s.Path)) { continue }
@@ -457,7 +434,7 @@ if ($updateMode) {
     }
     if ($anythingBackedUp) {
         Ok "User data backed up to $backupDir\"
-        Ok "  (tomes\, logs\, entity-core data\, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
+        Ok "  (tomes\, logs\, phylactery\data\, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
     }
 }
 
@@ -540,38 +517,6 @@ Ok "Node.js v$nodeVersion"
 
 # --- Deno (install if missing, in both modes) ---
 # Deno's installer writes to ~\.deno\bin\deno.exe. Prime PATH so a
-# fresh install is reachable in this script without a shell restart;
-# start.sh / Proto-Familiar.vbs do the same probe at launch time.
-$denoUserBin = Join-Path $env:USERPROFILE ".deno\bin"
-if (Test-Path (Join-Path $denoUserBin "deno.exe")) {
-    $env:PATH = $denoUserBin + ";" + $env:PATH
-}
-Step "Checking Deno..."
-if (-not (Have "deno")) {
-    $installedViaWinget = $false
-    if ($haveWinget) {
-        Step "Installing Deno via winget..."
-        winget install --id DenoLand.Deno --scope user --silent `
-            --accept-source-agreements --accept-package-agreements
-        if ($LASTEXITCODE -eq 0) {
-            Update-EnvPath
-            $installedViaWinget = (Have "deno")
-        } else {
-            Warn "winget Deno install exited with code $LASTEXITCODE — trying official installer."
-        }
-    }
-    if (-not $installedViaWinget -and -not (Have "deno")) {
-        Step "Installing Deno via the official PowerShell script (writes to ~\.deno\bin)..."
-        try {
-            Invoke-RestMethod https://deno.land/install.ps1 | Invoke-Expression
-            if (Test-Path (Join-Path $denoUserBin "deno.exe")) {
-                $env:PATH = $denoUserBin + ";" + $env:PATH
-            }
-        } catch { Warn "Deno auto-install failed — entity-core will be disabled until you install Deno from https://deno.com/" }
-    }
-}
-if (Have "deno") { Ok "Deno present" } else { Warn "Deno missing (Proto-Familiar will still run without entity-core)" }
-
 # --- Git (install if missing, in both modes) ---
 Step "Checking Git..."
 if (-not (Have "git")) {
@@ -591,7 +536,7 @@ if (-not (Have "git")) {
         Install-Via-Browser "Git for Windows" "https://git-scm.com/download/win" "git"
     }
 }
-if (Have "git") { Ok "Git present" } else { Warn "Git missing — entity-core clone will be skipped" }
+if (Have "git") { Ok "Git present" } else { Warn "Git missing — git-based operations will be skipped" }
 
 # --- npm install (idempotent) ---
 Step "Running npm install..."
@@ -601,54 +546,6 @@ try {
     if ($LASTEXITCODE -ne 0) { Fail "npm install failed (exit $LASTEXITCODE)." }
 } finally { Pop-Location }
 Ok "Dependencies up to date"
-
-# --- entity-core: clone (install) or refresh to pinned tag (update) ---
-# entity-core's runtime data\ is gitignored at both workspace and package
-# root, so `git checkout <tag>` never touches user data.
-Step "Setting up entity-core..."
-if (Test-Path $entityCoreDir) {
-    if ($updateMode -and (Test-Path (Join-Path $entityCoreDir ".git")) -and (Have "git")) {
-        Step "Refreshing entity-core to tag $entityCoreTag..."
-        Push-Location $entityCoreDir
-        try {
-            & git fetch --tags --depth 1 origin "refs/tags/${entityCoreTag}:refs/tags/${entityCoreTag}" 2>$null | Out-Null
-            & git checkout --quiet $entityCoreTag
-            if ($LASTEXITCODE -ne 0) { Warn "Could not refresh entity-core to $entityCoreTag. Keeping current checkout." }
-            else { Ok "Refreshed to $entityCoreTag" }
-        } finally { Pop-Location }
-    } else {
-        Ok "Already present at $entityCoreDir"
-    }
-} elseif (Have "git") {
-    Step "Cloning $entityCoreRepo (tag $entityCoreTag) into $entityCoreDir..."
-    & git clone --depth 1 --branch $entityCoreTag $entityCoreRepo $entityCoreDir
-    if ($LASTEXITCODE -ne 0) {
-        Warn "Tag clone failed; falling back to default branch."
-        & git clone --depth 1 $entityCoreRepo $entityCoreDir
-    }
-    if (Test-Path $entityCoreDir) { Ok "Cloned to $entityCoreDir" } else { Warn "Clone failed - identity layer will be inactive." }
-} else {
-    Warn "git unavailable; skipping entity-core clone."
-}
-
-# --- entity-core dependency pre-cache (idempotent) ---
-$entityCorePkg = $null
-if (Test-Path (Join-Path $entityCoreDir "packages\entity-core\src\mod.ts")) {
-    $entityCorePkg = Join-Path $entityCoreDir "packages\entity-core"
-} elseif (Test-Path (Join-Path $entityCoreDir "src\mod.ts")) {
-    $entityCorePkg = $entityCoreDir
-}
-if ($entityCorePkg -and (Have "deno")) {
-    Step "Caching entity-core dependencies (only fetches what's new)..."
-    Push-Location $entityCorePkg
-    try {
-        & deno cache src/mod.ts | Out-Null
-        if ($LASTEXITCODE -eq 0) { Ok "entity-core dependencies cached" }
-        else { Warn "deno cache failed - first server start will download deps before entity-core comes up." }
-    } finally { Pop-Location }
-} elseif ($entityCorePkg) {
-    Warn "Skipping entity-core dep pre-cache (Deno not available). First server start will download them."
-}
 
 # --- uv (install if missing, in both modes) ---
 # uv is the Python package/runtime manager Unruh uses. Astral's installer
@@ -682,6 +579,25 @@ if (-not (Have "uv")) {
     }
 }
 if (Have "uv") { Ok "uv present" } else { Warn "uv missing (Proto-Familiar will still run without Unruh)" }
+
+# --- Phylactery dependency sync (idempotent; fast when nothing changed) ---
+$phylacteryDir = Join-Path $projectRoot "phylactery"
+if ((Have "uv") -and (Test-Path (Join-Path $phylacteryDir "pyproject.toml"))) {
+    Step "Syncing Phylactery dependencies (only fetches what's new)..."
+    Push-Location $phylacteryDir
+    try {
+        & uv sync --quiet
+        if ($LASTEXITCODE -eq 0) {
+            Ok "Phylactery dependencies synced"
+            & uv run --no-sync python -c "from phylactery.db import get_conn; get_conn().close()" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { Ok "Phylactery database up to date" }
+            else { Warn "Phylactery DB migration step skipped - it will apply on first start." }
+        }
+        else { Warn "uv sync failed for Phylactery - identity layer will be disabled until this is resolved." }
+    } finally { Pop-Location }
+} elseif (Test-Path (Join-Path $phylacteryDir "pyproject.toml")) {
+    Warn "Skipping Phylactery dep sync (uv not available). Identity layer will be disabled until uv is installed."
+}
 
 # --- Unruh dependency sync (idempotent; fast when nothing changed) ---
 $unruhDir = Join-Path $projectRoot "unruh"
