@@ -276,12 +276,13 @@ front-of-mind-every-turn. The fix is a real drain, not manual restraint:
   but moving something out of front-of-mind about my human is the kind of thing I can mention
   (*"I'm going to file this away rather than keep it top of mind — that okay?"*). The `me` block
   is my own. Non-hesitant per §7: mentioning it is welcome, not a reason to stall.
-- **Care-critical is pinned, never graduated.** `careWeight: "high"` facts (allergies, meds,
-  crisis triggers, safety-relevant health, support-map contacts — §8.2 defines the set) **stay in
-  the always-injected surface**; the audit only ever graduates *ordinary* detail. The audit prompt
-  carries the care-critical definition (§8.2) so I never quietly file a safety-relevant fact away.
-  This is the decay-shield ≠ graduation-pin distinction, and the graduation-eligibility boundary
-  is the mechanism's one safety sign-off (§8.2, §9).
+- **Care-critical is pinned, never graduated.** `careWeight: "high"` facts stay reachable from the
+  always-injected surface — as a pinned *body* for crisp critical facts (allergies, meds, crisis
+  triggers, support-map contacts) or a pinned *pointer* for larger care notes whose body stays
+  retrieval-specific (§8.2, pin-the-pointer-not-the-body). The audit only ever graduates *ordinary*
+  detail, and its prompt carries the care-critical definition (§8.2) so I never quietly file a
+  safety-relevant fact away. This is the decay-shield ≠ graduation-pin distinction, and the
+  graduation-eligibility boundary is the mechanism's one safety sign-off (§8.2, §9).
 - **Decay, never auto-delete, reversible.** Graduated (non-critical) records are *not* deleted —
   they decay in retrieval weight like any other memory (§8.2) and can be **pulled back** into the
   always-injected surface if they turn out to keep mattering (recalled often, re-confirmed).
@@ -363,6 +364,12 @@ from the store or from the code paths that consume them — only from the prompt
   *"(unconfirmed)"*), not a JSON blob with ISO timestamps.
 - **Conditional surfacing.** `knownTo` materializes only when composing *to* a specific person;
   `relationToFamiliar` only when that villager is in the room. Not dumped wholesale every turn.
+- **Pin the pointer, not the body.** For care-relevant content that *must* stay reachable but is
+  open-ended and grows (what-helps / what-doesn't, detailed coping notes), the always-injected
+  surface carries a compact **directory entry** (*"I have notes on X — retrieve `ward-xyz`"*) and
+  the body stays in the `ward` / `me` category, fetched on demand. The Familiar always knows the
+  resource exists; the surface only pays for bodies it actually pulls. The general rule for
+  keeping the always-injected surface lean: references, not bodies (see §8.2 care-critical).
 - **Trackers return aggregates, not logs.** A `tracker_def` with 200 `tracker_entry` rows never
   dumps 200 rows — default projection is latest entry + a tiny rollup (*"mood ~6 this week,
   trending up"*). Full series fetched only on explicit demand ("show me this month"). Highest-
@@ -914,15 +921,36 @@ A caretaker must know *how solid* a memory is and *how much it matters*:
 
   **What "care-critical" means — and the Familiar must be told it.** `careWeight` is a lever *I*
   set, so per the reachability rule (CLAUDE.md) I have to know what earns it. Care-critical =
-  facts where me acting *without* them could harm my human: allergies, medications, crisis
-  triggers, safety-relevant health, baselines / warning-signs and what-helps / what-doesn't
-  (§8.3), and trusted support-map contacts. **Not** care-critical (ordinary `narrative`, normal
-  decay, free to graduate to `me` / `ward`): preferences, hobbies, anecdotes, biography, gift
-  ideas, day-to-day mood (those are trackers anyway). **This definition is surfaced to me, in my
-  own voice, at every point where I assign or honour `careWeight` — memorization, consolidation,
-  and graduation** — so I apply it consistently across all three instead of guessing differently
-  each time. (The reachability rule again: a lever I can't judge correctly is a lever I can't
-  really use.)
+  facts where me acting *without* them could harm my human. But care-critical splits into **two
+  protection shapes**, because some of it is crisp and some of it balloons:
+
+  - **Pinned *body* (always-injected content)** — crisp facts that must be in front of me *this
+    turn*, because I could act wrongly in a single turn without them and there's no moment to go
+    look first: allergies, medications, crisis triggers, acute safety-relevant health, trusted
+    support-map contacts. These are one-liners; they stay bounded forever, so injecting them
+    wholesale is cheap and safe.
+  - **Pinned *pointer* (always-injected reference, retrieval-specific body)** — care guidance
+    that is open-ended and grows: **what-helps / what-doesn't**, detailed coping strategies,
+    extended baselines / warning-sign notes. The *body* lives in the `ward` (or `me`) memory
+    category, `careWeight: "high"` so it never decays or graduates — but the always-injected
+    surface carries only a compact **directory entry**, in my voice: *"I have notes on the
+    approaches that help my human with anxiety — I pull `ward-xyz` when that comes up."* I always
+    *know the resource exists* (discoverability — the reachability rule), and I only pay the
+    token cost when I actually retrieve it. This is the **pin-the-pointer-not-the-body** pattern,
+    and it's the general answer for anything care-relevant-but-large.
+
+  **The split criterion:** would acting wrongly in a single turn *without* it harm my human
+  (→ pinned body), or is it guidance I'd deliberately consult when the topic arises (→ pinned
+  pointer)? Both are `careWeight: "high"` — neither decays, neither graduates away; the only
+  difference is whether the *body* or just a *reference* rides the always-injected surface.
+
+  **Not** care-critical at all (ordinary `narrative`, normal decay, free to graduate to `me` /
+  `ward`): preferences, hobbies, anecdotes, biography, gift ideas, day-to-day mood (those are
+  trackers anyway). **This whole definition — the two shapes, the split criterion, and what isn't
+  care-critical — is surfaced to me, in my own voice, at every point where I assign or honour
+  `careWeight`: memorization, consolidation, and graduation** — so I apply it consistently instead
+  of guessing differently each time. (The reachability rule again: a lever I can't judge
+  correctly is a lever I can't really use.)
 
 - **`source` — authorship and provenance.** Every Phylactery record carries a `source` object
   identifying which embodiment wrote it and how it arrived:
@@ -1049,7 +1077,9 @@ scopes.
 - **`careWeight` mechanism (§8.2):** floor-based — `"high"` records can never score below
   `CARE_WEIGHT_FLOOR` (default 0.5) regardless of age; `"low"` / unset decay normally. `"high"`
   **also pins to the always-injected surface (exempt from graduation)** — decay-shield ≠
-  graduation-pin. The care-critical definition is surfaced to the Familiar at memorization,
+  graduation-pin — as a *body* for crisp critical facts or a compact *pointer* for larger care
+  notes whose body stays retrieval-specific (pin-the-pointer-not-the-body). The care-critical
+  definition (both shapes + split criterion) is surfaced to the Familiar at memorization,
   consolidation, and graduation. Optional `"critical"` level (floor = 1.0) still-open.
 - **Identity & ward hygiene (§3 "Ongoing operation"):** the always-injected `identity` + `ward`
   blocks are drained by a **Familiar-led, ward-consulted** audit (rides consolidation) that
