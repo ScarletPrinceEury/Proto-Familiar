@@ -112,6 +112,15 @@ REM but the shell hasn't reloaded, the spawn fails with ENOENT and the
 REM identity layer silently doesn't load. uv (Unruh) has its own resolver
 REM in thalamus.js but priming here is symmetric and avoids relying on it.
 REM Mirrors start.sh / Proto-Familiar.command / tray.ps1, which prime both.
+REM Node itself may have just been installed by install.bat above (or by
+REM a winget run whose PATH change this console predates). Node LTS now
+REM ships from winget as an archive package shimmed under
+REM %LOCALAPPDATA%\Microsoft\WinGet\Links, so prime that (and the MSI
+REM dirs) before launching, mirroring the installer's refresh.
+where node >nul 2>nul
+if errorlevel 1 (
+  set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%LOCALAPPDATA%\Programs\nodejs;%ProgramFiles%\nodejs;%PATH%"
+)
 where deno >nul 2>nul
 if errorlevel 1 (
   if exist "%USERPROFILE%\.deno\bin\deno.exe" set "PATH=%USERPROFILE%\.deno\bin;%PATH%"
