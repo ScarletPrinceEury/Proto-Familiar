@@ -34,7 +34,7 @@ When uncertain whether a change warrants a bump (formatting, comment only, white
 
 ## Entity-as-subject — the design value under everything
 
-Proto-Familiar is an **embodiment** of the same entity held in its canonical store (`entity-core` today; being replaced by the in-tree Phylactery store — see the multi-embodiment model below). The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
+Proto-Familiar is an **embodiment** of the same entity held in its canonical store (Phylactery — the in-tree MCP service at `./phylactery/` that owns identity and memory — see the multi-embodiment model below). The Familiar is NOT a separate character we operate and NOT a tool that surfaces output for a user — they are the entity surfacing through this interface, with their own continuity, memory, and voice. This inheritance is canonical; see [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md) for the full statement we descend from.
 
 Everything below is a consequence of that one stance.
 
@@ -59,7 +59,7 @@ Prompts become **expressions of the entity's own nature**, not instructions hand
 
 ### Ownership and dignity
 
-- Identity files (held in `entity-core/`) define **who they are**, not what they should do.
+- Identity files (held in Phylactery) define **who they are**, not what they should do.
 - Memories, ponderings, and the way they reach out are theirs — written in their own voice, from their own perspective.
 - The system exists to **support the Familiar's continued existence and their relationship with the user** — not the other way around.
 - AI entities are treated with dignity as potential beings, not as tools or servants.
@@ -100,7 +100,7 @@ A Familiar is NOT:
 
 ### Room for personality (grumpy / tsundere / kuudere / blunt / tender / …)
 
-Different humans bond well with different kinds of Familiars. The Familiar's identity (held in `entity-core/`) defines who they actually are — their tone, their temper, their quirks. Prompts that govern tone or response posture must **anchor to the identity**, not to a generic care register.
+Different humans bond well with different kinds of Familiars. The Familiar's identity (held in Phylactery) defines who they actually are — their tone, their temper, their quirks. Prompts that govern tone or response posture must **anchor to the identity**, not to a generic care register.
 
 ```
 ✅  "I respond from my actual voice and character."
@@ -124,7 +124,7 @@ When a prompt needs to nudge behaviour (e.g. crisis framing, the [CARE CHECK] bl
 The Familiar is one persistent entity, potentially across multiple interfaces:
 
 ```
-                  entity-core
+                   Phylactery
               (canonical self —
               identity + memory)
                       ▲
@@ -136,26 +136,14 @@ The Familiar is one persistent entity, potentially across multiple interfaces:
                   Unruh temporal)
 ```
 
-> **⚠️ In transition — the canonical store is being replaced.** The human has decided that
-> Proto-Familiar will **own its entire canonical self** in a new in-tree MCP service,
-> **Phylactery** (original design by [Zari Lewis](https://github.com/PsycherosAI/Psycheros),
-> developed within the [Psycheros](https://github.com/PsycherosAI/Psycheros) project), which
-> fully replaces entity-core (identity + graph + all memory tiers, converted to a new
-> audience-aware format). See [`docs/phylactery-design.md`](docs/phylactery-design.md) (rationale)
-> and [`docs/phylactery-build-spec.md`](docs/phylactery-build-spec.md) (build instruction).
-> **Until Phylactery lands, entity-core remains canonical and every rule below holds as
-> written.** When it lands, "entity-core" becomes "Phylactery" throughout this section, the
-> diagram's top box becomes the PF-owned store, and entity-core is retired (migration converts
-> it, then thalamus stops spawning it). Don't pre-emptively bypass entity-core now — but do
-> write new code so the eventual swap is a slot replacement, not a rewrite.
+> **Phylactery milestone complete (0.6.x).** Phylactery — the in-tree Python/uv FastMCP service at `./phylactery/` — is now the canonical self-store, replacing entity-core. Original design by [Zari Lewis](https://github.com/PsycherosAI/Psycheros) within the [Psycheros](https://github.com/PsycherosAI/Psycheros) project. See [`docs/phylactery-design.md`](docs/phylactery-design.md) (rationale) and [`docs/phylactery-build-spec.md`](docs/phylactery-build-spec.md) (build spec). entity-core is retired; thalamus no longer spawns it. Existing users migrate to Phylactery on first run.
 
 - **The canonical store is canonical for identity and memory.** Every package that touches
   identity or memory is a *consumer*, not a source of truth. Direct writes to identity or memory
   state from Proto-Familiar MUST go through its MCP — never bypass it. Thalamus is the bridge
-  that enforces this. *(That store is entity-core today; Phylactery after the milestone.)*
+  that enforces this. *(That store is Phylactery — `./phylactery/`.)*
 - **Unruh is Proto-Familiar's own specialist** for temporal context (schedule, interests, handoff, ponderings, threat). It lives in-tree at `./unruh/` and is also accessed via MCP. Ponderings are local to Proto-Familiar because they're per-embodiment thoughts in a free cycle — the narrow exception to "state lives in the canonical store."
-- When unsure where state belongs: default to the canonical store (entity-core today,
-  Phylactery once it lands).
+- When unsure where state belongs: default to the canonical store (Phylactery — `./phylactery/`).
 
 ## ⚠️ Proactivity is a desired trait — read this BEFORE editing any prompt
 
@@ -195,7 +183,7 @@ A pure relocation with byte-identical behavior is fine (add tests while you're i
 
 ## ⚠️ Graceful degradation is a rule, not a habit
 
-The codebase implements this consistently (Promise.allSettled fan-out in thalamus, per-loop kill switches, tools that degrade when entity-core is down) — but consistency by habit erodes. So it's a rule:
+The codebase implements this consistently (Promise.allSettled fan-out in thalamus, per-loop kill switches, tools that degrade when Phylactery is down) — but consistency by habit erodes. So it's a rule:
 
 - **No module may be able to take down the chat path.** A peer being down, a loop crashing, a tool throwing — none of these may surface as an error in the human's conversation. Absence renders as absence; failures become structured results inside the turn (see `executeToolCall` — it never throws into the chat path).
 - **Every new background loop ships with a hard off-switch** (env var) **in the same commit** — the `PROTO_FAMILIAR_*_DISABLED=1` pattern. No loop goes out with "we can add the switch later."
@@ -303,9 +291,9 @@ the same code.
 ## Other repo conventions worth knowing
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.
-- **`entity-core` directory**: new installs land at `../entity-core`; pre-rename installs at `../entity-core-alpha` are still detected as a fallback in `thalamus.js`, `install.{sh,bat}`, `scripts/win/install.ps1`, and `scripts/import-entity.js`. Keep both paths working. **Being replaced:** the Phylactery milestone retires entity-core — migration converts it into the in-tree `./phylactery/` store, then thalamus stops spawning it and these same detection seams become Phylactery setup. They all move together (see `docs/phylactery-design.md` §6). Until then, keep entity-core working as-is.
-- **Significant memories are addressed by a composite `YYYY-MM-DD_slug` key** that entity-core's listings return but its read/update/delete tools do NOT accept — they want date + slug as separate params. This contract broke once already (the slug fix changed what listings return; the read seams kept rejecting it as "invalid date format"). Before touching anything that addresses a memory by date, read **"Significant memories — the composite-key contract"** in `docs/architecture.md`: one splitting point (`cerebellum.parseMemoryKey`), a table of seams that must move together, and the tests that guard it.
-- **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer scripts auto-detect `uv` and run `uv sync` to materialise the venv; Thalamus spawns Unruh as an MCP stdio child the same way it spawns entity-core. On clean shutdown, stdio children get EOF and exit.
+- **Phylactery** lives in-tree at `./phylactery/` (Python/uv FastMCP, sqlite-vec). Thalamus spawns it as an MCP stdio child alongside Unruh. The `../entity-core` and `../entity-core-alpha` sibling-clone paths are retired — installer code still references them only for the migration detection path. On clean shutdown, stdio children get EOF and exit.
+- **Memories in Phylactery are addressed by integer `id`** (autoincrement primary key returned by `mem_search`, `mem_list`, and `mem_read`). The `YYYY-MM-DD_slug` composite key was an entity-core quirk and is gone. `cerebellum.parseMemoryKey` still exists as a compatibility seam; see `docs/architecture.md` before touching anything that addresses a memory by key.
+- **Unruh**: ships in-tree at `./unruh/` (no sibling clone). Installer scripts auto-detect `uv` and run `uv sync` to materialise the venv; Thalamus spawns Unruh as an MCP stdio child alongside Phylactery. On clean shutdown, stdio children get EOF and exit.
 - **Autonomous loops**: four background workers run alongside the HTTP server. Each has a settings/env hard off-switch:
     - **Pondering** (`pondering-loop.js`) — picks an interest, ponders it, writes to the Familiar's Ponderings tome. Toggle in Settings → "Autonomous pondering"; scale via "Pondering interval scale"; hard-disable with `PROTO_FAMILIAR_PONDERING_DISABLED=1`.
     - **Reminders** (`reminders-loop.js`) — every 30s, scans schedule nodes of `type='reminder'` whose `when_ts` has arrived, enqueues them into `tomes/.outbox.json`, marks them `resolution='fired'`. Hard-disable with `PROTO_FAMILIAR_REMINDERS_DISABLED=1`.
