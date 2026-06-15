@@ -681,6 +681,15 @@ All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus
   - thalamus.js helpers `getRememberMap()` / `setRememberMap()`
   - HTTP routes `GET /api/entity/ward/remember`, `PUT /api/entity/ward/remember`
   - KE Identity pane: "Remember settings" row always visible under the `ward` category header
+  - **Wired into the memorization gate** (`memorization.js`): the Village registry's
+    per-villager `remember` map covers facts about *other* people; the ward is not a
+    villager, so facts about my human themselves (no matched villager subject) are gated
+    by this ward map. Without it, the human's own `health_info`/`emotional_content` facts
+    bypassed the gate entirely. The gate decision lives in two pure, tested exports —
+    `gateForCategory(category, map)` and `resolveRememberGate(category, subjectVillagers, wardMap)`
+    (`remember-gate.test.mjs`). Defaults (human-signed): `basics=true`, all sensitive
+    categories `ask` — surfaced for confirmation, never silently dropped. Degrades to those
+    defaults if Phylactery is unreachable.
 - **Settings field rename**: `entityCoreConnectionId` → `phylacteryConnectionId` (legacy name
   still accepted as fallback in `loadPhylacteryEnv()` and `phylacteryCredsSnapshot()`).
 - **Prompt Inspector labels**: "Entity-Core (static/dynamic)" → "Phylactery (static/dynamic)".

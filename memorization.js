@@ -31,6 +31,36 @@ export const CONSENT_PENDING_FILE = path.join(TOMES_DIR, '.consent-pending.json'
 // remember taxonomy — must match village.js REMEMBER_CATEGORIES
 const REMEMBER_CATS = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
 
+// Resolve the remember gate for a single category against a remember map.
+// Shared default (matches village.js + build-spec §7): when the map is absent
+// or leaves a category unset, basics is stored freely and everything sensitive
+// defaults to 'ask' — surfaced for confirmation, never silently dropped.
+export function gateForCategory(category, remMap) {
+  if (!remMap) return category === 'basics' ? 'true' : 'ask';
+  const v = remMap[category];
+  if (v === false) return 'false';
+  if (v === 'ask') return 'ask';
+  if (v === true)  return 'true';
+  return category === 'basics' ? 'true' : 'ask';
+}
+
+// Resolve the effective gate for a fact. When no villager subject matched,
+// the fact is about my human themselves → the ward remember map gates it.
+// Otherwise the most restrictive map among the matched villagers wins
+// (false beats ask beats true).
+export function resolveRememberGate(category, subjectVillagers, wardRemember) {
+  if (!subjectVillagers || subjectVillagers.length === 0) {
+    return gateForCategory(category, wardRemember);
+  }
+  let gate = 'true';
+  for (const v of subjectVillagers) {
+    const vGate = gateForCategory(category, v.remember);
+    if (vGate === 'false') return 'false';
+    if (vGate === 'ask') gate = 'ask';
+  }
+  return gate;
+}
+
 mkdirSync(TOMES_DIR, { recursive: true });
 
 const MAX_ATTEMPTS    = 5;
@@ -91,7 +121,7 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull } from './thalamus.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap } from './thalamus.js';
 import { getRegistry } from './village.js';
 
 export function findOrCreateSessionMemoriesTome() {
@@ -378,6 +408,13 @@ async function processJob(job) {
     }
   }
 
+  // Ward remember map — gates facts about my human themselves (no matched
+  // villager subject). The Village registry covers OTHER people; the ward is
+  // not a villager, so without this the human's own sensitive facts would
+  // bypass the gate entirely. Fetched once per job; degrades to null (→ shared
+  // defaults: basics=true, rest=ask) if Phylactery is unreachable.
+  const wardRemember = await getRememberMap().catch(() => null);
+
   const audience = job.audienceTag ?? 'ward-private';
   const pendingConsent = [];
   let created = 0;
@@ -396,25 +433,9 @@ async function processJob(job) {
       .filter(Boolean);
     const subjectIds = [...new Set(subjectVillagers.map(v => v.id))];
 
-    // Apply remember gate: most restrictive among all matching villagers
-    let gate = 'true';
-    for (const v of subjectVillagers) {
-      const remMap = v.remember;
-      let vGate = 'true'; // default: basics=true, others=ask
-      if (!remMap) {
-        vGate = category === 'basics' ? 'true' : 'ask';
-      } else if (remMap[category] === false) {
-        vGate = 'false';
-      } else if (remMap[category] === 'ask') {
-        vGate = 'ask';
-      } else if (remMap[category] === true) {
-        vGate = 'true';
-      } else {
-        vGate = category === 'basics' ? 'true' : 'ask';
-      }
-      if (vGate === 'false') { gate = 'false'; break; }
-      if (vGate === 'ask') gate = 'ask';
-    }
+    // Apply the remember gate (ward map for self-facts, most-restrictive
+    // villager map for facts about others).
+    const gate = resolveRememberGate(category, subjectVillagers, wardRemember);
     if (gate === 'false') continue; // drop silently
 
     const slug = `fact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
