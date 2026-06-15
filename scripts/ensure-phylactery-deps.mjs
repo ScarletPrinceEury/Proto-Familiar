@@ -20,7 +20,7 @@
  * gracefully when Phylactery is unavailable.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -80,4 +80,53 @@ if (sync.status === 0) {
 } else {
   warn(`uv sync exited with status ${sync.status} — Phylactery may not work this boot.`);
 }
+
+// ── Auto-migrate from entity-core (first-run only) ───────────────────────────
+// If entity-core exists as a sibling directory and migration hasn't run yet,
+// migrate identity, memories, and graph into Phylactery automatically.
+// Runs here (before server boot) so Phylactery isn't running yet and there's
+// no SQLite concurrency. The marker file prevents re-running on every boot.
+const EC_MARKER = path.join(PHYLACTERY_ROOT, 'data', '.ec-migrated');
+
+function looksLikeEcDataDir(p) {
+  return existsSync(path.join(p, 'self'))
+      || existsSync(path.join(p, 'memories'))
+      || existsSync(path.join(p, 'graph.db'));
+}
+
+if (!existsSync(EC_MARKER) && existsSync(PHYLACTERY_VENV)) {
+  const ecCandidates = [
+    path.resolve(REPO_ROOT, '..', 'entity-core'),
+    path.resolve(REPO_ROOT, '..', 'entity-core-alpha'),
+  ];
+  let sourceDataDir = null;
+  for (const ec of ecCandidates) {
+    if (!existsSync(ec)) continue;
+    // Prefer the data/ subdirectory; fall back to the dir itself if it looks
+    // like a raw data directory (e.g. a custom ENTITY_CORE_DATA_DIR path).
+    const sub = path.join(ec, 'data');
+    if (existsSync(sub) && looksLikeEcDataDir(sub)) { sourceDataDir = sub; break; }
+    if (looksLikeEcDataDir(ec)) { sourceDataDir = ec; break; }
+  }
+
+  if (sourceDataDir) {
+    say('Found entity-core data — migrating identity, memories, and graph into Phylactery (one-time)…');
+    const mig = spawnSync(
+      uv,
+      ['run', 'python', '-m', 'phylactery.migrate_from_entity_core', '--source', sourceDataDir],
+      { cwd: PHYLACTERY_ROOT, stdio: 'inherit' },
+    );
+    if (mig.status === 0) {
+      try {
+        mkdirSync(path.dirname(EC_MARKER), { recursive: true });
+        writeFileSync(EC_MARKER, new Date().toISOString() + '\n');
+      } catch { /* non-fatal — will retry next boot */ }
+      say('Migration complete — identity, memories, and graph imported.');
+    } else {
+      warn(`Migration exited with status ${mig.status ?? 'unknown'}.`);
+      warn(`If this persists, run manually: npm run import-entity -- --from "${path.dirname(sourceDataDir)}"`);
+    }
+  }
+}
+
 process.exit(0);
