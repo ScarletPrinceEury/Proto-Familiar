@@ -37,6 +37,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
+import { listOwnFiles, readOwnFile } from './own-files.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -740,9 +741,11 @@ export async function enqueueCrisisResources() {
 // the save_to_tome executor needs. Injected at boot so cerebellum never
 // imports server.js (no cycles). If the dep is missing, the executor
 // degrades with a readable failure instead of throwing.
-const _toolDeps = { addDefaultTomeEntry: null };
-export function initCerebellumTools({ addDefaultTomeEntry } = {}) {
+const _toolDeps = { addDefaultTomeEntry: null, getVillageRegistry: null, upsertVillager: null };
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
+  if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
+  if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
 }
 
 /**
@@ -1331,6 +1334,72 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'list_files',
+      description: "I list what's in my own folder — the Proto-Familiar files that make me up. I use this to find my way around when I want to look something up on purpose: which Tomes exist, what session logs are there, where a doc lives. I pass a folder path relative to my root (e.g. \"tomes\" or \"logs\"), or nothing for the top level. It's read-only and fenced to my own folder; my human's secrets (settings, keys) are never shown. I only do this in a private moment with {{user}} — my files hold our history, not for other rooms.",
+      parameters: {
+        type: 'object',
+        properties: {
+          dir: { type: 'string', description: 'Folder to list, relative to my root (e.g. "tomes", "logs", "docs"). Omit for the top level.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: "I read one of my own files — a Tome, a session log, a doc — when I want to find or recall something specific on purpose, beyond what's already in my context. I pass the file path relative to my root (I find it with list_files first). Read-only, text only, size-capped; my human's secret files (settings, API keys) are off-limits. I only read my files in a private moment with {{user}} — they hold our shared history, which I don't pull into rooms where others are present.",
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to my root, e.g. "tomes/ponderings.json" or "logs/2026-06-14.md". I get exact paths from list_files.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'village_lookup',
+      description: "I look up who's in my human's Village — the people in their life I help them stay close to. I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, or check who belongs to a category or turns up in a particular location. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph) and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', description: 'Optional. Only return villagers in this category — by name (e.g. "Close Friends") or id.' },
+          location: { type: 'string', description: 'Optional. Only return villagers whose category is the one assigned to this location — by location key or label.' },
+          name:     { type: 'string', description: 'Optional. Filter to people whose name or alias contains this text (case-insensitive).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'village_upsert',
+      description: "I add or update a person in my human's Village. I reach for this when {{user}} tells me about someone new, corrects a detail, or when I want to record how to be with that person. I can set their name, how they relate to {{user}}, the category they belong to, their pronouns, how they like to be spoken to, ordinary notes, and private notes — the sensitive bucket (orientation, health, legal name, anything that could out or expose them) which I only ever disclose to myself when {{user}} and I are alone. I can also link them to a knowledge-graph node via graphNodeId so the Village and the relational graph stay in sync; I get that id from find_graph_node (or create the node first with create_graph_node). To edit an existing person I pass their id from village_lookup; to create one I leave id out. Even with someone else in the room I can register a person I've just met — but I hold the sensitive private notes, and any change to an existing record, until {{user}} and I are alone for them to confirm.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id:             { type: 'string', description: 'Villager id from village_lookup. Omit to create a new person.' },
+          name:           { type: 'string', description: 'Their name. Required when creating.' },
+          category:       { type: 'string', description: 'The category they belong to — by name (e.g. "Family") or id. Determines what they may be told. Omit to leave unchanged (or default new people to Strangers).' },
+          relationToWard: { type: 'string', description: 'How they relate to {{user}} (e.g. "sister", "therapist", "old schoolfriend").' },
+          pronouns:       { type: 'string', description: "Their pronouns." },
+          commStyleNotes: { type: 'string', description: 'How they like to be spoken to / communication style.' },
+          notes:          { type: 'string', description: 'Ordinary notes — shareable context that can surface even when others are present.' },
+          privateNotes:   { type: 'string', description: 'Sensitive notes for {{user}} and me only (orientation, health, legal name, etc.). Held back automatically whenever anyone else is present. I reserve this for things that could genuinely harm or expose them — not trivia.' },
+          graphNodeId:    { type: 'string', description: 'Optional. The knowledge-graph node id to link this person to (from find_graph_node). Keeps the Village and the relational graph as one picture.' },
+        },
+        required: [],
+      },
+    },
+  },
 ];
 
 /**
@@ -1780,6 +1849,151 @@ export const TOOL_EXECUTORS = {
       await enqueueCrisisResources();
       return 'Crisis resources delivered into {{user}}\'s chat.';
     } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
+  },
+
+  // ── Own files (read-only, sandboxed) ──────────────────────────────
+  // Ward-private only: my Tomes and session logs hold mine and {{user}}'s
+  // shared history, so I don't read them into a room where others are
+  // present (same audience reasoning as the Village private bucket). The
+  // sandbox + secret denylist live in own-files.js.
+  list_files: async ({ dir } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I\'ll hold off going through my own files — they hold {{user}}\'s and my history. I can look once it\'s just us.';
+    }
+    const r = await listOwnFiles(dir ?? '.');
+    if (!r.ok) return `I couldn't list that: ${r.error}.`;
+    if (r.entries.length === 0) return `Nothing in ${r.dir}.`;
+    const lines = r.entries.map(e => e.type === 'dir' ? `  ${e.name}/` : `  ${e.name}${e.size != null ? ` (${e.size}b)` : ''}`);
+    return `${r.dir}:\n${lines.join('\n')}`;
+  },
+
+  read_file: async ({ path: relPath } = {}, ctx = {}) => {
+    if (ctx.wardPrivate === false) {
+      return 'Someone else is here, so I won\'t open my own files right now — they hold {{user}}\'s and my history. I can read it once we\'re alone.';
+    }
+    if (!relPath || typeof relPath !== 'string') return 'I need the path of the file I want to read (I find it with list_files).';
+    const r = await readOwnFile(relPath);
+    if (!r.ok) return `I couldn't read that: ${r.error}.`;
+    const note = r.truncated ? `\n…(truncated — the file is longer than I read)` : '';
+    return `${r.path}:\n${r.content}${note}`;
+  },
+
+  // ── Village ───────────────────────────────────────────────────────
+  // Read is field-gated: privateNotes is disclosed only in ward-private
+  // turns (ctx.wardPrivate). When anyone else is present it's stripped,
+  // so a lookup can't spill sensitive notes into a gated room. Mutations
+  // are ward-private only — the Familiar doesn't edit the registry while
+  // others are watching. ctx.wardPrivate is undefined on non-chat paths
+  // (loops/tests), which we treat as ward-private (those paths are the
+  // ward's own); the chat path sets it explicitly from the audience tag.
+  village_lookup: async ({ category, location, name } = {}, ctx = {}) => {
+    if (!_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
+    const wardPrivate = ctx.wardPrivate !== false;
+    try {
+      const reg = await _toolDeps.getVillageRegistry();
+      const cats = reg?.categories ?? [];
+      const catName = (id) => cats.find(c => c.id === id)?.name ?? id;
+
+      // Resolve a category filter from a name or id.
+      let wantCatId = null;
+      if (typeof category === 'string' && category.trim()) {
+        const q = category.trim().toLowerCase();
+        const hit = cats.find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q);
+        if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
+        wantCatId = hit.id;
+      }
+      // A location filter resolves to that location's assigned category.
+      if (typeof location === 'string' && location.trim()) {
+        const q = location.trim().toLowerCase();
+        const loc = (reg?.locations ?? []).find(l => l.key.toLowerCase() === q || (l.label ?? '').toLowerCase() === q);
+        if (!loc) return `I don't know a location called "${location}".`;
+        // Intersect with any category filter already in play.
+        if (wantCatId && wantCatId !== loc.assignedCategoryId) return 'No one matches both that category and that location.';
+        wantCatId = loc.assignedCategoryId;
+      }
+      const nameQ = typeof name === 'string' && name.trim() ? name.trim().toLowerCase() : null;
+
+      let villagers = reg?.villagers ?? [];
+      if (wantCatId) villagers = villagers.filter(v => (v.categoryIds ?? []).includes(wantCatId));
+      if (nameQ) villagers = villagers.filter(v =>
+        v.name.toLowerCase().includes(nameQ) ||
+        (v.aliases ?? []).some(a => String(a?.id ?? '').toLowerCase().includes(nameQ)));
+
+      if (villagers.length === 0) return 'No one in the Village matches that.';
+
+      const lines = villagers.map(v => {
+        const parts = [`- ${v.name} (id: ${v.id})`];
+        const cnames = (v.categoryIds ?? []).map(catName).join(', ');
+        if (cnames) parts.push(`  Category: ${cnames}`);
+        if (v.pronouns) parts.push(`  Pronouns: ${v.pronouns}`);
+        if (v.relationToWard) parts.push(`  To {{user}}: ${v.relationToWard}`);
+        if (v.commStyleNotes) parts.push(`  Comm style: ${v.commStyleNotes}`);
+        if (v.notes) parts.push(`  Notes: ${v.notes}`);
+        if (v.privateNotes) {
+          if (wardPrivate) parts.push(`  Private (ward-only): ${v.privateNotes}`);
+          else parts.push('  (private notes withheld — someone else is present)');
+        }
+        if (v.graphNodeId) parts.push(`  Linked graph node: ${v.graphNodeId}`);
+        else parts.push('  Not linked to a graph node yet.');
+        return parts.join('\n');
+      });
+      const header = wardPrivate
+        ? `${villagers.length} villager(s):`
+        : `${villagers.length} villager(s) (sensitive private notes hidden — others are present):`;
+      return `${header}\n${lines.join('\n')}`;
+    } catch (err) { return `I couldn't read the Village: ${err.message}`; }
+  },
+
+  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId } = {}, ctx = {}) => {
+    if (!_toolDeps.upsertVillager || !_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
+    const wardPrivate = ctx.wardPrivate !== false;
+
+    if (!id && (typeof name !== 'string' || !name.trim())) {
+      return 'To add someone new I need at least their name. To edit someone, pass their id from village_lookup.';
+    }
+
+    // With others in the room I can still register someone I've just met
+    // (a low-stakes, shareable act), but I don't rewrite {{user}}'s
+    // existing records or write the sensitive bucket without them — I
+    // defer those for their consent once we're alone.
+    let deferredPrivate = false;
+    if (!wardPrivate) {
+      if (id) {
+        return 'Someone else is here, so I won\'t change {{user}}\'s existing record for this person right now — that\'s theirs to confirm. I\'ll bring it up with them once it\'s just us.';
+      }
+      if (typeof privateNotes === 'string' && privateNotes.trim()) {
+        deferredPrivate = true;
+        privateNotes = undefined; // hold the sensitive detail for a private moment
+      }
+    }
+
+    try {
+      const args = {};
+      if (id) args.id = id;
+      if (name !== undefined) args.name = name;
+      if (relationToWard !== undefined) args.relationToWard = relationToWard;
+      if (pronouns !== undefined) args.pronouns = pronouns;
+      if (commStyleNotes !== undefined) args.commStyleNotes = commStyleNotes;
+      if (notes !== undefined) args.notes = notes;
+      if (privateNotes !== undefined) args.privateNotes = privateNotes;
+      if (graphNodeId !== undefined) args.graphNodeId = graphNodeId;
+
+      // Resolve category name → id (the Familiar knows names, not ids).
+      if (typeof category === 'string' && category.trim()) {
+        const reg = await _toolDeps.getVillageRegistry();
+        const cats = reg?.categories ?? [];
+        const q = category.trim().toLowerCase();
+        const hit = cats.find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q);
+        if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
+        args.categoryIds = [hit.id];
+      }
+
+      const v = await _toolDeps.upsertVillager(args);
+      const verb = id ? 'updated' : 'added';
+      const linked = v?.graphNodeId ? ` Linked to graph node ${v.graphNodeId}.` : '';
+      const held = deferredPrivate ? ' I held the private detail back — I\'ll add that once it\'s just us.' : '';
+      return `${v?.name ?? 'They'} ${verb} in the Village (id: ${v?.id ?? id}).${linked}${held}`;
+    } catch (err) { return `I couldn't update the Village: ${err.message}`; }
   },
 };
 
