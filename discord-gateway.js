@@ -20,9 +20,10 @@
 //     participants — fail-closed, an unassigned room is Strangers.
 //   - No tools on Discord turns (V4): the gate bounds what I know;
 //     no tool surface bounds what a prompt-injection could do.
-//   - Memorization of Discord sessions is DEFERRED until memories
-//     carry audience tags — enqueueing untagged memories from public
-//     rooms would poison the ward-private RAG pool (see design doc).
+//   - Memorization: when a session idles past SESSION_IDLE_ROTATE_MS
+//     and a fresh session is created, the old session is enqueued for
+//     autonomous memorization (Pillar C). The stored audienceTag on the
+//     session log gates what context each fact carries into Phylactery.
 //
 // Transport: native WebSocket (Node ≥ 22; stable global). If the
 // runtime lacks it, the adapter logs loudly and stays down — degraded,
@@ -37,11 +38,13 @@ import { enrich, withLock } from './thalamus.js';
 import { getRegistry } from './village.js';
 import { resolveAudience, audienceTagFor } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
+import { enqueueMemorization } from './memorization.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
 import { recordKnock, recordLocationKnock } from './knocks.js';
+import { filterOutgoingReply } from './outgoing-filter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -242,9 +245,29 @@ async function sessionForLocation(locationKey, locationLabel, kind) {
     const map = await readMap();
     const entry = map[locationKey];
     const nowMs = Date.now();
-    if (entry?.sessionId && (nowMs - new Date(entry.lastTurnAt ?? 0).getTime()) < SESSION_IDLE_ROTATE_MS) {
-      const log = await readSessionLog(entry.sessionId);
-      if (log) return log;
+    if (entry?.sessionId) {
+      const elapsedMs = nowMs - new Date(entry.lastTurnAt ?? 0).getTime();
+      if (elapsedMs < SESSION_IDLE_ROTATE_MS) {
+        const log = await readSessionLog(entry.sessionId);
+        if (log) return log;
+      } else {
+        // session idled out — memorize it before rotating
+        const oldLog = await readSessionLog(entry.sessionId);
+        if (oldLog?.messages?.length >= 2) {
+          const settings = readSettingsSync();
+          const conn = primaryConnectionFrom(settings);
+          if (conn?.apiKey && conn?.model) {
+            enqueueMemorization({
+              sessionId: oldLog.sessionId,
+              messages:  oldLog.messages,
+              provider:  conn.provider,
+              apiKey:    conn.apiKey,
+              model:     conn.model,
+              audienceTag: oldLog.audienceTag ?? 'ward-private',
+            }).catch(err => console.warn('[discord] memorize on rotate failed:', err.message));
+          }
+        }
+      }
     }
     const fresh = {
       sessionId: randomUUID(),
@@ -414,7 +437,7 @@ async function handleTurn(gw, msg, decision) {
   // Scanned from the ACCUMULATED participants (readable, not just active,
   // same basis as the gate above), so a stranger who spoke earlier still
   // floors the room now. Stamped on the session so the memorization
-  // sweep can route ward-private content into entity-core while
+  // sweep can route ward-private content into Phylactery while
   // quarantining shared-room content to the local tome.
   const audienceTag = audienceTagFor(
     decision.audience === null ? null : { location: decision.audience.location, participants: session.participants },
@@ -453,7 +476,25 @@ async function handleTurn(gw, msg, decision) {
     { role: 'user', content: userContent },
   ];
 
-  const reply = await callChat({ conn, messages: apiMessages, settings });
+  const rawReply = await callChat({ conn, messages: apiMessages, settings });
+
+  // Pillar D: semantic outgoing gate. Ward-private sessions (the ward's own DM)
+  // fast-path immediately. All other rooms run the filter before delivery.
+  let reply = rawReply;
+  if (audienceTag !== 'ward-private' && rawReply) {
+    const filtered = await filterOutgoingReply({
+      draftText:    rawReply,
+      audienceTag,
+      callUpstream: async (msgs) => callChat({ conn, messages: msgs, settings }),
+      baseMessages: apiMessages,
+    }).catch(err => {
+      console.error('[discord] outgoing filter failed (passing through):', err?.message ?? err);
+      return { text: rawReply, blocked: false };
+    });
+    reply = filtered.text;
+    if (filtered.blocked)       console.log(`[discord] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
+    else if (reply !== rawReply) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
+  }
 
   await sendChannelMessage(gw.config.token, msg.channel_id, reply);
 

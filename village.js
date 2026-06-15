@@ -5,9 +5,9 @@
 // places) with trust ceilings. This module is the LOCAL MIRROR — the
 // copy Thalamus and Cerebellum read at runtime so the knowledge gate
 // never depends on a live MCP peer (fail-closed requires the gate to
-// work even when entity-core is down).
+// work even when Phylactery is down).
 //
-// The canonical copy lives in entity-core (hybrid model, see
+// The canonical copy lives in Phylactery (hybrid model, see
 // docs/village-support-design.md "Registry storage"). Sync contract:
 //   - writes are write-through: mutate mirror → push canonical;
 //     push failure marks syncPending and never throws into the caller
@@ -16,7 +16,7 @@
 //
 // The sync transport is injected via initVillageSync() so this module
 // stays import-safe for tests (same pattern as initCerebellumTools):
-// server.js wires the real entity-core push/pull at boot.
+// server.js wires the real Phylactery push/pull at boot.
 //
 // Concurrency: every read-modify-write goes through thalamus's
 // withLock (import-safe; MCP children spawn on startThalamus(), not
@@ -189,21 +189,33 @@ export function normalizeRegistry(raw) {
   const villagers = (Array.isArray(reg.villagers) ? reg.villagers : [])
     .filter(v => v && typeof v === 'object' && typeof v.id === 'string' && v.id.trim()
       && typeof v.name === 'string' && v.name.trim())
-    .map(v => ({
-      id: v.id,
-      name: v.name.trim(),
-      // Accepts both categoryIds[] (new) and legacy categoryId scalar.
-      // Dangling / empty → [strangers]. Narrow, never widen.
-      categoryIds: normalizeCategoryIds(
-        v.categoryIds ?? (v.categoryId ? [v.categoryId] : []),
-        byId,
-      ),
-      aliases: sanitizeAliases(v.aliases),
-      connection: typeof v.connection === 'string' ? v.connection : '',
-      ...(v.triage && typeof v.triage === 'object' && typeof v.triage.webhook === 'string'
-        ? { triage: { webhook: v.triage.webhook, ...(typeof v.triage.channel === 'string' ? { channel: v.triage.channel } : {}) } }
-        : {}),
-    }));
+    .map(v => {
+      const relFam = RELATION_TO_FAMILIAR_VALUES.includes(v.relationToFamiliar)
+        ? v.relationToFamiliar : 'unaware';
+      const rem = sanitizeRemember(v.remember);
+      return {
+        id: v.id,
+        name: v.name.trim(),
+        // Accepts both categoryIds[] (new) and legacy categoryId scalar.
+        // Dangling / empty → [strangers]. Narrow, never widen.
+        categoryIds: normalizeCategoryIds(
+          v.categoryIds ?? (v.categoryId ? [v.categoryId] : []),
+          byId,
+        ),
+        aliases: sanitizeAliases(v.aliases),
+        connection: typeof v.connection === 'string' ? v.connection : '',
+        relationToFamiliar: relFam,
+        ...(typeof v.pronouns === 'string' && v.pronouns.trim() ? { pronouns: v.pronouns.trim() } : {}),
+        ...(typeof v.relationToWard === 'string' && v.relationToWard.trim() ? { relationToWard: v.relationToWard.trim() } : {}),
+        ...(typeof v.commStyleNotes === 'string' && v.commStyleNotes.trim() ? { commStyleNotes: v.commStyleNotes.trim() } : {}),
+        ...(typeof v.notes === 'string' && v.notes.trim() ? { notes: v.notes.trim() } : {}),
+        ...(typeof v.graphNodeId === 'string' && v.graphNodeId.trim() ? { graphNodeId: v.graphNodeId.trim() } : {}),
+        ...(rem ? { remember: rem } : {}),
+        ...(v.triage && typeof v.triage === 'object' && typeof v.triage.webhook === 'string'
+          ? { triage: { webhook: v.triage.webhook, ...(typeof v.triage.channel === 'string' ? { channel: v.triage.channel } : {}) } }
+          : {}),
+      };
+    });
 
   const locations = (Array.isArray(reg.locations) ? reg.locations : [])
     .filter(l => l && typeof l === 'object' && typeof l.key === 'string' && l.key.trim())
@@ -244,12 +256,12 @@ async function writeRegistryFile(filePath, reg) {
   await fsp.rename(tmp, filePath);
 }
 
-// ── Sync (entity-core canonical) ──────────────────────────────────
+// ── Sync (Phylactery canonical) ───────────────────────────────────
 //
 // Injected by server.js at boot:
 //   push(canonicalJsonString) → { ok, error? }   write-through target
 //   pull()                    → canonical object | null
-// Both must never throw (wrap entity-core failures into { ok:false }
+// Both must never throw (wrap Phylactery failures into { ok:false }
 // / null) — but we defend anyway: a sync failure must never surface
 // as a registry API error.
 
@@ -407,9 +419,32 @@ export async function deleteCategory({ id, reassignTo }, { filePath = DEFAULT_VI
   });
 }
 
+// ── Villager field helpers ─────────────────────────────────────────
+
+export const RELATION_TO_FAMILIAR_VALUES = [
+  'unaware', 'warm', 'neutral', 'tolerates-for-ward', 'wary-of-ai', 'hostile',
+];
+
+export const REMEMBER_CATEGORIES = [
+  'basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts',
+];
+
+function sanitizeRemember(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const cat of REMEMBER_CATEGORIES) {
+    const v = raw[cat];
+    if (v === true || v === false || v === 'ask') out[cat] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // ── Villager CRUD ─────────────────────────────────────────────────
 
-export async function upsertVillager({ id, name, categoryIds, categoryId, aliases, connection, triage }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+export async function upsertVillager({
+  id, name, categoryIds, categoryId, aliases, connection, triage,
+  pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, graphNodeId, remember,
+}, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     // Accept categoryIds (array, new) or categoryId (scalar, legacy).
     const rawIds = categoryIds !== undefined ? categoryIds
@@ -422,6 +457,13 @@ export async function upsertVillager({ id, name, categoryIds, categoryId, aliase
         if (!reg.categories.some(c => c.id === cid)) throw new Error(`unknown category: ${cid}`);
       }
       return ids.length > 0 ? [...new Set(ids)] : [CATEGORY_STRANGERS];
+    };
+
+    const applyOptStr = (obj, key, val) => {
+      if (val !== undefined) {
+        if (typeof val === 'string' && val.trim()) obj[key] = val.trim();
+        else delete obj[key];
+      }
     };
 
     if (id) {
@@ -439,16 +481,39 @@ export async function upsertVillager({ id, name, categoryIds, categoryId, aliase
           delete v.triage;
         }
       }
+      applyOptStr(v, 'pronouns', pronouns);
+      applyOptStr(v, 'relationToWard', relationToWard);
+      if (relationToFamiliar !== undefined) {
+        v.relationToFamiliar = RELATION_TO_FAMILIAR_VALUES.includes(relationToFamiliar)
+          ? relationToFamiliar : 'unaware';
+      }
+      applyOptStr(v, 'commStyleNotes', commStyleNotes);
+      applyOptStr(v, 'notes', notes);
+      applyOptStr(v, 'graphNodeId', graphNodeId);
+      if (remember !== undefined) {
+        const rem = sanitizeRemember(remember);
+        if (rem) v.remember = rem;
+        else delete v.remember;
+      }
       return v;
     }
     if (typeof name !== 'string' || !name.trim()) throw new Error('name (string) is required');
     const cids = resolveCategories(rawIds) ?? [CATEGORY_STRANGERS];
+    const relFam = RELATION_TO_FAMILIAR_VALUES.includes(relationToFamiliar) ? relationToFamiliar : 'unaware';
+    const rem = sanitizeRemember(remember);
     const v = {
       id: randomUUID(),
       name: name.trim(),
       categoryIds: cids,
       aliases: sanitizeAliases(aliases),
       connection: typeof connection === 'string' ? connection : '',
+      relationToFamiliar: relFam,
+      ...(typeof pronouns === 'string' && pronouns.trim() ? { pronouns: pronouns.trim() } : {}),
+      ...(typeof relationToWard === 'string' && relationToWard.trim() ? { relationToWard: relationToWard.trim() } : {}),
+      ...(typeof commStyleNotes === 'string' && commStyleNotes.trim() ? { commStyleNotes: commStyleNotes.trim() } : {}),
+      ...(typeof notes === 'string' && notes.trim() ? { notes: notes.trim() } : {}),
+      ...(typeof graphNodeId === 'string' && graphNodeId.trim() ? { graphNodeId: graphNodeId.trim() } : {}),
+      ...(rem ? { remember: rem } : {}),
       ...(triage && typeof triage.webhook === 'string' && triage.webhook.trim()
         ? { triage: { webhook: triage.webhook.trim(), ...(typeof triage.channel === 'string' ? { channel: triage.channel } : {}) } }
         : {}),

@@ -1630,6 +1630,21 @@ button { cursor: pointer; font-family: var(--font); }
   background: var(--surface);
   flex-wrap: wrap;
 }
+.ke-backup-card {
+  margin: 16px; padding: 14px 16px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.ke-backup-card h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.ke-backup-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.ke-backup-row input {
+  flex: 1 1 180px; min-width: 140px;
+  font-size: 0.85rem; padding: 5px 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text);
+}
+#ke-backup-result { margin-top: 10px; }
+#ke-backup-result code { word-break: break-all; }
 .ke-toolbar label { font-size: 0.82rem; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
 .ke-toolbar select, .ke-toolbar input[type="text"] {
   font-size: 0.85rem;
@@ -1675,6 +1690,30 @@ button { cursor: pointer; font-family: var(--font); }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
+.ke-row-settings { opacity: 0.85; font-style: italic; }
+.ke-meta-row {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 8px; margin-bottom: 10px;
+}
+.ke-meta-label {
+  font-size: 0.82rem; color: var(--text-dim);
+  min-width: 100px; flex-shrink: 0;
+}
+.ke-select {
+  font-size: 0.85rem; padding: 4px 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text);
+  flex: 1 1 180px; min-width: 140px;
+}
+.ke-badge {
+  display: inline-block; margin-left: 6px;
+  font-size: 0.7rem; padding: 1px 5px;
+  border-radius: 3px; vertical-align: middle;
+  font-weight: 600; letter-spacing: 0.04em;
+}
+.ke-badge-audience { background: var(--accent-dim, #1c3a5e); color: var(--accent, #7ab4f5); }
+.ke-badge-cw-high   { background: #3a1c1c; color: #f5a07a; }
+.ke-badge-cw-low    { background: var(--surface); color: var(--text-dim); }
 
 .ke-detail-header { margin-bottom: 12px; }
 .ke-detail-header h3 { margin: 0; font-size: 1rem; color: var(--text); }
@@ -2892,6 +2931,31 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .vl-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .vl-note { font-size: 0.78rem; color: var(--text-dim); line-height: 1.5; }
 .vl-status { font-size: 0.82rem; min-height: 1.1em; }
+
+/* Memory consent grid (Pillar G) */
+.vl-rem-grid { display: flex; flex-direction: column; gap: 5px; }
+.vl-rem-row  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vl-rem-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  min-width: 9em;
+  flex-shrink: 0;
+}
+.vl-rem-toggle { display: flex; gap: 3px; }
+.vl-rem-btn {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 100px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+}
+.vl-rem-btn:hover { border-color: var(--accent); color: var(--text); }
+.vl-rem-free.vl-rem-on  { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.vl-rem-ask.vl-rem-on   { background: color-mix(in srgb, orange 18%, transparent); color: #c97c00; border-color: #c97c00; }
+.vl-rem-never.vl-rem-on { background: color-mix(in srgb, var(--danger, #c0392b) 15%, transparent); color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
 
 /* Knock list (V4.x) — pending unregistered contacts above the grid */
 .vl-knocks {

@@ -176,7 +176,7 @@ const state = {
   primaryConnectionId:     null, // id of the active/primary connection
   fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
   maxEmptyRetries:         2,    // retries per connection when response is empty
-  entityCoreConnectionId:  null, // id of the connection whose API key entity-core uses
+  phylacteryConnectionId:  null, // id of the connection whose API key Phylactery uses
   // ── Prompt-cache tuning ──────────────────────────────────
   // How many messages from the end of the conversation the dynamic
   // thalamus block gets injected at. Static identity stays at the
@@ -255,7 +255,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
-  'entityCoreConnectionId',
+  'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'trustedContacts', 'userDiscordWebhook',
@@ -448,6 +448,13 @@ async function syncSettingsFromServer() {
   for (const k of SERVER_SYNCED_KEYS) {
     if (k in effective) state[k] = effective[k];
   }
+  // Migrate field rename from 0.6.x: entityCoreConnectionId → phylacteryConnectionId.
+  // settings.json written before the rename still has the old key; the server handles
+  // it server-side too, but the UI needs its own copy so the connection picker renders.
+  if (!state.phylacteryConnectionId && effective?.entityCoreConnectionId) {
+    state.phylacteryConnectionId = effective.entityCoreConnectionId;
+    pushSettingsToServer(); // persist the renamed field immediately
+  }
   if (!Array.isArray(state.connections))           state.connections = [];
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   migrateLegacyConnection();
@@ -549,9 +556,9 @@ function migrateLegacyConnection() {
   state.fallbackConnectionIds = (state.fallbackConnectionIds || [])
     .filter(id => state.connections.find(c => c.id === id))
     .filter(id => id !== state.primaryConnectionId);
-  // Clear the entity-core designation if it points at a missing connection.
-  if (state.entityCoreConnectionId && !state.connections.find(c => c.id === state.entityCoreConnectionId)) {
-    state.entityCoreConnectionId = null;
+  // Clear the Phylactery designation if it points at a missing connection.
+  if (state.phylacteryConnectionId && !state.connections.find(c => c.id === state.phylacteryConnectionId)) {
+    state.phylacteryConnectionId = null;
   }
 }
 
@@ -624,7 +631,7 @@ function saveNewConnection(name) {
 function deleteConnection(id) {
   state.connections = state.connections.filter(c => c.id !== id);
   state.fallbackConnectionIds = state.fallbackConnectionIds.filter(x => x !== id);
-  if (state.entityCoreConnectionId === id) state.entityCoreConnectionId = null;
+  if (state.phylacteryConnectionId === id) state.phylacteryConnectionId = null;
   if (state.primaryConnectionId === id) {
     state.primaryConnectionId = state.connections[0]?.id ?? null;
     const newPrimary = getPrimaryConnection();
@@ -661,20 +668,20 @@ function toggleFallback(id, enabled) {
 }
 
 /**
- * Designate (or clear) the connection whose API key entity-core uses.
+ * Designate (or clear) the connection whose API key Phylactery uses.
  * Single-select: setting this on one connection clears it from any
  * other. Setting it to the currently-designated id clears the
  * designation entirely (so the same toggle button works for both
  * directions). server.js compares old vs new on PUT /api/settings and
- * respawns entity-core when this (or the pointed-at connection's key)
+ * respawns Phylactery when this (or the pointed-at connection's key)
  * changes — so the user sees the new key take effect on the next
  * chat message, no restart required.
  */
-function setEntityCoreConnection(id) {
-  if (state.entityCoreConnectionId === id) {
-    state.entityCoreConnectionId = null;
+function setPhylacteryConnection(id) {
+  if (state.phylacteryConnectionId === id) {
+    state.phylacteryConnectionId = null;
   } else {
-    state.entityCoreConnectionId = id;
+    state.phylacteryConnectionId = id;
   }
   saveSettings();
   renderConnectionsList();
@@ -701,7 +708,7 @@ function renderConnectionsList() {
     const isPrimary  = conn.id === state.primaryConnectionId;
     const fbIdx      = state.fallbackConnectionIds.indexOf(conn.id);
     const isFallback = fbIdx >= 0 && !isPrimary;
-    const isEntityCore = conn.id === state.entityCoreConnectionId;
+    const isEntityCore = conn.id === state.phylacteryConnectionId;
 
     const li = document.createElement('li');
     li.className = 'connection-item' + (isPrimary ? ' is-primary' : '');
@@ -720,7 +727,7 @@ function renderConnectionsList() {
     info.className = 'conn-info';
     const primaryBadge   = isPrimary    ? '<span class="conn-badge">primary</span>' : '';
     const fallbackBadge  = (!isPrimary && isFallback) ? `<span class="conn-badge fb">fallback #${fbIdx + 1}</span>` : '';
-    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">entity-core</span>' : '';
+    const entityBadge    = isEntityCore ? '<span class="conn-badge ec">Phylactery</span>' : '';
     info.innerHTML =
       `<div class="conn-name">${esc(conn.name)}${primaryBadge}${fallbackBadge}${entityBadge}</div>` +
       `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
@@ -744,22 +751,22 @@ function renderConnectionsList() {
     fbBtn.addEventListener('click', () => toggleFallback(conn.id, !isFallback));
     actions.appendChild(fbBtn);
 
-    // Entity-core designation: single-select across all connections. Tells
-    // the server which API key to pass to the entity-core child process
-    // via ENTITY_CORE_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
-    // Independent of primary/fallback — you can point entity-core at any
+    // Phylactery designation: single-select across all connections. Tells
+    // the server which API key to pass to the Phylactery child process
+    // via PHYLACTERY_LLM_API_KEY (and ZAI_API_KEY for z.ai providers).
+    // Independent of primary/fallback — you can point Phylactery at any
     // connection regardless of how the chat path uses it.
     const ecBtn = document.createElement('button');
     ecBtn.type = 'button';
-    ecBtn.textContent = isEntityCore ? '✓ entity-core' : '+ entity-core';
+    ecBtn.textContent = isEntityCore ? '✓ Phylactery' : '+ Phylactery';
     ecBtn.title = isEntityCore
-      ? 'Currently the API key source for entity-core (click to clear)'
-      : 'Use this connection’s API key for entity-core';
+      ? 'Currently the API key source for Phylactery (click to clear)'
+      : "Use this connection's API key for Phylactery";
     ecBtn.setAttribute('aria-label', isEntityCore
-      ? `Clear entity-core API-key designation from "${conn.name}"`
-      : `Use "${conn.name}" as entity-core API-key source`);
+      ? `Clear Phylactery API-key designation from "${conn.name}"`
+      : `Use "${conn.name}" as Phylactery API-key source`);
     ecBtn.setAttribute('aria-pressed', isEntityCore ? 'true' : 'false');
-    ecBtn.addEventListener('click', () => setEntityCoreConnection(conn.id));
+    ecBtn.addEventListener('click', () => setPhylacteryConnection(conn.id));
     actions.appendChild(ecBtn);
 
     if (isFallback) {
@@ -1440,7 +1447,7 @@ let abortController = null;
 let lastSentMessages = null;
 /** Per-segment provenance for the system message of the last build. See buildApiMessages. */
 let lastBuildSegments = null;
-/** The entity-core block that the server actually prepended to the last request's system message. */
+/** The Phylactery enrichment block that the server actually prepended to the last request's system message. */
 // Last successful response's thalamus envelope, captured per-request:
 //   { static, dynamic, depth, injectedAt }
 // `static` lives at the top of the system message (cacheable prefix);
@@ -2409,6 +2416,7 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
     provider:     state.provider,
     apiKey:       state.apiKey,
     model:        state.model,
+    audienceTag:  'ward-private',
   };
   try {
     const resp = await fetch('/api/memorize', {
@@ -2445,6 +2453,7 @@ function memorizeViaBeacon(messages, sessionId, opts = {}) {
     provider:     state.provider,
     apiKey:       state.apiKey,
     model:        state.model,
+    audienceTag:  'ward-private',
   };
   try {
     const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
@@ -2517,8 +2526,8 @@ const PI_SOURCE_LABELS = {
   // the static block prepends the system message (cacheable prefix);
   // the dynamic block is depth-injected as its own system message so
   // changes don't invalidate the static prefix.
-  'thalamus-static':   'Entity-Core (static)',
-  'thalamus-dynamic':  'Entity-Core (dynamic @ depth)',
+  'thalamus-static':   'Phylactery (static)',
+  'thalamus-dynamic':  'Phylactery (dynamic @ depth)',
   'lore-sys-top':      'Lore · system top',
   'lore-before-char':  'Lore · before character',
   'lore-after-char':   'Lore · after character',
@@ -2572,7 +2581,7 @@ function openPromptInspector() {
   if (!lastThalamus || (!lastThalamus.static && !lastThalamus.dynamic)) {
     const note = document.createElement('p');
     note.className = 'field-hint';
-    note.textContent = 'No entity-core block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
+    note.textContent = 'No Phylactery enrichment block in the last response. Thalamus may have returned empty (no enrichment), or the request hadn\'t completed yet — re-open after the next reply lands.';
     body.appendChild(note);
   }
 
@@ -2617,7 +2626,7 @@ function openPromptInspector() {
       return;
     }
 
-    // System message: split by source. Includes the entity-core
+    // System message: split by source. Includes the Phylactery
     // STATIC block as its own first segment when present, then each
     // tracked build segment. The DYNAMIC block lives in its own
     // synthetic message at `injectedAt` (handled above), not here.
@@ -3203,7 +3212,7 @@ function init() {
   });
   $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
 
-  // Knowledge editor (entity-core)
+  // Knowledge editor (Phylactery)
   $('knowledge-btn').addEventListener('click', openKnowledgeModal);
   $('knowledge-modal-close').addEventListener('click', closeKnowledgeModal);
   // Intentionally NO backdrop-click-to-close: it fires mid-pan or while
@@ -3295,6 +3304,8 @@ function init() {
   $('ke-id-refresh').addEventListener('click', keLoadIdentity);
   $('ke-snap-create').addEventListener('click', keCreateSnapshot);
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
+  $('ke-backup-export').addEventListener('click', keExportBackup);
+  $('ke-backup-restore').addEventListener('click', keRestoreBackup);
 
   // Tomes modal
   $('tomes-btn').addEventListener('click', openTomesModal);
@@ -3964,12 +3975,13 @@ async function runAutoSummarize(session) {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        sessionId: session.sessionId,
-        scope:     'session',
+        sessionId:   session.sessionId,
+        scope:       'session',
         messages,
-        provider:  state.provider,
-        apiKey:    state.apiKey,
-        model:     state.model,
+        provider:    state.provider,
+        apiKey:      state.apiKey,
+        model:       state.model,
+        audienceTag: 'ward-private',
       }),
     });
     if (!resp.ok) throw new Error(await resp.text().catch(() => `HTTP ${resp.status}`));
@@ -5084,7 +5096,7 @@ function downloadDiagnosticReport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// ── Knowledge editor (entity-core: memories, identity, graph, snapshots) ─
+// ── Knowledge editor (Phylactery: memories, identity, graph, snapshots) ──
 //
 // Layered UI: tabs across the top, two-pane list+detail per tab. All ops
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
@@ -5169,7 +5181,7 @@ function keError(err, fallback) {
 }
 
 // Pull the server's real `{ error }` message out of a non-OK response.
-// Falls back to HTTP status. Surfaces 'entity-core not connected'
+// Falls back to HTTP status. Surfaces 'phylactery not connected'
 // instead of the opaque 'HTTP 502' the user used to see.
 async function keReadServerError(res) {
   try {
@@ -5194,10 +5206,14 @@ async function keLoadMemories() {
     for (const m of memories) {
       const row = document.createElement('div');
       row.className = 'ke-row';
+      const audienceBadge = (m.audience && m.audience !== 'ward-private')
+        ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
+      const cwBadge = m.care_weight
+        ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
       row.innerHTML = `
-        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date)}</div>
-        <div class="ke-row-sub">${esc((m.preview ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date));
+        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${audienceBadge}${cwBadge}</div>
+        <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
+      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date ?? m.key));
       list.appendChild(row);
     }
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
@@ -5209,13 +5225,28 @@ async function keOpenMemory(granularity, date) {
     const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const content = data.memory?.content ?? data.content ?? '';
+    const content   = data.memory?.content    ?? data.content    ?? '';
+    const audience  = data.memory?.audience   ?? data.audience   ?? 'ward-private';
+    const careWeight = data.memory?.care_weight ?? data.care_weight ?? '';
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
         <h3>${esc(granularity)} · ${esc(date)}</h3>
       </div>
-      <textarea id="ke-mem-content" rows="14" class="ke-textarea">${esc(content)}</textarea>
+      <textarea id="ke-mem-content" rows="12" class="ke-textarea">${esc(content)}</textarea>
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="ke-mem-audience">Audience</label>
+        <select id="ke-mem-audience" class="ke-select">
+          <option value="ward-private" ${audience === 'ward-private' ? 'selected' : ''}>ward-private (most restrictive)</option>
+          <option value="all" ${audience === 'all' ? 'selected' : ''}>all (any room)</option>
+        </select>
+        <label class="ke-meta-label" for="ke-mem-care-weight">Care weight</label>
+        <select id="ke-mem-care-weight" class="ke-select">
+          <option value=""     ${!careWeight             ? 'selected' : ''}>— unset</option>
+          <option value="high" ${careWeight === 'high'   ? 'selected' : ''}>high (decay-shielded, never graduates)</option>
+          <option value="low"  ${careWeight === 'low'    ? 'selected' : ''}>low</option>
+        </select>
+      </div>
       <div class="ke-actions">
         <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
         <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
@@ -5224,9 +5255,11 @@ async function keOpenMemory(granularity, date) {
       <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
     $('ke-mem-save').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
+      const aud = $('ke-mem-audience').value;
+      const cw  = $('ke-mem-care-weight').value;
       const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, editedBy: 'user-edit' }),
+        body: JSON.stringify({ content: body, editedBy: 'user-edit', audience: aud, careWeight: cw || null }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();
@@ -6243,9 +6276,10 @@ async function keLoadIdentity() {
     const data = await res.json();
     list.innerHTML = '';
     let any = false;
-    for (const category of ['self', 'user', 'relationship', 'custom']) {
+    for (const category of ['self', 'ward', 'relationship', 'custom']) {
       const files = data[category] ?? [];
-      if (!files.length) continue;
+      const isWard = category === 'ward';
+      if (!files.length && !isWard) continue;
       const header = document.createElement('div');
       header.className = 'ke-row-header';
       header.textContent = category;
@@ -6259,6 +6293,17 @@ async function keLoadIdentity() {
           <div class="ke-row-sub">${esc((f.content ?? '').slice(0, 100).replace(/\n/g, ' '))}</div>`;
         row.addEventListener('click', () => keOpenIdentity(category, f));
         list.appendChild(row);
+      }
+      if (isWard) {
+        // Always expose Remember settings even when there are no ward files yet.
+        any = true;
+        const rmRow = document.createElement('div');
+        rmRow.className = 'ke-row ke-row-settings';
+        rmRow.innerHTML = `
+          <div class="ke-row-title">Remember settings</div>
+          <div class="ke-row-sub">Memory storage policy per category</div>`;
+        rmRow.addEventListener('click', keOpenRememberMap);
+        list.appendChild(rmRow);
       }
     }
     if (!any) list.innerHTML = '<p class="logs-empty">No identity files yet.</p>';
@@ -6304,6 +6349,65 @@ function keOpenIdentity(category, file) {
   });
 }
 
+// ── Remember-consent map ─────────────────────────────────────────────────────
+async function keOpenRememberMap() {
+  const det = $('ke-id-detail');
+  det.innerHTML = '<p class="logs-loading">Loading remember settings…</p>';
+  try {
+    const res = await fetch('/api/entity/ward/remember');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const map = data.map ?? {};
+    const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
+    const labels = {
+      basics: 'Basics (name, age, daily facts)',
+      emotional_content: 'Emotional content (feelings, struggles)',
+      health_info: 'Health information (meds, conditions)',
+      relationships: 'Relationships (family, friends)',
+      whereabouts: 'Whereabouts (location, travel)',
+    };
+    function selFor(cat) {
+      const v = map[cat];
+      const opts = [
+        `<option value="true"  ${v === true   ? 'selected' : ''}>Store freely</option>`,
+        `<option value="ask"   ${v === 'ask'  ? 'selected' : ''}>Ask first (consent_pending)</option>`,
+        `<option value="false" ${v === false  ? 'selected' : ''}>Never store</option>`,
+      ].join('');
+      return `<select id="rm-${cat}" class="ke-select">${opts}</select>`;
+    }
+    const rows = categories.map(cat => `
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="rm-${cat}">${esc(labels[cat])}</label>
+        ${selFor(cat)}
+      </div>`).join('');
+    det.innerHTML = `
+      <div class="ke-detail-header"><h3>Ward · Remember settings</h3></div>
+      <p class="field-hint">Controls how I handle information about <strong>my human themselves</strong>, per category.
+        (For other people in the Village, set memory consent per-person in the Village editor.)
+        "Store freely" means I remember it immediately.
+        "Ask first" means I store it as pending and surface it for confirmation.
+        "Never store" means I drop it silently — use with care.</p>
+      ${rows}
+      <div class="ke-actions">
+        <button id="ke-rm-save" class="btn-send">Save</button>
+      </div>`;
+    $('ke-rm-save').addEventListener('click', async () => {
+      const newMap = {};
+      for (const cat of categories) {
+        const raw = det.querySelector(`#rm-${cat}`)?.value;
+        newMap[cat] = raw === 'true' ? true : raw === 'false' ? false : 'ask';
+      }
+      const r = await fetch('/api/entity/ward/remember', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ map: newMap }),
+      });
+      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      alert('Remember settings saved.');
+      keOpenRememberMap();
+    });
+  } catch (err) { det.innerHTML = keError(err, 'Failed to load remember settings.'); }
+}
+
 // ── Snapshots tab ───────────────────────────────────────────────────────
 async function keLoadSnapshots() {
   const list = $('ke-snap-list');
@@ -6341,6 +6445,44 @@ async function keCreateSnapshot() {
   const r = await fetch('/api/entity/snapshots', { method: 'POST' });
   if (!r.ok) { alert(`Snapshot failed: ${(await r.json()).error ?? r.status}`); return; }
   keLoadSnapshots();
+}
+
+// ── Backup / restore (Pillar H) ──────────────────────────────────────────
+async function keExportBackup() {
+  const pass = $('ke-backup-pass').value;
+  const out  = $('ke-backup-result');
+  if (!pass || pass.length < 4) { out.textContent = 'Passphrase must be at least 4 characters.'; return; }
+  out.textContent = 'Encrypting…';
+  try {
+    const r = await fetch('/api/entity/backup/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase: pass }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error ?? r.status);
+    out.innerHTML = `Backed up to <code>${esc(data.filePath)}</code> (${Math.round((data.sizeBytes ?? 0) / 1024)} KB). Keep this file and your passphrase safe.`;
+    $('ke-backup-pass').value = '';
+  } catch (err) { out.textContent = `Backup failed: ${err.message}`; }
+}
+
+async function keRestoreBackup() {
+  const filePath = $('ke-backup-path').value.trim();
+  const pass     = $('ke-backup-restore-pass').value;
+  const out      = $('ke-backup-result');
+  if (!filePath) { out.textContent = 'Enter the backup file path to restore from.'; return; }
+  if (!pass)     { out.textContent = 'Enter the passphrase for the backup.'; return; }
+  if (!confirm('Restore from this backup? This OVERWRITES the current memory / identity / graph state entirely.')) return;
+  out.textContent = 'Restoring…';
+  try {
+    const r = await fetch('/api/entity/backup/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, passphrase: pass }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error ?? r.status);
+    out.textContent = `Restored from ${data.restoredFrom}. The Familiar is reconnecting to the restored self.`;
+    $('ke-backup-restore-pass').value = '';
+  } catch (err) { out.textContent = `Restore failed: ${err.message}`; }
 }
 
 // ── Tome entry editor ─────────────────────────────────────────────
@@ -7796,6 +7938,23 @@ const VL_STRANGERS = 'strangers';
 const VL_EMERGENCY = 'emergency-contacts';
 const VL_TABS      = ['people', 'categories', 'locations'];
 
+const VL_REL_FAM_LABELS = {
+  unaware:             'Unaware of the Familiar',
+  warm:                'Warm',
+  neutral:             'Neutral',
+  'tolerates-for-ward':'Tolerates (for the ward)',
+  'wary-of-ai':        'Wary of AI',
+  hostile:             'Hostile',
+};
+
+const VL_REMEMBER_CATS = [
+  { key: 'basics',           label: 'Basic info',       default: true  },
+  { key: 'emotional_content',label: 'Emotional content',default: 'ask' },
+  { key: 'health_info',      label: 'Health info',      default: 'ask' },
+  { key: 'relationships',    label: 'Relationships',    default: 'ask' },
+  { key: 'whereabouts',      label: 'Whereabouts',      default: 'ask' },
+];
+
 let _vlReg  = null;   // local registry cache; null = needs reload
 let _vlSelP = null;   // selected villager id
 let _vlSelC = null;   // selected category id
@@ -8009,6 +8168,19 @@ function vlStartNewPerson() {
   vlOpenDetail('vl-people-detail');
 }
 
+function vlRememberRowHtml(cat, currentVal) {
+  const val = currentVal !== undefined ? currentVal : cat.default;
+  const opts = [
+    { v: true,   cls: 'vl-rem-free',  label: 'Free'  },
+    { v: 'ask',  cls: 'vl-rem-ask',   label: 'Ask'   },
+    { v: false,  cls: 'vl-rem-never', label: 'Never' },
+  ];
+  const btns = opts.map(o =>
+    `<button class="vl-rem-btn ${o.cls}${o.v === val ? ' vl-rem-on' : ''}" data-cat="${esc(cat.key)}" data-val="${o.v}" type="button">${o.label}</button>`
+  ).join('');
+  return `<div class="vl-rem-row"><span class="vl-rem-label">${esc(cat.label)}</span><div class="vl-rem-toggle">${btns}</div></div>`;
+}
+
 function vlRenderPersonDetail(villager) {
   const detail = $('vl-people-detail');
   const reg = _vlReg;
@@ -8023,6 +8195,19 @@ function vlRenderPersonDetail(villager) {
 
   const aliasRows = (villager?.aliases ?? []).map((a, i) => vlAliasRowHtml(i, a.platform, a.id, a.handle ?? '')).join('');
 
+  const relFamOptions = Object.entries(VL_REL_FAM_LABELS).map(([val, label]) => {
+    const sel = (villager?.relationToFamiliar ?? 'unaware') === val ? ' selected' : '';
+    return `<option value="${esc(val)}"${sel}>${esc(label)}</option>`;
+  }).join('');
+
+  const remRows = VL_REMEMBER_CATS.map(cat =>
+    vlRememberRowHtml(cat, villager?.remember?.[cat.key])
+  ).join('');
+
+  const graphNodeHtml = (!isNew && villager.graphNodeId)
+    ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Graph node: <code>${esc(villager.graphNodeId)}</code></div>`
+    : '';
+
   detail.innerHTML = `
     <div class="vl-detail-head">${isNew ? 'Add person' : esc(villager.name)}</div>
     <div>
@@ -8030,8 +8215,20 @@ function vlRenderPersonDetail(villager) {
       <input type="text" id="vl-p-name" value="${isNew ? '' : esc(villager.name)}" placeholder="e.g. Chen" style="width:100%">
     </div>
     <div>
+      <div class="vl-field-label">Pronouns <span class="field-hint">(optional)</span></div>
+      <input type="text" id="vl-p-pronouns" value="${isNew ? '' : esc(villager.pronouns ?? '')}" placeholder="e.g. she/her, they/them" style="width:100%">
+    </div>
+    <div>
       <div class="vl-field-label">Categories <span class="field-hint">(can overlap)</span></div>
       <div class="vl-cat-toggles" id="vl-p-cat-toggles">${catToggles || '<span class="vl-chip-dim">No categories defined yet.</span>'}</div>
+    </div>
+    <div>
+      <div class="vl-field-label">Relation to the ward</div>
+      <input type="text" id="vl-p-rel-ward" value="${isNew ? '' : esc(villager.relationToWard ?? '')}" placeholder="e.g. college roommate, therapist" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Stance toward me <span class="field-hint">(how they relate to the Familiar)</span></div>
+      <select id="vl-p-rel-fam" style="width:100%">${relFamOptions}</select>
     </div>
     <div>
       <div class="vl-field-label">Platform aliases <span class="field-hint">(matched by stable ID, not handle)</span></div>
@@ -8042,6 +8239,19 @@ function vlRenderPersonDetail(villager) {
       <div class="vl-field-label">Connection note</div>
       <input type="text" id="vl-p-conn" value="${isNew ? '' : esc(villager.connection ?? '')}" placeholder="How do you know them?" style="width:100%">
     </div>
+    <div>
+      <div class="vl-field-label">Communication style <span class="field-hint">(optional)</span></div>
+      <input type="text" id="vl-p-comm" value="${isNew ? '' : esc(villager.commStyleNotes ?? '')}" placeholder="e.g. direct, uses sarcasm, prefers short messages" style="width:100%">
+    </div>
+    <div>
+      <div class="vl-field-label">Notes <span class="field-hint">(optional)</span></div>
+      <textarea id="vl-p-notes" placeholder="Anything else worth knowing…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.notes ?? '')}</textarea>
+    </div>
+    <div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
+      <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
+    </div>
+    ${graphNodeHtml}
     <div class="vl-actions">
       <button class="btn-send" id="vl-p-save" type="button">${isNew ? 'Add person' : 'Save'}</button>
       ${!isNew ? `<button class="btn-danger" id="vl-p-del" type="button">Delete</button>` : ''}
@@ -8065,6 +8275,14 @@ function vlRenderPersonDetail(villager) {
   detail.querySelectorAll('.vl-alias-rm').forEach(btn =>
     btn.addEventListener('click', () => btn.closest('.vl-alias-row').remove())
   );
+  detail.querySelectorAll('.vl-rem-toggle').forEach(group => {
+    group.querySelectorAll('.vl-rem-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('.vl-rem-btn').forEach(b => b.classList.remove('vl-rem-on'));
+        btn.classList.add('vl-rem-on');
+      });
+    });
+  });
   $('vl-p-save').addEventListener('click', () => vlSavePerson(villager?.id ?? null));
   $('vl-p-del')?.addEventListener('click', () => vlDeletePerson(villager.id));
   vlBindBackBtn('vl-p-back', 'vl-people-detail');
@@ -8092,12 +8310,23 @@ async function vlSavePerson(id) {
     }))
     .filter(a => a.platform && a.id);
   const connection = $('vl-p-conn').value.trim();
+  const pronouns = $('vl-p-pronouns')?.value.trim() || undefined;
+  const relationToWard = $('vl-p-rel-ward')?.value.trim() || undefined;
+  const relationToFamiliar = $('vl-p-rel-fam')?.value || 'unaware';
+  const commStyleNotes = $('vl-p-comm')?.value.trim() || undefined;
+  const notes = $('vl-p-notes')?.value.trim() || undefined;
+  const remember = {};
+  document.querySelectorAll('#vl-p-remember .vl-rem-btn.vl-rem-on').forEach(btn => {
+    const rawVal = btn.dataset.val;
+    remember[btn.dataset.cat] = rawVal === 'true' ? true : rawVal === 'false' ? false : 'ask';
+  });
   status.textContent = 'Saving…';
   try {
     const r = await fetch(
       id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
       { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, categoryIds, aliases, connection }) },
+        body: JSON.stringify({ name, categoryIds, aliases, connection,
+          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, remember }) },
     );
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

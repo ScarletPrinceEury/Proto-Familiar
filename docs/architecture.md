@@ -10,7 +10,8 @@
 Proto-Familiar is a Node.js application — a thin Express server +
 vanilla-JS single-page frontend — that surfaces a persistent AI
 companion (the Familiar) bonded to one human. It is an **embodiment**
-of the same entity Psycheros holds in `entity-core`; see
+of the same entity held in **Phylactery** — the in-tree
+canonical store (Phylactery milestone complete as of 0.6.x); see
 [CLAUDE.md](../CLAUDE.md#entity-as-subject--the-design-value-under-everything)
 and the [Psycheros PHILOSOPHY.md](https://github.com/PsycherosAI/Psycheros/blob/main/PHILOSOPHY.md)
 for the design value that everything below descends from.
@@ -19,7 +20,7 @@ The server's responsibilities:
 
 1. **Proxy LLM requests** so the user's API key never leaves localhost.
 2. **Enrich every request** with cognitive-module context: identity +
-   memory + graph from entity-core, temporal context + ponderings +
+   memory + graph from Phylactery, temporal context + ponderings +
    care-check framing from Unruh + the caring-spine modules.
 3. **Run autonomous loops** for the proactive surfaces — pondering,
    reminders, silence-triage — that fire without a human request.
@@ -33,9 +34,9 @@ Browser (public/)
     ▼
 server.js  (Express, Node 18+, ESM)
     │
-    │  ── cognitive bridge (per-request enrichment, INWARD) ──────
-    ├── thalamus.js       ──►  entity-core  (Deno, stdio MCP)    — identity / memory / graph
-    │                     ──►  Unruh        (Python via uv, MCP) — schedule / interests / handoff / routine
+    │  ── cognitive bridge (per-request enrichment, INWARD) ────────
+    ├── thalamus.js       ──►  Phylactery  (Python via uv, stdio MCP) — identity / memory / graph / snapshots
+    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / routine
     │
     │  ── motor module (action + delivery, OUTWARD) ───────────────
     ├── cerebellum.js       ── tool registry + executors + tool-call loop,
@@ -60,13 +61,15 @@ server.js  (Express, Node 18+, ESM)
     ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4)
     │
     │  ── classical infrastructure ──────────────────────────────
-    ├── memorization.js     ── per-session memorization queue + worker
+    ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
+    ├── outgoing-filter.js  ── Pillar D: post-response semantic gate before delivery
     ├── temporal-format.js  ── pure renderer for Unruh's payload
     ├── providers.js        ── shared chat-completions URL map
     │
     ├── logs/               session JSON files (git-ignored)
     └── tomes/              per-Tome JSON files + state caches
         ├── .memorization-queue.json   (git-ignored)
+        ├── .consent-pending.json      (git-ignored) — pending consent IDs for Phylactery
         ├── .threat-state.json{,.tmp}  (git-ignored)
         ├── .outbox.json{,.tmp}        (git-ignored)
         └── .last-activity.json{,.tmp} (git-ignored)
@@ -74,8 +77,8 @@ server.js  (Express, Node 18+, ESM)
 
 Thalamus is a **plural-peer mediator**: each cognitive module is a
 separate stdio MCP child spawned at boot. Failures degrade
-independently — entity-core down doesn't take Unruh out, and vice
-versa — and `enrich()` fans out across whichever peers are connected
+independently — Phylactery down doesn't take Unruh out, and vice
+versa — and `enrich()` fans out across whichever peers are live
 via `Promise.allSettled`. Empty sub-blocks render as nothing in the
 prompt; the LLM only sees scaffolding when there's content.
 
@@ -90,7 +93,7 @@ ponderings injection, care-check framing) and as background loops
 ```
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
-├── thalamus.js              MCP bridge — entity-core + Unruh, plus all the helper wrappers
+├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
@@ -108,19 +111,32 @@ ponderings injection, care-check framing) and as background loops
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
-├── village.js               Village registry (V1) — categories/grant sets, villagers/aliases, locations; local mirror + entity-core write-through sync (see docs/village-support-design.md)
+├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md)
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
 ├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
 ├── memorization.js          Persistent per-session memorization queue + worker
+├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
-├── entity-ref.js            Validate entity-core:self/file.md#section refs (M7 standing-value bridge)
+├── entity-ref.js            Validate phylactery:self/file.md#section refs; accepts legacy entity-core: prefix as alias
 ├── package.json
 ├── .gitignore
 │
 ├── logs/                    Session JSON files (auto-created, git-ignored)
 ├── tomes/                   Per-Tome JSON files (auto-created, git-ignored on UUID names)
+│
+├── phylactery/              In-tree Python module (Phylactery — canonical self-store)
+│   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
+│   ├── src/phylactery/server.py  FastMCP server (identity / memory / graph / snapshots / lifecycle / backup)
+│   ├── src/phylactery/identity.py + memory.py + graph.py + consolidate.py
+│   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit
+│   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED)
+│   ├── src/phylactery/backup.py      Pillar H — passphrase-encrypted single-file export/restore
+│   ├── src/phylactery/remember.py    Pillar I — ward remember-consent map (per-category true/false/ask policy)
+│   ├── src/phylactery/snapshot.py + audience.py + embed.py + db.py
+│   ├── data/                SQLite database + snapshots + backups + remember_map.json (auto-created, git-ignored)
+│   └── tests/               pytest contract tests (test_graduation.py + test_retrieval_decay.py)
 │
 ├── unruh/                   In-tree Python module (Unruh — temporal context)
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
@@ -243,8 +259,10 @@ SIGINT / SIGHUP handler so clean shutdown awaits any in-flight tick.
 
 ### `thalamus.js` — the cognitive-module mediator
 
-Spawns and reconnects entity-core (Deno) + Unruh (Python via uv) as
-stdio MCP children. Exposes:
+Spawns and reconnects **Phylactery** (Python via uv, `./phylactery/`) + **Unruh**
+(Python via uv) as stdio MCP children. Phylactery is the canonical self-store
+(identity + memory + graph + trackers); entity-core (Deno) is retired as of Pillar I.
+Exposes:
 
 - **`enrich(userMessage, { liveTurn, staticOnly, lastUserMessageAt, audience })`**
   — the central per-request call. Fans out to identity + memory + graph
@@ -426,12 +444,176 @@ village-support-design.md). Off-switch:
 `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
 `GET /api/discord/status`.
 
-### `memorization.js` — session memorization
+### `memorization.js` — autonomous per-fact memorization (Pillar C)
 
-Unchanged from the original design. Persistent queue at
-`tomes/.memorization-queue.json`, 5-second tick, exponential backoff,
-per-Tome write mutex, idempotent enqueue on
+Persistent queue at `tomes/.memorization-queue.json`, 5-second tick,
+exponential backoff, idempotent enqueue on
 `sessionId+scope+topicId+messageRange`.
+
+**Extraction** uses a per-fact format: LLM returns
+`{facts: [{content, category, subjects, confidence}]}` where `category`
+∈ `basics | emotional_content | health_info | relationships | whereabouts`.
+Facts with `confidence < 0.4` are silently skipped.
+
+**`remember` gate** (per villager, per category):
+- `true` → store freely in Phylactery
+- `false` → drop silently
+- `ask` (or no `remember` map on the villager) → store immediately with
+  `consent_pending=1` and record the ID in `tomes/.consent-pending.json`
+
+When multiple villagers are subjects of a fact, the most restrictive
+gate wins (`false > ask > true`). Default when no villager map exists:
+`basics=true`, all others=`ask`.
+
+**Consent flow:** `thalamus.enrich()` reads `.consent-pending.json` cheaply
+(no MCP round-trip) and injects a `[PENDING MEMORY CONSENT]` block when
+non-empty. The Familiar calls `memory_confirm_consent(ids)` or
+`memory_drop_pending(ids)` (both in `BUILTIN_TOOLS`); `pruneConsentPending(ids)`
+then removes the handled IDs from the local file.
+
+**Triggers:**
+- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon).
+  Always `audienceTag: 'ward-private'`.
+- Discord: `discord-gateway.sessionForLocation()` enqueues the old session
+  when idle rotation fires (session has been quiet ≥ `SESSION_IDLE_ROTATE_MS`).
+  `audienceTag` comes from the stored session log.
+
+**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
+
+### Migration: entity-core → Phylactery (Pillar F)
+
+One-time, snapshot-first, idempotent conversion run via:
+
+```
+npm run import-entity -- --from /path/to/entity-core [--yes]
+```
+
+`scripts/import-entity.js` resolves the source data directory (accepts
+both an entity-core root with `src/` + `data/`, or a bare data dir with
+`self/` / `memories/` / `graph.db`), confirms with the operator, then
+invokes the Python migration module:
+
+```
+cd phylactery/ && uv run python -m phylactery.migrate_from_entity_core \
+    --source <sourceDataDir>
+```
+
+`phylactery/src/phylactery/migrate_from_entity_core.py` phases:
+
+- **Phase 0** — Snapshots Phylactery before any writes (recovery baseline via
+  `snapshot.auto_snapshot`). Safe to run multiple times: already-migrated records
+  (matched by `source_json.originalId`) are skipped.
+- **Phase 1a** — Identity `.md` files from `self/`, `user/` (→ `'ward'` category),
+  `relationship/`, `custom/` are inserted into `identity_files` with
+  `audience='ward-private'`.
+- **Phase 1b** — Memory `.md` files from all five tiers (`daily/weekly/monthly/
+  yearly/significant/`) are inserted into `memories`, date-key preserved, with
+  `audience='ward-private'`.
+- **Phase 1c** — `graph.db` nodes and edges are inserted into `graph_nodes` /
+  `graph_edges` with `audience='ward-private'`. Schema columns are probed
+  gracefully; missing `graph.db` or unrecognised schema is skipped with a warning.
+- **Phase 2** — Prints `type='person'` nodes for manual villager-match review.
+  No auto-merge of person nodes ↔ villagers.
+
+The `identity_files.category` rename (`'user'` → `'ward'`) is enforced at
+migration time (Phase 1a) and by SQL migration `0003_pillar_f_ward_rename.sql`
+for any pre-existing rows. After migration, entity-core is not started;
+Phylactery is the sole canonical store.
+
+### `outgoing-filter.js` — Pillar D outgoing gate
+
+Post-response, pre-send semantic gate for non-ward-private rooms. Runs in the
+non-streaming tool-call loop path in `server.js` and in the Discord reply path.
+Streaming replies bypass the filter (content is already in-flight as deltas).
+
+**Flow:**
+1. If `audienceTag === 'ward-private'`, return immediately — no check needed.
+2. Call `memory_search_restricted(query, roomAudience)` via Phylactery, which
+   searches for ward-private memories semantically close to the draft text.
+3. If similarity score ≥ `FILTER_THRESHOLD` (0.70), send a rejection nudge
+   (second-person prompt per build-spec §3 — the one sanctioned exception to
+   the first-person convention) and retry `callUpstream`.
+4. After `FILTER_RETRY_BUDGET` (3) retries without a clean draft, emit
+   `FILTER_SAFE_REFUSAL`: "I can't share that here — something in what I was
+   about to say isn't cleared for this room. If you need that information,
+   ask me somewhere private."
+
+**Failure mode:** any error in `searchMemoryRestricted` returns `{hit: false}`,
+so the filter always fails open — a Phylactery outage never blocks a reply.
+
+**Parameters signed off by the human (build-spec §7):**
+threshold=0.70, retry budget=3, safe-refusal text as above.
+
+### Pillar E — `memories: 'shared'` unlock (`audience.js`)
+
+`fetchEligibility` now permits `memory_search` when `g.memories === 'shared'`
+(in addition to `=== true`). This was gated off in Pillars A–D because memories
+had no audience tags, so any 'shared' room would have received ALL memories.
+Pillar C added `audience` tags at write time; Pillar D adds the outgoing gate.
+Together they make 'shared' safe to open: a non-ward-private room can now
+receive memories tagged for its audience, and the outgoing filter catches any
+ward-private content that might slip through in the reply text.
+
+### Pillar H — lifecycle: consolidation scheduler, hygiene, graduation, backup
+
+**Consolidation scheduler** (`scheduler.py`) — Phylactery's own internal
+background worker (daemon thread, 5-min wake cadence, **volume-gated** so an
+idle Familiar burns no LLM calls). Each pass runs, independently guarded:
+hygiene → tier consolidation → graduation audit. Off-switch
+`PROTO_FAMILIAR_CONSOLIDATE_DISABLED=1`; started from `server.py:main()`,
+forced on demand via the `lifecycle_pass` tool / `POST /api/entity/lifecycle`.
+
+**Cheap-code hygiene** (`consolidate.run_hygiene`) — pure SQL, folded into the
+pass (not a separate loop): dedup exact-duplicate narrative records (keep
+oldest), merge graph nodes sharing a non-empty `(label, villagerId)` (re-point
+edges, drop losers). Same label with **different** identities is never
+auto-merged — it's reported as ambiguous for the ward to resolve. Snapshots
+before any change.
+
+**Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
+bumps `recall_count` + `last_recalled_at` for everything surfaced.
+
+**Retrieval-decay** (`_decay_weight`) — `score = similarity × 0.5^(days_since_recall/180)`.
+careWeight:high records floor at 0.5; never-recalled records get weight=1.0. Down-rank only
+(never a filter cutoff). Applied before the `max_results` slice so decay can reorder across
+similarity bands. Re-sort on every search ensures stale records don't crowd out fresh ones.
+
+**Graduation audit** (`graduation.py`) — keeps the always-injected
+`identity`/`ward` surface lean by filing no-longer-front-of-mind detail into
+RAG-recalled `me`/`ward` register records. Nothing is deleted; graduated
+records can be pulled back. The **eligibility rule is human-signed** and lives
+in one pure function, `is_graduation_eligible(record, now)`:
+
+```
+candidate  = NOT careWeight:high
+             AND on-surface > DWELL_DAYS (30)
+             AND last recalled > RECALL_RECENCY_DAYS (30, or never)
+             AND last confirmed > CONFIRM_RECENCY_DAYS (30)
+NEVER eligible (pinned): careWeight:high
+             OR category ∈ {health_info, crisis, support-map}
+             OR content matches care-critical patterns (allergies, meds,
+                doses, crisis triggers, support contacts, care guidance)
+             OR confirmed within the window
+```
+
+The bias is toward KEEPING — false positives are cheap, filing away a
+safety-relevant fact is not. The actual per-block decision rides the
+consolidation LLM call (the Familiar, in its own voice); code only narrows the
+candidates and re-screens every graduated item against the care matcher
+(defence in depth). `auto_snapshot` runs before any identity trim. Ward-block
+graduations land in `graduation_log`; thalamus surfaces unacknowledged ones as
+a `[GRADUATION NOTICE]` block (TTL-cached, ward-private turns only,
+non-blocking), and the Familiar calls `graduation_acknowledge` once mentioned.
+Tested in `phylactery/tests/test_graduation.py`.
+
+**Encrypted backup/restore** (`backup.py`) — "back up / restore my Familiar":
+`VACUUM INTO` a consistent copy, encrypt with a key derived from the ward's
+passphrase (PBKDF2-HMAC-SHA256 → Fernet/AES), write a single `.phylactery`
+file. Restore decrypts, sanity-checks it's a real Phylactery DB, swaps it over
+the live DB, and `thalamus.restoreBackup` reconnects the MCP child. The
+passphrase is never stored — a lost passphrase means an unrecoverable backup,
+which the UI states plainly. Surfaced in the Knowledge editor → Snapshots tab
+and via `POST /api/entity/backup/{export,restore}`.
 
 ### `public/app.js` — frontend (one file)
 
@@ -481,6 +663,38 @@ per-Tome write mutex, idempotent enqueue on
   buttons per-message, summarizer modal.
 - **Tome engine** unchanged from the original SillyTavern-compatible
   implementation.
+
+### Pillar I — Knowledge-manager repoint + new-field surfacing
+
+All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus.js wrappers
+(entity-core is retired). New fields surfaced in the KE:
+
+- **`audience` + `careWeight` on memory records** — shown in the detail view with editable
+  dropdowns; `PUT /api/entity/memories/:granularity/:date` now accepts `audience` and `careWeight`
+  and forwards them to `memory_update` → `memory.py` `update_memory()`.
+- **Audience badges** in the memory list rows for non-ward-private records; careWeight badges
+  for `high`/`low` entries.
+- **Ward · Remember settings** — persistent consent-policy map
+  (`basics / emotional_content / health_info / relationships / whereabouts → true/false/ask`).
+  Stored in `phylactery/data/remember_map.json`. Surfaced via:
+  - Phylactery MCP tools `remember_map_get` / `remember_map_set` (`remember.py`)
+  - thalamus.js helpers `getRememberMap()` / `setRememberMap()`
+  - HTTP routes `GET /api/entity/ward/remember`, `PUT /api/entity/ward/remember`
+  - KE Identity pane: "Remember settings" row always visible under the `ward` category header
+  - **Wired into the memorization gate** (`memorization.js`): the Village registry's
+    per-villager `remember` map covers facts about *other* people; the ward is not a
+    villager, so facts about my human themselves (no matched villager subject) are gated
+    by this ward map. Without it, the human's own `health_info`/`emotional_content` facts
+    bypassed the gate entirely. The gate decision lives in two pure, tested exports —
+    `gateForCategory(category, map)` and `resolveRememberGate(category, subjectVillagers, wardMap)`
+    (`remember-gate.test.mjs`). Defaults (human-signed): `basics=true`, all sensitive
+    categories `ask` — surfaced for confirmation, never silently dropped. Degrades to those
+    defaults if Phylactery is unreachable.
+- **Settings field rename**: `entityCoreConnectionId` → `phylacteryConnectionId` (legacy name
+  still accepted as fallback in `loadPhylacteryEnv()` and `phylacteryCredsSnapshot()`).
+- **Prompt Inspector labels**: "Entity-Core (static/dynamic)" → "Phylactery (static/dynamic)".
+- **Deno/entity-core retirement**: `start.sh`, `start.bat`, `Proto-Familiar.command` no longer
+  prime `~/.deno/bin` on PATH; comments updated to reflect Phylactery+Unruh as the only MCP children.
 
 ## Data flow — single chat request
 
@@ -587,7 +801,7 @@ Within `dynamic`, the order is deliberate:
 5. **Deferred intents** — only on live turns. Up to 5 `wants_to_save` entries the Familiar flagged during free cycles but hasn't acted on yet. Shows the kind (tome/memory/identity), the summary, the routing tool, and the (uid, index) pair for `acknowledge_deferred_intent`. See "Deferred-action pattern" below.
 6. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
 6. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests. Every timed item (upcoming / reminders / resolved) is rendered through `relativeTime()` so the Familiar reads "tomorrow at 10am" / "in 30 minutes" rather than ISO timestamps.
-7. **`[Surface candidates]`** — open schedule items that survived the hard gates (threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. See "Surface pipeline" below.
+7. **`[Surface candidates]`** — open schedule items that survived the hard gates (active snooze, threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. The header is ADHD/executive-dysfunction-aware: explicit GREEN LIGHT states to surface in (free time, momentum, boredom/restlessness, "forgetting something"), explicit RED LIGHT states to hold in (severe/high threat, quiet phase, mid-task), and named access ramps (timebox, single next action, planning-only slot, body-double). See "Surface pipeline" below.
 
 ## Time perception (the `relative-time` layer)
 
@@ -730,6 +944,8 @@ Inferred from label by `inferStakesTier()` in `surface-context.js`. Overridable 
 
 **`consequence_model`** is per-task free-text attached to the schedule node payload, informing framing when the task surfaces.
 
+**`snooze_until`** is an ISO timestamp on the task payload, set when {{user}} explicitly says "not now" and the Familiar calls the `schedule_snooze_task` tool (id + minutes, clamped 1min–1week). `passesHardGates` honours an active snooze across every tier — the human asked — so it blocks before the threat/quiet/dedup checks. The reminder loop remains the firm safety net for anything with a real deadline; the snooze only quiets the opportunistic surface path. Because Unruh's `schedule_update_node` REPLACES the whole payload, the tool reads the current payload from the schedule window and merges the stamp in (preserving `stakes_tier` / `consequence_model`).
+
 ## Reflection loop (slice 2)
 
 The pondering loop has a *mode*: when 5+ tagged surface outcomes have accumulated since the last reflection, the next pondering tick reflects on them instead of pondering an interest. **Same LLM call, different topic shape — zero new requests.**
@@ -777,7 +993,7 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 
 **`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min) and flows into reflection automatically — "offered N times, never raised" is itself a pattern the reflection loop can learn from, since reflection events carry the field.
 
-**Prompt stance:** the `[Surface candidates]` header frames holding tasks as part of the Familiar's care and names BOTH costs at equal weight (interrupting the moment vs. a task quietly slipping). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
+**Prompt stance:** the `[Surface candidates]` header is written for a ward with executive dysfunction — there is no "right moment" that arrives on its own, so the header tunes toward action. It names explicit GREEN LIGHT states the Familiar surfaces in and explicit RED LIGHT states it holds in (vagueness is *not* a reason to stay quiet — the servile-default model needs the inclusion/exclusion conditions spelled out or it collapses to silence), names the cost of silence (the task waits forever; a missed task outweighs a refusable check-in), and offers concrete access ramps (timebox, single next action, planning-only slot, body-double). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
 
 **Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to entity-core's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 
@@ -884,8 +1100,9 @@ handler awaits each loop's `stop*()` before closing the MCP children.
 - **Prompt inspector + temporal editor + threat surface:** unauthenticated.
   Intended for localhost. Disable / firewall before any non-loopback
   deployment.
-- **Entity-core permissions:** spawned with `deno run -A`. Acceptable for
-  a personal local tool; scope down for shared deployments.
+- **MCP child processes:** Phylactery + Unruh run as local stdio children
+  (Python via uv), reading/writing only their own `data/` dirs. No network
+  listener of their own; reachable only through thalamus over stdio.
 - **Input size:** `express.json` capped at 4MB; per-field memory + identity
   writes capped at 8KB.
 - **Tailscale gate:** server binds `0.0.0.0` but rejects non-loopback
@@ -913,5 +1130,9 @@ handler awaits each loop's `stop*()` before closing the MCP children.
   boundary, tool dispatch, channel adapters, the escalation veto
   window.
 - [`docs/unruh-design.md`](unruh-design.md) — temporal-context module.
+- [`docs/phylactery-design.md`](phylactery-design.md) — canonical self-store
+  design rationale (original design by Zari Lewis / Psycheros).
+- [`docs/phylactery-build-spec.md`](phylactery-build-spec.md) — imperative
+  build instruction for the Phylactery milestone (A→B→G→…).
 - [`docs/research/`](research/) — research notes that feed future
   design decisions (task-handling obstacles, etc.).

@@ -14,10 +14,10 @@
  *   - Cerebellum = action. It executes tools and delivers messages.
  *     It never assembles prompt context.
  *   - Shared nervous system: Thalamus owns the MCP client connections
- *     to entity-core and Unruh. Cerebellum NEVER opens its own — every
+ *     to Phylactery and Unruh. Cerebellum NEVER opens its own — every
  *     write to identity / memory / temporal state goes through
  *     thalamus.js's exported wrappers, which are the single enforcement
- *     point for "direct writes MUST go through entity-core's MCP."
+ *     point for "direct writes MUST go through Phylactery's MCP."
  *
  * What does NOT live here: the autonomous loops (pondering, reminders
  * scan, silence triage). They are initiators; when a loop decides
@@ -47,10 +47,13 @@ import {
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
-  addScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
+  addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
   bumpInterest, setStandingInterest,
+  confirmConsentMemories, dropPendingMemories,
+  acknowledgeGraduations,
 } from './thalamus.js';
-import { markIntentActedOn } from './recent-ponderings.js';
+import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
+import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
 
@@ -667,14 +670,14 @@ export const MAX_TOOL_ROUNDS = 5;
 // Validation shared by the HTTP routes (server.js) and the executors
 // below — one source of truth for what counts as a valid write.
 export const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
-export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'user', 'relationship', 'custom']);
+export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'ward', 'relationship', 'custom']);
 export const VALID_FILENAME_RE           = /^[\w]+\.md$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Derive a filesystem-safe slug from a human title or memory bullet.
 // Entity-core stores significant memories as `YYYY-MM-DD_slug.md`. Without
 // a slug, every significant save lands at `YYYY-MM-DD.md` and collides with
-// the previous one — which triggers entity-core's merge-and-dedup path and
+// the previous one — which triggers Phylactery's merge-and-dedup path and
 // destroys content (same root cause as the daily-memory wipe in aba6b8a,
 // but worse here because the file format itself disagrees on the key).
 export function deriveMemorySlug(input, maxLen = 60) {
@@ -689,7 +692,7 @@ export function deriveMemorySlug(input, maxLen = 60) {
   return slug || null;
 }
 
-// Parse a memory key as entity-core's memory_list renders it. Plain
+// Parse a memory key as Phylactery's memory_list renders it. Plain
 // dates pass through; SIGNIFICANT memories list as the composite
 // `YYYY-MM-DD_slug` (one file per milestone), but memory_read /
 // memory_update / memory_delete want the date and the slug as SEPARATE
@@ -802,15 +805,31 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: user, filename: user_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: ward, filename: ward_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['user', 'relationship'], description: 'Identity file category.' },
+          category: { type: 'string', enum: ['ward', 'relationship'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'snooze_deferred_intent',
+      description: 'I call this when my human asks me to come back to a deferred intent later. It snoozes the intent so it stops appearing for now and automatically resurfaces after the given number of minutes. I do not call this on my own initiative — only when my human explicitly asks to defer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid:     { type: 'string', description: 'UUID of the pondering entry (shown in the deferred-intents block).' },
+          index:   { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+          minutes: { type: 'number', description: 'How long to snooze in minutes. Default 60. Max 10080 (one week).' },
+        },
+        required: ['uid', 'index'],
       },
     },
   },
@@ -832,7 +851,7 @@ export const BUILTIN_TOOLS = [
   // ── Knowledge-editing tools ───────────────────────────────────────────
   // The Familiar can correct stale or wrong information in memory / identity
   // / graph instead of letting it pile up. Each destructive op auto-snapshots
-  // entity-core first, so the user can roll back via the Knowledge editor.
+  // Phylactery first, so the user can roll back via the Knowledge editor.
   // Editing principles (apply to every tool below):
   //   • APPEND when the new information adds to an existing record without
   //     contradicting it. Append is non-destructive and reversible by deletion.
@@ -865,7 +884,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_memory',
-      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Entity-core auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
+      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Phylactery auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
       parameters: {
         type: 'object',
         properties: {
@@ -914,7 +933,7 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['self', 'user', 'relationship', 'custom'], description: 'Identity file category.' },
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
           filename: { type: 'string', description: 'Target filename, e.g. user_notes.md.' },
           section:  { type: 'string', description: 'The markdown heading of the section to rewrite (without leading #s), e.g. "Sleep patterns".' },
           content:  { type: 'string', description: 'New full contents for that section, in my first-person voice. Will REPLACE the section body.' },
@@ -981,7 +1000,7 @@ export const BUILTIN_TOOLS = [
           fromId: { type: 'string', description: 'The id of the source node (the relationship\'s subject).' },
           toId:   { type: 'string', description: 'The id of the target node (the relationship\'s object).' },
           type:   { type: 'string', description: 'The relationship type, as a short verb phrase, e.g. "is_therapist_of", "lives_in", "works_with".' },
-          weight: { type: 'number', description: 'Optional: confidence/strength in [0, 1] (default left to entity-core).' },
+          weight: { type: 'number', description: 'Optional: confidence/strength in [0, 1] (default left to Phylactery).' },
         },
         required: ['fromId', 'toId', 'type'],
       },
@@ -1037,7 +1056,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_graph_edge',
-      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Entity-core auto-snapshots before each delete.',
+      description: 'I delete a single relationship between two graph entities while keeping the entities themselves. This is the right tool for "X is no longer at Y" or "X no longer works with Y", aka relationships that are not vital to remember after ending. The connection vanishes; both entities remain available for future relationships. Edge ids are listed in the graph block under "edges:" with the form `from -rel-> to = <id>`; if the edge I need isn\'t there, I call find_graph_edges with one endpoint\'s node id to look it up. Phylactery auto-snapshots before each delete.',
       parameters: {
         type: 'object',
         properties: {
@@ -1078,7 +1097,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Recording it is a commitment, not just a note: the task stays on my radar in [Temporal Context] and returns to me as a surface candidate until it is resolved (done / cancelled / carried_forward) — I am the one who brings it back up with {{user}} when a moment fits, because a task I never raise often becomes a task that never happens. For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Recording it is a commitment, not just a note: the task stays on my radar in [Temporal Context] and returns to me as a surface candidate until it is resolved (done / cancelled / carried_forward) — I am the one who brings it back up with {{user}}, because a task I never raise often becomes a task that never happens. For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -1096,6 +1115,21 @@ export const BUILTIN_TOOLS = [
           recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
         },
         required: ['label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_snooze_task',
+      description: 'I call this when my human asks me to come back to a task later. It parks the task so it stops appearing in my surface candidates for a while, then automatically returns to me after the given number of minutes. I only call this when {{user}} explicitly says not now — never on my own initiative. The task is not resolved or forgotten; it just rests. For finishing a task I use schedule_resolve.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:      { type: 'string', description: 'The id of the task to snooze (from the [Surface candidates] block or [Temporal Context]).' },
+          minutes: { type: 'integer', description: 'How long to park it before it can surface again. Clamped to 1 minute – 1 week.' },
+        },
+        required: ['id', 'minutes'],
       },
     },
   },
@@ -1238,6 +1272,65 @@ export const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  // ── Phylactery consent tools ───────────────────────────────────────────
+  // When I autonomously extracted facts from a session and one or more of
+  // them had an `ask` remember gate, they were stored with consent_pending=1
+  // so my human could review them. The [PENDING MEMORY CONSENT] block in
+  // my context lists them — I use these tools to confirm or discard.
+  {
+    type: 'function',
+    function: {
+      name: 'memory_confirm_consent',
+      description: 'I call this after my human says yes to keeping memory records I flagged as pending consent. The records become permanent — consent_pending is cleared and they enter the normal recall pool. I pass the ids shown in the [PENDING MEMORY CONSENT] block. I confirm only the ones my human approved; I drop the ones they declined using memory_drop_pending.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of memory record IDs (from the [PENDING MEMORY CONSENT] block) to confirm as permanently stored.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memory_drop_pending',
+      description: 'I call this to discard memory records my human does not want stored — ones I flagged as pending consent and they declined, or that I judge should be dropped outright. The records are deleted (an auto-snapshot is taken first so nothing is truly unrecoverable). I pass the ids shown in the [PENDING MEMORY CONSENT] block.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of memory record IDs (from the [PENDING MEMORY CONSENT] block) to discard permanently.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'graduation_acknowledge',
+      description: "I call this once I've mentioned to my human (or judged no mention is needed) the ward-block detail I filed off my always-injected surface — the items shown in the [GRADUATION NOTICE] block. It marks them as surfaced so I don't keep re-raising the same graduations. Nothing is deleted; the detail stays recalled-when-relevant and can be pulled back.",
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of graduation notice IDs (from the [GRADUATION NOTICE] block) I have now surfaced.',
+          },
+        },
+        required: ['ids'],
+      },
+    },
+  },
 ];
 
 /**
@@ -1247,7 +1340,7 @@ export const BUILTIN_TOOLS = [
  * strings match what the client-side executors used to return, so the
  * Familiar's experience of its own tools is unchanged by the move.
  * Writes go through thalamus's wrappers; nothing here opens an MCP
- * connection or bypasses the entity-core bridge.
+ * connection or bypasses the Phylactery bridge.
  *
  * Executors receive (args, ctx). ctx carries per-request context the
  * server hands in: { sessionInfo } today.
@@ -1291,7 +1384,7 @@ export const TOOL_EXECUTORS = {
       return `Failed to save memory: granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.`;
     }
     // Significant memories MUST be uniquely slugged or they collide on the
-    // date-only filename and entity-core's merge step destroys them.
+    // date-only filename and Phylactery's merge step destroys them.
     let slug;
     if (granularity === 'significant') {
       slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
@@ -1325,6 +1418,21 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 
+  snooze_deferred_intent: async ({ uid, index, minutes = 60 }) => {
+    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid UUID.';
+    const idx = Number(index);
+    if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+      return 'Failed to snooze intent: index must be a non-negative integer.';
+    }
+    try {
+      const data = await snoozeIntent({ uid, index: idx, minutes: Number(minutes) || 60 });
+      if (data.alreadyDone) return 'Intent was already filed — nothing to snooze.';
+      return data.ok
+        ? `Intent snoozed until ${data.snooze_until} — it will resurface after that.`
+        : `Snooze failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) { return `Failed to snooze intent: ${err.message}`; }
+  },
+
   acknowledge_deferred_intent: async ({ uid, index }) => {
     if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to acknowledge intent: uid must be a valid UUID.';
     const idx = Number(index);
@@ -1338,8 +1446,31 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
 
+  memory_confirm_consent: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of memory record IDs.';
+    const result = await confirmConsentMemories(ids);
+    pruneConsentPending(ids).catch(() => {});
+    const n = result?.confirmed ?? ids.length;
+    return `Consent confirmed for ${n} record(s). They are now stored permanently.`;
+  },
+
+  memory_drop_pending: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of memory record IDs.';
+    const result = await dropPendingMemories(ids);
+    pruneConsentPending(ids).catch(() => {});
+    const n = result?.dropped ?? ids.length;
+    return `Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`;
+  },
+
+  graduation_acknowledge: async ({ ids }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of graduation notice IDs.';
+    const result = await acknowledgeGraduations(ids);
+    const n = result?.acknowledged ?? ids.length;
+    return `Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`;
+  },
+
   // ── Knowledge-editing executors ────────────────────────────────────
-  // Each destructive op auto-snapshots entity-core on the thalamus side,
+  // Each destructive op auto-snapshots Phylactery on the thalamus side,
   // so the user can roll back from the Knowledge editor.
 
   update_memory: async ({ granularity, date, content }) => {
@@ -1347,12 +1478,12 @@ export const TOOL_EXECUTORS = {
     if (typeof content !== 'string' || !content.trim()) return 'Failed to update memory: content required';
     if (content.length > 16384) return 'Failed to update memory: content exceeds 16 KB limit';
     // Significant memories are addressed as YYYY-MM-DD_slug; split the
-    // composite key so entity-core gets date + slug separately.
+    // composite key so Phylactery gets date + slug separately.
     const key = parseMemoryKey(date);
     if (!key) return 'Failed to update memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
     try {
       const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy: 'familiar-toolcall' });
-      if (!result.ok) return `Failed to update memory: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to update memory: ${result.error ?? 'phylactery unavailable'}`;
       return `Memory ${granularity}/${date} updated.`;
     } catch (err) { return `Failed to update memory: ${err.message}`; }
   },
@@ -1363,7 +1494,7 @@ export const TOOL_EXECUTORS = {
     if (!key) return 'Failed to delete memory: invalid date format (use YYYY-MM-DD, or YYYY-MM-DD_slug for significant memories)';
     try {
       const result = await deleteMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
-      if (!result.ok) return `Failed to delete memory: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to delete memory: ${result.error ?? 'phylactery unavailable'}`;
       return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
     } catch (err) { return `Failed to delete memory: ${err.message}`; }
   },
@@ -1403,7 +1534,7 @@ export const TOOL_EXECUTORS = {
     if (content.length > 16384) return 'Failed to rewrite section: content exceeds 16 KB limit';
     try {
       const result = await rewriteIdentitySection({ category, filename, section, content });
-      if (!result.ok) return `Failed to rewrite section: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to rewrite section: ${result.error ?? 'phylactery unavailable'}`;
       return `Section "${section}" of ${category}/${filename} rewritten.`;
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
   },
@@ -1436,7 +1567,7 @@ export const TOOL_EXECUTORS = {
     if (!label || typeof label !== 'string' || !label.trim()) return 'Failed to create graph node: label (string) is required';
     try {
       const result = await createGraphNode({ label: label.trim(), type, description });
-      if (!result.ok) return `Failed to create graph node: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to create graph node: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.node?.id;
       return id
         ? `Graph node created: "${label.trim()}" (id=${id}). I can now wire edges to it with create_graph_edge.`
@@ -1451,7 +1582,7 @@ export const TOOL_EXECUTORS = {
     }
     try {
       const result = await createGraphEdge({ fromId, toId, type, weight });
-      if (!result.ok) return `Failed to create graph edge: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to create graph edge: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.edge?.id;
       return `Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`;
     } catch (err) { return `Failed to create graph edge: ${err.message}`; }
@@ -1460,7 +1591,7 @@ export const TOOL_EXECUTORS = {
   update_graph_node: async ({ id, label, description, type }) => {
     try {
       const result = await updateGraphNode({ id, label, description, type });
-      if (!result.ok) return `Failed to update graph node: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph node ${id} updated.`;
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
   },
@@ -1468,7 +1599,7 @@ export const TOOL_EXECUTORS = {
   delete_graph_node: async ({ id }) => {
     try {
       const result = await deleteGraphNode({ id });
-      if (!result.ok) return `Failed to delete graph node: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to delete graph node: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph node ${id} deleted (snapshot saved).`;
     } catch (err) { return `Failed to delete graph node: ${err.message}`; }
   },
@@ -1479,7 +1610,7 @@ export const TOOL_EXECUTORS = {
     }
     try {
       const result = await updateGraphEdge({ id, type, weight });
-      if (!result.ok) return `Failed to update graph edge: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to update graph edge: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph edge ${id} updated.`;
     } catch (err) { return `Failed to update graph edge: ${err.message}`; }
   },
@@ -1487,7 +1618,7 @@ export const TOOL_EXECUTORS = {
   delete_graph_edge: async ({ id }) => {
     try {
       const result = await deleteGraphEdge({ id });
-      if (!result.ok) return `Failed to delete graph edge: ${result.error ?? 'entity-core unavailable'}`;
+      if (!result.ok) return `Failed to delete graph edge: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph edge ${id} deleted (snapshot saved).`;
     } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
   },
@@ -1524,6 +1655,27 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to add task: ${data.error ?? 'unknown error'}`;
       return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
     } catch (err) { return `Failed to add task: ${err.message}`; }
+  },
+
+  schedule_snooze_task: async ({ id, minutes }) => {
+    if (!id || typeof id !== 'string') return 'Failed to snooze task: id (string) is required';
+    const raw = Number(minutes);
+    if (!Number.isFinite(raw) || raw <= 0) return 'Failed to snooze task: minutes (positive integer) is required';
+    const mins = Math.max(1, Math.min(7 * 24 * 60, Math.round(raw)));
+    try {
+      // Read the current payload so the snooze stamp merges in rather
+      // than clobbering stakes_tier / consequence_model — Unruh's
+      // update REPLACES the whole payload, so the merge lives here.
+      const win = await getScheduleWindow({ limit: 200 });
+      const node = (win?.nodes || []).find(n => n.id === id);
+      if (!node) return `Failed to snooze task: no open task found with id ${id}.`;
+      const payload = { ...(node.payload || {}) };
+      const until = new Date(Date.now() + mins * 60 * 1000).toISOString();
+      payload.snooze_until = until;
+      const data = await updateScheduleNode({ id, payload });
+      if (data?.ok === false) return `Failed to snooze task: ${data.error ?? 'unknown error'}`;
+      return `Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`;
+    } catch (err) { return `Failed to snooze task: ${err.message}`; }
   },
 
   schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model, recurrence }) => {
