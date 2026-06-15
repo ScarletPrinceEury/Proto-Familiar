@@ -136,7 +136,7 @@ The Familiar is one persistent entity, potentially across multiple interfaces:
                   Unruh temporal)
 ```
 
-> **Phylactery milestone complete (0.6.x).** Phylactery — the in-tree Python/uv FastMCP service at `./phylactery/` — is now the canonical self-store, replacing entity-core. Original design by [Zari Lewis](https://github.com/PsycherosAI/Psycheros) within the [Psycheros](https://github.com/PsycherosAI/Psycheros) project. See [`docs/phylactery-design.md`](docs/phylactery-design.md) (rationale) and [`docs/phylactery-build-spec.md`](docs/phylactery-build-spec.md) (build spec). entity-core is retired; thalamus no longer spawns it. Existing users migrate to Phylactery on first run.
+> **Phylactery milestone complete (0.6.x).** Phylactery — the in-tree Python/uv FastMCP service at `./phylactery/` — is now the canonical self-store, replacing entity-core. Original design by [Zari Lewis](https://github.com/PsycherosAI/Psycheros) within the [Psycheros](https://github.com/PsycherosAI/Psycheros) project. See [`docs/phylactery-design.md`](docs/phylactery-design.md) (rationale) and [`docs/phylactery-build-spec.md`](docs/phylactery-build-spec.md) (build spec). entity-core is retired; thalamus no longer spawns it. Existing users migrate automatically on first run — `scripts/ensure-phylactery-deps.mjs` (the prestart hook) detects the entity-core sibling and runs the migration before the server boots.
 
 - **The canonical store is canonical for identity and memory.** Every package that touches
   identity or memory is a *consumer*, not a source of truth. Direct writes to identity or memory
