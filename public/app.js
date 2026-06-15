@@ -205,6 +205,14 @@ const state = {
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
 
+  // Warm reach-outs (companionship loop). Default-ON: the Familiar
+  // reaches out warmly on its own, not only in crisis. Quiet hours are
+  // a local-time window (start==end disables it). Off via this toggle or
+  // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
+  warmthEnabled:           true,
+  warmthQuietHoursStart:   23,
+  warmthQuietHoursEnd:     8,
+
   // Trusted contacts for silence-triage outreach (M12c). Each entry
   // is { name, channel: 'discord', webhook: 'https://discord.com/api/webhooks/…' }.
   // The triage LLM may *suggest* contacting one of these (by name) when
@@ -258,6 +266,7 @@ const SERVER_SYNCED_KEYS = [
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
+  'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -335,6 +344,15 @@ function loadPersisted() {
       || state.ponderingIntervalScale < 1
       || state.ponderingIntervalScale > 10) {
     state.ponderingIntervalScale = 1;
+  }
+  if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (!Number.isInteger(state.warmthQuietHoursStart)
+      || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
+    state.warmthQuietHoursStart = 23;
+  }
+  if (!Number.isInteger(state.warmthQuietHoursEnd)
+      || state.warmthQuietHoursEnd < 0 || state.warmthQuietHoursEnd > 23) {
+    state.warmthQuietHoursEnd = 8;
   }
   if (!Array.isArray(state.trustedContacts)) state.trustedContacts = [];
   migrateLegacyConnection();
@@ -2179,6 +2197,15 @@ function readSettingsFromUI() {
     const n = parseFloat($('pondering-scale').value);
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
+  if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('warmth-quiet-start')) {
+    const n = parseInt($('warmth-quiet-start').value, 10);
+    state.warmthQuietHoursStart = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 23;
+  }
+  if ($('warmth-quiet-end')) {
+    const n = parseInt($('warmth-quiet-end').value, 10);
+    state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
+  }
   state.userName          = $('user-name').value.trim() || 'User';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
@@ -2231,6 +2258,9 @@ function writeSettingsToUI() {
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
+  if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
+  if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
@@ -3006,7 +3036,9 @@ function init() {
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
-    'pondering-toggle', 'pondering-scale', 'user-name', 'char-name',
+    'pondering-toggle', 'pondering-scale',
+    'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
     'user-discord-webhook',

@@ -52,6 +52,8 @@ server.js  (Express, Node 18+, ESM)
     ├── pondering-loop.js   ── autonomous: wakes on cadence, ponders
     ├── reminders-loop.js   ── autonomous: fires due reminders into outbox
     ├── silence-triage-loop.js ── autonomous: LLM-deliberated check-ins
+    ├── reachout-loop.js    ── autonomous: warm non-crisis outreach
+    ├── reachout.js         ── warm-outreach decision (ward + warm villagers)
     ├── outbox.js           ── persistent delivery queue (reminders, triage, alerts)
     ├── last-activity.js    ── timestamps user activity for the silence loop
     │
@@ -102,7 +104,9 @@ ponderings injection, care-check framing) and as background loops
 ├── pondering-loop.js        Autonomous singleton loop; integrates with cadence + isEnabled gate
 ├── reminders-loop.js        Autonomous singleton loop; polls Unruh for due reminders
 ├── silence-triage-loop.js   Autonomous singleton loop; LLM-deliberated proactive check-ins
-├── outbox.js                Delivery queue (reminders / triage / outbound_alert), dedup on originId
+├── reachout-loop.js         Autonomous singleton loop; warm non-crisis outreach (companionship). Stands down at moderate+ threat (triage owns distress); quiet-hours + cooldown gated
+├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
+├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
 ├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
@@ -441,6 +445,25 @@ delivery; see cerebellum's `contactDeadlineFor`). The deliberation
 prompt includes the Familiar's still-unacknowledged check-ins with
 their delivery state, so a failed push reads as "they may never have
 seen me," not as silence.
+
+**`reachout-loop.js`** + **`reachout.js`** — autonomous singleton, the
+companionship counterpart to silence-triage. Every 10min, `runOneReachoutTick`
+applies cheap code gates *before* any LLM call: crisis-defer (threat at
+moderate+ → stand down, triage owns the moment), quiet hours
+(`warmthQuietHoursStart/End`, default 23–08 local), and a cool-down
+(`nextCheckInMs`, clamped to [15min, 24h], default ~2h). The decision
+(`decideReachoutViaLLM`) reuses `enrich(staticOnly)` + recent session
+messages for continuity, and is given the pending `tell` intents
+(`getUnactedIntents`, filtered to kind `tell`) and the warm-villager list
+(`getWarmVillagers`: `relationToFamiliar==='warm'` AND Discord-reachable —
+the dormant tag's first real use). On `reach_out` it routes to either a
+ward banner (outbox `kind:'reachout'`, dedup-bucketed; marks the `tell`
+acted-on if one was cited) or a warm-villager DM (`relayToDiscord`, always
+mirrored to the ward — no covert contact). The prompt is warm-framed, not
+crisis-framed, and follows the proactivity rules (both costs named at equal
+weight; no bias-toward-quiet). This loop never gates a *safety* action —
+it's purely additive warmth. Off: Settings "Warm reach-outs" or
+`PROTO_FAMILIAR_WARMTH_DISABLED=1`.
 
 **`outbox.js`** — `tomes/.outbox.json` persistent queue. `enqueueOutbox`
 dedups on `(kind, originId)` while unacknowledged. `listOutbox`
