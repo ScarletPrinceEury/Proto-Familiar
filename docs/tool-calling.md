@@ -42,6 +42,7 @@ Twenty-nine tools are always available when tool use is enabled: eight read/writ
 | `schedule_add_reminder` | Set a time-triggered reminder, delivered as a chat message (and Discord push when configured) when it fires | Confirmation string with the node id |
 | `schedule_add_phase` | Add a named block to the daily routine, with an optional texture for how the Familiar shows up during it | Confirmation string with the node id |
 | `schedule_resolve` | Mark a schedule node `done` / `cancelled` / `carried_forward`; optional `occurrence_date` resolves one occurrence of a recurring series | Confirmation string |
+| `schedule_snooze_task` | Park a task for N minutes (clamped 1min–1week) when {{user}} says "not now" — it stops surfacing, then returns on its own | Confirmation string |
 | `interest_bump` | Nudge an interest topic's weight (creates the topic on first bump); feeds the pondering loop | Confirmation string |
 | `interest_set_standing` | Promote a topic to a never-decaying standing value | Confirmation string |
 | `get_trusted_contacts` | Return the names and channels of any trusted contacts configured in Settings. Call this before `contact_trusted_person` to confirm who is available and get the exact name to pass. | Plain-text list, or a note that none are configured |

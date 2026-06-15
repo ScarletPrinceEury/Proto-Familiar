@@ -47,7 +47,7 @@ import {
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
-  addScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
+  addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -1097,7 +1097,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_add_task',
-      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Recording it is a commitment, not just a note: the task stays on my radar in [Temporal Context] and returns to me as a surface candidate until it is resolved (done / cancelled / carried_forward) — I am the one who brings it back up with {{user}} when a moment fits, because a task I never raise often becomes a task that never happens. For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
+      description: 'I record a task — something {{user}} needs to do, optionally with a deadline. Recording it is a commitment, not just a note: the task stays on my radar in [Temporal Context] and returns to me as a surface candidate until it is resolved (done / cancelled / carried_forward) — I am the one who brings it back up with {{user}}, because a task I never raise often becomes a task that never happens. For things that happen at a specific time without action required, I use schedule_add_event. For nudges that should land in the chat at a chosen moment, schedule_add_reminder. Choosing the right type is important to make sure my human receives the correct support!',
       parameters: {
         type: 'object',
         properties: {
@@ -1115,6 +1115,21 @@ export const BUILTIN_TOOLS = [
           recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
         },
         required: ['label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_snooze_task',
+      description: 'I call this when my human asks me to come back to a task later. It parks the task so it stops appearing in my surface candidates for a while, then automatically returns to me after the given number of minutes. I only call this when {{user}} explicitly says not now — never on my own initiative. The task is not resolved or forgotten; it just rests. For finishing a task I use schedule_resolve.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:      { type: 'string', description: 'The id of the task to snooze (from the [Surface candidates] block or [Temporal Context]).' },
+          minutes: { type: 'integer', description: 'How long to park it before it can surface again. Clamped to 1 minute – 1 week.' },
+        },
+        required: ['id', 'minutes'],
       },
     },
   },
@@ -1640,6 +1655,27 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to add task: ${data.error ?? 'unknown error'}`;
       return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
     } catch (err) { return `Failed to add task: ${err.message}`; }
+  },
+
+  schedule_snooze_task: async ({ id, minutes }) => {
+    if (!id || typeof id !== 'string') return 'Failed to snooze task: id (string) is required';
+    const raw = Number(minutes);
+    if (!Number.isFinite(raw) || raw <= 0) return 'Failed to snooze task: minutes (positive integer) is required';
+    const mins = Math.max(1, Math.min(7 * 24 * 60, Math.round(raw)));
+    try {
+      // Read the current payload so the snooze stamp merges in rather
+      // than clobbering stakes_tier / consequence_model — Unruh's
+      // update REPLACES the whole payload, so the merge lives here.
+      const win = await getScheduleWindow({ limit: 200 });
+      const node = (win?.nodes || []).find(n => n.id === id);
+      if (!node) return `Failed to snooze task: no open task found with id ${id}.`;
+      const payload = { ...(node.payload || {}) };
+      const until = new Date(Date.now() + mins * 60 * 1000).toISOString();
+      payload.snooze_until = until;
+      const data = await updateScheduleNode({ id, payload });
+      if (data?.ok === false) return `Failed to snooze task: ${data.error ?? 'unknown error'}`;
+      return `Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`;
+    } catch (err) { return `Failed to snooze task: ${err.message}`; }
   },
 
   schedule_add_reminder: async ({ label, when, message, stakes_tier, consequence_model, recurrence }) => {
