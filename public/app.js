@@ -8674,6 +8674,16 @@ function vlRenderLocDetail(loc) {
     `<option value="${esc(c.id)}"${loc?.assignedCategoryId === c.id ? ' selected' : ''}>${esc(c.name)}</option>`
   ).join('');
 
+  // Connection dropdown — lets the ward assign a specific API connection
+  // (e.g. a throttled key for public Discord rooms) instead of the primary.
+  const connOpts = [
+    `<option value=""${!loc?.connectionId ? ' selected' : ''}>— use default —</option>`,
+    ...(state.connections ?? []).map(c => {
+      const label = c.name || c.provider || c.id;
+      return `<option value="${esc(c.id)}"${loc?.connectionId === c.id ? ' selected' : ''}>${esc(label)}</option>`;
+    }),
+  ].join('');
+
   detail.innerHTML = `
     <div class="vl-detail-head">${isNew ? 'Add location' : esc(loc.label)}</div>
     <div>
@@ -8687,6 +8697,10 @@ function vlRenderLocDetail(loc) {
     <div>
       <div class="vl-field-label">Trust ceiling <span class="field-hint">(anyone here is treated as at most this)</span></div>
       <select id="vl-l-cat" style="width:100%">${catOpts}</select>
+    </div>
+    <div>
+      <div class="vl-field-label">Connection <span class="field-hint">(optional — use a specific API key for this location)</span></div>
+      <select id="vl-l-conn" style="width:100%">${connOpts}</select>
     </div>
     <div>
       <div class="vl-field-label">Rate limit (messages/hour, optional)</div>
@@ -8711,6 +8725,7 @@ async function vlSaveLocation(key) {
   if (!locKey) { status.textContent = 'Key is required.'; return; }
   const label  = $('vl-l-label').value.trim() || locKey;
   const assignedCategoryId = $('vl-l-cat').value;
+  const connectionId = $('vl-l-conn')?.value || null;
   const rateRaw = $('vl-l-rate').value.trim();
   const rateLimit = rateRaw ? { perHour: parseInt(rateRaw, 10) } : null;
   status.textContent = 'Saving…';
@@ -8718,7 +8733,7 @@ async function vlSaveLocation(key) {
     const r = await fetch('/api/village/locations', {
       method: key ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: locKey, label, assignedCategoryId, rateLimit }),
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit }),
     });
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

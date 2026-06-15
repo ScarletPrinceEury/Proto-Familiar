@@ -45,6 +45,7 @@ import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
 import { recordKnock, recordLocationKnock } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
+import { enqueueOutbox } from './outbox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -68,6 +69,54 @@ const MAX_BACKOFF_MS        = 60_000;
 // Close codes after which re-identifying is pointless (bad token, bad
 // intents, sharding required). We stop and wait for a config change.
 const FATAL_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
+
+// ── Per-location rate-limit bucket (V5) ──────────────────────────
+// Simple hourly token bucket persisted to tomes/.rate-limits.json.
+// { [locationKey]: { count: N, windowStartMs: T } }
+const RATE_LIMITS_FILE = path.join(__dirname, 'tomes', '.rate-limits.json');
+let _rl = {};
+let _rlLoaded = false;
+
+async function loadRateLimits() {
+  if (_rlLoaded) return;
+  try {
+    const raw = await fsp.readFile(RATE_LIMITS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    _rl = (typeof parsed === 'object' && parsed !== null) ? parsed : {};
+  } catch { _rl = {}; }
+  _rlLoaded = true;
+}
+
+async function saveRateLimits() {
+  try {
+    const tmp = RATE_LIMITS_FILE + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(_rl, null, 2), 'utf8');
+    await fsp.rename(tmp, RATE_LIMITS_FILE);
+  } catch (err) {
+    console.warn('[discord] rate-limits save failed:', err?.message ?? err);
+  }
+}
+
+// Returns { ok: true } or { ok: false, resetAt: epochMs }.
+// Does NOT consume a slot — call consumeRateSlot() after delivery.
+export function checkRateLimit(locationKey, perHour) {
+  if (!Number.isFinite(perHour) || perHour <= 0) return { ok: true };
+  const now = Date.now();
+  const WINDOW_MS = 3_600_000;
+  const bucket = _rl[locationKey];
+  if (!bucket || now - bucket.windowStartMs >= WINDOW_MS) {
+    _rl[locationKey] = { count: 0, windowStartMs: now };
+    return { ok: true };
+  }
+  if (bucket.count >= perHour) return { ok: false, resetAt: bucket.windowStartMs + WINDOW_MS };
+  return { ok: true };
+}
+
+export function consumeRateSlot(locationKey) {
+  if (_rl[locationKey]) _rl[locationKey].count++;
+}
+
+export function resetRateLimitState() { _rl = {}; }
 
 // ── Pure helpers (unit-tested in tests/discord-gateway.test.mjs) ──
 
@@ -369,14 +418,41 @@ function enqueueTurn(locationKey, fn) {
 
 async function handleTurn(gw, msg, decision) {
   const settings = readSettingsSync();
-  const conn = primaryConnectionFrom(settings);
+  const registry = await getRegistry();
+  await loadRateLimits();
+
+  // V5: per-location connection routing. Use the location's designated
+  // connection if one is configured and valid; fall back to primary.
+  const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
+  const locConnId = regLoc?.connectionId;
+  const conn = (locConnId
+    ? (settings.connections ?? []).find(c => c?.id === locConnId && c?.apiKey && c?.model)
+    : null)
+    ?? primaryConnectionFrom(settings);
+
   if (!conn?.apiKey || !conn?.model) {
-    gw.status.lastError = 'no primary connection configured — cannot reply';
-    console.warn('[discord] inbound message but no primary connection configured; staying silent');
+    gw.status.lastError = 'no connection configured — cannot reply';
+    console.warn('[discord] inbound message but no connection configured; staying silent');
     return;
   }
 
-  const registry = await getRegistry();
+  // V5: rate-limit enforcement. When exhausted, stay quiet and enqueue
+  // one outbox notice per hour so the ward can see what happened.
+  if (regLoc?.rateLimit?.perHour) {
+    const rl = checkRateLimit(decision.locationKey, regLoc.rateLimit.perHour);
+    if (!rl.ok) {
+      const resetMins = Math.ceil((rl.resetAt - Date.now()) / 60_000);
+      console.log(`[discord] rate limit hit for ${decision.locationKey} — silent until ${new Date(rl.resetAt).toISOString()}`);
+      enqueueOutbox({
+        kind: 'rate-limit',
+        originId: `rate-limit:${decision.locationKey}:${Math.floor(Date.now() / 3_600_000)}`,
+        title: `Rate limit reached in ${regLoc.label ?? decision.locationKey}`,
+        body: `I've reached the hourly message limit for this location (${regLoc.rateLimit.perHour}/hr). I'll stay quiet there until the window resets in about ${resetMins} minute${resetMins === 1 ? '' : 's'}.`,
+      }).catch(() => {});
+      return;
+    }
+  }
+
   const content  = String(msg.content).slice(0, INPUT_CHAR_CAP);
   const nowIso   = new Date().toISOString();
 
@@ -399,7 +475,7 @@ async function handleTurn(gw, msg, decision) {
   }
 
   // Session: load-or-rotate, accumulate the speaker, derive the label.
-  const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
+  // (regLoc already resolved at the top of handleTurn for V5 routing)
   const label  = regLoc?.label
     ?? (decision.kind === 'guild' ? `Discord channel ${msg.channel_id}` : `Discord DM`);
 
@@ -511,6 +587,12 @@ async function handleTurn(gw, msg, decision) {
   session.updatedAt   = new Date().toISOString();
   await writeSessionLog(session);
   await touchLocation(decision.locationKey, session.sessionId);
+
+  // V5: consume one rate-limit slot after successful delivery.
+  if (regLoc?.rateLimit?.perHour) {
+    consumeRateSlot(decision.locationKey);
+    saveRateLimits().catch(() => {});
+  }
 
   gw.status.turns += 1;
   gw.status.lastTurnAt = session.updatedAt;

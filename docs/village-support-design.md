@@ -1,8 +1,10 @@
 # Village Support — design
 
 > Status: V1–V4 implemented (0.5.0-alpha); Familiar-facing Village access +
-> `privateNotes` field-gating added 0.6.x (see "The Familiar's own access to
-> the Village"). V5+ remain design-phase.
+> `privateNotes` field-gating added 0.6.x. V5 (per-location connections +
+> rate limits) and V7 (stranger data minimization) shipped 0.6.14-alpha.
+> V6 (Village actions: relay_message, check-on-ward) is design-phase and
+> requires human sign-off before implementation.
 > Read this before touching any Village code; update it in the same commit
 > as any architectural change (same rule as architecture.md).
 
@@ -431,9 +433,9 @@ landing; sub-features inside it bump patch.
 | **V2** | Session schema: location + participants fields, audience resolution module + tests, conversation-map (location→session), web-session audience selector ("Chen is sitting next to me") | Existing sessions untouched (absent fields = ward-private) |
 | **V3** ✅ | Thalamus knowledge gate: `audience` option on enrich(), gate-before-fetch for every knowledge class, two-tier identity gating with section markers, ward-only blocks, heavy test coverage incl. fail-closed and intersection tests | Human sign-off obtained 2026-06-11; shipped 0.4.21-alpha |
 | **V4** ✅ | Discord gateway adapter: bot connect/resume, router, DM policy, guild mention-reply, per-location sessions end-to-end | Shipped 0.5.0-alpha (the milestone landing — Village Support is live end-to-end) |
-| **V5** | Per-location connections + rate limits | Small, additive |
+| **V5** ✅ | Per-location connections + rate limits | Shipped 0.6.14-alpha: `connectionId` routing in discord-gateway (location → connection → primaryConnection fallback); hourly token-bucket in discord-gateway with `tomes/.rate-limits.json`; ward outbox notice on exhaustion; Connection dropdown in location editor |
 | **V6** | Village actions: `relay_message`, check-on-ward requests outside triage, ward double-check flows for commitments | Touches outreach surface — sign-off rule applies |
-| **V7** | Stranger data minimization (memorization profiles by audience) | Optional / flagged |
+| **V7** ✅ | Stranger data minimization (memorization profiles by audience) | Shipped 0.6.14-alpha: `buildSharedRoomPrompt` variant in memorization.js selected when `audienceTag !== 'ward-private'`; focuses on ward-only facts, skips unregistered-third-party detail |
 
 Suggested order rationale: V1–V3 build the safety floor before the
 first external door opens in V4. Opening Discord before the gate exists
