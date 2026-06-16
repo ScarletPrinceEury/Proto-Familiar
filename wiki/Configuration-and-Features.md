@@ -46,6 +46,13 @@ See [docs/tool-calling.md](../docs/tool-calling.md) for each tool's parameters a
 
 The optional Unruh module adds a `[Temporal Context]` block: a schedule (with recurrence — daily / weekly / monthly / yearly / "last Friday of every month" / etc. — and per-occurrence resolution), weighted/decaying interests + always-on standing values, and session-to-session intent handoff. The Schedule tab in the Temporal editor has a **List / Calendar** view toggle; calendar view is a click-to-create month grid. A `[Now]` block at the tail of every prompt anchors the Familiar in current wall-clock time + how long since the last user message. Full detail in [docs/features.md → Temporal context](../docs/features.md#temporal-context-unruh).
 
+## Discord & the Village
+
+The Familiar can also be present on Discord — in your DMs, in registered
+villagers' DMs, and in guild channels with per-room **presence modes**
+(strict / lurk / active), plus message relay. Set it up in Settings and
+the **Village** tab. Full guide: [Discord & the Village](Discord-and-Village.md).
+
 ## Sessions and logs
 
 - Sessions auto-end after 3 hours of inactivity.
