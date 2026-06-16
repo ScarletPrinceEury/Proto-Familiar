@@ -151,6 +151,7 @@ const state = {
   characterProfile:  '',
   userProfile:       '',
   postHistoryPrompt: '',
+  postHistoryRole:   'system',
   sessionId:               null,   // UUID, created at init or on clear
   sessionStartedAt:        null,   // ISO timestamp
   sessionEndedAt:          null,   // ISO timestamp — set when session is auto-ended
@@ -258,7 +259,7 @@ const state = {
 const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
-  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt',
+  'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
@@ -1110,13 +1111,14 @@ function _buildApiMessagesInner(userInput) {
   msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
 
   // ── Post-history prompt ───────────────────────────────────────
-  // role:'system' rather than role:'user' so it's semantically a
-  // priming directive (not a {{user}} turn), and so the "last
-  // role:'user' in the array" extraction server-side picks up
-  // {{user}}'s actual input. (The chat path also sends an explicit
-  // userMessage field for the same reason — belt-and-suspenders.)
-  if (state.postHistoryPrompt.trim())
-    msgs.push({ role: 'system', content: applyNameVars(state.postHistoryPrompt.trim()) });
+  // Role is user-configurable (default 'system'). The chat path always
+  // sends an explicit `userMessage` field, so the server-side "last
+  // role:'user'" fallback never picks this up regardless of role chosen.
+  if (state.postHistoryPrompt.trim()) {
+    const phr = ['system', 'user', 'assistant'].includes(state.postHistoryRole)
+      ? state.postHistoryRole : 'system';
+    msgs.push({ role: phr, content: applyNameVars(state.postHistoryPrompt.trim()) });
+  }
 
   lastBuildSegments = { systemSegments, atDepthInjections };
   return msgs;
@@ -1756,12 +1758,11 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       stream:      true,
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
-      // The Familiar's post-history prompt is also a user-role message
-      // at the end of `messages`, so naively extracting "last user"
-      // server-side picks up the template instead of {{user}}'s actual
-      // text. One request per user message now - the server runs all
-      // tool rounds inside it, so threat scoring / last-activity fire
-      // exactly once.
+      // `userMessage` carries {{user}}'s actual input so the server
+      // never mistakes the post-history prompt for it, regardless of
+      // the role that prompt is sent as. One request per user message —
+      // the server runs all tool rounds inside it, so threat scoring /
+      // last-activity fire exactly once.
       ...(typeof userInput === 'string' && userInput.trim()
           ? { userMessage: userInput }
           : {}),
@@ -1961,9 +1962,8 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       stream:      false,
       temperature: state.temperature,
       max_tokens:  state.maxTokens,
-      // See attemptStreamingOnce for why userMessage is sent explicitly:
-      // post-history prompt is also role:'user', so naive server-side
-      // extraction picks the wrong message.
+      // `userMessage` carries {{user}}'s actual input — see
+      // attemptStreamingOnce for the full rationale.
       ...(typeof userInput === 'string' && userInput.trim()
           ? { userMessage: userInput }
           : {}),
@@ -2212,6 +2212,10 @@ function readSettingsFromUI() {
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
   state.postHistoryPrompt = $('post-history-prompt').value;
+  if ($('post-history-role')) {
+    const v = $('post-history-role').value;
+    state.postHistoryRole = ['system', 'user', 'assistant'].includes(v) ? v : 'system';
+  }
   state.toolsEnabled      = $('tools-enabled').checked;
   state.customTools       = $('custom-tools').value;
   const scanEl = $('tome-scan-depth');
@@ -2271,6 +2275,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
   setIfNotFocused($('user-profile'),       'value',   state.userProfile);
   setIfNotFocused($('post-history-prompt'),'value',   state.postHistoryPrompt);
+  if ($('post-history-role')) setIfNotFocused($('post-history-role'), 'value', state.postHistoryRole ?? 'system');
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
@@ -3040,7 +3045,7 @@ function init() {
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
-    'user-profile', 'post-history-prompt', 'tools-enabled', 'custom-tools',
+    'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
     'user-discord-webhook',
     'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',

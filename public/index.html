@@ -241,9 +241,17 @@
             <span class="chevron">▾</span>
           </button>
           <div class="section-content" id="content-posthist">
-            <p class="field-hint">Injected as a final user message after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions.</p>
+            <p class="field-hint">Injected after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions. Choose the role it's sent as below.</p>
             <textarea id="post-history-prompt" rows="4" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
             <div class="field-actions">
+              <label class="field-label" style="margin-right:auto;display:flex;align-items:center;gap:0.4em;font-size:0.82em">
+                Role
+                <select id="post-history-role" style="font-size:1em">
+                  <option value="system">system</option>
+                  <option value="user">user</option>
+                  <option value="assistant">assistant</option>
+                </select>
+              </label>
               <button class="btn-secondary import-btn" data-target="post-history-prompt">↑ Import file</button>
               <button class="btn-ghost clear-field-btn" data-target="post-history-prompt">✕ Clear</button>
             </div>
