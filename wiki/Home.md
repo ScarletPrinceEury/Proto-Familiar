@@ -1,6 +1,6 @@
 # Proto-Familiar Wiki
 
-Welcome to the project wiki for **Proto-Familiar**, a lightweight self-hosted chat frontend for NanoGPT and Z.ai.
+Welcome to the project wiki for **Proto-Familiar**, a lightweight self-hosted chat frontend for NanoGPT, Z.ai, and Google AI Studio.
 
 ## Start Here
 
@@ -13,7 +13,7 @@ Welcome to the project wiki for **Proto-Familiar**, a lightweight self-hosted ch
 
 Proto-Familiar is a local-first chat UI with:
 
-- provider switching (NanoGPT, Z.ai Standard, Z.ai Coding Plan)
+- provider switching (NanoGPT, Z.ai Standard, Z.ai Coding Plan, Google AI Studio)
 - streaming and non-streaming chat
 - configurable prompt layers (system/character/user/post-history)
 - built-in and custom tool definitions

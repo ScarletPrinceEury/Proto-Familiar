@@ -2,7 +2,7 @@
 
 ## Connection
 
-- **Provider:** NanoGPT, Z.ai Standard, or Z.ai Coding Plan
+- **Provider:** NanoGPT, Z.ai Standard, Z.ai Coding Plan, or Google AI Studio (Gemini)
 - **API Key:** sent to local server, then proxied upstream
 - **Model:** free-form input with provider-based suggestions
 - **Streaming:** on/off toggle
@@ -21,7 +21,7 @@ The app builds context from:
 2. Character Profile
 3. User Profile
 4. Conversation history
-5. Post-History Prompt (final user instruction before generation)
+5. Post-History Prompt (final instruction before generation; role selectable — system (default), user, or assistant)
 
 All prompt fields support file import from `.txt`, `.md`, or `.json`.
 
