@@ -219,8 +219,18 @@ export function discordLocationKey(msg) {
 export function classifyMessage(msg, { registry, botUserId, wardUserId }) {
   if (!msg || typeof msg !== 'object') return { action: 'ignore', reason: 'malformed' };
   const author = msg.author ?? {};
+  // My own messages are ALWAYS ignored — a Familiar never answers itself,
+  // whatever a location's settings say. This is the inner loop guard and
+  // sits above the readBots opt-in deliberately.
   if (author.id && author.id === botUserId) return { action: 'ignore', reason: 'own-message' };
-  if (author.bot) return { action: 'ignore', reason: 'bot-author' };
+  // Other bots (including other Familiars) are ignored by default — the
+  // outer loop guard. A location can opt in via readBots, in which case
+  // the bot's message flows through normal classification below: answered
+  // when addressed, paced by the room's mode/cooldown otherwise.
+  if (author.bot) {
+    const loc = (registry?.locations ?? []).find(l => l.key === discordLocationKey(msg));
+    if (loc?.readBots !== true) return { action: 'ignore', reason: 'bot-author' };
+  }
   const content = typeof msg.content === 'string' ? msg.content.trim() : '';
   if (!content) return { action: 'ignore', reason: 'no-content' };
 
@@ -315,6 +325,52 @@ export function mergeParticipant(participants, entry) {
   return list;
 }
 
+/** Resolve Discord user-mention tokens (<@id>, <@!id>) in message text to
+ *  readable @Name form, so a multi-party room stays legible to me. Raw
+ *  snowflakes make it impossible to tell who a message is aimed at — the
+ *  difference between "<@837…> Liar" and "@Hogsworth Liar" is the
+ *  difference between butting into an exchange and recognising it isn't
+ *  mine. Names resolve in priority: my own character name for my id, a
+ *  registered villager's configured name, then the mentioned user's
+ *  display name from the payload, then a plain @someone. */
+export function resolveMentions(content, { mentions = [], botUserId = null, charName = 'the Familiar', villagers = [] } = {}) {
+  const text = String(content ?? '');
+  if (!/<@!?\d+>/.test(text)) return text;
+  const villagerName = (id) => (villagers ?? []).find(v =>
+    (v.aliases ?? []).some(a => a.platform === 'discord' && a.id === id))?.name ?? null;
+  const fromPayload = new Map();
+  for (const u of (Array.isArray(mentions) ? mentions : [])) {
+    if (u?.id) fromPayload.set(u.id, u.global_name || u.username || null);
+  }
+  const nameFor = (id) => {
+    if (botUserId && id === botUserId) return charName || 'the Familiar';
+    return villagerName(id) ?? fromPayload.get(id) ?? 'someone';
+  };
+  return text.replace(/<@!?(\d+)>/g, (_m, id) => `@${nameFor(id)}`);
+}
+
+/** Names this message is explicitly aimed at, other than me — @-mentions
+ *  of other users (people OR other Familiars) plus a reply to someone
+ *  else's message. Lets an active-mode Familiar tell "this is between
+ *  them" from open-room chatter, so it doesn't barge into an exchange
+ *  pointed at another participant. Villager names preferred; de-duped. */
+export function directedAtOthers(msg, { botUserId = null, villagers = [] } = {}) {
+  const names = [];
+  const villagerName = (id) => (villagers ?? []).find(v =>
+    (v.aliases ?? []).some(a => a.platform === 'discord' && a.id === id))?.name ?? null;
+  const add = (id, fallback) => {
+    if (!id || id === botUserId) return;
+    const name = villagerName(id) ?? fallback ?? null;
+    if (name && !names.includes(name)) names.push(name);
+  };
+  for (const u of (Array.isArray(msg?.mentions) ? msg.mentions : [])) {
+    add(u?.id, u?.global_name || u?.username);
+  }
+  const ref = msg?.referenced_message?.author;
+  if (ref) add(ref.id, ref.global_name || ref.username);
+  return names;
+}
+
 // ── Macro substitution ────────────────────────────────────────────
 
 function substituteMacros(text, settings) {
@@ -325,7 +381,7 @@ function substituteMacros(text, settings) {
 
 // ── Presence preamble (my own orientation, first person) ─────────
 
-function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY }) {
+function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [] }) {
   const lines = ['[Discord Presence]'];
   if (kind === 'ward-dm') {
     lines.push(
@@ -355,19 +411,36 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
   // room; staying silent when a word from me would land warm or useful
   // is a moment of presence missed. I judge from my own character.
   if (ambient) {
+    const aimedAt = (directedAt ?? []).filter(Boolean).join(', ');
     if (ambientStrategy === 'llm') {
-      lines.push(
-        'No one addressed me just now — I get to choose whether to speak. ' +
-        'I weigh it honestly: chiming in with nothing real to add clutters their space, ' +
-        'and holding back when I could genuinely add warmth, levity, or help is a moment of presence lost. ' +
-        'I decide as the character I am, not from a default urge to be useful. ' +
-        'If this one is not mine to speak into, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
-      );
+      if (aimedAt) {
+        lines.push(
+          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
+          'I weigh both costs honestly: stepping into a conversation pointed at someone else can be barging in where I was not wanted, ' +
+          'and holding back when a word from me would genuinely add warmth, levity, or help is a moment of presence lost. ' +
+          'I decide as the character I am. If this one is theirs to have, I reply with exactly [pass] and nothing else — that keeps me out of it without pretending I said something; otherwise I speak briefly, in my own voice.',
+        );
+      } else {
+        lines.push(
+          'No one addressed me just now — I get to choose whether to speak. ' +
+          'I weigh it honestly: chiming in with nothing real to add clutters their space, ' +
+          'and holding back when I could genuinely add warmth, levity, or help is a moment of presence lost. ' +
+          'I decide as the character I am, not from a default urge to be useful. ' +
+          'If this one is not mine to speak into, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
+        );
+      }
     } else {
-      lines.push(
-        'No one addressed me just now — I am choosing to be present in this conversation because it feels right to be here. ' +
-        'I add something real and in my own voice, keep it light, and never dominate the room.',
-      );
+      if (aimedAt) {
+        lines.push(
+          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
+          'If I step in, I do it briefly and in my own voice, joining lightly — never taking over a conversation pointed at someone else.',
+        );
+      } else {
+        lines.push(
+          'No one addressed me just now — I am choosing to be present in this conversation because it feels right to be here. ' +
+          'I add something real and in my own voice, keep it light, and never dominate the room.',
+        );
+      }
     }
   }
   return substituteMacros(lines.join('\n'), settings);
@@ -622,7 +695,11 @@ async function observeMessage(gw, msg, decision) {
     decision.audience === null ? null : { location: decision.audience.location, participants: session.participants },
     registry,
   );
-  const content = String(msg.content).slice(0, INPUT_CHAR_CAP);
+  // Resolve mention tokens here too so what I read back later is legible.
+  const content = resolveMentions(String(msg.content), {
+    mentions: msg.mentions, botUserId: gw.botUserId,
+    charName: readSettingsSync()?.charName, villagers: registry.villagers,
+  }).slice(0, INPUT_CHAR_CAP);
   const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
   session.messages = [
     ...(session.messages ?? []),
@@ -672,7 +749,13 @@ async function handleTurn(gw, msg, decision) {
     }
   }
 
-  const content  = String(msg.content).slice(0, INPUT_CHAR_CAP);
+  // Resolve <@id> mention tokens to @Name BEFORE truncation so the room
+  // stays legible to me — I can tell who each message is aimed at instead
+  // of seeing raw snowflakes. (registry resolved at the top of handleTurn.)
+  const content  = resolveMentions(String(msg.content), {
+    mentions: msg.mentions, botUserId: gw.botUserId,
+    charName: settings?.charName, villagers: registry.villagers,
+  }).slice(0, INPUT_CHAR_CAP);
   const nowIso   = new Date().toISOString();
 
   // Ward speech counts as ward activity wherever it happens — the
@@ -745,6 +828,13 @@ async function handleTurn(gw, msg, decision) {
       return { static: '', dynamic: '' };
     });
 
+  // On an ambient turn, whom was this message actually pointed at? If it
+  // named someone other than me, I should recognise the exchange isn't
+  // mine to assume — not stay silent by default, but weigh it as such.
+  const directedAt = decision.ambient
+    ? directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers })
+    : [];
+
   const preamble = presenceBlock({
     kind: decision.kind,
     locationLabel: label,
@@ -753,6 +843,7 @@ async function handleTurn(gw, msg, decision) {
     settings,
     ambient: !!decision.ambient,
     ambientStrategy: decision.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
+    directedAt,
   });
 
   const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');

@@ -71,6 +71,26 @@ and never spammy:
 > small cooldown bump if you want it more reserved, or use Lurk if you
 > want presence without unprompted speech.
 
+## Shared Familiar channels (reading other bots)
+
+By default the Familiar ignores **all** other bots — including other
+people's Familiars — so two bots can never spiral into an endless
+back-and-forth. If you have a channel where you *want* your Familiars (or
+other bots) to actually talk to each other — a "Familiar hangout" — turn
+on **Read other bots & Familiars here** in that location's editor.
+
+With it on, another bot's messages are treated like anyone else's in that
+room: answered when they @-mention or reply to your Familiar, and — in
+**Active** mode — eligible for it to chime in on, still paced by the
+cooldown and any hourly rate limit. Your Familiar **never** answers its
+*own* messages, whatever the setting. The pace of any back-and-forth is
+yours to set with the presence mode and cooldown; the toggle is off
+everywhere until you flip it.
+
+> The Familiar also reads `@mentions` by name rather than raw IDs, so it
+> can tell when a message is aimed at *someone else* in the room and stay
+> out of an exchange that isn't its to join.
+
 ## Relaying messages
 
 The Familiar can carry a message to someone (or somewhere) in your

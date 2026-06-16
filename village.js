@@ -268,6 +268,9 @@ export function normalizeRegistry(raw) {
       // Unassigned or dangling → strangers ceiling (the floor).
       assignedCategoryId: byId.has(l.assignedCategoryId) ? l.assignedCategoryId : CATEGORY_STRANGERS,
       ...normalizeLocationMode(l),
+      // readBots: opt-in to seeing other bots/Familiars in this room.
+      // Off by default — the loop guard. Independent of presence mode.
+      ...(l.readBots === true ? { readBots: true } : {}),
       ...(typeof l.connectionId === 'string' && l.connectionId ? { connectionId: l.connectionId } : {}),
       ...(l.rateLimit && typeof l.rateLimit === 'object' && Number.isFinite(l.rateLimit.perHour)
         ? { rateLimit: { perHour: Math.max(0, Math.floor(l.rateLimit.perHour)) } }
@@ -580,7 +583,7 @@ export async function deleteVillager({ id }, { filePath = DEFAULT_VILLAGE_PATH }
 
 // ── Location CRUD ─────────────────────────────────────────────────
 
-export async function upsertLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+export async function upsertLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     if (typeof key !== 'string' || !key.trim()) throw new Error('key (string) is required');
     if (assignedCategoryId !== undefined && !reg.categories.some(c => c.id === assignedCategoryId)) {
@@ -606,6 +609,13 @@ export async function upsertLocation({ key, label, assignedCategoryId, connectio
     if ((loc.mode ?? DEFAULT_LOCATION_MODE) !== 'active') {
       delete loc.activeStrategy;
       delete loc.activeCooldownSec;
+    }
+    // readBots: independent of mode. On = this room may see/answer other
+    // bots and Familiars (loops paced by the cooldown + rate limit; self
+    // is always ignored). Off = the default loop guard.
+    if (readBots !== undefined) {
+      if (readBots === true) loc.readBots = true;
+      else delete loc.readBots;
     }
     if (connectionId !== undefined) {
       if (typeof connectionId === 'string' && connectionId) loc.connectionId = connectionId;

@@ -8685,10 +8685,12 @@ function vlRenderLocList(reg) {
     const mode = ['strict', 'lurk', 'active'].includes(l.mode) ? l.mode : 'strict';
     const modeChip = mode !== 'strict'
       ? `<span class="vl-chip" style="flex-shrink:0" title="Presence mode">${esc(mode)}</span>` : '';
+    const botChip = l.readBots === true
+      ? `<span class="vl-chip" style="flex-shrink:0" title="Reads other bots & Familiars">🤖</span>` : '';
     return `<div class="vl-loc-card${_vlSelL === l.key ? ' vl-sel' : ''}" data-lkey="${esc(l.key)}" tabindex="0" role="button">
       <div class="vl-loc-label" title="${esc(l.label)}">${esc(l.label)}</div>
       <div class="vl-loc-key"   title="${esc(l.key)}">${esc(l.key)}</div>
-      ${modeChip}${chip}
+      ${modeChip}${botChip}${chip}
     </div>`;
   }).join('');
   list.querySelectorAll('.vl-loc-card').forEach(el => {
@@ -8774,6 +8776,13 @@ function vlRenderLocDetail(loc) {
       <input type="number" id="vl-l-active-cooldown" value="${loc?.activeCooldownSec ?? ''}" placeholder="60" min="0" step="5" style="width:100%">
       <p class="field-hint">A hard floor on unprompted turns, so active presence stays affordable. The hourly rate limit above still applies on top.</p>
     </div>
+    <div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="vl-l-readbots">
+        <span class="vl-field-label" style="margin:0">Read other bots &amp; Familiars here</span>
+      </label>
+      <p class="field-hint">Off by default. On = the Familiar sees and can answer other bots/Familiars in this room (it still never answers itself; loops are paced by the cooldown and rate limit above). Use for shared Familiar channels.</p>
+    </div>
     <div class="vl-actions">
       <button class="btn-send" id="vl-l-save" type="button">${isNew ? 'Add location' : 'Save'}</button>
       ${!isNew ? `<button class="btn-danger" id="vl-l-del" type="button">Delete</button>` : ''}
@@ -8797,6 +8806,8 @@ function vlRenderLocDetail(loc) {
     modeSel.addEventListener('change', toggleActiveOpts);
     toggleActiveOpts();
   }
+  const readBotsBox = $('vl-l-readbots');
+  if (readBotsBox) readBotsBox.checked = loc?.readBots === true;
 
   $('vl-l-save').addEventListener('click', () => vlSaveLocation(loc?.key ?? null));
   $('vl-l-del')?.addEventListener('click', () => vlDeleteLocation(loc.key));
@@ -8816,12 +8827,13 @@ async function vlSaveLocation(key) {
   const activeStrategy = $('vl-l-active-strategy')?.value || 'llm';
   const cdRaw = $('vl-l-active-cooldown')?.value.trim();
   const activeCooldownSec = cdRaw ? parseInt(cdRaw, 10) : undefined;
+  const readBots = $('vl-l-readbots')?.checked === true;
   status.textContent = 'Saving…';
   try {
     const r = await fetch('/api/village/locations', {
       method: key ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec }),
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots }),
     });
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();
