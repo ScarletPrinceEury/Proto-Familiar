@@ -230,7 +230,8 @@ JSON blob. The ward sets both buckets in the Village editor (the
       "rateLimit": { "perHour": 30 },                    // optional, enforced in code
       "mode": "active",                                  // V8 presence: 'strict' (default) | 'lurk' | 'active'
       "activeStrategy": "llm",                           // only in 'active': 'llm' (default) | 'tiers'
-      "activeCooldownSec": 60                             // only in 'active': hard floor between unprompted turns
+      "activeCooldownSec": 60,                            // only in 'active': hard floor between unprompted turns
+      "readBots": true                                   // V8 opt-in: see/answer other bots & Familiars here (default off; self always ignored)
     }
   ]
 }
@@ -457,6 +458,38 @@ All of this lives in `discord-gateway.js`: `decideAmbientReply`
 restart), and the dispatcher routing `observe` / ambient-gated turns.
 The knowledge gate (V3) runs identically regardless of mode — mode
 governs *when* the Familiar speaks, never *what context it has*.
+
+### Reading the room: mention legibility + who a message is for (V8)
+
+A Familiar that sees raw Discord `<@837…>` snowflakes can't tell whether
+it's the one being addressed — the reported failure was a Familiar
+quipping into `@Hogsworth Liar`, an exchange aimed at *another* Familiar.
+Two pure, unit-tested helpers fix this:
+
+- **`resolveMentions(content, …)`** rewrites `<@id>` / `<@!id>` to
+  `@Name` (my own char name → a registered villager's configured name →
+  the mention's payload display name → `@someone`) before the text
+  reaches the model — applied on both the reply and observe paths so
+  accumulated context stays legible too.
+- **`directedAtOthers(msg, …)`** lists the names a message was explicitly
+  aimed at other than me (other-user @-mentions + a reply target). On an
+  ambient turn the presence block names them so the Familiar can tell
+  "this is between them" from open-room chatter. Framed with both costs
+  at equal weight (barging into someone else's exchange vs. a missed
+  moment of presence) — never a bias toward silence.
+
+### Other bots & Familiars: `readBots` (V8)
+
+Default: a Familiar ignores its *own* messages always (the inner loop
+guard), and ignores *other* bots — including sibling Familiars — with
+`reason: 'bot-author'`. A location can set **`readBots: true`** to let
+other bots through `classifyMessage` as normal traffic: answered when
+@-mentioned/replied-to, and (in `active` mode) eligible to be chimed in
+at, paced by `activeCooldownSec` + the hourly rate limit. This is for
+shared Familiar channels where the ward *wants* their Familiars to talk
+to each other; the loop is the ward's to pace (mode + cooldown), not a
+hard block. `readBots` is independent of presence mode and off by
+default, so every existing room is unchanged.
 
 ### Reaching what it can relay to (V8, the operability half)
 

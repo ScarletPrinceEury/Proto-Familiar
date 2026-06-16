@@ -12,6 +12,8 @@ import {
   resetRateLimitState,
   decideAmbientReply,
   isAmbientAbstain,
+  resolveMentions,
+  directedAtOthers,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -251,6 +253,48 @@ describe('classifyMessage — guild presence modes', () => {
   });
 });
 
+describe('classifyMessage — readBots (other bots & Familiars)', () => {
+  const GUILD_KEY = 'discord:guild:42:channel:1001';
+  // ctx with the guild location set to a mode + optional readBots flag.
+  const ctxBots = (readBots, mode = 'strict') => {
+    const registry = makeRegistry();
+    Object.assign(registry.locations.find(l => l.key === GUILD_KEY), { mode, readBots });
+    return { registry, botUserId: BOT_ID, wardUserId: WARD_ID };
+  };
+  const botMsg = (extra = {}) => guildMsg('555000555000555000', 'beep',
+    { author: { id: '555000555000555000', username: 'hogsworth_bot', bot: true }, ...extra });
+
+  it('default: a bot message is ignored (loop guard)', () => {
+    const d = classifyMessage(botMsg(), ctxBots(undefined, 'active'));
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'bot-author');
+  });
+
+  it('readBots on + active: a bot message becomes an ambient turn', () => {
+    const d = classifyMessage(botMsg(), ctxBots(true, 'active'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, true);
+  });
+
+  it('readBots on + strict: a bot message that addresses me earns a reply', () => {
+    const d = classifyMessage(botMsg({ mentions: [{ id: BOT_ID }] }), ctxBots(true, 'strict'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, false);
+  });
+
+  it('readBots on + lurk: an un-addressing bot message is observed', () => {
+    const d = classifyMessage(botMsg(), ctxBots(true, 'lurk'));
+    assert.equal(d.action, 'observe');
+  });
+
+  it('my own message is ignored even where readBots is on (inner loop guard)', () => {
+    const mine = guildMsg(BOT_ID, 'beep', { author: { id: BOT_ID, username: 'me', bot: true } });
+    const d = classifyMessage(mine, ctxBots(true, 'active'));
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'own-message');
+  });
+});
+
 // ── decideAmbientReply (the active-mode pacing gate) ───────────────
 
 describe('decideAmbientReply', () => {
@@ -459,5 +503,82 @@ describe('checkRateLimit', () => {
     consumeRateSlot('loc:X');
     assert.equal(checkRateLimit('loc:X', 1).ok, false, 'loc:X exhausted');
     assert.equal(checkRateLimit('loc:Y', 1).ok, true,  'loc:Y unaffected');
+  });
+});
+
+describe('resolveMentions — making the room legible', () => {
+  const villagers = [{
+    id: 'v-chen', name: 'Chen',
+    aliases: [{ platform: 'discord', id: '777' }],
+  }];
+
+  it('resolves a villager mention to their configured name', () => {
+    const out = resolveMentions('hey <@777> look', { villagers, mentions: [{ id: '777' }] });
+    assert.equal(out, 'hey @Chen look');
+  });
+
+  it('resolves my own id to my character name', () => {
+    const out = resolveMentions('<@999> hi', { botUserId: '999', charName: 'Hogsworth', mentions: [{ id: '999' }] });
+    assert.equal(out, '@Hogsworth hi');
+  });
+
+  it('falls back to the payload display name for unknown users (other Familiars/bots)', () => {
+    const out = resolveMentions('<@555> Liar', {
+      villagers, mentions: [{ id: '555', global_name: 'Hogsworth', username: 'hogsworth_bot' }],
+    });
+    assert.equal(out, '@Hogsworth Liar');
+  });
+
+  it('handles the nickname form <@!id>', () => {
+    const out = resolveMentions('<@!777>!', { villagers, mentions: [{ id: '777' }] });
+    assert.equal(out, '@Chen!');
+  });
+
+  it('leaves text without mentions untouched (cheap fast-path)', () => {
+    assert.equal(resolveMentions('no pings here', { villagers }), 'no pings here');
+  });
+
+  it('unknown id with no payload entry becomes @someone, never a raw snowflake', () => {
+    const out = resolveMentions('<@12345> who?', {});
+    assert.equal(out, '@someone who?');
+  });
+});
+
+describe('directedAtOthers — recognising an exchange is not mine', () => {
+  const villagers = [{
+    id: 'v-chen', name: 'Chen',
+    aliases: [{ platform: 'discord', id: '777' }],
+  }];
+
+  it('names another Familiar a message was @-mentioned at (the reported case)', () => {
+    const msg = { mentions: [{ id: '555', global_name: 'Hogsworth' }], content: '<@555> Liar' };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Hogsworth']);
+  });
+
+  it('prefers the villager name over the payload display name', () => {
+    const msg = { mentions: [{ id: '777', global_name: 'chen_draws' }] };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Chen']);
+  });
+
+  it('excludes me — a mention of my own id is not "directed at others"', () => {
+    const msg = { mentions: [{ id: '999', global_name: 'Me' }] };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), []);
+  });
+
+  it('includes a reply target when replying to someone else', () => {
+    const msg = { mentions: [], referenced_message: { author: { id: '555', global_name: 'Hogsworth' } } };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Hogsworth']);
+  });
+
+  it('de-duplicates when the same person is both mentioned and the reply target', () => {
+    const msg = {
+      mentions: [{ id: '777' }],
+      referenced_message: { author: { id: '777', global_name: 'chen_draws' } },
+    };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Chen']);
+  });
+
+  it('open-room chatter (no mentions, no reply) is directed at no one', () => {
+    assert.deepEqual(directedAtOthers({ content: 'lol' }, { botUserId: '999', villagers }), []);
   });
 });

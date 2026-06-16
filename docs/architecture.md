@@ -60,7 +60,7 @@ server.js  (Express, Node 18+, ESM)
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
     ├── audience.js         ── grant resolution + section-marker gate (V3)
-    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active (V8)
+    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active + mention legibility + readBots (V8)
     │
     │  ── classical infrastructure ──────────────────────────────
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
@@ -514,6 +514,26 @@ floor on unprompted turns plus one of two ward-toggleable strategies —
 by `isAmbientAbstain`) or `tiers` (pure-code slow/medium/fast cadence
 scaled off the cooldown). The V3 knowledge gate runs identically in
 every mode — mode is *when* the Familiar speaks, never *what it knows*.
+
+*Room legibility (V8).* `resolveMentions()` (pure, tested) rewrites
+inbound `<@id>` / `<@!id>` tokens to `@Name` (my own char name → a
+registered villager's name → the payload display name → `@someone`)
+before the text reaches the model, in both the reply and observe paths —
+raw snowflakes leave the Familiar unable to tell who a message names. On
+an ambient turn `directedAtOthers()` (pure, tested) collects the names a
+message was explicitly aimed at (other-user @-mentions + a reply target,
+excluding me) and feeds them to the presence block, so an active-mode
+Familiar can distinguish "this exchange is between them" from open-room
+chatter and weigh both costs (barging in vs. a missed moment of
+presence) instead of treating every unaddressed line as its cue.
+
+*Other bots & Familiars (V8).* My own messages are ALWAYS ignored (the
+inner loop guard, above the opt-in). *Other* bots — including other
+Familiars — are ignored by default (`reason: 'bot-author'`); a location
+with `readBots: true` lets them through `classifyMessage` as normal, so
+they're answered when addressed and paced by the room's mode +
+`activeCooldownSec` + rate limit otherwise. For shared Familiar
+channels; the loop is the ward's to pace, not a hard block.
 
 ### `memorization.js` — autonomous per-fact memorization (Pillar C)
 

@@ -283,6 +283,22 @@ test('invalid active strategy is ignored (keeps default on read)', async () => {
   assert.equal(reg.locations.find(l => l.key === 'k').activeStrategy, 'llm');
 });
 
+test('readBots defaults off and is independent of presence mode', async () => {
+  const loc = await upsertLocation({ key: 'k', mode: 'lurk' }, { filePath });
+  assert.equal(loc.readBots, undefined, 'off by default');
+  const on = await upsertLocation({ key: 'k', readBots: true }, { filePath });
+  assert.equal(on.readBots, true, 'enables without touching mode');
+  assert.equal(on.mode, 'lurk', 'mode preserved');
+});
+
+test('readBots survives a normalize round-trip and can be cleared', async () => {
+  await upsertLocation({ key: 'k', readBots: true }, { filePath });
+  const reg = await getRegistry({ filePath });
+  assert.equal(reg.locations.find(l => l.key === 'k').readBots, true);
+  const off = await upsertLocation({ key: 'k', readBots: false }, { filePath });
+  assert.equal(off.readBots, undefined, 'false clears the flag');
+});
+
 // ── Migration ──────────────────────────────────────────────────────
 
 test('trustedContacts migrate into Emergency Contacts, idempotently', async () => {
