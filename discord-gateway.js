@@ -224,10 +224,19 @@ async function fireRevisit(item) {
     : null) ?? primaryConnectionFrom(settings);
   if (!conn?.apiKey || !conn?.model) { console.log('[discord] revisit: no connection — dropping'); return; }
 
+  const channelId = discordChannelIdFromKey(item.locationKey);
+  if (!channelId) { console.log(`[discord] revisit: can't resolve a channel from ${item.locationKey} — dropping`); return; }
+
   const label   = regLoc.label ?? `Discord channel`;
   const session = await sessionForLocation(item.locationKey, label, 'group');
 
-  const enriched = await enrich('', { audience: null, liveTurn: false })
+  // Same knowledge gate the live path applies: a revisit speaks into a
+  // SHARED room, so it must never carry ward-private context. The gate is
+  // resolved from the room + accumulated participants, identical to handleTurn.
+  const audienceInput = { location: item.locationKey, participants: session.participants };
+  const { audienceGrants, audienceTag } = resolveLocationGate(audienceInput, registry);
+
+  const enriched = await enrich('', { audience: audienceGrants, liveTurn: false })
     .catch(() => ({ static: '', dynamic: '' }));
 
   const directedAt = carriedExchange(session.messages);
@@ -277,19 +286,12 @@ async function fireRevisit(item) {
     return;
   }
 
-  const channelId = item.locationKey.replace(/^discord:guild:/, '');
-  await sendChannelMessage(gw.config.token, channelId, rawReply);
-
-  const now = new Date().toISOString();
-  session.messages = [
-    ...(session.messages ?? []),
-    { id: randomUUID(), role: 'assistant', content: rawReply, timestamp: now },
-  ];
-  session.provider  = conn.provider;
-  session.model     = conn.model;
-  session.updatedAt = now;
-  await writeSessionLog(session);
-  await touchLocation(item.locationKey, session.sessionId);
+  // Same delivery spine as the live path: Pillar D filter, send, persist,
+  // rate slot, status. No new incoming message, so priorMessages is empty.
+  await deliverReply(gw, {
+    rawReply, audienceTag, apiMessages, conn, settings,
+    channelId, session, locationKey: item.locationKey, regLoc, priorMessages: [],
+  });
   console.log(`[discord] revisit: spoke in ${item.locationKey}`);
 }
 
@@ -826,6 +828,73 @@ async function sendChannelMessage(token, channelId, content) {
   }
 }
 
+/** Resolve the knowledge gate for a location turn. `audienceInput` is null
+ *  for the ward's own DM (ward-private — no gating) or { location,
+ *  participants } for any other room. Returns the grants enrich() fetches
+ *  against and the durable audience tag stamped on the session. Shared by
+ *  the live path and the deferred-revisit path so the gate can never differ
+ *  between them. */
+function resolveLocationGate(audienceInput, registry) {
+  return {
+    audienceGrants: audienceInput === null ? null : resolveAudience(audienceInput, registry),
+    audienceTag:    audienceTagFor(audienceInput, registry),
+  };
+}
+
+/** Deliver a reply I composed into a Discord channel and persist the turn.
+ *  Shared by the live chat path (handleTurn) and the deferred-revisit path
+ *  (fireRevisit) so BOTH run the same Pillar D outgoing gate, session
+ *  persistence, rate-limit accounting, and status bookkeeping — neither can
+ *  drift from the other or quietly skip a safety step. `priorMessages` are
+ *  appended before my reply (the incoming user turn for a live turn; empty
+ *  for a revisit, where there is no new incoming message). */
+async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [] }) {
+  // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
+  // fast-paths; every other room is filtered before I say anything.
+  let reply = rawReply;
+  if (audienceTag !== 'ward-private' && rawReply) {
+    const filtered = await filterOutgoingReply({
+      draftText:    rawReply,
+      audienceTag,
+      callUpstream: async (msgs) => callChat({ conn, messages: msgs, settings }),
+      baseMessages: apiMessages,
+    }).catch(err => {
+      console.error('[discord] outgoing filter failed (passing through):', err?.message ?? err);
+      return { text: rawReply, blocked: false };
+    });
+    reply = filtered.text;
+    if (filtered.blocked)        console.log(`[discord] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
+    else if (reply !== rawReply) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
+  }
+
+  await sendChannelMessage(gw.config.token, channelId, reply);
+
+  // Persist the turn. Sessions land in logs/ exactly like web sessions
+  // and stay listable by the ward in the UI — no hidden conversations.
+  const now = new Date().toISOString();
+  session.messages = [
+    ...(session.messages ?? []),
+    ...priorMessages,
+    { id: randomUUID(), role: 'assistant', content: reply, timestamp: now },
+  ];
+  session.provider    = conn.provider;
+  session.model       = conn.model;
+  session.audienceTag = audienceTag;
+  session.updatedAt   = now;
+  await writeSessionLog(session);
+  await touchLocation(locationKey, session.sessionId);
+
+  // V5: consume one rate-limit slot after successful delivery.
+  if (regLoc?.rateLimit?.perHour) {
+    consumeRateSlot(locationKey);
+    saveRateLimits().catch(() => {});
+  }
+
+  gw.status.turns += 1;
+  gw.status.lastTurnAt = session.updatedAt;
+  return reply;
+}
+
 /** Channel id embedded in a registry location key, or null if the key
  *  isn't a Discord location. `discord:guild:G:channel:C` → C;
  *  `discord:dm:C` → C. Exported + pure for tests. */
@@ -1043,25 +1112,14 @@ async function handleTurn(gw, msg, decision) {
 
   // Audience re-resolved per turn from ACCUMULATED participants — a
   // stranger who spoke earlier in this session still tightens the gate
-  // now ("readable, not just active"). Ward-private stays null.
-  const audienceGrants = decision.audience === null
+  // now ("readable, not just active"). Ward-private stays null. The tag
+  // is the LOWEST permission level among everyone present; it's stamped on
+  // the session so the memorization sweep can route ward-private content
+  // into Phylactery while quarantining shared-room content to the tome.
+  const audienceInput = decision.audience === null
     ? null
-    : resolveAudience(
-        { location: decision.audience.location, participants: session.participants },
-        registry,
-      );
-
-  // Durable audience tag for the room — the LOWEST permission level
-  // among everyone present ('ward-private' only for the ward's own DMs).
-  // Scanned from the ACCUMULATED participants (readable, not just active,
-  // same basis as the gate above), so a stranger who spoke earlier still
-  // floors the room now. Stamped on the session so the memorization
-  // sweep can route ward-private content into Phylactery while
-  // quarantining shared-room content to the local tome.
-  const audienceTag = audienceTagFor(
-    decision.audience === null ? null : { location: decision.audience.location, participants: session.participants },
-    registry,
-  );
+    : { location: decision.audience.location, participants: session.participants };
+  const { audienceGrants, audienceTag } = resolveLocationGate(audienceInput, registry);
 
   const enriched = await enrich(content, { audience: audienceGrants, liveTurn: false })
     .catch(err => {
@@ -1161,48 +1219,15 @@ async function handleTurn(gw, msg, decision) {
     return;
   }
 
-  // Pillar D: semantic outgoing gate. Ward-private sessions (the ward's own DM)
-  // fast-path immediately. All other rooms run the filter before delivery.
-  let reply = rawReply;
-  if (audienceTag !== 'ward-private' && rawReply) {
-    const filtered = await filterOutgoingReply({
-      draftText:    rawReply,
-      audienceTag,
-      callUpstream: async (msgs) => callChat({ conn, messages: msgs, settings }),
-      baseMessages: apiMessages,
-    }).catch(err => {
-      console.error('[discord] outgoing filter failed (passing through):', err?.message ?? err);
-      return { text: rawReply, blocked: false };
-    });
-    reply = filtered.text;
-    if (filtered.blocked)       console.log(`[discord] outgoing filter exhausted budget — safe refusal sent (audience=${audienceTag})`);
-    else if (reply !== rawReply) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
-  }
-
-  await sendChannelMessage(gw.config.token, msg.channel_id, reply);
-
-  // Persist the turn. Sessions land in logs/ exactly like web sessions
-  // and stay listable by the ward in the UI — no hidden conversations.
-  session.messages = [
-    ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user',      content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
-    { id: randomUUID(), role: 'assistant', content: reply,       timestamp: new Date().toISOString() },
-  ];
-  session.provider    = conn.provider;
-  session.model       = conn.model;
-  session.audienceTag = audienceTag;
-  session.updatedAt   = new Date().toISOString();
-  await writeSessionLog(session);
-  await touchLocation(decision.locationKey, session.sessionId);
-
-  // V5: consume one rate-limit slot after successful delivery.
-  if (regLoc?.rateLimit?.perHour) {
-    consumeRateSlot(decision.locationKey);
-    saveRateLimits().catch(() => {});
-  }
-
-  gw.status.turns += 1;
-  gw.status.lastTurnAt = session.updatedAt;
+  // Pillar D filter → send → persist → rate slot → status, all shared with
+  // the deferred-revisit path so neither can skip a step the other runs.
+  await deliverReply(gw, {
+    rawReply, audienceTag, apiMessages, conn, settings,
+    channelId: msg.channel_id, session, locationKey: decision.locationKey, regLoc,
+    priorMessages: [
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+    ],
+  });
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
 }
 
@@ -1296,6 +1321,10 @@ function onDispatch(t, d) {
     gw.status.botUser = d.user ? `${d.user.username} (${d.user.id})` : null;
     gw.reconnectAttempts = 0;
     console.log(`[discord] gateway READY as ${gw.status.botUser}`);
+    // Re-arm any pending revisits on every successful connect — covers a
+    // disable→enable cycle and a fresh boot alike, and guarantees the bot
+    // token is populated before a revisit timer could fire.
+    armRevisitTimer().catch(() => {});
     return;
   }
   if (t === 'RESUMED') {
@@ -1529,7 +1558,8 @@ export function startDiscordGateway() {
   superviseTick();
   gw.supervisorTimer = setInterval(superviseTick, SUPERVISOR_TICK_MS);
   gw.supervisorTimer.unref?.();
-  armRevisitTimer().catch(() => {});
+  // Revisit timers are armed on READY (every successful connect), so the bot
+  // token is guaranteed present before any revisit could fire.
   console.log('[discord] gateway supervisor started');
 }
 

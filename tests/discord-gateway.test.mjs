@@ -16,6 +16,7 @@ import {
   directedAtOthers,
   messageNamesBot,
   carriedExchange,
+  discordChannelIdFromKey,
   parseDeferToken,
   isDeferToken,
 } from '../discord-gateway.js';
@@ -728,5 +729,26 @@ describe('parseDeferToken — deferred presence syntax', () => {
     assert.equal(isDeferToken('[later:20m]'), true);
     assert.equal(isDeferToken('[pass]'), false);
     assert.equal(isDeferToken('just chatting'), false);
+  });
+});
+
+describe('discordChannelIdFromKey — channel resolution for revisits', () => {
+  it('extracts the channel id from a full guild location key', () => {
+    // fireRevisit relies on this to send: discord:guild:<guild>:channel:<channel>
+    assert.equal(discordChannelIdFromKey('discord:guild:111:channel:222'), '222');
+  });
+  it('extracts the channel id from a DM key', () => {
+    assert.equal(discordChannelIdFromKey('discord:dm:333'), '333');
+  });
+  it('returns null for a malformed or non-discord key', () => {
+    assert.equal(discordChannelIdFromKey('discord:guild:111'), null);
+    assert.equal(discordChannelIdFromKey('not-a-key'), null);
+    assert.equal(discordChannelIdFromKey(null), null);
+  });
+  it('does not confuse the guild id for the channel id', () => {
+    // The pre-fix bug stripped "discord:guild:" and kept "111:channel:222".
+    const id = discordChannelIdFromKey('discord:guild:111:channel:222');
+    assert.notEqual(id, '111:channel:222');
+    assert.notEqual(id, '111');
   });
 });
