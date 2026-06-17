@@ -1,6 +1,6 @@
 # Server API
 
-The server is implemented in `server.js` (Express, Node.js 18+, ESM).
+The server is implemented in `server.js` (Express, Node.js 22+, ESM).
 
 ## Base behavior
 

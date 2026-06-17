@@ -32,7 +32,7 @@ Browser (public/)
     │
     │  HTTP + SSE  + /api/outbox polling for proactive deliveries
     ▼
-server.js  (Express, Node 18+, ESM)
+server.js  (Express, Node 22+, ESM)
     │
     │  ── cognitive bridge (per-request enrichment, INWARD) ────────
     ├── thalamus.js       ──►  Phylactery  (Python via uv, stdio MCP) — identity / memory / graph / snapshots
