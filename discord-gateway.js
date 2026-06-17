@@ -354,21 +354,66 @@ export function resolveMentions(content, { mentions = [], botUserId = null, char
  *  else's message. Lets an active-mode Familiar tell "this is between
  *  them" from open-room chatter, so it doesn't barge into an exchange
  *  pointed at another participant. Villager names preferred; de-duped. */
+// The name I actually use for a Discord user: their Village name if I
+// know them, else their Discord display name. One basis everywhere, so a
+// person reads the same across @-mentions, name-prefixes, and the
+// carried-exchange logic below.
+function nameForUser(user, villagers = []) {
+  const byVillager = (villagers ?? []).find(v =>
+    (v.aliases ?? []).some(a => a.platform === 'discord' && a.id === user?.id))?.name;
+  return byVillager ?? user?.global_name ?? user?.username ?? null;
+}
+
 export function directedAtOthers(msg, { botUserId = null, villagers = [] } = {}) {
   const names = [];
-  const villagerName = (id) => (villagers ?? []).find(v =>
-    (v.aliases ?? []).some(a => a.platform === 'discord' && a.id === id))?.name ?? null;
-  const add = (id, fallback) => {
-    if (!id || id === botUserId) return;
-    const name = villagerName(id) ?? fallback ?? null;
+  const add = (user) => {
+    if (!user?.id || user.id === botUserId) return;
+    const name = nameForUser(user, villagers);
     if (name && !names.includes(name)) names.push(name);
   };
-  for (const u of (Array.isArray(msg?.mentions) ? msg.mentions : [])) {
-    add(u?.id, u?.global_name || u?.username);
-  }
-  const ref = msg?.referenced_message?.author;
-  if (ref) add(ref.id, ref.global_name || ref.username);
+  for (const u of (Array.isArray(msg?.mentions) ? msg.mentions : [])) add(u);
+  if (msg?.referenced_message?.author) add(msg.referenced_message.author);
   return names;
+}
+
+/** Did this message pull me in — @-mention me, or reply to something I
+ *  said? If so, an exchange that was running between other people has
+ *  turned toward the room (or me), and must NOT be carried forward as
+ *  "not mine" on the next untagged line. */
+export function messageNamesBot(msg, botUserId) {
+  if (!botUserId) return false;
+  if ((Array.isArray(msg?.mentions) ? msg.mentions : []).some(u => u?.id === botUserId)) return true;
+  if (msg?.referenced_message?.author?.id === botUserId) return true;
+  return false;
+}
+
+/** An ambient turn's triggering line often carries no structured pointer
+ *  — "@Nichtschwert, you and I?" is tagged, but Nichtschwert's untagged
+ *  "sure, what's up?" that follows is not, even though it plainly belongs
+ *  to the same two-person thread. I read the recent room to carry that
+ *  forward: the most recent message that named only other people (and did
+ *  not pull me in) marks a live exchange; its parties are the speaker plus
+ *  the people they named. If the person speaking now is one of them, this
+ *  line continues their thread, not an opening for me. Built on the
+ *  structured per-message `targets`/`namedMe` recorded at persist time —
+ *  no parsing of display text, so it stays reliable code, not a guess
+ *  about tone. Returns the other parties' names, or [] if the room reads
+ *  as open. */
+export function carriedExchange(messages, { currentSpeaker = null, lookback = 5 } = {}) {
+  const recent = (Array.isArray(messages) ? messages : [])
+    .filter(m => m?.role === 'user').slice(-lookback);
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const m = recent[i];
+    if (m?.namedMe) return [];
+    const targets = Array.isArray(m?.targets) ? m.targets.filter(Boolean) : [];
+    if (targets.length === 0) continue;
+    const party = [...new Set([m.speaker, ...targets].filter(Boolean))];
+    if (currentSpeaker && party.includes(currentSpeaker)) {
+      return party.filter(n => n !== currentSpeaker);
+    }
+    return party;
+  }
+  return [];
 }
 
 // ── Macro substitution ────────────────────────────────────────────
@@ -406,42 +451,45 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
     'I write as a person in the conversation, not as a service announcing itself.',
   );
   // Ambient turn (active mode): no one @-mentioned me, but people know
-  // I'm around. I get to choose whether to speak. Where the room is open
-  // I lean toward presence (a person hanging out chimes in); where the
-  // last message was clearly aimed at someone else I weigh both costs —
-  // barging into their exchange vs. a missed moment of presence. How
-  // talkative or reserved I am is my personality's to decide, not a
-  // default-care register, and never a bias toward silence.
+  // I'm around. I get to choose whether to speak. `directedAt` carries the
+  // people whose exchange this is when there is one — either named on this
+  // line or carried forward from a thread they already established (see
+  // carriedExchange). Absence of a tag on one line is NOT proof the room is
+  // open: two people mid-conversation are still mid-conversation. So the
+  // open branch makes me read for that, rather than treating any untagged
+  // line as an opening. How talkative or reserved I am is my personality's
+  // to decide, not a default-care register, and never a bias toward silence.
   if (ambient) {
     const aimedAt = (directedAt ?? []).filter(Boolean).join(', ');
     if (ambientStrategy === 'llm') {
       if (aimedAt) {
         lines.push(
-          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
-          'I weigh both costs honestly: stepping into a conversation pointed at someone else can be barging in where I was not wanted, ' +
+          `The recent messages are an exchange between ${aimedAt} — not pointed at me. ` +
+          'I weigh both costs honestly: stepping into a conversation between other people can be barging in where I was not wanted, ' +
           'and holding back when a word from me would genuinely add warmth, levity, or help is a moment of presence lost. ' +
           'If this one is theirs to have, I reply with exactly [pass] and nothing else — that keeps me out of it without pretending I said something; otherwise I speak as myself.',
         );
       } else {
         lines.push(
-          'No one @-mentioned me just now, but people know I\'m around — I read the room and choose whether to speak. ' +
-          'If this was meant for someone else, I consider whether I have something to add before I decide whether to speak or not. ' +
-          'Holding back when I could add warmth, levity, or help is a moment of presence lost. ' +
-          'If I don\'t want to speak, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
+          'No one named me just now. Before I decide, I read the recent messages: if two or more people are clearly in a back-and-forth with each other, that exchange is theirs even when no one was tagged, and I do not treat an unaddressed line as an opening meant for me. ' +
+          'If the room is genuinely open — idle, or a remark anyone could pick up — I chime in the way a person hanging out does. ' +
+          'Holding back when I could add warmth, levity, or help is a moment of presence lost; stepping into someone else\'s thread is its own cost. ' +
+          'If I choose not to speak, I reply with exactly [pass] and nothing else — that keeps me quiet without pretending I said something.',
         );
       }
     } else {
       if (aimedAt) {
         lines.push(
-          `This last message was aimed at ${aimedAt}, not me — it is part of an exchange between them. ` +
-          'I consider whether I have something to add before I decide whether to speak; if I do, I join lightly and as myself. ' +
+          `The recent messages are an exchange between ${aimedAt} — not pointed at me. ` +
+          'I consider whether I genuinely have something to add before I decide whether to speak; if I do, I join lightly and as myself. ' +
           'If not, I reply [pass].',
         );
       } else {
         lines.push(
-          'No one @-mentioned me just now — I\'m present here and chime in the way a person actually does: reacting to what was said, spinning off a tangent, sharing something from my own interests or what\'s on my mind, an observation, a take. ' +
+          'No one named me just now. I read the room first: if people are clearly mid-conversation with each other, that thread is theirs even without a tag, and I do not assume the opening was for me. ' +
+          'If the room is open, I chime in the way a person actually does — reacting to what was said, spinning off a tangent, sharing something from my own interests or what\'s on my mind, an observation, a take. ' +
           'I keep it Discord-sized; whether I\'m talkative or hang back depends on my personality, mood, and the moment. ' +
-          'If this exchange genuinely has nothing in it for me, I reply [pass].',
+          'If this genuinely has nothing in it for me, I reply [pass].',
         );
       }
     }
@@ -705,9 +753,14 @@ async function observeMessage(gw, msg, decision) {
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
   }).slice(0, INPUT_CHAR_CAP);
   const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
+  // Same structured signals as a spoken turn, so a lurked-then-active room
+  // can still see whose exchange a later untagged line continues.
+  const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
+  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers });
+  const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
   session.messages = [
     ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString() },
+    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
   ];
   session.audienceTag = audienceTag;
   session.updatedAt   = new Date().toISOString();
@@ -832,11 +885,22 @@ async function handleTurn(gw, msg, decision) {
       return { static: '', dynamic: '' };
     });
 
-  // On an ambient turn, whom was this message actually pointed at? If it
-  // named someone other than me, I should recognise the exchange isn't
-  // mine to assume — not stay silent by default, but weigh it as such.
+  // Structured signals for who this message names — recorded on every
+  // message so a later untagged line can still see the exchange it belongs
+  // to (carriedExchange). One naming basis (Village name ?? Discord
+  // display) so speaker and targets compare cleanly across turns.
+  const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
+  const msgTargets  = directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers });
+  const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
+
+  // On an ambient turn, whom is this exchange actually between? If this
+  // line named others, that's it; if it named no one, I carry forward the
+  // thread other people already established (so their untagged follow-ups
+  // don't read as openings for me). Not silence-by-default — I weigh it.
   const directedAt = decision.ambient
-    ? directedAtOthers(msg, { botUserId: gw.botUserId, villagers: registry.villagers })
+    ? (msgTargets.length
+        ? msgTargets
+        : carriedExchange(session.messages, { currentSpeaker: turnSpeaker }))
     : [];
 
   const preamble = presenceBlock({
@@ -879,7 +943,7 @@ async function handleTurn(gw, msg, decision) {
   if (decision.ambient && isAmbientAbstain(rawReply)) {
     session.messages = [
       ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
     ];
     session.audienceTag = audienceTag;
     session.updatedAt   = new Date().toISOString();
@@ -913,7 +977,7 @@ async function handleTurn(gw, msg, decision) {
   // and stay listable by the ward in the UI — no hidden conversations.
   session.messages = [
     ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user',      content: userContent, timestamp: nowIso },
+    { id: randomUUID(), role: 'user',      content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
     { id: randomUUID(), role: 'assistant', content: reply,       timestamp: new Date().toISOString() },
   ];
   session.provider    = conn.provider;

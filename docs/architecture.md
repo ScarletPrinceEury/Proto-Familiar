@@ -527,6 +527,26 @@ Familiar can distinguish "this exchange is between them" from open-room
 chatter and weigh both costs (barging in vs. a missed moment of
 presence) instead of treating every unaddressed line as its cue.
 
+But the *triggering* line of an exchange is often the only one that's
+tagged — "@Nichtschwert, you and I?" is, but Nichtschwert's untagged
+"sure, what's up?" that follows is not, even though it plainly continues
+their two-person thread. `directedAtOthers()` alone would read that
+follow-up as open-room and the Familiar would barge in. So every stored
+message (spoken and observed) records structured per-message signals —
+`speaker`, `targets` (others it named), `namedMe` (whether it pulled me
+in) — and on an ambient turn whose own line names no one,
+`carriedExchange()` (pure, tested) walks the recent history for the most
+recent message that named only others (and didn't pull me in): its
+speaker + named parties are a live exchange, and if the person speaking
+now is one of them, this line continues *their* thread, not an opening
+for me. It reads only the structured fields — no parsing of display text
+— so it stays reliable code, not a guess about tone. A line that names
+me cancels the carry-forward (the room turned toward me). The open-room
+presence branch is correspondingly worded to make the model *read* for an
+untagged exchange between others rather than treating any unaddressed
+line as its cue — absence of a tag on one line is not proof the room is
+open.
+
 *Other bots & Familiars (V8).* My own messages are ALWAYS ignored (the
 inner loop guard, above the opt-in). *Other* bots — including other
 Familiars — are ignored by default (`reason: 'bot-author'`); a location
