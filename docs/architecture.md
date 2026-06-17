@@ -306,11 +306,12 @@ Phylactery's MCP").
 Currently owns:
 
 - **Tool dispatch** — `BUILTIN_TOOLS` (the full registry of tool
-  definitions, first-person descriptions, raw `{{user}}`/`{{char}}`
+  definitions, first-person descriptions authored with `{{user}}`/`{{char}}`
   macros) + `TOOL_EXECUTORS` (server-side implementations; writes ride
   thalamus's wrappers) + `executeToolCall()` (never throws — failures
-  become structured strings into the loop) + `composeActiveTools()`
-  (built-ins + the user's advertise-only custom tools) +
+  become structured strings into the loop; resolves macros in tool results) +
+  `composeActiveTools()` (built-ins + the user's advertise-only custom
+  tools; resolves description macros to the configured names before send) +
   `runToolCallLoop()` (the non-streaming multi-round loop; the
   streaming variant lives in /api/chat because it is SSE transport).
   `initCerebellumTools()` receives the tome-storage capability, **the

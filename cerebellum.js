@@ -784,9 +784,10 @@ export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, u
 /**
  * Tool definitions sent to the LLM for built-in tools.
  * The format matches the OpenAI function-calling spec. Descriptions
- * are in the Familiar's first-person voice (entity-as-subject) and
- * carry raw {{user}} / {{char}} macros — they are sent to the provider
- * unsubstituted, exactly as the client-side registry always did.
+ * are in the Familiar's first-person voice (entity-as-subject) and are
+ * authored with {{user}} / {{char}} macros; composeActiveTools resolves
+ * them to the configured names before the tools reach the provider, so the
+ * model never reads a literal macro describing my own capability.
  */
 export const BUILTIN_TOOLS = [
   {
@@ -2149,14 +2150,38 @@ export const TOOL_EXECUTORS = {
  * docs/architecture.md ("Custom tools — advertise-only") for what a
  * real extension point would need before it ships.
  */
-export function composeActiveTools(customTools) {
+export function composeActiveTools(customTools, settings = readSettingsSync()) {
   const tools = [...BUILTIN_TOOLS];
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);
     }
   }
-  return tools;
+  // Resolve {{user}} / {{char}} in every description the model reads — both
+  // built-ins and custom tools — so the Familiar never sees a literal macro
+  // describing its own capability. Clone-and-substitute; BUILTIN_TOOLS is
+  // shared module state and must never be mutated.
+  return tools.map(t => substituteToolMacros(t, settings));
+}
+
+// Deep-clone a tool definition, substituting macros in every `description`
+// field (top-level and nested parameter properties) and leaving names, enums,
+// and structure untouched.
+function substituteToolMacros(tool, settings) {
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        out[k] = (k === 'description' && typeof v === 'string')
+          ? substituteMacros(v, settings)
+          : walk(v);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(tool);
 }
 
 /**
