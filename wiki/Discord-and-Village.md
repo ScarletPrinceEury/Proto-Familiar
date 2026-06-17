@@ -71,6 +71,20 @@ and never spammy:
 > small cooldown bump if you want it more reserved, or use Lurk if you
 > want presence without unprompted speech.
 
+## Deferred presence — `[later:…]`
+
+In **Active** mode the Familiar has three options on any ambient turn: speak, stay quiet, or schedule a revisit. A revisit is its way of saying *"not right now, but I'd like to see where this goes"* — and then actually coming back.
+
+Three syntax forms are understood:
+
+| Form | Example | Meaning |
+|---|---|---|
+| **Duration** | `[later:20m]`, `[later:1h]` | Check back in N minutes |
+| **Wall clock** | `[later:22:30]` | Come back at this time of day |
+| **Bucket** | `[later:soon]` / `[later:later]` / `[later:much-later]` | ~15 min / ~45 min / ~1 h |
+
+All forms are clamped to **[5 min, 1 hour]**. The Familiar can re-defer up to **twice**; after that it either speaks or drops the thread. Any real incoming message at that location cancels the pending revisit automatically. Revisit state persists across server restarts in `tomes/.discord-revisits.json`.
+
 ## Shared Familiar channels (reading other bots)
 
 By default the Familiar ignores **all** other bots — including other

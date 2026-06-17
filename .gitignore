@@ -18,6 +18,16 @@ tomes/.last-activity.json.tmp
 # Surface-events stream (slice 2) — per-embodiment record of offers + outcomes.
 tomes/.surface-events.json
 tomes/.surface-events.json.tmp
+# Discord gateway runtime state — conversation map, rate-limit buckets, revisit queue.
+tomes/.discord-map.json
+tomes/.discord-map.json.tmp
+tomes/.discord-revisits.json
+tomes/.discord-revisits.json.tmp
+tomes/.rate-limits.json
+tomes/.rate-limits.json.tmp
+# Consent-pending tracking for the memorization greenlight flow.
+tomes/.consent-pending.json
+tomes/.consent-pending.json.tmp
 # User-generated tomes (Session Memories, Familiar's Ponderings, etc.)
 # use UUID filenames. Shipped tomes use human-readable "*-Tome.json".
 tomes/????????-????-????-????-????????????.json

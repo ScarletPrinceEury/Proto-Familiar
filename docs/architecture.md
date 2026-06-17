@@ -562,10 +562,20 @@ buckets (`[later:soon]` ~15min / `[later:later]` ~45min /
 `[later:much-later]` ~1h). Clamped to [5min, 1h]; may re-defer up to
 2× total. Persisted in `tomes/.discord-revisits.json`. A self-arming
 timer (`armRevisitTimer`) fires the soonest-due entry and re-arms; it
-is seeded from the queue at `startDiscordGateway` and cleared in
+is armed on every `READY` (so the bot token is present before a timer
+could fire, and a disable→enable cycle re-arms) and cleared in
 `teardown`. Any real incoming message at a location supersedes its
 pending revisit (`cancelRevisitsForLocation`). Revisit turns are
 threat-neutral and never move the ward's activity clock.
+
+A revisit speaks into a *shared* room, so `fireRevisit` runs the exact
+same safety spine as a live turn: it resolves the knowledge gate from
+the room + accumulated participants (`resolveLocationGate` →
+`resolveAudience`/`audienceTagFor`, never ward-private context in a
+guild), and delivers through `deliverReply` — the shared Pillar D
+outgoing-filter → send → persist → rate-slot → status path that
+`handleTurn` also uses. The two paths share one delivery function so
+neither can drift from the other or skip a gate the other applies.
 
 Session history now renders `[HH:MM]` timestamps (server local time)
 before each speaker prefix, so the model can read exchange rhythm and

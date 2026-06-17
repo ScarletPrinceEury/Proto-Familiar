@@ -4,7 +4,8 @@
 > `privateNotes` field-gating added 0.6.x. V5 (per-location connections +
 > rate limits) and V7 (stranger data minimization) shipped 0.6.14-alpha.
 > V6 `relay_message` shipped 0.6.15-alpha (ward-approved). V8 (per-location
-> presence modes + relay discoverability) shipped 0.6.19-alpha. The rest of
+> presence modes + relay discoverability) shipped 0.6.19-alpha. V9 (deferred
+> `[later:…]` presence + history timestamps) shipped 0.6.28-alpha. The rest of
 > V6 (check-on-ward outside triage, ward double-check for villager-initiated
 > commitments) remains design-phase and touches the safety-critical
 > escalation surface — human sign-off required before implementation.
@@ -569,6 +570,7 @@ landing; sub-features inside it bump patch.
 | **V6** ◑ | Village actions: `relay_message` ✅ (0.6.15-alpha), check-on-ward requests outside triage, ward double-check flows for commitments | `relay_message` shipped (ward-approved): cerebellum tool resolves a villager/location target, applies the restricted-memory gate, delivers via the Discord bot token, mirrors to the ward (no covert contact). check-on-ward + commitment double-check still touch the safety-critical escalation surface — sign-off rule applies |
 | **V7** ✅ | Stranger data minimization (memorization profiles by audience) | Shipped 0.6.14-alpha: `buildSharedRoomPrompt` variant in memorization.js selected when `audienceTag !== 'ward-private'`; focuses on ward-only facts, skips unregistered-third-party detail |
 | **V8** ✅ | Per-location presence modes (`strict`/`lurk`/`active`) + relay discoverability | Shipped 0.6.19-alpha: location `mode` field (default strict, backward compatible); `observe` router action for lurk + sat-out active turns (threat-neutral context accumulation); active-mode pacing with a hard cooldown floor and two ward-toggleable strategies — `llm` (model abstains via `[pass]`) and `tiers` (pure-code activity cadence, `decideAmbientReply`); `village_lookup` now surfaces the Places roster + Discord-reachability so both `relay_message` target kinds are enumerable by the Familiar |
+| **V9** ✅ | Deferred presence (`[later:…]` revisit) + history timestamps | Shipped 0.6.28-alpha: an ambient turn's third option beyond speak/`[pass]` — `parseDeferToken` accepts relative (`[later:15m]`), wall-clock (`[later:22:30]`), and bucket (`[later:soon\|later\|much-later]`) forms, clamped to [5min, 1h]; revisit queue persisted in `tomes/.discord-revisits.json` with a self-arming timer (`armRevisitTimer`/`fireRevisit`), re-defer capped at 2×, superseded by any real incoming message (`cancelRevisitsForLocation`); revisit turns are threat-neutral and never touch the ward's activity clock. Session history now renders `[HH:MM]` timestamps and `carriedExchange` gained a 1h staleness gate so stale dyads don't carry forward as live exchanges |
 
 Suggested order rationale: V1–V3 build the safety floor before the
 first external door opens in V4. Opening Discord before the gate exists
