@@ -1077,12 +1077,15 @@ LLM returns:
 | `resolution === 'cancelled'` | `cancelled` |
 | `resolution === 'carried_forward'` | `deferred` |
 | `resolution === 'fired'` (reminder) | `fired` |
-| unresolved + offered > 24h ago | `unresponded` |
+| unresolved + offered > 24h ago + `raised === true` | `unresponded` |
+| unresolved + offered > 24h ago + `raised !== true` | `not_raised` |
 | unresolved + < 24h | left null, re-checked next turn |
+
+The `unresponded` / `not_raised` split is load-bearing: `unresponded` means the Familiar *actually raised* the task with the ward and nothing came of it (evidence about the ward), while `not_raised` means it was offered to the Familiar as a candidate but never reached the ward at all (evidence about the Familiar's own surfacing — the ward can't respond to what they never saw). Conflating them — the pre-0.6.25 behaviour — let a quiet stretch where the Familiar simply didn't speak get misread as the ward withdrawing. A confirmed resolution always wins over both regardless of `raised`.
 
 Once tagged, an event's `outcome` is immutable — the LLM later reasons about a stable record, not a moving target.
 
-**`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min) and flows into reflection automatically — "offered N times, never raised" is itself a pattern the reflection loop can learn from, since reflection events carry the field.
+**`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min), decides the aged-out outcome split above, and flows into reflection (the projection carries `raised`, and the reflection prompt is taught that `not_raised` outcomes are about the Familiar's surfacing, never the ward's engagement).
 
 **Prompt stance:** the `[Surface candidates]` header is written for a ward with executive dysfunction — there is no "right moment" that arrives on its own, so the header tunes toward action. It names explicit GREEN LIGHT states the Familiar surfaces in and explicit RED LIGHT states it holds in (vagueness is *not* a reason to stay quiet — the servile-default model needs the inclusion/exclusion conditions spelled out or it collapses to silence), names the cost of silence (the task waits forever; a missed task outweighs a refusable check-in), and offers concrete access ramps (timebox, single next action, planning-only slot, body-double). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
 
