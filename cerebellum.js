@@ -469,9 +469,10 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
           ? m.content
           : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
         const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
+        const humanLabel = (s?.userName || '').trim() || 'My human';
         const prefix = when
-          ? `[${m.role === 'user' ? 'User' : 'Me'} · ${when}]`
-          : `[${m.role === 'user' ? 'User' : 'Me'}]`;
+          ? `[${m.role === 'user' ? humanLabel : 'Me'} · ${when}]`
+          : `[${m.role === 'user' ? humanLabel : 'Me'}]`;
         return `  ${prefix}: ${text.slice(0, 400)}`;
       }).join('\n')}`
     : '\nNo recent conversation on record.';
