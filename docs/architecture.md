@@ -124,6 +124,7 @@ ponderings injection, care-check framing) and as background loops
 ├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
+├── macros.js                Shared macro substitution — `substituteMacros(text, settings)` resolves `{{user}}`/`{{char}}` to configured names. Applied at three boundaries: (1) LLM prompts (triage, reachout), (2) tool results (`executeToolCall` result boundary — all executors covered automatically), (3) tool descriptions (`composeActiveTools`). Lowercase fallbacks ('my human', 'the Familiar') are intentional for mid-sentence inline prose.
 ├── entity-ref.js            Validate phylactery:self/file.md#section refs; accepts legacy entity-core: prefix as alias
 ├── package.json
 ├── .gitignore
@@ -307,12 +308,17 @@ Currently owns:
 
 - **Tool dispatch** — `BUILTIN_TOOLS` (the full registry of tool
   definitions, first-person descriptions authored with `{{user}}`/`{{char}}`
-  macros) + `TOOL_EXECUTORS` (server-side implementations; writes ride
+  macros — raw source form; substitution happens at send time) +
+  `TOOL_EXECUTORS` (server-side implementations; writes ride
   thalamus's wrappers) + `executeToolCall()` (never throws — failures
-  become structured strings into the loop; resolves macros in tool results) +
-  `composeActiveTools()` (built-ins + the user's advertise-only custom
-  tools; resolves description macros to the configured names before send) +
-  `runToolCallLoop()` (the non-streaming multi-round loop; the
+  become structured strings into the loop; applies `substituteMacros` from
+  `macros.js` to every tool return value at the result boundary, so all
+  executors are covered even if they forget substitution individually) +
+  `composeActiveTools(customTools, settings)` (built-ins + the user's
+  advertise-only custom tools; deep-clone walks every `description` string
+  through `substituteToolMacros` → `macros.js` before the tool list is sent
+  to the provider; optional `settings` param defaults to `readSettingsSync()`)
+  + `runToolCallLoop()` (the non-streaming multi-round loop; the
   streaming variant lives in /api/chat because it is SSE transport).
   `initCerebellumTools()` receives the tome-storage capability, **the
   Village read/upsert functions, and `relayToDiscord`** from server.js at
