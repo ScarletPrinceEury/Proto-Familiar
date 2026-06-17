@@ -187,7 +187,13 @@ async function cancelRevisitsForLocation(locationKey) {
   try {
     const list = await readRevisits();
     const pruned = list.filter(r => r.locationKey !== locationKey);
-    if (pruned.length !== list.length) await writeRevisits(pruned);
+    if (pruned.length !== list.length) {
+      await writeRevisits(pruned);
+      // The live timer may have been pointing at an entry we just pruned —
+      // re-arm so it reflects the current queue and a superseded revisit
+      // can't fire from a stale closure.
+      armRevisitTimer().catch(() => {});
+    }
   } catch { /* best-effort */ }
 }
 
@@ -206,11 +212,18 @@ async function armRevisitTimer() {
 }
 
 async function fireRevisit(item) {
-  // Remove this item from the queue and re-arm for the next one.
+  // Claim the item. If it's no longer in the queue, a real incoming message
+  // (or a re-arm) already superseded this revisit — honour the supersession
+  // and stand down rather than speaking from a stale timer closure.
   try {
     const list = await readRevisits();
+    if (!list.some(r => r.id === item.id)) {
+      console.log(`[discord] revisit: ${item.locationKey} already superseded — standing down`);
+      armRevisitTimer().catch(() => {});
+      return;
+    }
     await writeRevisits(list.filter(r => r.id !== item.id));
-  } catch { /* continue — still attempt the turn */ }
+  } catch { /* read/write failed — fall through and still attempt the turn */ }
   armRevisitTimer().catch(() => {});
 
   const settings  = readSettingsSync();
@@ -828,6 +841,17 @@ async function sendChannelMessage(token, channelId, content) {
   }
 }
 
+/** Build the knowledge-gate input from a classified message + the room's
+ *  accumulated participants. Null means the ward's own DM (ward-private, no
+ *  gating). One source of truth for this shape so the spoken path and the
+ *  observe path can never compute the gate from different inputs — the shape
+ *  this returns is exactly what the privacy gate keys on. */
+function audienceInputFor(decision, participants) {
+  return decision.audience === null
+    ? null
+    : { location: decision.audience.location, participants };
+}
+
 /** Resolve the knowledge gate for a location turn. `audienceInput` is null
  *  for the ward's own DM (ward-private — no gating) or { location,
  *  participants } for any other room. Returns the grants enrich() fetches
@@ -884,8 +908,12 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
   await writeSessionLog(session);
   await touchLocation(locationKey, session.sessionId);
 
-  // V5: consume one rate-limit slot after successful delivery.
+  // V5: consume one rate-limit slot after successful delivery. Hydrate the
+  // bucket state first — a revisit can reach here (after a restart, armed on
+  // READY) before any inbound message has loaded it, and saving an unloaded
+  // {} would clobber the persisted buckets. loadRateLimits is idempotent.
   if (regLoc?.rateLimit?.perHour) {
+    await loadRateLimits();
     consumeRateSlot(locationKey);
     saveRateLimits().catch(() => {});
   }
@@ -994,10 +1022,7 @@ async function observeMessage(gw, msg, decision) {
       name: decision.speakerName,
     });
   }
-  const audienceTag = audienceTagFor(
-    decision.audience === null ? null : { location: decision.audience.location, participants: session.participants },
-    registry,
-  );
+  const audienceTag = audienceTagFor(audienceInputFor(decision, session.participants), registry);
   // Resolve mention tokens here too so what I read back later is legible.
   const content = resolveMentions(String(msg.content), {
     mentions: msg.mentions, botUserId: gw.botUserId,
@@ -1116,9 +1141,7 @@ async function handleTurn(gw, msg, decision) {
   // is the LOWEST permission level among everyone present; it's stamped on
   // the session so the memorization sweep can route ward-private content
   // into Phylactery while quarantining shared-room content to the tome.
-  const audienceInput = decision.audience === null
-    ? null
-    : { location: decision.audience.location, participants: session.participants };
+  const audienceInput = audienceInputFor(decision, session.participants);
   const { audienceGrants, audienceTag } = resolveLocationGate(audienceInput, registry);
 
   const enriched = await enrich(content, { audience: audienceGrants, liveTurn: false })
