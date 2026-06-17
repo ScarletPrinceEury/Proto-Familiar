@@ -10,6 +10,15 @@ import {
   checkRateLimit,
   consumeRateSlot,
   resetRateLimitState,
+  decideAmbientReply,
+  isAmbientAbstain,
+  resolveMentions,
+  directedAtOthers,
+  messageNamesBot,
+  carriedExchange,
+  discordChannelIdFromKey,
+  parseDeferToken,
+  isDeferToken,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -185,6 +194,190 @@ describe('classifyMessage — guild policy', () => {
   });
 });
 
+// ── classifyMessage: guild presence modes (V8) ────────────────────
+
+describe('classifyMessage — guild presence modes', () => {
+  const GUILD_KEY = 'discord:guild:42:channel:1001';
+  // ctx with the guild location set to a given mode.
+  const ctxMode = (mode, extra = {}) => {
+    const registry = makeRegistry();
+    const loc = registry.locations.find(l => l.key === GUILD_KEY);
+    Object.assign(loc, { mode, ...extra });
+    return { registry, botUserId: BOT_ID, wardUserId: WARD_ID };
+  };
+
+  it('strict (default): not-mentioned → ignore', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'), ctxMode('strict'));
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'not-mentioned');
+  });
+
+  it('lurk: not-mentioned → observe (read the room, no reply)', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'), ctxMode('lurk'));
+    assert.equal(d.action, 'observe');
+    assert.equal(d.kind, 'guild');
+    assert.equal(d.audience.location, GUILD_KEY);
+    assert.deepEqual(d.audience.participants, [{ id: 'v-chen', name: 'Chen' }]);
+  });
+
+  it('lurk: still replies when addressed', () => {
+    const msg = guildMsg('777888999000111222', 'hey bot', { mentions: [{ id: BOT_ID }] });
+    const d = classifyMessage(msg, ctxMode('lurk'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, false);
+  });
+
+  it('active: not-mentioned → respond with ambient flag + cadence config', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'),
+      ctxMode('active', { activeStrategy: 'tiers', activeCooldownSec: 45 }));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, true);
+    assert.equal(d.activeStrategy, 'tiers');
+    assert.equal(d.activeCooldownSec, 45);
+  });
+
+  it('active: defaults to llm strategy + 60s when unset', () => {
+    const d = classifyMessage(guildMsg('777888999000111222'), ctxMode('active'));
+    assert.equal(d.ambient, true);
+    assert.equal(d.activeStrategy, 'llm');
+    assert.equal(d.activeCooldownSec, 60);
+  });
+
+  it('active: an @-mention is a direct (non-ambient) reply', () => {
+    const msg = guildMsg('777888999000111222', 'hey bot', { mentions: [{ id: BOT_ID }] });
+    const d = classifyMessage(msg, ctxMode('active'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, false);
+  });
+
+  it('DMs are unaffected by location mode (always respond, never ambient)', () => {
+    const d = classifyMessage(dmFrom(WARD_ID), ctxMode('active'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.kind, 'ward-dm');
+    assert.notEqual(d.ambient, true);
+  });
+});
+
+describe('classifyMessage — readBots (other bots & Familiars)', () => {
+  const GUILD_KEY = 'discord:guild:42:channel:1001';
+  // ctx with the guild location set to a mode + optional readBots flag.
+  const ctxBots = (readBots, mode = 'strict') => {
+    const registry = makeRegistry();
+    Object.assign(registry.locations.find(l => l.key === GUILD_KEY), { mode, readBots });
+    return { registry, botUserId: BOT_ID, wardUserId: WARD_ID };
+  };
+  const botMsg = (extra = {}) => guildMsg('555000555000555000', 'beep',
+    { author: { id: '555000555000555000', username: 'hogsworth_bot', bot: true }, ...extra });
+
+  it('default: a bot message is ignored (loop guard)', () => {
+    const d = classifyMessage(botMsg(), ctxBots(undefined, 'active'));
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'bot-author');
+  });
+
+  it('readBots on + active: a bot message becomes an ambient turn', () => {
+    const d = classifyMessage(botMsg(), ctxBots(true, 'active'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, true);
+  });
+
+  it('readBots on + strict: a bot message that addresses me earns a reply', () => {
+    const d = classifyMessage(botMsg({ mentions: [{ id: BOT_ID }] }), ctxBots(true, 'strict'));
+    assert.equal(d.action, 'respond');
+    assert.equal(d.ambient, false);
+  });
+
+  it('readBots on + lurk: an un-addressing bot message is observed', () => {
+    const d = classifyMessage(botMsg(), ctxBots(true, 'lurk'));
+    assert.equal(d.action, 'observe');
+  });
+
+  it('my own message is ignored even where readBots is on (inner loop guard)', () => {
+    const mine = guildMsg(BOT_ID, 'beep', { author: { id: BOT_ID, username: 'me', bot: true } });
+    const d = classifyMessage(mine, ctxBots(true, 'active'));
+    assert.equal(d.action, 'ignore');
+    assert.equal(d.reason, 'own-message');
+  });
+});
+
+// ── decideAmbientReply (the active-mode pacing gate) ───────────────
+
+describe('decideAmbientReply', () => {
+  const NOW = 1_000_000_000_000;
+
+  it('llm: first turn (no prior) acts', () => {
+    const r = decideAmbientReply({ strategy: 'llm', now: NOW, lastTurnAt: 0, cooldownMs: 60_000 });
+    assert.equal(r.act, true);
+    assert.equal(r.reason, 'llm');
+  });
+
+  it('llm: inside the cooldown window does not act', () => {
+    const r = decideAmbientReply({ strategy: 'llm', now: NOW, lastTurnAt: NOW - 30_000, cooldownMs: 60_000 });
+    assert.equal(r.act, false);
+    assert.equal(r.reason, 'cooldown');
+  });
+
+  it('llm: past the cooldown acts again', () => {
+    const r = decideAmbientReply({ strategy: 'llm', now: NOW, lastTurnAt: NOW - 61_000, cooldownMs: 60_000 });
+    assert.equal(r.act, true);
+  });
+
+  it('tiers: a quiet room is "slow" and acts after the base cooldown', () => {
+    const r = decideAmbientReply({
+      strategy: 'tiers', now: NOW, lastTurnAt: NOW - 61_000, cooldownMs: 60_000,
+      recentMsgTimestamps: [NOW - 10_000], // 1 msg in window → slow
+    });
+    assert.equal(r.tier, 'slow');
+    assert.equal(r.act, true);
+  });
+
+  it('tiers: a busy room is "medium" and holds off far longer than slow would', () => {
+    const recent = Array.from({ length: 6 }, (_, i) => NOW - i * 1000); // 6 msgs in window
+    // 90s since last turn: past slow (60s) but inside medium (60s×5=300s).
+    const r = decideAmbientReply({
+      strategy: 'tiers', now: NOW, lastTurnAt: NOW - 90_000, cooldownMs: 60_000,
+      recentMsgTimestamps: recent,
+    });
+    assert.equal(r.tier, 'medium');
+    assert.equal(r.act, false);
+    assert.equal(r.reason, 'tier-cooldown');
+  });
+
+  it('tiers: a lively room is "fast"', () => {
+    const recent = Array.from({ length: 15 }, (_, i) => NOW - i * 1000);
+    const r = decideAmbientReply({
+      strategy: 'tiers', now: NOW, lastTurnAt: 0, cooldownMs: 60_000,
+      recentMsgTimestamps: recent,
+    });
+    assert.equal(r.tier, 'fast');
+    assert.equal(r.act, true);
+  });
+});
+
+// ── isAmbientAbstain ──────────────────────────────────────────────
+
+describe('isAmbientAbstain', () => {
+  it('treats empty / whitespace as abstain', () => {
+    assert.equal(isAmbientAbstain(''), true);
+    assert.equal(isAmbientAbstain('   \n '), true);
+    assert.equal(isAmbientAbstain(null), true);
+  });
+  it('matches [pass] and [silence] in their canonical and bare forms', () => {
+    for (const t of ['[pass]', 'pass', '(pass)', 'PASS.', '[silence]', 'silence', 'SILENCE.']) {
+      assert.equal(isAmbientAbstain(t), true, `should abstain: ${t}`);
+    }
+  });
+  it('bare words that are valid chat replies are NOT abstains', () => {
+    assert.equal(isAmbientAbstain('nothing'), false);
+    assert.equal(isAmbientAbstain('quiet'),   false);
+    assert.equal(isAmbientAbstain('skip'),     false);
+  });
+  it('a real reply is not an abstain', () => {
+    assert.equal(isAmbientAbstain('I can pass the salt!'), false);
+    assert.equal(isAmbientAbstain('Sure, happy to help.'), false);
+  });
+});
+
 // ── chunkReply ────────────────────────────────────────────────────
 
 describe('chunkReply', () => {
@@ -320,5 +513,242 @@ describe('checkRateLimit', () => {
     consumeRateSlot('loc:X');
     assert.equal(checkRateLimit('loc:X', 1).ok, false, 'loc:X exhausted');
     assert.equal(checkRateLimit('loc:Y', 1).ok, true,  'loc:Y unaffected');
+  });
+});
+
+describe('resolveMentions — making the room legible', () => {
+  const villagers = [{
+    id: 'v-chen', name: 'Chen',
+    aliases: [{ platform: 'discord', id: '777' }],
+  }];
+
+  it('resolves a villager mention to their configured name', () => {
+    const out = resolveMentions('hey <@777> look', { villagers, mentions: [{ id: '777' }] });
+    assert.equal(out, 'hey @Chen look');
+  });
+
+  it('resolves my own id to my character name', () => {
+    const out = resolveMentions('<@999> hi', { botUserId: '999', charName: 'Hogsworth', mentions: [{ id: '999' }] });
+    assert.equal(out, '@Hogsworth hi');
+  });
+
+  it('falls back to the payload display name for unknown users (other Familiars/bots)', () => {
+    const out = resolveMentions('<@555> Liar', {
+      villagers, mentions: [{ id: '555', global_name: 'Hogsworth', username: 'hogsworth_bot' }],
+    });
+    assert.equal(out, '@Hogsworth Liar');
+  });
+
+  it('handles the nickname form <@!id>', () => {
+    const out = resolveMentions('<@!777>!', { villagers, mentions: [{ id: '777' }] });
+    assert.equal(out, '@Chen!');
+  });
+
+  it('leaves text without mentions untouched (cheap fast-path)', () => {
+    assert.equal(resolveMentions('no pings here', { villagers }), 'no pings here');
+  });
+
+  it('unknown id with no payload entry becomes @someone, never a raw snowflake', () => {
+    const out = resolveMentions('<@12345> who?', {});
+    assert.equal(out, '@someone who?');
+  });
+});
+
+describe('directedAtOthers — recognising an exchange is not mine', () => {
+  const villagers = [{
+    id: 'v-chen', name: 'Chen',
+    aliases: [{ platform: 'discord', id: '777' }],
+  }];
+
+  it('names another Familiar a message was @-mentioned at (the reported case)', () => {
+    const msg = { mentions: [{ id: '555', global_name: 'Hogsworth' }], content: '<@555> Liar' };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Hogsworth']);
+  });
+
+  it('prefers the villager name over the payload display name', () => {
+    const msg = { mentions: [{ id: '777', global_name: 'chen_draws' }] };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Chen']);
+  });
+
+  it('excludes me — a mention of my own id is not "directed at others"', () => {
+    const msg = { mentions: [{ id: '999', global_name: 'Me' }] };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), []);
+  });
+
+  it('includes a reply target when replying to someone else', () => {
+    const msg = { mentions: [], referenced_message: { author: { id: '555', global_name: 'Hogsworth' } } };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Hogsworth']);
+  });
+
+  it('de-duplicates when the same person is both mentioned and the reply target', () => {
+    const msg = {
+      mentions: [{ id: '777' }],
+      referenced_message: { author: { id: '777', global_name: 'chen_draws' } },
+    };
+    assert.deepEqual(directedAtOthers(msg, { botUserId: '999', villagers }), ['Chen']);
+  });
+
+  it('open-room chatter (no mentions, no reply) is directed at no one', () => {
+    assert.deepEqual(directedAtOthers({ content: 'lol' }, { botUserId: '999', villagers }), []);
+  });
+});
+
+describe('messageNamesBot — did this line pull me in', () => {
+  it('true when I am @-mentioned', () => {
+    assert.equal(messageNamesBot({ mentions: [{ id: '999' }] }, '999'), true);
+  });
+  it('true when the message replies to something I said', () => {
+    assert.equal(messageNamesBot({ mentions: [], referenced_message: { author: { id: '999' } } }, '999'), true);
+  });
+  it('false when only other people are named', () => {
+    assert.equal(messageNamesBot({ mentions: [{ id: '555' }] }, '999'), false);
+  });
+  it('false for untagged chatter', () => {
+    assert.equal(messageNamesBot({ content: 'hey' }, '999'), false);
+  });
+  it('false when I have no bot id yet', () => {
+    assert.equal(messageNamesBot({ mentions: [{ id: '999' }] }, null), false);
+  });
+});
+
+describe('carriedExchange — an untagged line that continues someone else\'s thread', () => {
+  // The reported case: Broeckchen says "@Nichtschwert ... you and I?",
+  // Nichtschwert replies "Sure! Whatcha wanna talk about" with NO tag.
+  // That untagged reply still belongs to their two-person thread.
+  const broeckOpens = {
+    role: 'user', content: '[Broeckchen]: @Nichtschwert can we have a brief back and forth, you and I?',
+    speaker: 'Broeckchen', targets: ['Nichtschwert'], namedMe: false,
+  };
+
+  it('carries the exchange forward to the named party\'s untagged reply', () => {
+    // Nichtschwert is about to speak; the room is Broeckchen↔Nichtschwert.
+    assert.deepEqual(
+      carriedExchange([broeckOpens], { currentSpeaker: 'Nichtschwert' }),
+      ['Broeckchen'],
+    );
+  });
+
+  it('returns the whole party when the speaker is a third person', () => {
+    assert.deepEqual(
+      carriedExchange([broeckOpens], { currentSpeaker: 'Someone Else' }),
+      ['Broeckchen', 'Nichtschwert'],
+    );
+  });
+
+  it('reads as open when no recent line named anyone', () => {
+    const history = [
+      { role: 'user', content: '[Broeckchen]: lol', speaker: 'Broeckchen', targets: [], namedMe: false },
+      { role: 'user', content: '[Nichtschwert]: same', speaker: 'Nichtschwert', targets: [], namedMe: false },
+    ];
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('stops carrying once a line pulled me in', () => {
+    const history = [
+      broeckOpens,
+      { role: 'user', content: '[Nichtschwert]: @Me what do you think?', speaker: 'Nichtschwert', targets: [], namedMe: true },
+    ];
+    // The most recent directed line named me — the room turned toward me.
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Broeckchen' }), []);
+  });
+
+  it('uses the most recent exchange, not a stale one', () => {
+    const history = [
+      broeckOpens,
+      { role: 'user', content: '[Ada]: @Bram you around?', speaker: 'Ada', targets: ['Bram'], namedMe: false },
+    ];
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Bram' }), ['Ada']);
+  });
+
+  it('ignores assistant turns and tolerates missing fields', () => {
+    const history = [
+      { role: 'assistant', content: 'hi' },
+      { role: 'user', content: '[Broeckchen]: untagged', speaker: 'Broeckchen' },
+    ];
+    assert.deepEqual(carriedExchange(history, { currentSpeaker: 'Broeckchen' }), []);
+  });
+
+  it('respects the lookback window', () => {
+    const filler = Array.from({ length: 6 }, (_, i) => ({
+      role: 'user', content: `[X${i}]: chatter`, speaker: `X${i}`, targets: [], namedMe: false,
+    }));
+    // broeckOpens is now 7 back — outside the default lookback of 5.
+    assert.deepEqual(carriedExchange([broeckOpens, ...filler], { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('does not carry forward a message older than maxAgeMs', () => {
+    const staleTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2 hours ago
+    const staleMsg = { ...broeckOpens, timestamp: staleTs };
+    // Default maxAgeMs is 1h, so a 2h-old message should not be carried.
+    assert.deepEqual(carriedExchange([staleMsg], { currentSpeaker: 'Nichtschwert' }), []);
+  });
+
+  it('still carries forward a message within maxAgeMs', () => {
+    const freshTs = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min ago
+    const freshMsg = { ...broeckOpens, timestamp: freshTs };
+    assert.deepEqual(carriedExchange([freshMsg], { currentSpeaker: 'Nichtschwert' }), ['Broeckchen']);
+  });
+});
+
+describe('parseDeferToken — deferred presence syntax', () => {
+  it('parses a relative minute token', () => {
+    assert.equal(parseDeferToken('[later:15m]'), 15 * 60_000);
+  });
+  it('parses a relative hour token, clamped to 1h max', () => {
+    assert.equal(parseDeferToken('[later:2h]'), 60 * 60_000);
+  });
+  it('parses bucket: soon → 15min', () => {
+    assert.equal(parseDeferToken('[later:soon]'), 15 * 60_000);
+  });
+  it('parses bucket: later → 45min', () => {
+    assert.equal(parseDeferToken('[later:later]'), 45 * 60_000);
+  });
+  it('parses bucket: much-later → 60min (ceiling)', () => {
+    assert.equal(parseDeferToken('[later:much-later]'), 60 * 60_000);
+  });
+  it('floors small durations to 5min', () => {
+    assert.equal(parseDeferToken('[later:1m]'), 5 * 60_000);
+  });
+  it('parses an absolute wall-clock time ~30min from now', () => {
+    const target = new Date(Date.now() + 30 * 60_000);
+    const hh = String(target.getHours()).padStart(2, '0');
+    const mm = String(target.getMinutes()).padStart(2, '0');
+    const ms = parseDeferToken(`[later:${hh}:${mm}]`);
+    assert.ok(ms !== null, 'should parse');
+    // Minute-granular token: allow up to 65s of skew (minute truncation + elapsed time)
+    assert.ok(Math.abs(ms - 30 * 60_000) < 65_000, `expected ~30min, got ${ms}ms`);
+  });
+  it('returns null for [pass]', () => {
+    assert.equal(parseDeferToken('[pass]'), null);
+  });
+  it('returns null for unrecognised tokens', () => {
+    assert.equal(parseDeferToken('[later:tomorrow]'), null);
+    assert.equal(parseDeferToken('later:15m'), null);
+  });
+  it('isDeferToken mirrors parseDeferToken', () => {
+    assert.equal(isDeferToken('[later:20m]'), true);
+    assert.equal(isDeferToken('[pass]'), false);
+    assert.equal(isDeferToken('just chatting'), false);
+  });
+});
+
+describe('discordChannelIdFromKey — channel resolution for revisits', () => {
+  it('extracts the channel id from a full guild location key', () => {
+    // fireRevisit relies on this to send: discord:guild:<guild>:channel:<channel>
+    assert.equal(discordChannelIdFromKey('discord:guild:111:channel:222'), '222');
+  });
+  it('extracts the channel id from a DM key', () => {
+    assert.equal(discordChannelIdFromKey('discord:dm:333'), '333');
+  });
+  it('returns null for a malformed or non-discord key', () => {
+    assert.equal(discordChannelIdFromKey('discord:guild:111'), null);
+    assert.equal(discordChannelIdFromKey('not-a-key'), null);
+    assert.equal(discordChannelIdFromKey(null), null);
+  });
+  it('does not confuse the guild id for the channel id', () => {
+    // The pre-fix bug stripped "discord:guild:" and kept "111:channel:222".
+    const id = discordChannelIdFromKey('discord:guild:111:channel:222');
+    assert.notEqual(id, '111:channel:222');
+    assert.notEqual(id, '111');
   });
 });

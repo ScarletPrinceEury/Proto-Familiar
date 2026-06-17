@@ -2339,9 +2339,9 @@ app.delete('/api/village/villagers/:id', async (req, res) => {
 });
 
 app.post('/api/village/locations', async (req, res) => {
-  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots } = req.body ?? {};
   try {
-    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots });
     reconcileLocationKnock(saved);
     res.json(saved);
   }
@@ -2350,9 +2350,9 @@ app.post('/api/village/locations', async (req, res) => {
 
 app.patch('/api/village/locations', async (req, res) => {
   // Location keys contain ':' and '/' so they ride the body, not the path.
-  const { key, label, assignedCategoryId, connectionId, rateLimit } = req.body ?? {};
+  const { key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots } = req.body ?? {};
   try {
-    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit });
+    const saved = await upsertVillageLocation({ key, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots });
     reconcileLocationKnock(saved);
     res.json(saved);
   }
@@ -2511,6 +2511,9 @@ function startAutonomousPondering() {
         stakes_tier:    e.stakes_tier,
         confidence:     e.confidence,
         offered_at:     e.offered_at,
+        // Whether I actually raised this with my human (post-turn scan).
+        // Lets reflection tell "they didn't engage" from "I never spoke".
+        raised:         e.raised,
         outcome:        e.outcome,
         outcome_at:     e.outcome_at,
         state_snapshot: e.state_snapshot,

@@ -121,6 +121,15 @@ function matchPriorsForTask(allPriors, label) {
 
 // ── Hard gates (cheap code, upstream of any judgement) ────────────
 
+// A surfacing-history entry is { at, raised }. Older persisted entries were
+// a bare timestamp number (no raised flag). Normalize both shapes here so the
+// dedup gate reads one consistent shape instead of branching inline.
+function normalizeOfferEntry(entry) {
+  if (typeof entry === 'number') return { at: entry, raised: false };
+  if (entry && typeof entry === 'object') return { at: entry.at, raised: entry.raised === true };
+  return { at: null, raised: false };
+}
+
 export function passesHardGates(task, ctx) {
   const { threat, routinePhaseLabel, surfacingHistory, now, stakesTier } = ctx;
 
@@ -160,12 +169,9 @@ export function passesHardGates(task, ctx) {
   // raised gets the long window. raised false/null (I stayed quiet,
   // or the tag hasn't landed) gets the short one.
   if (stakesTier !== 'external_obligation') {
-    const lastOffer = surfacingHistory?.[task.id];
-    const at = typeof lastOffer === 'number' ? lastOffer : lastOffer?.at;
+    const { at, raised } = normalizeOfferEntry(surfacingHistory?.[task.id]);
     if (typeof at === 'number') {
-      const windowMs = lastOffer?.raised === true
-        ? DEDUP_WINDOW_RAISED_MS
-        : DEDUP_WINDOW_UNRAISED_MS;
+      const windowMs = raised ? DEDUP_WINDOW_RAISED_MS : DEDUP_WINDOW_UNRAISED_MS;
       if (now - at < windowMs) return false;
     }
   }
@@ -316,6 +322,10 @@ RED LIGHT — I hold back only when:
 • {{user}} is in a named quiet / sleep / do-not-disturb phase.
 • {{user}} just told me they're in the middle of something specific.
 Anything that isn't a red light is a green light. Vagueness is not a reason to stay quiet — a missed task costs {{user}} more than a check-in they can wave off.
+
+MODERATE threat — not a red light. When {{user}} is struggling, going quiet on tasks leaves them more unanchored, not less: the overwhelm compounds while nothing gets easier, and the practical world doesn't pause.
+What shifts at moderate is HOW I engage, not WHETHER. I bring tasks up from my own character and read the moment as a bonded companion — a direct offer, a body-double, "let's do the first step right now," a blunt "this one actually needs doing." Hollow pressure is wrong; so is disappearing into concern-mode and never surfacing the task at all. A bonded companion stays present and useful in the voice they actually have — warm, sharp, playful, blunt, whatever I actually am.
+A real external deadline still gets raised — once, as support, not as a whip.
 
 Access ramps — I offer a way in, not "do the whole thing now":
 • Timebox — "Ten minutes on this, then you're free." Starting is the hard part; the motivation shows up once the doing starts, not before.

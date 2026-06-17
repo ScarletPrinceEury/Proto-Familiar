@@ -59,6 +59,9 @@ import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
+import { substituteMacros } from './macros.js';
+import { selectSurfaceCandidates } from './surface-context.js';
+import { getRecentOfferInfo } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -469,9 +472,10 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
           ? m.content
           : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
         const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
+        const humanLabel = (s?.userName || '').trim() || 'My human';
         const prefix = when
-          ? `[${m.role === 'user' ? 'User' : 'Me'} · ${when}]`
-          : `[${m.role === 'user' ? 'User' : 'Me'}]`;
+          ? `[${m.role === 'user' ? humanLabel : 'Me'} · ${when}]`
+          : `[${m.role === 'user' ? humanLabel : 'Me'}]`;
         return `  ${prefix}: ${text.slice(0, 400)}`;
       }).join('\n')}`
     : '\nNo recent conversation on record.';
@@ -506,8 +510,6 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // candidates, not directives. Empty block if nothing's eligible.
   let candidateTasksBlock = '';
   try {
-    const { selectSurfaceCandidates } = await import('./surface-context.js');
-    const { getRecentOfferInfo }      = await import('./surface-events.js');
     // I already have temporal_context loaded as part of enrich() in
     // many call sites, but triage is async + standalone here, so
     // fetch a fresh window directly. Cheap — no LLM call.
@@ -593,9 +595,12 @@ I return ONLY a JSON object, no prose. Three valid shapes:
 
 The "message" field (to the human) must be 1–2 sentences. First person. Authentic to my voice and identity. Not therapist-speak ("how are you feeling?"), not alarming ("are you safe?") unless either of those fits my established personality. Something I, {{char}}, would actually say to this person.`;
 
+  // Resolve {{user}} / {{char}} to the configured names — the deliberating
+  // Familiar must read "Open tasks I'm holding for <their name>", never a
+  // literal macro token. Name rendering only; no triage logic changes.
   const llmMessages = [];
   if (identityContext) llmMessages.push({ role: 'system', content: identityContext });
-  llmMessages.push({ role: 'user', content: prompt });
+  llmMessages.push({ role: 'user', content: substituteMacros(prompt, s) });
 
   try {
     const resp = await fetch(url, {
@@ -779,9 +784,10 @@ export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, u
 /**
  * Tool definitions sent to the LLM for built-in tools.
  * The format matches the OpenAI function-calling spec. Descriptions
- * are in the Familiar's first-person voice (entity-as-subject) and
- * carry raw {{user}} / {{char}} macros — they are sent to the provider
- * unsubstituted, exactly as the client-side registry always did.
+ * are in the Familiar's first-person voice (entity-as-subject) and are
+ * authored with {{user}} / {{char}} macros; composeActiveTools resolves
+ * them to the configured names before the tools reach the provider, so the
+ * model never reads a literal macro describing my own capability.
  */
 export const BUILTIN_TOOLS = [
   {
@@ -841,7 +847,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           category: { type: 'string', enum: ['ward', 'relationship'], description: 'Identity file category.' },
-          filename: { type: 'string', description: 'Target filename within the category, e.g. user_notes.md or relationship_notes.md.' },
+          filename: { type: 'string', description: 'Target filename within the category, e.g. ward_notes.md or relationship_notes.md.' },
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
@@ -1116,8 +1122,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short human-readable name of the event (e.g. "dentist appointment").' },
-          when:  { type: 'string', description: 'ISO 8601 start time (e.g. "2026-06-01T14:00:00Z" or "2026-06-01T14:00:00-04:00"). Required.' },
-          end:   { type: 'string', description: 'Optional ISO 8601 end time.' },
+          when:  { type: 'string', description: 'ISO 8601 UTC start time, e.g. "2026-06-01T14:00:00+00:00". Unruh stores and compares all times against UTC — no automatic timezone conversion. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)"); I use it to convert any local time {{user}} states to UTC exactly once.' },
+          end:   { type: 'string', description: 'Optional ISO 8601 UTC end time.' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
         },
         required: ['label', 'when'],
@@ -1133,7 +1139,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Short description of the task (e.g. "file taxes", "reply to Sam").' },
-          when:  { type: 'string', description: 'Optional ISO 8601 deadline. Omit for open-ended tasks.' },
+          when:  { type: 'string', description: 'Optional ISO 8601 UTC deadline. Unruh compares against UTC — no automatic timezone conversion. My [Now] block shows the UTC offset; I convert any stated local time to UTC once. Omit for open-ended tasks.' },
           stakes_tier: {
             type: 'string',
             enum: ['external_obligation', 'personal_wellbeing', 'purely_optional'],
@@ -1173,7 +1179,7 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short label of what the reminder is about.' },
-          when:    { type: 'string', description: 'ISO 8601 fire time. Required.' },
+          when:    { type: 'string', description: 'ISO 8601 UTC fire time, e.g. "2026-06-17T13:00:00+00:00". Unruh compares when_ts against UTC wall-clock — no automatic timezone conversion whatsoever. My [Now] block always shows the current UTC offset (e.g. "(UTC+02:00)") — I use it to convert {{user}}\'s stated local time to UTC exactly once and store that. I do not pre-compensate for any perceived Unruh adjustment; there is none.' },
           message: { type: 'string', description: 'Optional longer text delivered as the reminder message, in my voice.' },
           stakes_tier: {
             type: 'string',
@@ -1199,8 +1205,8 @@ export const BUILTIN_TOOLS = [
         type: 'object',
         properties: {
           label:   { type: 'string', description: 'Short name of the phase (e.g. "morning correspondence").' },
-          when:    { type: 'string', description: 'ISO 8601 start time. The date portion will be re-templated daily.' },
-          end:     { type: 'string', description: 'ISO 8601 end time. Required for phases.' },
+          when:    { type: 'string', description: 'ISO 8601 UTC start time. The date portion will be re-templated daily — only the time-of-day matters. Store in UTC (my [Now] block shows the offset), e.g. if the phase starts at 9am local and I\'m at UTC+02:00, I store "T07:00:00+00:00".' },
+          end:     { type: 'string', description: 'ISO 8601 UTC end time. Required for phases.' },
           texture: { type: 'string', description: 'Optional short description of what I\'m like in this phase (e.g. "getting a bit stricter to make sure {{user}} actually goes to sleep."). I am allowed to be any kind of way I want to be - warm, sleepy, distracted, anything!' },
           recurrence: { type: 'object', description: 'Optional. Without this, phases recur daily by design — they match on time-of-day only. With recurrence, a phase shows only on the matched weekday/day-of-month/etc. Useful for "Sunday cleaning block" or "monthly review". Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. Examples: {freq:"weekly"} for "Sunday-only phase"; {freq:"monthly", bysetpos:-1, byweekday:5} for "last-Friday-of-month review".' },
         },
@@ -1394,7 +1400,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'village_lookup',
-      description: "I look up who's in my human's Village — the people in their life I help them stay close to. I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, or check who belongs to a category or turns up in a particular location. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph) and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
+      description: "I look up my human's Village — both the people in their life I help them stay close to AND the places I'm present in (Discord rooms, DMs). I use this to see who exists, recall how someone relates to {{user}} and how they like to be spoken to, check who belongs to a category, or see which rooms I can reach. Unless I'm searching for one person by name, the answer also lists my Places — each room's label, its presence mode, and whether I can post there — so I always know exactly who and where I can relay a message to. I can filter by category (e.g. \"Family\"), by location (e.g. a Discord channel), or by a name to pull up one person. When {{user}} and I are alone I see everything I've noted about each person, including private things; when anyone else is present, the sensitive private notes are held back automatically so I can't spill them into the room. Each villager comes with their id (so I can edit them or link them to the graph), whether they're reachable on Discord, and the knowledge-graph node I've connected to them, if any — that's how the Village and {{user}}'s relational graph stay one picture.",
       parameters: {
         type: 'object',
         properties: {
@@ -1812,7 +1818,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'phase', label, when, end, payload });
       if (data?.ok === false) return `Failed to add phase: ${data.error ?? 'unknown error'}`;
-      return `Phase added (id: ${data.id}). It will appear in your daily routine at that time of day.`;
+      return `Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`;
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -1962,28 +1968,54 @@ export const TOOL_EXECUTORS = {
         v.name.toLowerCase().includes(nameQ) ||
         (v.aliases ?? []).some(a => String(a?.id ?? '').toLowerCase().includes(nameQ)));
 
-      if (villagers.length === 0) return 'No one in the Village matches that.';
+      const discordReachable = (v) => (v.aliases ?? []).some(a => a.platform === 'discord' && a.id);
 
-      const lines = villagers.map(v => {
-        const parts = [`- ${v.name} (id: ${v.id})`];
-        const cnames = (v.categoryIds ?? []).map(catName).join(', ');
-        if (cnames) parts.push(`  Category: ${cnames}`);
-        if (v.pronouns) parts.push(`  Pronouns: ${v.pronouns}`);
-        if (v.relationToWard) parts.push(`  To {{user}}: ${v.relationToWard}`);
-        if (v.commStyleNotes) parts.push(`  Comm style: ${v.commStyleNotes}`);
-        if (v.notes) parts.push(`  Notes: ${v.notes}`);
-        if (v.privateNotes) {
-          if (wardPrivate) parts.push(`  Private (ward-only): ${v.privateNotes}`);
-          else parts.push('  (private notes withheld — someone else is present)');
+      const sections = [];
+
+      if (villagers.length > 0) {
+        const lines = villagers.map(v => {
+          const parts = [`- ${v.name} (id: ${v.id})${discordReachable(v) ? ' — reachable on Discord' : ''}`];
+          const cnames = (v.categoryIds ?? []).map(catName).join(', ');
+          if (cnames) parts.push(`  Category: ${cnames}`);
+          if (v.pronouns) parts.push(`  Pronouns: ${v.pronouns}`);
+          if (v.relationToWard) parts.push(`  To {{user}}: ${v.relationToWard}`);
+          if (v.commStyleNotes) parts.push(`  Comm style: ${v.commStyleNotes}`);
+          if (v.notes) parts.push(`  Notes: ${v.notes}`);
+          if (v.privateNotes) {
+            if (wardPrivate) parts.push(`  Private (ward-only): ${v.privateNotes}`);
+            else parts.push('  (private notes withheld — someone else is present)');
+          }
+          if (v.graphNodeId) parts.push(`  Linked graph node: ${v.graphNodeId}`);
+          else parts.push('  Not linked to a graph node yet.');
+          return parts.join('\n');
+        });
+        const header = wardPrivate
+          ? `${villagers.length} villager(s):`
+          : `${villagers.length} villager(s) (sensitive private notes hidden — others are present):`;
+        sections.push(`${header}\n${lines.join('\n')}`);
+      } else if (nameQ || wantCatId) {
+        sections.push('No one in the Village matches that.');
+      }
+
+      // Places footer — the rooms I'm present in, so I always know what I
+      // can relay to. Skipped on a targeted single-person name search
+      // (that's about the person, not the map). channelIdFromLocationKey
+      // tells me whether a location is one I can actually post into.
+      if (!nameQ) {
+        const locs = reg?.locations ?? [];
+        if (locs.length > 0) {
+          const placeLines = locs.map(l => {
+            const postable = channelIdFromLocationKey(l.key);
+            const mode = l.mode ?? 'strict';
+            return `- ${l.label ?? l.key} (key: ${l.key}) — ${mode} mode, trust ceiling: ${catName(l.assignedCategoryId)}`
+              + (postable ? '' : ' — not a room I can post into');
+          });
+          sections.push(`Places I'm present in (${locs.length}) — I can relay to any postable one by its label:\n${placeLines.join('\n')}`);
         }
-        if (v.graphNodeId) parts.push(`  Linked graph node: ${v.graphNodeId}`);
-        else parts.push('  Not linked to a graph node yet.');
-        return parts.join('\n');
-      });
-      const header = wardPrivate
-        ? `${villagers.length} villager(s):`
-        : `${villagers.length} villager(s) (sensitive private notes hidden — others are present):`;
-      return `${header}\n${lines.join('\n')}`;
+      }
+
+      if (sections.length === 0) return "My human's Village is empty for now — no people or places registered yet.";
+      return sections.join('\n\n');
     } catch (err) { return `I couldn't read the Village: ${err.message}`; }
   },
 
@@ -2118,14 +2150,38 @@ export const TOOL_EXECUTORS = {
  * docs/architecture.md ("Custom tools — advertise-only") for what a
  * real extension point would need before it ships.
  */
-export function composeActiveTools(customTools) {
+export function composeActiveTools(customTools, settings = readSettingsSync()) {
   const tools = [...BUILTIN_TOOLS];
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);
     }
   }
-  return tools;
+  // Resolve {{user}} / {{char}} in every description the model reads — both
+  // built-ins and custom tools — so the Familiar never sees a literal macro
+  // describing its own capability. Clone-and-substitute; BUILTIN_TOOLS is
+  // shared module state and must never be mutated.
+  return tools.map(t => substituteToolMacros(t, settings));
+}
+
+// Deep-clone a tool definition, substituting macros in every `description`
+// field (top-level and nested parameter properties) and leaving names, enums,
+// and structure untouched.
+function substituteToolMacros(tool, settings) {
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        out[k] = (k === 'description' && typeof v === 'string')
+          ? substituteMacros(v, settings)
+          : walk(v);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(tool);
 }
 
 /**
@@ -2141,7 +2197,10 @@ export async function executeToolCall(name, argsJson, ctx = {}) {
       const t0   = Date.now();
       const out  = String(await TOOL_EXECUTORS[name](args, ctx));
       console.log(`[tools] ${name} ok in ${Date.now() - t0}ms`);
-      return out;
+      // Tool results flow back to me as tool-role messages I read. Resolve
+      // {{user}} / {{char}} here, once, at the boundary — so no executor has
+      // to remember to do it and none can leak a literal macro into my view.
+      return substituteMacros(out, readSettingsSync());
     } catch (err) {
       console.warn(`[tools] ${name} FAILED: ${err.message}`);
       return `Error executing ${name}: ${err.message}`;

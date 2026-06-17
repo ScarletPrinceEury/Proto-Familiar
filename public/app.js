@@ -155,7 +155,7 @@ const state = {
   streaming:         true,
   temperature:       0.8,
   maxTokens:         2048,
-  userName:          'User',
+  userName:          'My human',
   charName:          'Assistant',
   systemPrompt:      '',
   characterProfile:  '',
@@ -954,7 +954,7 @@ async function refreshPreviousSessionEndedAt() {
  */
 function applyNameVars(text) {
   return text
-    .replace(/\{\{user\}\}/gi, state.userName || 'User')
+    .replace(/\{\{user\}\}/gi, state.userName || 'my human')
     .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
     .replace(/\{\{elapsedTime\}\}/gi, () => {
       const ms = elapsedBetweenUserMessages();
@@ -1085,7 +1085,7 @@ function _buildApiMessagesInner(userInput) {
   if (lore.before_char.length)     pushSeg('lore-before-char', joinLore(lore.before_char));
   if (state.characterProfile.trim()) pushSeg('character-profile', '[Character Profile]\n' + applyNameVars(state.characterProfile.trim()));
   if (lore.after_char.length)      pushSeg('lore-after-char',  joinLore(lore.after_char));
-  if (state.userProfile.trim())    pushSeg('user-profile',     '[User Profile]\n' + applyNameVars(state.userProfile.trim()));
+  if (state.userProfile.trim())    pushSeg('user-profile',     '[Human Profile]\n' + applyNameVars(state.userProfile.trim()));
   if (lore.sys_bottom.length)      pushSeg('lore-sys-bottom',  joinLore(lore.sys_bottom));
 
   if (systemSegments.length)
@@ -2216,7 +2216,7 @@ function readSettingsFromUI() {
     const n = parseInt($('warmth-quiet-end').value, 10);
     state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
   }
-  state.userName          = $('user-name').value.trim() || 'User';
+  state.userName          = $('user-name').value.trim() || 'My human';
   state.charName          = $('char-name').value.trim() || 'Assistant';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
@@ -2279,7 +2279,7 @@ function writeSettingsToUI() {
   $('temp-display').textContent = state.temperature;
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
   if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
-  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'User');
+  setIfNotFocused($('user-name'),          'value',   state.userName ?? 'My human');
   setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
@@ -4320,7 +4320,7 @@ let _pendingSummaryTopic = null;
 
 async function generateTopicSummary(topic, rangeMessages) {
   const convText = rangeMessages
-    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content ?? ''}`)
+    .map(m => `${m.role === 'user' ? (state.userName || 'My human') : 'Me'}: ${m.content ?? ''}`)
     .join('\n\n');
 
   const userLabel = userNamedTopicLabel(topic);
@@ -8682,10 +8682,15 @@ function vlRenderLocList(reg) {
   list.innerHTML = reg.locations.map(l => {
     const cat = catMap.get(l.assignedCategoryId);
     const chip = cat ? `<span class="vl-chip${cat.builtin ? ' vl-chip-green' : ''}" style="flex-shrink:0">${esc(cat.name)}</span>` : '';
+    const mode = ['strict', 'lurk', 'active'].includes(l.mode) ? l.mode : 'strict';
+    const modeChip = mode !== 'strict'
+      ? `<span class="vl-chip" style="flex-shrink:0" title="Presence mode">${esc(mode)}</span>` : '';
+    const botChip = l.readBots === true
+      ? `<span class="vl-chip" style="flex-shrink:0" title="Reads other bots & Familiars">🤖</span>` : '';
     return `<div class="vl-loc-card${_vlSelL === l.key ? ' vl-sel' : ''}" data-lkey="${esc(l.key)}" tabindex="0" role="button">
       <div class="vl-loc-label" title="${esc(l.label)}">${esc(l.label)}</div>
       <div class="vl-loc-key"   title="${esc(l.key)}">${esc(l.key)}</div>
-      ${chip}
+      ${modeChip}${botChip}${chip}
     </div>`;
   }).join('');
   list.querySelectorAll('.vl-loc-card').forEach(el => {
@@ -8753,6 +8758,31 @@ function vlRenderLocDetail(loc) {
       <div class="vl-field-label">Rate limit (messages/hour, optional)</div>
       <input type="number" id="vl-l-rate" value="${loc?.rateLimit?.perHour ?? ''}" placeholder="unlimited" min="0" step="1" style="width:100%">
     </div>
+    <div>
+      <div class="vl-field-label">Presence <span class="field-hint">(how the Familiar behaves in this room)</span></div>
+      <select id="vl-l-mode" style="width:100%">
+        <option value="strict">Strict — only replies when @-mentioned</option>
+        <option value="lurk">Lurk — reads the room, replies when addressed</option>
+        <option value="active">Active — can chime in without being mentioned</option>
+      </select>
+    </div>
+    <div id="vl-l-active-opts" style="display:none;padding-left:8px;border-left:2px solid var(--border,#333)">
+      <div class="vl-field-label">Active cadence</div>
+      <select id="vl-l-active-strategy" style="width:100%">
+        <option value="llm">Familiar's judgment — decides each time whether to speak</option>
+        <option value="tiers">Activity tiers — paces itself to how busy the room is</option>
+      </select>
+      <div class="vl-field-label" style="margin-top:6px">Min seconds between unprompted replies</div>
+      <input type="number" id="vl-l-active-cooldown" value="${loc?.activeCooldownSec ?? ''}" placeholder="60" min="0" step="5" style="width:100%">
+      <p class="field-hint">A hard floor on unprompted turns, so active presence stays affordable. The hourly rate limit above still applies on top.</p>
+    </div>
+    <div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="vl-l-readbots">
+        <span class="vl-field-label" style="margin:0">Read other bots &amp; Familiars here</span>
+      </label>
+      <p class="field-hint">Off by default. On = the Familiar sees and can answer other bots/Familiars in this room (it still never answers itself; loops are paced by the cooldown and rate limit above). Use for shared Familiar channels.</p>
+    </div>
     <div class="vl-actions">
       <button class="btn-send" id="vl-l-save" type="button">${isNew ? 'Add location' : 'Save'}</button>
       ${!isNew ? `<button class="btn-danger" id="vl-l-del" type="button">Delete</button>` : ''}
@@ -8760,6 +8790,24 @@ function vlRenderLocDetail(loc) {
     </div>
     <div class="vl-status" id="vl-l-status"></div>
   `;
+
+  // Presence mode: <select>s can't carry a selected attr via the template
+  // above without string-building, so set the values and wire the
+  // active-options reveal here after the markup lands.
+  const modeSel = $('vl-l-mode');
+  if (modeSel) {
+    modeSel.value = ['strict', 'lurk', 'active'].includes(loc?.mode) ? loc.mode : 'strict';
+    const stratSel = $('vl-l-active-strategy');
+    if (stratSel) stratSel.value = loc?.activeStrategy === 'tiers' ? 'tiers' : 'llm';
+    const toggleActiveOpts = () => {
+      const box = $('vl-l-active-opts');
+      if (box) box.style.display = modeSel.value === 'active' ? '' : 'none';
+    };
+    modeSel.addEventListener('change', toggleActiveOpts);
+    toggleActiveOpts();
+  }
+  const readBotsBox = $('vl-l-readbots');
+  if (readBotsBox) readBotsBox.checked = loc?.readBots === true;
 
   $('vl-l-save').addEventListener('click', () => vlSaveLocation(loc?.key ?? null));
   $('vl-l-del')?.addEventListener('click', () => vlDeleteLocation(loc.key));
@@ -8775,12 +8823,17 @@ async function vlSaveLocation(key) {
   const connectionId = $('vl-l-conn')?.value || null;
   const rateRaw = $('vl-l-rate').value.trim();
   const rateLimit = rateRaw ? { perHour: parseInt(rateRaw, 10) } : null;
+  const mode = $('vl-l-mode')?.value || 'strict';
+  const activeStrategy = $('vl-l-active-strategy')?.value || 'llm';
+  const cdRaw = $('vl-l-active-cooldown')?.value.trim();
+  const activeCooldownSec = cdRaw ? parseInt(cdRaw, 10) : undefined;
+  const readBots = $('vl-l-readbots')?.checked === true;
   status.textContent = 'Saving…';
   try {
     const r = await fetch('/api/village/locations', {
       method: key ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit }),
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots }),
     });
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

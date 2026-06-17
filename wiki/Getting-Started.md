@@ -12,7 +12,7 @@ Open `http://localhost:8742` in your browser (this happens automatically on laun
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 22+
 - uv (optional, for the Phylactery identity layer and the Unruh temporal-context module; ships its own Python)
 - Git (optional)
 
@@ -46,6 +46,7 @@ To access the UI from your phone or another device, click the globe icon in the 
    - `NanoGPT`
    - `Z.ai — Standard API`
    - `Z.ai — Coding Plan`
+   - `Google AI Studio — Gemini`
 3. Paste your API key.
 4. Enter a model name.
 5. (Optional) tune streaming, temperature, and max tokens.

@@ -32,7 +32,7 @@ Browser (public/)
     │
     │  HTTP + SSE  + /api/outbox polling for proactive deliveries
     ▼
-server.js  (Express, Node 18+, ESM)
+server.js  (Express, Node 22+, ESM)
     │
     │  ── cognitive bridge (per-request enrichment, INWARD) ────────
     ├── thalamus.js       ──►  Phylactery  (Python via uv, stdio MCP) — identity / memory / graph / snapshots
@@ -60,7 +60,7 @@ server.js  (Express, Node 18+, ESM)
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
     ├── audience.js         ── grant resolution + section-marker gate (V3)
-    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4)
+    ├── discord-gateway.js  ── autonomous: bidirectional Discord presence (V4); per-location presence modes strict/lurk/active + mention legibility + readBots (V8); deferred presence [later:…] revisit queue (V9)
     │
     │  ── classical infrastructure ──────────────────────────────
     ├── memorization.js     ── autonomous per-fact memorization queue + worker (Pillar C)
@@ -124,6 +124,7 @@ ponderings injection, care-check framing) and as background loops
 ├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
+├── macros.js                Shared macro substitution — `substituteMacros(text, settings)` resolves `{{user}}`/`{{char}}` to configured names. Applied at three boundaries: (1) LLM prompts (triage, reachout), (2) tool results (`executeToolCall` result boundary — all executors covered automatically), (3) tool descriptions (`composeActiveTools`). Lowercase fallbacks ('my human', 'the Familiar') are intentional for mid-sentence inline prose.
 ├── entity-ref.js            Validate phylactery:self/file.md#section refs; accepts legacy entity-core: prefix as alias
 ├── package.json
 ├── .gitignore
@@ -271,7 +272,7 @@ Exposes:
 
 - **`enrich(userMessage, { liveTurn, staticOnly, lastUserMessageAt, audience })`**
   — the central per-request call. Fans out to identity + memory + graph
-  (entity-core) + temporal_context (Unruh) + local-disk reads (recent
+  (Phylactery) + temporal_context (Unruh) + local-disk reads (recent
   ponderings, threat state). Returns `{ static, dynamic }`. The
   `audience` option (Village V3) is the resolved grant object from
   `audience.js`; when present, ungranted knowledge classes are never
@@ -286,10 +287,10 @@ Exposes:
   `getDueReminders`, `getRemindersHealth`, `listPhases`.
 - **Handoff helpers:** `recordHandoff`, `getHandoff`,
   `markHandoffConsumed`.
-- **Entity-core spawn / reconnect:** auto re-spawns when settings
-  change the entity-core connection.
+- **Phylactery spawn / reconnect:** auto re-spawns when settings
+  change the Phylactery connection.
 - **Standing-value bridge (M7):** on every liveTurn, reconciles
-  standing values whose `value_ref` points at a now-gone entity-core
+  standing values whose `value_ref` points at a now-gone Phylactery
   identity fact (demotes them to live interests).
 
 ### `cerebellum.js` — the motor module (outbound counterpart to Thalamus)
@@ -301,17 +302,23 @@ cerebellum executes actions and never assembles prompt context.
 Cerebellum never opens its own MCP connections — every write to
 identity / memory / temporal state goes through thalamus.js's exported
 wrappers (the single enforcement point for "writes go through
-entity-core's MCP").
+Phylactery's MCP").
 
 Currently owns:
 
 - **Tool dispatch** — `BUILTIN_TOOLS` (the full registry of tool
-  definitions, first-person descriptions, raw `{{user}}`/`{{char}}`
-  macros) + `TOOL_EXECUTORS` (server-side implementations; writes ride
+  definitions, first-person descriptions authored with `{{user}}`/`{{char}}`
+  macros — raw source form; substitution happens at send time) +
+  `TOOL_EXECUTORS` (server-side implementations; writes ride
   thalamus's wrappers) + `executeToolCall()` (never throws — failures
-  become structured strings into the loop) + `composeActiveTools()`
-  (built-ins + the user's advertise-only custom tools) +
-  `runToolCallLoop()` (the non-streaming multi-round loop; the
+  become structured strings into the loop; applies `substituteMacros` from
+  `macros.js` to every tool return value at the result boundary, so all
+  executors are covered even if they forget substitution individually) +
+  `composeActiveTools(customTools, settings)` (built-ins + the user's
+  advertise-only custom tools; deep-clone walks every `description` string
+  through `substituteToolMacros` → `macros.js` before the tool list is sent
+  to the provider; optional `settings` param defaults to `readSettingsSync()`)
+  + `runToolCallLoop()` (the non-streaming multi-round loop; the
   streaming variant lives in /api/chat because it is SSE transport).
   `initCerebellumTools()` receives the tome-storage capability, **the
   Village read/upsert functions, and `relayToDiscord`** from server.js at
@@ -343,7 +350,10 @@ Currently owns:
   `relayToDiscord` (injected dep), and mirrors every relay to the ward's
   outbox (`mirrorToWard` dep, defaults to `enqueueAndDispatch`) — no covert
   contact. The gate/mirror/delivery deps are injectable so tests run
-  without spawning MCP children or touching the real outbox.
+  without spawning MCP children or touching the real outbox. Both target
+  kinds are made enumerable to the Familiar by `village_lookup`, which
+  (V8) reports a **Places** roster + per-villager Discord-reachability so
+  the Familiar can always name a valid relay target.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted
@@ -483,18 +493,102 @@ native-WebSocket client (Node ≥ 22) implementing identify / heartbeat /
 resume / backoff; fatal close codes (bad token, missing privileged
 intents) park it until Settings change. Inbound `MESSAGE_CREATE` flows
 through `classifyMessage()` (pure, tested): ward DM → ward-private
-turn; registered-villager DM → gated turn; guild → reply only when
-@-mentioned or replied-to, with the location ceiling ALWAYS in the
-audience (unassigned room = Strangers). Each location is a session in
-`logs/` (rotated after 6h idle; map in `tomes/.discord-map.json`),
-participants accumulate, and the audience is re-resolved per turn from
-the accumulated list. Ward messages also run crisis-signal scoring +
-threat recording (`source: 'discord'`). Discord turns carry NO tools
-and never consume handoffs (`liveTurn: false`). Memorization of
-Discord sessions is deferred until memories carry audience tags (see
-village-support-design.md). Off-switch:
-`PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
+turn; registered-villager DM → gated turn; guild → governed by the
+location's **presence mode** (Village V8): `strict` (default — reply
+only when @-mentioned or replied-to), `lurk` (read the room, reply only
+when addressed), or `active` (may chime in unprompted). The location
+ceiling is ALWAYS in the audience (unassigned room = Strangers). Each
+location is a session in `logs/` (rotated after 6h idle; map in
+`tomes/.discord-map.json`), participants accumulate, and the audience is
+re-resolved per turn from the accumulated list. Ward messages also run
+crisis-signal scoring + threat recording (`source: 'discord'`) on the
+reply path. Discord turns carry NO tools and never consume handoffs
+(`liveTurn: false`). Memorization of Discord sessions is deferred until
+memories carry audience tags (see village-support-design.md).
+Off-switch: `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
 `GET /api/discord/status`.
+
+*Presence modes (V8).* Messages the Familiar isn't addressed in resolve
+to `action: 'observe'` (lurk, and active turns it sits out): the message
+is appended to the session for context, nothing is sent, no LLM call —
+and deliberately **threat-neutral** (observing never moves the ward's
+activity clock or threat tier; that stays on the reply path, out of the
+safety-critical surface). Active-mode pacing is `decideAmbientReply()`
+(pure, tested) over a volatile in-memory `ambientState` (per-location
+`lastTurnAt` + recent message timestamps): a hard `activeCooldownSec`
+floor on unprompted turns plus one of two ward-toggleable strategies —
+`llm` (model decides each time; abstains via a bare `[pass]`, detected
+by `isAmbientAbstain`) or `tiers` (pure-code slow/medium/fast cadence
+scaled off the cooldown). The V3 knowledge gate runs identically in
+every mode — mode is *when* the Familiar speaks, never *what it knows*.
+
+*Room legibility (V8).* `resolveMentions()` (pure, tested) rewrites
+inbound `<@id>` / `<@!id>` tokens to `@Name` (my own char name → a
+registered villager's name → the payload display name → `@someone`)
+before the text reaches the model, in both the reply and observe paths —
+raw snowflakes leave the Familiar unable to tell who a message names. On
+an ambient turn `directedAtOthers()` (pure, tested) collects the names a
+message was explicitly aimed at (other-user @-mentions + a reply target,
+excluding me) and feeds them to the presence block, so an active-mode
+Familiar can distinguish "this exchange is between them" from open-room
+chatter and weigh both costs (barging in vs. a missed moment of
+presence) instead of treating every unaddressed line as its cue.
+
+But the *triggering* line of an exchange is often the only one that's
+tagged — "@Nichtschwert, you and I?" is, but Nichtschwert's untagged
+"sure, what's up?" that follows is not, even though it plainly continues
+their two-person thread. `directedAtOthers()` alone would read that
+follow-up as open-room and the Familiar would barge in. So every stored
+message (spoken and observed) records structured per-message signals —
+`speaker`, `targets` (others it named), `namedMe` (whether it pulled me
+in) — and on an ambient turn whose own line names no one,
+`carriedExchange()` (pure, tested) walks the recent history for the most
+recent message that named only others (and didn't pull me in): its
+speaker + named parties are a live exchange, and if the person speaking
+now is one of them, this line continues *their* thread, not an opening
+for me. It reads only the structured fields — no parsing of display text
+— so it stays reliable code, not a guess about tone. A line that names
+me cancels the carry-forward (the room turned toward me). The open-room
+presence branch is correspondingly worded to make the model *read* for an
+untagged exchange between others rather than treating any unaddressed
+line as its cue — absence of a tag on one line is not proof the room is
+open.
+
+*Other bots & Familiars (V8).* My own messages are ALWAYS ignored (the
+inner loop guard, above the opt-in). *Other* bots — including other
+Familiars — are ignored by default (`reason: 'bot-author'`); a location
+with `readBots: true` lets them through `classifyMessage` as normal, so
+they're answered when addressed and paced by the room's mode +
+`activeCooldownSec` + rate limit otherwise. For shared Familiar
+channels; the loop is the ward's to pace, not a hard block.
+
+*Deferred presence (V9).* Ambient turns now have a third option beyond
+speak / `[pass]`: `[later:…]` schedules a revisit. Three syntax forms —
+relative (`[later:15m]`), wall-clock (`[later:22:30]`), and named
+buckets (`[later:soon]` ~15min / `[later:later]` ~45min /
+`[later:much-later]` ~1h). Clamped to [5min, 1h]; may re-defer up to
+2× total. Persisted in `tomes/.discord-revisits.json`. A self-arming
+timer (`armRevisitTimer`) fires the soonest-due entry and re-arms; it
+is armed on every `READY` (so the bot token is present before a timer
+could fire, and a disable→enable cycle re-arms) and cleared in
+`teardown`. Any real incoming message at a location supersedes its
+pending revisit (`cancelRevisitsForLocation`). Revisit turns are
+threat-neutral and never move the ward's activity clock.
+
+A revisit speaks into a *shared* room, so `fireRevisit` runs the exact
+same safety spine as a live turn: it resolves the knowledge gate from
+the room + accumulated participants (`resolveLocationGate` →
+`resolveAudience`/`audienceTagFor`, never ward-private context in a
+guild), and delivers through `deliverReply` — the shared Pillar D
+outgoing-filter → send → persist → rate-slot → status path that
+`handleTurn` also uses. The two paths share one delivery function so
+neither can drift from the other or skip a gate the other applies.
+
+Session history now renders `[HH:MM]` timestamps (server local time)
+before each speaker prefix, so the model can read exchange rhythm and
+gaps directly. `carriedExchange` gains a `maxAgeMs` staleness gate
+(default 1h) so exchanges older than that are not carried forward as
+live threads.
 
 ### `memorization.js` — autonomous per-fact memorization (Pillar C)
 
@@ -771,9 +865,9 @@ scoreMessage(userMessage)                ← crisis-signals.js
        │
        ▼
 thalamus.enrich(userMessage, { liveTurn: true })
-   ├── identity_get_all     ──►  entity-core (MCP)        → static block
-   ├── memory_search        ──►  entity-core (MCP)        ┐
-   ├── graph_node_search    ──►  entity-core (MCP)        │
+   ├── identity_get_all     ──►  Phylactery (MCP)         → static block
+   ├── memory_search        ──►  Phylactery (MCP)         ┐
+   ├── graph_node_search    ──►  Phylactery (MCP)         │
    ├── temporal_context     ──►  Unruh (MCP)              │ dynamic block:
    │     ├── current phase                                │  - RAG memory matches
    │     ├── full routine (live phases, date-independent) │  - graph excerpt
@@ -783,7 +877,7 @@ thalamus.enrich(userMessage, { liveTurn: true })
    ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
    └── getThreat()           ──► local file read          ┘  - [Temporal Context]
        │
-       │  injection-guard.js is available but NOT applied to entity-core /
+       │  injection-guard.js is available but NOT applied to Phylactery /
        │  Unruh content — those are trusted first-party systems. The guard
        │  is reserved for genuinely external ingestion points (web search
        │  results, Discord / channel-adapter messages) that do not yet exist.
@@ -953,7 +1047,7 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
    ── CONTEXT ASSEMBLY (per candidate) ──
    stakes_tier  ← payload.stakes_tier OR inferStakesTier(label)
    priorsBlock  ← matched section from docs/consequence-priors.md
-   personModel  ← entity-core custom/what_lapses_cost.md (raw)
+   personModel  ← Phylactery custom/what_lapses_cost.md (raw)
    taskSpecific ← payload.consequence_model
    confidence   ← high/medium/low based on what info is present
                 │
@@ -1027,7 +1121,7 @@ LLM returns:
    └── If what_lapses_cost_update present:
        updateIdentitySection({ category: 'custom',
                                filename: 'what_lapses_cost.md',
-                               heading, content })   ← via entity-core MCP
+                               heading, content })   ← via Phylactery MCP
 ```
 
 **Outcome tagging** is pure-code, runs at chat-turn entry as a fire-and-forget pass over `tomes/.surface-events.json`:
@@ -1038,18 +1132,21 @@ LLM returns:
 | `resolution === 'cancelled'` | `cancelled` |
 | `resolution === 'carried_forward'` | `deferred` |
 | `resolution === 'fired'` (reminder) | `fired` |
-| unresolved + offered > 24h ago | `unresponded` |
+| unresolved + offered > 24h ago + `raised === true` | `unresponded` |
+| unresolved + offered > 24h ago + `raised !== true` | `not_raised` |
 | unresolved + < 24h | left null, re-checked next turn |
+
+The `unresponded` / `not_raised` split is load-bearing: `unresponded` means the Familiar *actually raised* the task with the ward and nothing came of it (evidence about the ward), while `not_raised` means it was offered to the Familiar as a candidate but never reached the ward at all (evidence about the Familiar's own surfacing — the ward can't respond to what they never saw). Conflating them — the pre-0.6.25 behaviour — let a quiet stretch where the Familiar simply didn't speak get misread as the ward withdrawing. A confirmed resolution always wins over both regardless of `raised`.
 
 Once tagged, an event's `outcome` is immutable — the LLM later reasons about a stable record, not a moving target.
 
-**`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min) and flows into reflection automatically — "offered N times, never raised" is itself a pattern the reflection loop can learn from, since reflection events carry the field.
+**`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min), decides the aged-out outcome split above, and flows into reflection (the projection carries `raised`, and the reflection prompt is taught that `not_raised` outcomes are about the Familiar's surfacing, never the ward's engagement).
 
 **Prompt stance:** the `[Surface candidates]` header is written for a ward with executive dysfunction — there is no "right moment" that arrives on its own, so the header tunes toward action. It names explicit GREEN LIGHT states the Familiar surfaces in and explicit RED LIGHT states it holds in (vagueness is *not* a reason to stay quiet — the servile-default model needs the inclusion/exclusion conditions spelled out or it collapses to silence), names the cost of silence (the task waits forever; a missed task outweighs a refusable check-in), and offers concrete access ramps (timebox, single next action, planning-only slot, body-double). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
 
-**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to entity-core's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
+**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 
-**`what_lapses_cost.md`** lives at `entity-core/custom/what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
+**`what_lapses_cost.md`** lives in Phylactery's `custom` category as `what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
 
 Files: `surface-context.js`, `surface-events.js`, `docs/consequence-priors.md`.
 
@@ -1131,11 +1228,13 @@ that is the contract talking — update all seams together or stop.
 
 | Loop | Cadence | Off-switch | What it does |
 |---|---|---|---|
-| Memorization | 5s tick | (none — always on) | Drains queue of session-memorization jobs |
+| Memorization | 5s tick | `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` | Drains queue of session-memorization jobs |
 | Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry |
 | Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired |
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
-| Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score user text; tracker accumulates with decay |
+| Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |
+| Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
+| Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |
 
 The autonomous loops do not run during shutdown — server.js's SIGTERM
 handler awaits each loop's `stop*()` before closing the MCP children.
