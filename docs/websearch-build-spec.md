@@ -1,6 +1,12 @@
 # Web search & read — build spec
 
-> **Status: PLANNED (targets `0.7.0-alpha`).** This is the build instruction for giving
+> **Status: SHIPPED (`0.7.0-alpha`).** Built as specced: `websearch.js` (SSRF guard +
+> timeout + `linkedom`/Readability/turndown extraction with provenance), two opt-in tools in
+> `cerebellum.js`, settings + toggle + `PROTO_FAMILIAR_WEBSEARCH_DISABLED` off-switch, docs,
+> and `tests/websearch.test.mjs`. Kept as the build record. The rest of this document is the
+> instruction it followed.
+>
+> This was the build instruction for giving
 > the Familiar the ability to **search the web, read a page, and keep what's worth keeping** —
 > backed by a local, self-hosted [SearXNG](https://docs.searxng.org/) instance and in-process
 > content extraction. It is the **what and in-what-order**. The reviewed proposal it descends
@@ -319,27 +325,27 @@ URL rides in on the stamped return. Nothing new is required to make this usable.
 
 ## 9. Acceptance criteria
 
-- [ ] `web_search` against a live local SearXNG returns ≤ `webSearchMaxResults` rows, each with
+- [x] `web_search` against a live local SearXNG returns ≤ `webSearchMaxResults` rows, each with
       a usable URL, as a compact string.
-- [ ] `read_webpage` on a real article returns clean truncated markdown, framed as untrusted,
+- [x] `read_webpage` on a real article returns clean truncated markdown, framed as untrusted,
       with a `Source: <url> · retrieved <date>` provenance line.
-- [ ] A `read_webpage` result persists in session history and is re-accessible on later turns
+- [x] A `read_webpage` result persists in session history and is re-accessible on later turns
       without re-fetching (no special work — verify the tool round lands in `state.messages`).
-- [ ] After a `read_webpage`, the Familiar can keep the gist via `save_to_tome` (no new tool,
+- [x] After a `read_webpage`, the Familiar can keep the gist via `save_to_tome` (no new tool,
       no extra LLM call) and the saved entry carries the source URL; a *next-session* recall
       surfaces it.
-- [ ] `read_webpage` on `http://127.0.0.1:8742/…`, `http://169.254.169.254/…`, `file:///…`,
+- [x] `read_webpage` on `http://127.0.0.1:8742/…`, `http://169.254.169.254/…`, `file:///…`,
       and a public URL that **redirects** to a private one are all refused by the guard, and the
       refusal renders as a calm first-person string — never a thrown 500.
-- [ ] A hung host returns the timeout failure within the configured window; the rest of the
+- [x] A hung host returns the timeout failure within the configured window; the rest of the
       tool round completes.
-- [ ] SearXNG down → calm "I couldn't reach my search right now," no chat-path error.
-- [ ] `webSearchEnabled=false` (or `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1`) → neither tool is
+- [x] SearXNG down → calm "I couldn't reach my search right now," no chat-path error.
+- [x] `webSearchEnabled=false` (or `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1`) → neither tool is
       advertised to the model.
-- [ ] Tool descriptions are first person; no second-person or imperative phrasing.
-- [ ] `package.json` at `0.7.0-alpha`; `docs/architecture.md`, `docs/tool-calling.md`,
+- [x] Tool descriptions are first person; no second-person or imperative phrasing.
+- [x] `package.json` at `0.7.0-alpha`; `docs/architecture.md`, `docs/tool-calling.md`,
       `docs/features.md` updated (tool count + tables) in the same commit.
-- [ ] Tests cover the SSRF guard (allow/deny matrix), the timeout, and the toggle-gated
+- [x] Tests cover the SSRF guard (allow/deny matrix), the timeout, and the toggle-gated
       advertisement, in `tests/`.
 
 ---
