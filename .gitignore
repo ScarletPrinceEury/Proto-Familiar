@@ -9,6 +9,8 @@ tomes/.memorization-queue.json.tmp
 # Threat-tracker state (step 4b) — local, decaying scalar; never committed.
 tomes/.threat-state.json
 tomes/.threat-state.json.tmp
+# Generated SearXNG config (random secret, per-boot port) — never committed.
+tomes/.searxng/
 # Outbox delivery queue (M11) — local pending notifications.
 tomes/.outbox.json
 tomes/.outbox.json.tmp
