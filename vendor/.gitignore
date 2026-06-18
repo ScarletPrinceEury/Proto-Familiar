@@ -1,0 +1,11 @@
+# Vendored third-party apps. We DO commit their source (so it ships "in the
+# box"), but never their build artifacts or virtualenvs.
+#
+# SearXNG (see docs/searxng-managed-build-spec.md): clone into searxng/, record
+# the pinned commit SHA in searxng/VERSION, then `rm -rf searxng/.git` so it's
+# vendored files rather than an embedded gitlink.
+searxng/.venv/
+searxng/.git/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
