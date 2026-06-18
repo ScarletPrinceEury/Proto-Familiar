@@ -1470,6 +1470,7 @@ async function connect() {
     if (!url) throw new Error('gateway URL missing from /gateway/bot');
   }
 
+  const WS = globalThis.WebSocket;
   const ws = new WS(`${url}?v=10&encoding=json`);
   gw.ws = ws;
 
