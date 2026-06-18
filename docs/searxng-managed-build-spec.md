@@ -61,8 +61,11 @@ guaranteed floor, managed SearXNG as a one-click sturdier backend that costs not
 
 ## Remaining work (vendor + verify)
 
-1. **Vendor SearXNG** into `./vendor/searxng/` at a pinned version; write `./vendor/searxng/VERSION`.
-   Add `vendor/searxng/` build artifacts (`.venv`, caches) to `.gitignore`.
+1. **Vendor SearXNG** into `./vendor/searxng/`, pinned to a specific **commit SHA** (SearXNG is a
+   rolling release — no version tags; every master commit is a "release"). Clone, record the SHA
+   into `./vendor/searxng/VERSION`, then strip the nested `.git` so the files are vendored (not an
+   embedded gitlink). Add `vendor/searxng/` build artifacts (`.venv`, `__pycache__`, caches) to
+   `.gitignore`.
 2. **Confirm the spawn invocation** against that version: the entrypoint (`python -m searx.webapp`
    vs a `granian`/`searx.webapp:app` runner), the env it reads for bind/port
    (`SEARXNG_BIND_ADDRESS` / `SEARXNG_PORT` / `SEARXNG_SETTINGS_PATH`), and the health endpoint.
