@@ -47,6 +47,7 @@ import { recordKnock, recordLocationKnock } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
 import { substituteMacros } from './macros.js';
+import { stripLlmTimestamps } from './message-sanitize.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -282,10 +283,13 @@ async function fireRevisit(item) {
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
-    .map(m => ({
-      role: m.role,
-      content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${m.content}` : m.content,
-    }));
+    .map(m => {
+      const clean = stripLlmTimestamps(m.content);
+      return {
+        role: m.role,
+        content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+      };
+    });
 
   const apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
@@ -901,6 +905,7 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
     else if (reply !== rawReply) console.log(`[discord] outgoing filter rewrote reply (audience=${audienceTag})`);
   }
 
+  reply = stripLlmTimestamps(reply);
   await sendChannelMessage(gw.config.token, channelId, reply);
 
   // Persist the turn. Sessions land in logs/ exactly like web sessions
@@ -1193,10 +1198,13 @@ async function handleTurn(gw, msg, decision) {
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
-    .map(m => ({
-      role: m.role,
-      content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${m.content}` : m.content,
-    }));
+    .map(m => {
+      const clean = stripLlmTimestamps(m.content);
+      return {
+        role: m.role,
+        content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+      };
+    });
 
   // Non-ward speakers are name-prefixed so multi-party rooms stay
   // legible to me across turns. The ward's own words stay raw, same
@@ -1435,10 +1443,17 @@ function onDispatch(t, d) {
   }
 }
 
+// The gateway transport is the platform's native WebSocket, which lands as
+// a stable global in Node ≥ 22. One predicate, used both to gate connect()
+// and to report capability up to the Settings UI — so the warning the ward
+// sees and the reason the gateway stays down can never drift apart.
+function webSocketAvailable() {
+  return typeof globalThis.WebSocket === 'function';
+}
+
 async function connect() {
   if (!gw.running || gw.fatal) return;
-  const WS = globalThis.WebSocket;
-  if (typeof WS !== 'function') {
+  if (!webSocketAvailable()) {
     gw.fatal = true;
     gw.status.lastError = 'WebSocket unavailable — Discord gateway requires Node ≥ 22';
     console.error('[discord] no global WebSocket (Node ≥ 22 required) — gateway stays down');
@@ -1603,5 +1618,12 @@ export function stopDiscordGateway() {
 
 /** Observability for /api/discord/status and the UI. */
 export function getDiscordStatus() {
-  return { ...gw.status };
+  // webSocketSupported lets the UI warn *before* the ward enables Discord
+  // on a too-old runtime, instead of only learning after it silently fails
+  // to connect. nodeVersion makes that warning concrete and actionable.
+  return {
+    ...gw.status,
+    webSocketSupported: webSocketAvailable(),
+    nodeVersion: process.version,
+  };
 }
