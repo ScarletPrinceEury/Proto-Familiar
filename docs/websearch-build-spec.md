@@ -1,11 +1,11 @@
 # Web search & read — build spec
 
 > **Status: PLANNED (targets `0.7.0-alpha`).** This is the build instruction for giving
-> the Familiar two new capabilities — searching the web and reading a page — backed by a
-> local, self-hosted [SearXNG](https://docs.searxng.org/) instance and in-process content
-> extraction. It is the **what and in-what-order**. The reviewed proposal it descends from
-> chose SearXNG + `@mozilla/readability`; this spec keeps that shape and hardens it against
-> the conventions in `CLAUDE.md`.
+> the Familiar the ability to **search the web, read a page, and keep what's worth keeping** —
+> backed by a local, self-hosted [SearXNG](https://docs.searxng.org/) instance and in-process
+> content extraction. It is the **what and in-what-order**. The reviewed proposal it descends
+> from chose SearXNG + `@mozilla/readability`; this spec keeps that shape, swaps the DOM for the
+> lighter `linkedom`, and hardens it against the conventions in `CLAUDE.md`.
 
 This milestone owns the `0.7.0` minor slot: the feature landing is `0.7.0-alpha`; any
 follow-up fixes inside it bump PATCH.
@@ -81,9 +81,15 @@ Read these first. They are constraints you build *inside of*, not background rea
             │                    guardedFetch(url)  ◄── SSRF guard + timeout
             │                          │              (shared helper)
             ▼                          ▼
-     SearXNG JSON API          raw HTML → jsdom → Readability → turndown
-   (local Docker, configured     → markdown (truncated, framed as
-    base URL in settings)          UNTRUSTED external content)
+     SearXNG JSON API          raw HTML → linkedom → Readability → turndown
+   (local Docker, configured     → markdown (truncated, framed as UNTRUSTED
+    base URL in settings)          external content, stamped with source URL)
+                                          │
+                                          ▼
+                                 the Familiar may keep the gist
+                                 via the EXISTING save_to_tome —
+                                 provenance rides along, so a later
+                                 recall answers without re-fetching
 ```
 
 - **No Discord exposure.** Discord turns run no tools; only `/api/chat` composes the tool
@@ -177,20 +183,31 @@ identity edits. The guard is not optional.
 ### 4c. `readWebpage(url, settings)`
 
 - `guardedFetch(url)` → raw HTML.
-- `jsdom` → `Readability(...).parse()` → article HTML.
+- `linkedom` → parse to a `document` → `Readability(...).parse()` → article HTML.
 - `turndown` → markdown.
 - Truncate to `webSearchMaxChars` with a visible `[…truncated]` marker.
+- **Stamp provenance.** Prepend a `Source: <url> · retrieved <ISO date>` line to the returned
+  content. This is what makes gist persistence (Pillar E) work — when the Familiar keeps what it
+  read, the URL and date travel with it.
 - **Frame the return as untrusted.** Wrap the markdown so the model reads it as *external
   content I fetched*, not as instructions addressed to it — a short delimiter/header to blunt
   prompt-injection from page bodies.
 
 ### 4d. Dependencies
 
-Add to `package.json` `dependencies`: `jsdom`, `@mozilla/readability`, `turndown`. Note in the
-commit body that `jsdom` is a heavy tree and a deliberate trade for real extraction — the repo
-otherwise prides itself on a two-dependency runtime. `import` them at **module top** of
-`websearch.js` (the reviewed snippet put imports inside the executor object literal — a syntax
-error; do not reproduce it).
+Add to `package.json` `dependencies`: `linkedom`, `@mozilla/readability`, `turndown`. All three
+are light: `@mozilla/readability` and `turndown` carry near-zero transitive trees, and
+`linkedom` is a deliberate choice over `jsdom` to keep the runtime close to its two-dependency
+ideal — `jsdom` is a near-complete browser DOM that drags in dozens of transitive packages.
+`linkedom` provides Readability with the `document` it needs at a fraction of the install
+weight; the trade is slightly lower fidelity on malformed pages.
+
+**If testing shows `linkedom` mangles real articles, `jsdom` is the documented fallback** —
+swap the one parse line in `readWebpage`; nothing else changes. Note the swap (and why) in the
+commit body if it happens.
+
+`import` all three at **module top** of `websearch.js` (the reviewed snippet put imports inside
+the executor object literal — a syntax error; do not reproduce it).
 
 ---
 
@@ -203,7 +220,9 @@ Thin. The definitions and delegating executors only.
    - `web_search` — *"I reach for this when my human needs something current that my own memory
      doesn't hold — it gives me back a handful of titles, snippets, and links I can then read."*
    - `read_webpage` — *"I read a page I found while searching, pulled down to clean markdown so
-     I can actually take it in. I pass the exact URL a search handed me."*
+     I can actually take it in. I pass the exact URL a search handed me. When something on the
+     page is worth keeping, I save the gist to a tome so I can recall it later instead of
+     fetching it again."*
    - Keep parameter schemas as in the proposal (`query` / `url`, both required).
 2. **`TOOL_EXECUTORS`** — two `(args, ctx)` entries that `await` into `websearch.js` and return
    a string. They `try/catch` and return a calm first-person failure (the no-throw contract).
@@ -215,7 +234,44 @@ Thin. The definitions and delegating executors only.
 
 ---
 
-## 6. Safety gates (read before shipping)
+## 6. Pillar E — keeping what's worth keeping (gist persistence)
+
+The Familiar shouldn't have to re-fetch a page it already understood. After a `read_webpage`,
+it can persist the gist so a later question is answered from memory, and only re-read when it
+needs freshness. This is a planned part of the feature, not a someday-maybe.
+
+The robust shape here is **reuse, not a new mechanism**:
+
+1. **No new storage tool.** Knowledge already has a home — `save_to_tome` (and `save_memory`
+   for the more personal kind). Adding a `web_remember` tool would duplicate that logic and
+   split where web-derived knowledge lives. The Familiar keeps a gist with the tools it already
+   has. *(This is the no-copy-paste / one-home-for-state rule.)*
+
+2. **No new LLM call.** By the time the Familiar decides to keep something, the page content is
+   already in its context from `read_webpage`, in the same tool round. Deciding to save and
+   calling `save_to_tome` rides that existing turn — Pillar E adds **zero** request volume.
+
+3. **Provenance makes recall trustworthy and re-fetch avoidable.** Because `readWebpage` stamps
+   `Source: <url> · retrieved <date>` onto its return (Pillar C, 4c), whatever the Familiar
+   saves carries the URL and the date it was read. A future tome scan surfaces the saved gist
+   with its source, so the Familiar can answer directly — or, seeing the retrieval date is old,
+   choose to re-read for freshness. The provenance is what turns a saved blob into something it
+   can reason about later.
+
+4. **Saving is the Familiar's judgement, not automatic.** Auto-saving every page read would
+   bloat memory with things that didn't matter, and *what's worth keeping* is interpretation,
+   not a crisp code-side tag — so it stays the Familiar's call, nudged by the `read_webpage`
+   description (Pillar D). The consent-gating that already governs long-term memory applies
+   unchanged; web-derived facts are not a special exception to it.
+
+**Reachability check (both halves):** discoverability — the `read_webpage` first-person
+description tells the Familiar it can keep the gist; operability — every input `save_to_tome`
+needs (title, content, keywords) is already in hand from the page it just read, and the source
+URL rides in on the stamped return. Nothing new is required to make this usable.
+
+---
+
+## 7. Safety gates (read before shipping)
 
 - **SSRF guard + timeout are blocking.** No path reaches a network read without them. This is
   the single most important line in the spec.
@@ -229,10 +285,10 @@ Thin. The definitions and delegating executors only.
 
 ---
 
-## 7. Open knobs (decide before build)
+## 8. Open knobs (decide before build)
 
-1. **`jsdom` weight.** Confirmed acceptable, or evaluate a lighter HTML parser? Default: accept
-   `jsdom` for extraction quality, document the cost.
+1. **DOM library.** **Decided: `linkedom`** — light, keeps the runtime near its two-dep ideal;
+   `jsdom` is the documented fallback if testing shows mangled extraction (Pillar C, 4d).
 2. **Default `webSearchMaxChars`.** **Decided: 15000** (~4–5k tokens/read). This is a
    *per-read* context cost paid each time `read_webpage` runs — there is no page cache, so
    "read once then it's free" does not apply unless the Familiar deliberately persists what it
@@ -242,11 +298,14 @@ Thin. The definitions and delegating executors only.
 
 ---
 
-## 8. Acceptance criteria
+## 9. Acceptance criteria
 
 - [ ] `web_search` against a live local SearXNG returns ≤ `webSearchMaxResults` rows, each with
       a usable URL, as a compact string.
-- [ ] `read_webpage` on a real article returns clean truncated markdown, framed as untrusted.
+- [ ] `read_webpage` on a real article returns clean truncated markdown, framed as untrusted,
+      with a `Source: <url> · retrieved <date>` provenance line.
+- [ ] After a `read_webpage`, the Familiar can keep the gist via `save_to_tome` (no new tool,
+      no extra LLM call) and the saved entry carries the source URL; a later recall surfaces it.
 - [ ] `read_webpage` on `http://127.0.0.1:8742/…`, `http://169.254.169.254/…`, `file:///…`,
       and a public URL that **redirects** to a private one are all refused by the guard, and the
       refusal renders as a calm first-person string — never a thrown 500.
@@ -263,13 +322,13 @@ Thin. The definitions and delegating executors only.
 
 ---
 
-## 9. File-by-file change list
+## 10. File-by-file change list
 
 | File | Change |
 |---|---|
-| `websearch.js` *(new)* | `guardedFetch`, `searchWeb`, `readWebpage`; all extraction logic; top-of-file imports. |
-| `cerebellum.js` | Two `BUILTIN_TOOLS` entries (first-person); two delegating `TOOL_EXECUTORS` entries; toggle-gated advertisement. |
-| `package.json` | Add `jsdom`, `@mozilla/readability`, `turndown`; bump `version` → `0.7.0-alpha`. |
+| `websearch.js` *(new)* | `guardedFetch`, `searchWeb`, `readWebpage` (incl. provenance stamp); all extraction logic; top-of-file imports. |
+| `cerebellum.js` | Two `BUILTIN_TOOLS` entries (first-person; `read_webpage` nudges gist-keeping); two delegating `TOOL_EXECUTORS` entries; toggle-gated advertisement. No new save tool — gist persistence reuses `save_to_tome`. |
+| `package.json` | Add `linkedom`, `@mozilla/readability`, `turndown`; bump `version` → `0.7.0-alpha`. |
 | `public/app.js` | Settings fields + UI; add user-pref keys to `SERVER_SYNCED_KEYS`. |
 | `settings.json` handling | Read the four new fields with defaults; honour the env off-switch. |
 | `docs/architecture.md` | Record `websearch.js` and the two tools in the component map + data flow. |
