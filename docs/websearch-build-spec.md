@@ -233,8 +233,10 @@ Thin. The definitions and delegating executors only.
 
 1. **`jsdom` weight.** Confirmed acceptable, or evaluate a lighter HTML parser? Default: accept
    `jsdom` for extraction quality, document the cost.
-2. **Default `webSearchMaxChars`.** 15000 (~4–5k tokens/read) is generous on the configured
-   provider. Keep, or trim the default to 8000?
+2. **Default `webSearchMaxChars`.** **Decided: 15000** (~4–5k tokens/read). This is a
+   *per-read* context cost paid each time `read_webpage` runs — there is no page cache, so
+   "read once then it's free" does not apply unless the Familiar deliberately persists what it
+   read (see Future enhancements).
 3. **Settings UI placement.** New "Web search" group in the sidebar Tools section vs. a
    dedicated Settings panel.
 
