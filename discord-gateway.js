@@ -1435,10 +1435,17 @@ function onDispatch(t, d) {
   }
 }
 
+// The gateway transport is the platform's native WebSocket, which lands as
+// a stable global in Node ≥ 22. One predicate, used both to gate connect()
+// and to report capability up to the Settings UI — so the warning the ward
+// sees and the reason the gateway stays down can never drift apart.
+function webSocketAvailable() {
+  return typeof globalThis.WebSocket === 'function';
+}
+
 async function connect() {
   if (!gw.running || gw.fatal) return;
-  const WS = globalThis.WebSocket;
-  if (typeof WS !== 'function') {
+  if (!webSocketAvailable()) {
     gw.fatal = true;
     gw.status.lastError = 'WebSocket unavailable — Discord gateway requires Node ≥ 22';
     console.error('[discord] no global WebSocket (Node ≥ 22 required) — gateway stays down');
@@ -1603,5 +1610,12 @@ export function stopDiscordGateway() {
 
 /** Observability for /api/discord/status and the UI. */
 export function getDiscordStatus() {
-  return { ...gw.status };
+  // webSocketSupported lets the UI warn *before* the ward enables Discord
+  // on a too-old runtime, instead of only learning after it silently fails
+  // to connect. nodeVersion makes that warning concrete and actionable.
+  return {
+    ...gw.status,
+    webSocketSupported: webSocketAvailable(),
+    nodeVersion: process.version,
+  };
 }

@@ -229,7 +229,7 @@ ack/cancel — see `memorization.js`.
 - `POST /api/village/villagers` + `PATCH /api/village/villagers/:id` + `DELETE /api/village/villagers/:id` — saving a villager auto-dismisses knocks matching their aliases
 - `POST|PATCH|DELETE /api/village/locations` — keyed by body `key` (location keys contain `:`)
 - `GET /api/village/knocks` + `DELETE /api/village/knocks/:platform/:id` — pending contact attempts from unregistered people (captured by the Discord gateway; identity metadata only, never message content)
-- `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters
+- `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
 
 **Threat surface:**
 - `GET /api/threat` — current tier + weight + last_touched + disabled

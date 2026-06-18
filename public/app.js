@@ -2562,6 +2562,26 @@ function showMemorizationFailureNotice(reason) {
   }, 6000);
 }
 
+// Discord presence needs the server's Node runtime to expose a native
+// WebSocket (Node ≥ 22). On an older runtime the gateway silently stays
+// down — so when the ward opens the Discord section we surface a plain
+// warning that names the running version and the fix, instead of letting
+// them toggle Discord on and wonder why nothing connects.
+function renderDiscordNodeWarning(status) {
+  const el = $('discord-node-warning');
+  if (!el) return;
+  if (status && status.webSocketSupported === false) {
+    const ver = status.nodeVersion ? ` (this server is on Node ${status.nodeVersion})` : '';
+    el.innerHTML =
+      `⚠️ Discord presence needs <strong>Node 22 or newer</strong>${ver}. ` +
+      `The gateway can't open its WebSocket on this runtime and will stay offline ` +
+      `even with the toggle on. Re-run the installer to upgrade Node, then restart Proto-Familiar.`;
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
 // ── Prompt inspector modal ───────────────────────────────────
 
 // Human-readable labels for each prompt-segment source. The CSS class
@@ -3036,6 +3056,7 @@ function init() {
       if (!el) return;
       try {
         const s = await (await fetch('/api/discord/status')).json();
+        renderDiscordNodeWarning(s);
         const bits = [];
         bits.push(s.connected ? `🟢 Connected as ${s.botUser ?? 'bot'}` : (s.running ? '🟡 Starting / reconnecting…' : '⚪ Not running'));
         if (s.turns) bits.push(`${s.turns} replies this boot`);

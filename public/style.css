@@ -318,6 +318,22 @@ body {
   line-height: 1.4;
 }
 
+/* Inline warning banner inside a settings section (e.g. the Discord
+   section flags a too-old Node runtime that can't open the gateway). */
+.field-warning {
+  font-size: 0.78rem;
+  color: var(--warn-color);
+  background: color-mix(in srgb, var(--warn-color) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn-color) 45%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 9px;
+  line-height: 1.45;
+}
+.field-warning code {
+  font-style: normal;
+}
+
 /* Range input */
 input[type="range"] {
   width: 100%;
