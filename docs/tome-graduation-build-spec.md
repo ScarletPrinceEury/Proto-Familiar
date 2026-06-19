@@ -1,10 +1,12 @@
 # Tome → Phylactery graduation — build spec
 
-> **Status: PLANNED.** Phase 4 of the Phylactery-ingestion work. Phases 1–3 (graph legibility,
-> the `recall` tool, the memory-routing rubric in the save tools) are shipped; this is the
-> autonomous pass that moves *already-stranded* knowledge out of tomes and into its right
-> Phylactery home — the part that happens **without my human initiating it**. It inherits the
-> Phase 3 routing rubric verbatim (do not re-derive it).
+> **Status: SHIPPED — v1, opt-in (default OFF).** `tome-graduation.js` (pure logic) +
+> `tome-graduation-loop.js` (driver) are built and unit-tested (11 tests); wired into server
+> boot/shutdown and Settings ("Graduate tome knowledge" + `tomeGraduationTidy`). **v1 routes to
+> identity + memory only — autonomous graph construction is deferred to v2** (the one risky
+> route: building nodes/edges from free text unattended). It stays dormant until the ward enables
+> it, and the **LLM judgment prompt needs the ward's live behavioural test** when they do (it
+> can't be verified in CI). Inherits the Phase 3 routing rubric verbatim.
 
 ---
 
