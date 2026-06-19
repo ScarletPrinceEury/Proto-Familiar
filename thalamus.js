@@ -1361,15 +1361,21 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         for (const edge of sg.edges ?? []) {
           if (seenEdges.has(edge.id)) continue;
           seenEdges.add(edge.id);
+          const from = nodeLabels.get(edge.fromId);
+          const to   = nodeLabels.get(edge.toId);
+          // Relationship lines are concept-only — labels, never a raw id. If an
+          // endpoint label can't be resolved, skip the line rather than leak a
+          // UUID inline: the LLM relates concepts, not hex strings, and an
+          // unnamed endpoint can't be related anyway. Every id lives ONLY in
+          // the legend at the end of the block (the separate-block home).
+          if (!from || !to) continue;
           edgeNodeIds.add(edge.fromId);
           edgeNodeIds.add(edge.toId);
-          const from = nodeLabels.get(edge.fromId) ?? edge.fromId;
-          const to   = nodeLabels.get(edge.toId)   ?? edge.toId;
           const rel  = edge.customType ?? edge.type;
           const desc = nodeDescs.get(edge.toId);
           lines.push(desc ? `${from} ${rel} ${to} (${desc})` : `${from} ${rel} ${to}`);
-          if (edge.fromId && nodeLabels.has(edge.fromId)) idLegendNodes.set(edge.fromId, nodeLabels.get(edge.fromId));
-          if (edge.toId   && nodeLabels.has(edge.toId))   idLegendNodes.set(edge.toId,   nodeLabels.get(edge.toId));
+          idLegendNodes.set(edge.fromId, from);
+          idLegendNodes.set(edge.toId, to);
           if (edge.id) idLegendEdges.push({ id: edge.id, fromLabel: from, rel, toLabel: to });
         }
       }
@@ -1921,6 +1927,17 @@ export async function dropPendingMemories(ids) {
  * Returns { hit: boolean, topic?: string, score?: number }.
  * Always resolves (never rejects) — fails open with { hit: false }.
  */
+/**
+ * Semantic recall over my own long-term memory (ward-private). Backs the
+ * `recall` tool so I can check what I already hold before saving — the
+ * dedup-before-write path. Returns the raw { results: [...] } from
+ * Phylactery's memory_search; the caller formats it. Never the restricted
+ * variant: recall is a ward-private act.
+ */
+export async function searchMemory({ query, maxResults = 5 }) {
+  return callTool('memory_search', { query, instanceId: 'proto-familiar', maxResults });
+}
+
 export async function searchMemoryRestricted({ query, roomAudience, threshold = 0.70 }) {
   try {
     return await callTool('memory_search_restricted', {
