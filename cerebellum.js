@@ -52,7 +52,7 @@ import {
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
-  searchMemoryRestricted,
+  searchMemoryRestricted, searchMemory,
 } from './thalamus.js';
 import { audienceTagFor } from './audience.js';
 import { searchWeb, readWebpage } from './websearch.js';
@@ -967,6 +967,21 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'recall',
+      description: "I search my own long-term memory for what I already hold about something — by meaning, not exact words. I reach for this before I save a new memory (to check whether I already recorded a fact, so I update or supersede it instead of saving a duplicate), when {{user}} references something from before, or whenever I want to confirm what I know. It returns the closest matches with their relevance, their address (tier/date), and id, so I can then read_memory, update_memory, or delete_memory the right entry.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What I want to recall, in plain words — a topic, a person, or a fact I might already hold.' },
+          limit: { type: 'integer', description: 'How many matches to return (default 5, max 20).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'rewrite_identity_section',
       description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
@@ -1673,6 +1688,26 @@ export const TOOL_EXECUTORS = {
       if (!content || !String(content).trim()) return `No ${granularity} memory found at ${date}.`;
       return String(content);
     } catch (err) { return `Failed to read memory: ${err.message}`; }
+  },
+
+  recall: async ({ query, limit } = {}) => {
+    const q = String(query ?? '').trim();
+    if (!q) return 'I need something to recall — a topic, a name, or a fact to check.';
+    const n = Math.min(20, Math.max(1, parseInt(limit, 10) || 5));
+    try {
+      const res   = await searchMemory({ query: q, maxResults: n });
+      const items = Array.isArray(res?.results) ? res.results : [];
+      if (items.length === 0) return `I searched my memory for "${q}" and found nothing close — this looks new to me.`;
+      const lines = items.map((r, i) => {
+        const score = ((r.score ?? r.vectorScore ?? 0) * 100).toFixed(0);
+        const addr  = [r.granularity, r.date].filter(Boolean).join('/');
+        const idTag = r.id != null ? `, id ${r.id}` : '';
+        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match) ${(r.excerpt ?? r.content ?? '').trim()}`;
+      });
+      return `What I already hold close to "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
+    } catch (err) {
+      return `I couldn't reach my memory to recall just now (${err.message}).`;
+    }
   },
 
   rewrite_identity_section: async ({ category, filename, section, content }) => {

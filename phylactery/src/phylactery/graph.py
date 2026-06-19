@@ -125,6 +125,26 @@ def get_subgraph(
 
             frontier = next_frontier - set(visited_nodes.keys())
 
+        # Backfill labels for every edge endpoint. The BFS above only fetches
+        # node rows for each frontier it *expands*, so at the final depth the
+        # newly-discovered neighbours appear in `edges` but their node rows
+        # (labels/types/descriptions) were never loaded — callers then have to
+        # fall back to raw ids. Fetch the stragglers so every edge endpoint
+        # comes back with its label.
+        endpoint_ids = set()
+        for e in visited_edges.values():
+            endpoint_ids.add(e["fromId"])
+            endpoint_ids.add(e["toId"])
+        missing = [nid for nid in endpoint_ids if nid not in visited_nodes]
+        if missing:
+            ph = ",".join("?" * len(missing))
+            rows = conn.execute(
+                f"SELECT id, label, type, description FROM graph_nodes WHERE id IN ({ph})",
+                missing,
+            ).fetchall()
+            for r in rows:
+                visited_nodes[r["id"]] = _node_row_to_dict(r)
+
         return {
             "nodes": list(visited_nodes.values()),
             "edges": list(visited_edges.values()),
