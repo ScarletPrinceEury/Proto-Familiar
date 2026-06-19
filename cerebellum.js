@@ -812,7 +812,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I try to be somewhat discerning and avoid duplicate knowledge.',
+      description: 'I save keyword-triggered context into my Tome knowledge base — background or lore I want to resurface when a particular topic or phrase comes up again. I keep this lane narrow: durable facts about who {{user}} is belong in my identity files (update_identity); people, places, and how they connect belong in my graph (create_graph_node / create_graph_edge); moments and events with a \'when\' belong in my memory (save_memory). A tome is for what should surface on a trigger and fits none of those. Before I add one I recall so I don\'t duplicate what I already hold, and I tie it to the keywords {{user}} would actually say when the subject returns.',
       parameters: {
         type: 'object',
         properties: {
@@ -828,7 +828,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected. Significant memories are different: each one is a named, standalone milestone (e.g. "the night they told me about their sister", "first meeting"), stored in its own file. I always pass a short `title` when saving a significant memory so it gets its own filename and does not overwrite a previous one.',
+      description: 'I write a memory entry to my long-term store — a moment, event, emotional pattern, or anything with a \'when\' worth keeping. (Standing facts about who {{user}} is go to update_identity; entities and relationships go to my graph.) I prefer "daily" for routine session events and "significant" for major milestones. Daily memories accumulate — each save appends today\'s bullets, nothing is overwritten, and multiple saves a day are normal. A significant memory is a named, standalone milestone (e.g. "the night they told me about their sister") in its own file, so I always pass a short `title` for it. Before saving I recall to check I\'m not repeating myself: if I already recorded this and it was simply wrong, I update_memory to correct it; if it was true and has since changed, I save a fresh dated entry that supersedes the old without erasing the history.',
       parameters: {
         type: 'object',
         properties: {
@@ -844,12 +844,12 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: ward, filename: ward_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a durable fact to one of my identity files — who I am as I grow and change (category self: my_identity.md, my_persona.md, my_wants.md, …), who {{user}} is (ward: ward_notes.md), or our bond (relationship: relationship_notes.md). These files ride in front of me every turn, so they hold the load-bearing standing truths; richer or situational detail I still record, but to save_memory, where it\'s recalled when it matters instead of always taking up room. Before I add, I check whether I already hold it — I\'m reading these files already, and I recall for anything I\'ve graduated off this surface into memory — so a new fact lands cleanly instead of duplicating. I APPEND when a fact adds to what\'s there; I rewrite_identity_section when a section has gone stale, misleading, or sprawling — that\'s how I correct it, tighten it, and let a once-true thing reflect the now.',
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['ward', 'relationship'], description: 'Identity file category.' },
-          filename: { type: 'string', description: 'Target filename within the category, e.g. ward_notes.md or relationship_notes.md.' },
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'Target filename within the category, e.g. my_identity.md (self), ward_notes.md (ward), or relationship_notes.md (relationship).' },
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
@@ -968,7 +968,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'recall',
-      description: "I search my own long-term memory for what I already hold about something — by meaning, not exact words. I reach for this before I save a new memory (to check whether I already recorded a fact, so I update or supersede it instead of saving a duplicate), when {{user}} references something from before, or whenever I want to confirm what I know. It returns the closest matches with their relevance, their address (tier/date), and id, so I can then read_memory, update_memory, or delete_memory the right entry.",
+      description: "I search my own long-term memory for what I already hold about something — by meaning, not exact words. I reach for this before I save a new memory (to check whether I already recorded a fact, so I update or supersede it instead of saving a duplicate), when {{user}} references something from before, or whenever I want to confirm what I know. It returns the closest matches with their relevance, their address (tier/date), and id, so I can then read_memory, update_memory, or delete_memory the right entry. Recall is how I check; the save or update I then make is the actual filing — recalling alone doesn't record anything.",
       parameters: {
         type: 'object',
         properties: {
@@ -1031,7 +1031,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'create_graph_node',
-      description: 'I add a new entity (person, place, project, pet, organisation, etc.) to my knowledge graph. I use this when someone or something genuinely new enters {{user}}\'s world and I want it to persist as its own node I can later connect with edges. I check first with find_graph_node so I don\'t create a duplicate of an entity that already exists under a slightly different label. Recording a NEW fact about {{user}} is save_memory; this is for naming a thing the relationship graph should know about. Returns the new node\'s id so I can immediately wire edges to it.',
+      description: 'I add a new entity (person, place, project, pet, organisation, etc.) to my knowledge graph — for naming something my relationship graph should know about and later connect with edges. I check first with find_graph_node so I don\'t duplicate an entity that already exists under a slightly different label. (A durable fact about who {{user}} is goes to update_identity; a dated moment goes to save_memory — this is for naming a thing.) Returns the new node\'s id so I can immediately wire edges to it.',
       parameters: {
         type: 'object',
         properties: {
