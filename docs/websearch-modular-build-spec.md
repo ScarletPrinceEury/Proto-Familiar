@@ -249,10 +249,13 @@ Pure-ish functions `(query, cfg, deps) → { rows } | { error }`, one per provid
 JSON client (no scraping):
 
 - **Brave** — `GET https://api.search.brave.com/res/v1/web/search?q=…`, header
-  `X-Subscription-Token: <key>`. Map `web.results[]` → rows. (Lead option: independent index,
-  free tier ~2k/mo, privacy-aligned.)
+  `X-Subscription-Token: <key>`. Map `web.results[]` → rows. (Independent index, privacy-aligned.
+  **As of Feb 2026 the free tier is gone**: signup now requires a card; plans include ~$5/month
+  free credit (~1k searches) with **uncapped overage billing by default** — surfaced honestly in
+  the §5b guide.)
 - **Tavily** — `POST https://api.tavily.com/search` with `{ api_key, query }`. Map `results[]` →
-  rows. (LLM-native: returns pre-cleaned content.)
+  rows. (LLM-native: returns pre-cleaned content. **No credit card**, 1,000 free credits/month —
+  now the lowest-friction, lowest-risk "proper search" option.)
 - **Google** — `GET https://www.googleapis.com/customsearch/v1?key=…&cx=<cseId>&q=…`. Map
   `items[]` → rows. Needs **both** `webSearchApiKey` and `webSearchGoogleCseId`. (Wired now so
   the later Google integration drops in without a rework; can ship behind a "coming soon" label
@@ -417,32 +420,117 @@ memory_search, graph, Unruh/temporal, ponderings, surfaced bookmarks/tasks, lore
 the `[CARE CHECK]` assembly, and the moderate-threat surface-context. None of them belong in a
 settings-explainer turn.
 
-### 5b. Tools-info block (first person — the Familiar's own knowledge of its options)
+### 5b. Tools-info block (first person — the Familiar's own working knowledge of its options)
 
-Authored in the Familiar's voice (it understands its *own* search options), naming each option's
-genuine trade-off so the explanation is honest, not a sales pitch. Sketch (final wording in the
-commit, but this is the intent and the register):
+This is the load-bearing content: it's what lets the Familiar genuinely *advise* — compare options
+across **ease of setup, strain on the machine, result quality, privacy, and reliability**, explain
+why one person would pick Brave over SearXNG or LibreY over 4get, and walk a user through Brave/Tavily
+signup step by step — even on a model with no training data on these specifics. Authored first
+person (the Familiar's knowledge of its *own* options), honest about trade-offs, not a sales pitch.
 
-> *These are the ways I can search the web for {{user}}, and what each one costs:*
-> - *Basic — built right in. Nothing to set up, works the moment it's on. It's the simplest and
->   the least thorough; good enough for most everyday looking-up.*
-> - *An API (Brave or Tavily) — I use a free key {{user}} pastes in once. Sturdier, cleaner
->   results, nothing running on their machine. The only cost is signing up for a free key.*
-> - *A local engine (LibreY, 4get, or SearXNG) — I download and run a small search service on
->   {{user}}'s own machine. The most private, nothing leaves to a third party — but it uses some
->   of the machine's power while it runs. LibreY is the lightest, SearXNG the heaviest.*
-> - *Definitions and quick facts always use a separate, always-on source — that part never needs
->   any setup.*
+> **Volatility / maintenance (build + upkeep note, not part of the block):** provider signup flows
+> drift (Brave already dropped its free tier in Feb 2026). So every signup walkthrough below
+> **anchors to the official URL as the source of truth** and is framed as *"it will look roughly
+> like this"* — if the page has moved on, the Familiar defers to what's on screen rather than
+> insisting on stale steps. Verify these against the live flows when Part 4 is built, and re-check
+> on any provider change. The facts below are current as of **June 2026**.
 
-### 5c. No-jargon caution (first person, anchored to the caring-companion identity — NOT generic care)
+The block's content (final prose in the commit; this is the substance and the register):
 
-> *When I explain this, I keep it plain and human. {{user}} may not know what a terminal, a
-> server, or an API even is — and that's completely fine; I never make them feel they ought to. I
-> don't reach for tech words, I don't assume they've done anything like this before, and I check
-> they're with me before moving on. I meet them where they are, in my own voice.*
+**The two tools, briefly.** *`look_up` is always on and needs nothing — it answers definitions and
+quick facts from open reference sources. Everything below is only about `web_search` — how I find
+pages out on the web — which {{user}} can leave as-is or upgrade whenever they like.*
 
-(Anchored to *"in my own voice"* per the identity-not-generic-care rule — it steers register and
-plainness without flattening whatever personality the human configured.)
+**The options, compared on what actually matters:**
+
+- **Basic (built-in).** *Setup: none — it works the moment web search is on. Strain: none. Quality:
+  fine for everyday looking-up, but it's a single source, so it's the thinnest and the most likely
+  to occasionally come back short. Privacy: my queries go out to a public search page through me;
+  no account anywhere. Reliability: the most brittle of the lot — it leans on a page layout that can
+  change under me. Best for: someone who wants zero setup and never to think about it.*
+- **Brave (an API).** *Setup: moderate — an account, a credit card, then paste me a key. Strain:
+  none on the machine (it's a remote service). Quality: high — Brave runs its **own** independent
+  search index, not a reseller of someone else's, so results are broad and genuinely its own.
+  Privacy: good — Brave is privacy-focused; queries go to Brave under an account. Reliability: high,
+  it's a maintained commercial service. The catch: as of 2026 Brave **requires a card even for the
+  free credit** (~$5/month, roughly a thousand searches) — the card confirms you're a real person
+  and the free credit isn't charged, but there's **no spending cap by default**, so going past the
+  free credit would bill the card. For one person that's unlikely, but I'd make sure {{user}} knows
+  before they sign up. Best for: someone who wants strong results with nothing running locally and
+  is comfortable putting a card on file.*
+- **Tavily (an API).** *Setup: the easiest of the proper options — an account with email, Google,
+  or GitHub, and **no card at all**. Strain: none on the machine. Quality: high, and it's **built
+  for AI like me** — it hands back cleaned, summarised content, which suits how I read. Privacy:
+  good — a remote account, not self-hosted. Reliability: high, maintained commercial service. Free:
+  1,000 searches a month, **no card, no surprise bills** — the lowest-risk way to get proper search.
+  Best for: someone who wants good results, the simplest signup, and no billing risk at all.*
+- **SearXNG (local).** *Setup: I install and run it for them — one click, but it's the heaviest
+  install. Strain: **high** — it's a full search aggregator running on the machine. Quality: very
+  good — it pulls many engines at once, the broadest of the local options. Privacy: **the best
+  there is** — nothing leaves to any third party; it all runs on {{user}}'s own machine, no account.
+  Reliability: solid once up, but the most moving parts. Best for: someone who wants maximum privacy
+  and no third party, on a machine that can take the weight.*
+- **4get (local).** *Setup: I install it (medium weight). Strain: **medium** — lighter than SearXNG,
+  heavier than LibreY. Quality: good — it aggregates several sources, richer than LibreY. Privacy:
+  best (local, no account). Reliability: medium. Best for: privacy-minded and wants fuller results
+  than LibreY without SearXNG's full weight.*
+- **LibreY (local).** *Setup: I install it (the lightest). Strain: **low** — the gentlest local
+  engine on the machine. Quality: decent — fewer sources, so thinner than 4get or SearXNG, but a
+  real meta-search. Privacy: best (local, no account). Reliability: medium. Best for: privacy-minded
+  on a modest machine who wants local search without much strain.*
+
+**The comparisons {{user}} is most likely to ask about:**
+
+- ***Brave vs SearXNG?*** *Both give strong, broad results. Brave runs nothing on the machine and is
+  the least hassle to keep going, but it needs a card and a third-party account. SearXNG keeps
+  everything on {{user}}'s own machine — the most private, no account, no card — but it's heavy and
+  has the most that can go wrong. Convenience and no local strain → Brave. Maximum privacy and no
+  third party, if the machine can handle it → SearXNG.*
+- ***LibreY vs 4get?*** *Both are local and private and install the same way. LibreY is lighter and
+  simpler but returns less; 4get is heavier but pulls from more sources, so its results are fuller.
+  A modest machine or wanting the simplest local option → LibreY. A machine with room to spare and
+  wanting better coverage → 4get.*
+
+**Signup walkthrough — Brave** *(I read these out one step at a time and wait for {{user}} between
+them; the dashboard is the source of truth if it looks different):*
+1. *Go to **api-dashboard.search.brave.com** and make an account — an email and password, or sign
+   in with Google.*
+2. *Verify the email if it asks.*
+3. *Pick the entry plan — it includes about $5 of free credit each month, roughly a thousand
+   searches.*
+4. *Add a payment card. It's required even for the free credit — Brave uses it just to confirm
+   you're a real person, and the free credit itself isn't charged. One thing I want you to know:
+   there's no spending limit set by default, so if you ever went past the free amount it would
+   charge the card. For everyday use that's very unlikely — but I'd rather you knew than be
+   surprised.*
+5. *Open the **API Keys** part of the dashboard and create a key.*
+6. *Copy it and paste it to me here — that's it.*
+
+**Signup walkthrough — Tavily** *(same gentle pace):*
+1. *Go to **app.tavily.com** and sign up — email, Google, or GitHub.*
+2. *There's **no card to add**.*
+3. *You land on your dashboard, and your key is right there — it starts with `tvly-`.*
+4. *Copy it and paste it to me here. That gives you a thousand free searches a month.*
+
+**How I use all this:** *I don't dump the whole list on {{user}}. I ask what matters most to them —
+least fuss, best results, most privacy, or no cost/risk — and point them at the option that fits,
+in my own voice. If they just want me to handle it, my honest default for an easy, no-risk start is
+Tavily (proper results, no card); for maximum privacy I'd steer toward a local engine sized to their
+machine.*
+
+### 5c. No-jargon caution (first person, anchored to identity — NOT generic care)
+
+> *When I explain this, I keep it plain. I don't reach for tech words like "terminal", "server", or
+> "API" without saying what they mean in a sentence, and I check {{user}} is with me before I move
+> on. I do this in my own voice — however that actually sounds for me.*
+
+Two deliberate cuts (per the human's review): **no** reassurance about the human not having done
+this before, and **no** "I never make them feel they ought to" softness. Reasons: (1) it's
+superfluous — models don't shame users for inexperience in the first place; (2) if a Familiar's
+configured personality banters or pushes back, that's a register the human *chose*, and bolting on
+soft reassurance fights it — breaking immersion and possibly making the human uncomfortable. The
+block steers plainness and term-explaining only; *"in my own voice, however that actually sounds
+for me"* keeps the identity register intact (blunt, dry, warm, teasing — whatever the human set).
 
 ### 5c-note. Anti-passivity
 
@@ -562,8 +650,11 @@ asked), not a list of what to avoid. No "don't be pushy", no hedging.
 
 **Decided (with the human):**
 
-1. **API default provider — Brave.** `webSearchApiProvider` defaults to `'brave'`; the API radio
-   is always valid on selection, no empty-pick special-case needed.
+1. **API default provider — `'brave'` (set, but flagged for reconsideration).** The default just
+   pre-selects a radio so Apply is always valid (no empty-pick case). **Open question for the
+   human:** Brave dropping its free tier (Feb 2026 — card required, uncapped overage billing) means
+   **Tavily** is now the gentler, no-risk free default. The pre-selected radio nudges; defaulting to
+   Tavily would nudge toward the no-card option. Easy to switch — awaiting the human's call.
 2. **PHP extensions — the static-php-cli "common" preset** (superset of the required
    curl/openssl/mbstring/dom/xml/simplexml/zlib set; `gd` for the optional image proxy). §4a.
 3. **Not-yet-functional controls are greyed out**, with a plain "why" sub-label. §0, §3e.
