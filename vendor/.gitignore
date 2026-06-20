@@ -10,3 +10,6 @@ searxng/
 **/__pycache__/
 **/*.pyc
 **/*.pyo
+
+# Fetched static PHP runtime for the PHP-based local engines (4get/LibreY)
+php-runtime/
