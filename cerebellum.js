@@ -55,8 +55,8 @@ import {
   searchMemoryRestricted, searchMemory,
 } from './thalamus.js';
 import { audienceTagFor } from './audience.js';
-import { searchWeb, readWebpage } from './websearch.js';
-import { managedSearxngUrl } from './searxng-service.js';
+import { searchWeb, readWebpage, lookUp } from './websearch.js';
+import { managedEngineUrl } from './local-engine-service.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -1469,8 +1469,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'look_up',
+      description: "I reach for this when {{user}} wants a definition, a fact, or a quick overview — the encyclopedia kind of question. It draws on open reference sources (Wikipedia and a definitions API), always works without any setup, and hands me back a short grounded answer with its source. For finding pages out on the web I use web_search instead.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The thing I want defined or summarised, in plain words.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'web_search',
-      description: "I reach for this when {{user}} needs something current that my own memory doesn't hold — news, a fact I'm unsure of, a page to look up. It gives me back a handful of titles, snippets, and links I can then open with read_webpage.",
+      description: "I reach for this when {{user}} needs current or specific information out on the web — pages, news, sources. It hands me back a handful of titles, snippets, and links I can then open with read_webpage. For a plain definition or overview I use look_up instead.",
       parameters: {
         type: 'object',
         properties: {
@@ -2205,18 +2219,18 @@ export const TOOL_EXECUTORS = {
 
   // ── Web access ────────────────────────────────────────────────────
   // Thin delegation to websearch.js, which owns the SSRF guard, the
-  // timeout, and the extraction. These never appear in the tool list
-  // unless the human has opted in (webSearchEnabled) — see composeActiveTools.
-  //
-  // Effective search backend, resolved here at the boundary:
-  //   custom webSearchBaseUrl  ?? managedSearxngUrl()  ?? '' (keyless)
-  // A custom URL means "use my own SearXNG"; otherwise, if the Familiar's
-  // managed SearXNG is up, use it; otherwise the built-in keyless backend.
-  web_search: async ({ query } = {}) => {
-    const s    = readSettingsSync();
-    const base = (s.webSearchBaseUrl && String(s.webSearchBaseUrl).trim()) || managedSearxngUrl() || '';
-    return searchWeb(query, { ...s, webSearchBaseUrl: base });
-  },
+  // timeout, the backend resolution, and the extraction. These never appear
+  // in the tool list unless the human has opted in (webSearchEnabled) — see
+  // composeActiveTools. The executor just hands searchWeb the full settings
+  // (it reads the chosen backend / provider / key) plus the live managed-
+  // engine URL (runtime state the supervisor publishes); searchWeb resolves
+  // the rest and always degrades to the keyless floor.
+  web_search: async ({ query } = {}) =>
+    searchWeb(query, readSettingsSync(), { managedUrl: managedEngineUrl() }),
+  // look_up needs no backend resolution: it's always the keyless official
+  // reference APIs (Wikipedia + DDG Instant Answer), so it ignores the
+  // search-backend settings entirely.
+  look_up: async ({ query } = {}) => lookUp(query, readSettingsSync()),
   read_webpage: async ({ url } = {}) => readWebpage(url, readSettingsSync()),
 };
 
@@ -2231,11 +2245,13 @@ export const TOOL_EXECUTORS = {
  * docs/architecture.md ("Custom tools — advertise-only") for what a
  * real extension point would need before it ships.
  */
-// Web access is opt-in: it needs a local SearXNG instance, so the two
-// web tools stay out of the advertised list until the human enables them
-// (and the env off-switch can force them off regardless). A tool the
+// Web access is opt-in network egress, so the web tools stay out of the
+// advertised list until the human enables them (and the env off-switch can
+// force them off regardless). look_up and web_search work at zero config
+// (keyless reference APIs / in-process scrape floor respectively); the
+// toggle still gates them because egress itself is the opt-in. A tool the
 // Familiar can't actually use should never appear in its tool list.
-export const WEB_TOOL_NAMES = new Set(['web_search', 'read_webpage']);
+export const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 
 export function webSearchEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;

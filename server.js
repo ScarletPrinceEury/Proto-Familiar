@@ -93,7 +93,7 @@ import {
 import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
-import { startSearxngSupervisor, stopManagedSearxng } from './searxng-service.js';
+import { startLocalEngineSupervisor, stopLocalEngines, localEngineStatus, startInstall, uninstallEngine, applyLocalEngine } from './local-engine-service.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2254,6 +2254,44 @@ app.post('/api/discord/apply', (_req, res) => {
   res.json(applyDiscordSettings());
 });
 
+// ── Web search: managed local-engine lifecycle (the Settings modal) ──
+// Every handler degrades calmly — a failed install/uninstall never throws
+// into the UI, and search itself is unaffected (the floor always answers).
+
+// GET /api/websearch/engines — live status of every managed local engine
+// (installed / installing / active / unavailable), for the modal to render.
+app.get('/api/websearch/engines', (_req, res) => {
+  res.json(localEngineStatus());
+});
+
+// POST /api/websearch/engine/install { id } — begin installing an engine in
+// the background (a real install can take minutes); the modal polls status.
+app.post('/api/websearch/engine/install', (req, res) => {
+  try {
+    res.json(startInstall(String(req.body?.id || '')));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/websearch/engine/uninstall { id } — stop (if active) + delete the
+// engine's files. Fast; awaited.
+app.post('/api/websearch/engine/uninstall', async (req, res) => {
+  try {
+    await uninstallEngine(String(req.body?.id || ''));
+    res.json(localEngineStatus());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/websearch/apply — reconcile the supervisor to the saved settings
+// now (the modal's Apply, after PUT /api/settings), so a backend change takes
+// effect without waiting for the 30s tick. Returns immediate status.
+app.post('/api/websearch/apply', (_req, res) => {
+  res.json(applyLocalEngine());
+});
+
 // Knock list (V4.x) — contact attempts from unregistered people,
 // captured by the gateway so the ward can register villagers without
 // hunting platform IDs by hand. Metadata only; never message content.
@@ -2458,11 +2496,12 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startDiscordGateway();
 
   // Web-search backend (0.7.x). Keyless search always works in-process; this
-  // supervisor optionally brings up a Familiar-managed SearXNG when the ward
-  // turns on "Web search & read" (and the source is vendored), tearing it
-  // down when they turn it off. Follows settings within 30s. A failed spawn
-  // always degrades to keyless. Hard off-switch: PROTO_FAMILIAR_SEARXNG_DISABLED=1.
-  startSearxngSupervisor({ readSettings: readSettingsSync });
+  // supervisor optionally brings up a Familiar-managed local search engine
+  // (SearXNG now; 4get/LibreY in Part 3) when the ward selects the "local"
+  // backend, tearing it down when they switch away. Follows settings within
+  // 30s. A failed spawn always degrades to keyless. Hard off-switch:
+  // PROTO_FAMILIAR_LOCAL_ENGINE_DISABLED=1.
+  startLocalEngineSupervisor({ readSettings: readSettingsSync });
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2800,7 +2839,7 @@ async function handleSignal(signal) {
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
-  try { await stopManagedSearxng(); } catch { /* already stopped */ }
+  try { await stopLocalEngines(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.
