@@ -33,6 +33,8 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'fs';
 
+import { searxngSearch } from './local-engine-adapters.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SUPERVISOR_INTERVAL_MS = 30_000;
@@ -43,6 +45,7 @@ const SOURCE_RETRY_COOLDOWN_MS = 60 * 60_000;   // back off 1h after a failed fe
 // ── Supervisor state (single managed child across all engines) ─────
 let _state        = 'down';   // 'down' | 'starting' | 'ready' | 'stopping'
 let _activeId     = null;     // which engine is running (or null)
+let _activeEngine = null;     // the actual running descriptor (authoritative for search)
 let _child        = null;
 let _url          = null;
 let _timer        = null;
@@ -109,8 +112,9 @@ export async function reconcile(deps = {}) {
 async function startEngine(id, engines) {
   const eng = engines[id];
   if (!eng) { console.warn(`[local-engine] unknown engine "${id}"`); return; }
-  _state    = 'starting';
-  _activeId = id;
+  _state        = 'starting';
+  _activeId     = id;
+  _activeEngine = eng;
   try {
     if (!_depsEnsured.has(id)) {
       await eng.ensureInstalled();
@@ -123,7 +127,7 @@ async function startEngine(id, engines) {
     // If the child dies on its own, drop back to down so the next reconcile
     // (or the next search via managedEngineUrl) falls through to keyless.
     _child?.on?.('exit', () => {
-      if (_child === child) { _child = null; _url = null; _state = 'down'; _activeId = null; }
+      if (_child === child) { _child = null; _url = null; _state = 'down'; _activeId = null; _activeEngine = null; }
     });
     console.log(`[local-engine] ${id} ready at ${url}`);
   } catch (err) {
@@ -138,9 +142,10 @@ async function stopEngine() {
     try { _child.kill('SIGTERM'); } catch { /* already gone */ }
     _child = null;
   }
-  _url      = null;
-  _activeId = null;
-  _state    = 'down';
+  _url          = null;
+  _activeId     = null;
+  _activeEngine = null;
+  _state        = 'down';
 }
 
 /**
@@ -246,6 +251,25 @@ export function localEngineStatus() {
 export function applyLocalEngine() {
   reconcile({ readSettings: _readSettings }).catch(() => {});
   return localEngineStatus();
+}
+
+/**
+ * Query the currently-running managed engine, in its own JSON dialect. Bound
+ * into searchWeb (cerebellum injects this as deps.managedSearch) so web search
+ * can use whichever engine is active without knowing its shape. Returns
+ * { error } when nothing is ready — searchWeb degrades that to the keyless
+ * floor. Never throws.
+ */
+export async function managedEngineSearch(q, deps = {}) {
+  if (_state !== 'ready' || !_activeEngine || !_url) {
+    return { error: 'no managed search engine is running right now.' };
+  }
+  if (!_activeEngine.search) return { error: 'the running engine has no search adapter.' };
+  try {
+    return await _activeEngine.search(_url, q, deps);
+  } catch (err) {
+    return { error: `my ${_activeEngine.label} search failed (${err.message}).` };
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -378,6 +402,7 @@ const searxngEngine = {
   installed:       searxngInstalled,
   ensureInstalled: ensureSearxngDeps,
   spawn:           spawnSearxng,
+  search:          searxngSearch,   // (base, q, deps) → {rows}|{error}
   uninstall: async () => {
     rmSync(SEARXNG_DIR, { recursive: true, force: true });
     _searxngSourceRetryTs = 0;
@@ -396,6 +421,7 @@ function pendingPhpEngine(id, label, strain) {
     installed: () => false,
     ensureInstalled: soon,
     spawn: soon,
+    search: async () => ({ error: `${label} isn't available yet` }),
     uninstall: async () => {},
   };
 }
