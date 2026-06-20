@@ -93,7 +93,7 @@ import {
 import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
-import { startSearxngSupervisor, stopManagedSearxng } from './searxng-service.js';
+import { startLocalEngineSupervisor, stopLocalEngines } from './local-engine-service.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2458,11 +2458,12 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startDiscordGateway();
 
   // Web-search backend (0.7.x). Keyless search always works in-process; this
-  // supervisor optionally brings up a Familiar-managed SearXNG when the ward
-  // turns on "Web search & read" (and the source is vendored), tearing it
-  // down when they turn it off. Follows settings within 30s. A failed spawn
-  // always degrades to keyless. Hard off-switch: PROTO_FAMILIAR_SEARXNG_DISABLED=1.
-  startSearxngSupervisor({ readSettings: readSettingsSync });
+  // supervisor optionally brings up a Familiar-managed local search engine
+  // (SearXNG now; 4get/LibreY in Part 3) when the ward selects the "local"
+  // backend, tearing it down when they switch away. Follows settings within
+  // 30s. A failed spawn always degrades to keyless. Hard off-switch:
+  // PROTO_FAMILIAR_LOCAL_ENGINE_DISABLED=1.
+  startLocalEngineSupervisor({ readSettings: readSettingsSync });
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2800,7 +2801,7 @@ async function handleSignal(signal) {
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
-  try { await stopManagedSearxng(); } catch { /* already stopped */ }
+  try { await stopLocalEngines(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

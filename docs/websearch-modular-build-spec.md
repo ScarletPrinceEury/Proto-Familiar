@@ -1,7 +1,8 @@
 # Modular web search — build spec
 
-> **Status: IN PROGRESS — Part 1 shipped (`0.7.19-alpha`); Part 2a (backend engine: provider
-> adapters + resolution + settings) shipped (`0.7.20-alpha`); Parts 2b–4 planned.** This is the build
+> **Status: IN PROGRESS — Part 1 shipped (`0.7.19-alpha`); Part 2a (backend engine) shipped
+> (`0.7.20-alpha`); Part 2b (engine-agnostic local supervisor) shipped (`0.7.21-alpha`); Part 2c
+> (modal + endpoints) and Parts 3–4 planned.** This is the build
 > instruction for reworking web search from a single backend into **two distinct tools** (info
 > lookup vs. website search) and a **modular, human-pickable backend** (Basic / API / Local engine)
 > presented in a popout modal — with an in-modal **Familiar explainer** so the human can be guided
