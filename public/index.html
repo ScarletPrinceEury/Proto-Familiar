@@ -297,18 +297,9 @@
               <label for="web-search-enabled">Web search &amp; read</label>
               <input type="checkbox" id="web-search-enabled">
             </div>
-            <p class="field-hint">Adds <code>web_search</code> + <code>read_webpage</code>. Works out of the box — nothing to install. Just turn it on.</p>
-            <div class="field">
-              <label for="web-search-base-url">Custom search backend <span class="label-hint">(optional, advanced)</span></label>
-              <input type="text" id="web-search-base-url" placeholder="(blank = built-in search) e.g. http://localhost:8080 for your own SearXNG" spellcheck="false">
-            </div>
-            <div class="field-row">
-              <label for="web-search-max-results">Search results to keep</label>
-              <input type="number" id="web-search-max-results" min="1" max="20" step="1" style="width:5em">
-            </div>
-            <div class="field-row">
-              <label for="web-search-max-chars">Max page chars read</label>
-              <input type="number" id="web-search-max-chars" min="500" max="100000" step="500" style="width:7em">
+            <p class="field-hint">Adds <code>look_up</code> (definitions), <code>web_search</code> (finding pages) + <code>read_webpage</code>. Works out of the box — nothing to install. Just turn it on.</p>
+            <div class="field-actions">
+              <button class="btn-secondary" id="web-search-configure-btn" type="button">⚙ Configure search backend…</button>
             </div>
           </div>
         </div>
@@ -591,6 +582,69 @@
       <div class="modal-footer">
         <button class="btn-ghost" id="topic-name-cancel-btn">Cancel</button>
         <button class="btn-send" id="topic-name-start-btn">Start Topic</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Web search backend modal -->
+  <div class="modal-backdrop hidden" id="websearch-modal" role="dialog" aria-modal="true" aria-labelledby="websearch-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="websearch-modal-title">Web search</h2>
+        <button class="icon-btn modal-close" id="websearch-modal-close" aria-label="Close modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint"><strong>Definitions &amp; facts</strong> (<code>look_up</code>) are always on and need no setup. The choice below is only how I <strong>find web pages</strong> (<code>web_search</code>).</p>
+
+        <div class="field">
+          <label class="ws-opt"><input type="radio" name="web-search-backend" value="basic"><span><strong>Basic</strong> — built-in, no setup. Works for everyone.</span></label>
+          <label class="ws-opt"><input type="radio" name="web-search-backend" value="api"><span><strong>API</strong> — proper search, paste one key.</span></label>
+          <label class="ws-opt"><input type="radio" name="web-search-backend" value="local"><span><strong>Local engine</strong> — runs privately on your machine.</span></label>
+        </div>
+
+        <!-- API panel -->
+        <div id="websearch-api-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
+          <div class="field">
+            <label>Provider</label>
+            <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="tavily"><span>Tavily — no card, 1,000 free/month (easiest)</span></label>
+            <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="brave"><span>Brave — independent index (needs a card)</span></label>
+            <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="google"><span>Google — needs a key + an engine id</span></label>
+          </div>
+          <div class="field">
+            <label for="web-search-api-key">API key</label>
+            <input type="password" id="web-search-api-key" placeholder="paste your key here" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="field hidden" id="websearch-google-cse-field">
+            <label for="web-search-google-cse-id">Google engine id <span class="label-hint">(cx)</span></label>
+            <input type="text" id="web-search-google-cse-id" placeholder="Programmable Search engine id" spellcheck="false" autocomplete="off">
+          </div>
+        </div>
+
+        <!-- Local panel -->
+        <div id="websearch-local-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
+          <p class="field-hint">I download and run one of these on your machine. More private — nothing leaves to a third party — but it uses some of the machine's power while it runs.</p>
+          <div id="websearch-engine-list"></div>
+        </div>
+
+        <details class="field" style="margin-top:10px">
+          <summary style="cursor:pointer">Advanced: point at your own instance</summary>
+          <input type="text" id="web-search-base-url" placeholder="(blank = use the choice above) e.g. http://localhost:8080 for your own SearXNG" spellcheck="false" style="margin-top:6px;width:100%">
+          <p class="field-hint">When set, this wins over everything above.</p>
+        </details>
+
+        <div class="field-row" style="margin-top:10px">
+          <label for="web-search-max-results">Search results to keep</label>
+          <input type="number" id="web-search-max-results" min="1" max="20" step="1" style="width:5em">
+        </div>
+        <div class="field-row">
+          <label for="web-search-max-chars">Max page chars read</label>
+          <input type="number" id="web-search-max-chars" min="500" max="100000" step="500" style="width:7em">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span class="field-hint" id="websearch-apply-status" style="margin-right:auto"></span>
+        <button class="btn-ghost" id="websearch-modal-cancel" type="button">Close</button>
+        <button class="btn-send" id="websearch-apply-btn" type="button">Apply</button>
       </div>
     </div>
   </div>

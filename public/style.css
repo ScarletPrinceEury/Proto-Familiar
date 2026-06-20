@@ -3117,3 +3117,14 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   min-width: 0;
   font-size: 0.82rem;
 }
+
+/* Web search modal — option radio rows */
+.ws-opt {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 5px 0;
+  cursor: pointer;
+  line-height: 1.35;
+}
+.ws-opt input { margin-top: 3px; flex: none; }

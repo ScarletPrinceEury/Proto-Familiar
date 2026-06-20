@@ -93,7 +93,7 @@ import {
 import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
-import { startLocalEngineSupervisor, stopLocalEngines } from './local-engine-service.js';
+import { startLocalEngineSupervisor, stopLocalEngines, localEngineStatus, startInstall, uninstallEngine, applyLocalEngine } from './local-engine-service.js';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2252,6 +2252,44 @@ app.get('/api/discord/status', (_req, res) => {
 // supervisor tick or reload the page. Returns the resulting gateway status.
 app.post('/api/discord/apply', (_req, res) => {
   res.json(applyDiscordSettings());
+});
+
+// ── Web search: managed local-engine lifecycle (the Settings modal) ──
+// Every handler degrades calmly — a failed install/uninstall never throws
+// into the UI, and search itself is unaffected (the floor always answers).
+
+// GET /api/websearch/engines — live status of every managed local engine
+// (installed / installing / active / unavailable), for the modal to render.
+app.get('/api/websearch/engines', (_req, res) => {
+  res.json(localEngineStatus());
+});
+
+// POST /api/websearch/engine/install { id } — begin installing an engine in
+// the background (a real install can take minutes); the modal polls status.
+app.post('/api/websearch/engine/install', (req, res) => {
+  try {
+    res.json(startInstall(String(req.body?.id || '')));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/websearch/engine/uninstall { id } — stop (if active) + delete the
+// engine's files. Fast; awaited.
+app.post('/api/websearch/engine/uninstall', async (req, res) => {
+  try {
+    await uninstallEngine(String(req.body?.id || ''));
+    res.json(localEngineStatus());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/websearch/apply — reconcile the supervisor to the saved settings
+// now (the modal's Apply, after PUT /api/settings), so a backend change takes
+// effect without waiting for the 30s tick. Returns immediate status.
+app.post('/api/websearch/apply', (_req, res) => {
+  res.json(applyLocalEngine());
 });
 
 // Knock list (V4.x) — contact attempts from unregistered people,

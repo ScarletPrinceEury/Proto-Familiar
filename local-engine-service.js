@@ -48,6 +48,8 @@ let _url          = null;
 let _timer        = null;
 let _readSettings = () => ({});
 const _depsEnsured = new Set();   // engine ids whose install was confirmed this run
+const _installing  = new Set();   // engine ids whose install is in flight (modal polls this)
+const _installErr  = new Map();   // engine id → last install error message
 
 /** The healthy managed URL, or null when nothing is running. Safe to call
  *  anytime — searchWeb uses it to resolve the 'local' backend. */
@@ -78,7 +80,8 @@ export function desiredEngine(settings, { disabled = localEngineHardDisabled, en
   if (String(settings?.webSearchBaseUrl || '').trim()) return null;          // their own instance
   if (String(settings?.webSearchBackend || 'basic') !== 'local') return null; // not the local backend
   const id = String(settings?.webSearchLocalEngine || 'searxng');
-  return engines[id] ? id : null;
+  const eng = engines[id];
+  return (eng && eng.available !== false) ? id : null; // unavailable (not-yet-wired) → never desired
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────
@@ -170,9 +173,26 @@ export async function stopLocalEngines() {
 export async function installEngine(id) {
   const eng = ENGINES[id];
   if (!eng) throw new Error(`unknown engine "${id}"`);
+  if (eng.available === false) throw new Error(`${eng.label} isn't available yet`);
   await eng.ensureInstalled();
   _depsEnsured.add(id);
   return { id, installed: true };
+}
+
+/** Kick off installEngine in the BACKGROUND and record progress, so the HTTP
+ *  handler returns immediately (a real install — git fetch + venv — can take
+ *  minutes) and the modal polls localEngineStatus for the phase. */
+export function startInstall(id) {
+  const eng = ENGINES[id];
+  if (!eng) throw new Error(`unknown engine "${id}"`);
+  if (eng.available === false) throw new Error(`${eng.label} isn't available yet`);
+  if (_installing.has(id)) return { id, phase: 'installing' };
+  _installing.add(id);
+  _installErr.delete(id);
+  installEngine(id)
+    .then(()    => { _installing.delete(id); })
+    .catch(err => { _installing.delete(id); _installErr.set(id, err.message); });
+  return { id, phase: 'installing' };
 }
 
 /** Stop (if active) and delete an engine's installed files (the modal's
@@ -190,14 +210,26 @@ export async function uninstallEngine(id) {
 export function localEngineStatus() {
   const engines = {};
   for (const [id, e] of Object.entries(ENGINES)) {
+    const installed = e.installed();
+    const active    = _activeId === id && _state === 'ready';
+    // The single phase the modal renders its buttons from.
+    let phase;
+    if (e.available === false)  phase = 'unavailable';   // not-yet-wired → greyed
+    else if (_installing.has(id)) phase = 'installing';
+    else if (active)            phase = 'active';
+    else if (installed)         phase = 'installed';
+    else if (_installErr.has(id)) phase = 'failed';
+    else                        phase = 'absent';
     engines[id] = {
       id,
       label:     e.label,
       strain:    e.strain,       // 'low' | 'med' | 'high'
       runtime:   e.runtime,      // 'python' | 'php'
-      available: e.available !== false,  // false → install greyed out until wired (Part 3)
-      installed: e.installed(),
-      active:    _activeId === id && _state === 'ready',
+      available: e.available !== false,
+      installed,
+      active,
+      phase,
+      error:     _installErr.get(id) || null,
     };
   }
   return {
@@ -206,6 +238,14 @@ export function localEngineStatus() {
     hardDisabled: localEngineHardDisabled(),
     engines,
   };
+}
+
+/** Trigger an immediate reconcile (the modal's Apply, so a backend change
+ *  takes effect now rather than on the next 30s tick). Fire-and-forget —
+ *  spawning can be slow; the modal polls localEngineStatus for the outcome. */
+export function applyLocalEngine() {
+  reconcile({ readSettings: _readSettings }).catch(() => {});
+  return localEngineStatus();
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -344,10 +384,26 @@ const searxngEngine = {
   },
 };
 
-// The engine registry. 4get / LibreY descriptors (runtime:'php', available
-// after the static-PHP fetch) join here in Part 3.
+// 4get / LibreY are PHP engines that need a fetched static PHP runtime — that
+// arrives in Part 3. Until then they're listed (so the modal shows the whole
+// map and greys their controls) but marked available:false, which keeps them
+// out of desiredEngine and refuses install. Part 3 fills in their real
+// installed/ensureInstalled/spawn/uninstall and flips available to true.
+function pendingPhpEngine(id, label, strain) {
+  const soon = async () => { throw new Error(`${label} isn't available yet (a future update adds it)`); };
+  return {
+    id, label, strain, runtime: 'php', available: false,
+    installed: () => false,
+    ensureInstalled: soon,
+    spawn: soon,
+    uninstall: async () => {},
+  };
+}
+
 const ENGINES = {
   searxng: searxngEngine,
+  '4get':  pendingPhpEngine('4get',  '4get',   'med'),
+  librey:  pendingPhpEngine('librey', 'LibreY', 'low'),
 };
 
 // ── Shared spawn helpers ──────────────────────────────────────────

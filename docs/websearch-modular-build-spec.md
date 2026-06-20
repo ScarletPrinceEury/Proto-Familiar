@@ -1,8 +1,9 @@
 # Modular web search — build spec
 
-> **Status: IN PROGRESS — Part 1 shipped (`0.7.19-alpha`); Part 2a (backend engine) shipped
-> (`0.7.20-alpha`); Part 2b (engine-agnostic local supervisor) shipped (`0.7.21-alpha`); Part 2c
-> (modal + endpoints) and Parts 3–4 planned.** This is the build
+> **Status: IN PROGRESS — Part 1 (`0.7.19`), Part 2a (backend engine, `0.7.20`), Part 2b
+> (engine-agnostic supervisor, `0.7.21`), and Part 2c (the modal + endpoints, `0.7.22`) all
+> shipped — Part 2 is complete. Parts 3 (4get/LibreY via static PHP) and 4 (the in-modal Familiar
+> explainer) planned.** This is the build
 > instruction for reworking web search from a single backend into **two distinct tools** (info
 > lookup vs. website search) and a **modular, human-pickable backend** (Basic / API / Local engine)
 > presented in a popout modal — with an in-modal **Familiar explainer** so the human can be guided

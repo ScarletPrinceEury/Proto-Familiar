@@ -237,6 +237,12 @@ ack/cancel — see `memorization.js`.
 - `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, a `fatal` flag (token/intents rejected — the UI shows red instead of a perpetual "reconnecting"), plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
 - `POST /api/discord/apply` — apply the saved Discord settings and (re)connect immediately (the Settings "Apply & connect" button), clearing any fatal state; returns the resulting status. Saves the ward waiting for the 30s supervisor tick or reloading the page
 
+**Web search backend (the Settings "Configure search backend" modal, 0.7.22):**
+- `GET /api/websearch/engines` — live status of every managed local engine (`phase`: absent/installing/installed/active/unavailable, per-engine strain/runtime/error), for the modal to render
+- `POST /api/websearch/engine/install` `{ id }` — begin installing an engine in the background (a real install can take minutes); the modal polls the status endpoint. Refuses not-yet-wired (`available:false`) engines
+- `POST /api/websearch/engine/uninstall` `{ id }` — stop (if active) + delete the engine's files; returns fresh status
+- `POST /api/websearch/apply` — reconcile the local-engine supervisor to the saved settings now (after `PUT /api/settings`), so a backend change takes effect without waiting for the 30s tick
+
 **Threat surface:**
 - `GET /api/threat` — current tier + weight + last_touched + disabled
 - `GET /api/threat/history?limit=N` — audit trail
