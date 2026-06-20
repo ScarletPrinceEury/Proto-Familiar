@@ -395,8 +395,12 @@ def _upsert_node_embedding(conn: sqlite3.Connection, node_id: str, label: str, d
         from phylactery.embed import embed_text
         text = f"{label} {description}".strip()
         vec = embed_text(text)
+        # vec0 virtual tables don't honor "INSERT OR REPLACE" — re-embedding an
+        # existing node_id raises a UNIQUE-constraint error rather than
+        # replacing. Delete-then-insert is the safe pattern (mirrors memory.py).
+        conn.execute("DELETE FROM graph_node_vecs WHERE node_id=?", (node_id,))
         conn.execute(
-            "INSERT OR REPLACE INTO graph_node_vecs(node_id, embedding) VALUES (?, ?)",
+            "INSERT INTO graph_node_vecs(node_id, embedding) VALUES (?, ?)",
             (node_id, vec),
         )
         conn.commit()

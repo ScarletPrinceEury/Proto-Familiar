@@ -376,8 +376,13 @@ def _upsert_embedding(conn: sqlite3.Connection, record_id: str, content: str) ->
     try:
         from phylactery.embed import embed_text
         vec = embed_text(content[:2000])
+        # sqlite-vec (vec0) virtual tables do NOT honor "INSERT OR REPLACE" /
+        # UPSERT conflict resolution — re-embedding an existing memory_id raises
+        # "UNIQUE constraint failed on memory_vecs primary key" instead of
+        # replacing. Delete-then-insert is the documented safe pattern.
+        conn.execute("DELETE FROM memory_vecs WHERE memory_id=?", (record_id,))
         conn.execute(
-            "INSERT OR REPLACE INTO memory_vecs(memory_id, embedding) VALUES (?, ?)",
+            "INSERT INTO memory_vecs(memory_id, embedding) VALUES (?, ?)",
             (record_id, vec),
         )
         conn.commit()

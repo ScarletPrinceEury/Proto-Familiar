@@ -2,7 +2,14 @@
 
 > **Status: COMPLETE — Parts 1–4 shipped.** Part 4 (the in-modal Familiar explainer) landed at
 > `0.7.29` (`guide-chat.js` + `POST /api/guide-chat` + the modal mini-chat). The whole arc — two-tool
-> split, modular Basic/API/Local backend, static-PHP local engines, and the explainer — is done. Part 3 (`0.7.24`–`0.7.26`): the managedSearch seam (3a), `php-runtime.js`
+> split, modular Basic/API/Local backend, static-PHP local engines, and the explainer — is done.
+>
+> **Local-engine reality check (`0.7.31`):** the search observability log caught that the PHP
+> engines were *spawning + health-passing but silently failing the actual search* (fooled by the
+> keyless fallback). **LibreY**: fixed — its API wants `t=0&p=0` (numeric type + page), not
+> `type=text`; now the working light local engine. **4get**: held back (greyed) — its JSON API is
+> API-key-gated (401 on the reference instance), needing config-side key generation + auth not yet
+> wired. The fallback log now includes the engine's actual error so misconfig is diagnosable. Part 3 (`0.7.24`–`0.7.26`): the managedSearch seam (3a), `php-runtime.js`
 > static-PHP fetcher (3b, + Windows official-PHP support `0.7.27`), and the 4get + LibreY engines
 > (3c). The PHP runtime fetches a static binary on Linux/macOS and the official windows.php.net NTS
 > zip (+ generated php.ini) on Windows x64, so the engines work on all three. **Smoke-test caveat:**

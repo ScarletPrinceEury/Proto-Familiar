@@ -241,11 +241,13 @@ export async function searchWeb(query, settings = {}, deps = {}) {
   if (!isBasic) {
     const fallback = await searchViaDuckDuckGo(q, deps);
     if (!fallback.error) {
-      console.log(`[websearch] "${q}" — ${label} unavailable; fell back to built-in keyless search`);
+      // Include the chosen backend's actual error so a misconfigured engine
+      // is diagnosable (HTTP code / parse failure) rather than just "fell back".
+      console.log(`[websearch] "${q}" — ${label} failed [${primary.error}]; fell back to built-in keyless search`);
       return formatResults(q, fallback.rows, maxResults);
     }
   }
-  console.log(`[websearch] "${q}" — search failed (${label})`);
+  console.log(`[websearch] "${q}" — search failed (${label}) [${primary.error}]`);
   return primary.error; // the floor itself failed, or both down → report it
 }
 

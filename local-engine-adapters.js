@@ -52,11 +52,13 @@ const keepRows = (arr) => (Array.isArray(arr) ? arr : [])
   .map(toRow)
   .filter(row => row.url && row.title);
 
-// LibreY: GET /api.php?q=…&type=text → a JSON ARRAY of {title,url,description}
-// (a leading infobox/special element may appear; keepRows drops anything
-// without a url+title). API is on by default (config disable_api:false).
+// LibreY: GET /api.php?q=…&t=0&p=0 → a JSON ARRAY of {title,url,description}.
+// `t` is the numeric search type (0=text) and `p` the page (0=first) — NOT
+// `type=text` (confirmed from LibreY's api.php source). A leading infobox/
+// special element may appear; keepRows drops anything without a url+title.
+// API is on by default (config disable_api:false); a 500 / HTML body → {error}.
 export async function libreySearch(base, q, { fetchFn = fetch } = {}) {
-  const url = `${trimBase(base)}/api.php?q=${encodeURIComponent(q)}&type=text`;
+  const url = `${trimBase(base)}/api.php?q=${encodeURIComponent(q)}&t=0&p=0`;
   try {
     const res = await timedFetch(url, { fetchFn });
     if (!res.ok) return { error: `My LibreY search came back with an error (HTTP ${res.status}).` };
