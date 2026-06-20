@@ -2219,18 +2219,14 @@ export const TOOL_EXECUTORS = {
 
   // ── Web access ────────────────────────────────────────────────────
   // Thin delegation to websearch.js, which owns the SSRF guard, the
-  // timeout, and the extraction. These never appear in the tool list
-  // unless the human has opted in (webSearchEnabled) — see composeActiveTools.
-  //
-  // Effective search backend, resolved here at the boundary:
-  //   custom webSearchBaseUrl  ?? managedSearxngUrl()  ?? '' (keyless)
-  // A custom URL means "use my own SearXNG"; otherwise, if the Familiar's
-  // managed SearXNG is up, use it; otherwise the built-in keyless backend.
-  web_search: async ({ query } = {}) => {
-    const s    = readSettingsSync();
-    const base = (s.webSearchBaseUrl && String(s.webSearchBaseUrl).trim()) || managedSearxngUrl() || '';
-    return searchWeb(query, { ...s, webSearchBaseUrl: base });
-  },
+  // timeout, the backend resolution, and the extraction. These never appear
+  // in the tool list unless the human has opted in (webSearchEnabled) — see
+  // composeActiveTools. The executor just hands searchWeb the full settings
+  // (it reads the chosen backend / provider / key) plus the live managed-
+  // engine URL (runtime state the supervisor publishes); searchWeb resolves
+  // the rest and always degrades to the keyless floor.
+  web_search: async ({ query } = {}) =>
+    searchWeb(query, readSettingsSync(), { managedUrl: managedSearxngUrl() }),
   // look_up needs no backend resolution: it's always the keyless official
   // reference APIs (Wikipedia + DDG Instant Answer), so it ignores the
   // search-backend settings entirely.

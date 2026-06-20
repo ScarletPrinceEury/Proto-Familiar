@@ -153,6 +153,52 @@ test('searchWeb needs a query', async () => {
   assert.match(await searchWeb('   ', {}), /need something to search/);
 });
 
+// ── searchWeb: backend selection (api / local / floor) ───────────
+test('searchWeb (api backend) uses the chosen provider', async () => {
+  const fetchFn = async () => ({ ok: true, json: async () => ({ results: [{ title: 'P', url: 'https://p.test', content: 'cp' }] }) });
+  const out = await searchWeb('cats',
+    { webSearchBackend: 'api', webSearchApiProvider: 'tavily', webSearchApiKey: 'tvly-x' },
+    { fetchFn });
+  assert.match(out, /1\. P/);
+  assert.match(out, /https:\/\/p\.test/);
+});
+
+test('searchWeb (api backend) falls back to the keyless floor when the provider errors', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const fetchFn  = async (url) => {
+    if (url.includes('tavily')) return { ok: false, status: 401 };  // bad key
+    return { ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML };
+  };
+  const out = await searchWeb('cats',
+    { webSearchBackend: 'api', webSearchApiProvider: 'tavily', webSearchApiKey: 'bad' },
+    { fetchFn, lookupFn });
+  assert.match(out, /Result A/); // floor answered — never left without search
+});
+
+test('searchWeb (api backend, no key set) still answers via the floor', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const fetchFn  = async (url) => ({ ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML });
+  const out = await searchWeb('cats',
+    { webSearchBackend: 'api', webSearchApiProvider: 'brave' }, // no webSearchApiKey
+    { fetchFn, lookupFn });
+  assert.match(out, /Result A/);
+});
+
+test('searchWeb (local backend) uses the managed engine URL when one is ready', async () => {
+  let hit = '';
+  const fetchFn = async (url) => { hit = url; return { ok: true, json: async () => ({ results: [{ title: 'M', url: 'http://m.test', content: 'cm' }] }) }; };
+  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, managedUrl: 'http://127.0.0.1:9' });
+  assert.match(hit, /^http:\/\/127\.0\.0\.1:9\/search\?q=cats&format=json$/);
+  assert.match(out, /1\. M/);
+});
+
+test('searchWeb (local backend) falls to the floor when no managed engine is ready', async () => {
+  const lookupFn = async () => [{ address: '93.184.216.34' }];
+  const fetchFn  = async (url) => ({ ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML });
+  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, lookupFn }); // no managedUrl
+  assert.match(out, /Result A/);
+});
+
 // ── lookUp: keyless reference APIs (Wikipedia + DDG Instant Answer) ──
 const lookupPublic = async () => [{ address: '93.184.216.34' }];
 

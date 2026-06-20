@@ -1,6 +1,7 @@
 # Modular web search — build spec
 
-> **Status: IN PROGRESS — Part 1 shipped (`0.7.19-alpha`); Parts 2–4 planned.** This is the build
+> **Status: IN PROGRESS — Part 1 shipped (`0.7.19-alpha`); Part 2a (backend engine: provider
+> adapters + resolution + settings) shipped (`0.7.20-alpha`); Parts 2b–4 planned.** This is the build
 > instruction for reworking web search from a single backend into **two distinct tools** (info
 > lookup vs. website search) and a **modular, human-pickable backend** (Basic / API / Local engine)
 > presented in a popout modal — with an in-modal **Familiar explainer** so the human can be guided
@@ -214,7 +215,7 @@ fields in `settings.json` (and the user-pref subset added to `SERVER_SYNCED_KEYS
 | Field | Meaning |
 |---|---|
 | `webSearchBackend` | `'basic' \| 'api' \| 'local'` — governs `web_search` only. Default `'basic'`. |
-| `webSearchApiProvider` | `'brave' \| 'tavily' \| 'google'` — **default `'brave'`**. Defaulting (vs. special-casing an empty pick on Apply) is the cheaper path *and* means the API radio is always valid the moment the human selects API mode. |
+| `webSearchApiProvider` | `'brave' \| 'tavily' \| 'google'` — **default `'tavily'`** (Part 2a). Defaulting (vs. special-casing an empty pick on Apply) keeps the API radio always valid; Tavily is the default because it needs no card and carries no billing risk (Brave dropped its free tier Feb 2026). |
 | `webSearchApiKey` | provider key (secret; gitignored with the rest of `settings.json`) |
 | `webSearchGoogleCseId` | Google only — the Programmable-Search engine id (Google needs **two** values) |
 | `webSearchLocalEngine` | `'searxng' \| '4get' \| 'librey'` — which local engine is *selected* |
@@ -650,11 +651,10 @@ asked), not a list of what to avoid. No "don't be pushy", no hedging.
 
 **Decided (with the human):**
 
-1. **API default provider — `'brave'` (set, but flagged for reconsideration).** The default just
-   pre-selects a radio so Apply is always valid (no empty-pick case). **Open question for the
-   human:** Brave dropping its free tier (Feb 2026 — card required, uncapped overage billing) means
-   **Tavily** is now the gentler, no-risk free default. The pre-selected radio nudges; defaulting to
-   Tavily would nudge toward the no-card option. Easy to switch — awaiting the human's call.
+1. **API default provider — `'tavily'` (decided in Part 2a).** The default just pre-selects a radio
+   so Apply is always valid (no empty-pick case). Tavily over Brave because Brave dropped its free
+   tier (Feb 2026 — card required, uncapped overage billing) and Tavily needs no card / carries no
+   billing risk. The Familiar still guides across all options; this only sets the initial highlight.
 2. **PHP extensions — the static-php-cli "common" preset** (superset of the required
    curl/openssl/mbstring/dom/xml/simplexml/zlib set; `gd` for the optional image proxy). §4a.
 3. **Not-yet-functional controls are greyed out**, with a plain "why" sub-label. §0, §3e.

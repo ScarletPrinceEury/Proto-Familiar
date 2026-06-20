@@ -173,7 +173,15 @@ const state = {
   customTools:       '',     // JSON array string of user-defined tool definitions
   // ── Web search (opt-in; works in-box, no setup) ─────────────
   webSearchEnabled:    false,
-  webSearchBaseUrl:    '',     // blank = built-in keyless search; set to use your own SearXNG
+  // Backend for web_search (finding pages). 'basic' = built-in keyless scrape
+  // (the floor, no setup); 'api' = a proper provider key; 'local' = a Familiar-
+  // managed engine. look_up (definitions) ignores all of this.
+  webSearchBackend:     'basic',  // 'basic' | 'api' | 'local'
+  webSearchApiProvider: 'tavily', // 'brave' | 'tavily' | 'google' (Tavily: no card, no billing risk)
+  webSearchApiKey:      '',       // provider key (secret; lives in gitignored settings.json)
+  webSearchGoogleCseId: '',       // Google only — Programmable-Search engine id
+  webSearchLocalEngine: 'searxng',// 'searxng' | '4get' | 'librey' — which managed engine is selected
+  webSearchBaseUrl:    '',        // power-user escape hatch: point at your own SearXNG; when set it wins
   webSearchMaxResults: 5,
   webSearchMaxChars:   15000,
   // ── Topics & tomes (lorebook) ───────────────────────────
@@ -278,7 +286,9 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools',
-  'webSearchEnabled', 'webSearchBaseUrl', 'webSearchMaxResults', 'webSearchMaxChars',
+  'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
+  'webSearchGoogleCseId', 'webSearchLocalEngine', 'webSearchBaseUrl',
+  'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
