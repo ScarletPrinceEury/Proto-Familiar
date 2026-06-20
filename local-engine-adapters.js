@@ -25,13 +25,22 @@ function abortOr(err, name) {
   return { error: `I couldn't reach my ${name} instance (${err.message}). It may be down.` };
 }
 
+// Build an error result that includes the engine's own response body (the
+// engines return a JSON/text error on 500), so a misconfig is diagnosable
+// from the [websearch] log rather than just "HTTP 500".
+async function httpErr(res, name) {
+  let detail = '';
+  try { detail = (await res.text()).replace(/\s+/g, ' ').trim().slice(0, 300); } catch { /* body unreadable */ }
+  return { error: `My ${name} search came back with an error (HTTP ${res.status})${detail ? `: ${detail}` : ''}.` };
+}
+
 // SearXNG: GET /search?q=…&format=json → { results: [{title,url,content}, …] }
 // (results already carry title/url/content, so they pass through unmapped.)
 export async function searxngSearch(base, q, { fetchFn = fetch } = {}) {
   const url = `${trimBase(base)}/search?q=${encodeURIComponent(q)}&format=json`;
   try {
     const res = await timedFetch(url, { fetchFn });
-    if (!res.ok) return { error: `My search came back with an error (HTTP ${res.status}). My SearXNG instance needs JSON output enabled.` };
+    if (!res.ok) return httpErr(res, 'SearXNG');
     const data = await res.json();
     return { rows: Array.isArray(data?.results) ? data.results : [] };
   } catch (err) {
@@ -61,7 +70,7 @@ export async function libreySearch(base, q, { fetchFn = fetch } = {}) {
   const url = `${trimBase(base)}/api.php?q=${encodeURIComponent(q)}&t=0&p=0`;
   try {
     const res = await timedFetch(url, { fetchFn });
-    if (!res.ok) return { error: `My LibreY search came back with an error (HTTP ${res.status}).` };
+    if (!res.ok) return httpErr(res, 'LibreY');
     const data = await res.json();
     const arr = Array.isArray(data) ? data : (data?.results || data?.items);
     return { rows: keepRows(arr) };
@@ -79,7 +88,7 @@ export async function fourgetSearch(base, q, { fetchFn = fetch } = {}) {
   const url = `${trimBase(base)}/api/v1/web?s=${encodeURIComponent(q)}`;
   try {
     const res = await timedFetch(url, { fetchFn });
-    if (!res.ok) return { error: `My 4get search came back with an error (HTTP ${res.status}).` };
+    if (!res.ok) return httpErr(res, '4get');
     const data = await res.json();
     const arr = data?.web || data?.results || (Array.isArray(data) ? data : []);
     return { rows: keepRows(arr) };

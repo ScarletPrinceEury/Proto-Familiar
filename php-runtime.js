@@ -116,7 +116,12 @@ export async function ensurePhp(deps = {}) {
   }
   const dir = path.join(RUNTIME_ROOT, spec.dir);
   const bin = path.join(dir, spec.binary);
-  if (existsSync(bin)) return bin;
+  if (existsSync(bin)) {
+    // Already installed. On Windows, make sure the CA bundle + ini are present
+    // (older installs predate this) so curl HTTPS works — without a reinstall.
+    if (spec.kind === 'windows') await ensureWindowsConfig(dir, deps);
+    return bin;
+  }
 
   mkdirSync(dir, { recursive: true });
   const archivePath = path.join(dir, spec.archive === 'zip' ? 'php.zip' : 'php.tar.gz');
@@ -134,7 +139,7 @@ export async function ensurePhp(deps = {}) {
     rmSync(archivePath, { force: true });
     if (!existsSync(bin)) throw new Error('PHP archive extracted but the php binary is missing');
 
-    if (spec.kind === 'windows') writeWindowsIni(dir);
+    if (spec.kind === 'windows') await ensureWindowsConfig(dir, deps);
     else chmodSync(bin, 0o755);
 
     const ok = await (deps.verify || verifyPhp)(bin);
@@ -174,11 +179,28 @@ async function extractArchive(archive, dir) {
   await runToCompletion('tar', ['-xf', archive, '-C', dir]);
 }
 
-// Windows DLL extensions are off until enabled. php.exe auto-loads a php.ini
-// sitting beside it, so drop one in that turns on what 4get/LibreY need.
-function writeWindowsIni(dir) {
+// Windows post-install config: ensure a CA bundle (Windows PHP ships none, so
+// curl HTTPS — which 4get/LibreY use to scrape search engines — fails cert
+// verification and the engine 500s) and (re)write php.ini enabling the DLL
+// extensions + pointing curl/openssl at the bundle. Idempotent: only fetches
+// the bundle if missing, always rewrites the ini so old installs get fixed.
+async function ensureWindowsConfig(dir, deps = {}) {
+  const caPath = path.join(dir, 'cacert.pem');
+  if (!existsSync(caPath)) {
+    try {
+      await (deps.download || downloadFile)(['https://curl.se/ca/cacert.pem'], caPath);
+    } catch (err) {
+      console.warn(`[php-runtime] could not fetch the CA bundle (${err.message}); PHP curl HTTPS may fail`);
+    }
+  }
+  writeWindowsIni(dir, existsSync(caPath) ? caPath : null);
+}
+
+// php.exe auto-loads a php.ini sitting beside it. Enable the DLL extensions
+// 4get/LibreY need, and point curl + openssl at the CA bundle for HTTPS.
+function writeWindowsIni(dir, caPath) {
   const extDir = path.join(dir, 'ext').replace(/\\/g, '/');
-  const ini = [
+  const lines = [
     `extension_dir = "${extDir}"`,
     'extension=curl',
     'extension=openssl',
@@ -186,9 +208,13 @@ function writeWindowsIni(dir) {
     'extension=gd',
     'extension=fileinfo',
     'extension=intl',
-    '',
-  ].join('\r\n');
-  writeFileSync(path.join(dir, 'php.ini'), ini, 'utf8');
+  ];
+  if (caPath) {
+    const ca = caPath.replace(/\\/g, '/');
+    lines.push(`curl.cainfo = "${ca}"`, `openssl.cafile = "${ca}"`);
+  }
+  lines.push('');
+  writeFileSync(path.join(dir, 'php.ini'), lines.join('\r\n'), 'utf8');
 }
 
 // Functional integrity: the binary runs and reports the pinned major.minor.
