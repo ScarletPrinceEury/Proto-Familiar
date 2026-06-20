@@ -209,12 +209,12 @@ test('composeActiveTools appends custom tool objects after the built-ins', () =>
 
 test('composeActiveTools gates the web tools behind webSearchEnabled', () => {
   const names = (settings) => new Set(composeActiveTools(undefined, settings).map(t => t.function?.name));
-  // Off (default): neither web tool is advertised.
+  // Off (default): no web tool is advertised.
   const off = names({ webSearchEnabled: false });
-  assert.ok(!off.has('web_search') && !off.has('read_webpage'), 'web tools hidden when disabled');
-  // On: both appear.
+  assert.ok(!off.has('look_up') && !off.has('web_search') && !off.has('read_webpage'), 'web tools hidden when disabled');
+  // On: all three appear.
   const on = names({ webSearchEnabled: true });
-  assert.ok(on.has('web_search') && on.has('read_webpage'), 'web tools shown when enabled');
+  assert.ok(on.has('look_up') && on.has('web_search') && on.has('read_webpage'), 'web tools shown when enabled');
 });
 
 test('composeActiveTools resolves {{user}}/{{char}} macros in descriptions', () => {

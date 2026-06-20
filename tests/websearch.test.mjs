@@ -6,6 +6,7 @@ import {
   assertPublicUrl,
   guardedFetch,
   searchWeb,
+  lookUp,
   readWebpage,
   WebAccessError,
 } from '../websearch.js';
@@ -150,6 +151,58 @@ test('searchWeb reports the SearXNG error only when keyless ALSO fails', async (
 
 test('searchWeb needs a query', async () => {
   assert.match(await searchWeb('   ', {}), /need something to search/);
+});
+
+// ── lookUp: keyless reference APIs (Wikipedia + DDG Instant Answer) ──
+const lookupPublic = async () => [{ address: '93.184.216.34' }];
+
+// Route the injected fetch by host so one fetchFn can serve both sources.
+function lookUpFetch({ ddg = null, wiki = null } = {}) {
+  return async (href) => {
+    const base = { ok: true, url: href, status: 200, headers: { get: () => null } };
+    if (href.includes('api.duckduckgo.com')) {
+      if (ddg == null) return { ...base, ok: false, status: 404 };
+      return { ...base, json: async () => ddg };
+    }
+    if (href.includes('wikipedia.org')) {
+      if (wiki == null) return { ...base, ok: false, status: 404 };
+      return { ...base, json: async () => wiki };
+    }
+    throw new Error(`unexpected host: ${href}`);
+  };
+}
+
+test('lookUp merges a DDG instant answer and a Wikipedia overview, with sources, no scraping', async () => {
+  const fetchFn = lookUpFetch({
+    ddg:  { AbstractText: 'A cat is a small domesticated carnivore.', AbstractURL: 'https://duckduckgo.com/Cat' },
+    wiki: { query: { pages: { '12': { title: 'Cat', extract: 'The cat is a domestic species of small mammal.' } } } },
+  });
+  const out = await lookUp('cat', {}, { fetchFn, lookupFn: lookupPublic });
+  assert.match(out, /what I found on "cat"/);
+  assert.match(out, /small domesticated carnivore/);          // DDG abstract
+  assert.match(out, /domestic species of small mammal/);       // Wikipedia extract
+  assert.match(out, /Sources:/);
+  assert.match(out, /en\.wikipedia\.org\/wiki\/Cat/);          // wiki source link built from title
+});
+
+test('lookUp still answers when only one source has anything', async () => {
+  const fetchFn = lookUpFetch({
+    wiki: { query: { pages: { '9': { title: 'Quine', extract: 'A quine is a self-replicating program.' } } } },
+  });
+  const out = await lookUp('quine', {}, { fetchFn, lookupFn: lookupPublic });
+  assert.match(out, /self-replicating program/);
+  assert.match(out, /Source:/); // singular — only one source carried through
+});
+
+test('lookUp degrades calmly when neither source has an answer', async () => {
+  const fetchFn = lookUpFetch({}); // both 404
+  const out = await lookUp('asdkjfhqweoiu', {}, { fetchFn, lookupFn: lookupPublic });
+  assert.match(out, /couldn't find a clear definition or overview/);
+  assert.match(out, /web_search/); // points at the other tool
+});
+
+test('lookUp needs a query', async () => {
+  assert.match(await lookUp('   ', {}), /need something to look up/);
 });
 
 // ── readWebpage: guard refusal + extraction + provenance ─────────

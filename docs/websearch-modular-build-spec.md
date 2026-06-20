@@ -31,11 +31,12 @@ copy-paste, update the docs). The additions specific to this rework:
   anything up. Basic works at zero config. API is paste-a-key friction (same as the Discord
   token — not an install). Local is one-click install that the Familiar performs. Each tier is
   opt-in; none is a prerequisite for the one below it.
-- **A button that can't work is a lie.** Do not render an Install button for an engine we cannot
-  actually install on this machine end-to-end. The PHP engines depend on a runtime we fetch
-  (Part 3); until that fetch is wired and verified, their Install action must be honest about
-  what it needs. Dead buttons are the UI form of the "dead code that looks like care"
-  anti-pattern.
+- **A control that can't work is greyed out, not absent and not live.** Until a backend's
+  install path is wired and verified (the PHP engines before Part 3; any in-flight transition),
+  its button renders **disabled** with a plain sub-label saying why (*"available after the next
+  update"*, *"installing…"*). Greying-out — rather than a live-but-failing button or a hidden
+  one — keeps the modal honest *and* shows the human the whole map of what's coming. (Decided
+  with the human: grey them out until they actually do something.)
 
 ---
 
@@ -137,7 +138,7 @@ fields in `settings.json` (and the user-pref subset added to `SERVER_SYNCED_KEYS
 | Field | Meaning |
 |---|---|
 | `webSearchBackend` | `'basic' \| 'api' \| 'local'` — governs `web_search` only. Default `'basic'`. |
-| `webSearchApiProvider` | `'brave' \| 'tavily' \| 'google'` |
+| `webSearchApiProvider` | `'brave' \| 'tavily' \| 'google'` — **default `'brave'`**. Defaulting (vs. special-casing an empty pick on Apply) is the cheaper path *and* means the API radio is always valid the moment the human selects API mode. |
 | `webSearchApiKey` | provider key (secret; gitignored with the rest of `settings.json`) |
 | `webSearchGoogleCseId` | Google only — the Programmable-Search engine id (Google needs **two** values) |
 | `webSearchLocalEngine` | `'searxng' \| '4get' \| 'librey'` — which local engine is *selected* |
@@ -273,10 +274,17 @@ fetch-on-enable pattern SearXNG's source already uses.
   **sha256** per artifact. Pin like `SEARXNG_PIN`: a constant in this module, bumped deliberately.
 - Download once into `vendor/php-runtime/<platform>/` (gitignored), **verify the checksum**, mark
   executable, cache. Return the binary path.
-- **Verify required extensions are present in the chosen build.** 4get/LibreY need at least
-  `curl`; image-proxy features need more (`gd`/`imagick`). Pick a static build variant that
-  includes the needed set, or disable those features in the generated engine config and document
-  it. (This is an explicit verification step, not an assumption.)
+- **Extension set (decided — the human delegated the call).** Both engines fetch upstream over
+  HTTPS and parse returned HTML, so the **required** set is: `curl` + `openssl` (the upstream
+  fetch + TLS), `mbstring` (multibyte string handling), `dom` + `libxml` + `xml` + `simplexml`
+  (HTML/XML parsing of engine responses), `zlib` (gzip-decode responses), plus the near-always-on
+  `json` / `filter` / `ctype` / `fileinfo` / `tokenizer`. **Optional:** `gd` (4get's image-proxy
+  thumbnails) — nice-to-have, not required for text search. The pragmatic move is to pin a
+  static-php-cli build with its **"common extensions" preset**, which is a superset of all of the
+  above (it bundles curl, openssl, mbstring, dom, simplexml, xml, zlib, gd, sqlite3, fileinfo,
+  session, …). Then text search needs no feature-gating; only if a given prebuilt lacks `gd` do we
+  disable the image proxy and note it. Acceptance is behavioural, per the human: it installs,
+  searches, and doesn't brick the machine — that's the bar, not a hand-audited extension list.
 - Degrade cleanly: unsupported platform / failed download / checksum mismatch → the PHP engines
   simply can't install; the modal says so plainly; SearXNG + API + Basic are unaffected.
 
@@ -284,11 +292,15 @@ fetch-on-enable pattern SearXNG's source already uses.
 
 - **LibreY** — `runtime:'php'`, `strain:'low'`. `fetchSource` downloads the pinned release;
   `installDeps` resolves the static PHP via `php-runtime.js`; `spawn` runs
-  `php -S 127.0.0.1:<port> -t <webroot>`; `health` hits its index/JSON; `searchUrl` is its JSON
-  API. LibreY exposes a JSON API directly.
-- **4get** — `runtime:'php'`, `strain:'med'`. Same shape; 4get's JSON output is the
-  `…/api.php?...` / `&scraper=…` surface (confirm the exact JSON route against the pinned
-  release at build time). Heavier (more scrapers/extensions) → `med`.
+  `php -S 127.0.0.1:<port> -t <webroot>`; `health` hits its index; `searchUrl` is its JSON API.
+  **Seed route:** `GET {base}/api.php?q=<query>&type=text` → a JSON **array** of
+  `{ title, url, description }` (description → our `content`). A leading infobox/special element
+  can appear → parse defensively (keep only entries carrying both `url` and `title`).
+- **4get** — `runtime:'php'`, `strain:'med'`. Same shape; 4get's JSON API must be **enabled in its
+  generated config** (an `api`/`api_enabled` flag in `data/config.php`) — `writeManagedConfig`
+  sets it, the same way we set SearXNG's `formats: [json]`. **Seed route:** `GET {base}/api/v1/web?s=<query>`
+  → JSON grouped by result type (`{ web: [ { title, url, description }, … ], … }`); map `web[]` →
+  rows. Heavier (more scrapers/extensions) → `med`.
 
 Any per-engine source tweak needed for loopback/single-user operation lives as a tracked patch
 under `vendor/<engine>-patches/` and is re-applied on fetch (the SearXNG-patch precedent), each
@@ -470,14 +482,25 @@ asked), not a list of what to avoid. No "don't be pushy", no hedging.
 
 ---
 
-## 10. Open knobs (decide before/while building)
+## 10. Decisions & remaining knobs
 
-1. **API default provider** — recommend **Brave** (independent index, privacy-aligned, free tier).
-   Tavily offered as the LLM-native alternative.
-2. **Static PHP source/pin** — pick the static-php-cli release + per-platform artifacts + sha256;
-   record as a pinned constant in `php-runtime.js`. Confirm the bundled extension set covers
-   4get/LibreY (curl at minimum).
-3. **4get/LibreY JSON routes** — confirm the exact JSON endpoint/params against the pinned
-   release at build time (engine `searchUrl`).
-4. **Guide-chat endpoint** — dedicated `/api/guide-chat` vs `/api/chat` + `surface` flag. Lean
+**Decided (with the human):**
+
+1. **API default provider — Brave.** `webSearchApiProvider` defaults to `'brave'`; the API radio
+   is always valid on selection, no empty-pick special-case needed.
+2. **PHP extensions — the static-php-cli "common" preset** (superset of the required
+   curl/openssl/mbstring/dom/xml/simplexml/zlib set; `gd` for the optional image proxy). §4a.
+3. **Not-yet-functional controls are greyed out**, with a plain "why" sub-label. §0, §3e.
+4. **JSON routes are *locked from source*, not from docs.** Because Part 3 fetches each engine's
+   own source into the tree, the authoritative JSON route + response shape is read straight from
+   the pinned engine's API handler at build time. The §4b "seed routes" are the starting point;
+   the build step is *"open the fetched source's API handler, confirm the path/params/shape,
+   adjust the descriptor if upstream drifted."* This is strictly more reliable than predetermining
+   from possibly-stale public docs — the source we run is the source we read.
+
+**Remaining (resolve while building):**
+
+5. **Static PHP source/pin** — pick the static-php-cli release + per-platform artifacts + record
+   each sha256 as a pinned constant in `php-runtime.js` (done when Part 3 starts).
+6. **Guide-chat endpoint** — dedicated `/api/guide-chat` vs `/api/chat` + `surface` flag. Lean
    dedicated, to keep the stripped context off the main chat's assembly path.

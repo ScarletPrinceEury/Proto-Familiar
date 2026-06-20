@@ -118,7 +118,7 @@ ponderings injection, care-check framing) and as background loops
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
 ├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
-├── websearch.js             Web access (opt-in, 0.7.0) — backs the web_search / read_webpage tools. Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping. searchWeb dispatches on the effective base URL: empty → in-box keyless DuckDuckGo HTML scrape (no setup); set → that SearXNG JSON API. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1 (see docs/websearch-setup.md)
+├── websearch.js             Web access (opt-in, 0.7.0) — backs the look_up / web_search / read_webpage tools. look_up (0.7.19) answers definitions/facts/overviews from keyless official reference APIs (Wikipedia action API + DuckDuckGo Instant Answer API), no scraping/no setup. web_search finds pages; searchWeb dispatches on the effective base URL: empty → in-box keyless DuckDuckGo HTML scrape (no setup); set → that SearXNG JSON API. Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1 (see docs/websearch-setup.md)
 ├── searxng-service.js       Optional Familiar-managed SearXNG backend (0.7.x). A 30s supervisor (like the Discord gateway) brings up a self-hosted SearXNG when the ward enables web search and tears it down when they disable it. The backend is third-party and NOT committed — it is FETCHED on first enable (pinned to SEARXNG_PIN, shallow clone by SHA, tracked patches under vendor/searxng-patches/ re-applied), then uv-spawned (`python -m searx.webapp`, generated loopback+JSON settings.yml); managedSearxngUrl() publishes the healthy URL. cerebellum resolves the effective backend as custom webSearchBaseUrl ?? managedSearxngUrl() ?? '' (keyless) — a cold/failed/absent managed instance ALWAYS degrades to keyless and can never break search. Hard off-switch PROTO_FAMILIAR_SEARXNG_DISABLED=1. See docs/searxng-managed-build-spec.md
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4+V5+V6) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); V6: relayToDiscord() REST send (DM-open or channel post) backing the relay_message tool; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
@@ -358,11 +358,14 @@ Currently owns:
   kinds are made enumerable to the Familiar by `village_lookup`, which
   (V8) reports a **Places** roster + per-villager Discord-reachability so
   the Familiar can always name a valid relay target.
-- **Web tools (opt-in, 0.7.0-alpha)** — `web_search` / `read_webpage`,
-  thin executors that delegate to `websearch.js` (SSRF guard, timeout,
+- **Web tools (opt-in, 0.7.0-alpha; `look_up`/`web_search` split 0.7.19-alpha)** —
+  `look_up` / `web_search` / `read_webpage`, thin executors that delegate
+  to `websearch.js` (SSRF guard, timeout,
   `linkedom`→`@mozilla/readability`→`turndown` extraction with provenance
-  stamping). Unlike every other built-in they are **conditionally
-  advertised**: `composeActiveTools` filters them out via
+  stamping). `look_up` answers definitions/facts/overviews from keyless
+  official reference APIs (Wikipedia + DDG Instant Answer), no scraping;
+  `web_search` finds pages. Unlike every other built-in they are
+  **conditionally advertised**: `composeActiveTools` filters them out via
   `webSearchEnabled(settings)` unless the human has enabled web access
   (and `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1` forces them off). A page the
   Familiar reads persists in session history for the rest of the session;

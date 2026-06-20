@@ -321,6 +321,98 @@ function ddgRealUrl(href) {
   }
 }
 
+// ── Look up — definitions, facts, overviews ───────────────────────
+// A distinct capability from searchWeb: this answers the "what is X /
+// who is Y / give me an overview" kind of question from official,
+// KEYLESS APIs — Wikipedia and DuckDuckGo's Instant Answer endpoint —
+// with NO scraping. It always works (nothing to install or configure)
+// and is narrower than web search by design: it returns a short
+// grounded answer with its source, not a list of pages. Both sources
+// are queried in parallel; either may come back empty, and the whole
+// thing degrades to a calm "couldn't find" rather than ever throwing.
+
+const DDG_IA_ENDPOINT = 'https://api.duckduckgo.com/';
+const WIKI_API_BASE   = 'https://en.wikipedia.org';
+
+export async function lookUp(query, settings = {}, deps = {}) {
+  const q = String(query ?? '').trim();
+  if (!q) return 'I need something to look up.';
+  const maxChars = clampInt(settings.webSearchMaxChars, DEFAULT_MAX_CHARS, 500, 100000);
+
+  const [ddg, wiki] = await Promise.all([
+    lookUpViaDuckDuckGo(q, deps),
+    lookUpViaWikipedia(q, deps),
+  ]);
+
+  // DDG's instant answer is a crisp definition when it has one; Wikipedia
+  // is the fuller encyclopedic overview. Lead with the crisp one, then add
+  // the overview if it says something the first didn't.
+  const parts = [ddg, wiki].filter(p => p && p.text);
+  if (parts.length === 0) {
+    return `I looked up "${q}" but couldn't find a clear definition or overview. A web_search might turn up pages about it.`;
+  }
+  return formatLookUp(q, parts, maxChars);
+}
+
+function formatLookUp(q, parts, maxChars) {
+  // Drop a part whose text is essentially contained in an earlier one, so
+  // the two sources don't repeat the same sentence back.
+  const kept = [];
+  for (const p of parts) {
+    const head = p.text.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 120);
+    if (kept.some(k => k._head === head)) continue;
+    kept.push({ ...p, _head: head });
+  }
+  let body = kept.map(p => p.text.trim()).join('\n\n');
+  if (body.length > maxChars) body = `${body.slice(0, maxChars)}\n\n[…truncated.]`;
+  const sources = kept.map(p => p.source).filter(Boolean);
+  const srcLine = sources.length
+    ? `\n\nSource${sources.length > 1 ? 's' : ''}: ${sources.join(' · ')}`
+    : '';
+  return `Here's what I found on "${q}":\n\n${body}${srcLine}`;
+}
+
+// Official DuckDuckGo Instant Answer API (NOT the HTML scrape) — keyless
+// JSON. Returns null on any miss/error so lookUp degrades calmly.
+async function lookUpViaDuckDuckGo(q, { fetchFn = fetch, lookupFn } = {}) {
+  const url = `${DDG_IA_ENDPOINT}?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`;
+  try {
+    const res = await guardedFetch(url, { fetchFn, lookupFn });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = String(data?.AbstractText || data?.Definition || data?.Answer || '').trim();
+    if (!text) return null;
+    const source = String(data?.AbstractURL || data?.DefinitionURL || '').trim() || null;
+    return { text, source };
+  } catch {
+    return null;
+  }
+}
+
+// Wikipedia via the MediaWiki action API: one request that searches for the
+// best-matching article and returns its plain-text intro extract. Keyless
+// JSON. Returns null on any miss/error.
+async function lookUpViaWikipedia(q, { fetchFn = fetch, lookupFn } = {}) {
+  const url = `${WIKI_API_BASE}/w/api.php?action=query&format=json&generator=search`
+    + `&gsrsearch=${encodeURIComponent(q)}&gsrlimit=1`
+    + '&prop=extracts&exintro=1&explaintext=1&redirects=1';
+  try {
+    const res = await guardedFetch(url, { fetchFn, lookupFn });
+    if (!res.ok) return null;
+    const data  = await res.json();
+    const pages = data?.query?.pages;
+    if (!pages || typeof pages !== 'object') return null;
+    const first = Object.values(pages)[0];
+    const text  = String(first?.extract || '').trim();
+    if (!text) return null;
+    const title  = String(first?.title || q);
+    const source = `${WIKI_API_BASE}/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+    return { text, source };
+  } catch {
+    return null;
+  }
+}
+
 // ── Read ──────────────────────────────────────────────────────────
 
 export async function readWebpage(url, settings = {}, { fetchFn = fetch, lookupFn } = {}) {
