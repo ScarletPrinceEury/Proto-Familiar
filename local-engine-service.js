@@ -432,13 +432,16 @@ const searxngEngine = {
 // `router` (optional): a front-controller script passed to `php -S` for apps
 // that rely on URL rewriting (4get). Flat-file apps (LibreY: api.php is a real
 // file) need none.
-function makePhpEngine({ id, label, strain, repo, pin, entry, configExample, router, search }) {
+function makePhpEngine({ id, label, strain, repo, pin, entry, configExample, router, search, enabled = true }) {
   const dir = path.join(__dirname, 'vendor', id);
   let retryTs = 0;
   const installed = () => existsSync(path.join(dir, entry));
   return {
     id, label, strain, runtime: 'php',
-    get available() { return phpSupported(); },
+    // `enabled:false` greys the engine in the modal (and keeps it out of
+    // desiredEngine / install) — used to hold back an engine that isn't
+    // wired end-to-end yet (4get: its JSON API is key-gated, not done).
+    get available() { return phpSupported() && enabled; },
     installed,
     ensureInstalled: async () => {
       await ensurePhp();                 // fetch the static PHP runtime (throws where unsupported)
@@ -494,6 +497,10 @@ const fourgetEngine = makePhpEngine({
   configExample: ['data/config.php.example', 'data/config.php'],
   router: 'index.php',   // front-controller routing (no apache rewrites under php -S)
   search: fourgetSearch,
+  // Held back: 4get's JSON API (/api/v1/web) is API-key-gated (401 even on the
+  // reference instance), which needs config-side key generation + auth we
+  // haven't wired/verified. Greyed until then; LibreY/SearXNG cover local.
+  enabled: false,
 });
 
 const ENGINES = {
