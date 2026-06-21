@@ -411,6 +411,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const toolCtx     = {
       sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null,
       wardPrivate: audienceTag === 'ward-private',
+      // For memorize_now: the session's own provider/key/audience so the
+      // Familiar can commit this conversation through the real pipeline.
+      audienceTag,
+      apiKey,
     };
     const upstreamUrl = url;
     const authHeaders = {
@@ -1385,7 +1389,40 @@ initCerebellumTools({
   getVillageRegistry,
   upsertVillager,
   relayToDiscord,
+  memorizeSessionNow,
 });
+
+// Backs the Familiar's `memorize_now` tool: commit THIS conversation to memory
+// on demand, instead of waiting for a session rollover that may never cleanly
+// happen (the human switches sessions, clears history, etc.). Reads the clean
+// session log off disk — kept current by the client's per-message saveToServer —
+// and enqueues the same extraction pipeline the rollover uses, so the facts land
+// at the right tier, consent-gated and dedup'd. Function declaration so it can be
+// referenced in the initCerebellumTools call above (hoisted). Degrades to a
+// structured result; never throws into the tool loop.
+async function memorizeSessionNow({ sessionId, provider, apiKey, model, audienceTag }) {
+  if (!isValidUUID(sessionId)) return { ok: false, error: 'no-session' };
+  let log;
+  try {
+    log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${sessionId}.json`), 'utf8'));
+  } catch {
+    return { ok: false, error: 'no-log' };
+  }
+  const messages = Array.isArray(log?.messages) ? log.messages : [];
+  const readable = messages.filter(m =>
+    (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());
+  if (readable.length < 2) return { ok: false, error: 'too-short' };
+  try {
+    const { jobId, deduped } = await enqueueMemorization({
+      sessionId, scope: 'session', messages,
+      provider: provider ?? log.provider, apiKey, model: model ?? log.model,
+      audienceTag: audienceTag ?? 'ward-private',
+    });
+    return { ok: true, jobId, deduped, messageCount: readable.length };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? 'enqueue-failed' };
+  }
+}
 
 // ── Memorization queue endpoints ────────────────────────────────
 

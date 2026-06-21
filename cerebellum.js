@@ -767,17 +767,20 @@ const _toolDeps = {
   getVillageRegistry: null,
   upsertVillager: null,
   relayToDiscord: null,
+  // Commit the current session to memory on demand (backs memorize_now).
+  memorizeSessionNow: null,
   // The restricted-memory gate defaults to the real Phylactery-backed check;
   // tests inject a stub so they don't spawn MCP children.
   searchRestricted: searchMemoryRestricted,
   // The ward-mirror enqueue defaults to the real outbox dispatch.
   mirrorToWard: enqueueAndDispatch,
 };
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, searchRestricted, mirrorToWard } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
   if (typeof relayToDiscord === 'function')      _toolDeps.relayToDiscord      = relayToDiscord;
+  if (typeof memorizeSessionNow === 'function')  _toolDeps.memorizeSessionNow  = memorizeSessionNow;
   if (typeof searchRestricted === 'function')    _toolDeps.searchRestricted    = searchRestricted;
   if (typeof mirrorToWard === 'function')        _toolDeps.mirrorToWard        = mirrorToWard;
 }
@@ -837,6 +840,14 @@ export const BUILTIN_TOOLS = [
         },
         required: ['content', 'granularity'],
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memorize_now',
+      description: "I draw this whole conversation into my long-term memory right now, instead of waiting for it to roll over on its own — which doesn't always happen cleanly (my human switches sessions, clears history, and a thread of real importance could otherwise slip away unkept). I reach for it the moment I realise we've covered things I need to carry across to wherever we talk next: news about their life, a decision, something that changes how I should be with them. This runs my full memorization pass over the session — it extracts the facts, files them at the right tier, maps the relationships, and still asks before keeping anything sensitive that needs my human's say-so. (For a single deliberate fact I already know I want, I use save_memory; this is for committing the whole exchange.) Calling it more than once is harmless — an in-flight commit just continues.",
+      parameters: { type: 'object', properties: {}, required: [] },
     },
   },
   {
@@ -1552,6 +1563,25 @@ export const TOOL_EXECUTORS = {
     } catch (err) {
       return `Failed to save to Tome: ${err.message}`;
     }
+  },
+
+  memorize_now: async (_args, ctx = {}) => {
+    if (!_toolDeps.memorizeSessionNow) return "I can't reach my memory pipeline right now — I'll catch this conversation when the session settles.";
+    const sessionId = ctx?.sessionInfo?.sessionId;
+    if (!sessionId) return "I can't tell which conversation to commit just now, so I'll let it memorize on its own when we're done.";
+    const res = await _toolDeps.memorizeSessionNow({
+      sessionId,
+      provider:    ctx?.sessionInfo?.provider,
+      model:       ctx?.sessionInfo?.model,
+      apiKey:      ctx?.apiKey,
+      audienceTag: ctx?.audienceTag,
+    });
+    if (!res?.ok) {
+      if (res.error === 'too-short') return "There isn't enough here yet for me to commit to memory — I'll keep it in mind as we go.";
+      return "I couldn't commit this conversation just now — I'll catch it when the session settles.";
+    }
+    if (res.deduped) return "I'm already drawing this conversation into my memory — it's in hand.";
+    return "Done — I've set this conversation to be drawn into my long-term memory now, so it carries across to wherever we talk next. I'll still check with you before keeping anything sensitive.";
   },
 
   save_memory: async ({ content, granularity, title }) => {

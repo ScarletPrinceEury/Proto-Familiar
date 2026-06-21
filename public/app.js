@@ -91,6 +91,7 @@ function getCustomTools() {
 /** Session metadata for the server-side get_session_info tool. */
 function buildSessionInfo() {
   return {
+    sessionId:    state.sessionId,   // lets the Familiar's memorize_now find this session's log
     startedAt:    state.sessionStartedAt,
     messageCount: state.messages.length,
     provider:     state.provider,

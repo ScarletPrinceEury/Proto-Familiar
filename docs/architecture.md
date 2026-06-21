@@ -690,13 +690,25 @@ non-empty. The Familiar calls `memory_confirm_consent(ids)` or
 then removes the handled IDs from the local file.
 
 **Triggers:**
-- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon).
+- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon),
+  and the sidebar "Memorize now" button (`memorize-now-btn`) for on-demand.
   Always `audienceTag: 'ward-private'`.
 - Discord: `discord-gateway.sessionForLocation()` enqueues the old session
   when idle rotation fires (session has been quiet ≥ `SESSION_IDLE_ROTATE_MS`).
   `audienceTag` comes from the stored session log.
+- **Familiar self-trigger (0.8.4):** the `memorize_now` tool. When the Familiar
+  judges the conversation holds things it must carry across instances — and a
+  clean rollover may never happen (the human switches sessions / clears history)
+  — it commits the session itself. The executor reads the session id from the
+  tool context (`sessionInfo.sessionId`) and delegates to `memorizeSessionNow`
+  (server.js, injected via `initCerebellumTools` to avoid the cerebellum↔
+  memorization import cycle), which reads the clean on-disk log and enqueues the
+  same pipeline. No new request beyond the chat turn it rides; degrades to a calm
+  first-person line, never throws into the tool loop. (Single deliberate facts
+  still go through `save_memory`; this commits the whole exchange.)
 
-**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
+**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` (the worker; `memorize_now`
+just enqueues, so it honours the same switch — a disabled worker won't drain).
 
 ### Migration: entity-core → Phylactery (Pillar F)
 
