@@ -5512,8 +5512,11 @@ async function keLoadMemories() {
         ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
       const cwBadge = m.care_weight
         ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
+      // A me/ward register memory is a standing truth, not a passing moment — badge it.
+      const registerBadge = (m.register === 'me' || m.register === 'ward')
+        ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
       row.innerHTML = `
-        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${audienceBadge}${cwBadge}</div>
+        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
         <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
       row.addEventListener('click', () => keOpenMemory(m.granularity, m.date ?? m.key));
       list.appendChild(row);
@@ -5530,10 +5533,14 @@ async function keOpenMemory(granularity, date) {
     const content   = data.memory?.content    ?? data.content    ?? '';
     const audience  = data.memory?.audience   ?? data.audience   ?? 'ward-private';
     const careWeight = data.memory?.care_weight ?? data.care_weight ?? '';
+    const register  = data.memory?.register   ?? data.register   ?? 'episodic';
+    const registerNote = (register === 'me' || register === 'ward')
+      ? `<span class="ke-badge ke-badge-register">standing truth · ${register === 'me' ? 'about the Familiar' : 'about the ward'}</span>` : '';
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
         <h3>${esc(granularity)} · ${esc(date)}</h3>
+        ${registerNote}
       </div>
       <textarea id="ke-mem-content" rows="12" class="ke-textarea">${esc(content)}</textarea>
       <div class="ke-meta-row">

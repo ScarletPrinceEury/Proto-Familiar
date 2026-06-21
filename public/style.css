@@ -1730,6 +1730,7 @@ button { cursor: pointer; font-family: var(--font); }
 .ke-badge-audience { background: var(--accent-dim, #1c3a5e); color: var(--accent, #7ab4f5); }
 .ke-badge-cw-high   { background: #3a1c1c; color: #f5a07a; }
 .ke-badge-cw-low    { background: var(--surface); color: var(--text-dim); }
+.ke-badge-register  { background: #2a234a; color: #c4b5f5; }
 
 .ke-detail-header { margin-bottom: 12px; }
 .ke-detail-header h3 { margin: 0; font-size: 1rem; color: var(--text); }

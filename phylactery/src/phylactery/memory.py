@@ -74,6 +74,7 @@ def _row_to_list_item(row: sqlite3.Row) -> dict:
         "id": row["id"],
         "key": row["date_key"] or "",
         "granularity": row["granularity"],
+        "register": row["register"],
         "title": head,
         "content": content,
         "audience": row["audience"] or "ward-private",
@@ -385,12 +386,12 @@ def list_memories(
     try:
         if granularity:
             rows = conn.execute(
-                "SELECT id,granularity,date_key,content,audience,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,register,date_key,content,audience,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (granularity, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id,granularity,date_key,content,audience,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,register,date_key,content,audience,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         return [_row_to_list_item(r) for r in rows]
@@ -415,7 +416,7 @@ def read_memory(
         else:
             dk = date_key
         row = conn.execute(
-            "SELECT content, audience, care_weight FROM memories WHERE granularity=? AND date_key=? AND kind='narrative'",
+            "SELECT content, register, audience, care_weight FROM memories WHERE granularity=? AND date_key=? AND kind='narrative'",
             (granularity, dk),
         ).fetchone()
         if not row:
@@ -423,6 +424,7 @@ def read_memory(
         return {
             "ok": True,
             "content": row["content"] or "",
+            "register": row["register"],
             "audience": row["audience"] or "ward-private",
             "care_weight": row["care_weight"],
         }

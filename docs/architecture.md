@@ -640,8 +640,11 @@ it), and the date-bucketed journal (`daily`/`weekly`/… with `slug` NULL, conte
 appended as bullets). Reserving `significant` for true milestones means these
 facts now **consolidate** (`daily→weekly→…`), **decay**, and are caught by
 exact-dup hygiene (which groups by `granularity,date_key,content` — significant's
-unique `date_slug` had escaped it). *(Consolidation creates roll-up summaries but
-does not yet prune the daily source rows — a known follow-up.)*
+unique `date_slug` had escaped it). After a weekly rollup, the consolidated daily
+sources are **pruned** (snapshot first, recoverable) so the tier doesn't pile up;
+`consent_pending` dailies are excluded from both the summary and the prune, so an
+unreviewed fact is never baked into a permanent weekly note before the ward
+approves it.
 
 > **Tiering is one of two axes; don't conflate them.** `granularity`
 > (`daily…significant`) is the rollup tier this section touches. A memory record
@@ -655,10 +658,13 @@ does not yet prune the daily source rows — a known follow-up.)*
 > filed as a standalone `significant` fact on that register; the lighter sibling
 > of `update_identity`). `me`/`ward` are **not** `granularity` values.
 >
-> **Legibility at recall (0.8.6):** `memory.search` returns each result's
-> `register`, and thalamus tags `me`/`ward` recalls (`a standing fact about my
-> human · …`) so the Familiar can weight an identity-grade fact differently from
-> a passing episodic moment. Without this the register was invisible at recall.
+> **Legibility (0.8.6 / 0.7.48):** `memory.search`, `memory.list_memories`, and
+> `memory.read_memory` all carry each record's `register`. Thalamus tags
+> `me`/`ward` recalls (`a standing fact about my human · …`) so the *Familiar* can
+> weight an identity-grade fact differently from a passing episodic moment, and
+> the *Knowledge editor* badges them (`standing · self`/`ward`) in the memory
+> browse list + detail so the **human** can see them too. Without this the
+> register was invisible on both surfaces.
 
 **Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
 similarity check before inserting a significant / standalone / consent-pending
@@ -816,6 +822,14 @@ oldest), merge graph nodes sharing a non-empty `(label, villagerId)` (re-point
 edges, drop losers). Same label with **different** identities is never
 auto-merged — it's reported as ambiguous for the ward to resolve. Snapshots
 before any change.
+
+**Tier consolidation** (`consolidate.consolidate_to_weekly/monthly/yearly`) — LLM
+rolls a period's lower-tier entries into one higher-tier summary (`daily→weekly→
+monthly→yearly`). After a successful **weekly** rollup the consolidated daily
+sources are pruned (`_prune_consolidated`, snapshot first) so the daily tier
+doesn't accumulate. `consent_pending` dailies are held out of both the summary and
+the prune — an unreviewed fact is never folded into a permanent rollup before the
+ward approves it.
 
 **Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
 bumps `recall_count` + `last_recalled_at` for everything surfaced.

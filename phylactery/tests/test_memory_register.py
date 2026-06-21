@@ -81,3 +81,23 @@ def test_search_surfaces_the_register():
         out = memory.search("nurse", max_results=3, conn=c)
         top = out["results"][0]
         assert top["register"] == "ward"  # the Familiar can read which register it came from
+
+
+def test_list_memories_carries_register():
+    """The Knowledge-editor browse list reads register off each item to badge
+    me/ward standing truths."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        memory.create("Alice is a nurse", "significant", register="ward", conn=c)
+        items = memory.list_memories(conn=c)
+        assert items and all("register" in it for it in items)
+        assert items[0]["register"] == "ward"
+
+
+def test_read_memory_carries_register():
+    """The Knowledge-editor detail view reads register to label the entry."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        res = memory.create("Alice is a nurse", "significant", register="ward", conn=c)
+        out = memory.read_memory("significant", res["dateKey"], conn=c)
+        assert out["ok"] and out["register"] == "ward"
