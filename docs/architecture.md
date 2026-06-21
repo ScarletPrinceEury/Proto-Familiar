@@ -643,6 +643,23 @@ exact-dup hygiene (which groups by `granularity,date_key,content` — significan
 unique `date_slug` had escaped it). *(Consolidation creates roll-up summaries but
 does not yet prune the daily source rows — a known follow-up.)*
 
+> **Tiering is one of two axes; don't conflate them.** `granularity`
+> (`daily…significant`) is the rollup tier this section touches. A memory record
+> *also* has a **`register`** field — `episodic | me | ward` — which is a
+> **separate axis** (`phylactery-design.md:272`). The memorization pipeline only
+> produces **`episodic`** facts; the `me`/`ward` registers hold *standing truths*
+> about the Familiar (`me`) or the human (`ward`). They are reached two ways:
+> autonomously by *graduation* (Pillar H moves identity-file detail off the
+> always-injected surface, created at `significant`), and **deliberately by the
+> Familiar** via `save_memory`'s `register` choice (0.8.6 — a me/ward write is
+> filed as a standalone `significant` fact on that register; the lighter sibling
+> of `update_identity`). `me`/`ward` are **not** `granularity` values.
+>
+> **Legibility at recall (0.8.6):** `memory.search` returns each result's
+> `register`, and thalamus tags `me`/`ward` recalls (`a standing fact about my
+> human · …`) so the Familiar can weight an identity-grade fact differently from
+> a passing episodic moment. Without this the register was invisible at recall.
+
 **Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
 similarity check before inserting a significant / standalone / consent-pending
 memory. A near-identical paraphrase (sim ≥ 0.85) folds into the existing entry
