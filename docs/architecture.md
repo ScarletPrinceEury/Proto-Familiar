@@ -658,10 +658,13 @@ approves it.
 > filed as a standalone `significant` fact on that register; the lighter sibling
 > of `update_identity`). `me`/`ward` are **not** `granularity` values.
 >
-> **Legibility at recall (0.8.6):** `memory.search` returns each result's
-> `register`, and thalamus tags `me`/`ward` recalls (`a standing fact about my
-> human · …`) so the Familiar can weight an identity-grade fact differently from
-> a passing episodic moment. Without this the register was invisible at recall.
+> **Legibility (0.8.6 / 0.7.48):** `memory.search`, `memory.list_memories`, and
+> `memory.read_memory` all carry each record's `register`. Thalamus tags
+> `me`/`ward` recalls (`a standing fact about my human · …`) so the *Familiar* can
+> weight an identity-grade fact differently from a passing episodic moment, and
+> the *Knowledge editor* badges them (`standing · self`/`ward`) in the memory
+> browse list + detail so the **human** can see them too. Without this the
+> register was invisible on both surfaces.
 
 **Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
 similarity check before inserting a significant / standalone / consent-pending
