@@ -38,7 +38,7 @@ import { enrich, withLock } from './thalamus.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
-import { enqueueMemorization } from './memorization.js';
+import { enqueueSessionByDay } from './memorization.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
@@ -764,7 +764,7 @@ async function sessionForLocation(locationKey, locationLabel, kind) {
           const settings = readSettingsSync();
           const conn = primaryConnectionFrom(settings);
           if (conn?.apiKey && conn?.model) {
-            enqueueMemorization({
+            enqueueSessionByDay({
               sessionId: oldLog.sessionId,
               messages:  oldLog.messages,
               provider:  conn.provider,

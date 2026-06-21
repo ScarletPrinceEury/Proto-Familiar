@@ -2654,8 +2654,10 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
       console.warn('[memorize] enqueue failed:', resp.status, await resp.text().catch(() => ''));
       return null;
     }
-    const { jobId } = await resp.json();
-    return jobId;
+    // Topic scope returns a single { jobId }; session scope is day-anchored on
+    // the server and returns { enqueued, skipped } — either is success here.
+    const data = await resp.json();
+    return data.jobId ?? 'ok';
   } catch (err) {
     console.warn('[memorize] enqueue error:', err);
     return null;

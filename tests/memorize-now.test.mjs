@@ -31,7 +31,7 @@ test('missing session id → defers gracefully instead of erroring', async () =>
 
 test('success path passes session id + auth through and confirms', async () => {
   let seen = null;
-  initCerebellumTools({ memorizeSessionNow: async (a) => { seen = a; return { ok: true, jobId: 'j1' }; } });
+  initCerebellumTools({ memorizeSessionNow: async (a) => { seen = a; return { ok: true, enqueued: 1, skipped: 0 }; } });
   const out = await executeToolCall('memorize_now', '{}', ctx());
   assert.equal(seen.sessionId, '11111111-1111-1111-1111-111111111111');
   assert.equal(seen.apiKey, 'sk-test');
@@ -39,8 +39,8 @@ test('success path passes session id + auth through and confirms', async () => {
   assert.match(out, /long-term memory|carries across/i);
 });
 
-test('already in-flight (deduped) reads as in-hand, not a second commit', async () => {
-  initCerebellumTools({ memorizeSessionNow: async () => ({ ok: true, deduped: true }) });
+test('nothing new to enqueue (all slices already memorized) reads as in-hand', async () => {
+  initCerebellumTools({ memorizeSessionNow: async () => ({ ok: true, enqueued: 0, skipped: 2 }) });
   const out = await executeToolCall('memorize_now', '{}', ctx());
   assert.match(out, /already|in hand/i);
 });

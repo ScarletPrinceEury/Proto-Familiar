@@ -125,6 +125,8 @@ async function persistQueue() {
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, graphRelate } from './thalamus.js';
 import { getRegistry, standingConsentActive } from './village.js';
+import { segmentByDay } from './day-segments.js';
+import { recordSegmentRun, isSegmentMemorized } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
 
 export function findOrCreateSessionMemoriesTome() {
@@ -657,7 +659,27 @@ async function processJob(job) {
     if (edgesRouted) console.log(`[memorization] routed ${edgesRouted}/${relations.length} relation(s) to the graph`);
   }
 
-  if (!created) throw new Error('No valid facts produced or all dropped by remember gate.');
+  // Day-anchored coverage (Phase 1): record this date-slice as processed so the
+  // ledger / calendar can mark the day. A slice that produced zero kept facts is
+  // still DONE (pleasantries memorize to nothing) — recording it stops the sweep
+  // re-running it forever. Shared-room slices are flagged so the day reads
+  // 'uncertain'. Fire-and-forget; coverage never fails the job.
+  if (job.scope === 'day' && job.topicId) {
+    await recordSegmentRun({
+      date:         job.topicId,
+      sessionId:    job.sessionId,
+      throughCount: Array.isArray(job.messages) ? job.messages.length : 0,
+      facts:        created,
+      flag:         (job.audienceTag && job.audienceTag !== 'ward-private') ? 'shared-room' : null,
+    }).catch(() => {});
+  }
+
+  if (!created) {
+    // A day slice with nothing to keep is a success (already recorded). For
+    // session/topic jobs, preserve the original "nothing memorized" signal.
+    if (job.scope === 'day') return { factsCreated: 0, consentPending: 0, edgesRouted: 0 };
+    throw new Error('No valid facts produced or all dropped by remember gate.');
+  }
   return { factsCreated: created, consentPending: pendingConsent.length, edgesRouted };
 }
 
@@ -776,7 +798,7 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
   if (!sessionId || typeof sessionId !== 'string') throw new Error('sessionId is required.');
   if (!Array.isArray(messages) || messages.length < 2) throw new Error('At least 2 messages are required.');
   if (!provider || !apiKey || !model) throw new Error('provider, apiKey, and model are required.');
-  const normScope = scope === 'topic' ? 'topic' : 'session';
+  const normScope = scope === 'topic' ? 'topic' : scope === 'day' ? 'day' : 'session';
   const normLabel = typeof topicLabel === 'string' && topicLabel.trim() ? topicLabel.trim() : null;
 
   // Idempotency: same session+scope+topicId+rangeKey collapses to the existing job
@@ -810,6 +832,36 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
   // Kick the worker immediately rather than waiting for the next tick.
   tick().catch(() => {});
   return { jobId: job.id, deduped: false };
+}
+
+/**
+ * Day-anchored enqueue (Phase 1). Segments a session's messages by local
+ * calendar date and enqueues one job per date-slice, so memorization is tracked
+ * per DAY rather than per session. Slices the coverage ledger already marks
+ * memorized are skipped; midnight-crossing sessions naturally become two jobs.
+ * `scope:'day'` + `topicId:<date>` keys idempotency uniquely per date.
+ *
+ * Never throws (the sweep iterates many sessions): a too-short session or a
+ * single bad segment is skipped, not surfaced. Returns { enqueued, skipped }.
+ */
+export async function enqueueSessionByDay({ sessionId, messages, provider, apiKey, model, audienceTag }) {
+  if (!sessionId || !Array.isArray(messages) || messages.length < 2) return { enqueued: 0, skipped: 0 };
+  let enqueued = 0, skipped = 0;
+  for (const seg of segmentByDay(messages)) {
+    if (seg.readableCount < 2) continue; // nothing extractable on this date
+    try {
+      if (await isSegmentMemorized(sessionId, seg.date, seg.count)) { skipped++; continue; }
+      const r = await enqueueMemorization({
+        sessionId, scope: 'day', topicId: seg.date,
+        messageRange: { start: seg.startIdx, end: seg.endIdx },
+        messages: seg.messages, provider, apiKey, model, audienceTag,
+      });
+      if (r.deduped) skipped++; else enqueued++;
+    } catch (err) {
+      console.warn(`[memorization] enqueueSessionByDay ${seg.date} failed:`, err?.message ?? err);
+    }
+  }
+  return { enqueued, skipped };
 }
 
 export async function listJobs() {
