@@ -176,12 +176,10 @@ const state = {
   // Backend for web_search (finding pages). 'basic' = built-in keyless scrape
   // (the floor, no setup); 'api' = a proper provider key; 'local' = a Familiar-
   // managed engine. look_up (definitions) ignores all of this.
-  webSearchBackend:     'basic',  // 'basic' | 'api' | 'local'
-  webSearchApiProvider: 'tavily', // 'brave' | 'tavily' | 'google' (Tavily: no card, no billing risk)
-  webSearchApiKey:      '',       // provider key (secret; lives in gitignored settings.json)
-  webSearchGoogleCseId: '',       // Google only — Programmable-Search engine id
-  webSearchLocalEngine: 'searxng',// 'searxng' | '4get' | 'librey' — which managed engine is selected
-  webSearchBaseUrl:    '',        // power-user escape hatch: point at your own SearXNG; when set it wins
+  webSearchBackend:     'basic',     // 'basic' (DuckDuckGo floor) | 'api'
+  webSearchApiProvider: 'marginalia',// 'marginalia' | 'tavily' | 'brave' | 'google'
+  webSearchApiKey:      '',          // provider key (secret; lives in gitignored settings.json)
+  webSearchGoogleCseId: '',          // Google only — Programmable-Search engine id
   webSearchMaxResults: 5,
   webSearchMaxChars:   15000,
   // ── Topics & tomes (lorebook) ───────────────────────────
@@ -287,8 +285,7 @@ const SERVER_SYNCED_KEYS = [
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
-  'webSearchGoogleCseId', 'webSearchLocalEngine', 'webSearchBaseUrl',
-  'webSearchMaxResults', 'webSearchMaxChars',
+  'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
@@ -333,9 +330,9 @@ function saveTopics() {
 }
 
 // ── Web search backend modal ───────────────────────────────────
-// The picker for how web_search finds pages (Basic / API / Local). look_up
-// (definitions) is unaffected by any of this. The backend layer it drives
-// lives in websearch.js / websearch-providers.js / local-engine-service.js.
+// The picker for how web_search finds pages (Basic DuckDuckGo / a search API).
+// look_up (definitions) is unaffected. The backend layer lives in websearch.js
+// / websearch-providers.js.
 function setRadio(name, value) {
   const el = document.querySelector(`input[name="${name}"][value="${value}"]`);
   if (el) el.checked = true;
@@ -344,164 +341,43 @@ function setRadio(name, value) {
 function openWebSearchModal() {
   writeSettingsToUI();      // reflect current state into the modal fields
   syncWebSearchPanels();
-  startEnginePolling();     // live install/active status while open
   resetGuideChat();         // fresh, ephemeral explainer conversation
   $('websearch-modal')?.classList.remove('hidden');
 }
 
 function closeWebSearchModal() {
-  stopEnginePolling();
   $('websearch-modal')?.classList.add('hidden');
 }
 
-// Show only the panel for the chosen backend; show the Google engine-id field
-// only for Google.
+// Show the API panel only for the API backend; the Google engine-id field only
+// for Google; the Marginalia "no key" hint only for Marginalia.
 function syncWebSearchPanels() {
   const backend  = document.querySelector('input[name="web-search-backend"]:checked')?.value || 'basic';
   $('websearch-api-panel')?.classList.toggle('hidden', backend !== 'api');
-  $('websearch-local-panel')?.classList.toggle('hidden', backend !== 'local');
-  const provider = document.querySelector('input[name="web-search-api-provider"]:checked')?.value || 'tavily';
+  const provider = document.querySelector('input[name="web-search-api-provider"]:checked')?.value || 'marginalia';
   $('websearch-google-cse-field')?.classList.toggle('hidden', provider !== 'google');
   $('websearch-marginalia-hint')?.classList.toggle('hidden', provider !== 'marginalia');
 }
 
-let _engineListTimer = null;
-let _lastEngineJson  = '';
-let _uninstallingId  = null;
-function startEnginePolling() {
-  stopEnginePolling();
-  refreshEngineList();
-  _engineListTimer = setInterval(() => {
-    if ((document.querySelector('input[name="web-search-backend"]:checked')?.value) === 'local') refreshEngineList();
-  }, 2500);
-}
-function stopEnginePolling() {
-  if (_engineListTimer) { clearInterval(_engineListTimer); _engineListTimer = null; }
-  _lastEngineJson = '';
-}
-
-async function refreshEngineList() {
-  const host = $('websearch-engine-list');
-  if (!host) return;
-  let data;
-  try {
-    const r = await fetch('/api/websearch/engines');
-    data = await r.json();
-  } catch {
-    host.innerHTML = '<p class="field-hint">Couldn\'t load engine status right now.</p>';
-    return;
-  }
-  const json = JSON.stringify(data);
-  if (json === _lastEngineJson) return;  // nothing changed — don't churn the DOM
-  _lastEngineJson = json;
-  renderEngineList(host, data);
-}
-
-function renderEngineList(host, data) {
-  const selected = state.webSearchLocalEngine || 'searxng';
-  const strainText = { low: 'light', med: 'medium', high: 'heavy' };
-  const order = ['librey', '4get', 'searxng'];  // lightest → heaviest
-  const ids = Object.keys(data.engines || {}).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-  host.innerHTML = '';
-  for (const id of ids) {
-    const e = data.engines[id];
-    const unavailable = !e.available;
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border,#333)';
-
-    const pick = document.createElement('input');
-    pick.type = 'radio'; pick.name = 'web-search-local-engine'; pick.value = id;
-    pick.checked = (id === selected); pick.disabled = unavailable;
-    pick.addEventListener('change', () => { readSettingsFromUI(); });
-
-    const label = document.createElement('span');
-    label.style.flex = '1';
-    const strain = strainText[e.strain] || e.strain;
-    label.innerHTML = `<strong>${e.label}</strong> <span class="label-hint">· strain: ${strain}` +
-      `${unavailable ? ' · available after the next update' : (e.active ? ' · running' : '')}</span>`;
-
-    const actions = document.createElement('span');
-    actions.style.cssText = 'display:flex;gap:6px;align-items:center';
-    if (id === _uninstallingId) {
-      const s = document.createElement('span'); s.className = 'field-hint'; s.textContent = 'Uninstalling…';
-      actions.appendChild(s);
-    } else if (unavailable) {
-      // greyed: nothing actionable yet (Part 3 wires 4get/LibreY)
-    } else if (e.phase === 'installing') {
-      const s = document.createElement('span'); s.className = 'field-hint'; s.textContent = 'Installing…';
-      actions.appendChild(s);
-    } else if (e.phase === 'absent' || e.phase === 'failed') {
-      actions.appendChild(wsBtn(e.phase === 'failed' ? 'Retry install' : 'Install', () => installLocalEngineUI(id)));
-      if (e.phase === 'failed' && e.error) {
-        const er = document.createElement('span'); er.className = 'field-hint'; er.textContent = e.error;
-        actions.appendChild(er);
-      }
-    } else { // 'installed' or 'active'
-      if (e.active) actions.appendChild(wsBtn('Deactivate', deactivateLocalUI, 'btn-ghost'));
-      actions.appendChild(wsBtn('Uninstall', () => uninstallLocalEngineUI(id), 'btn-ghost'));
-    }
-    row.append(pick, label, actions);
-    host.appendChild(row);
-  }
-  const note = document.createElement('p');
-  note.className = 'field-hint';
-  note.textContent = 'Pick one, Install it, then Apply to switch search to it. Lighter engines are gentler on your machine.';
-  host.appendChild(note);
-}
-
-function wsBtn(text, onClick, cls = 'btn-secondary') {
-  const b = document.createElement('button');
-  b.type = 'button'; b.className = cls; b.textContent = text;
-  b.addEventListener('click', onClick);
-  return b;
-}
-
-async function installLocalEngineUI(id) {
-  try {
-    await fetch('/api/websearch/engine/install', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
-    });
-  } catch { /* status refresh shows the outcome */ }
-  _lastEngineJson = ''; refreshEngineList();
-}
-
-async function uninstallLocalEngineUI(id) {
-  _uninstallingId = id;
-  _lastEngineJson = ''; refreshEngineList();   // show "Uninstalling…" right away
-  try {
-    await fetch('/api/websearch/engine/uninstall', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
-    });
-  } catch { /* the refresh below shows the real outcome */ }
-  _uninstallingId = null;
-  _lastEngineJson = ''; refreshEngineList();
-}
-
-async function deactivateLocalUI() {
-  setRadio('web-search-backend', 'basic');
-  syncWebSearchPanels();
-  await applyWebSearchBackend();
-}
-
+// Apply just persists the chosen backend/provider/key (fields also auto-sync on
+// change; this gives explicit feedback). No process to reconcile.
 async function applyWebSearchBackend() {
   const btn    = $('websearch-apply-btn');
   const status = $('websearch-apply-status');
   if (btn) btn.disabled = true;
-  if (status) status.textContent = 'Applying…';
+  if (status) status.textContent = 'Saving…';
   try {
     readSettingsFromUI(); // pull every modal field into state (also persists)
     await fetch('/api/settings', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: extractServerSettings(state) }),
     });
-    await fetch('/api/websearch/apply', { method: 'POST' });
-    if (status) status.textContent = 'Applied.';
+    if (status) status.textContent = 'Saved.';
   } catch {
-    if (status) status.textContent = 'Saved — it\'ll take effect shortly.';
+    if (status) status.textContent = 'Saved locally.';
   }
-  _lastEngineJson = ''; refreshEngineList();
   if (btn) btn.disabled = false;
-  setTimeout(() => { if (status) status.textContent = ''; }, 4000);
+  setTimeout(() => { if (status) status.textContent = ''; }, 3000);
 }
 
 // ── In-modal Familiar explainer (the guide chat) ────────────────
@@ -2510,22 +2386,18 @@ function readSettingsFromUI() {
   state.customTools       = $('custom-tools').value;
   const wsEnabledEl = $('web-search-enabled');
   if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
-  const wsBaseEl = $('web-search-base-url');
-  if (wsBaseEl) state.webSearchBaseUrl = wsBaseEl.value.trim(); // blank = built-in search
   const wsResEl = $('web-search-max-results');
   if (wsResEl) state.webSearchMaxResults = Math.min(20, Math.max(1, parseInt(wsResEl.value, 10) || 5));
   const wsCharsEl = $('web-search-max-chars');
   if (wsCharsEl) state.webSearchMaxChars = Math.min(100000, Math.max(500, parseInt(wsCharsEl.value, 10) || 15000));
   const wsBackendEl = document.querySelector('input[name="web-search-backend"]:checked');
-  if (wsBackendEl) state.webSearchBackend = wsBackendEl.value; // 'basic' | 'api' | 'local'
+  if (wsBackendEl) state.webSearchBackend = wsBackendEl.value; // 'basic' | 'api'
   const wsProviderEl = document.querySelector('input[name="web-search-api-provider"]:checked');
   if (wsProviderEl) state.webSearchApiProvider = wsProviderEl.value;
   const wsKeyEl = $('web-search-api-key');
   if (wsKeyEl) state.webSearchApiKey = wsKeyEl.value.trim();
   const wsCseEl = $('web-search-google-cse-id');
   if (wsCseEl) state.webSearchGoogleCseId = wsCseEl.value.trim();
-  const wsEngineEl = document.querySelector('input[name="web-search-local-engine"]:checked');
-  if (wsEngineEl) state.webSearchLocalEngine = wsEngineEl.value;
   const scanEl = $('tome-scan-depth');
   if (scanEl) state.tomeScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
   const recursiveEl = $('tome-recursive');
@@ -2589,12 +2461,10 @@ function writeSettingsToUI() {
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('web-search-enabled'),     'checked', state.webSearchEnabled === true);
-  setIfNotFocused($('web-search-base-url'),    'value',   state.webSearchBaseUrl ?? '');
   setIfNotFocused($('web-search-max-results'), 'value',   state.webSearchMaxResults ?? 5);
   setIfNotFocused($('web-search-max-chars'),   'value',   state.webSearchMaxChars ?? 15000);
   setRadio('web-search-backend',      state.webSearchBackend ?? 'basic');
-  setRadio('web-search-api-provider', state.webSearchApiProvider ?? 'tavily');
-  setRadio('web-search-local-engine', state.webSearchLocalEngine ?? 'searxng');
+  setRadio('web-search-api-provider', state.webSearchApiProvider ?? 'marginalia');
   setIfNotFocused($('web-search-api-key'),        'value', state.webSearchApiKey ?? '');
   setIfNotFocused($('web-search-google-cse-id'),  'value', state.webSearchGoogleCseId ?? '');
   syncWebSearchPanels();
@@ -3438,7 +3308,7 @@ function init() {
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
-    'web-search-enabled', 'web-search-base-url', 'web-search-max-results', 'web-search-max-chars',
+    'web-search-enabled', 'web-search-max-results', 'web-search-max-chars',
     'web-search-api-key', 'web-search-google-cse-id',
     'user-discord-webhook',
     'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',

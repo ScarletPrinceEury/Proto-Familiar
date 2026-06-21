@@ -56,7 +56,6 @@ import {
 } from './thalamus.js';
 import { audienceTagFor } from './audience.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
-import { managedEngineSearch } from './local-engine-service.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -2218,15 +2217,13 @@ export const TOOL_EXECUTORS = {
   },
 
   // ── Web access ────────────────────────────────────────────────────
-  // Thin delegation to websearch.js, which owns the SSRF guard, the
-  // timeout, the backend resolution, and the extraction. These never appear
-  // in the tool list unless the human has opted in (webSearchEnabled) — see
-  // composeActiveTools. The executor just hands searchWeb the full settings
-  // (it reads the chosen backend / provider / key) plus the live managed-
-  // engine URL (runtime state the supervisor publishes); searchWeb resolves
-  // the rest and always degrades to the keyless floor.
-  web_search: async ({ query } = {}) =>
-    searchWeb(query, readSettingsSync(), { managedSearch: managedEngineSearch }),
+  // Thin delegation to websearch.js, which owns the SSRF guard, the timeout,
+  // the backend resolution (keyless DDG floor or a search API), and the
+  // extraction. These never appear in the tool list unless the human has
+  // opted in (webSearchEnabled) — see composeActiveTools. searchWeb reads the
+  // chosen backend / provider / key from settings and always degrades to the
+  // keyless floor.
+  web_search: async ({ query } = {}) => searchWeb(query, readSettingsSync()),
   // look_up needs no backend resolution: it's always the keyless official
   // reference APIs (Wikipedia + DDG Instant Answer), so it ignores the
   // search-backend settings entirely.

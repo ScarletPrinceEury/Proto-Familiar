@@ -113,47 +113,11 @@ test('searchWeb (default backend) degrades calmly when the web is unreachable', 
   assert.match(out, /couldn't reach the web/);
 });
 
-// ── searchWeb: opt-in SearXNG backend ────────────────────────────
-test('searchWeb uses SearXNG JSON when a custom base URL is set', async () => {
-  let hit = '';
-  const fetchFn = async (url) => { hit = url; return {
-    ok: true,
-    json: async () => ({ results: [
-      { title: 'A', url: 'http://a.test', content: 'snippet a' },
-      { title: 'B', url: 'http://b.test', content: 'snippet b' },
-    ] }),
-  }; };
-  const out = await searchWeb('cats', { webSearchBaseUrl: 'http://localhost:8080', webSearchMaxResults: 1 }, { fetchFn });
-  assert.match(hit, /^http:\/\/localhost:8080\/search\?q=cats&format=json$/);
-  assert.match(out, /1\. A/);
-  assert.doesNotMatch(out, /2\. B/);
-});
-
-test('searchWeb falls back to keyless when the configured SearXNG backend is down', async () => {
-  const lookupFn = async () => [{ address: '93.184.216.34' }];
-  const fetchFn  = async (url) => {
-    if (url.includes('format=json')) throw new Error('ECONNREFUSED'); // SearXNG unreachable
-    return { ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML };
-  };
-  const out = await searchWeb('cats', { webSearchBaseUrl: 'http://localhost:8080' }, { fetchFn, lookupFn });
-  assert.match(out, /Result A/);   // keyless results returned despite the stale/down SearXNG URL
-});
-
-test('searchWeb reports the SearXNG error only when keyless ALSO fails', async () => {
-  const lookupFn = async () => [{ address: '93.184.216.34' }];
-  const fetchFn  = async (url) => {
-    if (url.includes('format=json')) return { ok: false, status: 403 }; // SearXNG errors
-    throw new Error('offline');                                          // keyless also down
-  };
-  const out = await searchWeb('x', { webSearchBaseUrl: 'http://localhost:8080' }, { fetchFn, lookupFn });
-  assert.match(out, /HTTP 403/);
-});
-
 test('searchWeb needs a query', async () => {
   assert.match(await searchWeb('   ', {}), /need something to search/);
 });
 
-// ── searchWeb: backend selection (api / local / floor) ───────────
+// ── searchWeb: backend selection (api / floor) ───────────────────
 test('searchWeb (api backend) uses the chosen provider', async () => {
   const fetchFn = async () => ({ ok: true, json: async () => ({ results: [{ title: 'P', url: 'https://p.test', content: 'cp' }] }) });
   const out = await searchWeb('cats',
@@ -181,28 +145,6 @@ test('searchWeb (api backend, no key set) still answers via the floor', async ()
   const out = await searchWeb('cats',
     { webSearchBackend: 'api', webSearchApiProvider: 'brave' }, // no webSearchApiKey
     { fetchFn, lookupFn });
-  assert.match(out, /Result A/);
-});
-
-test('searchWeb (local backend) uses the injected managed search when present', async () => {
-  const managedSearch = async () => ({ rows: [{ title: 'M', url: 'http://m.test', content: 'cm' }] });
-  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { managedSearch });
-  assert.match(out, /1\. M/);
-  assert.match(out, /http:\/\/m\.test/);
-});
-
-test('searchWeb (local backend) falls to the floor when the managed engine returns an error', async () => {
-  const lookupFn = async () => [{ address: '93.184.216.34' }];
-  const fetchFn  = async (url) => ({ ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML });
-  const managedSearch = async () => ({ error: 'no managed search engine is running right now.' });
-  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, lookupFn, managedSearch });
-  assert.match(out, /Result A/); // floor answered
-});
-
-test('searchWeb (local backend) falls to the floor when no managed search is injected', async () => {
-  const lookupFn = async () => [{ address: '93.184.216.34' }];
-  const fetchFn  = async (url) => ({ ok: true, url, status: 200, headers: { get: () => null }, text: async () => DDG_HTML });
-  const out = await searchWeb('cats', { webSearchBackend: 'local' }, { fetchFn, lookupFn });
   assert.match(out, /Result A/);
 });
 

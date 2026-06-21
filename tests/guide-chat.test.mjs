@@ -15,7 +15,7 @@ test('buildGuideSystem assembles identity + the four prompt fields + the two blo
   assert.match(sys, /MAIN_PROMPT/);
   assert.match(sys, /CHAR_PROMPT/);
   assert.match(sys, /USER_PROMPT/);
-  assert.match(sys, /LibreY/);          // tools-info (§5b)
+  assert.match(sys, /Marginalia/);      // tools-info (§5b)
   assert.match(sys, /keep it plain/);   // no-jargon (§5c)
 });
 
@@ -32,7 +32,7 @@ test('buildGuideSystem does NOT inject the post-history prompt (the endpoint app
 
 test('buildGuideSystem tolerates an absent identity layer and empty prompt fields', () => {
   const sys = buildGuideSystem('', { userName: 'Sam' });
-  assert.match(sys, /LibreY/);          // still has the tools-info
+  assert.match(sys, /Marginalia/);      // still has the tools-info
   assert.ok(sys.length > 100);
 });
 

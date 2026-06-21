@@ -1,8 +1,13 @@
 # Modular web search — build spec
 
-> **Status: COMPLETE — Parts 1–4 shipped.** Part 4 (the in-modal Familiar explainer) landed at
-> `0.7.29` (`guide-chat.js` + `POST /api/guide-chat` + the modal mini-chat). The whole arc — two-tool
-> split, modular Basic/API/Local backend, static-PHP local engines, and the explainer — is done.
+> **Status: COMPLETE, then SIMPLIFIED.** Parts 1–4 shipped (two-tool split, modular backend, local
+> engines, explainer). Then in **0.7.38 the managed local engines (SearXNG/4get/LibreY) were
+> removed entirely** — too many failure points and too much processing overhead (PHP runtimes, uv
+> venvs, spawned processes, CA bundles, file locks, install/uninstall lifecycle) for what
+> **Marginalia + Tavily/Brave/Google + the DuckDuckGo floor** already cover. The web-search surface
+> is now: `look_up` (keyless reference APIs) + `web_search` with backend ∈ {basic (DDG floor), api}
+> + the in-modal explainer. Much of the Part 2b/2c/Part 3 material below is **historical** — kept as
+> the build record of what was tried and why it was unwound.
 >
 > **Local-engine reality check (`0.7.31`):** the search observability log caught that the PHP
 > engines were *spawning + health-passing but silently failing the actual search* (fooled by the
