@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { braveSearch, tavilySearch, googleSearch, API_PROVIDERS } from '../websearch-providers.js';
+import { braveSearch, tavilySearch, googleSearch, marginaliaSearch, API_PROVIDERS } from '../websearch-providers.js';
 
 // ── Brave ────────────────────────────────────────────────────────
 test('braveSearch needs a key', async () => {
@@ -65,7 +65,33 @@ test('googleSearch passes key+cx and maps items → rows', async () => {
   assert.deepEqual(r.rows[0], { title: 'G', url: 'https://g.test', content: 'sg' });
 });
 
+// ── Marginalia (independent index; key-optional) ─────────────────
+test('marginaliaSearch defaults to the public key and maps results', async () => {
+  let headers = null, url = '';
+  const fetchFn = async (u, opts) => { url = u; headers = opts.headers; return {
+    ok: true,
+    json: async () => ({ query: 'x', license: 'CC', results: [{ title: 'M', url: 'https://m.test', description: 'dm' }] }),
+  }; };
+  const r = await marginaliaSearch('cats', {}, { fetchFn }); // no key → 'public'
+  assert.equal(headers['API-Key'], 'public');
+  assert.match(url, /api2\.marginalia-search\.com\/search\?query=cats/);
+  assert.deepEqual(r.rows[0], { title: 'M', url: 'https://m.test', content: 'dm' });
+});
+
+test('marginaliaSearch uses a provided key over the public one', async () => {
+  let headers = null;
+  const fetchFn = async (_u, opts) => { headers = opts.headers; return { ok: true, json: async () => ({ results: [] }) }; };
+  await marginaliaSearch('x', { apiKey: 'mykey' }, { fetchFn });
+  assert.equal(headers['API-Key'], 'mykey');
+});
+
+test('marginaliaSearch explains a 503 as the shared-key rate limit', async () => {
+  const r = await marginaliaSearch('x', {}, { fetchFn: async () => ({ ok: false, status: 503 }) });
+  assert.match(r.error, /HTTP 503/);
+  assert.match(r.error, /rate-limited/);
+});
+
 // ── registry ─────────────────────────────────────────────────────
-test('API_PROVIDERS registers exactly brave / tavily / google', () => {
-  assert.deepEqual(Object.keys(API_PROVIDERS).sort(), ['brave', 'google', 'tavily']);
+test('API_PROVIDERS registers brave / google / marginalia / tavily', () => {
+  assert.deepEqual(Object.keys(API_PROVIDERS).sort(), ['brave', 'google', 'marginalia', 'tavily']);
 });

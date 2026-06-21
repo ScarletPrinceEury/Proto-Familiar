@@ -26,7 +26,6 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 
 import { API_PROVIDERS } from './websearch-providers.js';
-import { searxngSearch } from './local-engine-adapters.js';
 
 // The HTML-extraction stack (linkedom + @mozilla/readability + turndown) is
 // loaded LAZILY, not as static top-level imports. These are optional-feature
@@ -211,9 +210,7 @@ export async function guardedFetch(rawUrl, {
 // always falls through to the keyless in-process scrape so they are never
 // left without search. The resolution order:
 //
-//   custom webSearchBaseUrl  → that SearXNG JSON API   (power-user escape hatch)
-//   backend === 'api'        → the chosen provider (Brave/Tavily/Google)
-//   backend === 'local'      → the Familiar's managed engine (deps.managedUrl)
+//   backend === 'api'        → the chosen provider (Marginalia/Tavily/Brave/Google)
 //   else / anything failing  → keyless DuckDuckGo HTML scrape (the floor)
 //
 // Every backend yields the same {title,url,content} rows formatResults
@@ -255,29 +252,14 @@ export async function searchWeb(query, settings = {}, deps = {}) {
 // that backend was already the keyless floor (so searchWeb knows whether a
 // fallback is worth trying), and a human-readable label of what served.
 async function runChosenBackend(q, settings, deps) {
-  const custom = String(settings.webSearchBaseUrl || '').trim();
-  if (custom) return { primary: await searxngSearch(custom, q, deps), isBasic: false, label: 'your own SearXNG' };
-
   const backend = String(settings.webSearchBackend || 'basic');
 
   if (backend === 'api') {
-    const provider = String(settings.webSearchApiProvider || 'tavily');
+    const provider = String(settings.webSearchApiProvider || 'marginalia');
     const fn = API_PROVIDERS[provider];
     if (!fn) return { primary: { error: `I don't recognise the search provider "${provider}".` }, isBasic: false, label: `the ${provider} API` };
     const cfg = { apiKey: settings.webSearchApiKey, cseId: settings.webSearchGoogleCseId };
     return { primary: await fn(q, cfg, deps), isBasic: false, label: `the ${provider} API` };
-  }
-
-  if (backend === 'local') {
-    // The managed engine knows its own JSON dialect; local-engine-service
-    // injects managedSearch bound to whichever engine is active, and tags the
-    // result with `via` (the engine name). It returns { error } when nothing
-    // is ready, which falls through to the floor below.
-    if (deps.managedSearch) {
-      const primary = await deps.managedSearch(q, deps);
-      return { primary, isBasic: false, label: primary.via || 'a local engine' };
-    }
-    return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true, label: 'built-in keyless search' };
   }
 
   return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true, label: 'built-in keyless search' };

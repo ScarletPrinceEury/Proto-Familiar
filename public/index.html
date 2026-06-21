@@ -607,15 +607,15 @@
         </details>
 
         <div class="field">
-          <label class="ws-opt"><input type="radio" name="web-search-backend" value="basic"><span><strong>Basic</strong> — built-in, no setup. Works for everyone.</span></label>
-          <label class="ws-opt"><input type="radio" name="web-search-backend" value="api"><span><strong>API</strong> — proper search, paste one key.</span></label>
-          <label class="ws-opt"><input type="radio" name="web-search-backend" value="local"><span><strong>Local engine</strong> — runs privately on your machine.</span></label>
+          <label class="ws-opt"><input type="radio" name="web-search-backend" value="basic"><span><strong>Basic</strong> — built-in DuckDuckGo, no setup. Works for everyone.</span></label>
+          <label class="ws-opt"><input type="radio" name="web-search-backend" value="api"><span><strong>Search API</strong> — proper search; one (Marginalia) needs no signup at all.</span></label>
         </div>
 
         <!-- API panel -->
         <div id="websearch-api-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
           <div class="field">
             <label>Provider</label>
+            <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="marginalia"><span>Marginalia — independent index, <strong>no signup</strong> (indie / small web)</span></label>
             <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="tavily"><span>Tavily — no card, 1,000 free/month (easiest)</span></label>
             <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="brave"><span>Brave — independent index (needs a card)</span></label>
             <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="google"><span>Google — needs a key + an engine id</span></label>
@@ -623,24 +623,13 @@
           <div class="field">
             <label for="web-search-api-key">API key</label>
             <input type="password" id="web-search-api-key" placeholder="paste your key here" spellcheck="false" autocomplete="off">
+            <p class="field-hint hidden" id="websearch-marginalia-hint">Marginalia needs no key — leave this blank to use the free shared key (it can be slow/rate-limited; email kontakt@marginalia.nu for your own).</p>
           </div>
           <div class="field hidden" id="websearch-google-cse-field">
             <label for="web-search-google-cse-id">Google engine id <span class="label-hint">(cx)</span></label>
             <input type="text" id="web-search-google-cse-id" placeholder="Programmable Search engine id" spellcheck="false" autocomplete="off">
           </div>
         </div>
-
-        <!-- Local panel -->
-        <div id="websearch-local-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
-          <p class="field-hint">I download and run one of these on your machine. More private — nothing leaves to a third party — but it uses some of the machine's power while it runs.</p>
-          <div id="websearch-engine-list"></div>
-        </div>
-
-        <details class="field" style="margin-top:10px">
-          <summary style="cursor:pointer">Advanced: point at your own instance</summary>
-          <input type="text" id="web-search-base-url" placeholder="(blank = use the choice above) e.g. http://localhost:8080 for your own SearXNG" spellcheck="false" style="margin-top:6px;width:100%">
-          <p class="field-hint">When set, this wins over everything above.</p>
-        </details>
 
         <div class="field-row" style="margin-top:10px">
           <label for="web-search-max-results">Search results to keep</label>
