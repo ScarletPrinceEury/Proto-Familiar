@@ -91,6 +91,7 @@ function getCustomTools() {
 /** Session metadata for the server-side get_session_info tool. */
 function buildSessionInfo() {
   return {
+    sessionId:    state.sessionId,   // lets the Familiar's memorize_now find this session's log
     startedAt:    state.sessionStartedAt,
     messageCount: state.messages.length,
     provider:     state.provider,
@@ -8556,6 +8557,11 @@ function vlRenderPersonDetail(villager) {
       <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
       <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
     </div>
+    <div>
+      <div class="vl-field-label">Standing consent <span class="field-hint">(when both you and this person have agreed, the Familiar stops asking for per-fact consent about them — a "never store" category above still holds)</span></div>
+      <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-ward" ${villager?.standingConsent?.wardAgreed ? 'checked' : ''}> I agree the Familiar may keep memories about this person</label>
+      <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-villager" ${villager?.standingConsent?.villagerAgreed ? 'checked' : ''}> This person has agreed too</label>
+    </div>
     ${graphNodeHtml}
     <div class="vl-actions">
       <button class="btn-send" id="vl-p-save" type="button">${isNew ? 'Add person' : 'Save'}</button>
@@ -8626,13 +8632,17 @@ async function vlSavePerson(id) {
     const rawVal = btn.dataset.val;
     remember[btn.dataset.cat] = rawVal === 'true' ? true : rawVal === 'false' ? false : 'ask';
   });
+  const standingConsent = {
+    wardAgreed:     !!$('vl-p-consent-ward')?.checked,
+    villagerAgreed: !!$('vl-p-consent-villager')?.checked,
+  };
   status.textContent = 'Saving…';
   try {
     const r = await fetch(
       id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
       { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, categoryIds, aliases, connection,
-          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember }) },
+          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember, standingConsent }) },
     );
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

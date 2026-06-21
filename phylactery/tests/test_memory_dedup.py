@@ -101,3 +101,43 @@ def test_additive_dup_at_different_consent_level_inserts_new():
         b = memory.create("Alice has been stressed by her job", "significant", consent_pending=True, conn=c)  # pending, additive
         assert not b.get("merged")
         assert _count(c) == 2
+
+
+# ── Standalone daily facts (Part C — correct tiering) ────────────────────────
+# The memorization pipeline lands discrete facts at the `daily` tier with
+# standalone=True so each keeps its own row + metadata, consolidates, and decays
+# — instead of being mis-filed as permanent `significant`. These pin that shape.
+
+def test_standalone_daily_facts_get_their_own_rows():
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        memory.create("Alice is stressed about work", "daily", standalone=True, consent_pending=True, conn=c)
+        b = memory.create("Bob baked a chocolate cake", "daily", standalone=True, consent_pending=True, conn=c)
+        assert not b.get("merged")
+        assert _count(c) == 2  # two distinct standalone rows, NOT one date bucket
+        for row in c.execute("SELECT date_key, slug FROM memories").fetchall():
+            assert "_" not in row["date_key"]  # plain YYYY-MM-DD → consolidation's range filter catches it
+            assert row["slug"]                 # slug marks it standalone so the bucket never absorbs it
+
+
+def test_standalone_daily_dedups_like_significant():
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        a = memory.create("Alice is stressed about work", "daily", standalone=True, consent_pending=True, conn=c)
+        b = memory.create("Alice has been stressed by her job", "daily", standalone=True, consent_pending=True, conn=c)
+        assert b["merged"] is True and b["id"] == a["id"]
+        assert _count(c) == 1
+
+
+def test_plain_daily_bucket_and_standalone_fact_stay_separate():
+    """A standalone fact and the plain daily journal share the date but must not
+    bleed into one another: the fact is its own slugged row; journal lines append
+    into the slug-NULL bucket."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        memory.create("Alice is stressed about work", "daily", standalone=True, consent_pending=True, conn=c)
+        memory.create("- went for a walk", "daily", conn=c)      # plain journal line → new bucket
+        memory.create("- had lunch with Bob", "daily", conn=c)   # appends into the same bucket
+        assert _count(c) == 2  # one fact row + one journal bucket (not three)
+        bucket = c.execute("SELECT content FROM memories WHERE slug IS NULL").fetchone()
+        assert "went for a walk" in bucket["content"] and "had lunch with Bob" in bucket["content"]

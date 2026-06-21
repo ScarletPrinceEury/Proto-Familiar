@@ -628,15 +628,31 @@ exponential backoff, idempotent enqueue on
 where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`.
 Facts with `confidence < 0.4` are silently skipped.
 
+**Tiering — standalone `daily` facts (0.8.2):** extracted facts land at the
+`daily` tier (the doc's baseline for conversation-derived memory), written with
+`standalone: true` so each keeps **its own row** carrying its `category` /
+`subjects` / `consent_pending` / `confidence` — instead of being mis-filed as
+`significant`. In `memory.create` there are now three storage shapes:
+`significant` (own row keyed `date_slug`, a rare deliberate milestone),
+`standalone` (own row keyed by the **plain date** so consolidation's range
+filter still rolls it up; a `slug` marks it so the journal bucket never absorbs
+it), and the date-bucketed journal (`daily`/`weekly`/… with `slug` NULL, content
+appended as bullets). Reserving `significant` for true milestones means these
+facts now **consolidate** (`daily→weekly→…`), **decay**, and are caught by
+exact-dup hygiene (which groups by `granularity,date_key,content` — significant's
+unique `date_slug` had escaped it). *(Consolidation creates roll-up summaries but
+does not yet prune the daily source rows — a known follow-up.)*
+
 **Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
-similarity check before inserting a significant/consent-pending memory. A
-near-identical paraphrase (sim ≥ 0.85) folds into the existing entry (bumps
-`updated_at`, no new row); an additive near-dup (sim ≥ 0.78) appends the new
-detail to the existing content. Consent-safe: an unconsented detail is never
-folded into an already-confirmed memory (it gets its own row). The merge marker
-rides back through `memory_create` → `thalamus.createMemoryFull` →
-`memorization.js`, which skips re-queuing a merged dup for consent. This is what
-stopped the "82 queued, only 5 new" duplicate pile-up.
+similarity check before inserting a significant / standalone / consent-pending
+memory. A near-identical paraphrase (sim ≥ 0.85) folds into the existing entry
+(bumps `updated_at`, no new row); an additive near-dup (sim ≥ 0.78) appends the
+new detail. A per-fact row only dedups against other per-fact rows
+(`slug IS NOT NULL`), never into a journal bucket. Consent-safe: an unconsented
+detail is never folded into an already-confirmed memory (it gets its own row).
+The merge marker rides back through `memory_create` → `thalamus.createMemoryFull`
+→ `memorization.js`, which skips re-queuing a merged dup for consent. This is
+what stopped the "82 queued, only 5 new" duplicate pile-up.
 
 **Auto-graph (0.8.1):** the same extraction call also returns `relations` —
 concrete edges between named entities (person/place/organisation/pet/condition/
@@ -659,6 +675,14 @@ When multiple villagers are subjects of a fact, the most restrictive
 gate wins (`false > ask > true`). Default when no villager map exists:
 `basics=true`, all others=`ask`.
 
+**Standing mutual consent (0.8.3):** a villager record can carry
+`standingConsent: { wardAgreed, villagerAgreed }`. When **both** are true
+(`village.standingConsentActive`), `resolveRememberGate` clears that villager's
+`ask` to `true` — no more per-fact consent prompts about them — but an explicit
+`false` category still hard-blocks (a convenience toggle never overrides the
+ward's veto). Set two ways: the Village-UI consent checkboxes, or the Familiar's
+`village_upsert` tool (`mutualConsentToRemember`, ward-private only).
+
 **Consent flow:** `thalamus.enrich()` reads `.consent-pending.json` cheaply
 (no MCP round-trip) and injects a `[PENDING MEMORY CONSENT]` block when
 non-empty. The Familiar calls `memory_confirm_consent(ids)` or
@@ -666,13 +690,25 @@ non-empty. The Familiar calls `memory_confirm_consent(ids)` or
 then removes the handled IDs from the local file.
 
 **Triggers:**
-- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon).
+- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon),
+  and the sidebar "Memorize now" button (`memorize-now-btn`) for on-demand.
   Always `audienceTag: 'ward-private'`.
 - Discord: `discord-gateway.sessionForLocation()` enqueues the old session
   when idle rotation fires (session has been quiet ≥ `SESSION_IDLE_ROTATE_MS`).
   `audienceTag` comes from the stored session log.
+- **Familiar self-trigger (0.8.4):** the `memorize_now` tool. When the Familiar
+  judges the conversation holds things it must carry across instances — and a
+  clean rollover may never happen (the human switches sessions / clears history)
+  — it commits the session itself. The executor reads the session id from the
+  tool context (`sessionInfo.sessionId`) and delegates to `memorizeSessionNow`
+  (server.js, injected via `initCerebellumTools` to avoid the cerebellum↔
+  memorization import cycle), which reads the clean on-disk log and enqueues the
+  same pipeline. No new request beyond the chat turn it rides; degrades to a calm
+  first-person line, never throws into the tool loop. (Single deliberate facts
+  still go through `save_memory`; this commits the whole exchange.)
 
-**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
+**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` (the worker; `memorize_now`
+just enqueues, so it honours the same switch — a disabled worker won't drain).
 
 ### Migration: entity-core → Phylactery (Pillar F)
 
