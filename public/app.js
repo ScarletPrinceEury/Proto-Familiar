@@ -362,6 +362,7 @@ function syncWebSearchPanels() {
   $('websearch-local-panel')?.classList.toggle('hidden', backend !== 'local');
   const provider = document.querySelector('input[name="web-search-api-provider"]:checked')?.value || 'tavily';
   $('websearch-google-cse-field')?.classList.toggle('hidden', provider !== 'google');
+  $('websearch-marginalia-hint')?.classList.toggle('hidden', provider !== 'marginalia');
 }
 
 let _engineListTimer = null;

@@ -616,6 +616,7 @@
         <div id="websearch-api-panel" class="hidden" style="border-left:2px solid var(--border, #444);padding-left:12px;margin:8px 0">
           <div class="field">
             <label>Provider</label>
+            <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="marginalia"><span>Marginalia — independent index, <strong>no signup</strong> (indie / small web)</span></label>
             <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="tavily"><span>Tavily — no card, 1,000 free/month (easiest)</span></label>
             <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="brave"><span>Brave — independent index (needs a card)</span></label>
             <label class="ws-opt"><input type="radio" name="web-search-api-provider" value="google"><span>Google — needs a key + an engine id</span></label>
@@ -623,6 +624,7 @@
           <div class="field">
             <label for="web-search-api-key">API key</label>
             <input type="password" id="web-search-api-key" placeholder="paste your key here" spellcheck="false" autocomplete="off">
+            <p class="field-hint hidden" id="websearch-marginalia-hint">Marginalia needs no key — leave this blank to use the free shared key (it can be slow/rate-limited; email kontakt@marginalia.nu for your own).</p>
           </div>
           <div class="field hidden" id="websearch-google-cse-field">
             <label for="web-search-google-cse-id">Google engine id <span class="label-hint">(cx)</span></label>

@@ -77,10 +77,37 @@ export async function googleSearch(query, { apiKey, cseId } = {}, { fetchFn = fe
   }
 }
 
+// Marginalia — an INDEPENDENT small-web index (its own crawler; not Google/
+// Bing/DDG). A legitimate API, not scraping — and the key "public" works with
+// NO account/card/registration (shared rate limit → occasional HTTP 503; an
+// own key via kontakt@marginalia.nu avoids that). Deliberately favours indie /
+// non-commercial pages over big commercial sites, so it's for discovery, not a
+// general Google replacement. Maps results[] → rows.
+export async function marginaliaSearch(query, { apiKey } = {}, { fetchFn = fetch } = {}) {
+  const key = (apiKey && String(apiKey).trim()) || 'public';
+  const url = 'https://api2.marginalia-search.com/search'
+    + `?query=${encodeURIComponent(query)}&count=20&timeout=200`;
+  try {
+    const res = await timedFetch(url, { headers: { 'API-Key': key }, fetchFn });
+    if (!res.ok) {
+      const limited = res.status === 503 ? ' — the free shared key is rate-limited right now (an own key from kontakt@marginalia.nu avoids that)' : '';
+      return { error: `Marginalia search came back with an error (HTTP ${res.status})${limited}.` };
+    }
+    const data = await res.json();
+    const rows = (Array.isArray(data?.results) ? data.results : [])
+      .map(r => ({ title: r?.title || '', url: r?.url || '', content: r?.description || '' }));
+    return { rows };
+  } catch (err) {
+    if (err?.name === 'AbortError') return { error: 'My Marginalia search timed out before it answered.' };
+    return { error: `I couldn't reach Marginalia search (${err.message}).` };
+  }
+}
+
 // The provider registry searchWeb dispatches through. Adding a provider =
 // one adapter + one entry here (+ its settings fields + UI).
 export const API_PROVIDERS = {
-  brave:  braveSearch,
-  tavily: tavilySearch,
-  google: googleSearch,
+  brave:      braveSearch,
+  tavily:     tavilySearch,
+  google:     googleSearch,
+  marginalia: marginaliaSearch,
 };
