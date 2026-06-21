@@ -475,6 +475,29 @@ def graph_edge_create(
 
 
 @mcp.tool()
+def graph_relate(
+    fromLabel: str,
+    toLabel: str,
+    type: str,
+    fromType: Optional[str] = None,
+    toType: Optional[str] = None,
+    weight: Optional[float] = None,
+    instanceId: Optional[str] = None,
+) -> dict[str, Any]:
+    """I record a relationship between two entities BY NAME, creating either
+    node only if it isn't already in my graph and skipping the edge if I already
+    have it — so my graph never fills with duplicates. I reach for this (or it's
+    called for me when I memorise a session) whenever I learn how two real things
+    connect: "Sam works_at Acme", "Sam lives_in Bristol", "Mochi is_pet_of Sam".
+    fromLabel/toLabel are the entities' names; fromType/toType classify them
+    (person, place, pet, organisation, condition, project, …); type is the
+    relationship in snake_case.
+    """
+    w = float(weight) if weight is not None else 1.0
+    return graph.relate(fromLabel, fromType, toLabel, toType, type, weight=w, conn=_c())
+
+
+@mcp.tool()
 def graph_edge_update(
     id: str,
     type: Optional[str] = None,

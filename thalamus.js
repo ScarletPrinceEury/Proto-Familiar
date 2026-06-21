@@ -2270,6 +2270,29 @@ export async function createGraphEdge({ fromId, toId, type, weight, instanceId =
   }
 }
 
+/**
+ * Record a relationship by entity NAMES with resolve-or-create + edge dedup
+ * (the graph_relate tool does it all in one round-trip in Phylactery). This is
+ * what the memorization loop calls for each extracted relation, so the graph
+ * populates itself without piling up duplicate nodes/edges. Degrades to a
+ * no-op when Phylactery is down.
+ */
+export async function graphRelate({ fromLabel, fromType, toLabel, toType, type, weight, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const args = { fromLabel, toLabel, type, instanceId };
+    if (fromType !== undefined) args.fromType = fromType;
+    if (toType   !== undefined) args.toType   = toType;
+    if (weight   !== undefined) args.weight   = weight;
+    const result = await callTool('graph_relate', args);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] graphRelate failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function updateGraphNode({ id, label, description, type, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
