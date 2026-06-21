@@ -585,10 +585,18 @@ async function processJob(job) {
     const gate = resolveRememberGate(category, subjectVillagers, wardRemember);
     if (gate === 'false') continue; // drop silently
 
+    // Discrete session facts land at the `daily` tier — the doc's baseline for
+    // conversation-derived memory — but as STANDALONE rows so each keeps its own
+    // category / subjects / consent. They then consolidate (daily→weekly→…) and
+    // decay like daily memory should, instead of every fact being mis-filed as a
+    // permanent `significant` milestone (which bypasses consolidation and was a
+    // root cause of the consent-queue pile-up). `significant` is reserved for
+    // genuine milestones the Familiar marks deliberately via save_memory.
     const slug = `fact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const result = await createMemoryFull({
       content,
-      granularity: 'significant',
+      granularity: 'daily',
+      standalone: true,
       audience,
       subjects: subjectIds,
       category,

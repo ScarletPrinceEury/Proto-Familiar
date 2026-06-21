@@ -191,20 +191,26 @@ def _lexically_contained(new: str, existing: str) -> bool:
     return bool(n) and n in _norm_text(existing)
 
 
-def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str):
+def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str,
+                         standalone_only: bool = False):
     """Nearest existing narrative memory to `content`, if it's similar enough to
     be a duplicate. Returns (id, content, consent_pending, similarity) or None.
-    Degrades to None (→ normal insert) if embeddings are unavailable."""
+    Degrades to None (→ normal insert) if embeddings are unavailable.
+
+    standalone_only restricts the search to per-fact / significant rows (those
+    with a slug), so a discrete extracted fact dedups against other discrete
+    facts and never folds itself into a date-bucketed daily journal blob."""
     try:
         from phylactery.embed import embed_text
         q_vec = embed_text(content)
         aud_clause, aud_params = audience_filter_sql(audience)
+        slug_clause = " AND m.slug IS NOT NULL" if standalone_only else ""
         row = conn.execute(f"""
             SELECT m.id, m.content, m.consent_pending, v.distance
             FROM memory_vecs v
             JOIN memories m ON m.id = v.memory_id
             WHERE v.embedding MATCH ? AND k = ?
-              AND m.kind='narrative' AND {aud_clause}
+              AND m.kind='narrative'{slug_clause} AND {aud_clause}
             ORDER BY v.distance
             LIMIT 1
         """, [q_vec, 10] + aud_params).fetchone()
@@ -218,10 +224,11 @@ def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str):
         return None
 
 
-def _dedup_merge(conn, content, audience, consent_pending, now, source):
+def _dedup_merge(conn, content, audience, consent_pending, now, source,
+                 standalone_only: bool = False):
     """If `content` duplicates an existing memory, fold it in and return a
     create-style result; otherwise return None (caller inserts normally)."""
-    dup = _find_near_duplicate(conn, content, audience)
+    dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only)
     if dup is None:
         return None
     dup_id, dup_content, dup_pending, sim = dup
@@ -267,6 +274,7 @@ def create(
     category: str | None = None,
     consent_pending: bool = False,
     confidence: float = 1.0,
+    standalone: bool = False,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     if granularity not in VALID_GRANULARITIES:
@@ -279,10 +287,26 @@ def create(
         rec_id = new_id()
         subj_json = json.dumps(subjects or [])
 
+        # Three storage shapes:
+        #   • significant  → its own row keyed `date_slug` (a permanent, rare milestone).
+        #   • standalone   → its own row keyed by the plain date, but carrying per-fact
+        #     metadata (category / subjects / consent). This is how the memorization
+        #     pipeline lands discrete claimable facts at the `daily` tier so they
+        #     consolidate and decay like the doc intends — instead of every fact being
+        #     mis-filed as `significant`. The slug marks the row as a standalone fact so
+        #     the daily-journal bucket (below) never appends into it, and the plain
+        #     date_key keeps it inside consolidation's date-range roll-up.
+        #   • bucket       → the date-bucketed daily/weekly/… journal: one row per
+        #     (tier, date), new content appended as bullets. slug stays NULL.
+        is_standalone = granularity == "significant" or standalone
         if granularity == "significant":
             if not slug:
                 slug = _derive_slug(None, content)
             dk = f"{date_key or _today()}_{slug}"
+        elif standalone:
+            dk = date_key or _today()
+            if not slug:
+                slug = _derive_slug(None, content) or f"fact-{rec_id[:8]}"
         else:
             dk = date_key or _today()
             slug = None
@@ -291,18 +315,23 @@ def create(
 
         # Semantic dedup/merge — fold a near-identical fact into an existing
         # memory instead of piling up paraphrase duplicates (the consent-queue
-        # bloat). Scoped to the memorization path (significant / consent-pending);
-        # plain daily logs keep their date-bucketed append below.
-        if content and content.strip() and (granularity == "significant" or consent_pending):
-            merged = _dedup_merge(conn, content, audience, consent_pending, now, source)
+        # bloat). Scoped to per-fact rows (significant / standalone) and any
+        # consent-pending write; plain daily journal buckets keep their
+        # date-bucketed append below. A per-fact row only dedups against other
+        # per-fact rows, never into a journal bucket.
+        if content and content.strip() and (is_standalone or consent_pending):
+            merged = _dedup_merge(conn, content, audience, consent_pending, now, source,
+                                  standalone_only=is_standalone)
             if merged is not None:
                 return merged
 
         with conn:
-            # For non-significant tiers: APPEND to existing date entry if one exists.
-            if granularity != "significant":
+            # Date-bucketed journal tiers: APPEND to the existing bucket if one
+            # exists. The `slug IS NULL` guard keeps this off standalone fact
+            # rows that share the same plain date_key.
+            if not is_standalone:
                 existing = conn.execute(
-                    "SELECT id, content FROM memories WHERE granularity=? AND date_key=? AND kind='narrative'",
+                    "SELECT id, content FROM memories WHERE granularity=? AND date_key=? AND slug IS NULL AND kind='narrative'",
                     (granularity, dk),
                 ).fetchone()
                 if existing:

@@ -1879,7 +1879,7 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
  * Accepts audience, subjects, category, consent_pending, confidence.
  * Returns { ok, id?, error? }.
  */
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0 }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -1887,6 +1887,7 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
     if (slug) args.slug = slug;
     if (category) args.category = category;
+    if (standalone) args.standalone = true;
     const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
     // Parse the returned string for the id and whether it merged into an
     // existing memory ("Memory saved id=<id>." vs "Memory merged into existing

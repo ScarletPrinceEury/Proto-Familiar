@@ -178,6 +178,7 @@ def memory_create(
     category: Optional[str] = None,
     consent_pending: Optional[bool] = None,
     confidence: Optional[float] = None,
+    standalone: Optional[bool] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to store a new memory about my human or our world. I reach for it
@@ -186,7 +187,9 @@ def memory_create(
     For significant, slug is derived from content if omitted.
     audience defaults to ward-private; subjects is a list of villager IDs;
     category is the remember-taxonomy bucket; consent_pending marks records
-    awaiting ward approval (the ask path).
+    awaiting ward approval (the ask path). standalone gives a non-significant
+    fact its own row (carrying its category/consent) instead of appending into
+    the date bucket — how the memorization pipeline lands discrete daily facts.
     """
     result = mem.create(
         content, granularity, date_key=date, slug=slug,
@@ -196,6 +199,7 @@ def memory_create(
         category=category,
         consent_pending=bool(consent_pending),
         confidence=float(confidence) if confidence is not None else 1.0,
+        standalone=bool(standalone),
         conn=_c(),
     )
     if not result.get("ok"):

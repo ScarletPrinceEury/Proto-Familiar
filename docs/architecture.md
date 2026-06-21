@@ -628,15 +628,31 @@ exponential backoff, idempotent enqueue on
 where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`.
 Facts with `confidence < 0.4` are silently skipped.
 
+**Tiering — standalone `daily` facts (0.8.2):** extracted facts land at the
+`daily` tier (the doc's baseline for conversation-derived memory), written with
+`standalone: true` so each keeps **its own row** carrying its `category` /
+`subjects` / `consent_pending` / `confidence` — instead of being mis-filed as
+`significant`. In `memory.create` there are now three storage shapes:
+`significant` (own row keyed `date_slug`, a rare deliberate milestone),
+`standalone` (own row keyed by the **plain date** so consolidation's range
+filter still rolls it up; a `slug` marks it so the journal bucket never absorbs
+it), and the date-bucketed journal (`daily`/`weekly`/… with `slug` NULL, content
+appended as bullets). Reserving `significant` for true milestones means these
+facts now **consolidate** (`daily→weekly→…`), **decay**, and are caught by
+exact-dup hygiene (which groups by `granularity,date_key,content` — significant's
+unique `date_slug` had escaped it). *(Consolidation creates roll-up summaries but
+does not yet prune the daily source rows — a known follow-up.)*
+
 **Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
-similarity check before inserting a significant/consent-pending memory. A
-near-identical paraphrase (sim ≥ 0.85) folds into the existing entry (bumps
-`updated_at`, no new row); an additive near-dup (sim ≥ 0.78) appends the new
-detail to the existing content. Consent-safe: an unconsented detail is never
-folded into an already-confirmed memory (it gets its own row). The merge marker
-rides back through `memory_create` → `thalamus.createMemoryFull` →
-`memorization.js`, which skips re-queuing a merged dup for consent. This is what
-stopped the "82 queued, only 5 new" duplicate pile-up.
+similarity check before inserting a significant / standalone / consent-pending
+memory. A near-identical paraphrase (sim ≥ 0.85) folds into the existing entry
+(bumps `updated_at`, no new row); an additive near-dup (sim ≥ 0.78) appends the
+new detail. A per-fact row only dedups against other per-fact rows
+(`slug IS NOT NULL`), never into a journal bucket. Consent-safe: an unconsented
+detail is never folded into an already-confirmed memory (it gets its own row).
+The merge marker rides back through `memory_create` → `thalamus.createMemoryFull`
+→ `memorization.js`, which skips re-queuing a merged dup for consent. This is
+what stopped the "82 queued, only 5 new" duplicate pile-up.
 
 **Auto-graph (0.8.1):** the same extraction call also returns `relations` —
 concrete edges between named entities (person/place/organisation/pet/condition/
