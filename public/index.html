@@ -752,11 +752,31 @@
             <span id="ke-cov-month" class="ke-cov-month"></span>
             <button id="ke-cov-next" class="btn-ghost" title="Next month">›</button>
             <button id="ke-cov-refresh" class="btn-ghost">Refresh</button>
+            <button id="ke-cov-import" class="btn-secondary">Import logs…</button>
             <div class="ke-cov-legend">
               <span class="ke-cov-key"><i class="ke-cov-swatch cov-complete"></i>memorized</span>
               <span class="ke-cov-key"><i class="ke-cov-swatch cov-partial"></i>missing</span>
               <span class="ke-cov-key"><i class="ke-cov-swatch cov-uncertain"></i>uncertain</span>
             </div>
+          </div>
+          <div class="ke-inline-form hidden" id="ke-cov-import-form">
+            <div class="field-hint">Bring in past conversation logs from elsewhere. Supported: Proto-Familiar JSON, and timestamped text lines like <code>[2026-06-20 14:35] Name: message</code>. Logs are placed by date; you'll see a count before anything is memorized.</div>
+            <input type="file" id="ke-cov-import-file" accept=".json,.jsonl,.txt,.md,.log">
+            <textarea id="ke-cov-import-text" rows="6" placeholder="…or paste the log content here"></textarea>
+            <div class="ke-inline-form-row">
+              <input id="ke-cov-import-self" type="text" placeholder="AI/assistant speaker name(s), comma-separated (for text logs)">
+              <input id="ke-cov-import-source" type="text" placeholder="source label (e.g. ChatGPT)">
+            </div>
+            <div class="ke-inline-form-row">
+              <label class="field-hint" for="ke-cov-import-date">Date (only if the log has no timestamps and none in its filename)</label>
+              <input id="ke-cov-import-date" type="date">
+            </div>
+            <div class="ke-actions">
+              <button id="ke-cov-import-preview" class="btn-secondary">Preview</button>
+              <button id="ke-cov-import-commit" class="btn-send" disabled>Import &amp; memorize</button>
+              <button id="ke-cov-import-cancel" class="btn-ghost">Cancel</button>
+            </div>
+            <div class="vl-status" id="ke-cov-import-status"></div>
           </div>
           <div class="ke-split">
             <div class="ke-cov-cal" id="ke-cov-cal"></div>

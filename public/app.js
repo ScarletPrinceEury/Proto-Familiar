@@ -3598,6 +3598,11 @@ function init() {
   $('ke-cov-refresh')?.addEventListener('click', keLoadCoverage);
   $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
   $('ke-cov-next')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, 1);  keRenderCalendar(); } });
+  $('ke-cov-import')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.toggle('hidden'));
+  $('ke-cov-import-cancel')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.add('hidden'));
+  $('ke-cov-import-file')?.addEventListener('change', keCovImportFileChosen);
+  $('ke-cov-import-preview')?.addEventListener('click', keCovImportPreview);
+  $('ke-cov-import-commit')?.addEventListener('click', keCovImportCommit);
   $('ke-graph-refresh').addEventListener('click', () => {
     keGraphClosePopover();
     if (_keGraphView === 'map') keLoadGraphMap();
@@ -5727,6 +5732,85 @@ async function keMemorizeDay(date) {
     setTimeout(keLoadCoverage, 1500);
   } catch (err) {
     status.textContent = `Failed: ${err.message}`;
+  }
+}
+
+// ── Coverage: foreign-log import ────────────────────────────────────────
+let _keImportPreviewed = null; // last preview's {dates, days, messages, format}
+let _keImportFilename = '';    // name of the chosen file (for filename-date extraction)
+
+async function keCovImportFileChosen(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (file.size > 30 * 1024 * 1024) { $('ke-cov-import-status').textContent = 'File too large (max 30 MB).'; return; }
+  try {
+    $('ke-cov-import-text').value = await file.text();
+    _keImportFilename = file.name;
+    $('ke-cov-import-status').textContent = `Loaded ${file.name}.`;
+  } catch { $('ke-cov-import-status').textContent = 'Could not read that file.'; }
+}
+
+function keCovImportBody(commit) {
+  return {
+    content: $('ke-cov-import-text').value,
+    selfNames: $('ke-cov-import-self').value,
+    source: $('ke-cov-import-source').value,
+    filename: _keImportFilename || undefined,
+    fallbackDate: $('ke-cov-import-date').value || undefined,
+    ...(commit ? { commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model } : {}),
+  };
+}
+
+async function keCovImportPreview() {
+  const status = $('ke-cov-import-status');
+  if (!$('ke-cov-import-text').value.trim()) { status.textContent = 'Paste or choose a log first.'; return; }
+  status.textContent = 'Reading…';
+  $('ke-cov-import-commit').disabled = true;
+  _keImportPreviewed = null;
+  try {
+    const res = await fetch('/api/import-logs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(keCovImportBody(false)),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    if (data.needsDate) {
+      _keImportPreviewed = null;
+      status.textContent = `Recognised ${data.format}, but it has no timestamps and none in the filename. Enter a "Date" above, then Preview again.`;
+      $('ke-cov-import-date')?.focus();
+      return;
+    }
+    _keImportPreviewed = data;
+    const range = data.dates.length ? `${data.dates[0]} → ${data.dates[data.dates.length - 1]}` : '—';
+    status.textContent = `Recognised ${data.format}: ${data.days} day(s) (${range}), ${data.messages} message(s). `
+      + `"Import & memorize" will store them and run ~${data.days} extraction pass(es).`;
+    $('ke-cov-import-commit').disabled = false;
+  } catch (err) {
+    status.textContent = `Couldn't read it: ${err.message}`;
+  }
+}
+
+async function keCovImportCommit() {
+  const status = $('ke-cov-import-status');
+  if (!_keImportPreviewed) { status.textContent = 'Preview first.'; return; }
+  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (!confirm(`Import ${_keImportPreviewed.days} day(s) and memorize them now? This runs ~${_keImportPreviewed.days} extraction pass(es).`)) return;
+  status.textContent = 'Importing…';
+  $('ke-cov-import-commit').disabled = true;
+  try {
+    const res = await fetch('/api/import-logs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(keCovImportBody(true)),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    status.textContent = `Imported ${data.days} day(s), queued ${data.enqueued} for memorizing. Coverage updates as they finish.`;
+    _keImportPreviewed = null;
+    $('ke-cov-import-text').value = '';
+    setTimeout(keLoadCoverage, 1500);
+  } catch (err) {
+    status.textContent = `Import failed: ${err.message}`;
+    $('ke-cov-import-commit').disabled = false;
   }
 }
 
