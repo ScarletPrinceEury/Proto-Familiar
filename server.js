@@ -51,6 +51,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
+import { startMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
@@ -2618,6 +2619,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startRemindersScheduler();
   startSilenceTriage();
   startReachout();
+  startMemorySweep();
   startVillageSync();
   // Discord gateway (Village V4). Supervisor idles until the ward sets
   // a bot token + enables the toggle in Settings; follows settings
@@ -2928,6 +2930,27 @@ function startReachout() {
   // drains durable facts stranded in tomes into identity/memory. Hard
   // off-switch: PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1.
   startTomeGraduationLoop();
+}
+
+// Memory coverage sweep (day-anchoring Phase 2). Memorizes past days that never
+// ingested. Default-ON; settings toggle "Memory coverage sweep"; hard off-switch
+// PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1. Only enqueues into the memorization
+// worker, so it also stands down when that worker is disabled.
+function startMemorySweep() {
+  if (process.env.PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED === '1') {
+    console.log('[sweep] PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 — memory coverage sweep is OFF');
+    return;
+  }
+  startMemorySweepLoop({
+    isEnabled: async () => {
+      if (process.env.PROTO_FAMILIAR_MEMORIZE_DISABLED === '1') return false; // worker off → nothing to feed
+      const s = readSettingsSync();
+      return s.memorySweepEnabled !== false; // default-ON (undefined = on)
+    },
+    getConnection: () => primaryConnectionFrom(readSettingsSync()),
+    onTick: (r) => { if (r.acted) console.log(`[sweep] enqueued ${r.enqueued} slice(s) across ${r.days} past day(s)`); },
+    onError: (err) => console.warn('[sweep] tick error:', err?.message ?? err),
+  });
 }
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
