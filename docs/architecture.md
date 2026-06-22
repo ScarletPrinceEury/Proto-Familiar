@@ -208,8 +208,11 @@ lifecycle of the autonomous loops:
 
 **Logs / Tomes:** familiar endpoints for session JSON and Tome CRUD.
 
-**Memorization:** `POST /api/memorize` + `GET /api/memorize` +
-ack/cancel — see `memorization.js`.
+**Memorization:** `POST /api/memorize` (session scope is day-anchored) +
+`GET /api/memorize` + ack/cancel — see `memorization.js`.
+**Coverage (day-anchoring Phase 3):** `GET /api/memory-coverage` (per-date
+status for the calendar) + `POST /api/memorize-day {date,force}` ((re)feed a
+day's slices) — see `memory-coverage.js`.
 
 **Temporal editor (M9):**
 - `GET /api/temporal/interests` — live + standing with decay metadata
@@ -712,7 +715,29 @@ non-empty. The Familiar calls `memory_confirm_consent(ids)` or
 `memory_drop_pending(ids)` (both in `BUILTIN_TOOLS`); `pruneConsentPending(ids)`
 then removes the handled IDs from the local file.
 
-**Triggers:**
+**Day-anchored coverage (Phase 1 of the day-anchoring keystone, 0.7.x).** Session
+memorization is now tracked per **local calendar date**, not per session.
+`day-segments.js` `segmentByDay(messages)` derives per-date slices from a session
+log (Hybrid model — the live log stays one intact file; segmentation is logical,
+at memorize time; a midnight-crossing session becomes two slices). `memorization
+.enqueueSessionByDay()` enqueues one job per date-slice (`scope:'day'`,
+`topicId:<date>`, `messageRange`), skipping slices the **coverage ledger** already
+marks memorized. On completion `processJob` calls `memory-coverage
+.recordSegmentRun()` (a day slice with zero kept facts is still *done* — it's
+recorded, not retried; shared-room slices get a `'shared-room'` flag). The ledger
+(`tomes/.memory-coverage.json`) stores only what's been memorized per
+(date, session); `computeCoverage()` reads the logs live and derives per-date
+status (`complete | partial | uncertain | empty`) by comparing the two — so the
+active day reads `partial` the moment new messages land. Dates use server-local
+time, stamped in the ledger. **Phase 3 (calendar UI):** the Knowledge editor's
+**Coverage** tab renders a month calendar coloured by status (`computeCoverage()`
+via `GET /api/memory-coverage`); clicking a day lists its sessions and offers
+"Memorize this day" (`POST /api/memorize-day`, `collectDateSlices` → per-slice
+enqueue, `force` to re-run done days). *(Remaining: Phase 2 always-on sweep, Phase
+4 foreign-log import; see `docs/day-anchoring-build-spec.md`.)*
+
+**Triggers** (all session-scope triggers route through `enqueueSessionByDay`;
+topic-scope stays whole-range):
 - Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon),
   and the sidebar "Memorize now" button (`memorize-now-btn`) for on-demand.
   Always `audienceTag: 'ward-private'`.

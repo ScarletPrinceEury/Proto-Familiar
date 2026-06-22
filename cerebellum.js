@@ -1581,7 +1581,7 @@ export const TOOL_EXECUTORS = {
       if (res.error === 'too-short') return "There isn't enough here yet for me to commit to memory — I'll keep it in mind as we go.";
       return "I couldn't commit this conversation just now — I'll catch it when the session settles.";
     }
-    if (res.deduped) return "I'm already drawing this conversation into my memory — it's in hand.";
+    if (!res.enqueued) return "I'm already drawing this conversation into my memory — it's in hand.";
     return "Done — I've set this conversation to be drawn into my long-term memory now, so it carries across to wherever we talk next. I'll still check with you before keeping anything sensitive.";
   },
 

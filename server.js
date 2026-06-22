@@ -76,12 +76,14 @@ import {
 import { expandWindow } from './recurrence.js';
 import {
   enqueueMemorization,
+  enqueueSessionByDay,
   listJobs as listMemorizationJobs,
   acknowledgeJob as acknowledgeMemorizationJob,
   cancelJob as cancelMemorizationJob,
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
+import { computeCoverage, collectDateSlices } from './memory-coverage.js';
 import {
   getRegistry as getVillageRegistry,
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
@@ -1413,12 +1415,14 @@ async function memorizeSessionNow({ sessionId, provider, apiKey, model, audience
     (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());
   if (readable.length < 2) return { ok: false, error: 'too-short' };
   try {
-    const { jobId, deduped } = await enqueueMemorization({
-      sessionId, scope: 'session', messages,
+    // Day-anchored: segments the session by date and enqueues the missing
+    // slices (skips dates already memorized per the coverage ledger).
+    const { enqueued, skipped } = await enqueueSessionByDay({
+      sessionId, messages,
       provider: provider ?? log.provider, apiKey, model: model ?? log.model,
       audienceTag: audienceTag ?? 'ward-private',
     });
-    return { ok: true, jobId, deduped, messageCount: readable.length };
+    return { ok: true, enqueued, skipped, messageCount: readable.length };
   } catch (err) {
     return { ok: false, error: err?.message ?? 'enqueue-failed' };
   }
@@ -1442,10 +1446,18 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
   if (!isValidUUID(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
-    const { jobId, deduped } = await enqueueMemorization({
-      sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag,
-    });
-    res.status(202).json({ jobId, deduped });
+    if (scope === 'topic') {
+      // Topic-scoped memorization stays whole-range (one summary of a slice).
+      const { jobId, deduped } = await enqueueMemorization({
+        sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag,
+      });
+      res.status(202).json({ jobId, deduped });
+    } else {
+      // Session scope is day-anchored: one job per calendar date the session
+      // touched, skipping date-slices already memorized (the coverage ledger).
+      const r = await enqueueSessionByDay({ sessionId, messages, provider, apiKey, model, audienceTag });
+      res.status(202).json(r);
+    }
   } catch (err) {
     res.status(400).json({ error: err.message ?? 'Failed to enqueue memorization.' });
   }
@@ -1457,6 +1469,39 @@ app.get('/api/memorize', async (_req, res) => {
     res.json(await listMemorizationJobs());
   } catch {
     res.json([]);
+  }
+});
+
+// GET /api/memory-coverage — per-day memorization coverage for the calendar.
+// Computed live from the session logs + the coverage ledger; no message content.
+app.get('/api/memory-coverage', async (_req, res) => {
+  try { res.json(await computeCoverage()); }
+  catch { res.json({ tz: 'local', days: {} }); }
+});
+
+// POST /api/memorize-day — (re)feed every session's slice for one calendar date.
+// Skips slices already memorized unless `force`. Client supplies the creds, same
+// as POST /api/memorize.
+app.post('/api/memorize-day', async (req, res) => {
+  const { date, force, provider, apiKey, model } = req.body ?? {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) return res.status(400).json({ error: 'Invalid date (YYYY-MM-DD).' });
+  if (!provider || !apiKey || !model) return res.status(400).json({ error: 'provider, apiKey, and model are required.' });
+  try {
+    const slices = await collectDateSlices(date, { force: force === true });
+    let enqueued = 0, deduped = 0;
+    for (const { sessionId, audienceTag, seg } of slices) {
+      try {
+        const r = await enqueueMemorization({
+          sessionId, scope: 'day', topicId: date,
+          messageRange: { start: seg.startIdx, end: seg.endIdx },
+          messages: seg.messages, provider, apiKey, model, audienceTag,
+        });
+        if (r.deduped) deduped++; else enqueued++;
+      } catch (err) { console.warn('[memorize-day] slice failed:', err?.message ?? err); }
+    }
+    res.status(202).json({ enqueued, deduped, requested: slices.length });
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? 'Failed to memorize day.' });
   }
 });
 
