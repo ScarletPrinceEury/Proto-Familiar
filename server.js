@@ -85,7 +85,7 @@ import {
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 import { computeCoverage, collectDateSlices } from './memory-coverage.js';
-import { parseImport } from './log-import.js';
+import { parseImport, dateFromFilename, applyFallbackDate } from './log-import.js';
 import { segmentByDay } from './day-segments.js';
 import {
   getRegistry as getVillageRegistry,
@@ -1513,15 +1513,30 @@ app.post('/api/memorize-day', async (req, res) => {
 // can show the scale before spending; with `commit` it places the logs by date
 // (one imported session per date) and enqueues them for immediate ingestion.
 app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) => {
-  const { content, selfNames, source, commit, provider, apiKey, model } = req.body ?? {};
+  const { content, selfNames, source, commit, provider, apiKey, model, fallbackDate, filename } = req.body ?? {};
   const names = Array.isArray(selfNames) ? selfNames
     : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
 
   const parsed = parseImport(content, { selfNames: names });
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
+  // Date placement (the "read filename, then ask" path): if the log carries no
+  // timestamps at all, stamp every message with a single date — an explicit
+  // fallbackDate, else one pulled from the filename. If neither is available the
+  // preview asks for a date; a commit refuses without one.
+  let messages = parsed.messages;
+  if (!messages.some(m => m.timestamp)) {
+    const explicit = (typeof fallbackDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fallbackDate)) ? fallbackDate : null;
+    const date = explicit || dateFromFilename(filename);
+    if (!date) {
+      if (!commit) return res.json({ ok: true, preview: true, format: parsed.format, needsDate: true, messages: messages.length });
+      return res.status(400).json({ error: 'This log has no timestamps. Provide a date (YYYY-MM-DD) for it.' });
+    }
+    messages = applyFallbackDate(messages, date);
+  }
+
   // Segment into per-date slices with enough to extract.
-  const segs = segmentByDay(parsed.messages).filter(s => s.readableCount >= 2);
+  const segs = segmentByDay(messages).filter(s => s.readableCount >= 2);
   if (segs.length === 0) {
     return res.status(400).json({ error: 'No date had enough messages to import (need ≥2 each).' });
   }

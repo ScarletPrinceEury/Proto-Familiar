@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseImport, parseTimestampedText, toIso } from '../log-import.js';
+import { parseImport, parseTimestampedText, toIso, dateFromFilename, applyFallbackDate } from '../log-import.js';
 
 test('toIso handles epoch seconds, ms, and ISO; rejects junk', () => {
   assert.equal(toIso(1_750_000_000).slice(0, 4), '2025');       // seconds
@@ -55,6 +55,39 @@ test('timestamped text with no parseable timestamp anywhere is rejected', () => 
   // parseImport falls through both parsers → error
   const direct = parseTimestampedText(raw);
   assert.equal(direct, null);
+});
+
+test('parses a SillyTavern .jsonl (metadata line + is_user roles + send_date)', () => {
+  const raw = [
+    JSON.stringify({ chat_metadata: {}, user_name: 'unused', character_name: 'unused' }),
+    JSON.stringify({ name: 'Kenric', is_user: false, is_system: false, send_date: '2026-06-14T21:19:41.313Z', mes: 'the room was hot' }),
+    JSON.stringify({ name: 'Lydia', is_user: true, is_system: false, send_date: '2026-06-14T21:26:22.849Z', mes: 'she gasped' }),
+    JSON.stringify({ name: 'System', is_user: false, is_system: true, send_date: '2026-06-14T21:27:00Z', mes: 'group note' }),
+  ].join('\n');
+  const r = parseImport(raw);
+  assert.equal(r.ok, true);
+  assert.equal(r.format, 'SillyTavern');
+  assert.equal(r.messages.length, 2);            // system line skipped
+  assert.equal(r.messages[0].role, 'assistant'); // is_user:false
+  assert.equal(r.messages[1].role, 'user');      // is_user:true
+  assert.equal(r.messages[0].timestamp, '2026-06-14T21:19:41.313Z');
+});
+
+test('dateFromFilename pulls an ISO-ish date out of a name', () => {
+  assert.equal(dateFromFilename('b3acc751-Kenric__2026061423h19m41s277ms.jsonl'), '2026-06-14');
+  assert.equal(dateFromFilename('chat 2025-05-23.txt'), '2025-05-23');
+  assert.equal(dateFromFilename('no date here.txt'), null);
+  assert.equal(dateFromFilename('2025-13-40 bad.txt'), null); // invalid month/day
+});
+
+test('applyFallbackDate stamps only undated messages, on the given local day', () => {
+  const out = applyFallbackDate([
+    { role: 'user', content: 'a', timestamp: null },
+    { role: 'assistant', content: 'b', timestamp: '2026-01-01T00:00:00Z' },
+  ], '2026-06-20');
+  assert.equal(out[0].timestamp.slice(0, 4), '2026');
+  assert.equal(new Date(out[0].timestamp).getFullYear(), 2026);
+  assert.equal(out[1].timestamp, '2026-01-01T00:00:00Z'); // already-dated untouched
 });
 
 test('unknown format → loud structured error listing what is supported', () => {

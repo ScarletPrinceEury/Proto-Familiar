@@ -5737,13 +5737,17 @@ async function keMemorizeDay(date) {
 
 // ── Coverage: foreign-log import ────────────────────────────────────────
 let _keImportPreviewed = null; // last preview's {dates, days, messages, format}
+let _keImportFilename = '';    // name of the chosen file (for filename-date extraction)
 
 async function keCovImportFileChosen(e) {
   const file = e.target.files?.[0];
   if (!file) return;
   if (file.size > 30 * 1024 * 1024) { $('ke-cov-import-status').textContent = 'File too large (max 30 MB).'; return; }
-  try { $('ke-cov-import-text').value = await file.text(); $('ke-cov-import-status').textContent = `Loaded ${file.name}.`; }
-  catch { $('ke-cov-import-status').textContent = 'Could not read that file.'; }
+  try {
+    $('ke-cov-import-text').value = await file.text();
+    _keImportFilename = file.name;
+    $('ke-cov-import-status').textContent = `Loaded ${file.name}.`;
+  } catch { $('ke-cov-import-status').textContent = 'Could not read that file.'; }
 }
 
 function keCovImportBody(commit) {
@@ -5751,6 +5755,8 @@ function keCovImportBody(commit) {
     content: $('ke-cov-import-text').value,
     selfNames: $('ke-cov-import-self').value,
     source: $('ke-cov-import-source').value,
+    filename: _keImportFilename || undefined,
+    fallbackDate: $('ke-cov-import-date').value || undefined,
     ...(commit ? { commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model } : {}),
   };
 }
@@ -5768,6 +5774,12 @@ async function keCovImportPreview() {
     });
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
+    if (data.needsDate) {
+      _keImportPreviewed = null;
+      status.textContent = `Recognised ${data.format}, but it has no timestamps and none in the filename. Enter a "Date" above, then Preview again.`;
+      $('ke-cov-import-date')?.focus();
+      return;
+    }
     _keImportPreviewed = data;
     const range = data.dates.length ? `${data.dates[0]} → ${data.dates[data.dates.length - 1]}` : '—';
     status.textContent = `Recognised ${data.format}: ${data.days} day(s) (${range}), ${data.messages} message(s). `

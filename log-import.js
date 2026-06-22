@@ -31,6 +31,23 @@ function normRole(r) {
   return r === 'assistant' ? 'assistant' : r === 'system' ? 'system' : 'user';
 }
 
+// Pull a YYYY-MM-DD out of a filename for logs with no per-message timestamps
+// (e.g. a SillyTavern export named "...2025-05-23..." or "...20250523...").
+// Matches an ISO-ish run anywhere in the name, validating month/day; null if none.
+export function dateFromFilename(name) {
+  if (typeof name !== 'string') return null;
+  const m = name.match(/(20\d{2})[-_]?(0[1-9]|1[0-2])[-_]?(0[1-9]|[12]\d|3[01])/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+// Stamp undated messages with a single calendar date (local noon, so the local
+// day can't drift at timezone edges). Used when a whole log lacks timestamps.
+export function applyFallbackDate(messages, date) {
+  const [y, mo, d] = date.split('-').map(Number);
+  const iso = new Date(y, mo - 1, d, 12).toISOString();
+  return messages.map(m => (m.timestamp ? m : { ...m, timestamp: iso }));
+}
+
 // ── Parser: Proto-Familiar session-log JSON (single, bundle, or raw array) ────
 function parsePfJson(raw) {
   let data;
@@ -83,14 +100,46 @@ export function parseTimestampedText(raw, { selfNames = [] } = {}) {
   return { messages: usable, format: 'timestamped text' };
 }
 
-// Registry — order matters (JSON shapes before the text catch-all). SillyTavern
-// and OpenClaw parsers slot in here once their real formats are confirmed.
+// ── Parser: SillyTavern chat (.jsonl) ────────────────────────────────────────
+// One JSON object per line: an optional metadata line first ({chat_metadata,
+// user_name, character_name}), then messages {name, is_user, is_system,
+// send_date, mes, swipes…}. is_user gives the role; send_date is ISO; mes is the
+// active swipe. System lines are skipped.
+export function parseSillyTavern(raw) {
+  const lines = String(raw).split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return null;
+  const out = [];
+  let sawMessage = false;
+  for (const line of lines) {
+    let o;
+    try { o = JSON.parse(line); } catch { return null; } // a non-JSON line → not ST JSONL
+    if (o && typeof o.mes === 'string' && ('is_user' in o)) {
+      sawMessage = true;
+      if (o.is_system || !o.mes.trim()) continue;
+      out.push({
+        role: o.is_user ? 'user' : 'assistant',
+        content: o.mes,
+        timestamp: toIso(o.send_date),
+        speaker: typeof o.name === 'string' ? o.name : undefined,
+      });
+    } else if (o && (o.chat_metadata !== undefined || o.user_name !== undefined || o.character_name !== undefined)) {
+      continue; // metadata line — skip
+    } else {
+      return null; // unexpected shape → let another parser try (it won't), then error
+    }
+  }
+  return sawMessage && out.length >= 2 ? { messages: out, format: 'SillyTavern' } : null;
+}
+
+// Registry — order matters (JSON shapes before the text catch-all). OpenClaw
+// slots in here once its real format is confirmed.
 const PARSERS = [
   parsePfJson,
+  parseSillyTavern,
   parseTimestampedText,
 ];
 
-export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'timestamped text'];
+export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'timestamped text'];
 
 /**
  * Parse `raw` into normalized messages. Returns { ok, messages, format } or
