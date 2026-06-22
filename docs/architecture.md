@@ -695,6 +695,23 @@ by `from/to/lower(type)`. Fire-and-forget per edge (Promise.allSettled), gated o
 This rides the existing memorization LLM call (no new request) and fixes the
 "Familiar almost never saves to the graph unless prompted" gap.
 
+**Graph-node audience derivation (Pillar E, 0.7.x).** Each endpoint's audience is
+derived **in code** before routing: `audience.deriveNodeAudience({ label,
+registry })` matches the label to a known villager (by name/handle) and takes that
+villager's representative Village category, else **`ward-private`** (fail-closed —
+places, orgs, the ward, abstractions stay private until deliberately widened). The
+edge takes the **narrower** of its two endpoints (`mostRestrictiveAudience`) so it
+can't reveal a ward-private node in a wider room. These ride into `graph_relate`'s
+`fromAudience`/`toAudience`/`edgeAudience` (and the Familiar's `create_graph_node`
+derives the same way). Audience tags only **new** nodes — `resolve_or_create_node`
+never re-tags an existing node, so a deliberate override isn't clobbered by ongoing
+memorization. The deliberate-override surface is `graph_node_update`'s `audience`
+(Familiar tool `update_graph_node`, or the Knowledge-editor node popover's audience
+dropdown) — how the ward/Familiar widens a node to a circle or keeps it to just the
+two of them. Graph gating is the structural `audience` column + the Phase-1 recall
+filter; the `<!-- gate: -->` comments are an **identity-file** mechanism only and
+were never used in graph descriptions.
+
 **`remember` gate** (per villager, per category):
 - `true` → store freely in Phylactery
 - `false` → drop silently
@@ -712,6 +729,26 @@ gate wins (`false > ask > true`). Default when no villager map exists:
 `false` category still hard-blocks (a convenience toggle never overrides the
 ward's veto). Set two ways: the Village-UI consent checkboxes, or the Familiar's
 `village_upsert` tool (`mutualConsentToRemember`, ward-private only).
+
+**Write-time audience derivation (Pillar C → Pillar E, 0.7.x).** Each per-fact row
+is now stamped with the audience tag that gates its later recall — derived **in
+code** by `audience.deriveMemoryAudience({ category, subjects, sessionTag,
+registry })`, never asked of the extractor (a tag the LLM could forget is a tag
+that could leak). The rule is **session-bounded by default, widen/tighten by
+explicit consent**: with no per-subject preference a fact is capped at the room it
+was made in (`audienceTag`), and a sensitive category (`health_info`,
+`emotional_content`) is floored to `ward-private`. A subject villager may carry a
+`disclosure` map (per remember-category → a Village category id, or
+`ward-private`); an explicit entry **overrides** the default in either direction —
+widening a ward-private fact out to a named circle, or tightening past the session
+ceiling — and even overrides the sensitivity floor, because that is the data
+subject's own stated consent. With multiple subjects the **narrowest** circle wins
+(everyone named must be comfortable with the room). The ward sets `disclosure` in
+the Village UI (a per-category dropdown beside the consent toggles); the Familiar
+sets it in first person via `village_upsert`'s `disclosure` argument (circle names
+resolved to ids, ward-private only for edits). The derived tag rides into
+`createMemoryFull({ audience })`, where it becomes the `audience` column the Pillar
+E recall gate filters on.
 
 **Consent flow:** `thalamus.enrich()` reads `.consent-pending.json` cheaply
 (no MCP round-trip) and injects a `[PENDING MEMORY CONSENT]` block when
@@ -837,15 +874,30 @@ so the filter always fails open — a Phylactery outage never blocks a reply.
 **Parameters signed off by the human (build-spec §7):**
 threshold=0.70, retry budget=3, safe-refusal text as above.
 
-### Pillar E — `memories: 'shared'` unlock (`audience.js`)
+### Pillar E — audience-gated recall (`audience.js` + Phylactery)
 
-`fetchEligibility` now permits `memory_search` when `g.memories === 'shared'`
-(in addition to `=== true`). This was gated off in Pillars A–D because memories
-had no audience tags, so any 'shared' room would have received ALL memories.
-Pillar C added `audience` tags at write time; Pillar D adds the outgoing gate.
-Together they make 'shared' safe to open: a non-ward-private room can now
-receive memories tagged for its audience, and the outgoing filter catches any
-ward-private content that might slip through in the reply text.
+`fetchEligibility` decides *whether* the memory/graph fetch runs for a room;
+**the recall gate decides *what comes back*.** `audience.js` `visibleAudiences
+(roomTag, registry)` computes the SET of audience tags a room may see — every
+Village category whose `permissionScore` ≤ the room's, which excludes
+`ward-private` (it isn't a category and outscores all) and any
+more-trusted-than-the-room category. `server.js`/`discord-gateway.js` compute
+this set and pass it into `enrich({ audiences })`, which forwards it to
+`memory_search` / `graph_node_search` / `graph_subgraph`. Phylactery's
+`audience_in_sql(audiences)` turns it into `audience IN (…)` (None → `1=1` for a
+ward room; `[]` → `0=1`); `memory.search`, `graph.search_nodes`, and
+`graph.get_subgraph` (all three fetches, incl. the subgraph endpoint backfill)
+filter through it. Fail-closed: a record tagged with a deleted/unknown category
+is absent from the set → excluded; a registry-read failure leaves
+`audiences=null` only on the ward path.
+
+**The leak this closed (0.7.x):** the room tag was never passed, so recall
+defaulted to `ward-private` → `1=1` → ward-private memories/graph surfaced in the
+Familiar's *context* in trusted shared rooms. (The old `audience_filter_sql` also
+kept `ward-private` in the non-ward `IN`-list — a second leak — left for the dedup
+path; recall now routes through `audience_in_sql`, which doesn't.) The outgoing
+filter (Pillar D) remains the send-side backstop; together they are the two gates
+the design intended. See `docs/audience-gating-build-spec.md`.
 
 ### Pillar H — lifecycle: consolidation scheduler, hygiene, graduation, backup
 

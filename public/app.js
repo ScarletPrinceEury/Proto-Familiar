@@ -6720,6 +6720,17 @@ async function keGraphOpenPopover(node, clientX, clientY) {
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
     const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
+    // Audience dropdown options — "just us" plus every Village circle. A node is
+    // private by default; this is the deliberate widen/tighten surface for the
+    // human (the Familiar has the same control via update_graph_node).
+    let audOptions = `<option value="ward-private">Just us (ward-private)</option>`;
+    try {
+      const reg = await vlFetch();
+      const cur = self.audience ?? 'ward-private';
+      audOptions = `<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>Just us (ward-private)</option>` +
+        (reg?.categories ?? []).map(c =>
+          `<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+    } catch { /* Village unreachable → ward-private only; harmless */ }
     pop.innerHTML = `
       <div class="ke-graph-popover-head">
         <h3>${esc(self.label ?? node.id)}</h3>
@@ -6728,6 +6739,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
       <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}" list="ke-node-types-dl"></div>
       <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
+      <div class="field"><label>Audience <span class="field-hint">(where this may surface)</span></label><select id="ke-pop-audience">${audOptions}</select></div>
       <div class="ke-actions">
         <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
         <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
@@ -6747,6 +6759,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
         label:       $('ke-pop-label').value,
         type:        $('ke-pop-type').value,
         description: $('ke-pop-desc').value,
+        audience:    $('ke-pop-audience')?.value || 'ward-private',
       };
       const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -8708,6 +8721,20 @@ function vlRememberRowHtml(cat, currentVal) {
   return `<div class="vl-rem-row"><span class="vl-rem-label">${esc(cat.label)}</span><div class="vl-rem-toggle">${btns}</div></div>`;
 }
 
+// Disclosure row: for one remember-category, which circle may facts about this
+// person in that category surface in? Default = session-bounded (the room the
+// memory was made in caps it; never auto-widened). An explicit pick widens or
+// tightens. 'ward-private' means "only ever when it's just us two".
+function vlDisclosureRowHtml(cat, currentVal, categories) {
+  const opts = [`<option value="">Default (session-bounded)</option>`,
+    `<option value="ward-private"${currentVal === 'ward-private' ? ' selected' : ''}>Ward-private (just us)</option>`];
+  for (const c of categories) {
+    opts.push(`<option value="${esc(c.id)}"${currentVal === c.id ? ' selected' : ''}>${esc(c.name)}</option>`);
+  }
+  return `<div class="vl-rem-row"><span class="vl-rem-label">${esc(cat.label)}</span>` +
+    `<select class="vl-disc-sel" data-cat="${esc(cat.key)}" style="flex:1">${opts.join('')}</select></div>`;
+}
+
 function vlRenderPersonDetail(villager) {
   const detail = $('vl-people-detail');
   const reg = _vlReg;
@@ -8729,6 +8756,10 @@ function vlRenderPersonDetail(villager) {
 
   const remRows = VL_REMEMBER_CATS.map(cat =>
     vlRememberRowHtml(cat, villager?.remember?.[cat.key])
+  ).join('');
+
+  const discRows = VL_REMEMBER_CATS.map(cat =>
+    vlDisclosureRowHtml(cat, villager?.disclosure?.[cat.key], reg.categories)
   ).join('');
 
   const graphNodeHtml = (!isNew && villager.graphNodeId)
@@ -8786,6 +8817,10 @@ function vlRenderPersonDetail(villager) {
       <div class="vl-field-label">Standing consent <span class="field-hint">(when both you and this person have agreed, the Familiar stops asking for per-fact consent about them — a "never store" category above still holds)</span></div>
       <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-ward" ${villager?.standingConsent?.wardAgreed ? 'checked' : ''}> I agree the Familiar may keep memories about this person</label>
       <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-villager" ${villager?.standingConsent?.villagerAgreed ? 'checked' : ''}> This person has agreed too</label>
+    </div>
+    <div>
+      <div class="vl-field-label">Disclosure <span class="field-hint">(per category, which circle facts about this person may surface in — default keeps them to the room the memory was made in; pick a category to widen, or Ward-private to keep them to just us)</span></div>
+      <div id="vl-p-disclosure" class="vl-rem-grid">${discRows}</div>
     </div>
     ${graphNodeHtml}
     <div class="vl-actions">
@@ -8861,13 +8896,18 @@ async function vlSavePerson(id) {
     wardAgreed:     !!$('vl-p-consent-ward')?.checked,
     villagerAgreed: !!$('vl-p-consent-villager')?.checked,
   };
+  const disclosure = {};
+  document.querySelectorAll('#vl-p-disclosure .vl-disc-sel').forEach(sel => {
+    const v = sel.value.trim();
+    if (v) disclosure[sel.dataset.cat] = v;
+  });
   status.textContent = 'Saving…';
   try {
     const r = await fetch(
       id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
       { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, categoryIds, aliases, connection,
-          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember, standingConsent }) },
+          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember, standingConsent, disclosure }) },
     );
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

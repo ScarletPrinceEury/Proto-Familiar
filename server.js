@@ -95,7 +95,7 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
-import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -304,13 +304,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
   // rather than blocking the chat. Audience only applies on the full path.
   // audienceTag (Pillar D): durable room label used by the outgoing filter.
-  let audienceGrants = WARD_PRIVATE;
-  let audienceTag    = 'ward-private';
+  let audienceGrants  = WARD_PRIVATE;
+  let audienceTag     = 'ward-private';
+  let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
-      audienceGrants = resolveAudience(sessionAudience, registry);
-      audienceTag    = audienceTagFor(sessionAudience, registry);
+      audienceGrants  = resolveAudience(sessionAudience, registry);
+      audienceTag     = audienceTagFor(sessionAudience, registry);
+      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
@@ -322,7 +324,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
@@ -1830,11 +1832,12 @@ app.post('/api/entity/graph/edges', async (req, res) => {
 app.patch('/api/entity/graph/nodes/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const { label, description, type } = req.body;
+  const { label, description, type, audience } = req.body;
   if (label !== undefined && typeof label !== 'string')             return badRequest(res, 'label must be string');
   if (description !== undefined && typeof description !== 'string') return badRequest(res, 'description must be string');
   if (type !== undefined && typeof type !== 'string')               return badRequest(res, 'type must be string');
-  const result = await updateGraphNode({ id, label, description, type });
+  if (audience !== undefined && typeof audience !== 'string')        return badRequest(res, 'audience must be string');
+  const result = await updateGraphNode({ id, label, description, type, audience });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -2532,10 +2535,10 @@ function reconcileLocationKnock(location) {
 
 app.post('/api/village/villagers', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage,
-    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent } = req.body ?? {};
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure } = req.body ?? {};
   try {
     const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage,
-      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent });
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure });
     reconcileKnocks(saved);
     res.json(saved);
   }
@@ -2544,10 +2547,10 @@ app.post('/api/village/villagers', async (req, res) => {
 
 app.patch('/api/village/villagers/:id', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage,
-    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent } = req.body ?? {};
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure } = req.body ?? {};
   try {
     const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage,
-      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent });
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure });
     reconcileKnocks(saved);
     res.json(saved);
   }

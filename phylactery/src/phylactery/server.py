@@ -257,15 +257,17 @@ def memory_search(
     query: str,
     maxResults: Optional[int] = None,
     instanceId: Optional[str] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to search my memories by meaning. I reach for it when I'm trying to
     recall something relevant to a topic or question — it does semantic RAG search and
     falls back to recency. Returns thin projections with ids and scores.
+    `audiences` is the room's allowed audience-tag set (omit for a ward-private
+    room → I see everything); the recall gate keeps shared-room recall to what
+    that room is cleared for.
     """
     k = max(1, min(20, int(maxResults or 5)))
-    aud = audience or "ward-private"
-    return mem.search(query, max_results=k, audience=aud, conn=_c())
+    return mem.search(query, max_results=k, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
@@ -379,32 +381,32 @@ def graph_node_search(
     query: str,
     limit: Optional[int] = None,
     minScore: Optional[float] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to search my knowledge graph by meaning. I reach for it when I need
     to find a person, place, concept, or other entity node I might be connected to.
     Optionally expands to 1-hop GraphRAG neighbours.
+    `audiences` is the room's allowed audience-tag set (omit for ward-private → all).
     Returns { results: [{ node: {id, label, type, description}, score }] }
     """
     k = max(1, min(50, int(limit or 10)))
     ms = float(minScore or 0.3)
-    aud = audience or "ward-private"
-    return graph.search_nodes(query, limit=k, min_score=ms, audience=aud, conn=_c())
+    return graph.search_nodes(query, limit=k, min_score=ms, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
 def graph_subgraph(
     nodeId: str,
     depth: Optional[int] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to pull the subgraph around a node — its direct neighbours and
     edges up to N hops deep. I reach for it when I want to understand my connections
-    to a specific entity. Returns { nodes: [...], edges: [...] }.
+    to a specific entity. `audiences` is the room's allowed audience-tag set (omit
+    for ward-private → all). Returns { nodes: [...], edges: [...] }.
     """
     d = max(1, min(3, int(depth or 1)))
-    aud = audience or "ward-private"
-    return graph.get_subgraph(nodeId, depth=d, audience=aud, conn=_c())
+    return graph.get_subgraph(nodeId, depth=d, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
@@ -412,13 +414,16 @@ def graph_node_create(
     label: str,
     type: Optional[str] = None,
     description: Optional[str] = None,
+    audience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to add a new node to my knowledge graph. I reach for it when I
     encounter a person, place, organisation, or concept worth tracking. Returns
-    the new node's id for use in edge creation.
+    the new node's id for use in edge creation. `audience` (derived in code from
+    who the node is) governs where it may surface; it defaults to ward-private.
     """
-    return graph.create_node(label, node_type=type, description=description, conn=_c())
+    aud = audience if audience is not None else "ward-private"
+    return graph.create_node(label, node_type=type, description=description, audience=aud, conn=_c())
 
 
 @mcp.tool()
@@ -440,13 +445,16 @@ def graph_node_update(
     id: str,
     label: Optional[str] = None,
     description: Optional[str] = None,
+    audience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to rename or re-describe a node in my knowledge graph (auto-snapshots first).
     I reach for it when a person or entity's details have changed and the current label
-    or description no longer fits.
+    or description no longer fits. `audience` deliberately sets how widely this node may
+    surface (a Village category id, or 'ward-private') — it's how I keep a node to just
+    {{user}} and me, or open it up to one of our circles.
     """
-    result = graph.update_node(id, label=label, description=description, conn=_c())
+    result = graph.update_node(id, label=label, description=description, audience=audience, conn=_c())
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
     return "Node updated. (Snapshot created before change.)"
@@ -491,6 +499,9 @@ def graph_relate(
     fromType: Optional[str] = None,
     toType: Optional[str] = None,
     weight: Optional[float] = None,
+    fromAudience: Optional[str] = None,
+    toAudience: Optional[str] = None,
+    edgeAudience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I record a relationship between two entities BY NAME, creating either
@@ -500,10 +511,16 @@ def graph_relate(
     connect: "Sam works_at Acme", "Sam lives_in Bristol", "Mochi is_pet_of Sam".
     fromLabel/toLabel are the entities' names; fromType/toType classify them
     (person, place, pet, organisation, condition, project, …); type is the
-    relationship in snake_case.
+    relationship in snake_case. The audience tags (derived in code from who each
+    entity is) tag any NEW node/edge so a person-node surfaces only where they're
+    cleared; an existing node is never re-tagged.
     """
     w = float(weight) if weight is not None else 1.0
-    return graph.relate(fromLabel, fromType, toLabel, toType, type, weight=w, conn=_c())
+    return graph.relate(
+        fromLabel, fromType, toLabel, toType, type, weight=w,
+        from_audience=fromAudience, to_audience=toAudience, edge_audience=edgeAudience,
+        conn=_c(),
+    )
 
 
 @mcp.tool()

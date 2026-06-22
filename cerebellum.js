@@ -54,7 +54,7 @@ import {
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory,
 } from './thalamus.js';
-import { audienceTagFor } from './audience.js';
+import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
@@ -1075,13 +1075,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_graph_node',
-      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
+      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. I can also set how widely a node may surface with `audience`: by default a node about a person is private until I open it up, so I use this to keep something to just {{user}} and me ("ward-private") or to let it surface in one of our circles (a category name like "Family"). The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
       parameters: {
         type: 'object',
         properties: {
           id:          { type: 'string', description: 'The id of the node to update (from earlier graph context).' },
           label:       { type: 'string', description: 'New display label. Omit to leave unchanged.' },
           description: { type: 'string', description: 'New description. Omit to leave unchanged.' },
+          audience:    { type: 'string', description: 'Where this node may surface: a circle name (e.g. "Family", "Close friends") to open it to that circle, or "ward-private" to keep it to just {{user}} and me. Omit to leave unchanged.' },
         },
         required: ['id'],
       },
@@ -1458,6 +1459,7 @@ export const BUILTIN_TOOLS = [
           privateNotes:   { type: 'string', description: 'Sensitive notes for {{user}} and me only (orientation, health, legal name, etc.). Held back automatically whenever anyone else is present. I reserve this for things that could genuinely harm or expose them — not trivia.' },
           graphNodeId:    { type: 'string', description: 'Optional. The knowledge-graph node id to link this person to (from find_graph_node). Keeps the Village and the relational graph as one picture.' },
           mutualConsentToRemember: { type: 'boolean', description: 'Standing memory consent. I set this true ONLY when both {{user}} AND this person have agreed I may keep memories about them — then I stop asking for per-fact consent on them (an explicit "never store" category still holds). I set it false to withdraw that standing agreement. I only touch this when {{user}} and I are alone, since it changes their record.' },
+          disclosure: { type: 'object', description: 'Where facts about this person may surface, per kind of fact. A map from fact-kind (one of: basics, emotional_content, health_info, relationships, whereabouts) to a circle — a category name (e.g. "Family", "Close friends") meaning "memories of this kind about them may surface in that circle\'s rooms", or "ward-private" meaning "only ever when {{user}} and I are alone". I set this when someone tells me how widely they\'re comfortable being discussed (e.g. "you can mention my health to my family but no one else"). A kind I leave out keeps its default: bounded to the room a memory was made in. I only change this when {{user}} and I are alone, since it edits their record.' },
         },
         required: [],
       },
@@ -1521,6 +1523,16 @@ export const BUILTIN_TOOLS = [
     },
   },
 ];
+
+// Resolve a circle name the Familiar typed (a Village category's name or id) to
+// that category. Shared by every tool that lets it name an audience circle in its
+// own voice (village_upsert's category + disclosure, update_graph_node's audience)
+// — the Familiar knows names, the store keeps ids. Returns the category or null.
+function resolveCircleInList(cats, name) {
+  const q = String(name ?? '').trim().toLowerCase();
+  if (!q) return null;
+  return (cats ?? []).find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q) ?? null;
+}
 
 /**
  * Server-side implementations of the built-in tools.
@@ -1803,7 +1815,18 @@ export const TOOL_EXECUTORS = {
   create_graph_node: async ({ label, type, description }) => {
     if (!label || typeof label !== 'string' || !label.trim()) return 'Failed to create graph node: label (string) is required';
     try {
-      const result = await createGraphNode({ label: label.trim(), type, description });
+      // Derive the node's audience in code: a label matching a known villager
+      // takes their category, otherwise ward-private (fail-closed). The Familiar
+      // never tags a node by hand — it can deliberately widen one later via
+      // update_graph_node's audience setter.
+      let audience;
+      if (_toolDeps.getVillageRegistry) {
+        try {
+          const reg = await _toolDeps.getVillageRegistry();
+          audience = deriveNodeAudience({ label: label.trim(), registry: reg });
+        } catch { /* registry down → leave audience undefined → Phylactery defaults ward-private */ }
+      }
+      const result = await createGraphNode({ label: label.trim(), type, description, audience });
       if (!result.ok) return `Failed to create graph node: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.node?.id;
       return id
@@ -1825,9 +1848,23 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to create graph edge: ${err.message}`; }
   },
 
-  update_graph_node: async ({ id, label, description, type }) => {
+  update_graph_node: async ({ id, label, description, type, audience }) => {
     try {
-      const result = await updateGraphNode({ id, label, description, type });
+      // Resolve a named audience circle → the id the store keeps. 'ward-private'
+      // is the sentinel; any other value must name a real Village category, else
+      // it's a hard stop so a node never lands tagged for a circle that isn't there.
+      let resolvedAudience;
+      if (typeof audience === 'string' && audience.trim()) {
+        if (audience.trim().toLowerCase() === 'ward-private') {
+          resolvedAudience = 'ward-private';
+        } else if (_toolDeps.getVillageRegistry) {
+          const reg = await _toolDeps.getVillageRegistry();
+          const hit = resolveCircleInList(reg?.categories, audience);
+          if (!hit) return `I don't have a circle called "${audience}". Circles: ${(reg?.categories ?? []).map(c => c.name).join(', ') || '(none)'}, or "ward-private".`;
+          resolvedAudience = hit.id;
+        }
+      }
+      const result = await updateGraphNode({ id, label, description, type, audience: resolvedAudience });
       if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph node ${id} updated.`;
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
@@ -2138,7 +2175,7 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't read the Village: ${err.message}`; }
   },
 
-  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId, mutualConsentToRemember } = {}, ctx = {}) => {
+  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId, mutualConsentToRemember, disclosure } = {}, ctx = {}) => {
     if (!_toolDeps.upsertVillager || !_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
     const wardPrivate = ctx.wardPrivate !== false;
 
@@ -2177,14 +2214,35 @@ export const TOOL_EXECUTORS = {
       if (mutualConsentToRemember === true) args.standingConsent = { wardAgreed: true, villagerAgreed: true };
       else if (mutualConsentToRemember === false) args.standingConsent = {};
 
-      // Resolve category name → id (the Familiar knows names, not ids).
-      if (typeof category === 'string' && category.trim()) {
+      // Resolve circle names → ids (the Familiar knows names, not ids). The
+      // registry is read once and shared by both the category and disclosure
+      // resolution below.
+      const needsRegistry = (typeof category === 'string' && category.trim()) ||
+        (disclosure && typeof disclosure === 'object' && !Array.isArray(disclosure));
+      let cats = [];
+      if (needsRegistry) {
         const reg = await _toolDeps.getVillageRegistry();
-        const cats = reg?.categories ?? [];
-        const q = category.trim().toLowerCase();
-        const hit = cats.find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q);
+        cats = reg?.categories ?? [];
+      }
+      if (typeof category === 'string' && category.trim()) {
+        const hit = resolveCircleInList(cats, category);
         if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
         args.categoryIds = [hit.id];
+      }
+
+      // Disclosure: per fact-kind, the circle a person is OK being discussed in.
+      // Resolve each value (a circle name, or 'ward-private') to the id the
+      // store keeps; an unknown circle is a hard stop so nothing lands wrong.
+      if (disclosure && typeof disclosure === 'object' && !Array.isArray(disclosure)) {
+        const resolved = {};
+        for (const [kind, circle] of Object.entries(disclosure)) {
+          if (typeof circle !== 'string' || !circle.trim()) continue;
+          if (circle.trim().toLowerCase() === 'ward-private') { resolved[kind] = 'ward-private'; continue; }
+          const hit = resolveCircleInList(cats, circle);
+          if (!hit) return `For disclosure I don't have a circle called "${circle}". Circles: ${cats.map(c => c.name).join(', ') || '(none)'}, or "ward-private".`;
+          resolved[kind] = hit.id;
+        }
+        if (Object.keys(resolved).length) args.disclosure = resolved;
       }
 
       const v = await _toolDeps.upsertVillager(args);

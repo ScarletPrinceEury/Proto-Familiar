@@ -9,7 +9,7 @@ the embedding failure — so the fixture only needs the two relational tables.
 
 import sqlite3
 
-from phylactery.graph import relate, resolve_or_create_node
+from phylactery.graph import relate, resolve_or_create_node, update_node
 
 
 def _conn() -> sqlite3.Connection:
@@ -77,3 +77,45 @@ def test_missing_endpoint_or_type_is_rejected_without_writing():
     assert relate("", "person", "Acme", "organisation", "works_at", conn=c)["ok"] is False
     assert relate("Alice", "person", "Acme", "organisation", "", conn=c)["ok"] is False
     assert _node_count(c) == 0 and _edge_count(c) == 0
+
+
+def _aud(c, label):
+    return c.execute("SELECT audience FROM graph_nodes WHERE lower(label)=lower(?)", (label,)).fetchone()["audience"]
+
+
+def test_relate_tags_each_new_node_with_its_own_derived_audience():
+    c = _conn()
+    # Audience is derived per-endpoint in JS and passed in: Sam → friends, the
+    # place → ward-private (fail-closed), the edge takes the narrower endpoint.
+    relate("Sam", "person", "The Gym", "place", "trains_at", conn=c,
+           from_audience="friends", to_audience="ward-private", edge_audience="ward-private")
+    assert _aud(c, "Sam") == "friends"
+    assert _aud(c, "The Gym") == "ward-private"
+    edge = c.execute("SELECT audience FROM graph_edges LIMIT 1").fetchone()
+    assert edge["audience"] == "ward-private"
+
+
+def test_relate_falls_back_to_single_audience_for_older_callers():
+    c = _conn()
+    relate("Alice", "person", "Acme", "organisation", "works_at", conn=c, audience="family")
+    assert _aud(c, "Alice") == "family"
+    assert _aud(c, "Acme") == "family"
+
+
+def test_resolve_or_create_never_retags_an_existing_node():
+    c = _conn()
+    relate("Sam", "person", "Acme", "organisation", "works_at", conn=c, audience="friends")
+    # A later relate with a different audience must NOT clobber Sam's tag — a
+    # deliberate override survives ongoing memorization.
+    relate("Sam", "person", "Beta", "organisation", "advises", conn=c, audience="ward-private")
+    assert _aud(c, "Sam") == "friends"
+
+
+def test_update_node_sets_audience_deliberately():
+    c = _conn()
+    nid, _ = resolve_or_create_node(c, "Sam", "person", audience="ward-private")
+    assert update_node(nid, audience="family", conn=c)["ok"] is True
+    assert _aud(c, "Sam") == "family"
+    # label-only edit leaves audience untouched
+    update_node(nid, label="Samuel", conn=c)
+    assert _aud(c, "Samuel") == "family"
