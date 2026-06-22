@@ -257,15 +257,17 @@ def memory_search(
     query: str,
     maxResults: Optional[int] = None,
     instanceId: Optional[str] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to search my memories by meaning. I reach for it when I'm trying to
     recall something relevant to a topic or question — it does semantic RAG search and
     falls back to recency. Returns thin projections with ids and scores.
+    `audiences` is the room's allowed audience-tag set (omit for a ward-private
+    room → I see everything); the recall gate keeps shared-room recall to what
+    that room is cleared for.
     """
     k = max(1, min(20, int(maxResults or 5)))
-    aud = audience or "ward-private"
-    return mem.search(query, max_results=k, audience=aud, conn=_c())
+    return mem.search(query, max_results=k, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
@@ -379,32 +381,32 @@ def graph_node_search(
     query: str,
     limit: Optional[int] = None,
     minScore: Optional[float] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to search my knowledge graph by meaning. I reach for it when I need
     to find a person, place, concept, or other entity node I might be connected to.
     Optionally expands to 1-hop GraphRAG neighbours.
+    `audiences` is the room's allowed audience-tag set (omit for ward-private → all).
     Returns { results: [{ node: {id, label, type, description}, score }] }
     """
     k = max(1, min(50, int(limit or 10)))
     ms = float(minScore or 0.3)
-    aud = audience or "ward-private"
-    return graph.search_nodes(query, limit=k, min_score=ms, audience=aud, conn=_c())
+    return graph.search_nodes(query, limit=k, min_score=ms, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
 def graph_subgraph(
     nodeId: str,
     depth: Optional[int] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to pull the subgraph around a node — its direct neighbours and
     edges up to N hops deep. I reach for it when I want to understand my connections
-    to a specific entity. Returns { nodes: [...], edges: [...] }.
+    to a specific entity. `audiences` is the room's allowed audience-tag set (omit
+    for ward-private → all). Returns { nodes: [...], edges: [...] }.
     """
     d = max(1, min(3, int(depth or 1)))
-    aud = audience or "ward-private"
-    return graph.get_subgraph(nodeId, depth=d, audience=aud, conn=_c())
+    return graph.get_subgraph(nodeId, depth=d, audiences=audiences, conn=_c())
 
 
 @mcp.tool()

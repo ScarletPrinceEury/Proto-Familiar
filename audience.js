@@ -265,6 +265,29 @@ export function audienceTagFor(sessionAudience, registry) {
   return tag;
 }
 
+/**
+ * The set of audience tags a room may SEE on stored records (Pillar E recall
+ * gate). A record tagged with category X surfaces in room R iff R is at least as
+ * trusted as X — i.e. permissionScore(R) >= permissionScore(X). So the room sees
+ * every category whose score is ≤ the room's, which naturally EXCLUDES
+ * 'ward-private' (it isn't a category and outscores every category) and any
+ * category more trusted than the room.
+ *
+ * @returns {string[]|null} the allowed audience-tag set, or null for a
+ *   ward-private room (= no filtering, the ward sees everything). A record
+ *   tagged with a deleted/unknown category id is absent from the set → excluded
+ *   (fail-closed).
+ */
+export function visibleAudiences(roomTag, registry) {
+  if (!roomTag || roomTag === AUDIENCE_TAG_WARD_PRIVATE) return null; // ward sees all
+  const categories = registry?.categories ?? [];
+  const categoryMap = new Map(categories.map(c => [c.id, c]));
+  const roomScore = permissionScore(categoryMap.get(roomTag)?.grants);
+  return categories
+    .filter(c => permissionScore(c.grants) <= roomScore)
+    .map(c => c.id);
+}
+
 // ── Grant check ───────────────────────────────────────────────────
 
 /**

@@ -1124,7 +1124,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -1177,12 +1177,14 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       (staticOnly || !doMemory) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: memories)'))
         : mcpClient.callTool({
             name: 'memory_search',
-            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5 },
+            // audiences = the room's allowed audience-tag set (Pillar E recall
+            // gate). null/omitted = ward-private room → no filter (sees all).
+            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}) },
           }),
       (staticOnly || !doGraph) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: graph)'))
         : mcpClient.callTool({
             name: 'graph_node_search',
-            arguments: { query: userMessage, limit: 10, minScore: 0.3 },
+            arguments: { query: userMessage, limit: 10, minScore: 0.3, ...(audiences ? { audiences } : {}) },
           }),
     ] : [Promise.reject(new Error('phylactery not connected')),
          Promise.reject(new Error('phylactery not connected')),
@@ -1338,7 +1340,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         traversalNodes.map(n =>
           mcpClient.callTool({
             name: 'graph_subgraph',
-            arguments: { nodeId: n.id, depth: 1 },
+            arguments: { nodeId: n.id, depth: 1, ...(audiences ? { audiences } : {}) },
           })
         )
       );

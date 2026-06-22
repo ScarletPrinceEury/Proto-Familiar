@@ -95,7 +95,7 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
-import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -304,13 +304,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
   // rather than blocking the chat. Audience only applies on the full path.
   // audienceTag (Pillar D): durable room label used by the outgoing filter.
-  let audienceGrants = WARD_PRIVATE;
-  let audienceTag    = 'ward-private';
+  let audienceGrants  = WARD_PRIVATE;
+  let audienceTag     = 'ward-private';
+  let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
-      audienceGrants = resolveAudience(sessionAudience, registry);
-      audienceTag    = audienceTagFor(sessionAudience, registry);
+      audienceGrants  = resolveAudience(sessionAudience, registry);
+      audienceTag     = audienceTagFor(sessionAudience, registry);
+      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
@@ -322,7 +324,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 

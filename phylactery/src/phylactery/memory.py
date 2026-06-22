@@ -18,7 +18,7 @@ from typing import Any
 
 from phylactery.db import get_conn, new_id, now_iso
 from phylactery.snapshot import auto_snapshot
-from phylactery.audience import audience_filter_sql, WARD_PRIVATE
+from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
 
@@ -112,14 +112,16 @@ def _decay_weight(last_recalled_at: str | None, care_weight: str | None) -> floa
 def search(
     query: str,
     max_results: int = 5,
-    audience: str = "ward-private",
+    audiences=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
+    # audiences: the room's allowed audience-tag set (None = ward sees all),
+    # computed JS-side by visibleAudiences(). The recall gate (Pillar E).
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     try:
-        aud_clause, aud_params = audience_filter_sql(audience)
+        aud_clause, aud_params = audience_in_sql(audiences)
         try:
             from phylactery.embed import embed_text
             q_vec = embed_text(query)

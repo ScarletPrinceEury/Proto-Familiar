@@ -15,7 +15,7 @@ from typing import Any
 
 from phylactery.db import get_conn, new_id, now_iso
 from phylactery.snapshot import auto_snapshot
-from phylactery.audience import audience_filter_sql
+from phylactery.audience import audience_filter_sql, audience_in_sql
 
 
 def _node_row_to_dict(row: sqlite3.Row) -> dict:
@@ -44,14 +44,14 @@ def search_nodes(
     query: str,
     limit: int = 10,
     min_score: float = 0.3,
-    audience: str = "ward-private",
+    audiences=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     try:
-        aud_clause, aud_params = audience_filter_sql(audience, col="n.audience")
+        aud_clause, aud_params = audience_in_sql(audiences, col="n.audience")
         try:
             from phylactery.embed import embed_text
             q_vec = embed_text(query)
@@ -91,13 +91,19 @@ def search_nodes(
 def get_subgraph(
     node_id: str,
     depth: int = 1,
-    audience: str = "ward-private",
+    audiences=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
     try:
+        # Recall gate (Pillar E): never surface a node/edge the room isn't cleared
+        # for. None = ward sees all. Applied to every fetch below — node, edge, and
+        # the endpoint backfill — so a gated neighbour can't leak via an edge.
+        aud_node, aud_node_p = audience_in_sql(audiences)
+        aud_edge, aud_edge_p = audience_in_sql(audiences)
+
         visited_nodes: dict[str, dict] = {}
         visited_edges: dict[str, dict] = {}
         frontier = {node_id}
@@ -108,21 +114,24 @@ def get_subgraph(
             next_frontier: set[str] = set()
             placeholders = ",".join("?" * len(frontier))
             node_rows = conn.execute(
-                f"SELECT id, label, type, description FROM graph_nodes WHERE id IN ({placeholders})",
-                list(frontier),
+                f"SELECT id, label, type, description FROM graph_nodes WHERE id IN ({placeholders}) AND {aud_node}",
+                list(frontier) + aud_node_p,
             ).fetchall()
             for r in node_rows:
                 visited_nodes[r["id"]] = _node_row_to_dict(r)
 
             edge_rows = conn.execute(f"""
                 SELECT id, from_id, to_id, type, weight FROM graph_edges
-                WHERE from_id IN ({placeholders}) OR to_id IN ({placeholders})
-            """, list(frontier) + list(frontier)).fetchall()
+                WHERE (from_id IN ({placeholders}) OR to_id IN ({placeholders})) AND {aud_edge}
+            """, list(frontier) + list(frontier) + aud_edge_p).fetchall()
             for r in edge_rows:
                 visited_edges[r["id"]] = _edge_row_to_dict(r)
                 next_frontier.add(r["from_id"])
                 next_frontier.add(r["to_id"])
 
+            # Gated neighbours are excluded by the audience filter on the next
+            # iteration's node query (and the backfill), so they never enter
+            # visited_nodes.
             frontier = next_frontier - set(visited_nodes.keys())
 
         # Backfill labels for every edge endpoint. The BFS above only fetches
@@ -139,8 +148,8 @@ def get_subgraph(
         if missing:
             ph = ",".join("?" * len(missing))
             rows = conn.execute(
-                f"SELECT id, label, type, description FROM graph_nodes WHERE id IN ({ph})",
-                missing,
+                f"SELECT id, label, type, description FROM graph_nodes WHERE id IN ({ph}) AND {aud_node}",
+                missing + aud_node_p,
             ).fetchall()
             for r in rows:
                 visited_nodes[r["id"]] = _node_row_to_dict(r)

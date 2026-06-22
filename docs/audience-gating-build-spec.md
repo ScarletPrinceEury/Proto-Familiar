@@ -42,18 +42,22 @@ audienceTag (category id)  ──audience.js: visibleAudiences()──▶  ["cat
 - **`thalamus`** computes `visibleAudiences` from the session's `audienceTag` (+ registry) and passes the set to both `memory_search` and `graph_subgraph`. The MCP tools (`server.py`) thread it through.
 - Result: a shared room sees only memories/graph it's cleared for; ward-private never surfaces outside a ward-private session. Closes the leak.
 
-### Phase 2 — write-time audience derivation (the §7 / open-question piece)
-Today a memory's `audience` = the session's `audienceTag`. That's a safe ceiling (ward-private sessions → ward-private), but a fact's **sensitivity** and the **subject's** disclosure prefs should be able to make it *more* restrictive.
+### Phase 2 — write-time audience derivation (widen + tighten — ward decision)
+Today a memory's `audience` = the session's `audienceTag`. **Decision (ward): both widen and tighten** — a subject villager's disclosure preference may raise *or* lower a memory's audience.
 
-**Rule (recommended — most-restrictive wins, session is the ceiling):**
+**Rule (the subject's stated disclosure is the source of truth for memories about them; most-restrictive across multiple subjects):**
 ```
-audience = mostRestrictive( sessionTag, categoryFloor(fact.category), villagerFloor(subjects) )
+memory about villager(s) V:  audience = mostRestrictive( disclosure(V_i, fact.category) for each subject )
+memory about the ward only:  audience = mostRestrictive( sessionTag, categoryFloor(fact.category) )
 ```
-- `sessionTag` — where it was created. **A ceiling: never widened beyond this.** (A memory made in a ward-private chat stays ward-private even if it's about a "friends"-category villager — we don't widen private knowledge.)
-- `categoryFloor` — per remember-category sensitivity: `health_info`, `emotional_content` → `ward-private`; `relationships`, `whereabouts`, `basics` → no floor (use ceiling). Conservative.
-- `villagerFloor` — if a subject villager's category is *more* restrictive than the ceiling, tighten to it.
+- **`disclosure(V, C)`** — how widely V is OK being discussed re: category C. Source: a **new per-villager `disclosure` map** (sibling of `remember`/`standingConsent`), per remember-category, holding an audience level (a Village category id, or `ward-private`). This is what lets Melian's *"my health is fine with close friends"* widen a health memory to `cat-friends` instead of `ward-private`.
+  - **Default when unset (fail-private):** V's representative Village category for non-sensitive categories (`basics`/`relationships`/`whereabouts`); **`ward-private`** for sensitive ones (`health_info`, `emotional_content`) until V explicitly widens them.
+- **Widen IS allowed** (per decision): a memory about a `cat-friends` villager can become friends-visible even though it was made in a ward-private session — that's the *subject's* expressed disclosure, not the ward's. The ward's **own** facts (no villager subject) never widen past the session tag.
+- **Multi-subject** → most restrictive wins (every named person must be OK with the room).
 
-> **Open decision for you:** should a villager's *disclosure preference* ever **widen** a memory (e.g. "my health is fine to share with close friends" → a health memory about them becomes `cat-friends` instead of `ward-private`)? Widening is the privacy-risky direction. **Recommendation: NO for v1** — derivation only ever tightens; widening requires the memory to have actually been created in that wider room. The `remember` map already governs *whether* to store; `audience` governs *where it may surface*, and erring restrictive is correct.
+> **New field `villager.disclosure`** needs: schema/sanitize in `village.js` (mirrors `remember`), a Village-UI editor (per-category → audience level), and the Familiar's `village_upsert` tool gaining a way to record *"they're fine sharing X with my circle"* in first person (it learns this in conversation). Audience is still **derived in code** from this field + the fact's category + subjects — the extraction LLM is never asked for an audience (§6).
+
+> **Phase 1 is independent of all this** — it gates recall by whatever `audience` a record already carries, so it closes the leak regardless of how audience is written. Phase 2 only changes what audience gets *written* going forward.
 
 ### Phase 3 — graph-node audience is settable; retire the inert comments
 - A Familiar/UI way to set a graph node's structural `audience` (the field exists; nothing writes it deliberately yet — `graph_relate`/`graph_node_create` default `ward-private`).
@@ -66,9 +70,8 @@ audience = mostRestrictive( sessionTag, categoryFloor(fact.category), villagerFl
 - **Tests:** `visibleAudiences` ladder (pure), `audience_filter_sql` set semantics + the ward-private fix, write-time derivation rule, graph filter.
 - **docs/architecture.md** updated per phase; this leak + fix recorded.
 
-## 5. Order & the one decision
-Phase 1 (close the leak) → Phase 2 (write-time derivation) → Phase 3 (graph audience + cleanup).
-The only thing I need from you before Phase 2: the **widen-or-tighten-only** decision above (recommend tighten-only).
+## 5. Order
+Phase 1 (close the leak — independent, the safety win) → Phase 2 (write-time derivation, widen+tighten, the new `disclosure` field) → Phase 3 (graph audience + cleanup). The widen/tighten decision is settled (both).
 
 ## 6. The LLMs must not have to learn the schema (discoverability & operability)
 

@@ -837,15 +837,30 @@ so the filter always fails open — a Phylactery outage never blocks a reply.
 **Parameters signed off by the human (build-spec §7):**
 threshold=0.70, retry budget=3, safe-refusal text as above.
 
-### Pillar E — `memories: 'shared'` unlock (`audience.js`)
+### Pillar E — audience-gated recall (`audience.js` + Phylactery)
 
-`fetchEligibility` now permits `memory_search` when `g.memories === 'shared'`
-(in addition to `=== true`). This was gated off in Pillars A–D because memories
-had no audience tags, so any 'shared' room would have received ALL memories.
-Pillar C added `audience` tags at write time; Pillar D adds the outgoing gate.
-Together they make 'shared' safe to open: a non-ward-private room can now
-receive memories tagged for its audience, and the outgoing filter catches any
-ward-private content that might slip through in the reply text.
+`fetchEligibility` decides *whether* the memory/graph fetch runs for a room;
+**the recall gate decides *what comes back*.** `audience.js` `visibleAudiences
+(roomTag, registry)` computes the SET of audience tags a room may see — every
+Village category whose `permissionScore` ≤ the room's, which excludes
+`ward-private` (it isn't a category and outscores all) and any
+more-trusted-than-the-room category. `server.js`/`discord-gateway.js` compute
+this set and pass it into `enrich({ audiences })`, which forwards it to
+`memory_search` / `graph_node_search` / `graph_subgraph`. Phylactery's
+`audience_in_sql(audiences)` turns it into `audience IN (…)` (None → `1=1` for a
+ward room; `[]` → `0=1`); `memory.search`, `graph.search_nodes`, and
+`graph.get_subgraph` (all three fetches, incl. the subgraph endpoint backfill)
+filter through it. Fail-closed: a record tagged with a deleted/unknown category
+is absent from the set → excluded; a registry-read failure leaves
+`audiences=null` only on the ward path.
+
+**The leak this closed (0.7.x):** the room tag was never passed, so recall
+defaulted to `ward-private` → `1=1` → ward-private memories/graph surfaced in the
+Familiar's *context* in trusted shared rooms. (The old `audience_filter_sql` also
+kept `ward-private` in the non-ward `IN`-list — a second leak — left for the dedup
+path; recall now routes through `audience_in_sql`, which doesn't.) The outgoing
+filter (Pillar D) remains the send-side backstop; together they are the two gates
+the design intended. See `docs/audience-gating-build-spec.md`.
 
 ### Pillar H — lifecycle: consolidation scheduler, hygiene, graduation, backup
 
