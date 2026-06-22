@@ -125,7 +125,7 @@ async function persistQueue() {
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, graphRelate } from './thalamus.js';
 import { getRegistry, standingConsentActive } from './village.js';
-import { deriveMemoryAudience } from './audience.js';
+import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
 import { segmentByDay } from './day-segments.js';
 import { recordSegmentRun, isSegmentMemorized } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
@@ -655,13 +655,23 @@ async function processJob(job) {
   let edgesRouted = 0;
   if (created && relations.length) {
     const results = await Promise.allSettled(
-      relations.map(rel => graphRelate({
-        fromLabel: rel.from,
-        fromType:  rel.fromType,
-        toLabel:   rel.to,
-        toType:    rel.toType,
-        type:      rel.type,
-      }))
+      relations.map(rel => {
+        // Derive each endpoint's audience in code: a node matching a known
+        // villager takes their category, otherwise ward-private (fail-closed).
+        // The edge takes the narrower of its two endpoints so it can't reveal a
+        // ward-private node in a wider room.
+        const fromAudience = deriveNodeAudience({ label: rel.from, registry });
+        const toAudience   = deriveNodeAudience({ label: rel.to,   registry });
+        const edgeAudience = mostRestrictiveAudience([fromAudience, toAudience], registry);
+        return graphRelate({
+          fromLabel: rel.from,
+          fromType:  rel.fromType,
+          toLabel:   rel.to,
+          toType:    rel.toType,
+          type:      rel.type,
+          fromAudience, toAudience, edgeAudience,
+        });
+      })
     );
     edgesRouted = results.filter(r => r.status === 'fulfilled' && r.value?.ok).length;
     if (edgesRouted) console.log(`[memorization] routed ${edgesRouted}/${relations.length} relation(s) to the graph`);

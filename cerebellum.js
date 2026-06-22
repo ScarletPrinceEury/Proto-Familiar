@@ -54,7 +54,7 @@ import {
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory,
 } from './thalamus.js';
-import { audienceTagFor } from './audience.js';
+import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
@@ -1075,13 +1075,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_graph_node',
-      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
+      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. I can also set how widely a node may surface with `audience`: by default a node about a person is private until I open it up, so I use this to keep something to just {{user}} and me ("ward-private") or to let it surface in one of our circles (a category name like "Family"). The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
       parameters: {
         type: 'object',
         properties: {
           id:          { type: 'string', description: 'The id of the node to update (from earlier graph context).' },
           label:       { type: 'string', description: 'New display label. Omit to leave unchanged.' },
           description: { type: 'string', description: 'New description. Omit to leave unchanged.' },
+          audience:    { type: 'string', description: 'Where this node may surface: a circle name (e.g. "Family", "Close friends") to open it to that circle, or "ward-private" to keep it to just {{user}} and me. Omit to leave unchanged.' },
         },
         required: ['id'],
       },
@@ -1523,6 +1524,16 @@ export const BUILTIN_TOOLS = [
   },
 ];
 
+// Resolve a circle name the Familiar typed (a Village category's name or id) to
+// that category. Shared by every tool that lets it name an audience circle in its
+// own voice (village_upsert's category + disclosure, update_graph_node's audience)
+// — the Familiar knows names, the store keeps ids. Returns the category or null.
+function resolveCircleInList(cats, name) {
+  const q = String(name ?? '').trim().toLowerCase();
+  if (!q) return null;
+  return (cats ?? []).find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q) ?? null;
+}
+
 /**
  * Server-side implementations of the built-in tools.
  *
@@ -1804,7 +1815,18 @@ export const TOOL_EXECUTORS = {
   create_graph_node: async ({ label, type, description }) => {
     if (!label || typeof label !== 'string' || !label.trim()) return 'Failed to create graph node: label (string) is required';
     try {
-      const result = await createGraphNode({ label: label.trim(), type, description });
+      // Derive the node's audience in code: a label matching a known villager
+      // takes their category, otherwise ward-private (fail-closed). The Familiar
+      // never tags a node by hand — it can deliberately widen one later via
+      // update_graph_node's audience setter.
+      let audience;
+      if (_toolDeps.getVillageRegistry) {
+        try {
+          const reg = await _toolDeps.getVillageRegistry();
+          audience = deriveNodeAudience({ label: label.trim(), registry: reg });
+        } catch { /* registry down → leave audience undefined → Phylactery defaults ward-private */ }
+      }
+      const result = await createGraphNode({ label: label.trim(), type, description, audience });
       if (!result.ok) return `Failed to create graph node: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.node?.id;
       return id
@@ -1826,9 +1848,23 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to create graph edge: ${err.message}`; }
   },
 
-  update_graph_node: async ({ id, label, description, type }) => {
+  update_graph_node: async ({ id, label, description, type, audience }) => {
     try {
-      const result = await updateGraphNode({ id, label, description, type });
+      // Resolve a named audience circle → the id the store keeps. 'ward-private'
+      // is the sentinel; any other value must name a real Village category, else
+      // it's a hard stop so a node never lands tagged for a circle that isn't there.
+      let resolvedAudience;
+      if (typeof audience === 'string' && audience.trim()) {
+        if (audience.trim().toLowerCase() === 'ward-private') {
+          resolvedAudience = 'ward-private';
+        } else if (_toolDeps.getVillageRegistry) {
+          const reg = await _toolDeps.getVillageRegistry();
+          const hit = resolveCircleInList(reg?.categories, audience);
+          if (!hit) return `I don't have a circle called "${audience}". Circles: ${(reg?.categories ?? []).map(c => c.name).join(', ') || '(none)'}, or "ward-private".`;
+          resolvedAudience = hit.id;
+        }
+      }
+      const result = await updateGraphNode({ id, label, description, type, audience: resolvedAudience });
       if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph node ${id} updated.`;
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
@@ -2188,11 +2224,8 @@ export const TOOL_EXECUTORS = {
         const reg = await _toolDeps.getVillageRegistry();
         cats = reg?.categories ?? [];
       }
-      const resolveCircle = (q) => cats.find(c =>
-        c.id.toLowerCase() === q.trim().toLowerCase() || c.name.toLowerCase() === q.trim().toLowerCase());
-
       if (typeof category === 'string' && category.trim()) {
-        const hit = resolveCircle(category);
+        const hit = resolveCircleInList(cats, category);
         if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
         args.categoryIds = [hit.id];
       }
@@ -2205,7 +2238,7 @@ export const TOOL_EXECUTORS = {
         for (const [kind, circle] of Object.entries(disclosure)) {
           if (typeof circle !== 'string' || !circle.trim()) continue;
           if (circle.trim().toLowerCase() === 'ward-private') { resolved[kind] = 'ward-private'; continue; }
-          const hit = resolveCircle(circle);
+          const hit = resolveCircleInList(cats, circle);
           if (!hit) return `For disclosure I don't have a circle called "${circle}". Circles: ${cats.map(c => c.name).join(', ') || '(none)'}, or "ward-private".`;
           resolved[kind] = hit.id;
         }

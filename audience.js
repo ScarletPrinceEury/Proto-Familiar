@@ -344,6 +344,36 @@ export function deriveMemoryAudience({ category, subjects = [], sessionTag = AUD
   return mostRestrictive(levels, categoryMap);
 }
 
+/**
+ * Derive the audience tag a knowledge-graph node should carry, IN CODE (Phase 3).
+ * A node whose label matches a known villager (by name or handle) takes that
+ * villager's representative Village category — so a person-node surfaces only in
+ * rooms cleared for them. A label matching no villager (a place, an org, the ward,
+ * an abstraction) fails closed to ward-private; the ward/Familiar can widen a
+ * specific node deliberately later (graph_node_update). The model is never asked.
+ *
+ * @param {string} label    the node label (an entity name)
+ * @param {object} registry village registry
+ * @returns {string} an audience tag (a category id, or 'ward-private')
+ */
+export function deriveNodeAudience({ label, registry } = {}) {
+  if (!label || typeof label !== 'string') return AUDIENCE_TAG_WARD_PRIVATE;
+  const villager = resolveParticipant({ name: label }, registry);
+  if (!villager) return AUDIENCE_TAG_WARD_PRIVATE; // not a known person → fail-closed
+  const categoryMap = new Map((registry?.categories ?? []).map(c => [c.id, c]));
+  return representativeCategory(villager, categoryMap);
+}
+
+/**
+ * The most restrictive (narrowest) of a set of audience tags — the public wrapper
+ * over the internal helper, for callers that hold a registry but not a categoryMap
+ * (e.g. deriving an edge's audience as the narrower of its two endpoints).
+ */
+export function mostRestrictiveAudience(tags, registry) {
+  const categoryMap = new Map((registry?.categories ?? []).map(c => [c.id, c]));
+  return mostRestrictive(tags, categoryMap);
+}
+
 // ── Grant check ───────────────────────────────────────────────────
 
 /**

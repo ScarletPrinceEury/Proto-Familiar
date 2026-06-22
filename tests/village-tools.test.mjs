@@ -208,3 +208,11 @@ test('village_upsert: an unknown disclosure circle is a hard stop, no mutation',
     assert.equal(calls.length, 0);
   });
 });
+
+test('update_graph_node: an unknown audience circle is a hard stop before any write', async () => {
+  await withFakeVillage(async () => {
+    const out = await executeToolCall('update_graph_node',
+      JSON.stringify({ id: 'node-1', audience: 'Nonexistent' }), { wardPrivate: true });
+    assert.match(out, /don't have a circle called/i, 'named a real circle or ward-private, nothing else');
+  });
+});

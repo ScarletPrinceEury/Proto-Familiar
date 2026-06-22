@@ -414,13 +414,16 @@ def graph_node_create(
     label: str,
     type: Optional[str] = None,
     description: Optional[str] = None,
+    audience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to add a new node to my knowledge graph. I reach for it when I
     encounter a person, place, organisation, or concept worth tracking. Returns
-    the new node's id for use in edge creation.
+    the new node's id for use in edge creation. `audience` (derived in code from
+    who the node is) governs where it may surface; it defaults to ward-private.
     """
-    return graph.create_node(label, node_type=type, description=description, conn=_c())
+    aud = audience if audience is not None else "ward-private"
+    return graph.create_node(label, node_type=type, description=description, audience=aud, conn=_c())
 
 
 @mcp.tool()
@@ -442,13 +445,16 @@ def graph_node_update(
     id: str,
     label: Optional[str] = None,
     description: Optional[str] = None,
+    audience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to rename or re-describe a node in my knowledge graph (auto-snapshots first).
     I reach for it when a person or entity's details have changed and the current label
-    or description no longer fits.
+    or description no longer fits. `audience` deliberately sets how widely this node may
+    surface (a Village category id, or 'ward-private') — it's how I keep a node to just
+    {{user}} and me, or open it up to one of our circles.
     """
-    result = graph.update_node(id, label=label, description=description, conn=_c())
+    result = graph.update_node(id, label=label, description=description, audience=audience, conn=_c())
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
     return "Node updated. (Snapshot created before change.)"
@@ -493,6 +499,9 @@ def graph_relate(
     fromType: Optional[str] = None,
     toType: Optional[str] = None,
     weight: Optional[float] = None,
+    fromAudience: Optional[str] = None,
+    toAudience: Optional[str] = None,
+    edgeAudience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I record a relationship between two entities BY NAME, creating either
@@ -502,10 +511,16 @@ def graph_relate(
     connect: "Sam works_at Acme", "Sam lives_in Bristol", "Mochi is_pet_of Sam".
     fromLabel/toLabel are the entities' names; fromType/toType classify them
     (person, place, pet, organisation, condition, project, …); type is the
-    relationship in snake_case.
+    relationship in snake_case. The audience tags (derived in code from who each
+    entity is) tag any NEW node/edge so a person-node surfaces only where they're
+    cleared; an existing node is never re-tagged.
     """
     w = float(weight) if weight is not None else 1.0
-    return graph.relate(fromLabel, fromType, toLabel, toType, type, weight=w, conn=_c())
+    return graph.relate(
+        fromLabel, fromType, toLabel, toType, type, weight=w,
+        from_audience=fromAudience, to_audience=toAudience, edge_audience=edgeAudience,
+        conn=_c(),
+    )
 
 
 @mcp.tool()

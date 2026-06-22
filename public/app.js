@@ -6720,6 +6720,17 @@ async function keGraphOpenPopover(node, clientX, clientY) {
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
     const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
+    // Audience dropdown options — "just us" plus every Village circle. A node is
+    // private by default; this is the deliberate widen/tighten surface for the
+    // human (the Familiar has the same control via update_graph_node).
+    let audOptions = `<option value="ward-private">Just us (ward-private)</option>`;
+    try {
+      const reg = await vlFetch();
+      const cur = self.audience ?? 'ward-private';
+      audOptions = `<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>Just us (ward-private)</option>` +
+        (reg?.categories ?? []).map(c =>
+          `<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+    } catch { /* Village unreachable → ward-private only; harmless */ }
     pop.innerHTML = `
       <div class="ke-graph-popover-head">
         <h3>${esc(self.label ?? node.id)}</h3>
@@ -6728,6 +6739,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
       <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}" list="ke-node-types-dl"></div>
       <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
+      <div class="field"><label>Audience <span class="field-hint">(where this may surface)</span></label><select id="ke-pop-audience">${audOptions}</select></div>
       <div class="ke-actions">
         <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
         <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
@@ -6747,6 +6759,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
         label:       $('ke-pop-label').value,
         type:        $('ke-pop-type').value,
         description: $('ke-pop-desc').value,
+        audience:    $('ke-pop-audience')?.value || 'ward-private',
       };
       const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

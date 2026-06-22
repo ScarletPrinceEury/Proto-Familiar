@@ -2250,7 +2250,7 @@ export async function rewriteIdentitySection({ category, filename, section, cont
   }
 }
 
-export async function createGraphNode({ label, type, description, instanceId = PROTO_INSTANCE_ID }) {
+export async function createGraphNode({ label, type, description, audience, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2258,6 +2258,7 @@ export async function createGraphNode({ label, type, description, instanceId = P
     if (label       !== undefined) args.label       = label;
     if (description !== undefined) args.description = description;
     if (type        !== undefined) args.type        = type;
+    if (audience    !== undefined) args.audience    = audience;
     const result = await callTool('graph_node_create', args);
     console.log(`[thalamus] createGraphNode (${label ?? '?'})`);
     return { ok: true, result };
@@ -2290,7 +2291,7 @@ export async function createGraphEdge({ fromId, toId, type, weight, instanceId =
  * populates itself without piling up duplicate nodes/edges. Degrades to a
  * no-op when Phylactery is down.
  */
-export async function graphRelate({ fromLabel, fromType, toLabel, toType, type, weight, instanceId = PROTO_INSTANCE_ID }) {
+export async function graphRelate({ fromLabel, fromType, toLabel, toType, type, weight, fromAudience, toAudience, edgeAudience, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2298,6 +2299,11 @@ export async function graphRelate({ fromLabel, fromType, toLabel, toType, type, 
     if (fromType !== undefined) args.fromType = fromType;
     if (toType   !== undefined) args.toType   = toType;
     if (weight   !== undefined) args.weight   = weight;
+    // Per-endpoint audience tags (derived in code by the caller) only tag NEW
+    // nodes/edges; an existing node is never re-tagged server-side.
+    if (fromAudience  !== undefined) args.fromAudience  = fromAudience;
+    if (toAudience    !== undefined) args.toAudience    = toAudience;
+    if (edgeAudience  !== undefined) args.edgeAudience  = edgeAudience;
     const result = await callTool('graph_relate', args);
     return { ok: true, result };
   } catch (err) {
@@ -2306,7 +2312,7 @@ export async function graphRelate({ fromLabel, fromType, toLabel, toType, type, 
   }
 }
 
-export async function updateGraphNode({ id, label, description, type, instanceId = PROTO_INSTANCE_ID }) {
+export async function updateGraphNode({ id, label, description, type, audience, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`graph_node_update ${id}`);
@@ -2315,6 +2321,7 @@ export async function updateGraphNode({ id, label, description, type, instanceId
     if (label       !== undefined) args.label       = label;
     if (description !== undefined) args.description = description;
     if (type        !== undefined) args.type        = type;
+    if (audience    !== undefined) args.audience    = audience;
     const result = await callTool('graph_node_update', args);
     console.log(`[thalamus] updateGraphNode ${id}`);
     return { ok: true, result };

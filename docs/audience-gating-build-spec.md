@@ -1,8 +1,9 @@
 # Audience-gated recall — build spec
 
-> **Status:** draft for review. Privacy-critical. Closes the recall-side audience
-> leak and completes the audience model the design intended. Patches on `0.7.x`
-> (completing an incomplete safety feature, not a new milestone).
+> **Status:** built (all three phases). Privacy-critical. Closed the recall-side
+> audience leak and completed the audience model the design intended. Patches on
+> `0.7.x` (completing an incomplete safety feature, not a new milestone). The
+> phase headings below are marked ✅ as they landed.
 
 ## 1. The real gap (verified against code, not docs)
 
@@ -62,9 +63,10 @@ memory about villager(s) V = mostRestrictive(
 
 > **Phase 1 is independent of all this** — it gates recall by whatever `audience` a record already carries, so it closes the leak regardless of how audience is written. Phase 2 only changes what audience gets *written* going forward.
 
-### Phase 3 — graph-node audience is settable; retire the inert comments
-- A Familiar/UI way to set a graph node's structural `audience` (the field exists; nothing writes it deliberately yet — `graph_relate`/`graph_node_create` default `ward-private`).
-- Audit and remove the inert `<!-- gate: sensitive -->` comments from graph-node descriptions (they never did anything). Document that graph gating is the structural field + Phase 1 filtering.
+### Phase 3 — graph-node audience is settable; retire the inert comments ✅ done
+- **Derived in code (the default):** `audience.deriveNodeAudience({ label, registry })` tags each new node from the villager it matches (else `ward-private`, fail-closed); the edge takes the narrower endpoint (`mostRestrictiveAudience`). The auto-graph path (`memorization.js`) and the Familiar's `create_graph_node` both derive this way; `graph_relate` gained `fromAudience`/`toAudience`/`edgeAudience` and `resolve_or_create_node` never re-tags an existing node (a deliberate override survives).
+- **Settable deliberately:** `graph_node_update` (Python + MCP) gained an `audience` setter; the Familiar reaches it via `update_graph_node`'s `audience` arg (circle name → id, ward-private sentinel), the human via the Knowledge-editor node popover's audience dropdown. `get_subgraph`/`search_nodes` now return each node's `audience` so the editor can show it.
+- **The inert comments:** an audit found **no** `<!-- gate: -->` comments in any graph-node description — they only ever existed as the identity-file gating mechanism (`stripGatedSections`). Nothing to remove; documented that graph gating is the structural `audience` field + the Phase-1 recall filter.
 
 ## 4. Cross-cutting
 - **Versioning:** `0.7.x` patch per phase.

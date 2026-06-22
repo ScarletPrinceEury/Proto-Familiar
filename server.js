@@ -1832,11 +1832,12 @@ app.post('/api/entity/graph/edges', async (req, res) => {
 app.patch('/api/entity/graph/nodes/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const { label, description, type } = req.body;
+  const { label, description, type, audience } = req.body;
   if (label !== undefined && typeof label !== 'string')             return badRequest(res, 'label must be string');
   if (description !== undefined && typeof description !== 'string') return badRequest(res, 'description must be string');
   if (type !== undefined && typeof type !== 'string')               return badRequest(res, 'type must be string');
-  const result = await updateGraphNode({ id, label, description, type });
+  if (audience !== undefined && typeof audience !== 'string')        return badRequest(res, 'audience must be string');
+  const result = await updateGraphNode({ id, label, description, type, audience });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });

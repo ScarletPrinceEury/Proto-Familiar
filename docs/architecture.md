@@ -695,6 +695,23 @@ by `from/to/lower(type)`. Fire-and-forget per edge (Promise.allSettled), gated o
 This rides the existing memorization LLM call (no new request) and fixes the
 "Familiar almost never saves to the graph unless prompted" gap.
 
+**Graph-node audience derivation (Pillar E, 0.7.x).** Each endpoint's audience is
+derived **in code** before routing: `audience.deriveNodeAudience({ label,
+registry })` matches the label to a known villager (by name/handle) and takes that
+villager's representative Village category, else **`ward-private`** (fail-closed —
+places, orgs, the ward, abstractions stay private until deliberately widened). The
+edge takes the **narrower** of its two endpoints (`mostRestrictiveAudience`) so it
+can't reveal a ward-private node in a wider room. These ride into `graph_relate`'s
+`fromAudience`/`toAudience`/`edgeAudience` (and the Familiar's `create_graph_node`
+derives the same way). Audience tags only **new** nodes — `resolve_or_create_node`
+never re-tags an existing node, so a deliberate override isn't clobbered by ongoing
+memorization. The deliberate-override surface is `graph_node_update`'s `audience`
+(Familiar tool `update_graph_node`, or the Knowledge-editor node popover's audience
+dropdown) — how the ward/Familiar widens a node to a circle or keeps it to just the
+two of them. Graph gating is the structural `audience` column + the Phase-1 recall
+filter; the `<!-- gate: -->` comments are an **identity-file** mechanism only and
+were never used in graph descriptions.
+
 **`remember` gate** (per villager, per category):
 - `true` → store freely in Phylactery
 - `false` → drop silently
