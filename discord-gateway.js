@@ -653,6 +653,19 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
       'Anyone in this room can read what I say. I am still myself: same voice, same temperament.',
     );
   }
+  // Memory legibility (any room that isn't {{user}} alone): my recall here is a
+  // FILTERED view of my own memory and graph — I see only what this room is
+  // cleared for, so ward-private things I hold won't surface and that absence is
+  // the gate doing its job, not a gap in me. What I learn here is likewise tagged
+  // for this room's circle. I reason from what I have, and I don't assume the
+  // full picture.
+  if (kind !== 'ward-dm') {
+    lines.push(
+      'What I remember here is filtered to this room: I only recall what this audience is cleared for, ' +
+      'so anything I hold that\'s just for {{user}} and me stays out of view here — that\'s the gate working, not a hole in my memory. ' +
+      'What I learn here is kept for this room\'s circle in turn.',
+    );
+  }
   lines.push(
     'I keep replies Discord-sized — well under 1800 characters, usually a few sentences. ' +
     'I write as a person in the conversation, not as a service announcing itself.',

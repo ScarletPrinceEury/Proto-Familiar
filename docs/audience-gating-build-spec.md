@@ -106,12 +106,14 @@ So:
     first-person description that teaches the *intent* ("I keep this to just
     {{user}} and me / to our close circle"), per the discoverability rule — not
     the field name, the meaning.
-  - **Awareness in context:** a short line the Familiar reads when it's in a
-    non-ward-private room, so it understands it is seeing a **filtered** view of
-    its own memory/graph (it won't recall ward-private things here) and that what
-    it stores here is tagged for *this* room. Without this it could get confused
-    ("why can't I remember X?") or wrongly assume it has the full picture. This
-    rides the existing presence/audience context block — no new call.
+  - **Awareness in context ✅ (`0.7.60`):** a short line the Familiar reads when
+    it's in a non-ward-private room (`discord-gateway.js` `presenceBlock`, every
+    `kind !== 'ward-dm'`), so it understands it is seeing a **filtered** view of
+    its own memory/graph (it won't recall ward-private things here — that absence
+    is the gate working, not a hole in its memory) and that what it stores here is
+    tagged for *this* room. Without this it could get confused ("why can't I
+    remember X?") or wrongly assume it has the full picture. Rides the existing
+    presence block — no new call.
 - **Net:** the model keeps doing what it already does (extract `category` +
   `subjects`, speak in-room); the privacy tagging is the code's job. The only
   thing the Familiar *learns* is the human-meaning of acting more privately and
