@@ -712,6 +712,7 @@
       </div>
       <div class="ke-tabs" role="tablist">
         <button class="ke-tab ke-tab-active" data-tab="memories"  role="tab">Memories</button>
+        <button class="ke-tab"               data-tab="coverage"  role="tab">Coverage</button>
         <button class="ke-tab"               data-tab="graph"     role="tab">Graph</button>
         <button class="ke-tab"               data-tab="identity"  role="tab">Identity</button>
         <button class="ke-tab"               data-tab="snapshots" role="tab">Snapshots</button>
@@ -735,6 +736,26 @@
             <div class="ke-list" id="ke-mem-list"></div>
             <div class="ke-detail" id="ke-mem-detail">
               <p class="logs-empty">Pick a memory on the left to view or edit.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ke-pane" id="ke-pane-coverage">
+          <div class="ke-toolbar">
+            <button id="ke-cov-prev" class="btn-ghost" title="Previous month">‹</button>
+            <span id="ke-cov-month" class="ke-cov-month"></span>
+            <button id="ke-cov-next" class="btn-ghost" title="Next month">›</button>
+            <button id="ke-cov-refresh" class="btn-ghost">Refresh</button>
+            <div class="ke-cov-legend">
+              <span class="ke-cov-key"><i class="ke-cov-swatch cov-complete"></i>memorized</span>
+              <span class="ke-cov-key"><i class="ke-cov-swatch cov-partial"></i>missing</span>
+              <span class="ke-cov-key"><i class="ke-cov-swatch cov-uncertain"></i>uncertain</span>
+            </div>
+          </div>
+          <div class="ke-split">
+            <div class="ke-cov-cal" id="ke-cov-cal"></div>
+            <div class="ke-detail" id="ke-cov-detail">
+              <p class="logs-empty">Pick a day to see its sessions and (re)feed it to memory.</p>
             </div>
           </div>
         </div>

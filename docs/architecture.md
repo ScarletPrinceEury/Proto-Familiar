@@ -208,8 +208,11 @@ lifecycle of the autonomous loops:
 
 **Logs / Tomes:** familiar endpoints for session JSON and Tome CRUD.
 
-**Memorization:** `POST /api/memorize` + `GET /api/memorize` +
-ack/cancel — see `memorization.js`.
+**Memorization:** `POST /api/memorize` (session scope is day-anchored) +
+`GET /api/memorize` + ack/cancel — see `memorization.js`.
+**Coverage (day-anchoring Phase 3):** `GET /api/memory-coverage` (per-date
+status for the calendar) + `POST /api/memorize-day {date,force}` ((re)feed a
+day's slices) — see `memory-coverage.js`.
 
 **Temporal editor (M9):**
 - `GET /api/temporal/interests` — live + standing with decay metadata
@@ -726,8 +729,12 @@ recorded, not retried; shared-room slices get a `'shared-room'` flag). The ledge
 (date, session); `computeCoverage()` reads the logs live and derives per-date
 status (`complete | partial | uncertain | empty`) by comparing the two — so the
 active day reads `partial` the moment new messages land. Dates use server-local
-time, stamped in the ledger. *(Phases 3/2/4 — calendar UI, always-on sweep,
-foreign-log import — build on this; see `docs/day-anchoring-build-spec.md`.)*
+time, stamped in the ledger. **Phase 3 (calendar UI):** the Knowledge editor's
+**Coverage** tab renders a month calendar coloured by status (`computeCoverage()`
+via `GET /api/memory-coverage`); clicking a day lists its sessions and offers
+"Memorize this day" (`POST /api/memorize-day`, `collectDateSlices` → per-slice
+enqueue, `force` to re-run done days). *(Remaining: Phase 2 always-on sweep, Phase
+4 foreign-log import; see `docs/day-anchoring-build-spec.md`.)*
 
 **Triggers** (all session-scope triggers route through `enqueueSessionByDay`;
 topic-scope stays whole-range):

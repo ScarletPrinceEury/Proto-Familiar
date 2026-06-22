@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   recordSegmentRun, isSegmentMemorized, computeCoverage, incompleteDates, deriveStatus,
+  collectDateSlices,
 } from '../memory-coverage.js';
 
 const at = (y, mo, d, h = 12) => new Date(y, mo - 1, d, h).toISOString();
@@ -84,6 +85,27 @@ test('isSegmentMemorized reflects recorded progress', async () => {
   await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2 }, opts);
   assert.equal(await isSegmentMemorized('s1', '2026-06-20', 2, opts), true);
   assert.equal(await isSegmentMemorized('s1', '2026-06-20', 3, opts), false); // grew past it
+});
+
+test('collectDateSlices returns a date\'s un-memorized slices; force includes done ones', async () => {
+  await writeLog('s1', [msg('a', at(2026, 6, 20, 9)), msg('b', at(2026, 6, 20, 10), 'assistant')]);
+  await writeLog('s2', [msg('c', at(2026, 6, 20, 14)), msg('d', at(2026, 6, 20, 15), 'assistant')]);
+
+  // nothing memorized → both sessions' slices come back
+  let slices = await collectDateSlices('2026-06-20', opts);
+  assert.deepEqual(slices.map(s => s.sessionId).sort(), ['s1', 's2']);
+
+  // memorize s1 → only s2 remains (skipped by default)
+  await recordSegmentRun({ date: '2026-06-20', sessionId: 's1', throughCount: 2 }, opts);
+  slices = await collectDateSlices('2026-06-20', opts);
+  assert.deepEqual(slices.map(s => s.sessionId), ['s2']);
+
+  // force re-includes the memorized one
+  slices = await collectDateSlices('2026-06-20', { ...opts, force: true });
+  assert.equal(slices.length, 2);
+
+  // a different date with no logs → empty
+  assert.deepEqual(await collectDateSlices('2026-06-25', opts), []);
 });
 
 test('a midnight-crossing session needs both days memorized to clear', async () => {

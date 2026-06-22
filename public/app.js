@@ -3586,6 +3586,9 @@ function init() {
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-cov-refresh')?.addEventListener('click', keLoadCoverage);
+  $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
+  $('ke-cov-next')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, 1);  keRenderCalendar(); } });
   $('ke-graph-refresh').addEventListener('click', () => {
     keGraphClosePopover();
     if (_keGraphView === 'map') keLoadGraphMap();
@@ -5406,7 +5409,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'graph', 'identity', 'snapshots'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -5469,6 +5472,7 @@ function keSwitchTab(tab) {
     el.classList.toggle('ke-tab-active', el.dataset.tab === tab);
   });
   if (tab === 'memories')   keLoadMemories();
+  if (tab === 'coverage')   keLoadCoverage();
   if (tab === 'graph') {
     if (_keGraphView === 'map') { keSetGraphView('map'); }
     else                        { keSetGraphView('list'); keLoadGraphNodes(); }
@@ -5596,6 +5600,125 @@ async function keOpenMemory(granularity, date) {
       keLoadMemories();
     });
   } catch (err) { keSetDetail('ke-mem-detail', keError(err, 'Failed to load memory.')); }
+}
+
+// ── Coverage tab (day-anchoring calendar) ───────────────────────────────
+// Shows which calendar days are fully memorized vs missing vs uncertain, and
+// lets the ward (re)feed a day's logs to the pipeline. Data: GET
+// /api/memory-coverage (per-date status from the coverage ledger + live logs).
+let _keCovData = null;                 // { tz, days: { 'YYYY-MM-DD': {status,facts,flags,sessions} } }
+let _keCovMonth = null;                // { y, m } (m: 0-11) currently displayed
+
+function keCovShiftMonth({ y, m }, delta) {
+  const d = new Date(y, m + delta, 1);
+  return { y: d.getFullYear(), m: d.getMonth() };
+}
+function keCovDateKey(y, m, day) {
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+async function keLoadCoverage() {
+  const cal = $('ke-cov-cal');
+  cal.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    const res = await fetch('/api/memory-coverage');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    _keCovData = await res.json();
+    // Default to the most recent month that has any data, else the current month.
+    if (!_keCovMonth) {
+      const dates = Object.keys(_keCovData.days ?? {}).sort();
+      const ref = dates.length ? new Date(dates[dates.length - 1] + 'T00:00:00') : new Date();
+      _keCovMonth = { y: ref.getFullYear(), m: ref.getMonth() };
+    }
+    keRenderCalendar();
+  } catch (err) {
+    cal.innerHTML = keError(err, 'Failed to load coverage.');
+  }
+}
+
+function keRenderCalendar() {
+  const cal = $('ke-cov-cal');
+  if (!_keCovData || !_keCovMonth) { cal.innerHTML = ''; return; }
+  const { y, m } = _keCovMonth;
+  const days = _keCovData.days ?? {};
+  $('ke-cov-month').textContent = new Date(y, m, 1)
+    .toLocaleString([], { month: 'long', year: 'numeric' });
+
+  const firstDow = (new Date(y, m, 1).getDay() + 6) % 7; // Mon=0
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  let html = '<div class="ke-cov-grid">';
+  for (const d of dow) html += `<div class="ke-cov-dow">${d}</div>`;
+  for (let i = 0; i < firstDow; i++) html += '<div class="ke-cov-cell ke-cov-blank"></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = keCovDateKey(y, m, day);
+    const entry = days[key];
+    const status = entry?.status ?? 'empty';
+    const facts = entry?.facts ?? 0;
+    const title = entry ? `${status}${facts ? ` · ${facts} fact(s)` : ''}` : 'no logs';
+    html += `<button class="ke-cov-cell cov-${status}" data-cov-date="${key}" title="${esc(title)}">`
+         +  `<span class="ke-cov-num">${day}</span>`
+         +  (facts ? `<span class="ke-cov-facts">${facts}</span>` : '')
+         +  '</button>';
+  }
+  html += '</div>';
+  cal.innerHTML = html;
+  cal.querySelectorAll('[data-cov-date]').forEach(el =>
+    el.addEventListener('click', () => keOpenCoverageDay(el.dataset.covDate)));
+}
+
+function keOpenCoverageDay(date) {
+  const entry = _keCovData?.days?.[date];
+  const det = $('ke-cov-detail');
+  const pretty = new Date(date + 'T00:00:00').toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  if (!entry) {
+    det.innerHTML = `<div class="ke-detail-header"><h3>${esc(pretty)}</h3></div>`
+      + '<p class="logs-empty">No conversation logs on this day.</p>';
+    return;
+  }
+  const sessions = entry.sessions ?? [];
+  const rows = sessions.map(s => {
+    const done = s.memorized >= s.total;
+    const flag = s.flag ? ` <span class="ke-badge ke-badge-register">${esc(s.flag)}</span>` : '';
+    return `<div class="ke-cov-srow">${done ? '✓' : '○'} <code>${esc(s.sessionId.slice(0, 8))}</code> `
+      + `<span class="field-hint">${s.memorized}/${s.total} msgs</span>${flag}</div>`;
+  }).join('');
+  det.innerHTML = `
+    <div class="ke-detail-header">
+      <h3>${esc(pretty)}</h3>
+      <span class="ke-badge cov-${entry.status}">${esc(entry.status)}</span>
+    </div>
+    <p class="field-hint">${entry.facts} fact(s) memorized from this day.</p>
+    <div class="ke-cov-sessions">${rows || '<p class="logs-empty">—</p>'}</div>
+    <div class="ke-actions">
+      <button id="ke-cov-memorize" class="btn-send">Memorize this day</button>
+      <label class="ke-cov-force"><input type="checkbox" id="ke-cov-force"> re-run already-done</label>
+    </div>
+    <div class="vl-status" id="ke-cov-status"></div>`;
+  $('ke-cov-memorize').addEventListener('click', () => keMemorizeDay(date));
+}
+
+async function keMemorizeDay(date) {
+  const status = $('ke-cov-status');
+  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  const force = !!$('ke-cov-force')?.checked;
+  status.textContent = 'Queuing…';
+  try {
+    const res = await fetch('/api/memorize-day', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, force, provider: state.provider, apiKey: state.apiKey, model: state.model }),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const { enqueued, deduped, requested } = await res.json();
+    status.textContent = enqueued
+      ? `Queued ${enqueued} session-slice(s) — coverage updates as they finish.`
+      : (requested ? 'Already in hand (in flight or done).' : 'Nothing to memorize on this day.');
+    // Refresh coverage shortly so the colour reflects in-flight work settling.
+    setTimeout(keLoadCoverage, 1500);
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  }
 }
 
 // ── Graph tab ───────────────────────────────────────────────────────────

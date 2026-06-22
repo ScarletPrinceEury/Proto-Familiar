@@ -95,6 +95,29 @@ export function deriveStatus(sessions) {
   return sessions.some(s => s.flag) ? 'uncertain' : 'complete';
 }
 
+// Read every session log under logsDir → [{ sessionId, messages, audienceTag }].
+// Shared by computeCoverage and collectDateSlices so the scan lives in one place.
+async function readSessionLogs(logsDir) {
+  let files = [];
+  try {
+    files = (await fsp.readdir(logsDir)).filter(f => f.endsWith('.json') && !f.startsWith('.'));
+  } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    try {
+      const log = JSON.parse(await fsp.readFile(path.join(logsDir, f), 'utf8'));
+      const messages = Array.isArray(log?.messages) ? log.messages : [];
+      if (messages.length === 0) continue;
+      out.push({
+        sessionId: log?.sessionId ?? f.replace(/\.json$/, ''),
+        messages,
+        audienceTag: log?.audienceTag ?? 'ward-private',
+      });
+    } catch { /* skip unreadable log */ }
+  }
+  return out;
+}
+
 /**
  * Live coverage: scan the session logs, derive day-segments, and compare what
  * EXISTS against what the ledger says is MEMORIZED. Returns per-date status for
@@ -105,19 +128,7 @@ export async function computeCoverage({ logsDir = DEFAULT_LOGS_DIR, ledgerFile =
   const ledger = await load(ledgerFile);
   const days = {}; // date -> { sessions: {sessionId:{memorized,total,flag}}, facts }
 
-  let files = [];
-  try {
-    files = (await fsp.readdir(logsDir)).filter(f => f.endsWith('.json') && !f.startsWith('.'));
-  } catch { files = []; }
-
-  for (const f of files) {
-    let log;
-    try { log = JSON.parse(await fsp.readFile(path.join(logsDir, f), 'utf8')); }
-    catch { continue; }
-    const sessionId = log?.sessionId ?? f.replace(/\.json$/, '');
-    const messages = Array.isArray(log?.messages) ? log.messages : [];
-    if (messages.length === 0) continue;
-
+  for (const { sessionId, messages } of await readSessionLogs(logsDir)) {
     for (const seg of segmentByDay(messages)) {
       if (seg.readableCount < 2) continue;
       const led = ledger.days?.[seg.date]?.segments?.[sessionId];
@@ -147,4 +158,21 @@ export async function computeCoverage({ logsDir = DEFAULT_LOGS_DIR, ledgerFile =
 export async function incompleteDates(opts = {}) {
   const { days } = await computeCoverage(opts);
   return Object.entries(days).filter(([, d]) => d.status === 'partial').map(([date]) => date);
+}
+
+/**
+ * Every session's slice that touches `date` — what "Memorize this day" feeds.
+ * Returns [{ sessionId, audienceTag, seg }] for slices with ≥2 readable
+ * messages. By default already-memorized slices are dropped; `force` includes
+ * them (a manual re-run, made safe by the write-time dedup).
+ */
+export async function collectDateSlices(date, { logsDir = DEFAULT_LOGS_DIR, ledgerFile = DEFAULT_LEDGER_FILE, force = false } = {}) {
+  const out = [];
+  for (const { sessionId, messages, audienceTag } of await readSessionLogs(logsDir)) {
+    const seg = segmentByDay(messages).find(s => s.date === date);
+    if (!seg || seg.readableCount < 2) continue;
+    if (!force && await isSegmentMemorized(sessionId, date, seg.count, { ledgerFile })) continue;
+    out.push({ sessionId, audienceTag, seg });
+  }
+  return out;
 }

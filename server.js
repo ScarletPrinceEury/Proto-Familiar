@@ -83,6 +83,7 @@ import {
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
+import { computeCoverage, collectDateSlices } from './memory-coverage.js';
 import {
   getRegistry as getVillageRegistry,
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
@@ -1468,6 +1469,39 @@ app.get('/api/memorize', async (_req, res) => {
     res.json(await listMemorizationJobs());
   } catch {
     res.json([]);
+  }
+});
+
+// GET /api/memory-coverage — per-day memorization coverage for the calendar.
+// Computed live from the session logs + the coverage ledger; no message content.
+app.get('/api/memory-coverage', async (_req, res) => {
+  try { res.json(await computeCoverage()); }
+  catch { res.json({ tz: 'local', days: {} }); }
+});
+
+// POST /api/memorize-day — (re)feed every session's slice for one calendar date.
+// Skips slices already memorized unless `force`. Client supplies the creds, same
+// as POST /api/memorize.
+app.post('/api/memorize-day', async (req, res) => {
+  const { date, force, provider, apiKey, model } = req.body ?? {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) return res.status(400).json({ error: 'Invalid date (YYYY-MM-DD).' });
+  if (!provider || !apiKey || !model) return res.status(400).json({ error: 'provider, apiKey, and model are required.' });
+  try {
+    const slices = await collectDateSlices(date, { force: force === true });
+    let enqueued = 0, deduped = 0;
+    for (const { sessionId, audienceTag, seg } of slices) {
+      try {
+        const r = await enqueueMemorization({
+          sessionId, scope: 'day', topicId: date,
+          messageRange: { start: seg.startIdx, end: seg.endIdx },
+          messages: seg.messages, provider, apiKey, model, audienceTag,
+        });
+        if (r.deduped) deduped++; else enqueued++;
+      } catch (err) { console.warn('[memorize-day] slice failed:', err?.message ?? err); }
+    }
+    res.status(202).json({ enqueued, deduped, requested: slices.length });
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? 'Failed to memorize day.' });
   }
 });
 
