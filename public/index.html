@@ -152,6 +152,12 @@
           </div>
 
           <div class="field-row" style="margin-top:8px">
+            <label for="memory-sweep-toggle">Memory coverage sweep</label>
+            <input type="checkbox" id="memory-sweep-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. A slow background pass (every ~10 min) that memorizes any <em>past</em> day whose conversations never got ingested — for when a session didn't roll over cleanly (you switched sessions or cleared history). It only enqueues into the normal memorization worker (no extra LLM calls of its own) and skips the current day (handled live) and days already done. See the Coverage tab in the Knowledge editor. Off leaves memorization to session-end and the Memorize-now button only.</div>
+
+          <div class="field-row" style="margin-top:8px">
             <label for="tome-graduation-toggle">Graduate tome knowledge</label>
             <input type="checkbox" id="tome-graduation-toggle">
           </div>

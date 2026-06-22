@@ -233,6 +233,10 @@ const state = {
   // a local-time window (start==end disables it). Off via this toggle or
   // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
   warmthEnabled:           true,
+  // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
+  // memorizes past days that never ingested. Off via this toggle or the
+  // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
+  memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
@@ -294,6 +298,7 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
+  'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
@@ -508,6 +513,7 @@ function loadPersisted() {
     state.ponderingIntervalScale = 1;
   }
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
     state.warmthQuietHoursStart = 23;
@@ -2363,6 +2369,7 @@ function readSettingsFromUI() {
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
@@ -2444,6 +2451,7 @@ function writeSettingsToUI() {
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
@@ -3307,6 +3315,7 @@ function init() {
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'memory-sweep-toggle',
     'tome-graduation-toggle', 'tome-graduation-tidy',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',

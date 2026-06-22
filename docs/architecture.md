@@ -733,8 +733,12 @@ time, stamped in the ledger. **Phase 3 (calendar UI):** the Knowledge editor's
 **Coverage** tab renders a month calendar coloured by status (`computeCoverage()`
 via `GET /api/memory-coverage`); clicking a day lists its sessions and offers
 "Memorize this day" (`POST /api/memorize-day`, `collectDateSlices` → per-slice
-enqueue, `force` to re-run done days). *(Remaining: Phase 2 always-on sweep, Phase
-4 foreign-log import; see `docs/day-anchoring-build-spec.md`.)*
+enqueue, `force` to re-run done days). **Phase 2 (always-on sweep):**
+`memory-sweep-loop.js` — a 10-min pass that enqueues the missing slices of every
+*past* incomplete day (skips today, handled live; skips completed days). Only
+enqueues into the memorization worker (no LLM call of its own); default-ON,
+Settings "Memory coverage sweep" / `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1`.
+*(Remaining: Phase 4 foreign-log import; see `docs/day-anchoring-build-spec.md`.)*
 
 **Triggers** (all session-scope triggers route through `enqueueSessionByDay`;
 topic-scope stays whole-range):
@@ -1374,6 +1378,7 @@ that is the contract talking — update all seams together or stop.
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
 | Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |
 | Tome graduation | 30min tick (opt-in, default OFF) | Settings "Graduate tome knowledge" + `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1` | Drains durable facts stranded in tomes → identity/memory/graph (relational facts resolve-or-create + dedup); confirmed route before tidy; consent-gated ward memory |
+| Memory coverage sweep | 10min tick (default ON) | Settings "Memory coverage sweep" + `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` | Memorizes PAST days that never ingested (day-anchoring Phase 2); skips today + completed days; only enqueues into the memorization worker — no LLM call of its own |
 | Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
 | Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |
 
