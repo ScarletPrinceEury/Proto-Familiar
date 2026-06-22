@@ -85,6 +85,8 @@ import {
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 import { computeCoverage, collectDateSlices } from './memory-coverage.js';
+import { parseImport } from './log-import.js';
+import { segmentByDay } from './day-segments.js';
 import {
   getRegistry as getVillageRegistry,
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
@@ -1504,6 +1506,65 @@ app.post('/api/memorize-day', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err?.message ?? 'Failed to memorize day.' });
   }
+});
+
+// POST /api/import-logs — bring past conversation logs in from elsewhere.
+// Two-step: without `commit` it PREVIEWS (parse + segment, no writes) so the UI
+// can show the scale before spending; with `commit` it places the logs by date
+// (one imported session per date) and enqueues them for immediate ingestion.
+app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) => {
+  const { content, selfNames, source, commit, provider, apiKey, model } = req.body ?? {};
+  const names = Array.isArray(selfNames) ? selfNames
+    : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+  const parsed = parseImport(content, { selfNames: names });
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+
+  // Segment into per-date slices with enough to extract.
+  const segs = segmentByDay(parsed.messages).filter(s => s.readableCount >= 2);
+  if (segs.length === 0) {
+    return res.status(400).json({ error: 'No date had enough messages to import (need ≥2 each).' });
+  }
+  const dates = segs.map(s => s.date);
+
+  if (!commit) {
+    return res.json({
+      ok: true, preview: true, format: parsed.format,
+      dates, days: segs.length,
+      messages: segs.reduce((n, s) => n + s.count, 0),
+    });
+  }
+
+  if (!provider || !apiKey || !model) {
+    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  }
+
+  let created = 0, enqueued = 0;
+  const tag = (typeof source === 'string' && source.trim()) ? source.trim().slice(0, 40) : 'import';
+  for (const seg of segs) {
+    const sessionId = randomUUID();
+    const startedAt = seg.messages.find(m => m.timestamp)?.timestamp ?? new Date().toISOString();
+    const endedAt = [...seg.messages].reverse().find(m => m.timestamp)?.timestamp ?? startedAt;
+    const log = {
+      sessionId, startedAt, endedAt, imported: true, source: tag,
+      audienceTag: 'ward-private', messages: seg.messages,
+    };
+    try {
+      const p = path.join(LOGS_DIR, `${sessionId}.json`);
+      await fsp.writeFile(p + '.tmp', JSON.stringify(log, null, 2), 'utf8');
+      await fsp.rename(p + '.tmp', p);
+      created++;
+    } catch (err) { console.warn('[import] write failed:', err?.message ?? err); continue; }
+    try {
+      const r = await enqueueMemorization({
+        sessionId, scope: 'day', topicId: seg.date,
+        messageRange: { start: seg.startIdx, end: seg.endIdx },
+        messages: seg.messages, provider, apiKey, model, audienceTag: 'ward-private',
+      });
+      if (!r.deduped) enqueued++;
+    } catch (err) { console.warn('[import] enqueue failed:', err?.message ?? err); }
+  }
+  res.status(202).json({ ok: true, committed: true, format: parsed.format, days: created, enqueued, dates });
 });
 
 // POST /api/memorize/:id/ack — mark a terminal job as seen by the UI

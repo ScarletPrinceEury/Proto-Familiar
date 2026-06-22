@@ -213,6 +213,10 @@ lifecycle of the autonomous loops:
 **Coverage (day-anchoring Phase 3):** `GET /api/memory-coverage` (per-date
 status for the calendar) + `POST /api/memorize-day {date,force}` ((re)feed a
 day's slices) — see `memory-coverage.js`.
+**Import (day-anchoring Phase 4):** `POST /api/import-logs` — without `commit`
+PREVIEWS (parse + segment, no writes); with `commit` places foreign logs by date
+(one imported session per date) and enqueues them for immediate ingestion. Parsers
+in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudly).
 
 **Temporal editor (M9):**
 - `GET /api/temporal/interests` — live + standing with decay metadata
@@ -738,7 +742,11 @@ enqueue, `force` to re-run done days). **Phase 2 (always-on sweep):**
 *past* incomplete day (skips today, handled live; skips completed days). Only
 enqueues into the memorization worker (no LLM call of its own); default-ON,
 Settings "Memory coverage sweep" / `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1`.
-*(Remaining: Phase 4 foreign-log import; see `docs/day-anchoring-build-spec.md`.)*
+**Phase 4 (foreign-log import):** `POST /api/import-logs` (preview → commit) +
+`log-import.js` parsers place foreign logs by date (one imported session per
+date) and enqueue them for immediate ingestion (confirm-gated in the Coverage-tab
+import form). v1 parsers: Proto-Familiar JSON + timestamped text; more formats
+slot into the `PARSERS` registry. *(see `docs/day-anchoring-build-spec.md`.)*
 
 **Triggers** (all session-scope triggers route through `enqueueSessionByDay`;
 topic-scope stays whole-range):
