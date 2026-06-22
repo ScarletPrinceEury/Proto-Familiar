@@ -5538,24 +5538,35 @@ async function keLoadMemories() {
       row.innerHTML = `
         <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
         <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date ?? m.key));
+      row.addEventListener('click', () => keOpenMemory(m));
       list.appendChild(row);
     }
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
 }
 
-async function keOpenMemory(granularity, date) {
+// A memory is addressed by its unique id — granularity+date can't single out a
+// standalone per-fact row, because a whole day's extracted facts share one date.
+// `m` is the list row (carries id, granularity, key=date).
+async function keOpenMemory(m) {
+  const id = m?.id;
   keSetDetail('ke-mem-detail', '<p class="logs-loading">Loading…</p>');
   try {
-    const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
+    if (!id) throw new Error('this memory has no id to open');
+    const res = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const content   = data.memory?.content    ?? data.content    ?? '';
-    const audience  = data.memory?.audience   ?? data.audience   ?? 'ward-private';
-    const careWeight = data.memory?.care_weight ?? data.care_weight ?? '';
-    const register  = data.memory?.register   ?? data.register   ?? 'episodic';
+    if (data.ok === false) throw new Error(data.error ?? 'memory not found');
+    const content    = data.content     ?? '';
+    const granularity = data.granularity ?? m.granularity ?? '';
+    const date       = data.date        ?? m.key ?? '';
+    const audience   = data.audience    ?? 'ward-private';
+    const careWeight = data.care_weight ?? '';
+    const register   = data.register    ?? 'episodic';
     const registerNote = (register === 'me' || register === 'ward')
       ? `<span class="ke-badge ke-badge-register">standing truth · ${register === 'me' ? 'about the Familiar' : 'about the ward'}</span>` : '';
+    // The day this memory is filed under, as a value an <input type="date"> accepts
+    // (the leading YYYY-MM-DD; significant keys carry a _slug suffix we drop here).
+    const dayValue = (String(date).match(/^\d{4}-\d{2}-\d{2}/) || [''])[0];
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
@@ -5576,23 +5587,39 @@ async function keOpenMemory(granularity, date) {
           <option value="low"  ${careWeight === 'low'    ? 'selected' : ''}>low</option>
         </select>
       </div>
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="ke-mem-movedate">Filed under</label>
+        <input type="date" id="ke-mem-movedate" class="ke-select" value="${esc(dayValue)}">
+        <button id="ke-mem-move" class="btn-secondary">Move to this day</button>
+      </div>
       <div class="ke-actions">
         <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
         <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
         <button id="ke-mem-delete"  class="btn-ghost ke-danger">Delete</button>
       </div>
-      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
+      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Move to this day" re-files the memory under a different date (the fix for facts imported into the wrong day). "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
     $('ke-mem-save').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
       const aud = $('ke-mem-audience').value;
       const cw  = $('ke-mem-care-weight').value;
-      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, editedBy: 'user-edit', audience: aud, careWeight: cw || null }),
+        body: JSON.stringify({ content: body, audience: aud, careWeight: cw || '' }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();
-      keOpenMemory(granularity, date);
+      keOpenMemory({ ...m, id });
+    });
+    $('ke-mem-move').addEventListener('click', async () => {
+      const nd = $('ke-mem-movedate').value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(nd)) { alert('Pick a valid date first.'); return; }
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}/move`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: nd }),
+      });
+      if (!r.ok) { alert(`Move failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadMemories();
+      keOpenMemory({ ...m, id });
     });
     $('ke-mem-super').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
@@ -5607,8 +5634,8 @@ async function keOpenMemory(granularity, date) {
       keLoadMemories();
     });
     $('ke-mem-delete').addEventListener('click', async () => {
-      if (!confirm(`Delete memory ${granularity}/${date}? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
-      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+      if (!confirm(`Delete this ${granularity} memory (${date})? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
       keSetDetail('ke-mem-detail', '<p class="logs-empty">Deleted.</p>');
       keLoadMemories();
