@@ -1040,8 +1040,11 @@ All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus
 (entity-core is retired). New fields surfaced in the KE:
 
 - **`audience` + `careWeight` on memory records** — shown in the detail view with editable
-  dropdowns; `PUT /api/entity/memories/:granularity/:date` now accepts `audience` and `careWeight`
-  and forwards them to `memory_update` → `memory.py` `update_memory()`.
+  dropdowns; `PUT /api/entity/memories/by-id/:id` accepts `audience` and `careWeight`
+  and forwards them to `memory_update_by_id` → `memory.py` `update_memory_by_id()`. The
+  audience dropdown lists the real Village circles (ward-private + each category, via the
+  shared `keAudienceOptionsHTML` helper used by the graph-node editor too) — the same model
+  the recall gate filters on, not the old stale `ward-private`/`all` pair.
 - **Audience badges** in the memory list rows for non-ward-private records; careWeight badges
   for `high`/`low` entries.
 - **Ward · Remember settings** — persistent consent-policy map

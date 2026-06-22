@@ -5544,6 +5544,24 @@ async function keLoadMemories() {
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
 }
 
+// Audience <option> list shared by the memory + graph-node editors: "just us"
+// (ward-private) plus every Village circle, with `current` preselected. An
+// unknown current value (a legacy tag like the old 'all', or a since-deleted
+// circle) is shown as its own option so opening a record never silently re-tags
+// it on save.
+function keAudienceOptionsHTML(current, categories) {
+  const cur  = current ?? 'ward-private';
+  const cats = categories ?? [];
+  const opts = [`<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>ward-private (just us)</option>`];
+  for (const c of cats) {
+    opts.push(`<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`);
+  }
+  if (cur !== 'ward-private' && !cats.some(c => c.id === cur)) {
+    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)} (unknown circle)</option>`);
+  }
+  return opts.join('');
+}
+
 // A memory is addressed by its unique id — granularity+date can't single out a
 // standalone per-fact row, because a whole day's extracted facts share one date.
 // `m` is the list row (carries id, granularity, key=date).
@@ -5567,6 +5585,11 @@ async function keOpenMemory(m) {
     // The day this memory is filed under, as a value an <input type="date"> accepts
     // (the leading YYYY-MM-DD; significant keys carry a _slug suffix we drop here).
     const dayValue = (String(date).match(/^\d{4}-\d{2}-\d{2}/) || [''])[0];
+    // Audience is a Village circle id (or ward-private), same model the recall gate
+    // filters on. Pull the circles so the dropdown offers real options, not a stale
+    // ward-private/all pair. Village unreachable → ward-private only; harmless.
+    let audCats = [];
+    try { audCats = (await vlFetch())?.categories ?? []; } catch { /* keep ward-private only */ }
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
@@ -5576,10 +5599,7 @@ async function keOpenMemory(m) {
       <textarea id="ke-mem-content" rows="12" class="ke-textarea">${esc(content)}</textarea>
       <div class="ke-meta-row">
         <label class="ke-meta-label" for="ke-mem-audience">Audience</label>
-        <select id="ke-mem-audience" class="ke-select">
-          <option value="ward-private" ${audience === 'ward-private' ? 'selected' : ''}>ward-private (most restrictive)</option>
-          <option value="all" ${audience === 'all' ? 'selected' : ''}>all (any room)</option>
-        </select>
+        <select id="ke-mem-audience" class="ke-select">${keAudienceOptionsHTML(audience, audCats)}</select>
         <label class="ke-meta-label" for="ke-mem-care-weight">Care weight</label>
         <select id="ke-mem-care-weight" class="ke-select">
           <option value=""     ${!careWeight             ? 'selected' : ''}>— unset</option>
@@ -6747,17 +6767,13 @@ async function keGraphOpenPopover(node, clientX, clientY) {
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
     const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
-    // Audience dropdown options — "just us" plus every Village circle. A node is
-    // private by default; this is the deliberate widen/tighten surface for the
-    // human (the Familiar has the same control via update_graph_node).
-    let audOptions = `<option value="ward-private">Just us (ward-private)</option>`;
-    try {
-      const reg = await vlFetch();
-      const cur = self.audience ?? 'ward-private';
-      audOptions = `<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>Just us (ward-private)</option>` +
-        (reg?.categories ?? []).map(c =>
-          `<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
-    } catch { /* Village unreachable → ward-private only; harmless */ }
+    // Audience dropdown — "just us" plus every Village circle (shared with the
+    // memory editor). A node is private by default; this is the deliberate
+    // widen/tighten surface for the human (the Familiar has the same control via
+    // update_graph_node). Village unreachable → ward-private only; harmless.
+    let audCats = [];
+    try { audCats = (await vlFetch())?.categories ?? []; } catch { /* keep ward-private only */ }
+    const audOptions = keAudienceOptionsHTML(self.audience, audCats);
     pop.innerHTML = `
       <div class="ke-graph-popover-head">
         <h3>${esc(self.label ?? node.id)}</h3>
