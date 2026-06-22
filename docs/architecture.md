@@ -916,7 +916,14 @@ threshold=0.70, retry budget=3, safe-refusal text as above.
 ### Pillar E — audience-gated recall (`audience.js` + Phylactery)
 
 `fetchEligibility` decides *whether* the memory/graph fetch runs for a room;
-**the recall gate decides *what comes back*.** `audience.js` `visibleAudiences
+**the recall gate decides *what comes back*.** **Graph follows the memory grant**
+(0.7.66): the graph is relational memory, so `doGraph = doMemory` (a room with
+`memories: true | 'shared'` also fetches the graph), and the per-node `audiences`
+filter below scopes it node-by-node. This replaced a gate on a `graph` grant that
+**no Village category ever granted** — graph enrichment was therefore silently OFF
+in *every* non-ward session (memory still worked, so the symptom was "graph stopped
+enriching but memory didn't"). The per-node tags now do the real privacy gating, so
+the coarse grant was both unsatisfiable and redundant. `audience.js` `visibleAudiences
 (roomTag, registry)` computes the SET of audience tags a room may see — every
 Village category whose `permissionScore` ≤ the room's, which excludes
 `ward-private` (it isn't a category and outscores all) and any

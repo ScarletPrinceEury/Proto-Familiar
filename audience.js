@@ -401,6 +401,12 @@ export function isGranted(grantKey, grants) {
  *     outgoing filter (Pillar D) guards what leaves. Pillar E unlocks this
  *     so 'shared' grants now permit memory_search, filtered to same-audience
  *     records at query time.
+ *   - graph FOLLOWS the memory grant. The graph is relational memory; once a room
+ *     may see shared memories it may see the graph, and the per-node `audiences`
+ *     filter (visibleAudiences → audience_in_sql) scopes it node-by-node so a
+ *     ward-private node never surfaces even when the fetch runs. (Previously graph
+ *     gated on a `graph` grant that NO category ever granted, so it was silently
+ *     off in every non-ward session — the per-node tags now do the real gating.)
  *   - schedule: 'coarse' requires a coarse renderer ("busy until evening").
  *     None exists yet → only 'full' (or boolean true) permits the
  *     temporal_context fetch today.
@@ -414,10 +420,11 @@ export function fetchEligibility(audience) {
     return { wardPrivate: true, memory: true, graph: true, temporal: true };
   }
   const g = audience ?? {};
+  const memory = g.memories === true || g.memories === 'shared';
   return {
     wardPrivate: false,
-    memory:   g.memories === true || g.memories === 'shared',
-    graph:    g.graph === true,
+    memory,
+    graph: memory, // graph follows memory; per-node audiences filter does the gating
     temporal: g.schedule === 'full' || g.schedule === true,
   };
 }
