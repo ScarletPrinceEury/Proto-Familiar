@@ -486,11 +486,47 @@ function sanitizeRemember(raw) {
   return Object.keys(out).length ? out : null;
 }
 
+// Standing mutual consent: when BOTH my human and this person have agreed I may
+// keep memories about them, the per-fact consent prompts stop for that person
+// (an explicit `false` in their remember map still hard-blocks that category —
+// a convenience toggle never overrides my human's veto). Only `true` is stored;
+// an un-agreed side is simply absent. Returns null when neither side has agreed.
+function sanitizeStandingConsent(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  if (raw.wardAgreed === true) out.wardAgreed = true;
+  if (raw.villagerAgreed === true) out.villagerAgreed = true;
+  return Object.keys(out).length ? out : null;
+}
+
+// Both sides agreed → standing consent is active and the `ask` gate is cleared
+// for that person (their explicit `false` categories still hard-block).
+export function standingConsentActive(villager) {
+  const sc = villager?.standingConsent;
+  return !!(sc && sc.wardAgreed === true && sc.villagerAgreed === true);
+}
+
+// `disclosure` — per remember-category, the AUDIENCE this person is OK being
+// discussed at (a Village category id, or 'ward-private'). Governs WHERE a memory
+// about them may surface (distinct from `remember`, which governs WHETHER to
+// store). Each value is a non-empty string; the audience-derivation validates it
+// against the live registry. Absent categories → no explicit preference (the
+// memory's audience stays session-bounded).
+function sanitizeDisclosure(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const cat of REMEMBER_CATEGORIES) {
+    const v = raw[cat];
+    if (typeof v === 'string' && v.trim()) out[cat] = v.trim();
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // ── Villager CRUD ─────────────────────────────────────────────────
 
 export async function upsertVillager({
   id, name, categoryIds, categoryId, aliases, connection, triage,
-  pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember,
+  pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure,
 }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     // Accept categoryIds (array, new) or categoryId (scalar, legacy).
@@ -543,12 +579,24 @@ export async function upsertVillager({
         if (rem) v.remember = rem;
         else delete v.remember;
       }
+      if (standingConsent !== undefined) {
+        const sc = sanitizeStandingConsent(standingConsent);
+        if (sc) v.standingConsent = sc;
+        else delete v.standingConsent;
+      }
+      if (disclosure !== undefined) {
+        const dc = sanitizeDisclosure(disclosure);
+        if (dc) v.disclosure = dc;
+        else delete v.disclosure;
+      }
       return v;
     }
     if (typeof name !== 'string' || !name.trim()) throw new Error('name (string) is required');
     const cids = resolveCategories(rawIds) ?? [CATEGORY_STRANGERS];
     const relFam = RELATION_TO_FAMILIAR_VALUES.includes(relationToFamiliar) ? relationToFamiliar : 'unaware';
     const rem = sanitizeRemember(remember);
+    const sc = sanitizeStandingConsent(standingConsent);
+    const dc = sanitizeDisclosure(disclosure);
     const v = {
       id: randomUUID(),
       name: name.trim(),
@@ -563,6 +611,8 @@ export async function upsertVillager({
       ...(typeof privateNotes === 'string' && privateNotes.trim() ? { privateNotes: privateNotes.trim() } : {}),
       ...(typeof graphNodeId === 'string' && graphNodeId.trim() ? { graphNodeId: graphNodeId.trim() } : {}),
       ...(rem ? { remember: rem } : {}),
+      ...(sc ? { standingConsent: sc } : {}),
+      ...(dc ? { disclosure: dc } : {}),
       ...(triage && typeof triage.webhook === 'string' && triage.webhook.trim()
         ? { triage: { webhook: triage.webhook.trim(), ...(typeof triage.channel === 'string' ? { channel: triage.channel } : {}) } }
         : {}),

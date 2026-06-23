@@ -44,7 +44,7 @@ import {
   // second MCP connection (single enforcement point; see header).
   createMemory, appendIdentity,
   updateMemory, deleteMemory, rewriteIdentitySection,
-  listMemories, readMemory,
+  listMemories, readMemory, readMemoryById, moveMemoryDate, updateMemoryById, deleteMemoryById,
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
@@ -52,11 +52,11 @@ import {
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
-  searchMemoryRestricted,
+  searchMemoryRestricted, searchMemory,
 } from './thalamus.js';
-import { audienceTagFor } from './audience.js';
-import { searchWeb, readWebpage } from './websearch.js';
-import { managedSearxngUrl } from './searxng-service.js';
+import { audienceTagFor, deriveNodeAudience } from './audience.js';
+import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
+import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
@@ -768,17 +768,20 @@ const _toolDeps = {
   getVillageRegistry: null,
   upsertVillager: null,
   relayToDiscord: null,
+  // Commit the current session to memory on demand (backs memorize_now).
+  memorizeSessionNow: null,
   // The restricted-memory gate defaults to the real Phylactery-backed check;
   // tests inject a stub so they don't spawn MCP children.
   searchRestricted: searchMemoryRestricted,
   // The ward-mirror enqueue defaults to the real outbox dispatch.
   mirrorToWard: enqueueAndDispatch,
 };
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, searchRestricted, mirrorToWard } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
   if (typeof relayToDiscord === 'function')      _toolDeps.relayToDiscord      = relayToDiscord;
+  if (typeof memorizeSessionNow === 'function')  _toolDeps.memorizeSessionNow  = memorizeSessionNow;
   if (typeof searchRestricted === 'function')    _toolDeps.searchRestricted    = searchRestricted;
   if (typeof mirrorToWard === 'function')        _toolDeps.mirrorToWard        = mirrorToWard;
 }
@@ -812,7 +815,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'I save a piece of knowledge or a fact I learned during this conversation into my persistent Tome knowledge base. I use this when {{user}} shares something important about themselves, their relationships, their preferences, or their situation that I should remember across future conversations. I try to be somewhat discerning and avoid duplicate knowledge.',
+      description: 'I save keyword-triggered context into my Tome knowledge base — background or lore I want to resurface when a particular topic or phrase comes up again. I keep this lane narrow: durable facts about who {{user}} is belong in my identity files (update_identity); people, places, and how they connect belong in my graph (create_graph_node / create_graph_edge); moments and events with a \'when\' belong in my memory (save_memory). A tome is for what should surface on a trigger and fits none of those. Before I add one I recall so I don\'t duplicate what I already hold, and I tie it to the keywords {{user}} would actually say when the subject returns.',
       parameters: {
         type: 'object',
         properties: {
@@ -828,13 +831,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_memory',
-      description: 'I write a new memory entry to my long-term memory system. I use this to record important events, emotional patterns, or significant moments from this conversation in my durable, time-stamped store. I prefer "daily" for routine session events; I use "significant" for major milestones. Daily memories accumulate across the day — each save appends my new bullets to today\'s file; nothing is overwritten. Multiple saves in the same day are normal and expected. Significant memories are different: each one is a named, standalone milestone (e.g. "the night they told me about their sister", "first meeting"), stored in its own file. I always pass a short `title` when saving a significant memory so it gets its own filename and does not overwrite a previous one.',
+      description: 'I write a memory entry to my long-term store — a moment, event, emotional pattern, or anything with a \'when\' worth keeping. I prefer "daily" for routine session events and "significant" for major milestones. Daily memories accumulate — each save appends today\'s bullets, nothing is overwritten, and multiple saves a day are normal. A significant memory is a named, standalone milestone (e.g. "the night they told me about their sister") in its own file, so I always pass a short `title` for it. Most of what I save is a lived *moment* (the default — register "episodic"). But a memory also has a register, a separate axis: when what I\'m keeping is a STANDING TRUTH rather than a moment — about myself (register "me") or about {{user}} (register "ward") — I set it, and it becomes an identity-grade fact recalled when relevant. That\'s the lighter sibling of update_identity: update_identity keeps a truth in front of me every single turn; a "me"/"ward" memory holds it in recalled-when-relevant store instead, so my always-on surface stays lean. Entities and relationships still go to my graph. Before saving I recall to check I\'m not repeating myself: if I already recorded this and it was simply wrong, I update_memory to correct it; if it was true and has since changed, I save a fresh dated entry that supersedes the old without erasing the history.',
       parameters: {
         type: 'object',
         properties: {
           content:     { type: 'string', description: 'Memory content I write in first-person, as bullet points starting with "- " — one bullet per fact, insight, or moment. I do NOT include a [chat:id] tag on each bullet — that tag is for external import dedup; live saves from this conversation just want plain bullets so they all accrue. Brief, specific, in my voice.' },
-          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier.' },
-          title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity, ignored for the others. A few words that name the milestone (e.g. "first meeting", "{{user}}\'s grandmother", "the night of the crisis call"). Used to generate the file slug so each significant memory lives in its own file.' },
+          granularity: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly', 'significant'], description: 'Memory tier (the rollup axis). For a "me"/"ward" standing truth this is ignored — those are filed as standalone significant facts.' },
+          title:       { type: 'string', description: 'Short human-readable label for this memory — required for "significant" granularity and for any "me"/"ward" standing truth, ignored for plain daily/weekly/etc. A few words that name it (e.g. "first meeting", "{{user}}\'s grandmother", "what calms {{user}} down"). Used to generate the file slug so each lives in its own file.' },
+          register:    { type: 'string', enum: ['episodic', 'me', 'ward'], description: 'The register axis (separate from granularity). "episodic" (default) is a lived moment. "me" is a standing truth about myself; "ward" is a standing truth about {{user}}. I reach for me/ward only when it\'s genuinely a lasting fact worth recalling — not a passing moment, and not so load-bearing it must stay in my always-injected identity files (that\'s update_identity).' },
         },
         required: ['content', 'granularity'],
       },
@@ -843,13 +847,21 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'memorize_now',
+      description: "I draw this whole conversation into my long-term memory right now, instead of waiting for it to roll over on its own — which doesn't always happen cleanly (my human switches sessions, clears history, and a thread of real importance could otherwise slip away unkept). I reach for it the moment I realise we've covered things I need to carry across to wherever we talk next: news about their life, a decision, something that changes how I should be with them. This runs my full memorization pass over the session — it extracts the facts, files them at the right tier, maps the relationships, and still asks before keeping anything sensitive that needs my human's say-so. (For a single deliberate fact I already know I want, I use save_memory; this is for committing the whole exchange.) Calling it more than once is harmless — an in-flight commit just continues.",
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'update_identity',
-      description: 'I append a new durable fact to one of my persistent identity files. I use this for facts about {{user}} (category: ward, filename: ward_notes.md) or about my relationship with them (category: relationship, filename: relationship_notes.md). I avoid using this for session-specific or transient information, because that will confuse me and rack up token waste. When to choose append vs. rewrite_identity_section: I APPEND when adding a new fact that complements what is already there; I REWRITE a section when an existing section is now misleading, stale or incomplete and a partial correction would leave it confusing.',
+      description: 'I append a durable fact to one of my identity files — who I am as I grow and change (category self: my_identity.md, my_persona.md, my_wants.md, …), who {{user}} is (ward: ward_notes.md), or our bond (relationship: relationship_notes.md). These files ride in front of me every turn, so they hold the load-bearing standing truths; richer or situational detail I still record, but to save_memory, where it\'s recalled when it matters instead of always taking up room. Before I add, I check whether I already hold it — I\'m reading these files already, and I recall for anything I\'ve graduated off this surface into memory — so a new fact lands cleanly instead of duplicating. I APPEND when a fact adds to what\'s there; I rewrite_identity_section when a section has gone stale, misleading, or sprawling — that\'s how I correct it, tighten it, and let a once-true thing reflect the now.',
       parameters: {
         type: 'object',
         properties: {
-          category: { type: 'string', enum: ['ward', 'relationship'], description: 'Identity file category.' },
-          filename: { type: 'string', description: 'Target filename within the category, e.g. ward_notes.md or relationship_notes.md.' },
+          category: { type: 'string', enum: ['self', 'ward', 'relationship', 'custom'], description: 'Identity file category.' },
+          filename: { type: 'string', description: 'Target filename within the category, e.g. my_identity.md (self), ward_notes.md (ward), or relationship_notes.md (relationship).' },
           content:  { type: 'string', description: 'Content to append to the identity file, written in my own first-person voice.' },
         },
         required: ['category', 'filename', 'content'],
@@ -907,7 +919,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_memory',
-      description: 'I overwrite an existing memory entry to correct an inaccuracy. I use this when the entry is incomplete or partially wrong but the core record (this date, this granularity) is still the right place for the fact. I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
+      description: 'I overwrite a journal entry (a daily/weekly/… summary bucket, or a significant milestone addressed by its YYYY-MM-DD_slug key) to correct an inaccuracy. For one specific per-fact memory I use update_memory_by_id instead — a whole day\'s extracted facts share one date, so addressing by date alone can\'t single one out (and would touch the wrong rows). I avoid using this to record new information — that is save_memory. I avoid using this to remove information — that is delete_memory. When the change is "X was true, now Y is true," prefer save_memory with today\'s date so the history is preserved.',
       parameters: {
         type: 'object',
         properties: {
@@ -923,7 +935,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'delete_memory',
-      description: 'I permanently delete a memory entry. I use this only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Phylactery auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
+      description: 'I permanently delete a journal entry (a daily/weekly/… summary bucket, or a significant milestone by its YYYY-MM-DD_slug key). For one specific per-fact memory I use delete_memory_by_id instead — a whole day\'s facts share one date, so addressing by date alone can\'t single one out. I delete only when the entry is fully wrong or no longer relevant, and keeping it would mislead future-me. If the change has historical value ("they were on vacation last week, back now"), I do NOT delete — I write a new contradicting memory with save_memory instead, and let recency-decay demote the stale one. Phylactery auto-snapshots before each delete so a mistake is recoverable from the Knowledge editor.',
       parameters: {
         type: 'object',
         properties: {
@@ -961,6 +973,79 @@ export const BUILTIN_TOOLS = [
           date:        { type: 'string', description: 'Date of the entry in the format it was stored (YYYY-MM-DD for daily). For a significant memory I pass the whole composite key YYYY-MM-DD_slug.' },
         },
         required: ['granularity', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_memory_by_id',
+      description: "I read one specific memory by its id — the reliable handle when a date alone can't tell two entries apart. Many of my per-fact memories share a single day (a whole conversation's facts land on the same date), so addressing by day returns whichever comes first; the id always lands on the exact one. Ids ride in on recall and list_memories results. I reach for this when I need the full, exact entry before I edit or move it.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The memory id, from a recall or list_memories result.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'move_memory_date',
+      description: "I move a memory (by its id) to the day it actually belongs to, when it was filed under the wrong date. The case this is for: a batch of facts brought in from older conversations all landed in today's bucket because no date rode along when they were saved — I read each one, work out the day it really happened from its content, and move it there. Only the day changes; the content stays exactly as it is. I get the id from recall or list_memories.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id:   { type: 'string', description: 'The memory id to move, from a recall or list_memories result.' },
+          date: { type: 'string', description: 'The correct calendar day, YYYY-MM-DD.' },
+        },
+        required: ['id', 'date'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_memory_by_id',
+      description: "I correct one specific memory by its id — the safe way to fix a single per-fact memory. Because a whole day's extracted facts share one date, update_memory (by date) can't target just one of them; this can. I pass the new full content (it REPLACES the old — I include everything I want to keep). I get the id from recall or list_memories.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id:      { type: 'string', description: 'The memory id to correct, from a recall or list_memories result.' },
+          content: { type: 'string', description: 'The full new contents. This REPLACES the entry — I include everything I want to keep.' },
+        },
+        required: ['id', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_memory_by_id',
+      description: "I delete one specific memory by its id — the safe way to remove a single per-fact memory (a duplicate, or one I extracted wrongly). Because a whole day's facts share one date, delete_memory (by date) can't single one out; this can. Phylactery auto-snapshots first, so a mistake is recoverable. I get the id from recall or list_memories.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The memory id to delete, from a recall or list_memories result.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'recall',
+      description: "I search my own long-term memory for what I already hold about something — by meaning, not exact words. I reach for this before I save a new memory (to check whether I already recorded a fact, so I update or supersede it instead of saving a duplicate), when {{user}} references something from before, or whenever I want to confirm what I know. It returns the closest matches with their relevance, their address (tier/date), and id, so I can then read_memory_by_id (the exact entry), move_memory_date (re-file a mis-dated one), update_memory, or delete_memory. Recall is how I check; the save or update I then make is the actual filing — recalling alone doesn't record anything.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What I want to recall, in plain words — a topic, a person, or a fact I might already hold.' },
+          limit: { type: 'integer', description: 'How many matches to return (default 5, max 20).' },
+        },
+        required: ['query'],
       },
     },
   },
@@ -1016,12 +1101,12 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'create_graph_node',
-      description: 'I add a new entity (person, place, project, pet, organisation, etc.) to my knowledge graph. I use this when someone or something genuinely new enters {{user}}\'s world and I want it to persist as its own node I can later connect with edges. I check first with find_graph_node so I don\'t create a duplicate of an entity that already exists under a slightly different label. Recording a NEW fact about {{user}} is save_memory; this is for naming a thing the relationship graph should know about. Returns the new node\'s id so I can immediately wire edges to it.',
+      description: `I add a new entity (a ${GRAPH_ENTITY_TYPES_STR}) to my knowledge graph — for naming something my relationship graph should know about and later connect with edges. ${GRAPH_NODE_RUBRIC} I check first with find_graph_node so I don't duplicate an entity that already exists under a slightly different label. (A durable fact about who {{user}} is goes to update_identity; a dated moment goes to save_memory — this is for naming a thing.) Returns the new node's id so I can immediately wire edges to it.`,
       parameters: {
         type: 'object',
         properties: {
           label:       { type: 'string', description: 'Display name of the entity, e.g. "Dr. Okafor", "the allotment", "Aria (cat)".' },
-          type:        { type: 'string', description: 'Optional: entity type, e.g. "person", "place", "project", "pet", "organisation".' },
+          type:        { type: 'string', description: `Optional: entity type — one of ${GRAPH_ENTITY_TYPES_STR}.` },
           description: { type: 'string', description: 'Optional: a short note on who/what this is, in my own voice.' },
         },
         required: ['label'],
@@ -1032,7 +1117,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'create_graph_edge',
-      description: 'I record a relationship between two entities already in my knowledge graph — the structural counterpart to save_memory. I use this for durable, queryable relationships ("Dr. Okafor —is_therapist_of-> {{user}}", "{{user}} —lives_in-> Bristol"). Both endpoints must exist first: I resolve or create them with find_graph_node / create_graph_node and pass their ids. For a relationship that has ended I delete or re-type the edge rather than leaving a false one standing.',
+      description: `I record a relationship between two entities already in my knowledge graph — the structural counterpart to save_memory. ${GRAPH_EDGE_RUBRIC} I use this for durable, queryable relationships ("Dr. Okafor —is_therapist_of-> {{user}}", "{{user}} —lives_in-> Bristol"). Both endpoints must exist first: I resolve or create them with find_graph_node / create_graph_node and pass their ids. For a relationship that has ended I delete or re-type the edge rather than leaving a false one standing.`,
       parameters: {
         type: 'object',
         properties: {
@@ -1049,13 +1134,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'update_graph_node',
-      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
+      description: 'I rename or re-describe an entity (person, place, project, etc.) in my knowledge graph. I use this when the node\'s label or description is wrong, outdated, or imprecise. I do NOT use this to record a new relationship — that is what edges are for. I can also set how widely a node may surface with `audience`: by default a node about a person is private until I open it up, so I use this to keep something to just {{user}} and me ("ward-private") or to let it surface in one of our circles (a category name like "Family"). The graph block in my context lists ids at the bottom; if the entity I want isn\'t listed there, I call find_graph_node first to look the id up.',
       parameters: {
         type: 'object',
         properties: {
           id:          { type: 'string', description: 'The id of the node to update (from earlier graph context).' },
           label:       { type: 'string', description: 'New display label. Omit to leave unchanged.' },
           description: { type: 'string', description: 'New description. Omit to leave unchanged.' },
+          audience:    { type: 'string', description: 'Where this node may surface: a circle name (e.g. "Family", "Close friends") to open it to that circle, or "ward-private" to keep it to just {{user}} and me. Omit to leave unchanged.' },
         },
         required: ['id'],
       },
@@ -1431,6 +1517,8 @@ export const BUILTIN_TOOLS = [
           notes:          { type: 'string', description: 'Ordinary notes — shareable context that can surface even when others are present.' },
           privateNotes:   { type: 'string', description: 'Sensitive notes for {{user}} and me only (orientation, health, legal name, etc.). Held back automatically whenever anyone else is present. I reserve this for things that could genuinely harm or expose them — not trivia.' },
           graphNodeId:    { type: 'string', description: 'Optional. The knowledge-graph node id to link this person to (from find_graph_node). Keeps the Village and the relational graph as one picture.' },
+          mutualConsentToRemember: { type: 'boolean', description: 'Standing memory consent. I set this true ONLY when both {{user}} AND this person have agreed I may keep memories about them — then I stop asking for per-fact consent on them (an explicit "never store" category still holds). I set it false to withdraw that standing agreement. I only touch this when {{user}} and I are alone, since it changes their record.' },
+          disclosure: { type: 'object', description: 'Where facts about this person may surface, per kind of fact. A map from fact-kind (one of: basics, emotional_content, health_info, relationships, whereabouts) to a circle — a category name (e.g. "Family", "Close friends") meaning "memories of this kind about them may surface in that circle\'s rooms", or "ward-private" meaning "only ever when {{user}} and I are alone". I set this when someone tells me how widely they\'re comfortable being discussed (e.g. "you can mention my health to my family but no one else"). A kind I leave out keeps its default: bounded to the room a memory was made in. I only change this when {{user}} and I are alone, since it edits their record.' },
         },
         required: [],
       },
@@ -1454,8 +1542,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'look_up',
+      description: "I reach for this when {{user}} wants a definition, a fact, or a quick overview — the encyclopedia kind of question. It draws on open reference sources (Wikipedia and a definitions API), always works without any setup, and hands me back a short grounded answer with its source. For finding pages out on the web I use web_search instead.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The thing I want defined or summarised, in plain words.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'web_search',
-      description: "I reach for this when {{user}} needs something current that my own memory doesn't hold — news, a fact I'm unsure of, a page to look up. It gives me back a handful of titles, snippets, and links I can then open with read_webpage.",
+      description: "I reach for this when {{user}} needs current or specific information out on the web — pages, news, sources. It hands me back a handful of titles, snippets, and links I can then open with read_webpage. For a plain definition or overview I use look_up instead.",
       parameters: {
         type: 'object',
         properties: {
@@ -1480,6 +1582,16 @@ export const BUILTIN_TOOLS = [
     },
   },
 ];
+
+// Resolve a circle name the Familiar typed (a Village category's name or id) to
+// that category. Shared by every tool that lets it name an audience circle in its
+// own voice (village_upsert's category + disclosure, update_graph_node's audience)
+// — the Familiar knows names, the store keeps ids. Returns the category or null.
+function resolveCircleInList(cats, name) {
+  const q = String(name ?? '').trim().toLowerCase();
+  if (!q) return null;
+  return (cats ?? []).find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q) ?? null;
+}
 
 /**
  * Server-side implementations of the built-in tools.
@@ -1525,21 +1637,49 @@ export const TOOL_EXECUTORS = {
     }
   },
 
-  save_memory: async ({ content, granularity, title }) => {
+  memorize_now: async (_args, ctx = {}) => {
+    if (!_toolDeps.memorizeSessionNow) return "I can't reach my memory pipeline right now — I'll catch this conversation when the session settles.";
+    const sessionId = ctx?.sessionInfo?.sessionId;
+    if (!sessionId) return "I can't tell which conversation to commit just now, so I'll let it memorize on its own when we're done.";
+    const res = await _toolDeps.memorizeSessionNow({
+      sessionId,
+      provider:    ctx?.sessionInfo?.provider,
+      model:       ctx?.sessionInfo?.model,
+      apiKey:      ctx?.apiKey,
+      audienceTag: ctx?.audienceTag,
+    });
+    if (!res?.ok) {
+      if (res.error === 'too-short') return "There isn't enough here yet for me to commit to memory — I'll keep it in mind as we go.";
+      return "I couldn't commit this conversation just now — I'll catch it when the session settles.";
+    }
+    if (!res.enqueued) return "I'm already drawing this conversation into my memory — it's in hand.";
+    return "Done — I've set this conversation to be drawn into my long-term memory now, so it carries across to wherever we talk next. I'll still check with you before keeping anything sensitive.";
+  },
+
+  save_memory: async ({ content, granularity, title, register }) => {
     if (!content || typeof content !== 'string' || !content.trim()) return 'Failed to save memory: content is required.';
     if (content.length > 8192) return 'Failed to save memory: content exceeds 8 KB limit.';
-    if (!VALID_MEMORY_GRANULARITIES.has(granularity)) {
+    // A me/ward standing truth is identity-grade: filed as a standalone
+    // significant fact on that register, regardless of the granularity passed.
+    const reg = (register === 'me' || register === 'ward') ? register : 'episodic';
+    const effGranularity = reg === 'episodic' ? granularity : 'significant';
+    if (!VALID_MEMORY_GRANULARITIES.has(effGranularity)) {
       return `Failed to save memory: granularity must be one of: ${[...VALID_MEMORY_GRANULARITIES].join(', ')}.`;
     }
     // Significant memories MUST be uniquely slugged or they collide on the
     // date-only filename and Phylactery's merge step destroys them.
     let slug;
-    if (granularity === 'significant') {
+    if (effGranularity === 'significant') {
       slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
     }
     try {
-      const result = await createMemory({ content: content.trim(), granularity, slug });
+      const result = await createMemory({ content: content.trim(), granularity: effGranularity, slug, register: reg });
       if (!result.ok) return `Memory save failed: ${result.error ?? 'unknown error'}`;
+      // me/ward standing truths read back in their own voice so I know where it landed.
+      if (reg !== 'episodic') {
+        const whose = reg === 'me' ? 'about myself' : "about my human";
+        return `Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`;
+      }
       // For significant memories, hand back the composite key — it's how
       // the entry is addressed later (update_memory / delete_memory take
       // YYYY-MM-DD_slug for significant).
@@ -1675,6 +1815,72 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to read memory: ${err.message}`; }
   },
 
+  read_memory_by_id: async ({ id } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to read — I get it from a recall or list_memories result.';
+    try {
+      const data = await readMemoryById({ id: mid });
+      if (!data || data.ok === false) return `No memory with id ${mid} — ${data?.error ?? 'not found'}.`;
+      const addr = [data.granularity, data.date].filter(Boolean).join('/');
+      const content = String(data.content ?? '').trim();
+      if (!content) return `Memory ${mid} (${addr}) is empty.`;
+      return `Memory ${mid} (${addr}):\n${content}`;
+    } catch (err) { return `Failed to read memory by id: ${err.message}`; }
+  },
+
+  move_memory_date: async ({ id, date } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to move — I get it from a recall or list_memories result.';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date ?? '').trim())) return 'I need the correct day as YYYY-MM-DD to move this memory to.';
+    try {
+      const res = await moveMemoryDate({ id: mid, date: String(date).trim() });
+      if (!res.ok) return `Failed to move memory ${mid}: ${res.error}`;
+      return `Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`;
+    } catch (err) { return `Failed to move memory: ${err.message}`; }
+  },
+
+  update_memory_by_id: async ({ id, content } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to correct — I get it from a recall or list_memories result.';
+    if (typeof content !== 'string' || !content.trim()) return 'I need the new content to write into this memory.';
+    if (content.length > 16384) return 'That content is too long (over 16 KB).';
+    try {
+      const res = await updateMemoryById({ id: mid, content: content.trim() });
+      if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
+      return `Memory ${mid} updated.`;
+    } catch (err) { return `Failed to update memory by id: ${err.message}`; }
+  },
+
+  delete_memory_by_id: async ({ id } = {}) => {
+    const mid = String(id ?? '').trim();
+    if (!mid) return 'I need the memory id to delete — I get it from a recall or list_memories result.';
+    try {
+      const res = await deleteMemoryById({ id: mid });
+      if (!res.ok) return `Failed to delete memory ${mid}: ${res.error}`;
+      return `Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+    } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
+  },
+
+  recall: async ({ query, limit } = {}) => {
+    const q = String(query ?? '').trim();
+    if (!q) return 'I need something to recall — a topic, a name, or a fact to check.';
+    const n = Math.min(20, Math.max(1, parseInt(limit, 10) || 5));
+    try {
+      const res   = await searchMemory({ query: q, maxResults: n });
+      const items = Array.isArray(res?.results) ? res.results : [];
+      if (items.length === 0) return `I searched my memory for "${q}" and found nothing close — this looks new to me.`;
+      const lines = items.map((r, i) => {
+        const score = ((r.score ?? r.vectorScore ?? 0) * 100).toFixed(0);
+        const addr  = [r.granularity, r.date].filter(Boolean).join('/');
+        const idTag = r.id != null ? `, id ${r.id}` : '';
+        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match) ${(r.excerpt ?? r.content ?? '').trim()}`;
+      });
+      return `What I already hold close to "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
+    } catch (err) {
+      return `I couldn't reach my memory to recall just now (${err.message}).`;
+    }
+  },
+
   rewrite_identity_section: async ({ category, filename, section, content }) => {
     if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Failed to rewrite section: invalid category';
     if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Failed to rewrite section: invalid filename';
@@ -1714,7 +1920,18 @@ export const TOOL_EXECUTORS = {
   create_graph_node: async ({ label, type, description }) => {
     if (!label || typeof label !== 'string' || !label.trim()) return 'Failed to create graph node: label (string) is required';
     try {
-      const result = await createGraphNode({ label: label.trim(), type, description });
+      // Derive the node's audience in code: a label matching a known villager
+      // takes their category, otherwise ward-private (fail-closed). The Familiar
+      // never tags a node by hand — it can deliberately widen one later via
+      // update_graph_node's audience setter.
+      let audience;
+      if (_toolDeps.getVillageRegistry) {
+        try {
+          const reg = await _toolDeps.getVillageRegistry();
+          audience = deriveNodeAudience({ label: label.trim(), registry: reg });
+        } catch { /* registry down → leave audience undefined → Phylactery defaults ward-private */ }
+      }
+      const result = await createGraphNode({ label: label.trim(), type, description, audience });
       if (!result.ok) return `Failed to create graph node: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.node?.id;
       return id
@@ -1736,9 +1953,23 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to create graph edge: ${err.message}`; }
   },
 
-  update_graph_node: async ({ id, label, description, type }) => {
+  update_graph_node: async ({ id, label, description, type, audience }) => {
     try {
-      const result = await updateGraphNode({ id, label, description, type });
+      // Resolve a named audience circle → the id the store keeps. 'ward-private'
+      // is the sentinel; any other value must name a real Village category, else
+      // it's a hard stop so a node never lands tagged for a circle that isn't there.
+      let resolvedAudience;
+      if (typeof audience === 'string' && audience.trim()) {
+        if (audience.trim().toLowerCase() === 'ward-private') {
+          resolvedAudience = 'ward-private';
+        } else if (_toolDeps.getVillageRegistry) {
+          const reg = await _toolDeps.getVillageRegistry();
+          const hit = resolveCircleInList(reg?.categories, audience);
+          if (!hit) return `I don't have a circle called "${audience}". Circles: ${(reg?.categories ?? []).map(c => c.name).join(', ') || '(none)'}, or "ward-private".`;
+          resolvedAudience = hit.id;
+        }
+      }
+      const result = await updateGraphNode({ id, label, description, type, audience: resolvedAudience });
       if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
       return `Graph node ${id} updated.`;
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
@@ -2049,7 +2280,7 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't read the Village: ${err.message}`; }
   },
 
-  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId } = {}, ctx = {}) => {
+  village_upsert: async ({ id, name, category, relationToWard, pronouns, commStyleNotes, notes, privateNotes, graphNodeId, mutualConsentToRemember, disclosure } = {}, ctx = {}) => {
     if (!_toolDeps.upsertVillager || !_toolDeps.getVillageRegistry) return 'I can\'t reach the Village right now.';
     const wardPrivate = ctx.wardPrivate !== false;
 
@@ -2082,15 +2313,41 @@ export const TOOL_EXECUTORS = {
       if (notes !== undefined) args.notes = notes;
       if (privateNotes !== undefined) args.privateNotes = privateNotes;
       if (graphNodeId !== undefined) args.graphNodeId = graphNodeId;
+      // Standing mutual consent: true sets both sides agreed, false clears it.
+      // Only reachable here when ward-private (id-edits are gated above), so a
+      // record change to memory permissions always happens with my human present.
+      if (mutualConsentToRemember === true) args.standingConsent = { wardAgreed: true, villagerAgreed: true };
+      else if (mutualConsentToRemember === false) args.standingConsent = {};
 
-      // Resolve category name → id (the Familiar knows names, not ids).
-      if (typeof category === 'string' && category.trim()) {
+      // Resolve circle names → ids (the Familiar knows names, not ids). The
+      // registry is read once and shared by both the category and disclosure
+      // resolution below.
+      const needsRegistry = (typeof category === 'string' && category.trim()) ||
+        (disclosure && typeof disclosure === 'object' && !Array.isArray(disclosure));
+      let cats = [];
+      if (needsRegistry) {
         const reg = await _toolDeps.getVillageRegistry();
-        const cats = reg?.categories ?? [];
-        const q = category.trim().toLowerCase();
-        const hit = cats.find(c => c.id.toLowerCase() === q || c.name.toLowerCase() === q);
+        cats = reg?.categories ?? [];
+      }
+      if (typeof category === 'string' && category.trim()) {
+        const hit = resolveCircleInList(cats, category);
         if (!hit) return `I don't have a category called "${category}". Categories: ${cats.map(c => c.name).join(', ') || '(none)'}.`;
         args.categoryIds = [hit.id];
+      }
+
+      // Disclosure: per fact-kind, the circle a person is OK being discussed in.
+      // Resolve each value (a circle name, or 'ward-private') to the id the
+      // store keeps; an unknown circle is a hard stop so nothing lands wrong.
+      if (disclosure && typeof disclosure === 'object' && !Array.isArray(disclosure)) {
+        const resolved = {};
+        for (const [kind, circle] of Object.entries(disclosure)) {
+          if (typeof circle !== 'string' || !circle.trim()) continue;
+          if (circle.trim().toLowerCase() === 'ward-private') { resolved[kind] = 'ward-private'; continue; }
+          const hit = resolveCircleInList(cats, circle);
+          if (!hit) return `For disclosure I don't have a circle called "${circle}". Circles: ${cats.map(c => c.name).join(', ') || '(none)'}, or "ward-private".`;
+          resolved[kind] = hit.id;
+        }
+        if (Object.keys(resolved).length) args.disclosure = resolved;
       }
 
       const v = await _toolDeps.upsertVillager(args);
@@ -2169,19 +2426,17 @@ export const TOOL_EXECUTORS = {
   },
 
   // ── Web access ────────────────────────────────────────────────────
-  // Thin delegation to websearch.js, which owns the SSRF guard, the
-  // timeout, and the extraction. These never appear in the tool list
-  // unless the human has opted in (webSearchEnabled) — see composeActiveTools.
-  //
-  // Effective search backend, resolved here at the boundary:
-  //   custom webSearchBaseUrl  ?? managedSearxngUrl()  ?? '' (keyless)
-  // A custom URL means "use my own SearXNG"; otherwise, if the Familiar's
-  // managed SearXNG is up, use it; otherwise the built-in keyless backend.
-  web_search: async ({ query } = {}) => {
-    const s    = readSettingsSync();
-    const base = (s.webSearchBaseUrl && String(s.webSearchBaseUrl).trim()) || managedSearxngUrl() || '';
-    return searchWeb(query, { ...s, webSearchBaseUrl: base });
-  },
+  // Thin delegation to websearch.js, which owns the SSRF guard, the timeout,
+  // the backend resolution (keyless DDG floor or a search API), and the
+  // extraction. These never appear in the tool list unless the human has
+  // opted in (webSearchEnabled) — see composeActiveTools. searchWeb reads the
+  // chosen backend / provider / key from settings and always degrades to the
+  // keyless floor.
+  web_search: async ({ query } = {}) => searchWeb(query, readSettingsSync()),
+  // look_up needs no backend resolution: it's always the keyless official
+  // reference APIs (Wikipedia + DDG Instant Answer), so it ignores the
+  // search-backend settings entirely.
+  look_up: async ({ query } = {}) => lookUp(query, readSettingsSync()),
   read_webpage: async ({ url } = {}) => readWebpage(url, readSettingsSync()),
 };
 
@@ -2196,11 +2451,13 @@ export const TOOL_EXECUTORS = {
  * docs/architecture.md ("Custom tools — advertise-only") for what a
  * real extension point would need before it ships.
  */
-// Web access is opt-in: it needs a local SearXNG instance, so the two
-// web tools stay out of the advertised list until the human enables them
-// (and the env off-switch can force them off regardless). A tool the
+// Web access is opt-in network egress, so the web tools stay out of the
+// advertised list until the human enables them (and the env off-switch can
+// force them off regardless). look_up and web_search work at zero config
+// (keyless reference APIs / in-process scrape floor respectively); the
+// toggle still gates them because egress itself is the opt-in. A tool the
 // Familiar can't actually use should never appear in its tool list.
-export const WEB_TOOL_NAMES = new Set(['web_search', 'read_webpage']);
+export const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 
 export function webSearchEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;

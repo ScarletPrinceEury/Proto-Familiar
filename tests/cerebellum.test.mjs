@@ -209,12 +209,12 @@ test('composeActiveTools appends custom tool objects after the built-ins', () =>
 
 test('composeActiveTools gates the web tools behind webSearchEnabled', () => {
   const names = (settings) => new Set(composeActiveTools(undefined, settings).map(t => t.function?.name));
-  // Off (default): neither web tool is advertised.
+  // Off (default): no web tool is advertised.
   const off = names({ webSearchEnabled: false });
-  assert.ok(!off.has('web_search') && !off.has('read_webpage'), 'web tools hidden when disabled');
-  // On: both appear.
+  assert.ok(!off.has('look_up') && !off.has('web_search') && !off.has('read_webpage'), 'web tools hidden when disabled');
+  // On: all three appear.
   const on = names({ webSearchEnabled: true });
-  assert.ok(on.has('web_search') && on.has('read_webpage'), 'web tools shown when enabled');
+  assert.ok(on.has('look_up') && on.has('web_search') && on.has('read_webpage'), 'web tools shown when enabled');
 });
 
 test('composeActiveTools resolves {{user}}/{{char}} macros in descriptions', () => {
@@ -237,6 +237,22 @@ test('executeToolCall: unknown / custom tool returns advertise-only notice, not 
 test('executeToolCall: malformed JSON args produce a structured failure into the loop', async () => {
   const out = await executeToolCall('get_datetime', '{not json');
   assert.match(out, /^Error executing get_datetime: /);
+});
+
+test('read_memory_by_id: a missing id is caught before any store call', async () => {
+  const out = await executeToolCall('read_memory_by_id', '{}');
+  assert.match(out, /need the memory id/i);
+});
+
+test('move_memory_date: a missing id and a bad date are each caught before any store call', async () => {
+  assert.match(await executeToolCall('move_memory_date', JSON.stringify({ date: '2026-01-01' })), /need the memory id/i);
+  assert.match(await executeToolCall('move_memory_date', JSON.stringify({ id: 'abc', date: 'june 22' })), /YYYY-MM-DD/);
+});
+
+test('update_memory_by_id / delete_memory_by_id: missing args are caught before any store call', async () => {
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ content: 'x' })), /need the memory id/i);
+  assert.match(await executeToolCall('update_memory_by_id', JSON.stringify({ id: 'abc' })), /need the new content/i);
+  assert.match(await executeToolCall('delete_memory_by_id', '{}'), /need the memory id/i);
 });
 
 test('executeToolCall: a throwing executor produces a structured failure, not an exception', async () => {

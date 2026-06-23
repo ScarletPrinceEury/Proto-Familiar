@@ -405,9 +405,11 @@ describe('fetchEligibility', () => {
     assert.equal(fetchEligibility({ schedule: 'coarse' }).temporal, false);
   });
 
-  it('graph: true → graph fetch eligible; absent → not', () => {
-    assert.equal(fetchEligibility({ graph: true }).graph, true);
-    assert.equal(fetchEligibility({ memories: true }).graph, false);
+  it('graph FOLLOWS the memory grant (per-node audiences filter does the real gating)', () => {
+    assert.equal(fetchEligibility({ memories: true }).graph, true);
+    assert.equal(fetchEligibility({ memories: 'shared' }).graph, true);
+    assert.equal(fetchEligibility({}).graph, false);            // strangers floor → nothing
+    assert.equal(fetchEligibility({ graph: true }).graph, false); // a bare graph grant no longer drives the fetch
   });
 });
 

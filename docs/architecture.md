@@ -105,6 +105,7 @@ ponderings injection, care-check framing) and as background loops
 ├── reminders-loop.js        Autonomous singleton loop; polls Unruh for due reminders
 ├── silence-triage-loop.js   Autonomous singleton loop; LLM-deliberated proactive check-ins
 ├── reachout-loop.js         Autonomous singleton loop; warm non-crisis outreach (companionship). Stands down at moderate+ threat (triage owns distress); quiet-hours + cooldown gated
+├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG)
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
@@ -117,8 +118,10 @@ ponderings injection, care-check framing) and as background loops
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
 ├── village.js               Village registry (V1) — categories/grant sets, villagers (name/pronouns/aliases/relation/stance/comm-style/notes/privateNotes/remember consent map/graphNodeId), locations; local mirror + Phylactery write-through sync (see docs/village-support-design.md). The Familiar reaches it via the village_lookup / village_upsert tools (privateNotes field-gated to ward-private turns)
 ├── own-files.js             Sandboxed read-only access to the Familiar's own checkout — resolves repo-relative paths inside the root, denies secrets (settings.json, .env) + build noise (node_modules/.git/.venv), size-caps + text-only. Backs the list_files / read_file tools (ward-private only)
-├── websearch.js             Web access (opt-in, 0.7.0) — backs the web_search / read_webpage tools. Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping. searchWeb dispatches on the effective base URL: empty → in-box keyless DuckDuckGo HTML scrape (no setup); set → that SearXNG JSON API. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1 (see docs/websearch-setup.md)
-├── searxng-service.js       Optional Familiar-managed SearXNG backend (0.7.x). A 30s supervisor (like the Discord gateway) brings up a self-hosted SearXNG when the ward enables web search and tears it down when they disable it. The backend is a VENDORED third-party app under ./vendor/searxng/ (uv-spawned `python -m searx.webapp`, generated loopback+JSON settings.yml); managedSearxngUrl() publishes the healthy URL. cerebellum resolves the effective backend as custom webSearchBaseUrl ?? managedSearxngUrl() ?? '' (keyless) — a cold/failed/absent managed instance ALWAYS degrades to keyless and can never break search. Hard off-switch PROTO_FAMILIAR_SEARXNG_DISABLED=1. See docs/searxng-managed-build-spec.md
+├── websearch.js             Web access (opt-in, 0.7.0) — backs the look_up / web_search / read_webpage tools. look_up (0.7.19) answers definitions/facts/overviews from keyless official reference APIs (Wikipedia action API + DuckDuckGo Instant Answer API), no scraping/no setup. web_search finds pages; searchWeb resolves the human-chosen backend: webSearchBackend ∈ {basic → in-box keyless DuckDuckGo HTML scrape (no setup); api → a provider adapter (Marginalia/Tavily/Brave/Google) via webSearchApiProvider+key}. ANY backend failing falls through to the keyless floor — a wrong key / down provider never leaves the human without search. Each search logs which backend actually served (`[websearch] "q" — served via …` / `… failed […]; fell back to built-in keyless search`) so a silent fallback is visible (0.7.28). Owns the SSRF guard (scheme allow-list + resolved-IP block of loopback/private/link-local/metadata + redirect re-validation), the fetch timeout, and the linkedom→@mozilla/readability→turndown extraction with provenance stamping. cerebellum registers the defs + delegates; gated by webSearchEnabled / PROTO_FAMILIAR_WEBSEARCH_DISABLED=1. (The managed local engines — SearXNG/4get/LibreY — were removed in 0.7.38; Marginalia + APIs + the floor cover the same ground without the install/spawn machinery.)
+├── websearch-providers.js   Proper search-API adapters (0.7.20; marginalia 0.7.37) — braveSearch / tavilySearch / googleSearch / marginaliaSearch, one small JSON client each (no scraping), all returning the same {rows}|{error} shape searchWeb dispatches through (API_PROVIDERS registry). Marginalia is an INDEPENDENT small-web index whose "public" key needs no signup (API-Key header; 503 when the shared key is rate-limited). Provider hosts are sanctioned public endpoints (not the SSRF-guarded read path); missing/bad key → {error} → searchWeb degrades to the floor
+├── guide-chat.js            In-modal web-search explainer (0.7.29) — the SAME Familiar, scoped to explaining the search-backend options in plain language. buildGuideSystem() assembles a STRIPPED context (framing + identity layer via enrich staticOnly + the four prompt fields + a tools-info block with honest per-option trade-offs and Brave/Tavily signup steps + a no-jargon block), macro-resolved. Explainer only: no tools, no memory/graph/temporal/care-check, not persisted/memorised. Backs POST /api/guide-chat. Off-switch PROTO_FAMILIAR_GUIDE_CHAT_DISABLED=1
+├── web-fetch-util.js        timedFetch — a shared fetch-with-AbortController-timeout used by the search-API provider adapters (one place, not copy-pasted). Not the SSRF guard; just the timeout + JSON defaults for sanctioned backends
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4+V5+V6) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); V6: relayToDiscord() REST send (DM-open or channel post) backing the relay_message tool; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
@@ -205,8 +208,15 @@ lifecycle of the autonomous loops:
 
 **Logs / Tomes:** familiar endpoints for session JSON and Tome CRUD.
 
-**Memorization:** `POST /api/memorize` + `GET /api/memorize` +
-ack/cancel — see `memorization.js`.
+**Memorization:** `POST /api/memorize` (session scope is day-anchored) +
+`GET /api/memorize` + ack/cancel — see `memorization.js`.
+**Coverage (day-anchoring Phase 3):** `GET /api/memory-coverage` (per-date
+status for the calendar) + `POST /api/memorize-day {date,force}` ((re)feed a
+day's slices) — see `memory-coverage.js`.
+**Import (day-anchoring Phase 4):** `POST /api/import-logs` — without `commit`
+PREVIEWS (parse + segment, no writes); with `commit` places foreign logs by date
+(one imported session per date) and enqueues them for immediate ingestion. Parsers
+in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudly).
 
 **Temporal editor (M9):**
 - `GET /api/temporal/interests` — live + standing with decay metadata
@@ -233,6 +243,9 @@ ack/cancel — see `memorization.js`.
 - `GET /api/village/knocks` + `DELETE /api/village/knocks/:platform/:id` — pending contact attempts from unregistered people (captured by the Discord gateway; identity metadata only, never message content)
 - `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, a `fatal` flag (token/intents rejected — the UI shows red instead of a perpetual "reconnecting"), plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
 - `POST /api/discord/apply` — apply the saved Discord settings and (re)connect immediately (the Settings "Apply & connect" button), clearing any fatal state; returns the resulting status. Saves the ward waiting for the 30s supervisor tick or reloading the page
+
+**Web search (the Settings "Configure search backend" modal):**
+- `POST /api/guide-chat` — the in-modal Familiar explainer (0.7.29): same entity, stripped context (identity + the four prompt fields + tools-info/no-jargon), non-streaming, no tools, not persisted. Degrades calmly. Off-switch `PROTO_FAMILIAR_GUIDE_CHAT_DISABLED=1`
 
 **Threat surface:**
 - `GET /api/threat` — current tier + weight + last_touched + disabled
@@ -357,11 +370,14 @@ Currently owns:
   kinds are made enumerable to the Familiar by `village_lookup`, which
   (V8) reports a **Places** roster + per-villager Discord-reachability so
   the Familiar can always name a valid relay target.
-- **Web tools (opt-in, 0.7.0-alpha)** — `web_search` / `read_webpage`,
-  thin executors that delegate to `websearch.js` (SSRF guard, timeout,
+- **Web tools (opt-in, 0.7.0-alpha; `look_up`/`web_search` split 0.7.19-alpha)** —
+  `look_up` / `web_search` / `read_webpage`, thin executors that delegate
+  to `websearch.js` (SSRF guard, timeout,
   `linkedom`→`@mozilla/readability`→`turndown` extraction with provenance
-  stamping). Unlike every other built-in they are **conditionally
-  advertised**: `composeActiveTools` filters them out via
+  stamping). `look_up` answers definitions/facts/overviews from keyless
+  official reference APIs (Wikipedia + DDG Instant Answer), no scraping;
+  `web_search` finds pages. Unlike every other built-in they are
+  **conditionally advertised**: `composeActiveTools` filters them out via
   `webSearchEnabled(settings)` unless the human has enabled web access
   (and `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1` forces them off). A page the
   Familiar reads persists in session history for the rest of the session;
@@ -615,9 +631,125 @@ exponential backoff, idempotent enqueue on
 `sessionId+scope+topicId+messageRange`.
 
 **Extraction** uses a per-fact format: LLM returns
-`{facts: [{content, category, subjects, confidence}]}` where `category`
-∈ `basics | emotional_content | health_info | relationships | whereabouts`.
+`{facts: [{content, category, subjects, confidence}], relations: [{from, fromType, type, to, toType}]}`
+where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`.
 Facts with `confidence < 0.4` are silently skipped.
+
+**Shared graph rubric (`graph-vocab.js`, 0.7.63).** What earns a node/edge is defined
+**once** and read by every surface that creates one: the entity-type vocabulary
+(`person, place, organisation, pet, condition, project, thing`), the **no-abstractions**
+rule (the single biggest driver of graph quality — keeps "stress"/"work-life balance"
+from becoming nodes), and the edge rule (both endpoints concrete, never invented,
+snake_case type). Both memorization prompts (`buildPrompt` / `buildSharedRoomPrompt`)
+and the chat-path tools (`create_graph_node` / `create_graph_edge`) interpolate the same
+constants, so a node made mid-chat is held to the same standard as one made during
+memorization — closing a drift where the vocabulary differed across three surfaces and
+the chat tools lacked the no-abstractions rule. The Python `graph_relate` /
+`graph_node_create` docstrings carry the same list by hand (sync comment in both).
+
+**Tiering — standalone `daily` facts (0.8.2):** extracted facts land at the
+`daily` tier (the doc's baseline for conversation-derived memory), written with
+`standalone: true` so each keeps **its own row** carrying its `category` /
+`subjects` / `consent_pending` / `confidence` — instead of being mis-filed as
+`significant`. In `memory.create` there are now three storage shapes:
+`significant` (own row keyed `date_slug`, a rare deliberate milestone),
+`standalone` (own row keyed by the **plain date** so consolidation's range
+filter still rolls it up; a `slug` marks it so the journal bucket never absorbs
+it), and the date-bucketed journal (`daily`/`weekly`/… with `slug` NULL, content
+appended as bullets). Reserving `significant` for true milestones means these
+facts now **consolidate** (`daily→weekly→…`), **decay**, and are caught by
+exact-dup hygiene (which groups by `granularity,date_key,content` — significant's
+unique `date_slug` had escaped it). After a weekly rollup, the consolidated daily
+sources are **pruned** (snapshot first, recoverable) so the tier doesn't pile up;
+`consent_pending` dailies are excluded from both the summary and the prune, so an
+unreviewed fact is never baked into a permanent weekly note before the ward
+approves it.
+
+**Day-anchored fact dates + by-id addressing (0.7.61).** Because many standalone
+facts share one plain `date_key`, that key **cannot** address a single fact —
+`read_memory(granularity, date)` returns whichever row comes first. Two fixes:
+- **The date now rides through.** `processJob` passes the day-scoped job's
+  `topicId` (the segment's calendar date) as `createMemoryFull({ date })`, so a
+  slice from an older conversation files under **its** day, not today. Without this
+  every imported fact landed in today's bucket (the "159-into-today" bug).
+- **By-id is the unique handle.** `memory.py` gained `read_memory_by_id`,
+  `update_memory_by_id`, `delete_memory_by_id`, and `move_memory_date` (re-files a
+  mis-dated fact — only the day moves; significant rows rebuild their `date_slug`).
+  Exposed as MCP tools (`memory_read_by_id`, `memory_move_date`,
+  `memory_update_by_id`, `memory_delete_by_id`), thalamus wrappers, the Familiar's
+  `read_memory_by_id` / `move_memory_date` / `update_memory_by_id` /
+  `delete_memory_by_id` tools (ids ride in on `recall` / `list_memories`), and the
+  HTTP `/api/entity/memories/by-id/:id` surface (GET/PUT/DELETE + `…/move`). The
+  Knowledge-editor memory panel now opens, edits, moves, and deletes by id — fixing
+  the bug where every row opened the same entry.
+- **The mass-overwrite guard (0.7.64, audit finding).** `granularity+date_key` is
+  unique ONLY for the journal bucket (`slug NULL`) and significant rows (slug baked
+  into the composite key) — **not** for standalone per-fact rows that share a plain
+  date. So the by-date `update_memory` / `delete_memory` now scope to `slug IS NULL`
+  when no slug is given: a no-slug update was previously an **un-scoped** `UPDATE …
+  WHERE granularity=? AND date_key=?` that would rewrite **every** standalone fact
+  on that date with the same content. By-date now only ever touches the journal
+  bucket; per-fact rows are by-id only, and the Familiar's `update_memory` /
+  `delete_memory` descriptions steer it to the `_by_id` variants for a single fact.
+
+> **Tiering is one of two axes; don't conflate them.** `granularity`
+> (`daily…significant`) is the rollup tier this section touches. A memory record
+> *also* has a **`register`** field — `episodic | me | ward` — which is a
+> **separate axis** (`phylactery-design.md:272`). The memorization pipeline only
+> produces **`episodic`** facts; the `me`/`ward` registers hold *standing truths*
+> about the Familiar (`me`) or the human (`ward`). They are reached two ways:
+> autonomously by *graduation* (Pillar H moves identity-file detail off the
+> always-injected surface, created at `significant`), and **deliberately by the
+> Familiar** via `save_memory`'s `register` choice (0.8.6 — a me/ward write is
+> filed as a standalone `significant` fact on that register; the lighter sibling
+> of `update_identity`). `me`/`ward` are **not** `granularity` values.
+>
+> **Legibility (0.8.6 / 0.7.48):** `memory.search`, `memory.list_memories`, and
+> `memory.read_memory` all carry each record's `register`. Thalamus tags
+> `me`/`ward` recalls (`a standing fact about my human · …`) so the *Familiar* can
+> weight an identity-grade fact differently from a passing episodic moment, and
+> the *Knowledge editor* badges them (`standing · self`/`ward`) in the memory
+> browse list + detail so the **human** can see them too. Without this the
+> register was invisible on both surfaces.
+
+**Semantic dedup-merge (0.8.0):** `memory.create` (Phylactery) runs a KNN
+similarity check before inserting a significant / standalone / consent-pending
+memory. A near-identical paraphrase (sim ≥ 0.85) folds into the existing entry
+(bumps `updated_at`, no new row); an additive near-dup (sim ≥ 0.78) appends the
+new detail. A per-fact row only dedups against other per-fact rows
+(`slug IS NOT NULL`), never into a journal bucket. Consent-safe: an unconsented
+detail is never folded into an already-confirmed memory (it gets its own row).
+The merge marker rides back through `memory_create` → `thalamus.createMemoryFull`
+→ `memorization.js`, which skips re-queuing a merged dup for consent. This is
+what stopped the "82 queued, only 5 new" duplicate pile-up.
+
+**Auto-graph (0.8.1):** the same extraction call also returns `relations` —
+concrete edges between named entities (person/place/organisation/pet/condition/
+thing; never abstractions). `parseRelations` normalises and within-job-dedups
+them (never throws — enrichment, not load-bearing), then `processJob` routes each
+via `thalamus.graphRelate` → Phylactery `graph_relate` (`graph.relate`), which
+resolve-or-creates both endpoints by case-insensitive label and dedups the edge
+by `from/to/lower(type)`. Fire-and-forget per edge (Promise.allSettled), gated on
+`created > 0` so a fully gate-dropped session doesn't quietly rebuild the graph.
+This rides the existing memorization LLM call (no new request) and fixes the
+"Familiar almost never saves to the graph unless prompted" gap.
+
+**Graph-node audience derivation (Pillar E, 0.7.x).** Each endpoint's audience is
+derived **in code** before routing: `audience.deriveNodeAudience({ label,
+registry })` matches the label to a known villager (by name/handle) and takes that
+villager's representative Village category, else **`ward-private`** (fail-closed —
+places, orgs, the ward, abstractions stay private until deliberately widened). The
+edge takes the **narrower** of its two endpoints (`mostRestrictiveAudience`) so it
+can't reveal a ward-private node in a wider room. These ride into `graph_relate`'s
+`fromAudience`/`toAudience`/`edgeAudience` (and the Familiar's `create_graph_node`
+derives the same way). Audience tags only **new** nodes — `resolve_or_create_node`
+never re-tags an existing node, so a deliberate override isn't clobbered by ongoing
+memorization. The deliberate-override surface is `graph_node_update`'s `audience`
+(Familiar tool `update_graph_node`, or the Knowledge-editor node popover's audience
+dropdown) — how the ward/Familiar widens a node to a circle or keeps it to just the
+two of them. Graph gating is the structural `audience` column + the Phase-1 recall
+filter; the `<!-- gate: -->` comments are an **identity-file** mechanism only and
+were never used in graph descriptions.
 
 **`remember` gate** (per villager, per category):
 - `true` → store freely in Phylactery
@@ -629,20 +761,93 @@ When multiple villagers are subjects of a fact, the most restrictive
 gate wins (`false > ask > true`). Default when no villager map exists:
 `basics=true`, all others=`ask`.
 
+**Standing mutual consent (0.8.3):** a villager record can carry
+`standingConsent: { wardAgreed, villagerAgreed }`. When **both** are true
+(`village.standingConsentActive`), `resolveRememberGate` clears that villager's
+`ask` to `true` — no more per-fact consent prompts about them — but an explicit
+`false` category still hard-blocks (a convenience toggle never overrides the
+ward's veto). Set two ways: the Village-UI consent checkboxes, or the Familiar's
+`village_upsert` tool (`mutualConsentToRemember`, ward-private only).
+
+**Write-time audience derivation (Pillar C → Pillar E, 0.7.x).** Each per-fact row
+is now stamped with the audience tag that gates its later recall — derived **in
+code** by `audience.deriveMemoryAudience({ category, subjects, sessionTag,
+registry })`, never asked of the extractor (a tag the LLM could forget is a tag
+that could leak). The rule is **session-bounded by default, widen/tighten by
+explicit consent**: with no per-subject preference a fact is capped at the room it
+was made in (`audienceTag`), and a sensitive category (`health_info`,
+`emotional_content`) is floored to `ward-private`. A subject villager may carry a
+`disclosure` map (per remember-category → a Village category id, or
+`ward-private`); an explicit entry **overrides** the default in either direction —
+widening a ward-private fact out to a named circle, or tightening past the session
+ceiling — and even overrides the sensitivity floor, because that is the data
+subject's own stated consent. With multiple subjects the **narrowest** circle wins
+(everyone named must be comfortable with the room). The ward sets `disclosure` in
+the Village UI (a per-category dropdown beside the consent toggles); the Familiar
+sets it in first person via `village_upsert`'s `disclosure` argument (circle names
+resolved to ids, ward-private only for edits). The derived tag rides into
+`createMemoryFull({ audience })`, where it becomes the `audience` column the Pillar
+E recall gate filters on.
+
 **Consent flow:** `thalamus.enrich()` reads `.consent-pending.json` cheaply
 (no MCP round-trip) and injects a `[PENDING MEMORY CONSENT]` block when
 non-empty. The Familiar calls `memory_confirm_consent(ids)` or
 `memory_drop_pending(ids)` (both in `BUILTIN_TOOLS`); `pruneConsentPending(ids)`
 then removes the handled IDs from the local file.
 
-**Triggers:**
-- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon).
+**Day-anchored coverage (Phase 1 of the day-anchoring keystone, 0.7.x).** Session
+memorization is now tracked per **local calendar date**, not per session.
+`day-segments.js` `segmentByDay(messages)` derives per-date slices from a session
+log (Hybrid model — the live log stays one intact file; segmentation is logical,
+at memorize time; a midnight-crossing session becomes two slices). `memorization
+.enqueueSessionByDay()` enqueues one job per date-slice (`scope:'day'`,
+`topicId:<date>`, `messageRange`), skipping slices the **coverage ledger** already
+marks memorized. On completion `processJob` calls `memory-coverage
+.recordSegmentRun()` (a day slice with zero kept facts is still *done* — it's
+recorded, not retried; shared-room slices get a `'shared-room'` flag). The ledger
+(`tomes/.memory-coverage.json`) stores only what's been memorized per
+(date, session); `computeCoverage()` reads the logs live and derives per-date
+status (`complete | partial | uncertain | empty`) by comparing the two — so the
+active day reads `partial` the moment new messages land. Dates use server-local
+time, stamped in the ledger. **Phase 3 (calendar UI):** the Knowledge editor's
+**Coverage** tab renders a month calendar coloured by status (`computeCoverage()`
+via `GET /api/memory-coverage`); clicking a day lists its sessions and offers
+"Memorize this day" (`POST /api/memorize-day`, `collectDateSlices` → per-slice
+enqueue, `force` to re-run done days). **Phase 2 (always-on sweep):**
+`memory-sweep-loop.js` — a 10-min pass that enqueues the missing slices of every
+*past* incomplete day (skips today, handled live; skips completed days). Only
+enqueues into the memorization worker (no LLM call of its own); default-ON,
+Settings "Memory coverage sweep" / `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1`.
+**Phase 4 (foreign-log import):** `POST /api/import-logs` (preview → commit) +
+`log-import.js` parsers place foreign logs by date (one imported session per
+date) and enqueue them for immediate ingestion (confirm-gated in the Coverage-tab
+import form). Parsers: Proto-Familiar JSON, SillyTavern `.jsonl` (`is_user`→role, ISO
+`send_date`), OpenClaw `.jsonl` (event stream — `type:'message'` events, content
+blocks), timestamped text. Undated logs are dated by an explicit `fallbackDate`
+or one read from the filename (`dateFromFilename`); if neither exists the preview
+asks for a date. *(see `docs/day-anchoring-build-spec.md`.)*
+
+**Triggers** (all session-scope triggers route through `enqueueSessionByDay`;
+topic-scope stays whole-range):
+- Web: client calls `POST /api/memorize` on session end (fetch or sendBeacon),
+  and the sidebar "Memorize now" button (`memorize-now-btn`) for on-demand.
   Always `audienceTag: 'ward-private'`.
 - Discord: `discord-gateway.sessionForLocation()` enqueues the old session
   when idle rotation fires (session has been quiet ≥ `SESSION_IDLE_ROTATE_MS`).
   `audienceTag` comes from the stored session log.
+- **Familiar self-trigger (0.8.4):** the `memorize_now` tool. When the Familiar
+  judges the conversation holds things it must carry across instances — and a
+  clean rollover may never happen (the human switches sessions / clears history)
+  — it commits the session itself. The executor reads the session id from the
+  tool context (`sessionInfo.sessionId`) and delegates to `memorizeSessionNow`
+  (server.js, injected via `initCerebellumTools` to avoid the cerebellum↔
+  memorization import cycle), which reads the clean on-disk log and enqueues the
+  same pipeline. No new request beyond the chat turn it rides; degrades to a calm
+  first-person line, never throws into the tool loop. (Single deliberate facts
+  still go through `save_memory`; this commits the whole exchange.)
 
-**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1`.
+**Off-switch:** `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` (the worker; `memorize_now`
+just enqueues, so it honours the same switch — a disabled worker won't drain).
 
 ### Migration: entity-core → Phylactery (Pillar F)
 
@@ -708,15 +913,37 @@ so the filter always fails open — a Phylactery outage never blocks a reply.
 **Parameters signed off by the human (build-spec §7):**
 threshold=0.70, retry budget=3, safe-refusal text as above.
 
-### Pillar E — `memories: 'shared'` unlock (`audience.js`)
+### Pillar E — audience-gated recall (`audience.js` + Phylactery)
 
-`fetchEligibility` now permits `memory_search` when `g.memories === 'shared'`
-(in addition to `=== true`). This was gated off in Pillars A–D because memories
-had no audience tags, so any 'shared' room would have received ALL memories.
-Pillar C added `audience` tags at write time; Pillar D adds the outgoing gate.
-Together they make 'shared' safe to open: a non-ward-private room can now
-receive memories tagged for its audience, and the outgoing filter catches any
-ward-private content that might slip through in the reply text.
+`fetchEligibility` decides *whether* the memory/graph fetch runs for a room;
+**the recall gate decides *what comes back*.** **Graph follows the memory grant**
+(0.7.66): the graph is relational memory, so `doGraph = doMemory` (a room with
+`memories: true | 'shared'` also fetches the graph), and the per-node `audiences`
+filter below scopes it node-by-node. This replaced a gate on a `graph` grant that
+**no Village category ever granted** — graph enrichment was therefore silently OFF
+in *every* non-ward session (memory still worked, so the symptom was "graph stopped
+enriching but memory didn't"). The per-node tags now do the real privacy gating, so
+the coarse grant was both unsatisfiable and redundant. `audience.js` `visibleAudiences
+(roomTag, registry)` computes the SET of audience tags a room may see — every
+Village category whose `permissionScore` ≤ the room's, which excludes
+`ward-private` (it isn't a category and outscores all) and any
+more-trusted-than-the-room category. `server.js`/`discord-gateway.js` compute
+this set and pass it into `enrich({ audiences })`, which forwards it to
+`memory_search` / `graph_node_search` / `graph_subgraph`. Phylactery's
+`audience_in_sql(audiences)` turns it into `audience IN (…)` (None → `1=1` for a
+ward room; `[]` → `0=1`); `memory.search`, `graph.search_nodes`, and
+`graph.get_subgraph` (all three fetches, incl. the subgraph endpoint backfill)
+filter through it. Fail-closed: a record tagged with a deleted/unknown category
+is absent from the set → excluded; a registry-read failure leaves
+`audiences=null` only on the ward path.
+
+**The leak this closed (0.7.x):** the room tag was never passed, so recall
+defaulted to `ward-private` → `1=1` → ward-private memories/graph surfaced in the
+Familiar's *context* in trusted shared rooms. (The old `audience_filter_sql` also
+kept `ward-private` in the non-ward `IN`-list — a second leak — left for the dedup
+path; recall now routes through `audience_in_sql`, which doesn't.) The outgoing
+filter (Pillar D) remains the send-side backstop; together they are the two gates
+the design intended. See `docs/audience-gating-build-spec.md`.
 
 ### Pillar H — lifecycle: consolidation scheduler, hygiene, graduation, backup
 
@@ -733,6 +960,14 @@ oldest), merge graph nodes sharing a non-empty `(label, villagerId)` (re-point
 edges, drop losers). Same label with **different** identities is never
 auto-merged — it's reported as ambiguous for the ward to resolve. Snapshots
 before any change.
+
+**Tier consolidation** (`consolidate.consolidate_to_weekly/monthly/yearly`) — LLM
+rolls a period's lower-tier entries into one higher-tier summary (`daily→weekly→
+monthly→yearly`). After a successful **weekly** rollup the consolidated daily
+sources are pruned (`_prune_consolidated`, snapshot first) so the daily tier
+doesn't accumulate. `consent_pending` dailies are held out of both the summary and
+the prune — an unreviewed fact is never folded into a permanent rollup before the
+ward approves it.
 
 **Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
 bumps `recall_count` + `last_recalled_at` for everything surfaced.
@@ -834,8 +1069,11 @@ All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus
 (entity-core is retired). New fields surfaced in the KE:
 
 - **`audience` + `careWeight` on memory records** — shown in the detail view with editable
-  dropdowns; `PUT /api/entity/memories/:granularity/:date` now accepts `audience` and `careWeight`
-  and forwards them to `memory_update` → `memory.py` `update_memory()`.
+  dropdowns; `PUT /api/entity/memories/by-id/:id` accepts `audience` and `careWeight`
+  and forwards them to `memory_update_by_id` → `memory.py` `update_memory_by_id()`. The
+  audience dropdown lists the real Village circles (ward-private + each category, via the
+  shared `keAudienceOptionsHTML` helper used by the graph-node editor too) — the same model
+  the recall gate filters on, not the old stale `ward-private`/`all` pair.
 - **Audience badges** in the memory list rows for non-ward-private records; careWeight badges
   for `high`/`low` entries.
 - **Ward · Remember settings** — persistent consent-policy map
@@ -1222,10 +1460,13 @@ re-implement this split anywhere else.
 | Seam | What it does |
 |---|---|
 | `GET/PUT/DELETE /api/entity/memories/:granularity/:date` (server.js) | Accepts the composite `:date`, splits via `parseMemoryKey`, passes `date` + `slug` separately to thalamus. **Never reintroduce a plain-date regex here.** |
+| `GET/PUT/DELETE /api/entity/memories/by-id/:id` + `POST …/move` (server.js) | The unique-handle surface (registered BEFORE `:granularity/:date` so `by-id` isn't swallowed as a granularity). The only way to address one of many standalone facts that share a date; `…/move` re-files a mis-dated fact. |
 | `thalamus.readMemory` / `updateMemory` / `deleteMemory` | Pass `slug` through to entity-core's tools. `updateMemory` without the slug is the shadow-file hazard. |
+| `thalamus.readMemoryById` / `updateMemoryById` / `deleteMemoryById` / `moveMemoryDate` | By-id wrappers over the `memory_*_by_id` / `memory_move_date` MCP tools. |
 | `update_memory` / `delete_memory` executors (cerebellum.js) | Split the model-supplied key; their tool descriptions teach the `YYYY-MM-DD_slug` addressing. |
+| `read_memory_by_id` / `move_memory_date` / `update_memory_by_id` / `delete_memory_by_id` executors (cerebellum.js) | The Familiar's by-id surface; ids ride in on `recall` / `list_memories`. `move_memory_date` cleans up facts filed under the wrong day; `update_/delete_by_id` safely correct or remove ONE per-fact row. The by-date `update_memory`/`delete_memory` are journal-bucket/significant only (scoped `slug IS NULL`). |
 | `save_memory` executor | Auto-derives the slug (`deriveMemorySlug`) and returns the composite key in its confirmation so the Familiar knows the address of what it just wrote. |
-| Knowledge editor (app.js) | Deliberately dumb: sends back whatever key the list returned. Keep it that way. |
+| Knowledge editor — memory panel (app.js) | Addresses every read/edit/move/delete by the row's `id` (0.7.61). It used to send the `granularity/date` key, which collided for standalone facts sharing a date — clicking any row opened the top one. By-id is the fix; don't regress it back to key-addressing. |
 
 **How it broke the first time** (so it isn't repeated): originally,
 significant saves had no slugs — listings returned plain dates and the
@@ -1251,6 +1492,8 @@ that is the contract talking — update all seams together or stop.
 | Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired |
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
 | Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |
+| Tome graduation | 30min tick (opt-in, default OFF) | Settings "Graduate tome knowledge" + `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1` | Drains durable facts stranded in tomes → identity/memory/graph (relational facts resolve-or-create + dedup); confirmed route before tidy; consent-gated ward memory |
+| Memory coverage sweep | 10min tick (default ON) | Settings "Memory coverage sweep" + `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` | Memorizes PAST days that never ingested (day-anchoring Phase 2); skips today + completed days; only enqueues into the memorization worker — no LLM call of its own |
 | Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
 | Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |
 

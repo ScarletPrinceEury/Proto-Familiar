@@ -91,6 +91,7 @@ function getCustomTools() {
 /** Session metadata for the server-side get_session_info tool. */
 function buildSessionInfo() {
   return {
+    sessionId:    state.sessionId,   // lets the Familiar's memorize_now find this session's log
     startedAt:    state.sessionStartedAt,
     messageCount: state.messages.length,
     provider:     state.provider,
@@ -173,7 +174,13 @@ const state = {
   customTools:       '',     // JSON array string of user-defined tool definitions
   // ── Web search (opt-in; works in-box, no setup) ─────────────
   webSearchEnabled:    false,
-  webSearchBaseUrl:    '',     // blank = built-in keyless search; set to use your own SearXNG
+  // Backend for web_search (finding pages). 'basic' = built-in keyless scrape
+  // (the floor, no setup); 'api' = a proper provider key; 'local' = a Familiar-
+  // managed engine. look_up (definitions) ignores all of this.
+  webSearchBackend:     'basic',     // 'basic' (DuckDuckGo floor) | 'api'
+  webSearchApiProvider: 'marginalia',// 'marginalia' | 'tavily' | 'brave' | 'google'
+  webSearchApiKey:      '',          // provider key (secret; lives in gitignored settings.json)
+  webSearchGoogleCseId: '',          // Google only — Programmable-Search engine id
   webSearchMaxResults: 5,
   webSearchMaxChars:   15000,
   // ── Topics & tomes (lorebook) ───────────────────────────
@@ -226,6 +233,12 @@ const state = {
   // a local-time window (start==end disables it). Off via this toggle or
   // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
   warmthEnabled:           true,
+  // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
+  // memorizes past days that never ingested. Off via this toggle or the
+  // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
+  memorySweepEnabled:      true,
+  tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
+  tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
 
@@ -276,7 +289,8 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools',
-  'webSearchEnabled', 'webSearchBaseUrl', 'webSearchMaxResults', 'webSearchMaxChars',
+  'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
+  'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
@@ -284,6 +298,8 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
+  'memorySweepEnabled',
+  'tomeGraduationEnabled', 'tomeGraduationTidy',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -317,6 +333,140 @@ function saveTopics() {
   try {
     localStorage.setItem(`pf_topics_${state.sessionId}`, JSON.stringify(state.topics));
   } catch { /* quota exceeded */ }
+}
+
+// ── Web search backend modal ───────────────────────────────────
+// The picker for how web_search finds pages (Basic DuckDuckGo / a search API).
+// look_up (definitions) is unaffected. The backend layer lives in websearch.js
+// / websearch-providers.js.
+function setRadio(name, value) {
+  const el = document.querySelector(`input[name="${name}"][value="${value}"]`);
+  if (el) el.checked = true;
+}
+
+function openWebSearchModal() {
+  writeSettingsToUI();      // reflect current state into the modal fields
+  syncWebSearchPanels();
+  resetGuideChat();         // fresh, ephemeral explainer conversation
+  $('websearch-modal')?.classList.remove('hidden');
+}
+
+function closeWebSearchModal() {
+  $('websearch-modal')?.classList.add('hidden');
+}
+
+// Show the API panel only for the API backend; the Google engine-id field only
+// for Google; the Marginalia "no key" hint only for Marginalia.
+function syncWebSearchPanels() {
+  const backend  = document.querySelector('input[name="web-search-backend"]:checked')?.value || 'basic';
+  $('websearch-api-panel')?.classList.toggle('hidden', backend !== 'api');
+  const provider = document.querySelector('input[name="web-search-api-provider"]:checked')?.value || 'marginalia';
+  $('websearch-google-cse-field')?.classList.toggle('hidden', provider !== 'google');
+  $('websearch-marginalia-hint')?.classList.toggle('hidden', provider !== 'marginalia');
+}
+
+// Apply just persists the chosen backend/provider/key (fields also auto-sync on
+// change; this gives explicit feedback). No process to reconcile.
+async function applyWebSearchBackend() {
+  const btn    = $('websearch-apply-btn');
+  const status = $('websearch-apply-status');
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = 'Saving…';
+  try {
+    readSettingsFromUI(); // pull every modal field into state (also persists)
+    await fetch('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: extractServerSettings(state) }),
+    });
+    if (status) status.textContent = 'Saved.';
+  } catch {
+    if (status) status.textContent = 'Saved locally.';
+  }
+  if (btn) btn.disabled = false;
+  setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+}
+
+// ── In-modal Familiar explainer (the guide chat) ────────────────
+// The same Familiar, scoped to explaining the search options. Ephemeral to the
+// modal (history resets each open); never persisted.
+let _guideHistory = [];
+let _guidePending = false;
+
+// The connection creds the guide chat sends (same as the main chat path).
+function guideConn() {
+  const c = (typeof getPrimaryConnection === 'function' && getPrimaryConnection()) || null;
+  const provider = c?.provider || state.provider;
+  const apiKey   = c?.apiKey   || state.apiKey;
+  const model    = c?.model    || state.model;
+  if (!provider || !apiKey || !model) return null;
+  return { provider, apiKey, model };
+}
+
+function resetGuideChat() {
+  _guideHistory = [];
+  _guidePending = false;
+  const ok = !!guideConn();
+  $('guide-chat-unavailable')?.classList.toggle('hidden', ok);
+  const input = $('guide-chat-input');
+  const send  = $('guide-chat-send');
+  if (input) input.disabled = !ok;
+  if (send)  send.disabled  = !ok;
+  renderGuideChat();
+}
+
+function renderGuideChat() {
+  const host = $('guide-chat-messages');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const m of _guideHistory) {
+    const b = document.createElement('div');
+    const mine = m.role === 'user';
+    b.style.cssText = `align-self:${mine ? 'flex-end' : 'flex-start'};max-width:85%;padding:6px 10px;` +
+      `border-radius:10px;white-space:pre-wrap;word-break:break-word;` +
+      (mine ? 'background:var(--accent,#3a6c5a);color:#fff'
+            : `background:var(--surface-2,#2a2a2a);${m.error ? 'opacity:.8;font-style:italic' : ''}`);
+    b.textContent = m.content;
+    host.appendChild(b);
+  }
+  if (_guidePending) {
+    const t = document.createElement('div');
+    t.className = 'field-hint'; t.textContent = '…'; t.style.alignSelf = 'flex-start';
+    host.appendChild(t);
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
+async function sendGuideChat() {
+  const input = $('guide-chat-input');
+  const text  = input ? input.value.trim() : '';
+  if (!text || _guidePending) return;
+  const conn = guideConn();
+  if (!conn) { resetGuideChat(); return; }
+
+  _guideHistory.push({ role: 'user', content: text });
+  if (input) input.value = '';
+  _guidePending = true;
+  renderGuideChat();
+
+  try {
+    const r = await fetch('/api/guide-chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ ...conn, messages: _guideHistory }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `request failed (${r.status})`);
+    const content = (typeof stripDisplayTimestamps === 'function')
+      ? stripDisplayTimestamps(data.content || '')
+      : (data.content || '');
+    _guideHistory.push({ role: 'assistant', content: content || '(no reply)' });
+  } catch (err) {
+    _guideHistory.push({ role: 'assistant', content: `I couldn't answer just now (${err.message}).`, error: true });
+  } finally {
+    _guidePending = false;
+    renderGuideChat();
+    input?.focus();
+  }
 }
 
 function saveHistory() {
@@ -363,6 +513,7 @@ function loadPersisted() {
     state.ponderingIntervalScale = 1;
   }
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
     state.warmthQuietHoursStart = 23;
@@ -2218,6 +2369,9 @@ function readSettingsFromUI() {
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
+  if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
+  if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
     state.warmthQuietHoursStart = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 23;
@@ -2240,12 +2394,18 @@ function readSettingsFromUI() {
   state.customTools       = $('custom-tools').value;
   const wsEnabledEl = $('web-search-enabled');
   if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
-  const wsBaseEl = $('web-search-base-url');
-  if (wsBaseEl) state.webSearchBaseUrl = wsBaseEl.value.trim(); // blank = built-in search
   const wsResEl = $('web-search-max-results');
   if (wsResEl) state.webSearchMaxResults = Math.min(20, Math.max(1, parseInt(wsResEl.value, 10) || 5));
   const wsCharsEl = $('web-search-max-chars');
   if (wsCharsEl) state.webSearchMaxChars = Math.min(100000, Math.max(500, parseInt(wsCharsEl.value, 10) || 15000));
+  const wsBackendEl = document.querySelector('input[name="web-search-backend"]:checked');
+  if (wsBackendEl) state.webSearchBackend = wsBackendEl.value; // 'basic' | 'api'
+  const wsProviderEl = document.querySelector('input[name="web-search-api-provider"]:checked');
+  if (wsProviderEl) state.webSearchApiProvider = wsProviderEl.value;
+  const wsKeyEl = $('web-search-api-key');
+  if (wsKeyEl) state.webSearchApiKey = wsKeyEl.value.trim();
+  const wsCseEl = $('web-search-google-cse-id');
+  if (wsCseEl) state.webSearchGoogleCseId = wsCseEl.value.trim();
   const scanEl = $('tome-scan-depth');
   if (scanEl) state.tomeScanDepth = Math.max(1, parseInt(scanEl.value, 10) || 4);
   const recursiveEl = $('tome-recursive');
@@ -2291,6 +2451,9 @@ function writeSettingsToUI() {
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
+  if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
+  if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
   if ($('warmth-quiet-end'))   setIfNotFocused($('warmth-quiet-end'),   'value',   state.warmthQuietHoursEnd ?? 8);
   setIfNotFocused($('temperature'),     'value',   state.temperature);
@@ -2307,9 +2470,13 @@ function writeSettingsToUI() {
   setIfNotFocused($('tools-enabled'),      'checked', state.toolsEnabled ?? true);
   setIfNotFocused($('custom-tools'),       'value',   state.customTools ?? '');
   setIfNotFocused($('web-search-enabled'),     'checked', state.webSearchEnabled === true);
-  setIfNotFocused($('web-search-base-url'),    'value',   state.webSearchBaseUrl ?? '');
   setIfNotFocused($('web-search-max-results'), 'value',   state.webSearchMaxResults ?? 5);
   setIfNotFocused($('web-search-max-chars'),   'value',   state.webSearchMaxChars ?? 15000);
+  setRadio('web-search-backend',      state.webSearchBackend ?? 'basic');
+  setRadio('web-search-api-provider', state.webSearchApiProvider ?? 'marginalia');
+  setIfNotFocused($('web-search-api-key'),        'value', state.webSearchApiKey ?? '');
+  setIfNotFocused($('web-search-google-cse-id'),  'value', state.webSearchGoogleCseId ?? '');
+  syncWebSearchPanels();
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
   setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
@@ -2495,8 +2662,10 @@ async function memorizeSessionToTome(messages, sessionId, opts = {}) {
       console.warn('[memorize] enqueue failed:', resp.status, await resp.text().catch(() => ''));
       return null;
     }
-    const { jobId } = await resp.json();
-    return jobId;
+    // Topic scope returns a single { jobId }; session scope is day-anchored on
+    // the server and returns { enqueued, skipped } — either is success here.
+    const data = await resp.json();
+    return data.jobId ?? 'ok';
   } catch (err) {
     console.warn('[memorize] enqueue error:', err);
     return null;
@@ -3125,16 +3294,34 @@ function init() {
     });
   }
 
+  // ── Web search backend modal ─────────────────────────────────
+  const webSearchConfigureBtn = $('web-search-configure-btn');
+  if (webSearchConfigureBtn) webSearchConfigureBtn.addEventListener('click', openWebSearchModal);
+  $('websearch-modal-close')?.addEventListener('click', closeWebSearchModal);
+  $('websearch-modal-cancel')?.addEventListener('click', closeWebSearchModal);
+  $('websearch-modal')?.addEventListener('click', e => { if (e.target === $('websearch-modal')) closeWebSearchModal(); });
+  document.querySelectorAll('input[name="web-search-backend"], input[name="web-search-api-provider"]').forEach(el => {
+    el.addEventListener('change', () => { readSettingsFromUI(); syncWebSearchPanels(); });
+  });
+  $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
+  $('guide-chat-send')?.addEventListener('click', sendGuideChat);
+  $('guide-chat-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }
+  });
+
   // ── Settings field listeners ─────────────────────────────────
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'memory-sweep-toggle',
+    'tome-graduation-toggle', 'tome-graduation-tidy',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
-    'web-search-enabled', 'web-search-base-url', 'web-search-max-results', 'web-search-max-chars',
+    'web-search-enabled', 'web-search-max-results', 'web-search-max-chars',
+    'web-search-api-key', 'web-search-google-cse-id',
     'user-discord-webhook',
     'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
@@ -3408,6 +3595,14 @@ function init() {
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-cov-refresh')?.addEventListener('click', keLoadCoverage);
+  $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
+  $('ke-cov-next')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, 1);  keRenderCalendar(); } });
+  $('ke-cov-import')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.toggle('hidden'));
+  $('ke-cov-import-cancel')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.add('hidden'));
+  $('ke-cov-import-file')?.addEventListener('change', keCovImportFileChosen);
+  $('ke-cov-import-preview')?.addEventListener('click', keCovImportPreview);
+  $('ke-cov-import-commit')?.addEventListener('click', keCovImportCommit);
   $('ke-graph-refresh').addEventListener('click', () => {
     keGraphClosePopover();
     if (_keGraphView === 'map') keLoadGraphMap();
@@ -5228,7 +5423,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'graph', 'identity', 'snapshots'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -5291,6 +5486,7 @@ function keSwitchTab(tab) {
     el.classList.toggle('ke-tab-active', el.dataset.tab === tab);
   });
   if (tab === 'memories')   keLoadMemories();
+  if (tab === 'coverage')   keLoadCoverage();
   if (tab === 'graph') {
     if (_keGraphView === 'map') { keSetGraphView('map'); }
     else                        { keSetGraphView('list'); keLoadGraphNodes(); }
@@ -5336,36 +5532,74 @@ async function keLoadMemories() {
         ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
       const cwBadge = m.care_weight
         ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
+      // A me/ward register memory is a standing truth, not a passing moment — badge it.
+      const registerBadge = (m.register === 'me' || m.register === 'ward')
+        ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
       row.innerHTML = `
-        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${audienceBadge}${cwBadge}</div>
+        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
         <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m.granularity, m.date ?? m.key));
+      row.addEventListener('click', () => keOpenMemory(m));
       list.appendChild(row);
     }
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
 }
 
-async function keOpenMemory(granularity, date) {
+// Audience <option> list shared by the memory + graph-node editors: "just us"
+// (ward-private) plus every Village circle, with `current` preselected. An
+// unknown current value (a legacy tag like the old 'all', or a since-deleted
+// circle) is shown as its own option so opening a record never silently re-tags
+// it on save.
+function keAudienceOptionsHTML(current, categories) {
+  const cur  = current ?? 'ward-private';
+  const cats = categories ?? [];
+  const opts = [`<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>ward-private (just us)</option>`];
+  for (const c of cats) {
+    opts.push(`<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`);
+  }
+  if (cur !== 'ward-private' && !cats.some(c => c.id === cur)) {
+    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)} (unknown circle)</option>`);
+  }
+  return opts.join('');
+}
+
+// A memory is addressed by its unique id — granularity+date can't single out a
+// standalone per-fact row, because a whole day's extracted facts share one date.
+// `m` is the list row (carries id, granularity, key=date).
+async function keOpenMemory(m) {
+  const id = m?.id;
   keSetDetail('ke-mem-detail', '<p class="logs-loading">Loading…</p>');
   try {
-    const res = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`);
+    if (!id) throw new Error('this memory has no id to open');
+    const res = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const content   = data.memory?.content    ?? data.content    ?? '';
-    const audience  = data.memory?.audience   ?? data.audience   ?? 'ward-private';
-    const careWeight = data.memory?.care_weight ?? data.care_weight ?? '';
+    if (data.ok === false) throw new Error(data.error ?? 'memory not found');
+    const content    = data.content     ?? '';
+    const granularity = data.granularity ?? m.granularity ?? '';
+    const date       = data.date        ?? m.key ?? '';
+    const audience   = data.audience    ?? 'ward-private';
+    const careWeight = data.care_weight ?? '';
+    const register   = data.register    ?? 'episodic';
+    const registerNote = (register === 'me' || register === 'ward')
+      ? `<span class="ke-badge ke-badge-register">standing truth · ${register === 'me' ? 'about the Familiar' : 'about the ward'}</span>` : '';
+    // The day this memory is filed under, as a value an <input type="date"> accepts
+    // (the leading YYYY-MM-DD; significant keys carry a _slug suffix we drop here).
+    const dayValue = (String(date).match(/^\d{4}-\d{2}-\d{2}/) || [''])[0];
+    // Audience is a Village circle id (or ward-private), same model the recall gate
+    // filters on. Pull the circles so the dropdown offers real options, not a stale
+    // ward-private/all pair. Village unreachable → ward-private only; harmless.
+    let audCats = [];
+    try { audCats = (await vlFetch())?.categories ?? []; } catch { /* keep ward-private only */ }
     const det = $('ke-mem-detail');
     det.innerHTML = `
       <div class="ke-detail-header">
         <h3>${esc(granularity)} · ${esc(date)}</h3>
+        ${registerNote}
       </div>
       <textarea id="ke-mem-content" rows="12" class="ke-textarea">${esc(content)}</textarea>
       <div class="ke-meta-row">
         <label class="ke-meta-label" for="ke-mem-audience">Audience</label>
-        <select id="ke-mem-audience" class="ke-select">
-          <option value="ward-private" ${audience === 'ward-private' ? 'selected' : ''}>ward-private (most restrictive)</option>
-          <option value="all" ${audience === 'all' ? 'selected' : ''}>all (any room)</option>
-        </select>
+        <select id="ke-mem-audience" class="ke-select">${keAudienceOptionsHTML(audience, audCats)}</select>
         <label class="ke-meta-label" for="ke-mem-care-weight">Care weight</label>
         <select id="ke-mem-care-weight" class="ke-select">
           <option value=""     ${!careWeight             ? 'selected' : ''}>— unset</option>
@@ -5373,23 +5607,39 @@ async function keOpenMemory(granularity, date) {
           <option value="low"  ${careWeight === 'low'    ? 'selected' : ''}>low</option>
         </select>
       </div>
+      <div class="ke-meta-row">
+        <label class="ke-meta-label" for="ke-mem-movedate">Filed under</label>
+        <input type="date" id="ke-mem-movedate" class="ke-select" value="${esc(dayValue)}">
+        <button id="ke-mem-move" class="btn-secondary">Move to this day</button>
+      </div>
       <div class="ke-actions">
         <button id="ke-mem-save"    class="btn-send">Save (overwrite)</button>
         <button id="ke-mem-super"   class="btn-secondary">Supersede with today's date</button>
         <button id="ke-mem-delete"  class="btn-ghost ke-danger">Delete</button>
       </div>
-      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
+      <p class="field-hint">Editing rewrites the entry in place; an auto-snapshot is taken first. "Move to this day" re-files the memory under a different date (the fix for facts imported into the wrong day). "Supersede" writes a NEW dated entry that contradicts this one — recency-decay then demotes the stale entry while preserving history.</p>`;
     $('ke-mem-save').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
       const aud = $('ke-mem-audience').value;
       const cw  = $('ke-mem-care-weight').value;
-      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, {
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, editedBy: 'user-edit', audience: aud, careWeight: cw || null }),
+        body: JSON.stringify({ content: body, audience: aud, careWeight: cw || '' }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();
-      keOpenMemory(granularity, date);
+      keOpenMemory({ ...m, id });
+    });
+    $('ke-mem-move').addEventListener('click', async () => {
+      const nd = $('ke-mem-movedate').value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(nd)) { alert('Pick a valid date first.'); return; }
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}/move`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: nd }),
+      });
+      if (!r.ok) { alert(`Move failed: ${(await r.json()).error ?? r.status}`); return; }
+      keLoadMemories();
+      keOpenMemory({ ...m, id });
     });
     $('ke-mem-super').addEventListener('click', async () => {
       const body = $('ke-mem-content').value;
@@ -5404,13 +5654,211 @@ async function keOpenMemory(granularity, date) {
       keLoadMemories();
     });
     $('ke-mem-delete').addEventListener('click', async () => {
-      if (!confirm(`Delete memory ${granularity}/${date}? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
-      const r = await fetch(`/api/entity/memories/${encodeURIComponent(granularity)}/${encodeURIComponent(date)}`, { method: 'DELETE' });
+      if (!confirm(`Delete this ${granularity} memory (${date})? An auto-snapshot is taken first; you can restore via the Snapshots tab.`)) return;
+      const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!r.ok) { alert(`Delete failed: ${(await r.json()).error ?? r.status}`); return; }
       keSetDetail('ke-mem-detail', '<p class="logs-empty">Deleted.</p>');
       keLoadMemories();
     });
   } catch (err) { keSetDetail('ke-mem-detail', keError(err, 'Failed to load memory.')); }
+}
+
+// ── Coverage tab (day-anchoring calendar) ───────────────────────────────
+// Shows which calendar days are fully memorized vs missing vs uncertain, and
+// lets the ward (re)feed a day's logs to the pipeline. Data: GET
+// /api/memory-coverage (per-date status from the coverage ledger + live logs).
+let _keCovData = null;                 // { tz, days: { 'YYYY-MM-DD': {status,facts,flags,sessions} } }
+let _keCovMonth = null;                // { y, m } (m: 0-11) currently displayed
+
+function keCovShiftMonth({ y, m }, delta) {
+  const d = new Date(y, m + delta, 1);
+  return { y: d.getFullYear(), m: d.getMonth() };
+}
+function keCovDateKey(y, m, day) {
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+async function keLoadCoverage() {
+  const cal = $('ke-cov-cal');
+  cal.innerHTML = '<p class="logs-loading">Loading…</p>';
+  try {
+    const res = await fetch('/api/memory-coverage');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    _keCovData = await res.json();
+    // Default to the most recent month that has any data, else the current month.
+    if (!_keCovMonth) {
+      const dates = Object.keys(_keCovData.days ?? {}).sort();
+      const ref = dates.length ? new Date(dates[dates.length - 1] + 'T00:00:00') : new Date();
+      _keCovMonth = { y: ref.getFullYear(), m: ref.getMonth() };
+    }
+    keRenderCalendar();
+  } catch (err) {
+    cal.innerHTML = keError(err, 'Failed to load coverage.');
+  }
+}
+
+function keRenderCalendar() {
+  const cal = $('ke-cov-cal');
+  if (!_keCovData || !_keCovMonth) { cal.innerHTML = ''; return; }
+  const { y, m } = _keCovMonth;
+  const days = _keCovData.days ?? {};
+  $('ke-cov-month').textContent = new Date(y, m, 1)
+    .toLocaleString([], { month: 'long', year: 'numeric' });
+
+  const firstDow = (new Date(y, m, 1).getDay() + 6) % 7; // Mon=0
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  let html = '<div class="ke-cov-grid">';
+  for (const d of dow) html += `<div class="ke-cov-dow">${d}</div>`;
+  for (let i = 0; i < firstDow; i++) html += '<div class="ke-cov-cell ke-cov-blank"></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = keCovDateKey(y, m, day);
+    const entry = days[key];
+    const status = entry?.status ?? 'empty';
+    const facts = entry?.facts ?? 0;
+    const title = entry ? `${status}${facts ? ` · ${facts} fact(s)` : ''}` : 'no logs';
+    html += `<button class="ke-cov-cell cov-${status}" data-cov-date="${key}" title="${esc(title)}">`
+         +  `<span class="ke-cov-num">${day}</span>`
+         +  (facts ? `<span class="ke-cov-facts">${facts}</span>` : '')
+         +  '</button>';
+  }
+  html += '</div>';
+  cal.innerHTML = html;
+  cal.querySelectorAll('[data-cov-date]').forEach(el =>
+    el.addEventListener('click', () => keOpenCoverageDay(el.dataset.covDate)));
+}
+
+function keOpenCoverageDay(date) {
+  const entry = _keCovData?.days?.[date];
+  const det = $('ke-cov-detail');
+  const pretty = new Date(date + 'T00:00:00').toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  if (!entry) {
+    det.innerHTML = `<div class="ke-detail-header"><h3>${esc(pretty)}</h3></div>`
+      + '<p class="logs-empty">No conversation logs on this day.</p>';
+    return;
+  }
+  const sessions = entry.sessions ?? [];
+  const rows = sessions.map(s => {
+    const done = s.memorized >= s.total;
+    const flag = s.flag ? ` <span class="ke-badge ke-badge-register">${esc(s.flag)}</span>` : '';
+    return `<div class="ke-cov-srow">${done ? '✓' : '○'} <code>${esc(s.sessionId.slice(0, 8))}</code> `
+      + `<span class="field-hint">${s.memorized}/${s.total} msgs</span>${flag}</div>`;
+  }).join('');
+  det.innerHTML = `
+    <div class="ke-detail-header">
+      <h3>${esc(pretty)}</h3>
+      <span class="ke-badge cov-${entry.status}">${esc(entry.status)}</span>
+    </div>
+    <p class="field-hint">${entry.facts} fact(s) memorized from this day.</p>
+    <div class="ke-cov-sessions">${rows || '<p class="logs-empty">—</p>'}</div>
+    <div class="ke-actions">
+      <button id="ke-cov-memorize" class="btn-send">Memorize this day</button>
+      <label class="ke-cov-force"><input type="checkbox" id="ke-cov-force"> re-run already-done</label>
+    </div>
+    <div class="vl-status" id="ke-cov-status"></div>`;
+  $('ke-cov-memorize').addEventListener('click', () => keMemorizeDay(date));
+}
+
+async function keMemorizeDay(date) {
+  const status = $('ke-cov-status');
+  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  const force = !!$('ke-cov-force')?.checked;
+  status.textContent = 'Queuing…';
+  try {
+    const res = await fetch('/api/memorize-day', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, force, provider: state.provider, apiKey: state.apiKey, model: state.model }),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const { enqueued, deduped, requested } = await res.json();
+    status.textContent = enqueued
+      ? `Queued ${enqueued} session-slice(s) — coverage updates as they finish.`
+      : (requested ? 'Already in hand (in flight or done).' : 'Nothing to memorize on this day.');
+    // Refresh coverage shortly so the colour reflects in-flight work settling.
+    setTimeout(keLoadCoverage, 1500);
+  } catch (err) {
+    status.textContent = `Failed: ${err.message}`;
+  }
+}
+
+// ── Coverage: foreign-log import ────────────────────────────────────────
+let _keImportPreviewed = null; // last preview's {dates, days, messages, format}
+let _keImportFilename = '';    // name of the chosen file (for filename-date extraction)
+
+async function keCovImportFileChosen(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (file.size > 30 * 1024 * 1024) { $('ke-cov-import-status').textContent = 'File too large (max 30 MB).'; return; }
+  try {
+    $('ke-cov-import-text').value = await file.text();
+    _keImportFilename = file.name;
+    $('ke-cov-import-status').textContent = `Loaded ${file.name}.`;
+  } catch { $('ke-cov-import-status').textContent = 'Could not read that file.'; }
+}
+
+function keCovImportBody(commit) {
+  return {
+    content: $('ke-cov-import-text').value,
+    selfNames: $('ke-cov-import-self').value,
+    source: $('ke-cov-import-source').value,
+    filename: _keImportFilename || undefined,
+    fallbackDate: $('ke-cov-import-date').value || undefined,
+    ...(commit ? { commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model } : {}),
+  };
+}
+
+async function keCovImportPreview() {
+  const status = $('ke-cov-import-status');
+  if (!$('ke-cov-import-text').value.trim()) { status.textContent = 'Paste or choose a log first.'; return; }
+  status.textContent = 'Reading…';
+  $('ke-cov-import-commit').disabled = true;
+  _keImportPreviewed = null;
+  try {
+    const res = await fetch('/api/import-logs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(keCovImportBody(false)),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    if (data.needsDate) {
+      _keImportPreviewed = null;
+      status.textContent = `Recognised ${data.format}, but it has no timestamps and none in the filename. Enter a "Date" above, then Preview again.`;
+      $('ke-cov-import-date')?.focus();
+      return;
+    }
+    _keImportPreviewed = data;
+    const range = data.dates.length ? `${data.dates[0]} → ${data.dates[data.dates.length - 1]}` : '—';
+    status.textContent = `Recognised ${data.format}: ${data.days} day(s) (${range}), ${data.messages} message(s). `
+      + `"Import & memorize" will store them and run ~${data.days} extraction pass(es).`;
+    $('ke-cov-import-commit').disabled = false;
+  } catch (err) {
+    status.textContent = `Couldn't read it: ${err.message}`;
+  }
+}
+
+async function keCovImportCommit() {
+  const status = $('ke-cov-import-status');
+  if (!_keImportPreviewed) { status.textContent = 'Preview first.'; return; }
+  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  if (!confirm(`Import ${_keImportPreviewed.days} day(s) and memorize them now? This runs ~${_keImportPreviewed.days} extraction pass(es).`)) return;
+  status.textContent = 'Importing…';
+  $('ke-cov-import-commit').disabled = true;
+  try {
+    const res = await fetch('/api/import-logs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(keCovImportBody(true)),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    status.textContent = `Imported ${data.days} day(s), queued ${data.enqueued} for memorizing. Coverage updates as they finish.`;
+    _keImportPreviewed = null;
+    $('ke-cov-import-text').value = '';
+    setTimeout(keLoadCoverage, 1500);
+  } catch (err) {
+    status.textContent = `Import failed: ${err.message}`;
+    $('ke-cov-import-commit').disabled = false;
+  }
 }
 
 // ── Graph tab ───────────────────────────────────────────────────────────
@@ -6319,6 +6767,13 @@ async function keGraphOpenPopover(node, clientX, clientY) {
     const sg   = await res.json();
     const self = (sg.nodes ?? []).find(n => n.id === node.id) ?? node;
     const edgesHtml = (sg.edges ?? []).map(e => keGraphEdgeRowHTML(node.id, e, sg)).join('');
+    // Audience dropdown — "just us" plus every Village circle (shared with the
+    // memory editor). A node is private by default; this is the deliberate
+    // widen/tighten surface for the human (the Familiar has the same control via
+    // update_graph_node). Village unreachable → ward-private only; harmless.
+    let audCats = [];
+    try { audCats = (await vlFetch())?.categories ?? []; } catch { /* keep ward-private only */ }
+    const audOptions = keAudienceOptionsHTML(self.audience, audCats);
     pop.innerHTML = `
       <div class="ke-graph-popover-head">
         <h3>${esc(self.label ?? node.id)}</h3>
@@ -6327,6 +6782,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
       <div class="field"><label>Label</label><input id="ke-pop-label" type="text" value="${esc(self.label ?? '')}"></div>
       <div class="field"><label>Type</label><input  id="ke-pop-type"  type="text" value="${esc(self.type  ?? '')}" list="ke-node-types-dl"></div>
       <div class="field"><label>Description</label><textarea id="ke-pop-desc" rows="3">${esc(self.description ?? '')}</textarea></div>
+      <div class="field"><label>Audience <span class="field-hint">(where this may surface)</span></label><select id="ke-pop-audience">${audOptions}</select></div>
       <div class="ke-actions">
         <button id="ke-pop-save"   class="btn-send"  type="button">Save</button>
         <button id="ke-pop-delete" class="btn-ghost ke-danger" type="button">Delete node</button>
@@ -6346,6 +6802,7 @@ async function keGraphOpenPopover(node, clientX, clientY) {
         label:       $('ke-pop-label').value,
         type:        $('ke-pop-type').value,
         description: $('ke-pop-desc').value,
+        audience:    $('ke-pop-audience')?.value || 'ward-private',
       };
       const r = await fetch(`/api/entity/graph/nodes/${encodeURIComponent(node.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -8307,6 +8764,20 @@ function vlRememberRowHtml(cat, currentVal) {
   return `<div class="vl-rem-row"><span class="vl-rem-label">${esc(cat.label)}</span><div class="vl-rem-toggle">${btns}</div></div>`;
 }
 
+// Disclosure row: for one remember-category, which circle may facts about this
+// person in that category surface in? Default = session-bounded (the room the
+// memory was made in caps it; never auto-widened). An explicit pick widens or
+// tightens. 'ward-private' means "only ever when it's just us two".
+function vlDisclosureRowHtml(cat, currentVal, categories) {
+  const opts = [`<option value="">Default (session-bounded)</option>`,
+    `<option value="ward-private"${currentVal === 'ward-private' ? ' selected' : ''}>Ward-private (just us)</option>`];
+  for (const c of categories) {
+    opts.push(`<option value="${esc(c.id)}"${currentVal === c.id ? ' selected' : ''}>${esc(c.name)}</option>`);
+  }
+  return `<div class="vl-rem-row"><span class="vl-rem-label">${esc(cat.label)}</span>` +
+    `<select class="vl-disc-sel" data-cat="${esc(cat.key)}" style="flex:1">${opts.join('')}</select></div>`;
+}
+
 function vlRenderPersonDetail(villager) {
   const detail = $('vl-people-detail');
   const reg = _vlReg;
@@ -8328,6 +8799,10 @@ function vlRenderPersonDetail(villager) {
 
   const remRows = VL_REMEMBER_CATS.map(cat =>
     vlRememberRowHtml(cat, villager?.remember?.[cat.key])
+  ).join('');
+
+  const discRows = VL_REMEMBER_CATS.map(cat =>
+    vlDisclosureRowHtml(cat, villager?.disclosure?.[cat.key], reg.categories)
   ).join('');
 
   const graphNodeHtml = (!isNew && villager.graphNodeId)
@@ -8380,6 +8855,15 @@ function vlRenderPersonDetail(villager) {
     <div>
       <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
       <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
+    </div>
+    <div>
+      <div class="vl-field-label">Standing consent <span class="field-hint">(when both you and this person have agreed, the Familiar stops asking for per-fact consent about them — a "never store" category above still holds)</span></div>
+      <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-ward" ${villager?.standingConsent?.wardAgreed ? 'checked' : ''}> I agree the Familiar may keep memories about this person</label>
+      <label class="vl-consent-line"><input type="checkbox" id="vl-p-consent-villager" ${villager?.standingConsent?.villagerAgreed ? 'checked' : ''}> This person has agreed too</label>
+    </div>
+    <div>
+      <div class="vl-field-label">Disclosure <span class="field-hint">(per category, which circle facts about this person may surface in — default keeps them to the room the memory was made in; pick a category to widen, or Ward-private to keep them to just us)</span></div>
+      <div id="vl-p-disclosure" class="vl-rem-grid">${discRows}</div>
     </div>
     ${graphNodeHtml}
     <div class="vl-actions">
@@ -8451,13 +8935,22 @@ async function vlSavePerson(id) {
     const rawVal = btn.dataset.val;
     remember[btn.dataset.cat] = rawVal === 'true' ? true : rawVal === 'false' ? false : 'ask';
   });
+  const standingConsent = {
+    wardAgreed:     !!$('vl-p-consent-ward')?.checked,
+    villagerAgreed: !!$('vl-p-consent-villager')?.checked,
+  };
+  const disclosure = {};
+  document.querySelectorAll('#vl-p-disclosure .vl-disc-sel').forEach(sel => {
+    const v = sel.value.trim();
+    if (v) disclosure[sel.dataset.cat] = v;
+  });
   status.textContent = 'Saving…';
   try {
     const r = await fetch(
       id ? `/api/village/villagers/${encodeURIComponent(id)}` : '/api/village/villagers',
       { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, categoryIds, aliases, connection,
-          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember }) },
+          pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, remember, standingConsent, disclosure }) },
     );
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();

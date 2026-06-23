@@ -1042,7 +1042,7 @@ import {
   getUnactedIntents,
   formatDeferredIntentsBlock,
 } from './recent-ponderings.js';
-import { getThreat, tierForThreat } from './threat-tracker.js';
+import { getThreat } from './threat-tracker.js';
 import {
   selectSurfaceCandidates,
   formatSurfaceCandidatesBlock,
@@ -1124,7 +1124,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -1177,12 +1177,14 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       (staticOnly || !doMemory) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: memories)'))
         : mcpClient.callTool({
             name: 'memory_search',
-            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5 },
+            // audiences = the room's allowed audience-tag set (Pillar E recall
+            // gate). null/omitted = ward-private room → no filter (sees all).
+            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}) },
           }),
       (staticOnly || !doGraph) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: graph)'))
         : mcpClient.callTool({
             name: 'graph_node_search',
-            arguments: { query: userMessage, limit: 10, minScore: 0.3 },
+            arguments: { query: userMessage, limit: 10, minScore: 0.3, ...(audiences ? { audiences } : {}) },
           }),
     ] : [Promise.reject(new Error('phylactery not connected')),
          Promise.reject(new Error('phylactery not connected')),
@@ -1302,7 +1304,12 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           const source = [r.granularity, r.date].filter(Boolean).join('/');
           const rel    = r.date ? relativeDay(r.date, memNow) : '';
           const when   = rel ? `${source}, ${rel}` : source;
-          return `[${i + 1}] (from ${when}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
+          // A me/ward register record is a standing truth I hold, not a passing
+          // moment — tag it so I weight it accordingly when I read it back.
+          const standing = r.register === 'ward' ? 'a standing fact about my human · '
+                         : r.register === 'me'   ? 'a standing fact about myself · '
+                         : '';
+          return `[${i + 1}] (${standing}from ${when}, ${score}% relevant)\n${(r.excerpt ?? '').trim()}`;
         })
         .filter(s => s.length > 5)
         .join('\n\n');
@@ -1333,7 +1340,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         traversalNodes.map(n =>
           mcpClient.callTool({
             name: 'graph_subgraph',
-            arguments: { nodeId: n.id, depth: 1 },
+            arguments: { nodeId: n.id, depth: 1, ...(audiences ? { audiences } : {}) },
           })
         )
       );
@@ -1361,15 +1368,21 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         for (const edge of sg.edges ?? []) {
           if (seenEdges.has(edge.id)) continue;
           seenEdges.add(edge.id);
+          const from = nodeLabels.get(edge.fromId);
+          const to   = nodeLabels.get(edge.toId);
+          // Relationship lines are concept-only — labels, never a raw id. If an
+          // endpoint label can't be resolved, skip the line rather than leak a
+          // UUID inline: the LLM relates concepts, not hex strings, and an
+          // unnamed endpoint can't be related anyway. Every id lives ONLY in
+          // the legend at the end of the block (the separate-block home).
+          if (!from || !to) continue;
           edgeNodeIds.add(edge.fromId);
           edgeNodeIds.add(edge.toId);
-          const from = nodeLabels.get(edge.fromId) ?? edge.fromId;
-          const to   = nodeLabels.get(edge.toId)   ?? edge.toId;
           const rel  = edge.customType ?? edge.type;
           const desc = nodeDescs.get(edge.toId);
           lines.push(desc ? `${from} ${rel} ${to} (${desc})` : `${from} ${rel} ${to}`);
-          if (edge.fromId && nodeLabels.has(edge.fromId)) idLegendNodes.set(edge.fromId, nodeLabels.get(edge.fromId));
-          if (edge.toId   && nodeLabels.has(edge.toId))   idLegendNodes.set(edge.toId,   nodeLabels.get(edge.toId));
+          idLegendNodes.set(edge.fromId, from);
+          idLegendNodes.set(edge.toId, to);
           if (edge.id) idLegendEdges.push({ id: edge.id, fromLabel: from, rel, toLabel: to });
         }
       }
@@ -1852,15 +1865,16 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
  * @param {{ content: string, granularity: string, date?: string, slug?: string, instanceId?: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-export async function createMemory({ content, granularity = 'daily', date, slug, instanceId = 'proto-familiar' }) {
+export async function createMemory({ content, granularity = 'daily', date, slug, register = 'episodic', instanceId = 'proto-familiar' }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
     const today = new Date().toISOString().slice(0, 10);
     const args = { content, granularity, date: date ?? today, instanceId };
     if (slug) args.slug = slug;
+    if (register && register !== 'episodic') args.register = register;
     await mcpClient.callTool({ name: 'memory_create', arguments: args });
-    console.log(`[thalamus] createMemory() saved ${granularity} memory${slug ? ` (slug=${slug})` : ''}`);
+    console.log(`[thalamus] createMemory() saved ${granularity}${register !== 'episodic' ? `/${register}` : ''} memory${slug ? ` (slug=${slug})` : ''}`);
     return { ok: true };
   } catch (err) {
     console.error('[thalamus] createMemory failed:', err.message);
@@ -1873,7 +1887,7 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
  * Accepts audience, subjects, category, consent_pending, confidence.
  * Returns { ok, id?, error? }.
  */
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0 }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -1881,13 +1895,17 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
     if (slug) args.slug = slug;
     if (category) args.category = category;
+    if (standalone) args.standalone = true;
     const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
-    // Parse the returned string to extract the id (format: "Memory saved id=<id>.")
+    // Parse the returned string for the id and whether it merged into an
+    // existing memory ("Memory saved id=<id>." vs "Memory merged into existing
+    // id=<id>."). `merged` lets the memorization loop skip re-queuing dupes.
     const text = raw?.content?.find(c => c.type === 'text')?.text ?? '';
     const idMatch = text.match(/id=([a-f0-9]+)/);
     const id = idMatch?.[1] ?? null;
-    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}`);
-    return { ok: true, id };
+    const merged = /merged/i.test(text);
+    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}${merged ? ' [merged-dedup]' : ''}`);
+    return { ok: true, id, merged };
   } catch (err) {
     console.error('[thalamus] createMemoryFull failed:', err.message);
     return { ok: false, error: err.message };
@@ -1921,6 +1939,17 @@ export async function dropPendingMemories(ids) {
  * Returns { hit: boolean, topic?: string, score?: number }.
  * Always resolves (never rejects) — fails open with { hit: false }.
  */
+/**
+ * Semantic recall over my own long-term memory (ward-private). Backs the
+ * `recall` tool so I can check what I already hold before saving — the
+ * dedup-before-write path. Returns the raw { results: [...] } from
+ * Phylactery's memory_search; the caller formats it. Never the restricted
+ * variant: recall is a ward-private act.
+ */
+export async function searchMemory({ query, maxResults = 5 }) {
+  return callTool('memory_search', { query, instanceId: 'proto-familiar', maxResults });
+}
+
 export async function searchMemoryRestricted({ query, roomAudience, threshold = 0.70 }) {
   try {
     return await callTool('memory_search_restricted', {
@@ -2081,12 +2110,16 @@ export async function updateIdentitySection({ category, filename, heading, conte
 
 const PROTO_INSTANCE_ID = 'proto-familiar';
 
-async function callTool(name, args = {}) {
+async function callTool(name, args = {}, opts = {}) {
   await startThalamus();
   if (!mcpClient) throw new Error('phylactery not connected');
   const t0 = Date.now();
   console.log(`[thalamus] → phylactery: ${name}`);
-  const result = await mcpClient.callTool({ name, arguments: args });
+  // opts.timeout overrides the SDK's 60s default — used by callers that
+  // must fail fast rather than hang (e.g. the village boot pull racing
+  // Phylactery's warm-up).
+  const reqOpts = opts.timeout ? { timeout: opts.timeout } : undefined;
+  const result = await mcpClient.callTool({ name, arguments: args }, undefined, reqOpts);
   console.log(`[thalamus] ← phylactery: ${name} (${Date.now() - t0}ms)`);
   return parseToolText(result, {});
 }
@@ -2114,8 +2147,59 @@ export async function readMemory({ granularity, date, slug }) {
   return callTool('memory_read', { granularity, date, ...(slug ? { slug } : {}) });
 }
 
-export async function getIdentityAll() {
-  return callTool('identity_get_all', {});
+// By-id addressing — the unique handle. granularity+date can't single out a
+// standalone per-fact row (many share one day), so read/edit/move/delete of a
+// specific fact must go by id.
+export async function readMemoryById({ id }) {
+  return callTool('memory_read_by_id', { id });
+}
+
+export async function moveMemoryDate({ id, date }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const result = await callTool('memory_move_date', { id, date });
+    console.log(`[thalamus] moveMemoryDate ${id} → ${date}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] moveMemoryDate failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateMemoryById({ id, content, audience, careWeight }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const args = { id,
+      ...(content   !== undefined ? { content }   : {}),
+      ...(audience  !== undefined ? { audience }  : {}),
+      ...(careWeight !== undefined ? { careWeight } : {}),
+    };
+    const result = await callTool('memory_update_by_id', args);
+    console.log(`[thalamus] updateMemoryById ${id}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] updateMemoryById failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteMemoryById({ id }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const result = await callTool('memory_delete_by_id', { id });
+    console.log(`[thalamus] deleteMemoryById ${id}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] deleteMemoryById failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function getIdentityAll({ timeout } = {}) {
+  return callTool('identity_get_all', {}, timeout ? { timeout } : {});
 }
 
 export async function listGraphNodes({ type, limit = 200, offset = 0 } = {}) {
@@ -2217,7 +2301,7 @@ export async function rewriteIdentitySection({ category, filename, section, cont
   }
 }
 
-export async function createGraphNode({ label, type, description, instanceId = PROTO_INSTANCE_ID }) {
+export async function createGraphNode({ label, type, description, audience, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2225,6 +2309,7 @@ export async function createGraphNode({ label, type, description, instanceId = P
     if (label       !== undefined) args.label       = label;
     if (description !== undefined) args.description = description;
     if (type        !== undefined) args.type        = type;
+    if (audience    !== undefined) args.audience    = audience;
     const result = await callTool('graph_node_create', args);
     console.log(`[thalamus] createGraphNode (${label ?? '?'})`);
     return { ok: true, result };
@@ -2250,7 +2335,35 @@ export async function createGraphEdge({ fromId, toId, type, weight, instanceId =
   }
 }
 
-export async function updateGraphNode({ id, label, description, type, instanceId = PROTO_INSTANCE_ID }) {
+/**
+ * Record a relationship by entity NAMES with resolve-or-create + edge dedup
+ * (the graph_relate tool does it all in one round-trip in Phylactery). This is
+ * what the memorization loop calls for each extracted relation, so the graph
+ * populates itself without piling up duplicate nodes/edges. Degrades to a
+ * no-op when Phylactery is down.
+ */
+export async function graphRelate({ fromLabel, fromType, toLabel, toType, type, weight, fromAudience, toAudience, edgeAudience, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const args = { fromLabel, toLabel, type, instanceId };
+    if (fromType !== undefined) args.fromType = fromType;
+    if (toType   !== undefined) args.toType   = toType;
+    if (weight   !== undefined) args.weight   = weight;
+    // Per-endpoint audience tags (derived in code by the caller) only tag NEW
+    // nodes/edges; an existing node is never re-tagged server-side.
+    if (fromAudience  !== undefined) args.fromAudience  = fromAudience;
+    if (toAudience    !== undefined) args.toAudience    = toAudience;
+    if (edgeAudience  !== undefined) args.edgeAudience  = edgeAudience;
+    const result = await callTool('graph_relate', args);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] graphRelate failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateGraphNode({ id, label, description, type, audience, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`graph_node_update ${id}`);
@@ -2259,6 +2372,7 @@ export async function updateGraphNode({ id, label, description, type, instanceId
     if (label       !== undefined) args.label       = label;
     if (description !== undefined) args.description = description;
     if (type        !== undefined) args.type        = type;
+    if (audience    !== undefined) args.audience    = audience;
     const result = await callTool('graph_node_update', args);
     console.log(`[thalamus] updateGraphNode ${id}`);
     return { ok: true, result };

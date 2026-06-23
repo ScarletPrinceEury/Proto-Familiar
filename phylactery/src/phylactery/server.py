@@ -178,6 +178,8 @@ def memory_create(
     category: Optional[str] = None,
     consent_pending: Optional[bool] = None,
     confidence: Optional[float] = None,
+    standalone: Optional[bool] = None,
+    register: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to store a new memory about my human or our world. I reach for it
@@ -186,7 +188,12 @@ def memory_create(
     For significant, slug is derived from content if omitted.
     audience defaults to ward-private; subjects is a list of villager IDs;
     category is the remember-taxonomy bucket; consent_pending marks records
-    awaiting ward approval (the ask path).
+    awaiting ward approval (the ask path). standalone gives a non-significant
+    fact its own row (carrying its category/consent) instead of appending into
+    the date bucket — how the memorization pipeline lands discrete daily facts.
+    register is the axis separate from granularity: episodic (default, a lived
+    moment), me (a standing truth about myself), or ward (a standing truth about
+    my human) — the recalled-when-relevant home for identity-grade facts.
     """
     result = mem.create(
         content, granularity, date_key=date, slug=slug,
@@ -196,10 +203,17 @@ def memory_create(
         category=category,
         consent_pending=bool(consent_pending),
         confidence=float(confidence) if confidence is not None else 1.0,
+        standalone=bool(standalone),
+        register=register or "episodic",
         conn=_c(),
     )
     if not result.get("ok"):
         return f"Memory save failed: {result.get('error', 'unknown')}"
+    if result.get("merged"):
+        # A near-duplicate was folded into an existing memory instead of
+        # creating a new row (the dedup path). The marker lets callers skip
+        # re-queuing it for consent.
+        return f"Memory merged into existing id={result.get('id', '')}."
     dk = result.get("dateKey", "")
     if granularity == "significant":
         return f"Memory saved (significant/{dk}) id={result.get('id', '')}."
@@ -239,19 +253,88 @@ def memory_read(
 
 
 @mcp.tool()
+def memory_read_by_id(
+    id: str,
+    instanceId: Optional[str] = None,
+) -> dict[str, Any]:
+    """I use this to read one specific memory by its id — the reliable handle when a
+    date alone is ambiguous. Many of my per-fact memories share a single day (a whole
+    conversation's facts land on the same date), so addressing by day can't tell them
+    apart; the id always can. I get ids from memory_search and memory_list. Returns the
+    full record — content, granularity, date, register, audience, care weight.
+    """
+    return mem.read_memory_by_id(id, conn=_c())
+
+
+@mcp.tool()
+def memory_move_date(
+    id: str,
+    date: str,
+    instanceId: Optional[str] = None,
+) -> str:
+    """I use this to move a memory (by its id) to the day it actually belongs to —
+    when something was filed under the wrong date. The classic case: a batch of facts
+    imported from older conversations all landed in today's bucket because no date rode
+    along at the time; I read each one, work out the day it really happened, and move it
+    there. Only the day changes — content and everything else stay put. date is the
+    correct calendar day, YYYY-MM-DD. Auto-snapshots first.
+    """
+    result = mem.move_memory_date(id, date, conn=_c())
+    if not result.get("ok"):
+        return f"Move failed: {result.get('error', 'unknown')}"
+    return f"Memory {id} moved to {result.get('date')}. (Snapshot created before change.)"
+
+
+@mcp.tool()
+def memory_update_by_id(
+    id: str,
+    content: Optional[str] = None,
+    audience: Optional[str] = None,
+    careWeight: Optional[str] = None,
+    instanceId: Optional[str] = None,
+) -> str:
+    """I use this to correct or re-tag one specific memory by its id — the reliable
+    handle when many facts share a day. content rewrites the text; audience sets who
+    may see it; careWeight is 'high'/'low' or '' to clear. Auto-snapshots first.
+    """
+    result = mem.update_memory_by_id(
+        id, new_content=content, audience=audience, care_weight=careWeight, conn=_c()
+    )
+    if not result.get("ok"):
+        return f"Update failed: {result.get('error', 'unknown')}"
+    return "Memory updated. (Snapshot created before change.)"
+
+
+@mcp.tool()
+def memory_delete_by_id(
+    id: str,
+    instanceId: Optional[str] = None,
+) -> str:
+    """I use this to delete one specific memory by its id — the reliable handle when
+    many facts share a day and a date can't single one out. Auto-snapshots first.
+    """
+    result = mem.delete_memory_by_id(id, conn=_c())
+    if not result.get("ok"):
+        return f"Delete failed: {result.get('error', 'unknown')}"
+    return f"Memory deleted: {result.get('deleted')}. (Snapshot created before deletion.)"
+
+
+@mcp.tool()
 def memory_search(
     query: str,
     maxResults: Optional[int] = None,
     instanceId: Optional[str] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to search my memories by meaning. I reach for it when I'm trying to
     recall something relevant to a topic or question — it does semantic RAG search and
     falls back to recency. Returns thin projections with ids and scores.
+    `audiences` is the room's allowed audience-tag set (omit for a ward-private
+    room → I see everything); the recall gate keeps shared-room recall to what
+    that room is cleared for.
     """
     k = max(1, min(20, int(maxResults or 5)))
-    aud = audience or "ward-private"
-    return mem.search(query, max_results=k, audience=aud, conn=_c())
+    return mem.search(query, max_results=k, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
@@ -365,32 +448,32 @@ def graph_node_search(
     query: str,
     limit: Optional[int] = None,
     minScore: Optional[float] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to search my knowledge graph by meaning. I reach for it when I need
     to find a person, place, concept, or other entity node I might be connected to.
     Optionally expands to 1-hop GraphRAG neighbours.
+    `audiences` is the room's allowed audience-tag set (omit for ward-private → all).
     Returns { results: [{ node: {id, label, type, description}, score }] }
     """
     k = max(1, min(50, int(limit or 10)))
     ms = float(minScore or 0.3)
-    aud = audience or "ward-private"
-    return graph.search_nodes(query, limit=k, min_score=ms, audience=aud, conn=_c())
+    return graph.search_nodes(query, limit=k, min_score=ms, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
 def graph_subgraph(
     nodeId: str,
     depth: Optional[int] = None,
-    audience: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """I use this to pull the subgraph around a node — its direct neighbours and
     edges up to N hops deep. I reach for it when I want to understand my connections
-    to a specific entity. Returns { nodes: [...], edges: [...] }.
+    to a specific entity. `audiences` is the room's allowed audience-tag set (omit
+    for ward-private → all). Returns { nodes: [...], edges: [...] }.
     """
     d = max(1, min(3, int(depth or 1)))
-    aud = audience or "ward-private"
-    return graph.get_subgraph(nodeId, depth=d, audience=aud, conn=_c())
+    return graph.get_subgraph(nodeId, depth=d, audiences=audiences, conn=_c())
 
 
 @mcp.tool()
@@ -398,13 +481,18 @@ def graph_node_create(
     label: str,
     type: Optional[str] = None,
     description: Optional[str] = None,
+    audience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> dict[str, Any]:
     """I use this to add a new node to my knowledge graph. I reach for it when I
-    encounter a person, place, organisation, or concept worth tracking. Returns
-    the new node's id for use in edge creation.
-    """
-    return graph.create_node(label, node_type=type, description=description, conn=_c())
+    encounter a concrete, nameable entity worth tracking — a person, place,
+    organisation, pet, condition, project, or thing (never an abstraction, feeling
+    or topic). Returns the new node's id for use in edge creation. `audience`
+    (derived in code from who the node is) governs where it may surface; it
+    defaults to ward-private.
+    """  # entity vocabulary kept in sync with graph-vocab.js
+    aud = audience if audience is not None else "ward-private"
+    return graph.create_node(label, node_type=type, description=description, audience=aud, conn=_c())
 
 
 @mcp.tool()
@@ -426,13 +514,16 @@ def graph_node_update(
     id: str,
     label: Optional[str] = None,
     description: Optional[str] = None,
+    audience: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to rename or re-describe a node in my knowledge graph (auto-snapshots first).
     I reach for it when a person or entity's details have changed and the current label
-    or description no longer fits.
+    or description no longer fits. `audience` deliberately sets how widely this node may
+    surface (a Village category id, or 'ward-private') — it's how I keep a node to just
+    {{user}} and me, or open it up to one of our circles.
     """
-    result = graph.update_node(id, label=label, description=description, conn=_c())
+    result = graph.update_node(id, label=label, description=description, audience=audience, conn=_c())
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
     return "Node updated. (Snapshot created before change.)"
@@ -467,6 +558,39 @@ def graph_edge_create(
     """
     w = float(weight) if weight is not None else 1.0
     return graph.create_edge(fromId, toId, type, weight=w, conn=_c())
+
+
+@mcp.tool()
+def graph_relate(
+    fromLabel: str,
+    toLabel: str,
+    type: str,
+    fromType: Optional[str] = None,
+    toType: Optional[str] = None,
+    weight: Optional[float] = None,
+    fromAudience: Optional[str] = None,
+    toAudience: Optional[str] = None,
+    edgeAudience: Optional[str] = None,
+    instanceId: Optional[str] = None,
+) -> dict[str, Any]:
+    """I record a relationship between two entities BY NAME, creating either
+    node only if it isn't already in my graph and skipping the edge if I already
+    have it — so my graph never fills with duplicates. I reach for this (or it's
+    called for me when I memorise a session) whenever I learn how two real things
+    connect: "Sam works_at Acme", "Sam lives_in Bristol", "Mochi is_pet_of Sam".
+    fromLabel/toLabel are the entities' names; fromType/toType classify them —
+    one of person, place, organisation, pet, condition, project, thing (concrete,
+    nameable entities only, never abstractions); type is the relationship in
+    snake_case. The audience tags (derived in code from who each entity is) tag any
+    NEW node/edge so a person-node surfaces only where they're cleared; an existing
+    node is never re-tagged.
+    """  # entity vocabulary kept in sync with graph-vocab.js
+    w = float(weight) if weight is not None else 1.0
+    return graph.relate(
+        fromLabel, fromType, toLabel, toType, type, weight=w,
+        from_audience=fromAudience, to_audience=toAudience, edge_audience=edgeAudience,
+        conn=_c(),
+    )
 
 
 @mcp.tool()

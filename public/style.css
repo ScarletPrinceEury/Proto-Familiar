@@ -1730,6 +1730,37 @@ button { cursor: pointer; font-family: var(--font); }
 .ke-badge-audience { background: var(--accent-dim, #1c3a5e); color: var(--accent, #7ab4f5); }
 .ke-badge-cw-high   { background: #3a1c1c; color: #f5a07a; }
 .ke-badge-cw-low    { background: var(--surface); color: var(--text-dim); }
+.ke-badge-register  { background: #2a234a; color: #c4b5f5; }
+
+/* ── Coverage calendar ─────────────────────────────────────────── */
+.ke-cov-month { font-weight: 600; min-width: 9em; text-align: center; }
+.ke-cov-legend { display: flex; gap: 12px; margin-left: auto; align-items: center; flex-wrap: wrap; }
+.ke-cov-key { display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; color: var(--text-dim); }
+.ke-cov-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.ke-cov-cal { flex: 1 1 auto; min-width: 0; overflow: auto; }
+.ke-cov-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.ke-cov-dow { text-align: center; font-size: 0.7rem; color: var(--text-dim); padding: 2px 0; font-weight: 600; }
+.ke-cov-cell {
+  position: relative; aspect-ratio: 1 / 1; min-height: 38px;
+  border: 1px solid var(--border, #333); border-radius: 5px;
+  background: var(--surface); color: var(--text);
+  cursor: pointer; padding: 3px; display: flex; align-items: flex-start; justify-content: flex-start;
+}
+.ke-cov-cell:hover { outline: 2px solid var(--accent, #7ab4f5); }
+.ke-cov-blank { border: none; background: none; cursor: default; }
+.ke-cov-num { font-size: 0.75rem; }
+.ke-cov-facts { position: absolute; bottom: 3px; right: 4px; font-size: 0.65rem; opacity: 0.8; }
+/* status palette — reused for the calendar cells AND the detail badge */
+.cov-complete  { background: #163a28; color: #7af5a0; border-color: #245c3c; }
+.cov-partial   { background: #3a2a16; color: #f5c07a; border-color: #5c4424; }
+.cov-uncertain { background: #2a234a; color: #c4b5f5; border-color: #443a6a; }
+.cov-empty     { background: var(--surface); color: var(--text-dim); }
+.ke-cov-swatch.cov-complete  { background: #245c3c; }
+.ke-cov-swatch.cov-partial   { background: #5c4424; }
+.ke-cov-swatch.cov-uncertain { background: #443a6a; }
+.ke-cov-sessions { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+.ke-cov-srow { font-size: 0.85rem; }
+.ke-cov-force { font-size: 0.78rem; color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; }
 
 .ke-detail-header { margin-bottom: 12px; }
 .ke-detail-header h3 { margin: 0; font-size: 1rem; color: var(--text); }
@@ -3116,4 +3147,25 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   flex: 1;
   min-width: 0;
   font-size: 0.82rem;
+}
+
+/* Web search modal — option radio rows */
+.ws-opt {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 5px 0;
+  cursor: pointer;
+  line-height: 1.35;
+}
+.ws-opt input { margin-top: 3px; flex: none; }
+
+/* Web search modal — resizable */
+#websearch-modal .modal {
+  resize: both;
+  overflow: auto;
+  min-width: 340px;
+  min-height: 300px;
+  max-width: 95vw;
+  max-height: 92vh;
 }

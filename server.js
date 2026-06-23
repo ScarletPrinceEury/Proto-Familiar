@@ -17,10 +17,10 @@ import {
   startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
-  listMemories, readMemory, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
+  listMemories, readMemory, readMemoryById, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
-  updateMemory, deleteMemory, rewriteIdentitySection,
+  updateMemory, deleteMemory, updateMemoryById, deleteMemoryById, moveMemoryDate, rewriteIdentitySection,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
@@ -48,9 +48,11 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged, enqueueOutbox } from './outbox.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
+import { startMemorySweepLoop } from './memory-sweep-loop.js';
+import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock } from './relative-time.js';
@@ -75,12 +77,16 @@ import {
 import { expandWindow } from './recurrence.js';
 import {
   enqueueMemorization,
+  enqueueSessionByDay,
   listJobs as listMemorizationJobs,
   acknowledgeJob as acknowledgeMemorizationJob,
   cancelJob as cancelMemorizationJob,
   startMemorizationWorker, stopMemorizationWorker,
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
+import { computeCoverage, collectDateSlices } from './memory-coverage.js';
+import { parseImport, dateFromFilename, applyFallbackDate } from './log-import.js';
+import { segmentByDay } from './day-segments.js';
 import {
   getRegistry as getVillageRegistry,
   upsertCategory as upsertVillageCategory, deleteCategory as deleteVillageCategory,
@@ -89,10 +95,12 @@ import {
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
-import { resolveAudience, audienceTagFor, WARD_PRIVATE } from './audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
-import { startSearxngSupervisor, stopManagedSearxng } from './searxng-service.js';
+import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
+import { substituteMacros } from './macros.js';
+import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -296,13 +304,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // enrichment. Fail-closed: any error defaults to WARD_PRIVATE (no gating)
   // rather than blocking the chat. Audience only applies on the full path.
   // audienceTag (Pillar D): durable room label used by the outgoing filter.
-  let audienceGrants = WARD_PRIVATE;
-  let audienceTag    = 'ward-private';
+  let audienceGrants  = WARD_PRIVATE;
+  let audienceTag     = 'ward-private';
+  let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
-      audienceGrants = resolveAudience(sessionAudience, registry);
-      audienceTag    = audienceTagFor(sessionAudience, registry);
+      audienceGrants  = resolveAudience(sessionAudience, registry);
+      audienceTag     = audienceTagFor(sessionAudience, registry);
+      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
@@ -314,7 +324,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
@@ -408,6 +418,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const toolCtx     = {
       sessionInfo: sessionInfo && typeof sessionInfo === 'object' ? sessionInfo : null,
       wardPrivate: audienceTag === 'ward-private',
+      // For memorize_now: the session's own provider/key/audience so the
+      // Familiar can commit this conversation through the real pipeline.
+      audienceTag,
+      apiKey,
     };
     const upstreamUrl = url;
     const authHeaders = {
@@ -1382,7 +1396,42 @@ initCerebellumTools({
   getVillageRegistry,
   upsertVillager,
   relayToDiscord,
+  memorizeSessionNow,
 });
+
+// Backs the Familiar's `memorize_now` tool: commit THIS conversation to memory
+// on demand, instead of waiting for a session rollover that may never cleanly
+// happen (the human switches sessions, clears history, etc.). Reads the clean
+// session log off disk — kept current by the client's per-message saveToServer —
+// and enqueues the same extraction pipeline the rollover uses, so the facts land
+// at the right tier, consent-gated and dedup'd. Function declaration so it can be
+// referenced in the initCerebellumTools call above (hoisted). Degrades to a
+// structured result; never throws into the tool loop.
+async function memorizeSessionNow({ sessionId, provider, apiKey, model, audienceTag }) {
+  if (!isValidUUID(sessionId)) return { ok: false, error: 'no-session' };
+  let log;
+  try {
+    log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${sessionId}.json`), 'utf8'));
+  } catch {
+    return { ok: false, error: 'no-log' };
+  }
+  const messages = Array.isArray(log?.messages) ? log.messages : [];
+  const readable = messages.filter(m =>
+    (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());
+  if (readable.length < 2) return { ok: false, error: 'too-short' };
+  try {
+    // Day-anchored: segments the session by date and enqueues the missing
+    // slices (skips dates already memorized per the coverage ledger).
+    const { enqueued, skipped } = await enqueueSessionByDay({
+      sessionId, messages,
+      provider: provider ?? log.provider, apiKey, model: model ?? log.model,
+      audienceTag: audienceTag ?? 'ward-private',
+    });
+    return { ok: true, enqueued, skipped, messageCount: readable.length };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? 'enqueue-failed' };
+  }
+}
 
 // ── Memorization queue endpoints ────────────────────────────────
 
@@ -1402,10 +1451,18 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
   if (!isValidUUID(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
-    const { jobId, deduped } = await enqueueMemorization({
-      sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag,
-    });
-    res.status(202).json({ jobId, deduped });
+    if (scope === 'topic') {
+      // Topic-scoped memorization stays whole-range (one summary of a slice).
+      const { jobId, deduped } = await enqueueMemorization({
+        sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag,
+      });
+      res.status(202).json({ jobId, deduped });
+    } else {
+      // Session scope is day-anchored: one job per calendar date the session
+      // touched, skipping date-slices already memorized (the coverage ledger).
+      const r = await enqueueSessionByDay({ sessionId, messages, provider, apiKey, model, audienceTag });
+      res.status(202).json(r);
+    }
   } catch (err) {
     res.status(400).json({ error: err.message ?? 'Failed to enqueue memorization.' });
   }
@@ -1418,6 +1475,113 @@ app.get('/api/memorize', async (_req, res) => {
   } catch {
     res.json([]);
   }
+});
+
+// GET /api/memory-coverage — per-day memorization coverage for the calendar.
+// Computed live from the session logs + the coverage ledger; no message content.
+app.get('/api/memory-coverage', async (_req, res) => {
+  try { res.json(await computeCoverage()); }
+  catch { res.json({ tz: 'local', days: {} }); }
+});
+
+// POST /api/memorize-day — (re)feed every session's slice for one calendar date.
+// Skips slices already memorized unless `force`. Client supplies the creds, same
+// as POST /api/memorize.
+app.post('/api/memorize-day', async (req, res) => {
+  const { date, force, provider, apiKey, model } = req.body ?? {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) return res.status(400).json({ error: 'Invalid date (YYYY-MM-DD).' });
+  if (!provider || !apiKey || !model) return res.status(400).json({ error: 'provider, apiKey, and model are required.' });
+  try {
+    const slices = await collectDateSlices(date, { force: force === true });
+    let enqueued = 0, deduped = 0;
+    for (const { sessionId, audienceTag, seg } of slices) {
+      try {
+        const r = await enqueueMemorization({
+          sessionId, scope: 'day', topicId: date,
+          messageRange: { start: seg.startIdx, end: seg.endIdx },
+          messages: seg.messages, provider, apiKey, model, audienceTag,
+        });
+        if (r.deduped) deduped++; else enqueued++;
+      } catch (err) { console.warn('[memorize-day] slice failed:', err?.message ?? err); }
+    }
+    res.status(202).json({ enqueued, deduped, requested: slices.length });
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? 'Failed to memorize day.' });
+  }
+});
+
+// POST /api/import-logs — bring past conversation logs in from elsewhere.
+// Two-step: without `commit` it PREVIEWS (parse + segment, no writes) so the UI
+// can show the scale before spending; with `commit` it places the logs by date
+// (one imported session per date) and enqueues them for immediate ingestion.
+app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) => {
+  const { content, selfNames, source, commit, provider, apiKey, model, fallbackDate, filename } = req.body ?? {};
+  const names = Array.isArray(selfNames) ? selfNames
+    : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+  const parsed = parseImport(content, { selfNames: names });
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+
+  // Date placement (the "read filename, then ask" path): if the log carries no
+  // timestamps at all, stamp every message with a single date — an explicit
+  // fallbackDate, else one pulled from the filename. If neither is available the
+  // preview asks for a date; a commit refuses without one.
+  let messages = parsed.messages;
+  if (!messages.some(m => m.timestamp)) {
+    const explicit = (typeof fallbackDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fallbackDate)) ? fallbackDate : null;
+    const date = explicit || dateFromFilename(filename);
+    if (!date) {
+      if (!commit) return res.json({ ok: true, preview: true, format: parsed.format, needsDate: true, messages: messages.length });
+      return res.status(400).json({ error: 'This log has no timestamps. Provide a date (YYYY-MM-DD) for it.' });
+    }
+    messages = applyFallbackDate(messages, date);
+  }
+
+  // Segment into per-date slices with enough to extract.
+  const segs = segmentByDay(messages).filter(s => s.readableCount >= 2);
+  if (segs.length === 0) {
+    return res.status(400).json({ error: 'No date had enough messages to import (need ≥2 each).' });
+  }
+  const dates = segs.map(s => s.date);
+
+  if (!commit) {
+    return res.json({
+      ok: true, preview: true, format: parsed.format,
+      dates, days: segs.length,
+      messages: segs.reduce((n, s) => n + s.count, 0),
+    });
+  }
+
+  if (!provider || !apiKey || !model) {
+    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  }
+
+  let created = 0, enqueued = 0;
+  const tag = (typeof source === 'string' && source.trim()) ? source.trim().slice(0, 40) : 'import';
+  for (const seg of segs) {
+    const sessionId = randomUUID();
+    const startedAt = seg.messages.find(m => m.timestamp)?.timestamp ?? new Date().toISOString();
+    const endedAt = [...seg.messages].reverse().find(m => m.timestamp)?.timestamp ?? startedAt;
+    const log = {
+      sessionId, startedAt, endedAt, imported: true, source: tag,
+      audienceTag: 'ward-private', messages: seg.messages,
+    };
+    try {
+      const p = path.join(LOGS_DIR, `${sessionId}.json`);
+      await fsp.writeFile(p + '.tmp', JSON.stringify(log, null, 2), 'utf8');
+      await fsp.rename(p + '.tmp', p);
+      created++;
+    } catch (err) { console.warn('[import] write failed:', err?.message ?? err); continue; }
+    try {
+      const r = await enqueueMemorization({
+        sessionId, scope: 'day', topicId: seg.date,
+        messageRange: { start: seg.startIdx, end: seg.endIdx },
+        messages: seg.messages, provider, apiKey, model, audienceTag: 'ward-private',
+      });
+      if (!r.deduped) enqueued++;
+    } catch (err) { console.warn('[import] enqueue failed:', err?.message ?? err); }
+  }
+  res.status(202).json({ ok: true, committed: true, format: parsed.format, days: created, enqueued, dates });
 });
 
 // POST /api/memorize/:id/ack — mark a terminal job as seen by the UI
@@ -1521,6 +1685,56 @@ app.get('/api/entity/memories', async (req, res) => {
   const n = limit !== undefined ? Math.max(1, Math.min(100, parseInt(limit, 10) || 50)) : 50;
   try { res.json(await listMemories({ granularity, limit: n })); }
   catch (err) { gatewayDown(res, err.message); }
+});
+
+// By-id addressing — the unique handle. Registered BEFORE the /:granularity/:date
+// routes so "by-id" is never swallowed as a granularity. granularity+date can't
+// single out a standalone per-fact row (many share one day); the id always can.
+const VALID_MEMORY_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+app.get('/api/entity/memories/by-id/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  try {
+    const result = await readMemoryById({ id });
+    if (result && result.ok === false) return res.status(404).json(result);
+    res.json(result);
+  } catch (err) { gatewayDown(res, err.message); }
+});
+
+app.put('/api/entity/memories/by-id/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { content, audience, careWeight } = req.body;
+  if (content !== undefined && (typeof content !== 'string' || !content.trim())) return badRequest(res, 'content must be a non-empty string');
+  if (content !== undefined && content.length > 16384)                          return badRequest(res, 'content exceeds 16 KB limit');
+  if (audience !== undefined && typeof audience !== 'string')                    return badRequest(res, 'audience must be string');
+  const result = await updateMemoryById({
+    id,
+    ...(content   !== undefined ? { content: content.trim() } : {}),
+    ...(audience  !== undefined ? { audience }                : {}),
+    ...(careWeight !== undefined ? { careWeight }             : {}),
+  });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result ?? { ok: true });
+});
+
+app.delete('/api/entity/memories/by-id/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const result = await deleteMemoryById({ id });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result ?? { ok: true });
+});
+
+app.post('/api/entity/memories/by-id/:id/move', async (req, res) => {
+  const { id } = req.params;
+  if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
+  const { date } = req.body;
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return badRequest(res, 'date must be YYYY-MM-DD');
+  const result = await moveMemoryDate({ id, date });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json(result.result ?? { ok: true });
 });
 
 app.get('/api/entity/memories/:granularity/:date', async (req, res) => {
@@ -1668,11 +1882,12 @@ app.post('/api/entity/graph/edges', async (req, res) => {
 app.patch('/api/entity/graph/nodes/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const { label, description, type } = req.body;
+  const { label, description, type, audience } = req.body;
   if (label !== undefined && typeof label !== 'string')             return badRequest(res, 'label must be string');
   if (description !== undefined && typeof description !== 'string') return badRequest(res, 'description must be string');
   if (type !== undefined && typeof type !== 'string')               return badRequest(res, 'type must be string');
-  const result = await updateGraphNode({ id, label, description, type });
+  if (audience !== undefined && typeof audience !== 'string')        return badRequest(res, 'audience must be string');
+  const result = await updateGraphNode({ id, label, description, type, audience });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });
@@ -2253,6 +2468,57 @@ app.post('/api/discord/apply', (_req, res) => {
   res.json(applyDiscordSettings());
 });
 
+// POST /api/guide-chat — the in-modal Familiar explainer (Part 4). Same entity,
+// STRIPPED context (identity + the four prompt fields + the tools-info /
+// no-jargon blocks; no memory/graph/temporal/tools/care-check). Non-streaming,
+// no tools, not persisted, not memorised. Degrades calmly so the modal still
+// works as a picker if this fails.
+app.post('/api/guide-chat', async (req, res) => {
+  if (guideChatDisabled()) return res.status(403).json({ error: 'The in-modal guide is turned off.' });
+  const { provider, apiKey, model, messages } = req.body || {};
+  const url = PROVIDER_URLS[provider];
+  if (!url) return res.status(400).json({ error: `Unknown provider: "${provider}".` });
+  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) return res.status(400).json({ error: 'API key is required.' });
+  if (!model || typeof model !== 'string' || !model.trim()) return res.status(400).json({ error: 'Model name is required.' });
+  if (!Array.isArray(messages) || messages.length === 0) return res.status(400).json({ error: 'Messages array is required.' });
+
+  const settings = readSettingsSync();
+  // Identity layer only (no memory/graph/temporal). Degrades to no identity.
+  let identityStatic = '';
+  try {
+    const enriched = await enrich('', { staticOnly: true });
+    identityStatic = enriched?.static || '';
+  } catch (err) {
+    console.warn('[guide-chat] identity enrich failed (continuing without it):', err?.message ?? err);
+  }
+
+  const systemContent = buildGuideSystem(identityStatic, settings);
+  const convo = messages
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .map(m => ({ role: m.role, content: m.content }));
+  const finalMessages = [{ role: 'system', content: systemContent }, ...convo];
+  if (settings.postHistoryPrompt && settings.postHistoryPrompt.trim()) {
+    finalMessages.push({ role: 'system', content: substituteMacros(settings.postHistoryPrompt.trim(), settings) });
+  }
+
+  try {
+    const r = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
+      body:    JSON.stringify({ model: model.trim(), messages: finalMessages, stream: false }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      return res.status(502).json({ error: `The model service answered with an error (${r.status}).`, detail: t.slice(0, 200) });
+    }
+    const data = await r.json();
+    const content = stripLlmTimestamps(data?.choices?.[0]?.message?.content ?? '');
+    res.json({ content });
+  } catch (err) {
+    res.status(502).json({ error: `I couldn't reach the model service (${err.message}).` });
+  }
+});
+
 // Knock list (V4.x) — contact attempts from unregistered people,
 // captured by the gateway so the ward can register villagers without
 // hunting platform IDs by hand. Metadata only; never message content.
@@ -2319,10 +2585,10 @@ function reconcileLocationKnock(location) {
 
 app.post('/api/village/villagers', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage,
-    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember } = req.body ?? {};
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure } = req.body ?? {};
   try {
     const saved = await upsertVillager({ name, categoryIds, categoryId, aliases, connection, triage,
-      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember });
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure });
     reconcileKnocks(saved);
     res.json(saved);
   }
@@ -2331,10 +2597,10 @@ app.post('/api/village/villagers', async (req, res) => {
 
 app.patch('/api/village/villagers/:id', async (req, res) => {
   const { name, categoryIds, categoryId, aliases, connection, triage,
-    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember } = req.body ?? {};
+    pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure } = req.body ?? {};
   try {
     const saved = await upsertVillager({ id: req.params.id, name, categoryIds, categoryId, aliases, connection, triage,
-      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember });
+      pronouns, relationToWard, relationToFamiliar, commStyleNotes, notes, privateNotes, graphNodeId, remember, standingConsent, disclosure });
     reconcileKnocks(saved);
     res.json(saved);
   }
@@ -2377,7 +2643,19 @@ app.delete('/api/village/locations', async (req, res) => {
 // the boot reconciliation + trusted-contacts migration. Degrades
 // gracefully: Phylactery down → mirror stays authoritative for
 // gating, writes accumulate as syncPending and replay on next boot.
+// Short timeout on the boot canonical pull so it fails fast instead of hanging
+// on the MCP SDK's 60s default while Phylactery is still warming up. If the pull
+// loses that race, the mirror stays authoritative and these backoffs retry the
+// reconciliation in the background until Phylactery answers.
+const VILLAGE_PULL_TIMEOUT_MS = 8_000;
+const VILLAGE_RESYNC_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000];
+
 async function startVillageSync() {
+  // Tracks whether the most recent canonical pull actually REACHED Phylactery
+  // (vs. timing out). A reached pull that simply found no village data yet is
+  // still a success — only a transport/timeout failure trips the retry.
+  let pullReached = false;
+
   initVillageSync({
     push: async (json) => {
       const content = '```json\n' + json + '\n```';
@@ -2393,11 +2671,13 @@ async function startVillageSync() {
     },
     pull: async () => {
       try {
-        const id = await getIdentityAll();
+        const id = await getIdentityAll({ timeout: VILLAGE_PULL_TIMEOUT_MS });
+        pullReached = true;
         const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
         const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
         return m ? JSON.parse(m[1]) : null;
       } catch (err) {
+        pullReached = false;
         console.warn('[village] canonical pull failed:', err?.message ?? err);
         return null;
       }
@@ -2417,6 +2697,24 @@ async function startVillageSync() {
     }
   } catch (err) {
     console.error('[village] boot sync failed (mirror stays authoritative):', err?.message ?? err);
+  }
+
+  // Boot-race recovery: if the canonical pull never reached Phylactery (it was
+  // still loading the embedding model / migrating / consolidating), a newer
+  // canonical wouldn't reconcile until the next restart. Retry the
+  // reconciliation in the background with backoff — non-blocking, bounded, and
+  // the mirror stays authoritative throughout.
+  if (!pullReached) {
+    for (const delay of VILLAGE_RESYNC_BACKOFF_MS) {
+      await new Promise(r => setTimeout(r, delay));
+      try { await villageBootSync(); }
+      catch (err) { console.warn('[village] deferred re-sync attempt failed:', err?.message ?? err); }
+      if (pullReached) {
+        console.log('[village] deferred re-sync reached Phylactery — canonical reconciled');
+        return;
+      }
+    }
+    console.warn('[village] deferred re-sync gave up; mirror remains authoritative until next restart');
   }
 }
 
@@ -2450,18 +2748,12 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startRemindersScheduler();
   startSilenceTriage();
   startReachout();
+  startMemorySweep();
   startVillageSync();
   // Discord gateway (Village V4). Supervisor idles until the ward sets
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
   startDiscordGateway();
-
-  // Web-search backend (0.7.x). Keyless search always works in-process; this
-  // supervisor optionally brings up a Familiar-managed SearXNG when the ward
-  // turns on "Web search & read" (and the source is vendored), tearing it
-  // down when they turn it off. Follows settings within 30s. A failed spawn
-  // always degrades to keyless. Hard off-switch: PROTO_FAMILIAR_SEARXNG_DISABLED=1.
-  startSearxngSupervisor({ readSettings: readSettingsSync });
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2761,6 +3053,33 @@ function startReachout() {
     onError: (err) => console.error('[reachout]', err?.message ?? err),
   });
   console.log('[reachout] Warm reach-out ENABLED (default-ON). Stands down at moderate+ threat; quiet hours respected. Hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.');
+
+  // Tome → Phylactery graduation (phase 4). OPT-IN: stays dormant until the
+  // ward enables "Graduate tome knowledge" in Settings. Slow 30-min pass that
+  // drains durable facts stranded in tomes into identity/memory. Hard
+  // off-switch: PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1.
+  startTomeGraduationLoop();
+}
+
+// Memory coverage sweep (day-anchoring Phase 2). Memorizes past days that never
+// ingested. Default-ON; settings toggle "Memory coverage sweep"; hard off-switch
+// PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1. Only enqueues into the memorization
+// worker, so it also stands down when that worker is disabled.
+function startMemorySweep() {
+  if (process.env.PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED === '1') {
+    console.log('[sweep] PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 — memory coverage sweep is OFF');
+    return;
+  }
+  startMemorySweepLoop({
+    isEnabled: async () => {
+      if (process.env.PROTO_FAMILIAR_MEMORIZE_DISABLED === '1') return false; // worker off → nothing to feed
+      const s = readSettingsSync();
+      return s.memorySweepEnabled !== false; // default-ON (undefined = on)
+    },
+    getConnection: () => primaryConnectionFrom(readSettingsSync()),
+    onTick: (r) => { if (r.acted) console.log(`[sweep] enqueued ${r.enqueued} slice(s) across ${r.days} past day(s)`); },
+    onError: (err) => console.warn('[sweep] tick error:', err?.message ?? err),
+  });
 }
 
 // Graceful shutdown — fires on SIGTERM (stop.sh / stop.bat / docker
@@ -2791,8 +3110,8 @@ async function handleSignal(signal) {
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
+  try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
-  try { await stopManagedSearxng(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
   // Give the close handshakes a tiny window, then exit.

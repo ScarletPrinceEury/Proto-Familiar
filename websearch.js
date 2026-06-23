@@ -25,6 +25,8 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
+import { API_PROVIDERS } from './websearch-providers.js';
+
 // The HTML-extraction stack (linkedom + @mozilla/readability + turndown) is
 // loaded LAZILY, not as static top-level imports. These are optional-feature
 // deps: if they're missing (e.g. a tester pulled new code but hasn't re-run
@@ -203,13 +205,17 @@ export async function guardedFetch(rawUrl, {
 }
 
 // ── Search ────────────────────────────────────────────────────────
-// The default backend is in-box and keyless: I scrape DuckDuckGo's HTML
-// results in-process with the same linkedom parser the reader uses. There
-// is nothing for my human to install, start, or configure — they just turn
-// the feature on. A power user who wants a heavier-duty backend can point
-// webSearchBaseUrl at their own SearXNG instance; when it's set I use that
-// instead. Both backends produce the same {title,url,content} rows, which
-// formatResults renders once.
+// web_search finds PAGES out on the web. The backend is the human's choice
+// (Settings → the web-search picker), but whatever they pick, a failure
+// always falls through to the keyless in-process scrape so they are never
+// left without search. The resolution order:
+//
+//   backend === 'api'        → the chosen provider (Marginalia/Tavily/Brave/Google)
+//   else / anything failing  → keyless DuckDuckGo HTML scrape (the floor)
+//
+// Every backend yields the same {title,url,content} rows formatResults
+// renders once. (look_up — definitions/facts — is a SEPARATE tool and never
+// touches this backend selection.)
 
 const DDG_HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
 
@@ -218,23 +224,45 @@ export async function searchWeb(query, settings = {}, deps = {}) {
   if (!q) return 'I need something to search for.';
   const maxResults = clampInt(settings.webSearchMaxResults, DEFAULT_MAX_RESULTS, 1, 20);
 
-  const base = String(settings.webSearchBaseUrl || '').trim();
-
-  // When a SearXNG backend is configured (a custom URL, or the Familiar's own
-  // managed instance), try it first — but fall back to the always-available
-  // keyless backend if it errors, so a wrong/stale URL or a down instance
-  // never leaves my human without search.
-  if (base) {
-    const primary = await searchViaSearxng(q, base, deps);
-    if (!primary.error) return formatResults(q, primary.rows, maxResults);
-    const fallback = await searchViaDuckDuckGo(q, deps);
-    if (!fallback.error) return formatResults(q, fallback.rows, maxResults);
-    return primary.error; // both down — report the SearXNG error
+  const { primary, isBasic, label } = await runChosenBackend(q, settings, deps);
+  if (!primary.error) {
+    // Observability: which backend actually answered (so a silent fallback
+    // doesn't look identical to the chosen backend working).
+    console.log(`[websearch] "${q}" — served via ${label}`);
+    return formatResults(q, primary.rows, maxResults);
   }
 
-  const res = await searchViaDuckDuckGo(q, deps);
-  if (res.error) return res.error;
-  return formatResults(q, res.rows, maxResults);
+  // The chosen backend errored. If it wasn't already the keyless floor, try
+  // the floor before giving up — a wrong key / stale URL / down instance
+  // never leaves my human without search.
+  if (!isBasic) {
+    const fallback = await searchViaDuckDuckGo(q, deps);
+    if (!fallback.error) {
+      // Include the chosen backend's actual error so a misconfigured engine
+      // is diagnosable (HTTP code / parse failure) rather than just "fell back".
+      console.log(`[websearch] "${q}" — ${label} failed [${primary.error}]; fell back to built-in keyless search`);
+      return formatResults(q, fallback.rows, maxResults);
+    }
+  }
+  console.log(`[websearch] "${q}" — search failed (${label}) [${primary.error}]`);
+  return primary.error; // the floor itself failed, or both down → report it
+}
+
+// Run ONLY the backend the human selected; return its {rows}|{error}, whether
+// that backend was already the keyless floor (so searchWeb knows whether a
+// fallback is worth trying), and a human-readable label of what served.
+async function runChosenBackend(q, settings, deps) {
+  const backend = String(settings.webSearchBackend || 'basic');
+
+  if (backend === 'api') {
+    const provider = String(settings.webSearchApiProvider || 'marginalia');
+    const fn = API_PROVIDERS[provider];
+    if (!fn) return { primary: { error: `I don't recognise the search provider "${provider}".` }, isBasic: false, label: `the ${provider} API` };
+    const cfg = { apiKey: settings.webSearchApiKey, cseId: settings.webSearchGoogleCseId };
+    return { primary: await fn(q, cfg, deps), isBasic: false, label: `the ${provider} API` };
+  }
+
+  return { primary: await searchViaDuckDuckGo(q, deps), isBasic: true, label: 'built-in keyless search' };
 }
 
 function formatResults(q, rows, maxResults) {
@@ -289,26 +317,6 @@ async function searchViaDuckDuckGo(q, { fetchFn = fetch, lookupFn } = {}) {
   }
 }
 
-// Power-user opt-in: a self-hosted SearXNG JSON API. Loopback is allowed
-// here (it's the human's own service), so this does NOT route through the
-// public-only guard.
-async function searchViaSearxng(q, base, { fetchFn = fetch } = {}) {
-  const url   = `${base.replace(/\/+$/, '')}/search?q=${encodeURIComponent(q)}&format=json`;
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
-  try {
-    const res = await fetchFn(url, { signal: ctrl.signal, headers: { 'Accept': 'application/json' } });
-    if (!res.ok) return { error: `My search came back with an error (HTTP ${res.status}). My SearXNG instance needs JSON output enabled.` };
-    const data = await res.json();
-    return { rows: Array.isArray(data?.results) ? data.results : [] };
-  } catch (err) {
-    if (err?.name === 'AbortError') return { error: 'My search timed out before it answered.' };
-    return { error: `I couldn't reach my SearXNG instance (${err.message}). It may be down.` };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // DuckDuckGo result links are redirect URLs (//duckduckgo.com/l/?uddg=…).
 // Pull the real target back out.
 function ddgRealUrl(href) {
@@ -318,6 +326,98 @@ function ddgRealUrl(href) {
     return uddg || u.href;
   } catch {
     return href;
+  }
+}
+
+// ── Look up — definitions, facts, overviews ───────────────────────
+// A distinct capability from searchWeb: this answers the "what is X /
+// who is Y / give me an overview" kind of question from official,
+// KEYLESS APIs — Wikipedia and DuckDuckGo's Instant Answer endpoint —
+// with NO scraping. It always works (nothing to install or configure)
+// and is narrower than web search by design: it returns a short
+// grounded answer with its source, not a list of pages. Both sources
+// are queried in parallel; either may come back empty, and the whole
+// thing degrades to a calm "couldn't find" rather than ever throwing.
+
+const DDG_IA_ENDPOINT = 'https://api.duckduckgo.com/';
+const WIKI_API_BASE   = 'https://en.wikipedia.org';
+
+export async function lookUp(query, settings = {}, deps = {}) {
+  const q = String(query ?? '').trim();
+  if (!q) return 'I need something to look up.';
+  const maxChars = clampInt(settings.webSearchMaxChars, DEFAULT_MAX_CHARS, 500, 100000);
+
+  const [ddg, wiki] = await Promise.all([
+    lookUpViaDuckDuckGo(q, deps),
+    lookUpViaWikipedia(q, deps),
+  ]);
+
+  // DDG's instant answer is a crisp definition when it has one; Wikipedia
+  // is the fuller encyclopedic overview. Lead with the crisp one, then add
+  // the overview if it says something the first didn't.
+  const parts = [ddg, wiki].filter(p => p && p.text);
+  if (parts.length === 0) {
+    return `I looked up "${q}" but couldn't find a clear definition or overview. A web_search might turn up pages about it.`;
+  }
+  return formatLookUp(q, parts, maxChars);
+}
+
+function formatLookUp(q, parts, maxChars) {
+  // Drop a part whose text is essentially contained in an earlier one, so
+  // the two sources don't repeat the same sentence back.
+  const kept = [];
+  for (const p of parts) {
+    const head = p.text.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 120);
+    if (kept.some(k => k._head === head)) continue;
+    kept.push({ ...p, _head: head });
+  }
+  let body = kept.map(p => p.text.trim()).join('\n\n');
+  if (body.length > maxChars) body = `${body.slice(0, maxChars)}\n\n[…truncated.]`;
+  const sources = kept.map(p => p.source).filter(Boolean);
+  const srcLine = sources.length
+    ? `\n\nSource${sources.length > 1 ? 's' : ''}: ${sources.join(' · ')}`
+    : '';
+  return `Here's what I found on "${q}":\n\n${body}${srcLine}`;
+}
+
+// Official DuckDuckGo Instant Answer API (NOT the HTML scrape) — keyless
+// JSON. Returns null on any miss/error so lookUp degrades calmly.
+async function lookUpViaDuckDuckGo(q, { fetchFn = fetch, lookupFn } = {}) {
+  const url = `${DDG_IA_ENDPOINT}?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`;
+  try {
+    const res = await guardedFetch(url, { fetchFn, lookupFn });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = String(data?.AbstractText || data?.Definition || data?.Answer || '').trim();
+    if (!text) return null;
+    const source = String(data?.AbstractURL || data?.DefinitionURL || '').trim() || null;
+    return { text, source };
+  } catch {
+    return null;
+  }
+}
+
+// Wikipedia via the MediaWiki action API: one request that searches for the
+// best-matching article and returns its plain-text intro extract. Keyless
+// JSON. Returns null on any miss/error.
+async function lookUpViaWikipedia(q, { fetchFn = fetch, lookupFn } = {}) {
+  const url = `${WIKI_API_BASE}/w/api.php?action=query&format=json&generator=search`
+    + `&gsrsearch=${encodeURIComponent(q)}&gsrlimit=1`
+    + '&prop=extracts&exintro=1&explaintext=1&redirects=1';
+  try {
+    const res = await guardedFetch(url, { fetchFn, lookupFn });
+    if (!res.ok) return null;
+    const data  = await res.json();
+    const pages = data?.query?.pages;
+    if (!pages || typeof pages !== 'object') return null;
+    const first = Object.values(pages)[0];
+    const text  = String(first?.extract || '').trim();
+    if (!text) return null;
+    const title  = String(first?.title || q);
+    const source = `${WIKI_API_BASE}/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+    return { text, source };
+  } catch {
+    return null;
   }
 }
 
