@@ -29,7 +29,9 @@
  *   - others       ("my friend said", "she told me")
  *   - hyperbolic   ("lol", "joking", "dying of laughter")
  *   - exertion     ("after my workout", "too much coffee", "so excited")
- *                  — NON-SEVERE signals only; never damps a severe signal
+ *   - mundane      ("struggling with this build", "anxious about the deploy")
+ *                  — exertion + mundane apply to NON-SEVERE signals ONLY;
+ *                    they never damp a severe signal
  * A damped severe / high / moderate / mild signal contributes 0.2× its
  * weight (it still fires — intent is fuzzy, and we'd rather over-flag
  * than miss a real signal hidden in awkward phrasing). A damped SAFETY
@@ -250,6 +252,20 @@ const EXERTION_BLOCKERS = [
   /\bcan'?t wait\b/i,
 ];
 
+// Mundane / technical / logistical context. "struggling with this build",
+// "anxious about the deploy", "the server is breaking down", "overwhelmed by my
+// inbox" are frustration with a THING, not personal distress. Like exertion,
+// this is applied ONLY to non-severe signals — a real crisis that happens to
+// mention work or a deadline must never be softened. Kept to clearly
+// non-emotional objects (computing + trivial logistics); emotionally-loaded
+// stressors (a diagnosis, a loss, "my job", money) are deliberately NOT here.
+const MUNDANE_BLOCKERS = [
+  // Software / computing
+  /\b(the )?(code|coding|bug|debugg?ing|the build|deploy(ing|ment)?|compil\w*|the server|database|the query|the config|the script|the repo|merge conflict|the app|the site|the api|the function|the test(s| suite)?|ci\/cd|the pipeline|the laptop|the browser|the wifi|the router)\b/i,
+  // Trivial everyday objects / minor logistics
+  /\b(the printer|the dishwasher|the boiler|the kettle|the car|traffic|the bus|the train|the recipe|the game|the puzzle|the spreadsheet|my inbox|this code|this build|this config|this bug|this deploy)\b/i,
+];
+
 const SEVERE_PER_MESSAGE_CAP = 10;
 const SEVERE_PER_MESSAGE_FLOOR = -5;
 
@@ -287,9 +303,14 @@ export function scoreMessage(message) {
         HYPOTHETICAL_BLOCKERS.some(b => b.test(ctx)) ||
         OTHERS_BLOCKERS.some(b      => b.test(ctx)) ||
         HYPERBOLIC_BLOCKERS.some(b  => b.test(ctx)) ||
-        // Exertion/arousal context never damps a SEVERE signal — a real
-        // crisis that mentions coffee or the gym must still fire at full weight.
-        (signal.tier !== 'severe' && EXERTION_BLOCKERS.some(b => b.test(ctx)))
+        // Exertion/arousal AND mundane/logistical context never damp a SEVERE
+        // signal — a real crisis that mentions coffee, the gym, or a deadline
+        // must still fire at full weight. They only soften non-severe signals
+        // that fired in a clearly-non-distress register.
+        (signal.tier !== 'severe' && (
+          EXERTION_BLOCKERS.some(b => b.test(ctx)) ||
+          MUNDANE_BLOCKERS.some(b  => b.test(ctx))
+        ))
       );
 
       let weight = signal.weight;

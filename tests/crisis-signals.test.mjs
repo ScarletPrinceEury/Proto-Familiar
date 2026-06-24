@@ -407,7 +407,44 @@ test('tightening: exertion/arousal damps panic but NEVER a severe signal', () =>
   }
 });
 
-test('tightening: a coding-frustration vent no longer stacks into a threat spike', () => {
+test('tightening: mundane/technical context damps non-severe, never severe', () => {
+  // frustration with a THING → damped (still fires weakly at 0.2x, not zeroed)
+  for (const { msg, id } of [
+    { msg: "I'm really struggling with this build.", id: 'severe_distress' },
+    { msg: "So anxious about the deploy tomorrow.",  id: 'worry' },
+    { msg: "I'm overwhelmed by my inbox.",            id: 'worry' },
+    { msg: "I can't cope with the printer today.",    id: 'severe_distress' },
+  ]) {
+    const r = scoreMessage(msg);
+    const sig = r.signals.find(s => s.id === id);
+    assert.ok(sig && sig.damped, `${id} should be damped for "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+  // a real severe signal that merely mentions code/a deadline must NOT be damped
+  for (const msg of ["I keep thinking about killing myself, can't even look at the code.",
+                     "Even the code can't distract me, I want to die."]) {
+    const r = scoreMessage(msg);
+    assert.ok(r.signals.some(s => s.tier === 'severe' && !s.damped),
+      `severe must stay undamped for "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+  // genuine distress NOT in a mundane register still fires full
+  const real = scoreMessage("I'm really struggling right now, everything feels so heavy.");
+  assert.ok(real.signals.some(s => s.id === 'severe_distress' && !s.damped),
+    `genuine struggling must fire full: ${JSON.stringify(real.signals)}`);
+});
+
+test('tightening: the full coding-frustration vent (incl. "struggling") now stays calm', () => {
+  // The exact report scenario — technical venting that used to stack to severe.
+  // "struggling" is left untightened, but the mundane "this build" damps it,
+  // and the tightened idioms (breaking down/point/done) no longer fire at all.
+  const vent = "I'm really struggling with this build, it keeps breaking down, " +
+               "what's the point of this config, I'm done.";
+  const r = scoreMessage(vent);
+  assert.ok(!r.signals.some(s => s.id === 'hopelessness'),  `no hopelessness: ${JSON.stringify(r.signals)}`);
+  assert.ok(!r.signals.some(s => s.id === 'cant_continue'), `no cant_continue: ${JSON.stringify(r.signals)}`);
+  assert.ok(r.level < 2, `vent should stay below the moderate gate (got ${r.level}): ${JSON.stringify(r.signals)}`);
+});
+
+test('tightening: a calm-register coding-frustration vent no longer stacks into a threat spike', () => {
   // The exact failure mode from the report: ordinary task frustration
   // stacking the HIGH idioms (point/done) + a data "breaking down" into
   // moderate/high and starving warm outreach. (`really struggling` is left
