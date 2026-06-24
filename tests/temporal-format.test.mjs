@@ -183,6 +183,16 @@ test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () =
   assert.match(out, /- review the report/);
 });
 
+test('open tasks show how long they have floated (created_at age)', () => {
+  // created 12 days ago → the briefing now carries the staleness signal so the
+  // Familiar can perceive an aged floating task and move to pin it a time.
+  const created = new Date(Date.now() - 12 * 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [{ type: 'task', label: 'file the housing form', created_at: created }] },
+  });
+  assert.match(out, /file the housing form \(floating 12d — no time set\)/);
+});
+
 test('upcoming items grouped under their own header with type tag', () => {
   const t = new Date(); t.setHours(15, 0, 0, 0);
   const out = formatTemporalContext({

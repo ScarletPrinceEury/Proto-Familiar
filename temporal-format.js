@@ -192,7 +192,14 @@ export function formatTemporalContext(payload) {
       // passive list to perceive.
       schedLines.push("Open tasks I'm holding for {{user}} — mine to remember and to raise (no completion confirmed):");
       for (const item of openTasks) {
-        schedLines.push(`  - ${item.label ?? item.id ?? ''}`);
+        // How long it's floated unscheduled — the signal that it's waiting to be
+        // pinned to a real time. (created_at rides in from Unruh; a task without
+        // one just renders bare.)
+        const created = item.created_at ? new Date(item.created_at).getTime() : NaN;
+        const floatDays = Number.isFinite(created)
+          ? Math.floor((nowMs - created) / (24 * 3600 * 1000)) : null;
+        const ageTag = (floatDays != null && floatDays >= 1) ? ` (floating ${floatDays}d — no time set)` : '';
+        schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}`);
       }
     }
     if (resolved.length) {

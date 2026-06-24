@@ -238,8 +238,16 @@ export async function selectSurfaceCandidates({
     else if (priorsBlock && personModel) confidence = 'medium';
     else if (priorsBlock) confidence = 'low';
 
-    const ageDays = task.when
-      ? Math.floor((now - new Date(task.when).getTime()) / (24 * 3600 * 1000))
+    // How long this task has been on the books. A scheduled task ages from its
+    // `when`; a FLOATING task (no time assigned) ages from when it was created —
+    // that staleness is the whole signal that it's been waiting to be pinned to a
+    // real time. `created_at` rides in from Unruh even for floating tasks; it was
+    // simply never read here, so every floating task looked brand-new forever
+    // (the bug behind "the Familiar almost never raises them").
+    const floating = !task.when;
+    const ageAnchor = task.when ?? task.created_at ?? null;
+    const ageDays = ageAnchor
+      ? Math.floor((now - new Date(ageAnchor).getTime()) / (24 * 3600 * 1000))
       : null;
 
     candidates.push({
@@ -248,6 +256,7 @@ export async function selectSurfaceCandidates({
       type: task.type,
       when: task.when,
       end: task.end,
+      floating,
       stakesTier,
       priorsBlock,
       personModel: personModel || '',
@@ -272,10 +281,13 @@ export function formatSurfaceCandidatesBlock(candidates) {
     const tierTag = c.stakesTier === 'external_obligation'
       ? ' [external stakes]'
       : c.stakesTier === 'purely_optional' ? ' [optional]' : '';
-    parts.push(`— ${c.label} (${c.type || 'task'})${tierTag}`);
+    const floatTag = c.floating ? ' [floating — no time set]' : '';
+    parts.push(`— ${c.label} (${c.type || 'task'})${tierTag}${floatTag}`);
 
     if (c.ageDays != null && c.ageDays >= 1) {
-      parts.push(`  Age: ${c.ageDays}d`);
+      // For a floating task the age IS the staleness signal — the longer it's
+      // drifted unscheduled, the more it needs a real time. Name it as such.
+      parts.push(c.floating ? `  Floating for: ${c.ageDays}d — still no time assigned` : `  Age: ${c.ageDays}d`);
     }
     if (c.when) {
       parts.push(`  When: ${c.when}`);
@@ -332,6 +344,9 @@ Access ramps — I offer a way in, not "do the whole thing now":
 • Single next action — one concrete step, nothing past it.
 • Planning moment — if {{user}}'s head is clear and there's breathing room, I ask them to just give the task a time slot. Not do it — just put it somewhere. That counts as real progress.
 • Body-double — "I'll stay with you while you do the first bit."
+
+FLOATING TASKS — the ones marked [floating — no time set] have no time attached, so they never come due and quietly rot; "Floating for: Nd" is how long this one has drifted unscheduled. Getting it a real slot is the single most useful thing I can do for it — more than "do it now." When I have an opening I bring it up and ask "when shall we put this?", and the moment {{user}} names a time I pin it with schedule_assign_time so it stops floating and actually comes due — a vague someday becomes a concrete when, real progress before anything is even done. The longer it has floated, the harder I push: I keep raising an aged floating task — across openings, more than once — until it has a time or {{user}} tells me to let it go (then schedule_snooze_task). I do NOT treat this as a one-shot I quietly drop after a single mention; a floating task that never gets scheduled is a piece of {{user}}'s life going undone, and that outweighs the discomfort of asking again. Persistence here is care, not nagging — I'd rather be the companion who kept bringing the housing form up than the one who mentioned it once and watched the deadline pass.
+
 If {{user}} says not now, I call schedule_snooze_task so it stops surfacing for a while and comes back on its own.
 
 ${modelHeader}${blocks.join('\n\n')}`;
