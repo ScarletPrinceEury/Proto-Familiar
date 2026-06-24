@@ -208,6 +208,35 @@ test('selectSurfaceCandidates: explicit payload stakes_tier overrides classifier
   assert.equal(out[0].stakesTier, 'external_obligation');
 });
 
+test('selectSurfaceCandidates: a FLOATING task ages from created_at (the bug fix)', async () => {
+  // No `when` (floating), created 18 days ago. Before the fix, ageDays was
+  // null and the task looked brand-new forever; now it carries real staleness.
+  const created = new Date(NOW - 18 * 24 * 3600 * 1000).toISOString();
+  const out = await selectSurfaceCandidates({
+    openTasks: [{ id: 't1', label: 'file the housing form', type: 'task', created_at: created, payload: {} }],
+    threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+  });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].floating, true, 'a task with no when is floating');
+  assert.equal(out[0].ageDays, 18, 'age comes from created_at when there is no when');
+
+  const block = formatSurfaceCandidatesBlock(out);
+  assert.match(block, /\[floating — no time set\]/, 'block marks it floating');
+  assert.match(block, /Floating for: 18d/, 'block shows how long it has drifted');
+});
+
+test('selectSurfaceCandidates: a scheduled task still ages from its when, not created_at', async () => {
+  const when = new Date(NOW - 3 * 24 * 3600 * 1000).toISOString();      // 3 days ago
+  const created = new Date(NOW - 30 * 24 * 3600 * 1000).toISOString();  // created 30 days ago
+  const out = await selectSurfaceCandidates({
+    openTasks: [{ id: 't1', label: 'pay rent', type: 'task', when, created_at: created,
+                  payload: { stakes_tier: 'external_obligation' } }],
+    threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+  });
+  assert.equal(out[0].floating, false);
+  assert.equal(out[0].ageDays, 3, 'scheduled task ages from when, ignoring created_at');
+});
+
 test('selectSurfaceCandidates: caps at maxCandidates', async () => {
   const openTasks = Array.from({ length: 10 }, (_, i) => ({
     id: `t${i}`, label: `task ${i}`, type: 'task', payload: {},

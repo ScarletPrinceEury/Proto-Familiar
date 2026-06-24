@@ -1246,6 +1246,21 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_assign_time',
+      description: 'I give an existing FLOATING task — one I\'ve been holding for {{user}} with no time set — a concrete time, so it stops drifting and actually comes due. I reach for this the moment {{user}} agrees on when to do a task: I pin it here instead of leaving it open-ended forever, which turns a vague someday into a real when (real progress, even before anything is done). The id comes from the [Surface candidates] or [Temporal Context] block. To park a task briefly I use schedule_snooze_task; to finish one I use schedule_resolve; this one is specifically for turning a someday into a when.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:   { type: 'string', description: 'The id of the floating task to give a time to (from [Surface candidates] or [Temporal Context]).' },
+          when: { type: 'string', description: 'ISO 8601 UTC time, e.g. "2026-06-18T13:00:00+00:00". Unruh compares against UTC with no timezone conversion — I read my [Now] block\'s UTC offset and convert {{user}}\'s stated local time to UTC exactly once.' },
+        },
+        required: ['id', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_snooze_task',
       description: 'I call this when my human asks me to come back to a task later. It parks the task so it stops appearing in my surface candidates for a while, then automatically returns to me after the given number of minutes. I only call this when {{user}} explicitly says not now — never on my own initiative. The task is not resolved or forgotten; it just rests. For finishing a task I use schedule_resolve.',
       parameters: {
@@ -2034,6 +2049,16 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to add task: ${data.error ?? 'unknown error'}`;
       return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
     } catch (err) { return `Failed to add task: ${err.message}`; }
+  },
+
+  schedule_assign_time: async ({ id, when }) => {
+    if (!id || typeof id !== 'string') return 'Failed to assign a time: id (string) is required.';
+    if (!when || typeof when !== 'string' || !when.trim()) return 'Failed to assign a time: when (ISO 8601 UTC) is required.';
+    try {
+      const data = await updateScheduleNode({ id, when: when.trim() });
+      if (data?.ok === false) return `Failed to assign a time: ${data.error ?? 'unknown error'}`;
+      return `Done — that task now has a time (${when.trim()}), so it'll come due and surface on its own instead of floating. (id: ${id})`;
+    } catch (err) { return `Failed to assign a time: ${err.message}`; }
   },
 
   schedule_snooze_task: async ({ id, minutes }) => {
