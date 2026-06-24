@@ -161,9 +161,10 @@ they only soften non-severe signals and never touch a severe one:
 | **Mundane / logistical** | "struggling with this build", "anxious about the deploy", "overwhelmed by my inbox", "can't cope with the printer" | non-severe only | weight × 0.2 | weight set to 0 |
 
 So *"I don't want to die"* still fires the signal but at ~1.6 instead of
-8. *"My friend said she wants to hurt herself"* fires at ~1.4 instead
-of 7. *"lol I can't take it anymore, this meme is too good 😂"* barely
-moves the needle.
+8. *"My sister told me she's been cutting again"* fires at ~1.4 instead
+of 7 (the others-speech blocker — the `cutting again` pattern matches
+regardless of who it's about, but "my sister told me" damps it). *"lol I
+can't take it anymore, this meme is too good 😂"* barely moves the needle.
 
 **Exertion / arousal.** A racing or pounding heart — or *"can't
 breathe"* — after a workout, too much caffeine, or excitement

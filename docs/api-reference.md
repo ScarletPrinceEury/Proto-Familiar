@@ -753,7 +753,7 @@ Appends to or updates a section of an identity file.
 
 ### Knowledge editor endpoints
 
-The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Most destructive ops (the by-DATE memory `PUT`/`DELETE`, identity rewrite, and every graph `PATCH`/`DELETE`) auto-snapshot Phylactery before the underlying MCP call, so a mistake is recoverable via the snapshots endpoints. The exceptions are the by-id memory routes (`PUT`/`DELETE`/`move`), which do not auto-snapshot. All return `502` when Phylactery is unavailable; reads return Phylactery's JSON verbatim.
+The endpoints below back the **Knowledge editor** modal in the sidebar and the LLM-callable editing tools (`update_memory`, `delete_memory`, `rewrite_identity_section`, `update_graph_node`, `delete_graph_node`, `update_graph_edge`, `delete_graph_edge`). Every destructive op auto-snapshots Phylactery before the change, so a mistake is recoverable via the snapshots endpoints. (The by-id memory ops and `…/move` snapshot inside Phylactery itself rather than at the thalamus layer the by-date ops use, but a snapshot is still taken either way.) All return `502` when Phylactery is unavailable; reads return Phylactery's JSON verbatim.
 
 #### Memory
 
