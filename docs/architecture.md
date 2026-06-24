@@ -1209,6 +1209,8 @@ Within `dynamic`, the order is deliberate:
 
 Unruh tells the Familiar *when* events happened — but the Familiar perceives time the way humans do: in relative phrases (yesterday, this morning, in 2 hours, last Tuesday) rather than ISO arithmetic. `relative-time.js` is the single helper every consumer of timestamped data uses to render that phrasing, recomputed every turn against `Date.now()` — the same moment used for the `[Now]` block. A memory written yesterday reads as "yesterday" today and "two days ago" tomorrow, without anyone re-writing the memory.
 
+**A relative phrase ALWAYS travels with a date (0.7.x).** Near-term phrasings ("yesterday", "in 3 weeks") were always present, but beyond ~a month `relativeTime`/`relativeDay` used to fall back to a bare absolute date the model had to date-arithmetic itself. They now append a directional interval (`intervalPhrase` → "in N months" / "a year ago"), so a distant memory or appointment reads "Friday, December 25 **(in 7 months)**" / "January 22, 2025 **(a year ago)**" — the absolute date keeps the precision, the parenthetical keeps the perception. One helper change covers every consumer below.
+
 Surfaces using `relativeTime()` / `relativeDay()`:
 
 | Surface | Where | What it gets |
@@ -1302,6 +1304,8 @@ temporalPayload.schedule.window   ←  open tasks/events/reminders
                 ▼
    ── CONTEXT ASSEMBLY (per candidate) ──
    stakes_tier  ← payload.stakes_tier OR inferStakesTier(label)
+   floating     ← !task.when  (no time assigned)
+   ageDays      ← from task.when, OR task.created_at when FLOATING
    priorsBlock  ← matched section from docs/consequence-priors.md
    personModel  ← Phylactery custom/what_lapses_cost.md (raw)
    taskSpecific ← payload.consequence_model
@@ -1399,6 +1403,8 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 **`raised` tagging** is a separate, earlier tag on the same event: did the Familiar actually *say* something about the task in the turn it was offered? Tagged post-turn by `tagRaisedOutcomes` (pure-code response-text scan, zero LLM calls). It drives the differentiated dedup window (raised → 6h rest; un-raised → back in 90min), decides the aged-out outcome split above, and flows into reflection (the projection carries `raised`, and the reflection prompt is taught that `not_raised` outcomes are about the Familiar's surfacing, never the ward's engagement).
 
 **Prompt stance:** the `[Surface candidates]` header is written for a ward with executive dysfunction — there is no "right moment" that arrives on its own, so the header tunes toward action. It names explicit GREEN LIGHT states the Familiar surfaces in and explicit RED LIGHT states it holds in (vagueness is *not* a reason to stay quiet — the servile-default model needs the inclusion/exclusion conditions spelled out or it collapses to silence), names the cost of silence (the task waits forever; a missed task outweighs a refusable check-in), and offers concrete access ramps (timebox, single next action, planning-only slot, body-double). It deliberately contains no bias-toward-quiet language — see CLAUDE.md's proactivity section; a regression test in `tests/surface-context.test.mjs` guards against its return.
+
+**Floating-task aging (0.7.x).** A floating task (no `when`) used to compute `ageDays` from `task.when` only — so it was always `null` and every floating task read as brand-new forever, with no staleness to prioritise. Now age falls back to `created_at` (which Unruh already serialised), the candidate carries a `floating` flag, and both surfaces show it — the candidate block (`[floating — no time set]` + `Floating for: Nd — still no time assigned`) and the `[Temporal Context]` open-tasks list (`(floating Nd — no time set)`). The prompt gains a dedicated FLOATING TASKS directive: the aged ones earn a gentle "when shall we put this?" in a calm moment, and the Familiar pins the agreed time with the new **`schedule_assign_time(id, when)`** tool (thin wrapper over `updateScheduleNode` → Unruh `schedule_update_node`, which always supported setting `when_ts` — the capability existed end-to-end but had no Familiar-facing surface). Turning a someday into a real `when` is itself counted as progress.
 
 **Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 

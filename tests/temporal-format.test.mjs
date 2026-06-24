@@ -107,10 +107,15 @@ test('falls back to id when label missing', () => {
   assert.match(out, /node-42/);
 });
 
-test('renders timed items with relative-time phrasing the Familiar can perceive', () => {
+test('renders timed items with relative-time phrasing the Familiar can perceive', (t) => {
   // An item later today renders with a time-of-day bucket ("tonight at
   // 10pm") rather than a bare ISO; the renderer recomputes against
-  // Date.now() per call so the relative phrasing stays current.
+  // Date.now() per call so the relative phrasing stays current. Pin "now"
+  // to a fixed LOCAL mid-day (so it's TZ-stable) — the item below is built
+  // from the same mocked clock, so the relative computation is deterministic
+  // regardless of when/where the suite runs (it used to fail after 22:00).
+  // t.mock.timers auto-restores when the test ends.
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 5, 22, 12, 0, 0).getTime() });
   const today = new Date();
   today.setHours(22, 0, 0, 0);
   const out = formatTemporalContext({
@@ -124,7 +129,9 @@ test('renders timed items with relative-time phrasing the Familiar can perceive'
   assert.match(out, /(at \d|in \d|\d minutes? ago|just now|moment|tonight|this evening|this afternoon|this morning)/i);
 });
 
-test('renders tomorrow items in tomorrow-relative phrasing', () => {
+test('renders tomorrow items in tomorrow-relative phrasing', (t) => {
+  // Pin "now" to a fixed local mid-day so "tomorrow at 2pm" can't drift.
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 5, 22, 12, 0, 0).getTime() });
   const tomorrow = new Date(Date.now() + 86_400_000);
   tomorrow.setHours(14, 0, 0, 0);
   const out = formatTemporalContext({
@@ -174,6 +181,16 @@ test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () =
   assert.match(out, /Open tasks I'm holding for \{\{user\}\} — mine to remember and to raise/);
   assert.match(out, /- file taxes/);
   assert.match(out, /- review the report/);
+});
+
+test('open tasks show how long they have floated (created_at age)', () => {
+  // created 12 days ago → the briefing now carries the staleness signal so the
+  // Familiar can perceive an aged floating task and move to pin it a time.
+  const created = new Date(Date.now() - 12 * 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [{ type: 'task', label: 'file the housing form', created_at: created }] },
+  });
+  assert.match(out, /file the housing form \(floating 12d — no time set\)/);
 });
 
 test('upcoming items grouped under their own header with type tag', () => {
