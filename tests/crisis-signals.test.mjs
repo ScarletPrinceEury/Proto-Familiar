@@ -330,6 +330,97 @@ test('regression: canonical true-positive cases still fire after tightening', ()
   }
 });
 
+// ── Fuzzy-pattern tightening (false-positive reduction) ─────────────
+// These HIGH/MODERATE idioms used to fire on ordinary venting and
+// task/coding-frustration, quietly pushing threat up for days (3-day
+// half-life) and starving warm outreach. Each case pins BOTH halves of
+// the tightening: the genuine-distress form still fires; the benign idiom
+// no longer does. (Real-distress sensitivity is preserved — a genuinely
+// distressed person trips the other additive signals too.)
+
+test('tightening: hopelessness keeps real despair, drops benign "giving up" / "the point"', () => {
+  for (const msg of ["I'm giving up on life.", "I'm giving up on everything.",
+                     "What's the point anymore?", "What's the point of going on?"]) {
+    assertScored(msg, { tier: 'high', idIncludes: 'hopelessness' });
+  }
+  for (const msg of ["I'm giving up coffee for Lent.",
+                     "Giving up on this bug, I'll try again tomorrow.",
+                     "What's the point of this function?",
+                     "What's the point of the second parameter?"]) {
+    const r = scoreMessage(msg);
+    assert.ok(!r.signals.some(s => s.id === 'hopelessness'),
+      `"${msg}" must not fire hopelessness: ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('tightening: cant_continue keeps "done with everything"/"done trying", drops "done with dinner"', () => {
+  for (const msg of ["I'm done with everything.", "I'm so done with life.", "I'm done trying."]) {
+    assertScored(msg, { tier: 'high', idIncludes: 'cant_continue' });
+  }
+  for (const msg of ["I'm done with dinner.", "I'm so done with this meeting.",
+                     "I'm done for today, see you tomorrow.", "I'm done with the project."]) {
+    const r = scoreMessage(msg);
+    assert.ok(!r.signals.some(s => s.id === 'cant_continue'),
+      `"${msg}" must not fire cant_continue: ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('tightening: severe_distress keeps "I\'m falling apart"/"I\'m breaking down", drops the car/data', () => {
+  for (const msg of ["I'm falling apart.", "Everything is falling apart.", "I'm breaking down."]) {
+    assertScored(msg, { tier: 'moderate', idIncludes: 'severe_distress' });
+  }
+  for (const msg of ["The car is falling apart.", "The whole plan is falling apart.",
+                     "Let me finish breaking down the data.", "Breaking down the steps now."]) {
+    const r = scoreMessage(msg);
+    assert.ok(!r.signals.some(s => s.id === 'severe_distress'),
+      `"${msg}" must not fire severe_distress: ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('tightening: dissociation keeps "nothing feels real", drops "not real leather"', () => {
+  for (const msg of ["Nothing feels real anymore.", "This doesn't feel real."]) {
+    assertScored(msg, { tier: 'moderate', idIncludes: 'dissociation' });
+  }
+  for (const msg of ["That's not real leather.", "Wait, this can't be real!",
+                     "The bug isn't real, it was a caching issue."]) {
+    const r = scoreMessage(msg);
+    assert.ok(!r.signals.some(s => s.id === 'dissociation'),
+      `"${msg}" must not fire dissociation: ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('tightening: exertion/arousal damps panic but NEVER a severe signal', () => {
+  // panic from exercise / caffeine / excitement → damped (still fires weakly)
+  for (const msg of ["My heart is racing after that workout.",
+                     "Heart pounding, too much coffee today.",
+                     "My heart is racing, I'm so excited!"]) {
+    const r = scoreMessage(msg);
+    const panic = r.signals.find(s => s.id === 'panic');
+    assert.ok(panic && panic.damped, `panic should be damped for "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+  // a real severe signal that merely mentions coffee/gym must NOT be damped
+  for (const msg of ["I had coffee with my therapist and I still want to die.",
+                     "After the gym I keep thinking about killing myself."]) {
+    const r = scoreMessage(msg);
+    assert.ok(r.signals.some(s => s.tier === 'severe' && !s.damped),
+      `severe must stay undamped for "${msg}": ${JSON.stringify(r.signals)}`);
+  }
+});
+
+test('tightening: a coding-frustration vent no longer stacks into a threat spike', () => {
+  // The exact failure mode from the report: ordinary task frustration
+  // stacking the HIGH idioms (point/done) + a data "breaking down" into
+  // moderate/high and starving warm outreach. (`really struggling` is left
+  // untightened by design, so it's omitted here.)
+  const vent = "Ugh, this build keeps breaking down the modules. What's the point of this " +
+               "config option? I'm done with the project for today.";
+  const r = scoreMessage(vent);
+  assert.ok(!r.signals.some(s => s.id === 'hopelessness'),  `no hopelessness: ${JSON.stringify(r.signals)}`);
+  assert.ok(!r.signals.some(s => s.id === 'cant_continue'), `no cant_continue: ${JSON.stringify(r.signals)}`);
+  assert.ok(!r.signals.some(s => s.id === 'severe_distress'), `no severe_distress: ${JSON.stringify(r.signals)}`);
+  assert.equal(r.level, 0, `coding vent should score calm (got ${r.level}): ${JSON.stringify(r.signals)}`);
+});
+
 // ── -ing forms + idiomatic suicidal phrasings (Eury bug report) ────
 // Previously: "killing myself" / "ending myself" / "ending it all"
 // silently scored ZERO because the base patterns required literal
