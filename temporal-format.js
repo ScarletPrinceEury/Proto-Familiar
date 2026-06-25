@@ -213,6 +213,31 @@ export function formatTemporalContext(payload) {
     if (schedLines.length) blocks.push(schedLines.join('\n'));
   }
 
+  // Schedule-id legend. The human-readable lines above carry labels, not ids —
+  // but every schedule editing tool (re-time, snooze, resolve, delete) is
+  // addressed by id, and without this the Familiar can SEE its schedule yet
+  // can't act on it. Mirrors the knowledge-graph block's id legend: ids live in
+  // one compact list at the end rather than inline on every line. Covers both
+  // routine phases and the window so a phase can be deleted and an event/task
+  // re-timed or resolved. Deduped; skips nodes with no id.
+  const scheduleNodes = [
+    ...(Array.isArray(payload.routine) ? payload.routine : []),
+    ...(Array.isArray(schedule.window) ? schedule.window : []),
+  ];
+  const idLegend = [];
+  const seenScheduleIds = new Set();
+  for (const n of scheduleNodes) {
+    if (!n?.id || seenScheduleIds.has(n.id)) continue;
+    seenScheduleIds.add(n.id);
+    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}] = ${n.id}`);
+  }
+  if (idLegend.length) {
+    blocks.push([
+      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), or remove one entirely incl. a phase (schedule_delete), pass its id]',
+      ...idLegend,
+    ].join('\n'));
+  }
+
   const interests = payload.interests ?? {};
   const standing = interests.standing ?? [];
   const live = interests.live ?? [];
