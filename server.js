@@ -2848,9 +2848,29 @@ function startAutonomousPondering() {
         raised:         e.raised,
         outcome:        e.outcome,
         outcome_at:     e.outcome_at,
+        // Where in the task's window the ward acted (when present) — the
+        // signal reflection learns start-timing from.
+        ...(Number.isFinite(e.window_fraction) ? { window_fraction: e.window_fraction } : {}),
         state_snapshot: e.state_snapshot,
       }));
-      return { mode: 'reflection', outcomes: projected, existingNotes };
+      // The Familiar's own PROJECTED consequence edges (not yet observed),
+      // with ids + endpoint labels, so reflection can grade and recalibrate
+      // its forecasts. Degrades to [] if Unruh is unreachable.
+      let consequenceEdges = [];
+      try {
+        const win = await getScheduleWindow({});
+        const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+        const labelById = new Map(nodes.map(n => [n.id, n.label]));
+        consequenceEdges = (Array.isArray(win?.edges) ? win.edges : [])
+          .filter(ed => ed?.payload && (ed.payload.valence || ed.payload.condition) && ed.payload.observed !== true)
+          .map(ed => ({
+            edge_id: ed.id, from: labelById.get(ed.src) ?? ed.src, to: labelById.get(ed.dst) ?? ed.dst,
+            kind: ed.kind, valence: ed.payload.valence, condition: ed.payload.condition,
+            horizon_hours: ed.payload.horizon_hours, severity: ed.payload.severity,
+            certainty: ed.payload.certainty, note: ed.payload.note,
+          }));
+      } catch { /* Unruh down → no calibration this cycle, prompt still works */ }
+      return { mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges };
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
       const s    = readSettingsSync();
@@ -2880,6 +2900,15 @@ function startAutonomousPondering() {
           })
             .then(r => console.log(`[pondering] reflection → ${r.ok ? 'wrote' : 'failed to write'} ${upd.heading} to what_lapses_cost.md`))
             .catch(err => console.error('[pondering] what_lapses_cost write failed:', err?.message ?? err));
+        }
+        // Apply any forecast recalibrations the reflection graded — raise/
+        // lower certainty, mark observed, add a note — onto the edges by id.
+        // Fire-and-forget per edge; one failing never blocks the others or
+        // the chat path.
+        for (const cal of (result.edge_calibrations ?? [])) {
+          updateScheduleEdge({ id: cal.edge_id, payload: cal.payload })
+            .then(r => console.log(`[pondering] reflection → ${r?.ok ? 'recalibrated' : 'failed to recalibrate'} edge ${cal.edge_id}`))
+            .catch(err => console.error('[pondering] edge recalibration failed:', err?.message ?? err));
         }
       }
       return result;
