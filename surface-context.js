@@ -283,6 +283,10 @@ export function formatSurfaceCandidatesBlock(candidates) {
       : c.stakesTier === 'purely_optional' ? ' [optional]' : '';
     const floatTag = c.floating ? ' [floating — no time set]' : '';
     parts.push(`— ${c.label} (${c.type || 'task'})${tierTag}${floatTag}`);
+    // The id is what every schedule editing tool needs (give a floating task a
+    // time, snooze it, resolve it). Surface it here, plainly, or the Familiar
+    // can read the candidate but never act on it.
+    if (c.id) parts.push(`  id: ${c.id}`);
 
     if (c.ageDays != null && c.ageDays >= 1) {
       // For a floating task the age IS the staleness signal — the longer it's

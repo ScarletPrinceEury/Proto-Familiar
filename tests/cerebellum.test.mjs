@@ -255,6 +255,10 @@ test('update_memory_by_id / delete_memory_by_id: missing args are caught before 
   assert.match(await executeToolCall('delete_memory_by_id', '{}'), /need the memory id/i);
 });
 
+test('schedule_delete: a missing id is caught before any Unruh call', async () => {
+  assert.match(await executeToolCall('schedule_delete', '{}'), /need the id of the schedule item/i);
+});
+
 test('executeToolCall: a throwing executor produces a structured failure, not an exception', async () => {
   TOOL_EXECUTORS.__test_throw = () => { throw new Error('peer is down'); };
   try {

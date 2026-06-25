@@ -303,6 +303,9 @@ test('formatSurfaceCandidatesBlock: includes label, framing, prompts probe on lo
   assert.match(block, /Age: 3d/);
   assert.match(block, /confidence on the consequences here is low/);
   assert.match(block, /once, naturally, refusable/);
+  // The id must be surfaced — schedule_assign_time / snooze / resolve are
+  // addressed by id, so a candidate the Familiar can't identify is unactionable.
+  assert.match(block, /id: t1/);
 });
 
 test('formatSurfaceCandidatesBlock: explicit green/red conditions, cost of silence named, no bias-toward-quiet', () => {

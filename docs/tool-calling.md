@@ -14,7 +14,7 @@ The **Enable tool use** checkbox in the sidebar **Tools** section controls wheth
 
 ## Built-in Tools
 
-Thirty-five tools are always available when tool use is enabled: nine read/write tools (including the deferred-intent acknowledger, two on-demand memory-read tools, and `recall` — semantic search over the Familiar's own memory, for checking what it already holds before saving), four graph-lookup and graph-creation tools, seven editing tools for correcting stale Phylactery state, eight temporal tools (schedule + interests, backed by Unruh), two Village tools (look up who's in the ward's Village and add/edit people, with sensitive notes gated to private turns), two own-file tools (sandboxed read access to the Familiar's own folder — tomes, logs, docs), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots Phylactery before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
+Thirty-six tools are always available when tool use is enabled: nine read/write tools (including the deferred-intent acknowledger, two on-demand memory-read tools, and `recall` — semantic search over the Familiar's own memory, for checking what it already holds before saving), four graph-lookup and graph-creation tools, seven editing tools for correcting stale Phylactery state, nine temporal tools (schedule + interests, backed by Unruh — the schedule side covers add/resolve/snooze **and delete**, so a node the Familiar can see it can also re-time, finish, or remove), two Village tools (look up who's in the ward's Village and add/edit people, with sensitive notes gated to private turns), two own-file tools (sandboxed read access to the Familiar's own folder — tomes, logs, docs), and three crisis outreach tools for when the Familiar needs to help a user who is in danger during a live conversation. Every destructive tool (delete / rewrite / replace) auto-snapshots Phylactery before the call — recovery is one click in the **Snapshots** tab of the Knowledge editor.
 
 Three further tools — `look_up`, `web_search`, and `read_webpage` — are **opt-in** (web access since **0.7.0-alpha**; the `look_up`/`web_search` split since **0.7.19-alpha**): they appear in the tool list only when the human enables web access in Settings, and the `PROTO_FAMILIAR_WEBSEARCH_DISABLED=1` env var forces them off regardless. They are the only built-ins gated this way; everything else above is always present. The two search tools are deliberately distinct: **`look_up`** answers the definition/fact/overview kind of question from keyless official reference APIs (Wikipedia + the DuckDuckGo Instant Answer API), no scraping and no setup; **`web_search`** finds pages out on the web and works **out of the box** via a built-in keyless DuckDuckGo scrape (no install), upgradable to a proper search API (Marginalia — no signup; Tavily; Brave; Google) in Settings (see [`websearch-setup.md`](websearch-setup.md)). All web logic lives in `websearch.js` (the SSRF guard, the timeout, the floor) + `websearch-providers.js` (the API adapters) + `lookUp` (the reference-API client) + the `linkedom`+`@mozilla/readability`+`turndown` extraction; cerebellum only registers the defs and delegates.
 
@@ -47,6 +47,7 @@ Three further tools — `look_up`, `web_search`, and `read_webpage` — are **op
 | `schedule_add_phase` | Add a named block to the daily routine, with an optional texture for how the Familiar shows up during it | Confirmation string with the node id |
 | `schedule_resolve` | Mark a schedule node `done` / `cancelled` / `carried_forward`; optional `occurrence_date` resolves one occurrence of a recurring series | Confirmation string |
 | `schedule_snooze_task` | Park a task for N minutes (clamped 1min–1week) when {{user}} says "not now" — it stops surfacing, then returns on its own | Confirmation string |
+| `schedule_delete` | Permanently remove a schedule node — event, task, reminder, or routine **phase** — when it should no longer exist at all (a duplicate or mistaken entry, or a phase {{user}} wants gone). For "done / cancelled" use `schedule_resolve`, which keeps the record; this erases the node. No undo | Confirmation string |
 | `interest_bump` | Nudge an interest topic's weight (creates the topic on first bump); feeds the pondering loop | Confirmation string |
 | `interest_set_standing` | Promote a topic to a never-decaying standing value | Confirmation string |
 | `get_trusted_contacts` | Return the names and channels of any trusted contacts configured in Settings. Call this before `contact_trusted_person` to confirm who is available and get the exact name to pass. | Plain-text list, or a note that none are configured |
@@ -75,6 +76,19 @@ edges:
 ```
 
 For entities or edges not in the active block, `find_graph_node` and `find_graph_edges` resolve names → ids on demand. For entities not yet in the graph, `create_graph_node` adds them and returns an id ready for `create_graph_edge`.
+
+### Schedule ids in the prompt
+
+The schedule renders the same way, and for the same reason: the human-readable lines in `[Temporal Context]` (today's rhythm, upcoming, open tasks, reminders) carry **labels**, not ids — but every schedule editing tool (`schedule_assign_time`, `schedule_snooze_task`, `schedule_resolve`, `schedule_delete`) is addressed by a node **id**. Without surfacing the ids the Familiar could *see* its schedule yet never act on it. So `temporal-format.js` appends a compact `[schedule ids]` legend at the end of the block — mirroring the graph-id legend — covering both routine phases and the window, deduped:
+
+```
+[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), or remove one entirely incl. a phase (schedule_delete), pass its id]
+  morning correspondence [phase] = ph-1
+  Calbright Workshop [event] = ev-9
+  file taxes [task] = tk-3
+```
+
+Floating tasks reach the model by a second path too — the `[Surface candidates]` block (`surface-context.js`) now prints an `id:` line under each candidate, so a task surfaced for time-assignment carries the id the tool needs in the same place the Familiar reads about it. Either surface is sufficient; both exist because a task can appear in one without the other.
 
 ### Editing principles surfaced to the model
 

@@ -48,7 +48,7 @@ import {
   searchGraphNodes, getGraphSubgraph,
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
-  addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence,
+  addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -1251,7 +1251,7 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          id:   { type: 'string', description: 'The id of the floating task to give a time to (from [Surface candidates] or [Temporal Context]).' },
+          id:   { type: 'string', description: 'The id of the floating task to give a time to — from the [schedule ids] legend in [Temporal Context], or the `id:` line under the task in [Surface candidates].' },
           when: { type: 'string', description: 'ISO 8601 UTC time, e.g. "2026-06-18T13:00:00+00:00". Unruh compares against UTC with no timezone conversion — I read my [Now] block\'s UTC offset and convert {{user}}\'s stated local time to UTC exactly once.' },
         },
         required: ['id', 'when'],
@@ -1266,7 +1266,7 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          id:      { type: 'string', description: 'The id of the task to snooze (from the [Surface candidates] block or [Temporal Context]).' },
+          id:      { type: 'string', description: 'The id of the task to snooze — from the `id:` line under the task in [Surface candidates], or the [schedule ids] legend in [Temporal Context].' },
           minutes: { type: 'integer', description: 'How long to park it before it can surface again. Clamped to 1 minute – 1 week.' },
         },
         required: ['id', 'minutes'],
@@ -1325,11 +1325,25 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: {
-          id:         { type: 'string', description: 'Schedule node id (from my [Temporal Context]). For a recurring occurrence, this is the anchor node\'s id.' },
+          id:         { type: 'string', description: 'Schedule node id, from the [schedule ids] legend in my [Temporal Context]. For a recurring occurrence, this is the anchor node\'s id.' },
           resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
           occurrence_date: { type: 'string', description: 'Optional. For recurring nodes only. "YYYY-MM-DD" (local-TZ) date of the specific occurrence to resolve — e.g. resolve THIS Sunday\'s cleaning without affecting next Sunday. Omit to resolve the entire series.' },
         },
         required: ['id', 'resolution'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_delete',
+      description: 'I permanently remove a schedule item — an event, task, reminder, or a routine PHASE — when it should no longer exist at all, not merely be marked finished. For "done / cancelled / didn\'t get to it" I use schedule_resolve instead, which keeps the record; this one erases the node. It\'s how I clean up a duplicate or a mistaken entry, and the only way to remove a phase {{user}} wants gone. The id comes from the [schedule ids] legend in my [Temporal Context]. There is no undo, so I delete only when I\'m sure; for a recurring item I usually prefer schedule_resolve (optionally per-occurrence) so the rest of the series survives.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the schedule item to remove, from the [schedule ids] legend in my [Temporal Context].' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -2124,6 +2138,17 @@ export const TOOL_EXECUTORS = {
         ? `Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`
         : `Marked ${id} as ${resolution}.`;
     } catch (err) { return `Failed to resolve: ${err.message}`; }
+  },
+
+  schedule_delete: async ({ id } = {}) => {
+    const sid = String(id ?? '').trim();
+    if (!sid) return 'I need the id of the schedule item to remove — it\'s in the [schedule ids] legend of my [Temporal Context].';
+    try {
+      const data = await deleteScheduleNode({ id: sid });
+      if (!data?.ok) return `I couldn't remove that schedule item: ${data?.error ?? 'Unruh unavailable'}.`;
+      if (data.deleted === false) return `There's no schedule item with id ${sid} — nothing to remove (it may already be gone).`;
+      return `Removed schedule item ${sid}.`;
+    } catch (err) { return `I couldn't remove that schedule item: ${err.message}`; }
   },
 
   interest_bump: async ({ topic, delta }) => {

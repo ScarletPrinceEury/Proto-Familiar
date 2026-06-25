@@ -164,8 +164,34 @@ test('does not repeat the current phase in the window list', () => {
       { id: 'e1', label: 'event 1', when: t(11) },
     ]},
   });
-  assert.equal(out.match(/correspondence-block/g)?.length, 1, 'current phase should appear exactly once');
+  // The current phase shows once as "Current phase:" and is NOT re-listed as a
+  // window event. (It also appears once in the [schedule ids] legend — a
+  // reference table, not the window display — so count only the readable part.)
+  const readable = out.split('[schedule ids')[0];
+  assert.equal(readable.match(/correspondence-block/g)?.length, 1, 'current phase should appear exactly once in the readable schedule');
   assert.match(out, /event 1/);
+});
+
+test('emits a [schedule ids] legend so the Familiar can address nodes (resolve/re-time/delete)', () => {
+  const out = formatTemporalContext({
+    routine: [{ id: 'ph-1', type: 'phase', label: 'morning correspondence', when: '2026-06-22T08:00:00Z', end: '2026-06-22T11:00:00Z' }],
+    schedule: { phase: null, window: [
+      { id: 'ev-9', type: 'event', label: 'Calbright Workshop', when: '2026-06-22T12:00:00Z' },
+      { id: 'tk-3', type: 'task', label: 'file taxes' },
+    ]},
+  });
+  // The human-readable lines carry labels; the legend carries the ids the
+  // editing tools need — without it the Familiar can see its schedule but
+  // can't act on it.
+  assert.match(out, /\[schedule ids/);
+  assert.match(out, /Calbright Workshop \[event\] = ev-9/);
+  assert.match(out, /file taxes \[task\] = tk-3/);
+  assert.match(out, /morning correspondence \[phase\] = ph-1/); // phases listed too → deletable
+});
+
+test('no [schedule ids] legend when there are no schedule nodes', () => {
+  const out = formatTemporalContext({ interests: { standing: [{ label: 'caring' }], live: [] } });
+  assert.doesNotMatch(out, /\[schedule ids/);
 });
 
 test('open tasks (no when_ts, no resolution) get a {{user}}-bonded header', () => {
