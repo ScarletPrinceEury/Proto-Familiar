@@ -295,27 +295,49 @@ export async function selectSurfaceCandidates({
 const IMMINENT_MS = 48 * 3600 * 1000;
 
 /**
- * Read the consequence edges where this task is the source and turn them
- * into (a) short human "why" lines the Familiar plans from and (b) a
- * numeric pressure used only to order candidates under the per-turn cap.
- * Pure code — the LLM interprets these, it doesn't compute them.
+ * Read the consequence edges that bear on this task and turn them into
+ * (a) short human "why" lines the Familiar plans from and (b) a numeric
+ * pressure used only to order candidates under the per-turn cap. Pure code —
+ * the LLM interprets these, it doesn't compute them.
+ *
+ * Direction matters and differs by kind. Every edge reads "src {kind} dst":
+ *   • causes / blocks — THIS task is the SOURCE (it leads to / crowds out dst).
+ *   • requires / depends_on — "src needs dst first", so dst is the prerequisite.
+ *     THIS task carries weight when it IS that prerequisite (the dst) and a
+ *     dependent (the src) is gated on it — surfacing the prerequisite of an
+ *     imminent dependent is the high-value nudge.
  */
 function summarizeConsequences(taskId, edges, nodeById, now) {
   const reasons = [];
   let pressure = 0;
+  const imminent = (node) => {
+    const when = node?.when ? new Date(node.when).getTime() : null;
+    return when != null && (when - now) <= IMMINENT_MS && (when - now) >= -3600_000;
+  };
   for (const e of edges) {
-    if (!e || e.src !== taskId) continue;
+    if (!e) continue;
+    const p = e.payload || {};
+
+    // requires / depends_on: dst is the prerequisite. THIS task matters when
+    // it is the dst — i.e. a dependent (e.src) needs it done first.
+    if (e.kind === 'requires' || e.kind === 'depends_on') {
+      if (e.dst !== taskId) continue;
+      const dep = nodeById.get(e.src);
+      const depLabel = dep?.label ?? 'something else';
+      const depImminent = imminent(dep);
+      reasons.push(depImminent
+        ? `${depLabel} is coming up and needs this done first — getting it scheduled unblocks that`
+        : `${depLabel} needs this done first`);
+      if (depImminent) pressure += 3;
+      continue;
+    }
+
+    // causes / blocks: THIS task is the source acting on dst.
+    if (e.src !== taskId) continue;
     const dst = nodeById.get(e.dst);
     const dstLabel = dst?.label ?? 'something downstream';
-    const dstWhen = dst?.when ? new Date(dst.when).getTime() : null;
-    const dstImminent = dstWhen != null && (dstWhen - now) <= IMMINENT_MS && (dstWhen - now) >= -3600_000;
-    const p = e.payload || {};
-    if (e.kind === 'requires' || e.kind === 'depends_on') {
-      reasons.push(dstImminent
-        ? `${dstLabel} is coming up and needs this done first — getting it scheduled unblocks that`
-        : `${dstLabel} needs this done first`);
-      if (dstImminent) pressure += 3;
-    } else if (e.kind === 'blocks') {
+    const dstImminent = imminent(dst);
+    if (e.kind === 'blocks') {
       reasons.push(dstImminent ? `this is blocking ${dstLabel} (coming up)` : `this blocks ${dstLabel}`);
       if (dstImminent) pressure += 3;
     } else if (e.kind === 'causes') {

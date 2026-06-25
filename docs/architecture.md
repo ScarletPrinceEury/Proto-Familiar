@@ -825,9 +825,19 @@ log (Hybrid model — the live log stays one intact file; segmentation is logica
 at memorize time; a midnight-crossing session becomes two slices). `memorization
 .enqueueSessionByDay()` enqueues one job per date-slice (`scope:'day'`,
 `topicId:<date>`, `messageRange`), skipping slices the **coverage ledger** already
-marks memorized. On completion `processJob` calls `memory-coverage
-.recordSegmentRun()` (a day slice with zero kept facts is still *done* — it's
-recorded, not retried; shared-room slices get a `'shared-room'` flag). The ledger
+marks memorized. **Tail-only ingestion:** for a day that's only *partly*
+memorized (a session that kept growing on the same date), `enqueueMemorization`
+slices to the un-memorized tail via `day-segments.dayDelta(messages,
+segmentMemorizedThrough(...))` and stamps `priorThrough` on the job — so the
+earlier messages are never re-read, which is what stopped the consent queue
+filling with duplicate / already-known facts re-minted from the same
+conversation each run. A tail with < 2 readable messages waits rather than
+spawning an empty job; the manual `force` re-memorize passes `fullSegment` to
+deliberately re-read the whole day. On completion `processJob` calls
+`memory-coverage.recordSegmentRun()` with the **cumulative** through-count
+(`priorThrough + delta length`), so a tail-only run still advances coverage to
+the full day (a day slice with zero kept facts is still *done* — it's recorded,
+not retried; shared-room slices get a `'shared-room'` flag). The ledger
 (`tomes/.memory-coverage.json`) stores only what's been memorized per
 (date, session); `computeCoverage()` reads the logs live and derives per-date
 status (`complete | partial | uncertain | empty`) by comparing the two — so the
