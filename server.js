@@ -1503,6 +1503,9 @@ app.post('/api/memorize-day', async (req, res) => {
           sessionId, scope: 'day', topicId: date,
           messageRange: { start: seg.startIdx, end: seg.endIdx },
           messages: seg.messages, provider, apiKey, model, audienceTag,
+          // A forced re-memorize deliberately re-reads the whole day; otherwise
+          // ingest only the un-memorized tail (the default delta behaviour).
+          fullSegment: force === true,
         });
         if (r.deduped) deduped++; else enqueued++;
       } catch (err) { console.warn('[memorize-day] slice failed:', err?.message ?? err); }
