@@ -1709,6 +1709,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             personModel,
             surfacingHistory,
             now: nowMs,
+            // Consequence awareness: the graph edges + the full window so a
+            // candidate's dependents/blocked-items resolve to read imminence.
+            edges: Array.isArray(temporalPayload?.schedule?.edges) ? temporalPayload.schedule.edges : [],
+            scheduleNodes: windowItems,
           });
 
           if (candidates.length > 0) {
