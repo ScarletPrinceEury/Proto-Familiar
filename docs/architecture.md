@@ -157,6 +157,9 @@ ponderings injection, care-check framing) and as background loops
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
 │   ├── src/unruh/server.py  MCP server exposing every temporal tool
 │   ├── src/unruh/schedule.py + interest.py + handoff.py
+│   ├── src/unruh/ical.py      iCal (.ics) parse → normalized-event contract (0.8 inbound; RRULE subset-map + 90-day fallback expansion)
+│   ├── src/unruh/gcal.py      normalized events → schedule nodes; change-classifying upsert/reconcile keyed by gcal_uid
+│   ├── src/unruh/icalwrite.py schedule node → .ics + Google-render URL (0.8 outbound; local→UTC at this one boundary)
 │   ├── data/                SQLite + state (auto-created, git-ignored)
 │   └── tests/               pytest contract tests
 │
@@ -238,6 +241,7 @@ in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudl
 - `POST /api/temporal/schedule/edge` — connect two nodes into the consequence graph (`{src, dst, kind}`, optional consequence `payload`)
 - `PATCH /api/temporal/schedule/edge/:id` — merge consequence metadata onto an edge (`{payload}`)
 - `DELETE /api/temporal/schedule/edge/:id` — remove one consequence link (both endpoint nodes survive)
+- `GET /api/schedule/:id/export.ics` — stream a schedule node as a downloadable `.ics` (calendar export, 0.8 §2). Built in Unruh's code from the node's stored fields (local→UTC at this boundary); the model never types a calendar artifact. Source-independent — works on any node, gated by nothing
 - `GET /api/temporal/phases` — **date-independent** routine surface
 - `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
 - `GET /api/temporal/reminders/health` — observability on the loop

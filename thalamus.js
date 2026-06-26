@@ -887,6 +887,21 @@ export async function getRemindersHealth() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/**
+ * Build the export artifacts (.ics text + "add to Google" URL) for a
+ * schedule node, in Unruh's code — the Familiar passes an id and never
+ * assembles a calendar artifact itself (build spec §2/§3). Best-effort:
+ * ok:false if Unruh is down or the id isn't found.
+ */
+export async function exportSchedule({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'schedule_export', arguments: { id } });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 // ── Google Calendar ingestion wrapper (0.8) ──────────────────────
 //
 // The Node adapters (gcal-source.js for the link tier; gogcli/gcalcli in

@@ -44,6 +44,7 @@ from unruh import schedule as sched
 from unruh import interest as interests
 from unruh import handoff as handoffs
 from unruh import gcal as gcal_ingest_mod
+from unruh import icalwrite
 
 mcp = FastMCP("unruh")
 
@@ -407,6 +408,33 @@ def gcal_ingest(
             )
     except Exception as e:  # parse/DB failure must degrade, never crash the loop
         return _err(f"gcal_ingest failed: {e}", code="ingest_error")
+
+
+@mcp.tool()
+def schedule_export(id: str) -> dict[str, Any]:
+    """I use this to turn one of my human's scheduled items into something they
+    can drop into their own calendar — a downloadable `.ics` file and a
+    one-click "add to Google" link. I reach for it when an appointment or plan
+    lives in my sense of their schedule but not yet in the calendar app on their
+    phone. I pass the node `id` from the `[schedule ids]` legend I already read;
+    Unruh builds the exact dates, UID, and URL in code — I never type a calendar
+    artifact myself. Works on ANY schedule node, even one added by hand with no
+    Google setup at all.
+
+    Args:
+        id: the schedule node id to export.
+
+    Returns: {ok: True, ics: '<.ics text>', google_url: '<render URL>'} on
+    success, or the standard error shape if the id isn't found.
+    """
+    try:
+        with get_conn() as conn:
+            node = sched.get_node(conn, id=id)
+        if node is None:
+            return _err(f"no schedule node with id {id!r}", code="not_found")
+        return icalwrite.export_node(node)
+    except Exception as e:
+        return _err(f"schedule_export failed: {e}", code="export_error")
 
 
 # ── Reminders (M11) ────────────────────────────────────────────────────

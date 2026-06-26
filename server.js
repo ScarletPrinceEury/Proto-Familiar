@@ -32,6 +32,7 @@ import {
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
+  exportSchedule,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
   ingestGcal,
@@ -2286,6 +2287,26 @@ app.post('/api/temporal/interests/set-standing', async (req, res) => {
   if (!topic || typeof topic !== 'string') return badRequest(res, 'topic (string) is required');
   try { res.json(await setStandingInterest({ topic, weight, value_ref })); }
   catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Calendar export (0.8 §2.2). Streams a schedule node as a downloadable
+// `.ics` so the Familiar's message can carry a real download link alongside
+// the "add to Google" URL. The artifact is built in Unruh's code from the
+// node's stored fields — the model never types a calendar value (§3).
+app.get('/api/schedule/:id/export.ics', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[a-fA-F0-9]{32}$/.test(id)) return res.status(400).json({ error: 'invalid schedule id' });
+  try {
+    const data = await exportSchedule({ id });
+    if (!data?.ok || !data.ics) {
+      return res.status(404).json({ error: data?.error || 'no exportable schedule item with that id' });
+    }
+    res.set('Content-Type', 'text/calendar; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="schedule-${id.slice(0, 8)}.ics"`);
+    res.send(data.ics);
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
 });
 
 // Schedule

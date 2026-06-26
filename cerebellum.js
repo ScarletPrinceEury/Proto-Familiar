@@ -49,7 +49,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState,
+  addScheduleEdge, upsertScheduleState, exportSchedule,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -1397,6 +1397,20 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_export',
+      description: 'I turn one of {{user}}\'s scheduled items into something they can drop straight into their own calendar — a downloadable `.ics` file and a one-click "add to Google" link. I reach for this when an appointment or plan lives in my sense of their day but not yet in the calendar app on their phone, or when {{user}} asks me to send them something for their calendar. I pass the node `id` from the [schedule ids] legend; Unruh builds the exact dates, file, and URL in code — I never type a calendar link or date myself, I just hand it over and say what it is. It works on ANY schedule item, including ones {{user}} added by hand, and it only reads — it never changes their calendar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the schedule item to export, from the [schedule ids] legend in my [Temporal Context].' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'interest_bump',
       description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please — but I keep the LABEL short and tag-like, because long propositional labels turn ponderings into fact-cards (see topic param).',
       parameters: {
@@ -2246,6 +2260,25 @@ export const TOOL_EXECUTORS = {
       const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
       return `Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`;
     } catch (err) { return `I couldn't connect those items: ${err.message}`; }
+  },
+
+  schedule_export: async ({ id } = {}) => {
+    const sid = String(id ?? '').trim();
+    if (!sid) return 'I need the id of the schedule item to export — it\'s in the [schedule ids] legend of my [Temporal Context].';
+    try {
+      const data = await exportSchedule({ id: sid });
+      if (!data?.ok) return `I couldn't build a calendar file for that item: ${data?.error ?? 'Unruh unavailable'} (the id may be stale).`;
+      // Hand the human two ready-made artifacts. The download path is
+      // same-origin (served by GET /api/schedule/:id/export.ics); the
+      // Google link is absolute and clickable anywhere. I built NEITHER by
+      // hand — Unruh generated the dates/UID/URL in code — I just relay them.
+      return [
+        `Calendar export ready for ${sid}:`,
+        `- Add to Google Calendar: ${data.google_url}`,
+        `- Download .ics file: /api/schedule/${encodeURIComponent(sid)}/export.ics`,
+        `I share both links with {{user}} so they can pick whichever suits their device. (I only read their calendar — adding this is their choice, not a change I make to it.)`,
+      ].join('\n');
+    } catch (err) { return `I couldn't build a calendar file for that item: ${err.message}`; }
   },
 
   interest_bump: async ({ topic, delta }) => {
