@@ -213,6 +213,14 @@ Two distinct systems coexist under the temporal umbrella:
 
 These two things coexist without conflicting. The schedule creates meaning; the reminders handle the genuinely time-sensitive.
 
+### Time model — local-naive, not UTC
+
+Unruh stores and compares every timestamp (`when_ts`, `end_ts`, `created_at`, …) in the **ward's local wall-clock with no timezone offset**, against a local-naive `now` (`db.now_iso`). This is a deliberate reversal of the earlier UTC-internal design.
+
+The reasoning: Unruh models **one** person's **local** day on a **co-located** machine, and every human-facing surface is already local (the `[Now]` block, the formatter, the times the Familiar speaks). Carrying UTC underneath meant a conversion at every boundary — and the LLM was the bridge for the write boundary. It kept getting it wrong in both directions (storing a naive local time the old UTC comparison never matched → a reminder that never fired; and double-applying the offset → an event two hours off). Local-internal deletes that entire class of bug: the Familiar writes plain local time, `now` is read live from the system clock (so DST is handled by the OS), and "9am daily" stays 9am without per-occurrence UTC re-derivation.
+
+The conversion doesn't vanish — it moves to a single code seam: an offset-bearing value (an external calendar, or a pre-migration row) is normalised to local once via `db.to_local_naive`, never by the model. The trade-off is a bounded DST edge case (a *one-off* time inside the spring-forward gap / fall-back overlap is ambiguous — rare, ±1h, twice a year) and an assumption that the server shares the ward's timezone (true for a home machine; a relocated machine has its clock adjusted anyway). Existing UTC rows are healed once by `db.migrate_timestamps_to_local` on first connect.
+
 ---
 
 ## Proactive Messaging

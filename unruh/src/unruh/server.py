@@ -39,7 +39,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from unruh import __version__
-from unruh.db import get_conn
+from unruh.db import get_conn, now_iso
 from unruh import schedule as sched
 from unruh import interest as interests
 from unruh import handoff as handoffs
@@ -48,7 +48,8 @@ mcp = FastMCP("unruh")
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Delegates to the canonical local-naive now (db.now_iso) — one source.
+    return now_iso()
 
 
 def _err(message: str, code: str = "bad_request") -> dict[str, Any]:

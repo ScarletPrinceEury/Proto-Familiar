@@ -16,7 +16,7 @@ edges in sqlite (`unruh/src/unruh/schedule.py` — pure functions over a
 connection; MCP glue in `server.py`):
 
 - **Node types:** `event | task | phase | state | reminder`. Columns: `id`,
-  `type`, `label`, `when_ts` (ISO-8601 UTC), `end_ts` (optional), `resolution`,
+  `type`, `label`, `when_ts` (ISO-8601 **local-naive**, no offset — see §1.2), `end_ts` (optional), `resolution`,
   and an arbitrary `payload_json`. Validation: `event`/`phase`/`state`/`reminder`
   require `when`; `phase` additionally requires `end`; `task` may omit both
   (open-ended to-do).
@@ -129,6 +129,17 @@ in two places.
 
 - `type = 'event'` (Google entries are appointments, not Proto-Familiar tasks).
 - `when = start`, `end = end`, `label = summary`.
+
+> **Timezone — the seam.** Unruh is **local-naive internal** (`when_ts`/`end_ts`
+> are the ward's local wall-clock, no offset — see `docs/unruh-design.md`). iCal
+> times arrive as real UTC/offset-bearing instants (the `…Z` above), so they MUST
+> be converted to local at this seam: `add_node`/`to_local_naive` already does
+> this on the inbound write, so passing the iСal value straight through is
+> correct. **Outbound** (§2) is the mirror — when the Familiar exports a node, the
+> local-naive `when_ts` is converted UP to a real UTC/offset value for the `.ics`
+> (`DTSTART`) and the Google-render URL, because external calendars require a true
+> instant. So the only timezone conversions in the whole feature live at this one
+> external boundary, in code, both directions — never the model.
 - `payload`: `source: 'gcal'` (marks it externally-managed — legibility +
   reconcile scope), `gcal_uid: uid` (idempotency key), `gcal_last_modified`
   (skip no-op updates), `recurrence` (mapped RRULE, §1.4), `location`,

@@ -158,10 +158,12 @@ test('dayAndDate: weekday + month + day, no year by default', () => {
 
 // ── buildTimeAnchorBlock ───────────────────────────────────────────
 
-test('buildTimeAnchorBlock: always includes the [Now] header + clock + UTC offset + weekday/date', () => {
+test('buildTimeAnchorBlock: always includes the [Now] header + local clock + weekday/date', () => {
   const block = buildTimeAnchorBlock({ now: NOW });
   assert.match(block, /^\[Now\]/);
-  assert.match(block, /Now: 2:30pm \(UTC[+-]\d{2}:\d{2}\) on Thursday, June 4\./);
+  // Plain local wall-clock, no UTC offset (Unruh stores local time; showing an
+  // offset only invited the timezone-math mistakes the local-time model removed).
+  assert.match(block, /Now: 2:30pm on Thursday, June 4 \(my human's local time\)\./);
 });
 
 test('buildTimeAnchorBlock: adds last-message line with absolute clock + interval', () => {
