@@ -8242,7 +8242,11 @@ function formatOutboxAsMessageContent(item) {
 }
 
 async function injectOutboxAsChatMessage(item) {
-  const content = formatOutboxAsMessageContent(item);
+  // Defense-in-depth: the server strips LLM-hallucinated timestamps at mint
+  // time, but strip here too before this proactive body is rendered, STORED in
+  // state.messages, and copied — every other assistant-commit path strips, and
+  // a stored fabricated time would re-inject next turn and compound.
+  const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
   const timestamp = item.ts || new Date().toISOString();
