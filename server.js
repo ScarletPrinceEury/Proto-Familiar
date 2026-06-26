@@ -58,7 +58,7 @@ import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
-import { buildTimeAnchorBlock } from './relative-time.js';
+import { buildTimeAnchorBlock, wardLocalNowISO } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -389,6 +389,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     timeAnchor = buildTimeAnchorBlock({
       now: Date.now(),
       lastUserMessageAt: lastUserMessageAt ?? null,
+      // The ward's zone, not the server's — so the [Now] the Familiar reads is
+      // the ward's clock even when the server runs in a different timezone.
+      timeZone: readSettingsSync()?.wardTimeZone || null,
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
@@ -3005,7 +3008,13 @@ function startRemindersScheduler() {
     // means a silently missed reminder.
     enqueueOutboxFn: enqueueAndDispatch,
     getDueReminders: async () => {
-      const r = await getDueReminders({ limit: 50 });
+      // Compare against the WARD's local now, not the server's clock — a
+      // reminder's when_ts is the ward's wall-clock, and the server may run in
+      // a different zone (a UTC container while the ward is in PDT). Passing a
+      // ward-local now here is what stops afternoon reminders firing in the
+      // morning. Falls back to server-local when no ward zone is known yet.
+      const now = wardLocalNowISO(readSettingsSync()?.wardTimeZone);
+      const r = await getDueReminders({ now, limit: 50 });
       return Array.isArray(r.reminders) ? r.reminders : [];
     },
     fireReminder: async ({ id }) => {

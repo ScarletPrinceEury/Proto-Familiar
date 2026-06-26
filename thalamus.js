@@ -21,6 +21,7 @@ import os from 'os';
 import { existsSync, readFileSync, mkdirSync, promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
+import { wardLocalNowISO } from './relative-time.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -239,6 +240,19 @@ import { PROVIDER_URLS } from './providers.js';
  *   (same pattern for BASE_URL, MODEL, PROVIDER)
  *   ZAI_* — only when provider is zai / zai-coding
  */
+// The ward's IANA timezone (auto-captured from the browser, synced to
+// settings). Unruh stores ward-local times, so "now" must be computed in this
+// zone — the server process may run in a different one. null when not yet known
+// (first boot before any browser connects) → callers fall back to server-local.
+function wardTimeZoneSetting() {
+  try {
+    const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
+    return (typeof s.wardTimeZone === 'string' && s.wardTimeZone.trim()) ? s.wardTimeZone.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function loadPhylacteryEnv() {
   let settings;
   try {
@@ -452,10 +466,21 @@ async function connectUnruh() {
     return;
   }
   const uvBin = resolveUvBinary();
+  // Pass the ward's timezone as TZ so ALL of Unruh's own datetime.now() (the
+  // get_due_reminders default, now_iso for created_at / state / resolution
+  // stamps) is ward-local — the comprehensive half of the cross-zone fix. The
+  // safety-critical firing/window paths already get an explicit ward-local
+  // `now` from Node, so this just keeps Unruh's internal stamps consistent.
+  // Resolved fresh per connect, so a settings-change reconnect picks up a new
+  // zone (e.g. the ward travels) without a full restart. Python honours TZ on
+  // the platforms where the bug occurs (Linux/WSL/Docker); native Windows is
+  // already in the ward's zone, so a no-op there is harmless.
+  const wardTz = wardTimeZoneSetting();
   const transport = new StdioClientTransport({
     command: uvBin,
     args: ['run', '--no-sync', 'python', '-m', 'unruh'],
     cwd: UNRUH_ROOT,
+    ...(wardTz ? { env: { ...process.env, TZ: wardTz } } : {}),
   });
 
   const client = new Client(
@@ -1276,7 +1301,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // failure here (e.g. the IDLE_THRESHOLD_MS regression) degrades to
     // non-idle rather than collapsing the whole enrich() call into the
     // outer catch.
-    const nowTs = new Date().toISOString();
+    // Ward-local now (the ward's zone, not the server's) so temporal_context's
+    // window/phase line up with ward-stated times even on a cross-zone server.
+    const nowTs = wardLocalNowISO(wardTimeZoneSetting());
     let isIdle = false;
     try {
       isIdle = !staticOnly

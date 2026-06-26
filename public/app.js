@@ -240,6 +240,7 @@ const state = {
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   notificationSounds:      true,    // in-app chime on new messages (default on)
+  wardTimeZone:            '',      // ward's IANA zone, auto-detected from the browser (see init overlay)
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -302,6 +303,7 @@ const SERVER_SYNCED_KEYS = [
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
+  'wardTimeZone',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -309,6 +311,12 @@ function extractServerSettings(s) {
   const out = {};
   for (const k of SERVER_SYNCED_KEYS) if (k in s) out[k] = s[k];
   return out;
+}
+// The ward's IANA timezone, straight from the browser — the ground truth for
+// where the ward actually is, which the server uses to compute ward-local "now".
+function detectWardTz() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+  catch { return ''; }
 }
 let _settingsPutTimer = null;
 function pushSettingsToServer() {
@@ -646,6 +654,19 @@ async function syncSettingsFromServer() {
   if (!Array.isArray(state.connections))           state.connections = [];
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   migrateLegacyConnection();
+
+  // Auto-capture the ward's live browser timezone. Unruh stores ward-local
+  // times, so the server — which may run in a DIFFERENT zone (a UTC container
+  // while the ward is in PDT) — needs this to compute "now" correctly, or
+  // reminders set for the ward's afternoon fire in their morning. Push whenever
+  // it changes (incl. the first load after this update), so a plain reload is
+  // enough for it to take effect; no setting for the ward to toggle.
+  const liveTz = detectWardTz();
+  if (liveTz && liveTz !== state.wardTimeZone) {
+    state.wardTimeZone = liveTz;
+    pushSettingsToServer();
+  }
+
   writeSettingsToUI();
   renderConnectionsList();
   refreshModelSuggestions(state.provider);
