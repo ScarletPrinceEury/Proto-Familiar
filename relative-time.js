@@ -332,12 +332,11 @@ export function plainInterval(target, now = Date.now()) {
  */
 export function buildTimeAnchorBlock({ now = Date.now(), lastUserMessageAt = null } = {}) {
   try {
-    const nowDate    = new Date(now);
-    const offsetMin  = -nowDate.getTimezoneOffset();
-    const offsetSign = offsetMin >= 0 ? '+' : '-';
-    const absMin     = Math.abs(offsetMin);
-    const offsetStr  = `UTC${offsetSign}${String(Math.floor(absMin / 60)).padStart(2, '0')}:${String(absMin % 60).padStart(2, '0')}`;
-    const lines = [`Now: ${clockTime(now)} (${offsetStr}) on ${dayAndDate(now)}.`];
+    // Plain LOCAL wall-clock — Unruh stores and compares in local time, so the
+    // times I schedule (reminders, events, tasks) use exactly this clock,
+    // written directly. No UTC offset shown on purpose: there is no conversion
+    // to do, and showing one only invites the timezone-math mistakes we removed.
+    const lines = [`Now: ${clockTime(now)} on ${dayAndDate(now)} (my human's local time).`];
     if (lastUserMessageAt) {
       const lastMs = toMs(lastUserMessageAt);
       if (Number.isFinite(lastMs)) {
