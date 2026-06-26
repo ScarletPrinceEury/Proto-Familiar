@@ -94,10 +94,10 @@ def schedule_add_node(
             requires `end`; task is the only type that may omit
             both (an open-ended 'to do' item).
         label: human-readable name. Required.
-        when: ISO-8601 LOCAL-naive start time (no offset; e.g.
+        when: local start time, format YYYY-MM-DDTHH:MM:SS (no offset; e.g.
             "2026-06-18T09:00:00"). An offset-bearing value is normalised to
             local in code (to_local_naive). Required for event/phase/state.
-        end: ISO-8601 local-naive end time. Required for phase; optional for
+        end: local end time, same format. Required for phase; optional for
             event/state (open-ended).
         payload: arbitrary extras stored as JSON (notes, source,
             categorisation that doesn't fit the four columns).
