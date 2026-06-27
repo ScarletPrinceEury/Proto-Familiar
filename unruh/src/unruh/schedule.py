@@ -530,6 +530,16 @@ def _edge_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return out
 
 
+def get_node(conn: sqlite3.Connection, *, id: str) -> dict[str, Any] | None:
+    """Return a single schedule-layer node as a wire dict, or None. Backs
+    schedule_export, which needs the node's stored fields to build the
+    `.ics`/URL in code."""
+    row = conn.execute(
+        "SELECT * FROM nodes WHERE id = ? AND layer = 'schedule'", (id,)
+    ).fetchone()
+    return _node_row_to_dict(row) if row else None
+
+
 def get_window(
     conn: sqlite3.Connection,
     *,

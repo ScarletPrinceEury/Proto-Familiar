@@ -887,6 +887,43 @@ export async function getRemindersHealth() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/**
+ * Build the export artifacts (.ics text + "add to Google" URL) for a
+ * schedule node, in Unruh's code — the Familiar passes an id and never
+ * assembles a calendar artifact itself (build spec §2/§3). Best-effort:
+ * ok:false if Unruh is down or the id isn't found.
+ */
+export async function exportSchedule({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'schedule_export', arguments: { id } });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+// ── Google Calendar ingestion wrapper (0.8) ──────────────────────
+//
+// The Node adapters (gcal-source.js for the link tier; gogcli/gcalcli in
+// Pass 4) fetch the calendar and hand the bytes/events here; Unruh parses
+// + reconciles and returns the change classification {new, updated,
+// removed}. Best-effort like every Unruh-facing call — a down peer or a
+// failed ingest degrades to ok:false and the sync loop simply skips this
+// tick. Pass exactly one of icsText / events.
+export async function ingestGcal({ icsText, events, reconcileDeletes = true } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', new: [], updated: [], removed: [] };
+  try {
+    const args = { reconcile_deletes: reconcileDeletes };
+    if (icsText !== undefined) args.ics_text = icsText;
+    if (events  !== undefined) args.events  = events;
+    const r = await unruhClient.callTool({ name: 'gcal_ingest', arguments: args });
+    return parseToolText(r, { ok: false, new: [], updated: [], removed: [] });
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), new: [], updated: [], removed: [] };
+  }
+}
+
 // ── Handoff wrappers (M9b) ───────────────────────────────────────
 
 export async function getHandoff({ include_consumed = true } = {}) {
@@ -1131,6 +1168,7 @@ function wrapFile(filename, content, promptLabel) {
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
+import { nextProjectionCue } from './gcal-projection.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
 import { summarizeNeedsForDay, isNeedWindow } from './needs-tracking.js';
@@ -1673,6 +1711,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Google-Calendar projection cue (§4) ──────────────────────────────
+    // The one Familiar-facing effect of inbound sync: newly-synced
+    // appointments not yet thought-through get a gentle "think two moves
+    // ahead" cue. Rides this turn (no standalone request); the candidate
+    // list already arrived in temporalPayload.gcal_projection. Ward-private
+    // (it's the ward's calendar); only live turns advance the turn-aging so
+    // previews/handoff summaries don't burn an item's window.
+    let gcalCueBlock = '';
+    if (liveTurn && !staticOnly && !gated) {
+      try {
+        const candidates = Array.isArray(temporalPayload?.gcal_projection) ? temporalPayload.gcal_projection : [];
+        gcalCueBlock = await nextProjectionCue({ candidates, advance: true });
+        if (gcalCueBlock) console.log('[thalamus] gcal projection cue: surfacing new calendar item(s)');
+      } catch (err) {
+        console.error('[thalamus] gcal projection cue failed:', err?.message ?? err);
+      }
+    }
+
     // ── Care check / break-through framing (step 4b) ──────────────────────
     // Read current threat; if elevated, prepend a [CARE CHECK] block that
     // tells the Familiar to consider checking in proactively. Never forces
@@ -1858,6 +1914,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
+    if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (careBlock)              dynamicSections.push(careBlock);
@@ -1882,6 +1939,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       graphLines             ? 'graph'    : null,
       ponderingsBlock        ? 'pondering'  : null,
       deferredIntentsBlock   ? 'intents'    : null,
+      gcalCueBlock           ? 'gcal-cue'   : null,
       consentPendingBlock    ? 'consent'    : null,
       graduationBlock        ? 'graduation' : null,
       careBlock              ? 'care'       : null,

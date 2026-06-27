@@ -5,6 +5,16 @@
 > follow-ups inside it bump PATCH (the consequence-graph two-pass precedent —
 > see CLAUDE.md "One milestone = one minor"). The feature branch name owns the
 > 0.8 slot; ancillary work elsewhere stays 0.7.x PATCH until this lands.
+>
+> **Status: SHIPPED in 0.8.0-alpha.** All five passes landed: inbound link tier
+> (`ical.py`/`gcal.py` + `gcal-source.js` + `gcal-sync-loop.js`), outbound export
+> (`icalwrite.py` + `schedule_export` + `/api/schedule/:id/export.ics`), the
+> change-gated projection cue (`gcal-projection.js`), the advanced authenticated
+> CLI read tier (`fetchViaCli`, gogcli/gcalcli), and confirmed write-back
+> (`pushIcsViaCli` + `schedule_push_to_google`, ADD-only, opt-in). The CLI tiers
+> are implemented as one generic, override-friendly adapter behind the single
+> `gcal_ingest` seam rather than two hardcoded tool integrations — the ward picks
+> a preset and may override the command. This doc stays as the design record.
 
 ## 0. What this builds on — inlined, so you don't open another doc to start
 

@@ -108,6 +108,9 @@ ponderings injection, care-check framing) and as background loops
 ├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG)
 ├── needs-tracking-loop.js   Autonomous singleton loop (Pass 2, opt-in/default-OFF); marks a recurring need-window's occurrence `missed` once its [when,end] elapses unresolved (builds the needs-fulfilment ledger). Pure selection in needs-tracking.js. Stands down at moderate+ threat (never competes with triage); only the LAPSE is made factual — projected consequence edges are untouched. Off-switch PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1
 ├── needs-tracking.js        Pure Pass-2 logic: isNeedWindow / selectMissedOccurrences / summarizeNeedsForDay (the live "Needs today" view)
+├── gcal-sync-loop.js        Autonomous singleton loop (0.8, opt-in/default-OFF); ward-configurable cadence (hourly default). Each due tick: fetch the iCal feed (gcal-source.js) → Unruh gcal_ingest (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Fetch/parse failure degrades silently and NEVER reconciles deletions. Off-switch PROTO_FAMILIAR_GCAL_DISABLED=1 + "Google Calendar sync" toggle
+├── gcal-source.js           Inbound FETCH half (Node owns network + the iCal URL): normalizeIcalUrl (webcal→https) + fetchIcal (timeout, ok:false on any failure, rejects non-iCal bodies so an auth wall can't read as "empty calendar"). Advanced tier (§1.5): fetchViaCli runs a ward-configured authenticated command (gogcli/gcalcli presets, overridable) that emits `.ics` (reuses Unruh's parser) or JSON (normalizeCliEvents) — a windowed read, always reconcileDeletes:false; detectCli probes installed/authed. Write-back (§7-5, the ONLY path that mutates the real calendar): pushIcsViaCli imports a generated `.ics` (reuses icalwrite — code builds it, never the model) through the ward's import command (ADD only) — gated behind the `schedule_push_to_google` tool's opt-in. Unruh stays parse-only/network-free
+├── gcal-projection.js       The §4 projection cue: pure selectCueItems (per-turn cap + turn/time aging) + buildCueBlock (first-person, literal "my human") over Unruh's `gcal_projection` feed; persisted aging state in tomes/.gcal-projection-cue.json. Rides chat turns (no standalone request); auto-clears when a node gains a consequence edge (Unruh drops it). Injected as a dynamic block in thalamus enrich()
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
@@ -155,6 +158,9 @@ ponderings injection, care-check framing) and as background loops
 │   ├── pyproject.toml       uv-managed Python project, deps locked in uv.lock
 │   ├── src/unruh/server.py  MCP server exposing every temporal tool
 │   ├── src/unruh/schedule.py + interest.py + handoff.py
+│   ├── src/unruh/ical.py      iCal (.ics) parse → normalized-event contract (0.8 inbound; RRULE subset-map + 90-day fallback expansion)
+│   ├── src/unruh/gcal.py      normalized events → schedule nodes; change-classifying upsert/reconcile keyed by gcal_uid
+│   ├── src/unruh/icalwrite.py schedule node → .ics + Google-render URL (0.8 outbound; local→UTC at this one boundary)
 │   ├── data/                SQLite + state (auto-created, git-ignored)
 │   └── tests/               pytest contract tests
 │
@@ -236,6 +242,7 @@ in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudl
 - `POST /api/temporal/schedule/edge` — connect two nodes into the consequence graph (`{src, dst, kind}`, optional consequence `payload`)
 - `PATCH /api/temporal/schedule/edge/:id` — merge consequence metadata onto an edge (`{payload}`)
 - `DELETE /api/temporal/schedule/edge/:id` — remove one consequence link (both endpoint nodes survive)
+- `GET /api/schedule/:id/export.ics` — stream a schedule node as a downloadable `.ics` (calendar export, 0.8 §2). Built in Unruh's code from the node's stored fields (local→UTC at this boundary); the model never types a calendar artifact. Source-independent — works on any node, gated by nothing
 - `GET /api/temporal/phases` — **date-independent** routine surface
 - `GET /api/temporal/handoff` + `POST .../handoff/:id/consume`
 - `GET /api/temporal/reminders/health` — observability on the loop
@@ -1264,7 +1271,7 @@ doesn't sit in front of it.
 | Block | Contents | Lifetime | Placement |
 |---|---|---|---|
 | `static` | `base_instructions.md` + identity files (self / user / relationship / custom) | Stable across turns in a session | Prepended to the system message at index 0 |
-| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → `[CARE CHECK]` (if threat ≠ calm) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
+| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → Google-Calendar projection cue (0.8) → `[CARE CHECK]` (if threat ≠ calm) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
 
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 
@@ -1274,7 +1281,8 @@ Within `dynamic`, the order is deliberate:
 3. **Graph excerpt** — entity-relationship context
 4. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop). Each entry's `created_at` is rendered via `relativeTime()`.
 5. **Deferred intents** — only on live turns. Up to 5 `wants_to_save` entries the Familiar flagged during free cycles but hasn't acted on yet. Shows the kind (tome/memory/identity), the summary, the routing tool, and the (uid, index) pair for `acknowledge_deferred_intent`. See "Deferred-action pattern" below.
-6. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
+6. **Google-Calendar projection cue** (0.8 §4) — only on live turns. Newly-synced appointments not yet thought-through, capped per turn and aged out after a few turns / a short window (code-driven, no acknowledgement call). Rides this turn — the candidate list arrives in `temporal_context.gcal_projection` (Unruh filters to flagged + open + in-horizon + no-consequence-edge, so it auto-clears the moment the Familiar links one). Invites authoring both futures via `schedule_link`; never nags. See `gcal-projection.js`.
+7. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
 6. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests. Every timed item (upcoming / reminders / resolved) is rendered through `relativeTime()` so the Familiar reads "tomorrow at 10am" / "in 30 minutes" rather than ISO timestamps.
 7. **`[Surface candidates]`** — open schedule items that survived the hard gates (active snooze, threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. The header is ADHD/executive-dysfunction-aware: explicit GREEN LIGHT states to surface in (free time, momentum, boredom/restlessness, "forgetting something"), explicit RED LIGHT states to hold in (severe/high threat, quiet phase, mid-task), and named access ramps (timebox, single next action, planning-only slot, body-double). See "Surface pipeline" below.
 
@@ -1602,6 +1610,7 @@ that is the contract talking — update all seams together or stop.
 | Tome graduation | 30min tick (opt-in, default OFF) | Settings "Graduate tome knowledge" + `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1` | Drains durable facts stranded in tomes → identity/memory/graph (relational facts resolve-or-create + dedup); confirmed route before tidy; consent-gated ward memory |
 | Needs tracking | 30min tick (opt-in, default OFF) | Settings "Track unmet needs" + `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1` | Marks a recurring need-window's occurrence `missed` once its window elapses unresolved (the needs-fulfilment ledger). Stands down at moderate+ threat; only the lapse is made factual — never auto-confirms a projected consequence |
 | Memory coverage sweep | 10min tick (default ON) | Settings "Memory coverage sweep" + `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` | Memorizes PAST days that never ingested (day-anchoring Phase 2); skips today + completed days; only enqueues into the memorization worker — no LLM call of its own |
+| Google Calendar sync | 60s wake + ward interval (hourly default; opt-in, default OFF) | Settings "Google Calendar sync" + `PROTO_FAMILIAR_GCAL_DISABLED=1` | Fetch the ward's iCal feed → Unruh `gcal_ingest` (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Failure degrades silently and never reconciles deletions |
 | Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
 | Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |
 

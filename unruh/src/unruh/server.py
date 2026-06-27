@@ -43,6 +43,8 @@ from unruh.db import get_conn, now_iso
 from unruh import schedule as sched
 from unruh import interest as interests
 from unruh import handoff as handoffs
+from unruh import gcal as gcal_ingest_mod
+from unruh import icalwrite
 
 mcp = FastMCP("unruh")
 
@@ -370,6 +372,71 @@ def schedule_list_phases(include_resolved: bool = False, limit: int = 200) -> di
     return {"ok": True, "phases": phases}
 
 
+# ── Google Calendar ingestion (0.8) ────────────────────────────────────
+
+
+@mcp.tool()
+def gcal_ingest(
+    ics_text: str | None = None,
+    events: list | None = None,
+    reconcile_deletes: bool = True,
+) -> dict[str, Any]:
+    """I use this to fold my human's Google Calendar into their schedule. The
+    Node sync loop hands me either a raw `.ics` feed (`ics_text`) or already-
+    normalised events (`events`, from the gogcli/gcalcli adapters); I parse,
+    map each entry to an `event` node keyed by its stable Google UID, and
+    reconcile the whole gcal-sourced set in one shot. This is mechanical —
+    the only Familiar-facing effect is that genuinely NEW items get flagged
+    for me to think two moves ahead about later.
+
+    Args:
+        ics_text: a complete `.ics` document (the link adapter's output).
+        events: a list of pre-normalised events (the authenticated adapters'
+            output). Pass exactly one of `ics_text` / `events`.
+        reconcile_deletes: True for a confirmed-good FULL snapshot (an event
+            that vanished from Google is cancelled here). A windowed/partial
+            read passes False so it can't cancel events outside its window.
+
+    Returns: {ok, new: [...ids], updated: [...], unchanged: [...],
+    removed: [...], complex_series: [...uids]}. Only `new` ever reaches me.
+    """
+    try:
+        with get_conn() as conn:
+            return gcal_ingest_mod.gcal_ingest(
+                conn, ics_text=ics_text, events=events,
+                reconcile_deletes=reconcile_deletes,
+            )
+    except Exception as e:  # parse/DB failure must degrade, never crash the loop
+        return _err(f"gcal_ingest failed: {e}", code="ingest_error")
+
+
+@mcp.tool()
+def schedule_export(id: str) -> dict[str, Any]:
+    """I use this to turn one of my human's scheduled items into something they
+    can drop into their own calendar — a downloadable `.ics` file and a
+    one-click "add to Google" link. I reach for it when an appointment or plan
+    lives in my sense of their schedule but not yet in the calendar app on their
+    phone. I pass the node `id` from the `[schedule ids]` legend I already read;
+    Unruh builds the exact dates, UID, and URL in code — I never type a calendar
+    artifact myself. Works on ANY schedule node, even one added by hand with no
+    Google setup at all.
+
+    Args:
+        id: the schedule node id to export.
+
+    Returns: {ok: True, ics: '<.ics text>', google_url: '<render URL>'} on
+    success, or the standard error shape if the id isn't found.
+    """
+    try:
+        with get_conn() as conn:
+            node = sched.get_node(conn, id=id)
+        if node is None:
+            return _err(f"no schedule node with id {id!r}", code="not_found")
+        return icalwrite.export_node(node)
+    except Exception as e:
+        return _err(f"schedule_export failed: {e}", code="export_error")
+
+
 # ── Reminders (M11) ────────────────────────────────────────────────────
 
 
@@ -645,6 +712,10 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # it once (the renderer ignores `id`). NULL/[] when there's
         # nothing pending.
         handoff = handoffs.get_handoff(conn)
+        # gcal items still wanting projection (§4) — rides this existing
+        # per-turn call rather than spending a standalone request. Empty
+        # unless a Google sync has flagged genuinely-new appointments.
+        gcal_projection = gcal_ingest_mod.projection_candidates(conn, now=now)
     # Edges ride along so the Familiar sees the consequence graph, not just
     # a flat list (temporal-format renders a "Consequence links" block from
     # these; edges whose endpoints aren't in the visible window are dropped
@@ -667,6 +738,10 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
             "open_threads": handoff["open_threads"] if handoff else [],
             "id":           handoff["id"] if handoff else None,
         },
+        # New gcal appointments not yet thought-through (§4). The JS cue
+        # layer applies the per-turn cap + turn/time aging; an empty list
+        # renders nothing.
+        "gcal_projection": gcal_projection,
     }
 
 

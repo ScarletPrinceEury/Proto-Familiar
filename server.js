@@ -32,8 +32,10 @@ import {
   getScheduleWindow, addScheduleNode, updateScheduleNode,
   resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
+  exportSchedule,
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth,
+  ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
 } from './thalamus.js';
@@ -49,6 +51,8 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+import { startGcalSyncLoop, stopGcalSyncLoop } from './gcal-sync-loop.js';
+import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
@@ -2285,6 +2289,26 @@ app.post('/api/temporal/interests/set-standing', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Calendar export (0.8 §2.2). Streams a schedule node as a downloadable
+// `.ics` so the Familiar's message can carry a real download link alongside
+// the "add to Google" URL. The artifact is built in Unruh's code from the
+// node's stored fields — the model never types a calendar value (§3).
+app.get('/api/schedule/:id/export.ics', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[a-fA-F0-9]{32}$/.test(id)) return res.status(400).json({ error: 'invalid schedule id' });
+  try {
+    const data = await exportSchedule({ id });
+    if (!data?.ok || !data.ics) {
+      return res.status(404).json({ error: data?.error || 'no exportable schedule item with that id' });
+    }
+    res.set('Content-Type', 'text/calendar; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="schedule-${id.slice(0, 8)}.ics"`);
+    res.send(data.ics);
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
+});
+
 // Schedule
 app.get('/api/temporal/schedule', async (req, res) => {
   const from_ts = req.query.from || undefined;
@@ -2779,6 +2803,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startMemorizationWorker();
   startAutonomousPondering();
   startRemindersScheduler();
+  startGcalSync();
   startSilenceTriage();
   startReachout();
   startMemorySweep();
@@ -3031,6 +3056,84 @@ function startRemindersScheduler() {
   console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
 }
 
+// ── Google Calendar sync loop (0.8) ─────────────────────────────
+// Inbound, mechanical, change-gated: fetch the ward's iCal feed →
+// Unruh's gcal_ingest parses + reconciles → only genuinely NEW items
+// get flagged for projection (the cue, Pass 3). Idles until the ward
+// pastes an iCal URL and enables the toggle; cadence is ward-configurable
+// (default hourly). A fetch/parse failure degrades silently and NEVER
+// reconciles deletions (so a blip can't look like "the calendar emptied").
+// Hard off-switch: PROTO_FAMILIAR_GCAL_DISABLED=1.
+
+function gcalSyncIntervalMs(s) {
+  // Settings stores minutes (ward-facing); the loop wants ms. A missing or
+  // nonsensical value falls back to the hourly default; the loop clamps.
+  const mins = Number(s?.gcalSyncIntervalMinutes);
+  return Number.isFinite(mins) && mins > 0 ? mins * 60_000 : 60 * 60_000;
+}
+
+// Resolve the configured calendar command for a CLI source ('gogcli' /
+// 'gcalcli'): the ward's explicit override if set, else the preset hint.
+function gcalCliCommandFor(s) {
+  const override = s?.gcalCliCommand && String(s.gcalCliCommand).trim();
+  return override || cliPresetHint(s?.gcalSource) || '';
+}
+
+function gcalSourceConfigured(s) {
+  if (!s || s.gcalEnabled !== true) return false;
+  const src = s.gcalSource || 'link';
+  if (src === 'link') return !!(s.gcalIcalUrl && String(s.gcalIcalUrl).trim());
+  return !!gcalCliCommandFor(s);  // gogcli / gcalcli
+}
+
+function startGcalSync() {
+  if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') {
+    console.log('[gcal] PROTO_FAMILIAR_GCAL_DISABLED=1 — calendar sync is OFF');
+    return;
+  }
+  startGcalSyncLoop({
+    isEnabled: async () => gcalSourceConfigured(readSettingsSync()),
+    getIntervalMs: async () => gcalSyncIntervalMs(readSettingsSync()),
+    // Source adapters, interchangeable behind the one seam (§1.5): the
+    // out-of-the-box link tier (full iCal feed, reconciles deletes) or an
+    // authenticated CLI (gogcli/gcalcli — windowed read, never reconciles
+    // deletes). Both produce input for the same gcal_ingest.
+    fetchSource: async () => {
+      const s = readSettingsSync();
+      const src = s?.gcalSource || 'link';
+      if (src === 'gogcli' || src === 'gcalcli') {
+        const command = gcalCliCommandFor(s);
+        const format = s?.gcalCliFormat || (src === 'gcalcli' ? 'json' : 'ics');
+        return fetchViaCli({ command, format });  // ok:false includes reconcileDeletes-safe skip
+      }
+      const res = await fetchIcal(s?.gcalIcalUrl);
+      if (!res.ok) return res;
+      return { ok: true, icsText: res.icsText, reconcileDeletes: true };
+    },
+    ingest: async ({ icsText, events, reconcileDeletes }) =>
+      ingestGcal({ icsText, events, reconcileDeletes }),
+    // routeNew: the `new` ids are already flagged needs_projection at
+    // insert (the cue reads that flag, Pass 3). This stays a log hook so a
+    // first import is observable without coupling the loop to the cue.
+    routeNew: async (ids) => { if (ids.length) console.log(`[gcal] ${ids.length} new calendar item(s) flagged for projection`); },
+    onTick: (r) => {
+      if (r.synced) {
+        const parts = [];
+        if (r.new?.length)     parts.push(`${r.new.length} new`);
+        if (r.updated?.length) parts.push(`${r.updated.length} updated`);
+        if (r.removed?.length) parts.push(`${r.removed.length} removed`);
+        if (parts.length) console.log(`[gcal] synced — ${parts.join(', ')}`);
+        for (const uid of r.complex_series || []) console.log(`[gcal] RRULE for "${uid}" too complex to map as a series — materialised next 90 days as individual events`);
+      } else if (r.reason === 'fetch_failed' || r.reason === 'ingest_failed') {
+        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error}`);
+      }
+      // 'disabled' / 'not_due' are silent.
+    },
+    onError: (err) => console.error('[gcal]', err?.message ?? err),
+  });
+  console.log('[gcal] Calendar sync loop ENABLED (idles until an iCal URL + toggle are set). Hard-disable with PROTO_FAMILIAR_GCAL_DISABLED=1.');
+}
+
 // ── Silence-triage loop (M12b) ──────────────────────────────────
 // Every 5 min, asks: "user is quiet AND threat is elevated — should
 // I gently reach out?" The DECISION is an LLM call (per design doc:
@@ -3238,6 +3341,7 @@ async function handleSignal(signal) {
   try { await stopMemorizationWorker(); } catch { /* already stopped */ }
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
+  try { await stopGcalSyncLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
