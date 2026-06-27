@@ -14,6 +14,9 @@
  */
 
 import { exec } from 'child_process';
+import { promises as fsp } from 'fs';
+import os from 'os';
+import path from 'path';
 
 const FETCH_TIMEOUT_MS = 20_000;
 const CLI_TIMEOUT_MS = 30_000;
@@ -184,6 +187,64 @@ export async function fetchViaCli({ command, format = 'ics', runner = defaultCli
     return { ok: false, error: 'calendar command did not emit an iCalendar feed' };
   }
   return { ok: true, icsText: stdout, reconcileDeletes: false };
+}
+
+// ── Write-back (the only path that mutates the real calendar, §6/§7-5) ──
+//
+// The Familiar pushes a Proto-Familiar schedule node TO Google by importing
+// its generated `.ics` through the same authenticated CLI. We reuse the
+// export `.ics` (icalwrite) rather than constructing per-field CLI args —
+// code generates the calendar artifact, never the model (§3) — and we only
+// ADD (never edit an existing Google event, §8). Explicit + confirmed: it's
+// gated behind a ward setting, and the Familiar confirms before calling.
+
+const WRITE_PRESETS = {
+  // {file} is replaced with the path to the generated .ics; appended if absent.
+  gogcli:  'gogcli calendar import {file}',
+  gcalcli: 'gcalcli import {file}',
+};
+
+export function writePresetCommand(source) { return WRITE_PRESETS[source] ?? ''; }
+
+/** Resolve the write/import command: the ward's override, else the preset. */
+export function resolveWriteCommand({ source, override } = {}) {
+  const o = typeof override === 'string' ? override.trim() : '';
+  return o || writePresetCommand(source) || '';
+}
+
+/**
+ * Import an `.ics` into the real calendar via the ward's configured command.
+ * Writes the bytes to a temp file, substitutes {file} (or appends the path),
+ * runs the command, and always cleans up the temp file. Never throws —
+ * returns { ok } / { ok:false, error }. This is the one place Proto-Familiar
+ * changes the ward's actual Google calendar.
+ *
+ * @param {object} p
+ * @param {string} p.icsText  the generated calendar artifact (from icalwrite)
+ * @param {string} p.command  the import command ({file} placeholder optional)
+ * @param {Function} [p.runner] injectable (tests); default spawns via exec
+ */
+export async function pushIcsViaCli({ icsText, command, runner = defaultCliRunner } = {}) {
+  const cmd = typeof command === 'string' ? command.trim() : '';
+  if (!cmd) return { ok: false, error: 'no calendar write command configured' };
+  if (!icsText || !/BEGIN:VCALENDAR/i.test(icsText)) return { ok: false, error: 'nothing valid to import' };
+
+  let tmpFile = '';
+  try {
+    tmpFile = path.join(os.tmpdir(), `pf-gcal-${process.pid}-${Date.now()}.ics`);
+    await fsp.writeFile(tmpFile, icsText, 'utf8');
+    const full = cmd.includes('{file}') ? cmd.replaceAll('{file}', tmpFile) : `${cmd} ${tmpFile}`;
+    const res = await runner(full);
+    if (!res || res.failed || res.code !== 0) {
+      const tail = (res?.stderr || '').trim().split('\n').slice(-1)[0] || `exit ${res?.code ?? '??'}`;
+      return { ok: false, error: `calendar import failed: ${tail}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  } finally {
+    if (tmpFile) { try { await fsp.unlink(tmpFile); } catch { /* best-effort cleanup */ } }
+  }
 }
 
 /**

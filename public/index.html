@@ -211,6 +211,16 @@
                 <option value="json">JSON array of events</option>
               </select>
             </div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="gcal-write-toggle">Allow adding to my calendar (write-back)</label>
+              <input type="checkbox" id="gcal-write-toggle">
+            </div>
+            <div class="field-hint">Off by default, and the <em>only</em> thing that changes your real calendar. When on, your Familiar can add an item from its schedule into your actual Google Calendar — it always confirms with you first, and it only <em>adds</em> (never edits or deletes your existing events). Reading your calendar never needs this; leave it off unless you want the Familiar to be able to put things back.</div>
+            <div class="field">
+              <label for="gcal-write-command">Import command (override)</label>
+              <input type="text" id="gcal-write-command" placeholder="leave blank to use the tool's default import command" autocomplete="off" spellcheck="false">
+              <div class="field-hint">A command that imports an <code>.ics</code> file into your calendar; use <code>{file}</code> where the file path should go (appended if omitted). Blank uses the selected tool's default (e.g. <code>gcalcli import {file}</code>).</div>
+            </div>
           </div>
           <div class="field">
             <label for="gcal-interval">Sync every (minutes)</label>

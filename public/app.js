@@ -252,6 +252,10 @@ const state = {
   gcalSource:              'link',
   gcalCliCommand:          '',     // override; blank → the preset's default command
   gcalCliFormat:           'ics',  // 'ics' (reuses the parser) | 'json'
+  // Write-back (the only path that mutates the real calendar). Opt-in;
+  // requires a CLI source. Blank command → the source preset's import command.
+  gcalWriteEnabled:        false,
+  gcalWriteCommand:        '',
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -317,6 +321,7 @@ const SERVER_SYNCED_KEYS = [
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
+  'gcalWriteEnabled', 'gcalWriteCommand',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -2429,6 +2434,8 @@ function readSettingsFromUI() {
   if ($('gcal-source')) state.gcalSource = ['link', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
+  if ($('gcal-write-toggle')) state.gcalWriteEnabled = $('gcal-write-toggle').checked;
+  if ($('gcal-write-command')) state.gcalWriteCommand = $('gcal-write-command').value.trim();
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2519,6 +2526,8 @@ function writeSettingsToUI() {
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
+  if ($('gcal-write-toggle')) setIfNotFocused($('gcal-write-toggle'), 'checked', state.gcalWriteEnabled === true);
+  if ($('gcal-write-command')) setIfNotFocused($('gcal-write-command'), 'value', state.gcalWriteCommand ?? '');
   if (typeof syncGcalSourcePanels === 'function') syncGcalSourcePanels();
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
@@ -3390,6 +3399,7 @@ function init() {
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format',
+    'gcal-write-toggle', 'gcal-write-command',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',

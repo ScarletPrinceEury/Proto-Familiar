@@ -65,6 +65,7 @@ import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
+import { pushIcsViaCli, resolveWriteCommand } from './gcal-source.js';
 import { getRecentOfferInfo } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1411,6 +1412,20 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_push_to_google',
+      description: 'I push one of {{user}}\'s schedule items INTO their real Google Calendar — the one path I have that actually changes their calendar, not just my own sense of it. Because it mutates their real calendar, I treat it with care: I confirm with {{user}} first that they want it added, and I only ADD a new entry (I never edit or delete their existing Google events). I pass the node `id`; the entry is generated from its stored fields in code (I never type calendar data myself) and imported through the tool {{user}} set up. This only appears when {{user}} has explicitly enabled calendar write-back, so its presence means they\'ve opted in — but I still ask before each push, since it lands in their actual calendar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The id of the schedule item to add to Google Calendar, from the [schedule ids] legend in my [Temporal Context].' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'interest_bump',
       description: 'I nudge the weight of an interest topic — used when {{user}} explicitly tells me they care about something, or wants me to think about it more, or when I want to think about it more/find it interesting. The interest accrues engagement weight (same scale my [Temporal Context] interests block shows) and starts decaying gently from that moment. Small deltas (0.5–3.0) for typical mentions; larger (5+) only when {{user}} is being emphatic. A topic that doesn\'t exist yet is created on first bump. For ongoing values that should never decay, I use interest_set_standing instead. I am allowed to add new topics whenever I darn well please — but I keep the LABEL short and tag-like, because long propositional labels turn ponderings into fact-cards (see topic param).',
       parameters: {
@@ -2281,6 +2296,35 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't build a calendar file for that item: ${err.message}`; }
   },
 
+  schedule_push_to_google: async ({ id } = {}) => {
+    const sid = String(id ?? '').trim();
+    if (!sid) return 'I need the id of the schedule item to add — it\'s in the [schedule ids] legend of my [Temporal Context].';
+    const s = readSettingsSync();
+    // Gate: only available when the ward has opted into write-back AND a
+    // command is resolvable. The tool is also filtered out of the advertised
+    // list when off, but guard here too in case it's called directly.
+    if (s?.gcalWriteEnabled !== true) {
+      return 'Calendar write-back isn\'t enabled — I can only add to {{user}}\'s real Google Calendar once they turn that on in Settings. Until then I can still export the item as a file or link with schedule_export.';
+    }
+    const command = resolveWriteCommand({ source: s?.gcalSource, override: s?.gcalWriteCommand });
+    if (!command) {
+      return 'Calendar write-back is on, but no import command is configured — {{user}} needs to set the gogcli/gcalcli source (or a write command) in Settings first. I can still export the item with schedule_export meanwhile.';
+    }
+    try {
+      // Generate the .ics in code (never type calendar data), then import it
+      // through the ward's tool. ADD only — never edits an existing event.
+      const exported = await exportSchedule({ id: sid });
+      if (!exported?.ok || !exported.ics) {
+        return `I couldn't build the calendar entry for ${sid}: ${exported?.error ?? 'Unruh unavailable'} (the id may be stale).`;
+      }
+      const res = await pushIcsViaCli({ icsText: exported.ics, command });
+      if (!res.ok) {
+        return `I tried to add ${sid} to {{user}}'s Google Calendar but the import didn't go through: ${res.error}. Their existing calendar is unchanged; I can share the export link instead if they'd like.`;
+      }
+      return `Added ${sid} to {{user}}'s real Google Calendar. (This added a new entry — I didn't touch anything already there.)`;
+    } catch (err) { return `I couldn't add that to Google Calendar: ${err.message}`; }
+  },
+
   interest_bump: async ({ topic, delta }) => {
     if (!topic || typeof topic !== 'string') return 'Failed to bump interest: topic (string) is required';
     const d = Number(delta);
@@ -2644,9 +2688,28 @@ export function webSearchEnabled(settings = readSettingsSync()) {
   return settings?.webSearchEnabled === true;
 }
 
+// Calendar write-back mutates the ward's REAL Google calendar, so the tool
+// only appears when the ward has explicitly enabled it AND configured a write
+// command (and never under the hard off-switch). A tool the Familiar can't
+// actually use should never appear in its list — and one that changes the
+// real calendar shouldn't be offered before the ward has opted in.
+export const GCAL_WRITE_TOOL = 'schedule_push_to_google';
+
+export function gcalWriteEnabled(settings = readSettingsSync()) {
+  if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') return false;
+  if (settings?.gcalWriteEnabled !== true) return false;
+  const source = settings?.gcalSource;
+  const cmd = (settings?.gcalWriteCommand && String(settings.gcalWriteCommand).trim())
+    || (source === 'gogcli' || source === 'gcalcli' ? 'preset' : '');
+  return !!cmd;
+}
+
 export function composeActiveTools(customTools, settings = readSettingsSync()) {
   const webOn = webSearchEnabled(settings);
-  const tools = BUILTIN_TOOLS.filter(t => webOn || !WEB_TOOL_NAMES.has(t.function?.name));
+  const gcalWriteOn = gcalWriteEnabled(settings);
+  const tools = BUILTIN_TOOLS.filter(t =>
+    (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
+    (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);

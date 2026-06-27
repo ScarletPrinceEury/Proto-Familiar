@@ -109,3 +109,41 @@ test('cliPresetHint returns a default command for known presets', () => {
   assert.match(cliPresetHint('gcalcli'), /gcalcli/);
   assert.equal(cliPresetHint('unknown'), '');
 });
+
+import { pushIcsViaCli, resolveWriteCommand, writePresetCommand } from '../gcal-source.js';
+
+test('resolveWriteCommand: override wins, else preset, else empty', () => {
+  assert.equal(resolveWriteCommand({ source: 'gcalcli', override: 'my cmd {file}' }), 'my cmd {file}');
+  assert.match(resolveWriteCommand({ source: 'gcalcli' }), /gcalcli import/);
+  assert.match(resolveWriteCommand({ source: 'gogcli' }), /gogcli/);
+  assert.equal(resolveWriteCommand({ source: 'link' }), '');
+  assert.match(writePresetCommand('gcalcli'), /\{file\}/);
+});
+
+test('pushIcsViaCli: substitutes {file} and reports success', async () => {
+  let received = '';
+  const runner = async (cmd) => { received = cmd; return { code: 0, stdout: 'imported', stderr: '', failed: false }; };
+  const r = await pushIcsViaCli({ icsText: ICS, command: 'gcalcli import {file}', runner });
+  assert.equal(r.ok, true);
+  assert.match(received, /gcalcli import \/.*\.ics/);   // {file} replaced with a real path
+  assert.ok(!received.includes('{file}'));
+});
+
+test('pushIcsViaCli: appends the path when no {file} placeholder', async () => {
+  let received = '';
+  const runner = async (cmd) => { received = cmd; return { code: 0, stdout: '', stderr: '', failed: false }; };
+  await pushIcsViaCli({ icsText: ICS, command: 'gogcli import', runner });
+  assert.match(received, /^gogcli import \/.*\.ics$/);
+});
+
+test('pushIcsViaCli: a failed import reports ok:false (calendar unchanged)', async () => {
+  const runner = async () => ({ code: 1, stdout: '', stderr: 'permission denied', failed: true });
+  const r = await pushIcsViaCli({ icsText: ICS, command: 'x {file}', runner });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /import failed|permission/);
+});
+
+test('pushIcsViaCli: no command / nothing valid → ok:false, never throws', async () => {
+  assert.equal((await pushIcsViaCli({ icsText: ICS, command: '' })).ok, false);
+  assert.equal((await pushIcsViaCli({ icsText: 'not ics', command: 'x', runner: async () => ({ code: 0 }) })).ok, false);
+});
