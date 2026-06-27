@@ -383,6 +383,18 @@ function closeWebSearchModal() {
   $('websearch-modal')?.classList.add('hidden');
 }
 
+// Google Calendar config lives in a modal (the out-of-the-box toggle stays in
+// the sidebar; everything else — source, sign-in, write-back, interval — opens
+// here, mirroring the web-search backend modal).
+function openGcalModal() {
+  writeSettingsToUI();       // reflect current state into the modal fields
+  syncGcalSourcePanels();    // show the right panel + refresh the Google status
+  $('gcal-modal')?.classList.remove('hidden');
+}
+function closeGcalModal() {
+  $('gcal-modal')?.classList.add('hidden');
+}
+
 // Show the API panel only for the API backend; the Google engine-id field only
 // for Google; the Marginalia "no key" hint only for Marginalia.
 function syncWebSearchPanels() {
@@ -3451,7 +3463,12 @@ function init() {
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
 
-  // Google Calendar source selector — toggle the source panels on change.
+  // Google Calendar config modal (mirrors the web-search backend modal).
+  $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
+  $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
+  $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
+  // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
   $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
   $('gcal-google-savetoken')?.addEventListener('click', gcalGoogleSaveToken);
