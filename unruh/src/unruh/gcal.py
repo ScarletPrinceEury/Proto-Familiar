@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta
 from typing import Any
 
 from .db import now_iso, to_local_naive
@@ -94,6 +95,48 @@ def _content_differs(existing: sqlite3.Row, ev: dict[str, Any]) -> bool:
     old = json.loads(existing["payload_json"] or "{}")
     new = _sync_payload(ev)
     return any(old.get(k) != v for k, v in new.items())
+
+
+def projection_candidates(
+    conn: sqlite3.Connection,
+    *,
+    now: str | None = None,
+    horizon_days: int = 14,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """gcal-sourced nodes that still want the Familiar's projection (§4).
+
+    The cue feed: items flagged `needs_projection` on first insert, still
+    open, falling inside the upcoming horizon — and with NO outgoing
+    consequence edge yet. That last clause is the auto-clear (§4.3): the
+    moment the Familiar attaches a `causes`/`co_occurs_with` edge, the item
+    drops out by pure derivation, no bookkeeping call. Updated/unchanged/
+    removed items never carry the flag, so they never appear here.
+
+    Returns [{id, label, when}], soonest first — the JS cue layer applies
+    the per-turn cap and the turn/time aging on top.
+    """
+    now_local = now or now_iso()
+    try:
+        horizon = (datetime.fromisoformat(now_local) + timedelta(days=horizon_days)).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        horizon = (datetime.now() + timedelta(days=horizon_days)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """SELECT id, label, when_ts FROM nodes
+            WHERE layer = 'schedule'
+              AND json_extract(payload_json, '$.source') = 'gcal'
+              AND json_extract(payload_json, '$.needs_projection') = 1
+              AND resolution IS NULL
+              AND when_ts IS NOT NULL
+              AND when_ts BETWEEN ? AND ?
+              AND id NOT IN (
+                SELECT src_id FROM edges WHERE kind IN ('causes', 'co_occurs_with')
+              )
+            ORDER BY when_ts ASC
+            LIMIT ?""",
+        (now_local, horizon, limit),
+    ).fetchall()
+    return [{"id": r["id"], "label": r["label"], "when": r["when_ts"]} for r in rows]
 
 
 def gcal_ingest(

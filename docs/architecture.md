@@ -110,6 +110,7 @@ ponderings injection, care-check framing) and as background loops
 ├── needs-tracking.js        Pure Pass-2 logic: isNeedWindow / selectMissedOccurrences / summarizeNeedsForDay (the live "Needs today" view)
 ├── gcal-sync-loop.js        Autonomous singleton loop (0.8, opt-in/default-OFF); ward-configurable cadence (hourly default). Each due tick: fetch the iCal feed (gcal-source.js) → Unruh gcal_ingest (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Fetch/parse failure degrades silently and NEVER reconciles deletions. Off-switch PROTO_FAMILIAR_GCAL_DISABLED=1 + "Google Calendar sync" toggle
 ├── gcal-source.js           Inbound FETCH half (Node owns network + the iCal URL): normalizeIcalUrl (webcal→https) + fetchIcal (timeout, ok:false on any failure, rejects non-iCal bodies so an auth wall can't read as "empty calendar"). Unruh stays parse-only/network-free
+├── gcal-projection.js       The §4 projection cue: pure selectCueItems (per-turn cap + turn/time aging) + buildCueBlock (first-person, literal "my human") over Unruh's `gcal_projection` feed; persisted aging state in tomes/.gcal-projection-cue.json. Rides chat turns (no standalone request); auto-clears when a node gains a consequence edge (Unruh drops it). Injected as a dynamic block in thalamus enrich()
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
@@ -1270,7 +1271,7 @@ doesn't sit in front of it.
 | Block | Contents | Lifetime | Placement |
 |---|---|---|---|
 | `static` | `base_instructions.md` + identity files (self / user / relationship / custom) | Stable across turns in a session | Prepended to the system message at index 0 |
-| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → `[CARE CHECK]` (if threat ≠ calm) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
+| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → Google-Calendar projection cue (0.8) → `[CARE CHECK]` (if threat ≠ calm) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
 
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 
@@ -1280,7 +1281,8 @@ Within `dynamic`, the order is deliberate:
 3. **Graph excerpt** — entity-relationship context
 4. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop). Each entry's `created_at` is rendered via `relativeTime()`.
 5. **Deferred intents** — only on live turns. Up to 5 `wants_to_save` entries the Familiar flagged during free cycles but hasn't acted on yet. Shows the kind (tome/memory/identity), the summary, the routing tool, and the (uid, index) pair for `acknowledge_deferred_intent`. See "Deferred-action pattern" below.
-6. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
+6. **Google-Calendar projection cue** (0.8 §4) — only on live turns. Newly-synced appointments not yet thought-through, capped per turn and aged out after a few turns / a short window (code-driven, no acknowledgement call). Rides this turn — the candidate list arrives in `temporal_context.gcal_projection` (Unruh filters to flagged + open + in-horizon + no-consequence-edge, so it auto-clears the moment the Familiar links one). Invites authoring both futures via `schedule_link`; never nags. See `gcal-projection.js`.
+7. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
 6. **`[Temporal Context]`** — handoff + today's rhythm + schedule window + interests. Every timed item (upcoming / reminders / resolved) is rendered through `relativeTime()` so the Familiar reads "tomorrow at 10am" / "in 30 minutes" rather than ISO timestamps.
 7. **`[Surface candidates]`** — open schedule items that survived the hard gates (active snooze, threat tier, routine phase, dedup window), packaged with consequence priors + person-model excerpt so the Familiar can decide in voice whether to mention any. The header is ADHD/executive-dysfunction-aware: explicit GREEN LIGHT states to surface in (free time, momentum, boredom/restlessness, "forgetting something"), explicit RED LIGHT states to hold in (severe/high threat, quiet phase, mid-task), and named access ramps (timebox, single next action, planning-only slot, body-double). See "Surface pipeline" below.
 

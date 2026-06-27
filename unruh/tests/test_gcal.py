@@ -231,6 +231,41 @@ def test_past_event_absent_is_not_a_deletion(conn):
     assert row["resolution"] is None
 
 
+# Projection candidates use a 14-day horizon from `now`; pin both for
+# determinism. Floating local-naive DTSTART (no Z) stores as-is.
+NOW = "2026-06-26T12:00:00"
+SOON = "20260628T140000"   # +2 days, in horizon
+FAR = "20260801T090000"    # +36 days, beyond horizon
+
+
+def test_projection_candidates_flagged_in_horizon(conn):
+    r = _ingest(conn, _cal(_vevent("p@g", SOON, "Dentist")))
+    nid = r["new"][0]
+    cands = gcal.projection_candidates(conn, now=NOW)
+    assert [c["id"] for c in cands] == [nid]
+    assert cands[0]["label"] == "Dentist"
+
+
+def test_projection_candidate_drops_after_consequence_edge(conn):
+    # Auto-clear (§4.3): once the Familiar links a consequence, it's gone.
+    r = _ingest(conn, _cal(_vevent("p2@g", SOON, "Interview")))
+    nid = r["new"][0]
+    state_id = sched.add_node(conn, type="state", label="calm", when="2026-06-20T09:00:00")
+    sched.add_edge(conn, src=nid, dst=state_id, kind="causes",
+                   payload={"valence": "help", "condition": "on_resolve"})
+    assert gcal.projection_candidates(conn, now=NOW) == []
+
+
+def test_projection_candidate_excludes_out_of_horizon_and_resolved(conn):
+    r = _ingest(conn, _cal(_vevent("near@g", SOON), _vevent("far@g", FAR)))
+    cands = gcal.projection_candidates(conn, now=NOW)
+    # Only the near one (the far one is past the 14-day horizon).
+    assert len(cands) == 1
+    # Resolving the near one removes it too.
+    sched.resolve(conn, id=cands[0]["id"], resolution="done")
+    assert gcal.projection_candidates(conn, now=NOW) == []
+
+
 def test_ingest_events_list_path(conn):
     # The authenticated-adapter path: pre-normalised events, not .ics text.
     ev = {

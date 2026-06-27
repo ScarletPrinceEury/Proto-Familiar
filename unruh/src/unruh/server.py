@@ -712,6 +712,10 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # it once (the renderer ignores `id`). NULL/[] when there's
         # nothing pending.
         handoff = handoffs.get_handoff(conn)
+        # gcal items still wanting projection (§4) — rides this existing
+        # per-turn call rather than spending a standalone request. Empty
+        # unless a Google sync has flagged genuinely-new appointments.
+        gcal_projection = gcal_ingest_mod.projection_candidates(conn, now=now)
     # Edges ride along so the Familiar sees the consequence graph, not just
     # a flat list (temporal-format renders a "Consequence links" block from
     # these; edges whose endpoints aren't in the visible window are dropped
@@ -734,6 +738,10 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
             "open_threads": handoff["open_threads"] if handoff else [],
             "id":           handoff["id"] if handoff else None,
         },
+        # New gcal appointments not yet thought-through (§4). The JS cue
+        # layer applies the per-turn cap + turn/time aging; an empty list
+        # renders nothing.
+        "gcal_projection": gcal_projection,
     }
 
 
