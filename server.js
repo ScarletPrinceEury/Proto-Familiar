@@ -2401,8 +2401,12 @@ app.post('/api/gcal/google/disconnect', async (_req, res) => {
 
 // Schedule
 app.get('/api/temporal/schedule', async (req, res) => {
-  const from_ts = req.query.from || undefined;
-  const to_ts   = req.query.to   || undefined;
+  // Default to a wide ward-local window (yesterday → the configured look-ahead,
+  // a year by default) so synced calendar events across the whole horizon show
+  // in the Map/schedule view, not just the next 7 days. An explicit ?from/?to
+  // still overrides.
+  const from_ts = req.query.from || wardLocalShiftedISO(-1);
+  const to_ts   = req.query.to   || wardLocalShiftedISO(gcalLookaheadDays());
   const limit   = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
   try {
     // Standard window — picks up anchor-in-window items only.
@@ -3173,7 +3177,29 @@ function gcalCliCommandFor(s) {
 // conceptually cover): 90 days ahead, matching the recurrence-expansion
 // horizon. A windowed read, so deletions are caught via showDeleted, not
 // reconcile.
-const GCAL_READ_HORIZON_DAYS = 90;
+const GCAL_DEFAULT_LOOKAHEAD_DAYS = 365;  // a year ahead by default
+const GCAL_MIN_LOOKAHEAD_DAYS = 30;
+const GCAL_MAX_LOOKAHEAD_DAYS = 1825;     // ~5 years
+
+// How far ahead a pull fetches, ward-configurable (gcalLookaheadDays).
+function gcalLookaheadDays(s = readSettingsSync()) {
+  const n = Number(s?.gcalLookaheadDays);
+  if (!Number.isFinite(n)) return GCAL_DEFAULT_LOOKAHEAD_DAYS;
+  return Math.max(GCAL_MIN_LOOKAHEAD_DAYS, Math.min(GCAL_MAX_LOOKAHEAD_DAYS, Math.round(n)));
+}
+
+// A ward-local-naive ISO timestamp `deltaDays` from now, keeping the current
+// wall-clock time. Whole-day arithmetic in a UTC frame avoids server-tz drift;
+// the result stays in the ward's local frame (matching stored when_ts), which
+// is what the schedule window query compares against. Used to default the
+// Map/schedule view to a wide window without a tz mismatch.
+function wardLocalShiftedISO(deltaDays, tz = readSettingsSync()?.wardTimeZone || null) {
+  const nowIso = wardLocalNowISO(tz);            // "YYYY-MM-DDTHH:MM:SS" ward-local
+  const [datePart, timePart] = nowIso.split('T');
+  const [y, m, d] = datePart.split('-').map(Number);
+  const shifted = new Date(Date.UTC(y, m - 1, d) + deltaDays * 86_400_000);
+  return `${shifted.toISOString().slice(0, 10)}T${timePart || '00:00:00'}`;
+}
 
 // Sync (sources other than google are decided synchronously from settings;
 // google needs an async token-store read, handled in isEnabled/fetchSource).
@@ -3197,7 +3223,7 @@ async function fetchGoogleSource() {
   try {
     const now = new Date();
     const timeMin = now.toISOString();
-    const timeMax = new Date(now.getTime() + GCAL_READ_HORIZON_DAYS * 86_400_000).toISOString();
+    const timeMax = new Date(now.getTime() + gcalLookaheadDays() * 86_400_000).toISOString();
     const items = await listGoogleEvents({ accessToken: fresh.accessToken, timeMin, timeMax });
     return { ok: true, events: normalizeGoogleEvents(items), reconcileDeletes: false };
   } catch (err) {
@@ -3229,7 +3255,14 @@ function startGcalSync() {
       if (src === 'gogcli' || src === 'gcalcli') {
         const command = gcalCliCommandFor(s);
         const format = s?.gcalCliFormat || (src === 'gcalcli' ? 'json' : 'ics');
-        return fetchViaCli({ command, format });  // ok:false includes reconcileDeletes-safe skip
+        // Hand the command the look-ahead window via {timeMin}/{timeMax}/
+        // {dateMin}/{dateMax}/{days} tokens, so a CLI that takes a date range
+        // fetches the whole horizon instead of its narrow default.
+        const lookaheadDays = gcalLookaheadDays(s);
+        const now = new Date();
+        const timeMin = now.toISOString();
+        const timeMax = new Date(now.getTime() + lookaheadDays * 86_400_000).toISOString();
+        return fetchViaCli({ command, format, timeMin, timeMax, lookaheadDays });
       }
       const res = await fetchIcal(s?.gcalIcalUrl);
       if (!res.ok) return res;

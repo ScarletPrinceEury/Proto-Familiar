@@ -247,6 +247,7 @@ const state = {
   gcalEnabled:             false,
   gcalIcalUrl:             '',
   gcalSyncIntervalMinutes: 60,
+  gcalLookaheadDays:       365,   // how far ahead each pull fetches (clamped 30–1825)
   // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
   // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
   gcalSource:              'link',
@@ -319,7 +320,7 @@ const SERVER_SYNCED_KEYS = [
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
   'wardTimeZone',
-  'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes',
+  'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'gcalWriteEnabled', 'gcalWriteCommand',
   'trustedContacts', 'userDiscordWebhook',
@@ -2513,6 +2514,10 @@ function readSettingsFromUI() {
     const n = parseInt($('gcal-interval').value, 10);
     state.gcalSyncIntervalMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
   }
+  if ($('gcal-lookahead')) {
+    const n = parseInt($('gcal-lookahead').value, 10);
+    state.gcalLookaheadDays = Number.isInteger(n) && n >= 30 && n <= 1825 ? n : 365;
+  }
   if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
@@ -2605,6 +2610,7 @@ function writeSettingsToUI() {
   if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
+  if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
@@ -3488,7 +3494,7 @@ function init() {
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
-    'gcal-source', 'gcal-cli-command', 'gcal-cli-format',
+    'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'gcal-write-toggle', 'gcal-write-command',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
