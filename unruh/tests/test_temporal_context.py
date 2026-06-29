@@ -71,6 +71,32 @@ class TestSchedulePopulation:
         labels = [n["label"] for n in result["schedule"]["window"]]
         assert "Chen's appointment" in labels
 
+    def test_event_a_few_days_out_now_shows(self, isolated_db):
+        # The chat window reaches 7 days forward (not just ±12h), so a synced
+        # calendar appointment next week surfaces in the briefing.
+        with get_conn() as conn:
+            now = datetime.now()
+            sched.add_node(
+                conn, type="event", label="Dentist next week",
+                when=(now + timedelta(days=3)).isoformat(timespec="seconds"),
+            )
+        result = temporal_context()
+        labels = [n["label"] for n in result["schedule"]["window"]]
+        assert "Dentist next week" in labels
+
+    def test_event_beyond_the_window_stays_out_of_chat(self, isolated_db):
+        # …but a far-future event does NOT bloat the per-turn briefing (it
+        # lives in the wider schedule/Map view instead).
+        with get_conn() as conn:
+            now = datetime.now()
+            sched.add_node(
+                conn, type="event", label="Far future thing",
+                when=(now + timedelta(days=60)).isoformat(timespec="seconds"),
+            )
+        result = temporal_context()
+        labels = [n["label"] for n in result["schedule"]["window"]]
+        assert "Far future thing" not in labels
+
     def test_resolved_task_drops_out(self, isolated_db):
         with get_conn() as conn:
             t = sched.add_node(conn, type="task", label="laundry")

@@ -735,6 +735,7 @@
                 <li>Back here: leave <em>Command</em> blank for the default, or paste your exact read command (e.g. <code>gcalcli agenda --details=all</code>), and set <em>Command output</em> to match what it prints (<code>.ics</code> or JSON).</li>
               </ol>
               <p style="margin-top:8px">Any other tool that can print your calendar as an <code>.ics</code> feed or a JSON array of events works too — point the <em>Command</em> field at it. (For <code>gogcli</code> specifically, follow that project's own setup; if you're not already using it, the gcalcli route or the Google-account option above are the well-trodden ones.)</p>
+              <p style="margin-top:8px"><strong>Fetch the whole window.</strong> Many tools only return the next few days by default. Put your tool's date-range flags in the <em>Command</em> and use these tokens — they're filled in with the “Look ahead” window each pull: <code>{dateMin}</code>/<code>{dateMax}</code> (YYYY-MM-DD), <code>{timeMin}</code>/<code>{timeMax}</code> (full ISO), <code>{days}</code>. E.g. <code>gcalcli --nocolor agenda --details=all {dateMin} {dateMax}</code>, or your <code>gogcli</code> read command with its own from/to flags pointed at <code>{dateMin}</code>/<code>{dateMax}</code>.</p>
             </div>
           </details>
           <div class="field">
@@ -768,6 +769,11 @@
           <label for="gcal-interval">Sync every (minutes)</label>
           <input type="number" id="gcal-interval" value="60" min="5" max="1440" step="5" style="width:6em">
           <div class="field-hint">How often it re-reads the calendar. Hourly suits most people; tighten it if you re-plan through the day, widen it if your plans rarely move. (Clamped to 5 min – 24 h.)</div>
+        </div>
+        <div class="field">
+          <label for="gcal-lookahead">Look ahead (days)</label>
+          <input type="number" id="gcal-lookahead" value="365" min="30" max="1825" step="1" style="width:6em">
+          <div class="field-hint">How far ahead each pull fetches events — a year by default, so appointments months out are still picked up. (Clamped 30–1825 days.) The Familiar's chat briefing still focuses on the coming week; the full range shows in the schedule/Map view.</div>
         </div>
       </div>
       <div class="modal-footer">

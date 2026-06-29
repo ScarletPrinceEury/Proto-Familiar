@@ -33,7 +33,7 @@ formatter in thalamus.js / temporal-format.js stays clean.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -52,6 +52,17 @@ mcp = FastMCP("unruh")
 def _now_iso() -> str:
     # Delegates to the canonical local-naive now (db.now_iso) — one source.
     return now_iso()
+
+
+def _window_base(now: str | None) -> datetime:
+    """Parse the caller's local-naive `now` to a datetime for window math,
+    falling back to the local clock if it's missing/unparseable."""
+    if now:
+        try:
+            return datetime.fromisoformat(now)
+        except (TypeError, ValueError):
+            pass
+    return datetime.now()
 
 
 def _err(message: str, code: str = "bad_request") -> dict[str, Any]:
@@ -710,7 +721,16 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
     """
     with get_conn() as conn:
         phase = sched.current_phase(conn, at=now)
-        window = sched.get_window(conn, from_ts=None, to_ts=None, limit=50)
+        # Render window for the chat briefing: the last 12h and the next 7
+        # DAYS. The forward reach matches the recurrence-expansion horizon
+        # thalamus uses, so non-recurring events (e.g. a synced calendar
+        # appointment next Tuesday) surface alongside recurring ones instead
+        # of only showing within ±12h. The full fetched range (a year) lives
+        # in the schedule/Map view; this keeps the per-turn briefing bounded.
+        base = _window_base(now)
+        win_from = (base - timedelta(hours=12)).isoformat(timespec="seconds")
+        win_to = (base + timedelta(days=7)).isoformat(timespec="seconds")
+        window = sched.get_window(conn, from_ts=win_from, to_ts=win_to, limit=50)
         # Full routine — every live phase, date-independent. The
         # Familiar needs the day's shape, not just "which phase right
         # now." current_phase still rides along separately so the
