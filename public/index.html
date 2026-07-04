@@ -183,6 +183,16 @@
           </div>
           <div class="field-hint">Off by default. When on, your Familiar reads your calendar (one-way) so your appointments show up in its sense of your day. Choose how to connect — and optionally allow write-back — in the configuration below.</div>
           <button class="btn-secondary" id="gcal-configure-btn" type="button">⚙ Configure calendar…</button>
+
+          <div class="field-row" style="margin-top:8px">
+            <label for="event-alerts-toggle">Event alerts</label>
+            <input type="checkbox" id="event-alerts-toggle" checked>
+          </div>
+          <div class="field" style="margin-top:4px">
+            <label for="event-alerts-lead">Alert lead time (minutes)</label>
+            <input type="number" id="event-alerts-lead" value="60" min="5" max="1440" step="5" style="width:6em">
+          </div>
+          <div class="field-hint">On by default. A "coming up" notice fires this many minutes before any event on your schedule starts — synced from Google or added by hand — so appointments don't rely on you noticing the time. All-day events don't ping (there's no start time to lead).</div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->
@@ -732,7 +742,7 @@
                 <li>Install it (its README covers your OS).</li>
                 <li>Run its one-time sign-in once — <code>gcalcli list</code> opens a browser to authorize.</li>
                 <li>Check it works: <code>gcalcli agenda</code> should print your events.</li>
-                <li>Back here: leave <em>Command</em> blank for the default, or paste your exact read command (e.g. <code>gcalcli agenda --details=all</code>), and set <em>Command output</em> to match what it prints (<code>.ics</code> or JSON).</li>
+                <li><strong>Important:</strong> gcalcli's own table/agenda output is meant for humans, not machines — the sync needs a command that prints an <code>.ics</code> feed or a JSON array of events (with stable event ids). Paste the exact command that does that for your version into <em>Command</em>, and set <em>Command output</em> to match. If your version can't, a small wrapper script (or the <strong>Google account</strong> source above) is the reliable route — check "Sync health" below after saving to confirm reads actually parse.</li>
               </ol>
               <p style="margin-top:8px">Any other tool that can print your calendar as an <code>.ics</code> feed or a JSON array of events works too — point the <em>Command</em> field at it. (For <code>gogcli</code> specifically, follow that project's own setup; if you're not already using it, the gcalcli route or the Google-account option above are the well-trodden ones.)</p>
               <p style="margin-top:8px"><strong>Fetch the whole window.</strong> Many tools only return the next few days by default. Put your tool's date-range flags in the <em>Command</em> and use these tokens — they're filled in with the “Look ahead” window each pull: <code>{dateMin}</code>/<code>{dateMax}</code> (YYYY-MM-DD), <code>{timeMin}</code>/<code>{timeMax}</code> (full ISO), <code>{days}</code>. E.g. <code>gcalcli --nocolor agenda --details=all {dateMin} {dateMax}</code>, or your <code>gogcli</code> read command with its own from/to flags pointed at <code>{dateMin}</code>/<code>{dateMax}</code>.</p>
@@ -774,6 +784,12 @@
           <label for="gcal-lookahead">Look ahead (days)</label>
           <input type="number" id="gcal-lookahead" value="365" min="30" max="1825" step="1" style="width:6em">
           <div class="field-hint">How far ahead each pull fetches events — a year by default, so appointments months out are still picked up. (Clamped 30–1825 days.) The Familiar's chat briefing still focuses on the coming week; the full range shows in the schedule/Map view.</div>
+        </div>
+
+        <div class="field" style="margin-top:10px">
+          <label>Sync health</label>
+          <div class="field-hint" id="gcal-sync-status">No sync has run yet.</div>
+          <button type="button" id="gcal-sync-now" class="btn-secondary" style="margin-top:6px">↻ Sync now</button>
         </div>
       </div>
       <div class="modal-footer">

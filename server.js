@@ -35,7 +35,7 @@ import {
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   exportSchedule,
   getHandoff, markHandoffConsumed,
-  getDueReminders, getRemindersHealth,
+  getDueReminders, getRemindersHealth, markEventAlerted,
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
@@ -52,7 +52,12 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
-import { startGcalSyncLoop, stopGcalSyncLoop } from './gcal-sync-loop.js';
+import {
+  selectDueEventAlerts, formatEventAlert, alertWindowBounds,
+  clampLeadMinutes, ALERT_GRACE_MS,
+} from './event-alerts.js';
+import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
+import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
 import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
 import {
   parseCredentials, buildAuthUrl, exchangeCode,
@@ -78,6 +83,8 @@ import {
   readSettingsSync, primaryConnectionFrom,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
+  appendReachoutEventLog, readReachoutEvents,
+  registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
   composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
@@ -140,7 +147,7 @@ function isValidUUID(id) {
   return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 }
 
-// Entry UIDs additionally allow the 0.9 slug shape ("ponder-x7k2m3")
+// Entry UIDs additionally allow the 0.8.x slug shape ("ponder-x7k2m3")
 // alongside legacy crypto.randomUUID() values. Same safety properties:
 // bounded length, alnum+dash only — no dots/slashes, still traversal-proof.
 function isValidEntryUid(uid) {
@@ -1109,6 +1116,17 @@ app.get('/api/active-session', async (_req, res) => {
 app.get('/api/triage-events', async (_req, res) => {
   try {
     res.json(await readTriageEvents());
+  } catch {
+    res.json([]);
+  }
+});
+
+// Warm reach-out decision log (mirror of /api/triage-events): every LLM
+// deliberation — including "wait" — with its reasoning surface, so "he
+// never reaches out" is auditable instead of a black box.
+app.get('/api/reachout-events', async (_req, res) => {
+  try {
+    res.json(await readReachoutEvents());
   } catch {
     res.json([]);
   }
@@ -2414,6 +2432,20 @@ app.post('/api/gcal/google/disconnect', async (_req, res) => {
   res.json({ ok: true, connected: false });
 });
 
+// Last real sync attempt + outcome (written by the sync loop's onTick), so
+// the modal can show "last synced 20 min ago" / "failing since Tuesday:
+// invalid_grant" instead of pretending everything is fine.
+app.get('/api/gcal/sync-status', async (_req, res) => {
+  res.json((await readSyncStatus()) ?? {});
+});
+
+// "Sync now": clear the cadence gate so the next loop wake (≤60s away)
+// runs a real sync regardless of the configured interval.
+app.post('/api/gcal/sync-now', (_req, res) => {
+  resetGcalSyncCadence();
+  res.json({ ok: true, note: 'sync will run within the next minute' });
+});
+
 // Schedule
 app.get('/api/temporal/schedule', async (req, res) => {
   // Default to a wide ward-local window (yesterday → the configured look-ahead,
@@ -2921,6 +2953,24 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
   startDiscordGateway();
+  // Bot-DM push channel: when the gateway can DM my human (token + ward's
+  // Discord user id configured), every outbox item — reminders, event
+  // alerts, warm reach-outs, triage check-ins — reaches them as a real
+  // Discord message, not only a banner waiting in the web app. Registered
+  // as a factory so cerebellum never imports the gateway (no cycle) and a
+  // Settings change applies on the next dispatch. Delivery is a plain REST
+  // call inside relayToDiscord, so it works even between WebSocket
+  // reconnects.
+  registerPushAdapterFactory((s) => {
+    const token  = typeof s?.discordBotToken   === 'string' ? s.discordBotToken.trim()   : '';
+    const wardId = typeof s?.discordWardUserId === 'string' ? s.discordWardUserId.trim() : '';
+    if (!token || !wardId || s?.discordEnabled !== true) return null;
+    if (process.env.PROTO_FAMILIAR_DISCORD_DISABLED === '1') return null;
+    return {
+      name: 'discord-bot-dm',
+      deliver: async (item) => relayToDiscord({ recipientUserId: wardId, message: formatItemForPush(item) }),
+    };
+  });
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -3155,14 +3205,40 @@ function startRemindersScheduler() {
       const r = await resolveScheduleNode({ id, resolution: 'fired' });
       if (!r.ok) throw new Error(r.error || 'resolve failed');
     },
+    // Event lead-time alerts (the timeblindness surface): unresolved
+    // type='event' nodes — synced from Google or added by hand — get a
+    // "coming up" ping a configurable lead before they start. Same tick,
+    // pure code gates, per-occurrence idempotent via payload.alerted_at /
+    // payload.alerts. All frames ward-local (see event-alerts.js).
+    getDueEventAlerts: async () => {
+      if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
+      const s = readSettingsSync();
+      if (s?.eventAlertsEnabled === false) return [];  // default-ON
+      const leadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
+      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs });
+      const [win, rec] = await Promise.all([
+        getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
+        listRecurring().catch(() => ({ nodes: [] })),
+      ]);
+      const windowNodes = Array.isArray(win) ? win : (win?.nodes ?? []);
+      const recurringNodes = Array.isArray(rec) ? rec : (rec?.nodes ?? []);
+      return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadMs, graceMs: ALERT_GRACE_MS })
+        .map(a => ({ ...a, ...formatEventAlert(a, { nowMs }) }));
+    },
+    markEventAlerted: async ({ id, occurrenceDate }) => {
+      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null });
+      if (!r.ok) throw new Error(r.error || 'mark_alerted failed');
+    },
     getHealth: getRemindersHealth,
     onTick: (r) => {
       for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
-      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label}": ${s.error}`);
+      for (const a of r.alerted || []) console.log(`[reminders] event alert "${a.label}" (${a.whenIso ?? ''})`);
+      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label ?? s.id}": ${s.error}`);
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
-  console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+  console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
 }
 
 // ── Google Calendar sync loop (0.8) ─────────────────────────────
@@ -3290,6 +3366,10 @@ function startGcalSync() {
     // first import is observable without coupling the loop to the cue.
     routeNew: async (ids) => { if (ids.length) console.log(`[gcal] ${ids.length} new calendar item(s) flagged for projection`); },
     onTick: (r) => {
+      // Persist every real attempt so the UI can show "last sync / last
+      // error" — a dead URL or expired token must be visible, not just a
+      // console line ('disabled'/'not_due' wakes are skipped inside).
+      recordSyncOutcome(r).catch(() => {});
       if (r.synced) {
         const parts = [];
         if (r.new?.length)     parts.push(`${r.new.length} new`);
@@ -3298,7 +3378,7 @@ function startGcalSync() {
         if (parts.length) console.log(`[gcal] synced — ${parts.join(', ')}`);
         for (const uid of r.complex_series || []) console.log(`[gcal] RRULE for "${uid}" too complex to map as a series — materialised next 90 days as individual events`);
       } else if (r.reason === 'fetch_failed' || r.reason === 'ingest_failed') {
-        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error}`);
+        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error} — retrying within 5 minutes`);
       }
       // 'disabled' / 'not_due' are silent.
     },
@@ -3375,16 +3455,20 @@ function startSilenceTriage() {
 // is elevated (triage owns that). Default-ON; toggle warmthEnabled in
 // Settings or hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.
 
-// Quiet hours for warm knocks — my human's configured night (local server
-// time). Start==end disables the window. Defaults to 23:00–08:00.
-function isWarmthQuietHours(now = new Date()) {
+// Quiet hours for warm knocks — my human's configured night, on MY HUMAN'S
+// clock (wardTimeZone), not the server's. A UTC container with a ward hours
+// away used to shift the 23–08 window onto their daytime and silently
+// suppress warm outreach for whole active stretches — the same cross-zone
+// bug class 0.7.86 fixed for reminders. Start==end disables the window.
+// Defaults to 23:00–08:00 ward-local.
+function isWarmthQuietHours() {
   const s = readSettingsSync();
   let start = Number(s?.warmthQuietHoursStart);
   let end   = Number(s?.warmthQuietHoursEnd);
   if (!Number.isInteger(start) || start < 0 || start > 23) start = 23;
   if (!Number.isInteger(end)   || end   < 0 || end   > 23) end   = 8;
   if (start === end) return false; // window disabled
-  const h = now.getHours();
+  const h = Number(wardLocalNowISO(s?.wardTimeZone).slice(11, 13));
   return start < end ? (h >= start && h < end) : (h >= start || h < end);
 }
 
@@ -3448,7 +3532,21 @@ function startReachout() {
       if (r.reason === 'reached_ward')         console.log(`[reachout] warm knock to my human: "${r.decision?.message?.slice(0, 80)}…"`);
       else if (r.reason === 'reached_villager') console.log(`[reachout] warm reach to ${r.villager?.name}: "${r.decision?.message?.slice(0, 60)}…"`);
       else if (r.reason === 'delivery_failed')  console.warn(`[reachout] delivery failed (${r.target}): ${r.error}`);
-      // wait / crisis_defer / quiet_hours / in_cooldown / disabled are silent.
+      // Every DELIBERATION (an LLM decision happened — including "wait")
+      // lands in the reachout event log so the loop is auditable via
+      // /api/reachout-events. Pure gate outcomes (cooldown/disabled/
+      // quiet-hours/crisis-defer) fire every tick and stay unlogged.
+      const deliberated = ['llm_said_wait', 'reached_ward', 'reached_villager', 'delivery_failed', 'unknown_villager', 'rate_limited'];
+      if (deliberated.includes(r.reason)) {
+        appendReachoutEventLog({
+          reason:         r.reason,
+          target:         r.target ?? null,
+          villager:       r.villager?.name ?? null,
+          messagePreview: r.decision?.message?.slice(0, 120) ?? null,
+          nextCheckInMs:  r.nextCheckInMs ?? null,
+          error:          r.error ?? null,
+        }).catch(() => {});
+      }
     },
     onError: (err) => console.error('[reachout]', err?.message ?? err),
   });

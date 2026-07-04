@@ -612,7 +612,7 @@ class TestLocalTime:
         assert migrate_timestamps_to_local(conn) == 0
 
 
-# ── Readable slug ids + schedule search (0.9 id overhaul) ──────────────
+# ── Readable slug ids + schedule search (0.8.x id overhaul) ────────────
 
 
 class TestSlugIds:
@@ -728,3 +728,29 @@ class TestIdsToSlugs:
         assert sched.get_node(conn, id=slugged) is not None  # untouched
         r2 = ids_to_slugs(conn)
         assert r2["nodes"] == 0 and r2["edges"] == 0 and r2["mapping"] == {}
+
+
+# ── Event lead-time alert marks ────────────────────────────────────────
+
+
+def test_mark_alerted_one_time_and_occurrence(conn):
+    nid = sched.add_node(conn, type="event", label="Dentist", when="2026-07-04T14:45:00")
+    assert sched.mark_alerted(conn, id=nid) is True
+    node = sched.get_node(conn, id=nid)
+    assert node["payload"]["alerted_at"]
+
+    rid = sched.add_node(
+        conn, type="event", label="Standup", when="2026-06-01T14:30:00",
+        payload={"recurrence": {"freq": "daily"}},
+    )
+    assert sched.mark_alerted(conn, id=rid, occurrence_date="2026-07-04") is True
+    node = sched.get_node(conn, id=rid)
+    assert "2026-07-04" in node["payload"]["alerts"]
+    # A second occurrence adds a key without clobbering the first.
+    sched.mark_alerted(conn, id=rid, occurrence_date="2026-07-05")
+    node = sched.get_node(conn, id=rid)
+    assert set(node["payload"]["alerts"]) == {"2026-07-04", "2026-07-05"}
+
+
+def test_mark_alerted_missing_node(conn):
+    assert sched.mark_alerted(conn, id="nope") is False

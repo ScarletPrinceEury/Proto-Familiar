@@ -887,6 +887,21 @@ export async function getRemindersHealth() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/** Record that an event's lead-time alert was delivered (one-time:
+ *  payload.alerted_at; recurring: payload.alerts[occurrence_date]) so the
+ *  alert scan never re-pings the same moment. Best-effort. */
+export async function markEventAlerted({ id, occurrence_date = null }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_mark_alerted',
+      arguments: occurrence_date ? { id, occurrence_date } : { id },
+    });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 /**
  * Build the export artifacts (.ics text + "add to Google" URL) for a
  * schedule node, in Unruh's code — the Familiar passes an id and never

@@ -100,10 +100,18 @@ export async function fetchIcal(url, { fetchFn = globalThis.fetch, timeoutMs = F
 
 const CLI_PRESETS = {
   // Documented starting points — the ward overrides the command to match
-  // their installed tool/version. Both default to an iCal export so the
-  // bytes route straight through Unruh's existing parser. The {dateMin}/
-  // {dateMax} tokens are substituted with the look-ahead window so the read
-  // covers the whole horizon, not the tool's (often narrow) default.
+  // their installed tool/version. The {dateMin}/{dateMax} tokens are
+  // substituted with the look-ahead window so the read covers the whole
+  // horizon, not the tool's (often narrow) default.
+  //
+  // HONESTY NOTE on gcalcli: its agenda/table output is human-facing —
+  // no JSON mode, and its TSV carries no stable event ids, which the
+  // reconcile requires. The preset below therefore runs but FAILS the
+  // JSON parse visibly (surfaced in the modal's "Sync health" line)
+  // rather than ingesting garbage; the setup guide tells the ward to
+  // supply a command/wrapper that actually emits .ics or JSON, or to
+  // use the native Google-account source. Do not "fix" this by parsing
+  // TSV — without ids, reconcile can't be idempotent (§1.1).
   gogcli:  { hint: 'gogcli calendar events --ics', format: 'ics' },
   gcalcli: { hint: 'gcalcli --nocolor agenda --details=all {dateMin} {dateMax}', format: 'json' },
 };

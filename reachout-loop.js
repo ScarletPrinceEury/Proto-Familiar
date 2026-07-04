@@ -97,8 +97,10 @@ export async function runOneReachoutTick({
     return { acted: false, reason: 'in_cooldown', cooldownUntilTs: _nextAllowedTickTs, at: nowMs };
   }
 
+  // null (not 0) when no activity was ever recorded: telling the LLM "they
+  // were around just now" on a fresh install is a standing nudge to wait.
   const last = await getLastActivity().catch(() => null);
-  const wardSilenceMs = last?.ms ? (nowMs - last.ms) : 0;
+  const wardSilenceMs = last?.ms ? Math.max(0, nowMs - last.ms) : null;
 
   const [pendingTells, warmVillagers] = await Promise.all([
     (typeof getPendingTells === 'function' ? getPendingTells().catch(() => []) : Promise.resolve([])),
