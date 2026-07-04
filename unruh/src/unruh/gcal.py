@@ -66,20 +66,47 @@ def _sync_payload(ev: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def list_gcal_nodes(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
-    """Every schedule node the sync manages (payload.source == 'gcal'),
-    keyed by its gcal_uid. One query — the reconcile compares the snapshot
-    against this whole set."""
+def dedupe_gcal_nodes(conn: sqlite3.Connection) -> tuple[dict[str, sqlite3.Row], list[str]]:
+    """Every sync-managed node (payload.source == 'gcal') keyed by gcal_uid,
+    plus the ids of unresolved DUPLICATE nodes that should be cancelled.
+
+    Historically the ingest could create two nodes with one gcal_uid (a
+    RECURRENCE-ID override sharing its series' UID before the parser learned
+    to split them). Reconcile needs exactly one live node per uid, so per
+    uid we keep the best row — unresolved beats resolved, then the most
+    recently updated — and report the other unresolved rows as duplicates
+    for the caller to cancel. Resolved extras are history; they stay.
+    """
     rows = conn.execute(
         """SELECT * FROM nodes
             WHERE layer = 'schedule'
-              AND json_extract(payload_json, '$.source') = 'gcal'"""
+              AND json_extract(payload_json, '$.source') = 'gcal'
+            ORDER BY updated_at ASC, id ASC"""
     ).fetchall()
     out: dict[str, sqlite3.Row] = {}
+    duplicates: list[str] = []
     for r in rows:
         uid = json.loads(r["payload_json"] or "{}").get("gcal_uid")
-        if uid:
+        if not uid:
+            continue
+        prev = out.get(uid)
+        if prev is None:
             out[uid] = r
+            continue
+        # Prefer the unresolved row; among equals, the later-updated one
+        # (rows arrive updated_at-ascending, so `r` is the later).
+        prev_open, r_open = prev["resolution"] is None, r["resolution"] is None
+        keep, drop = (r, prev) if (r_open or not prev_open) else (prev, r)
+        out[uid] = keep
+        if drop["resolution"] is None:
+            duplicates.append(drop["id"])
+    return out, duplicates
+
+
+def list_gcal_nodes(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    """Every schedule node the sync manages, keyed by gcal_uid — one row per
+    uid (the keeper row when historical duplicates exist)."""
+    out, _ = dedupe_gcal_nodes(conn)
     return out
 
 
@@ -173,16 +200,27 @@ def gcal_ingest(
         complex_series = parsed["complex_series"]
     events = events or []
 
-    existing = list_gcal_nodes(conn)
+    existing, duplicate_ids = dedupe_gcal_nodes(conn)
     seen_uids: set[str] = set()
     new_ids: list[str] = []
     updated_ids: list[str] = []
     unchanged_ids: list[str] = []
     removed_ids: list[str] = []
 
+    # Heal historical duplicates (two live nodes sharing one gcal_uid):
+    # cancel every non-keeper so the ward's schedule shows each Google
+    # event exactly once again.
+    for did in duplicate_ids:
+        sched.resolve(conn, id=did, resolution="cancelled")
+        removed_ids.append(did)
+
     for ev in events:
         uid = ev.get("uid")
-        if not uid:
+        if not uid or uid in seen_uids:
+            # A repeated uid within one snapshot would make the reconcile
+            # flip-flop and duplicate nodes; first occurrence wins, the
+            # rest are a feed anomaly (the parser splits legitimate
+            # RECURRENCE-ID overrides into distinct uids upstream).
             continue
         seen_uids.add(uid)
         node = existing.get(uid)

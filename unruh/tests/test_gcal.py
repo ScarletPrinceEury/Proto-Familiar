@@ -291,3 +291,144 @@ def test_ingest_events_list_path(conn):
     }
     r = gcal.gcal_ingest(conn, events=[ev])
     assert len(r["new"]) == 1
+
+
+# ── RECURRENCE-ID overrides (modified instances) ───────────────────────
+
+
+def _override_vevent(uid, rid, start, summary="Thing", extra=""):
+    return (
+        "BEGIN:VEVENT\n"
+        f"UID:{uid}\n"
+        f"RECURRENCE-ID:{rid}\n"
+        f"DTSTART:{start}\n"
+        f"SUMMARY:{summary}\n"
+        f"{extra}"
+        "END:VEVENT\n"
+    )
+
+
+def test_override_splits_into_synthetic_uid():
+    # A weekly series + one moved instance. The series must expand (a mapped
+    # anchor can't express the move), the overridden original date must not
+    # render, and the override gets the stable "<uid>#<orig-date>" key.
+    text = _cal(
+        _vevent("s@g", "20260706T100000", "Standup", extra="RRULE:FREQ=WEEKLY\n"),
+        _override_vevent("s@g", "20260713T100000", "20260713T150000", "Standup (moved)"),
+    )
+    out = ical.parse_ical(text, now=datetime(2026, 7, 4))
+    uids = [e["uid"] for e in out["events"]]
+    assert len(uids) == len(set(uids)), "every event in one snapshot has a distinct uid"
+    assert "s@g" not in uids, "series with overrides is expanded, not kept as anchor"
+    override = next(e for e in out["events"] if e["uid"] == "s@g#2026-07-13")
+    assert override["start"].startswith("2026-07-13T15:00:00")
+    assert override["summary"] == "Standup (moved)"
+    assert override["expanded_from"] == "s@g"
+    # The original 10:00 occurrence on the 13th is excluded from expansion.
+    starts = [e["start"] for e in out["events"] if e["uid"] != "s@g#2026-07-13"]
+    assert not any(s.startswith("2026-07-13") for s in starts)
+    # Override-forced expansion is expected behaviour, not a complex series.
+    assert out["complex_series"] == []
+
+
+def test_override_cancelled_instance():
+    text = _cal(
+        _vevent("c@g", "20260706T100000", "Weekly", extra="RRULE:FREQ=WEEKLY\n"),
+        _override_vevent("c@g", "20260720T100000", "20260720T100000", "Weekly",
+                         extra="STATUS:CANCELLED\n"),
+    )
+    out = ical.parse_ical(text, now=datetime(2026, 7, 4))
+    cancelled = next(e for e in out["events"] if e["uid"] == "c@g#2026-07-20")
+    assert cancelled["status"] == "cancelled"
+    kept = [e for e in out["events"] if e["uid"] != "c@g#2026-07-20"]
+    assert not any((e["start"] or "").startswith("2026-07-20") for e in kept)
+
+
+def test_override_utc_frame_matches_utc_anchor():
+    # Z-form RECURRENCE-ID against a Z-form DTSTART: exclusion + key must
+    # line up in the shared frame.
+    text = _cal(
+        _vevent("z@g", "20260706T100000Z", "Sync", extra="RRULE:FREQ=WEEKLY\n"),
+        _override_vevent("z@g", "20260713T100000Z", "20260713T120000Z"),
+    )
+    out = ical.parse_ical(text, now=datetime(2026, 7, 4))
+    uids = [e["uid"] for e in out["events"]]
+    assert "z@g#2026-07-13" in uids
+    starts = [e["start"] for e in out["events"] if e["uid"] != "z@g#2026-07-13"]
+    assert not any(s.startswith("2026-07-13T10") for s in starts)
+
+
+def test_override_without_anchor_stands_alone():
+    # Windowed feeds can carry an override whose series anchor is outside
+    # the window — it must still land as its own reconcilable event.
+    text = _cal(_override_vevent("lone@g", "20260710T090000", "20260710T110000", "Moved thing"))
+    out = ical.parse_ical(text, now=datetime(2026, 7, 4))
+    assert len(out["events"]) == 1
+    ev = out["events"][0]
+    assert ev["uid"] == "lone@g#2026-07-10"
+    assert ev["expanded_from"] == "lone@g"
+
+
+def test_override_ingest_round_trip(conn):
+    # End-to-end: sync a series, then re-sync after one instance moved.
+    # No duplicate nodes, no clobbered series, old time gone, new time in.
+    plain = _cal(_vevent("rt@g", "20990706T100000", "Standup", extra="RRULE:FREQ=WEEKLY\n"))
+    r1 = _ingest(conn, plain, now="2099-07-04T12:00:00")
+    assert len(r1["new"]) == 1  # mapped-subset anchor
+
+    moved = _cal(
+        _vevent("rt@g", "20990706T100000", "Standup", extra="RRULE:FREQ=WEEKLY\n"),
+        _override_vevent("rt@g", "20990713T100000", "20990713T150000", "Standup (moved)"),
+    )
+    r2 = _ingest(conn, moved, now="2099-07-04T12:00:00")
+    # The plain anchor uid vanished from the snapshot → cancelled; the
+    # expanded occurrences + override are new.
+    assert r1["new"][0] in r2["removed"]
+    rows = conn.execute(
+        """SELECT label, when_ts FROM nodes
+            WHERE json_extract(payload_json,'$.source')='gcal' AND resolution IS NULL"""
+    ).fetchall()
+    whens = [r["when_ts"] for r in rows]
+    assert "2099-07-13T15:00:00" in whens
+    assert "2099-07-13T10:00:00" not in whens
+    # A third identical sync changes nothing.
+    r3 = _ingest(conn, moved, now="2099-07-04T12:00:00")
+    assert not r3["new"] and not r3["removed"] and not r3["updated"]
+
+
+# ── Reconcile guards: duplicate uids ───────────────────────────────────
+
+
+def test_same_uid_twice_in_one_snapshot_first_wins(conn):
+    ev = lambda summary: {
+        "uid": "dupe@g", "summary": summary, "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r = gcal.gcal_ingest(conn, events=[ev("First"), ev("Second")])
+    assert len(r["new"]) == 1
+    rows = conn.execute(
+        "SELECT label FROM nodes WHERE json_extract(payload_json,'$.gcal_uid')='dupe@g'"
+    ).fetchall()
+    assert [row["label"] for row in rows] == ["First"]
+
+
+def test_ingest_heals_historical_duplicate_nodes(conn):
+    # Two live nodes sharing one gcal_uid (the pre-fix corruption): the next
+    # sync keeps one and cancels the rest.
+    for label in ("Old copy", "New copy"):
+        sched.add_node(conn, type="event", label=label, when="2099-07-02T14:00:00",
+                       payload={"source": "gcal", "gcal_uid": "healme@g"})
+    ev = {
+        "uid": "healme@g", "summary": "New copy", "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r = gcal.gcal_ingest(conn, events=[ev], reconcile_deletes=False)
+    assert len(r["removed"]) == 1
+    live = conn.execute(
+        """SELECT COUNT(*) n FROM nodes
+            WHERE json_extract(payload_json,'$.gcal_uid')='healme@g'
+              AND resolution IS NULL"""
+    ).fetchone()["n"]
+    assert live == 1
