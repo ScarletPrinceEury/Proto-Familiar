@@ -104,12 +104,15 @@ export function primaryConnectionFrom(settings) {
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
-export const TRIAGE_LOG_FILE = path.join(LOGS_DIR, 'triage-events.jsonl');
+export const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
+export const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
 
-export async function appendTriageEventLog(entry) {
+// Shared JSONL event-log primitives — triage and warm reach-out both use
+// them, so decisions from either loop are auditable the same way.
+async function appendEventLog(file, entry) {
   try {
     await fsp.appendFile(
-      TRIAGE_LOG_FILE,
+      file,
       JSON.stringify({ ...entry, loggedAt: new Date().toISOString() }) + '\n',
       'utf8',
     );
@@ -117,9 +120,9 @@ export async function appendTriageEventLog(entry) {
 }
 
 // Newest first. Tolerates a missing or partially corrupt log file.
-export async function readTriageEvents() {
+async function readEventLog(file) {
   try {
-    const raw   = await fsp.readFile(TRIAGE_LOG_FILE, 'utf8');
+    const raw   = await fsp.readFile(file, 'utf8');
     const lines  = raw.split('\n').filter(l => l.trim());
     return lines
       .map(l => { try { return JSON.parse(l); } catch { return null; } })
@@ -129,6 +132,16 @@ export async function readTriageEvents() {
     return [];
   }
 }
+
+export const appendTriageEventLog   = (entry) => appendEventLog(TRIAGE_LOG_FILE, entry);
+export const readTriageEvents       = ()      => readEventLog(TRIAGE_LOG_FILE);
+// The warm loop's deliberations were fully silent ("llm_said_wait" and
+// every gate outcome vanished), so "he never reaches out" was
+// indistinguishable from "the loop never ran". Every LLM deliberation
+// lands here now (gates like cooldown/disabled stay unlogged — they fire
+// every tick and carry no decision).
+export const appendReachoutEventLog = (entry) => appendEventLog(REACHOUT_LOG_FILE, entry);
+export const readReachoutEvents     = ()      => readEventLog(REACHOUT_LOG_FILE);
 
 // Read the last N user/assistant messages from the most recently updated
 // session log file. Used by decideTriageViaLLM to ground the triage

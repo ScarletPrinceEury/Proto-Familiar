@@ -82,6 +82,7 @@ import {
   readSettingsSync, primaryConnectionFrom,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
+  appendReachoutEventLog, readReachoutEvents,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
   composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
@@ -1099,6 +1100,17 @@ app.get('/api/active-session', async (_req, res) => {
 app.get('/api/triage-events', async (_req, res) => {
   try {
     res.json(await readTriageEvents());
+  } catch {
+    res.json([]);
+  }
+});
+
+// Warm reach-out decision log (mirror of /api/triage-events): every LLM
+// deliberation — including "wait" — with its reasoning surface, so "he
+// never reaches out" is auditable instead of a black box.
+app.get('/api/reachout-events', async (_req, res) => {
+  try {
+    res.json(await readReachoutEvents());
   } catch {
     res.json([]);
   }
@@ -3409,16 +3421,20 @@ function startSilenceTriage() {
 // is elevated (triage owns that). Default-ON; toggle warmthEnabled in
 // Settings or hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.
 
-// Quiet hours for warm knocks — my human's configured night (local server
-// time). Start==end disables the window. Defaults to 23:00–08:00.
-function isWarmthQuietHours(now = new Date()) {
+// Quiet hours for warm knocks — my human's configured night, on MY HUMAN'S
+// clock (wardTimeZone), not the server's. A UTC container with a ward hours
+// away used to shift the 23–08 window onto their daytime and silently
+// suppress warm outreach for whole active stretches — the same cross-zone
+// bug class 0.7.86 fixed for reminders. Start==end disables the window.
+// Defaults to 23:00–08:00 ward-local.
+function isWarmthQuietHours() {
   const s = readSettingsSync();
   let start = Number(s?.warmthQuietHoursStart);
   let end   = Number(s?.warmthQuietHoursEnd);
   if (!Number.isInteger(start) || start < 0 || start > 23) start = 23;
   if (!Number.isInteger(end)   || end   < 0 || end   > 23) end   = 8;
   if (start === end) return false; // window disabled
-  const h = now.getHours();
+  const h = Number(wardLocalNowISO(s?.wardTimeZone).slice(11, 13));
   return start < end ? (h >= start && h < end) : (h >= start || h < end);
 }
 
@@ -3482,7 +3498,21 @@ function startReachout() {
       if (r.reason === 'reached_ward')         console.log(`[reachout] warm knock to my human: "${r.decision?.message?.slice(0, 80)}…"`);
       else if (r.reason === 'reached_villager') console.log(`[reachout] warm reach to ${r.villager?.name}: "${r.decision?.message?.slice(0, 60)}…"`);
       else if (r.reason === 'delivery_failed')  console.warn(`[reachout] delivery failed (${r.target}): ${r.error}`);
-      // wait / crisis_defer / quiet_hours / in_cooldown / disabled are silent.
+      // Every DELIBERATION (an LLM decision happened — including "wait")
+      // lands in the reachout event log so the loop is auditable via
+      // /api/reachout-events. Pure gate outcomes (cooldown/disabled/
+      // quiet-hours/crisis-defer) fire every tick and stay unlogged.
+      const deliberated = ['llm_said_wait', 'reached_ward', 'reached_villager', 'delivery_failed', 'unknown_villager', 'rate_limited'];
+      if (deliberated.includes(r.reason)) {
+        appendReachoutEventLog({
+          reason:         r.reason,
+          target:         r.target ?? null,
+          villager:       r.villager?.name ?? null,
+          messagePreview: r.decision?.message?.slice(0, 120) ?? null,
+          nextCheckInMs:  r.nextCheckInMs ?? null,
+          error:          r.error ?? null,
+        }).catch(() => {});
+      }
     },
     onError: (err) => console.error('[reachout]', err?.message ?? err),
   });
