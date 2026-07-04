@@ -434,8 +434,34 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
+  // Context-sensitive tool surfacing (tool-surfacing-build-spec): when the
+  // ward has it on, only core + triggered modules are advertised; everything
+  // stays reachable via request_tools (same-turn recovery). Default OFF.
+  let surfacing = null;   // { selection:Set, used:Set } when active
   if (loopMode) {
-    const activeTools = composeActiveTools(customTools);
+    const sset = readSettingsSync();
+    const surfOn = sset?.toolSurfacingEnabled === true
+      && process.env.PROTO_FAMILIAR_TOOL_SURFACING_DISABLED !== '1';
+    let activeTools;
+    if (surfOn) {
+      const prevAssistant = [...(Array.isArray(messages) ? messages : [])].reverse()
+        .find(m => m?.role === 'assistant' && typeof m.content === 'string')?.content ?? '';
+      const turnText = `${typeof userMessage === 'string' ? userMessage : ''}\n${prevAssistant}`;
+      let villagerNames = [];
+      try { villagerNames = ((await getVillageRegistryFile())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
+      catch { /* registry unreadable → name-trigger degrades to keywords */ }
+      const selection = selectModules({
+        turnText,
+        dynamicBlock: enriched?.dynamic ?? '',
+        villagerNames,
+        sticky: stickyModulesFor(sessionInfo?.sessionId),
+      });
+      surfacing = { selection, used: new Set() };
+      activeTools = composeActiveTools(customTools, sset, { modules: selection });
+      console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised`);
+    } else {
+      activeTools = composeActiveTools(customTools);
+    }
     if (activeTools.length > 0) {
       payload.tools = activeTools;
       payload.tool_choice = 'auto';
@@ -462,6 +488,27 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       audienceTag,
       apiKey,
     };
+    if (surfacing) toolCtx._requestedModules = new Set();
+    // request_tools grew the set → the next round advertises the union.
+    // Growth-only within a turn; undefined = keep the current payload.tools.
+    const recomposeTools = () => {
+      if (!surfacing || !toolCtx._requestedModules?.size) return undefined;
+      const union = new Set([...surfacing.selection, ...toolCtx._requestedModules]);
+      return composeActiveTools(customTools, readSettingsSync(), { modules: union });
+    };
+    const tickSurfacing = (toolNamesUsed = []) => {
+      if (!surfacing) return;
+      for (const n of toolNamesUsed) {
+        const m = TOOL_MODULES[n];
+        if (m && m !== 'core') surfacing.used.add(m);
+      }
+      tickSticky(
+        sessionInfo?.sessionId,
+        new Set([...surfacing.selection, ...(toolCtx._requestedModules ?? []), ...surfacing.used]),
+        Number(readSettingsSync()?.toolStickyTurns ?? 2),
+      );
+    };
+
     const upstreamUrl = url;
     const authHeaders = {
       'Content-Type':  'application/json',
@@ -504,13 +551,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     if (!stream) {
       try {
         const { data, toolRounds } = await runToolCallLoop({
-          callUpstream: async (msgs) => {
+          getTools: recomposeTools,
+          callUpstream: async (msgs, roundTools) => {
             let r;
             try {
               r = await fetch(upstreamUrl, {
                 method:  'POST',
                 headers: authHeaders,
-                body:    JSON.stringify({ ...payload, messages: msgs, stream: false }),
+                body:    JSON.stringify({ ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false }),
                 signal:  ac.signal,
               });
             } catch (err) {
@@ -540,7 +588,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           toolCtx,
           signal: ac.signal,
         });
-        req.off('close', onClientClose);
+        tickSurfacing();
+    req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
         // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
@@ -567,7 +616,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';
-          if (enriched.surfacedBookmarks?.length > 0) {
+          tickSurfacing((toolRounds ?? []).flatMap(r => (r.toolCalls ?? []).map(tc => tc.function?.name)));
+        if (enriched.surfacedBookmarks?.length > 0) {
             reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
               .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
           }
@@ -695,6 +745,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         })));
         if (clientGone()) return;
         res.write(`data: ${JSON.stringify({ _toolRound: { toolCalls, results, content: fullContent || null, timestamp } })}\n\n`);
+        if (surfacing) {
+          for (const tc of toolCalls) {
+            const m = TOOL_MODULES[tc.function?.name];
+            if (m && m !== 'core') surfacing.used.add(m);
+          }
+          const grown = recomposeTools();
+          if (grown) payload.tools = grown;  // next round carries the pulled module
+        }
         currentMsgs = [
           ...currentMsgs,
           { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },

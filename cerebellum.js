@@ -67,6 +67,7 @@ import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-ti
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
 import { rekeyCueState } from './gcal-projection.js';
+import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules } from './tool-surfacing.js';
 import { rekeyPonderingUids } from './pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './gcal-source.js';
 import {
@@ -1469,6 +1470,20 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'request_tools',
+      description: 'My full toolbox is bigger than what I\'m currently holding — most modules only surface when the moment calls for them. If I need a tool that isn\'t in my hands right now, I name its module here and I\'ll have those tools THIS turn, on my very next step. Modules: ' + MODULE_INDEX + '. Passing "all" hands me everything at once. This is also how I answer "what can you do?" honestly: the list above is complete, and I can pull any module to check its details. If I reach for a tool and it isn\'t there, this is ALWAYS the recovery — never "I can\'t do that."',
+      parameters: {
+        type: 'object',
+        properties: {
+          modules: { type: 'string', description: 'Module name(s), comma-separated — e.g. "schedule-write" or "graph, village" — or "all".' },
+        },
+        required: ['modules'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_find',
       description: 'I search {{user}}\'s WHOLE schedule by name — any time horizon, not just the week my [Temporal Context] briefing shows. My briefing only legends what\'s near; the store holds far more (like a year of synced calendar events), and this is how I reach any of it: when {{user}} asks "when\'s my dentist appointment?", when I need the id of something months out to export or link it, or when I want to check whether something already exists before adding a duplicate. I search, read the matches\' ids, then act. With include_resolved I can also answer "did I already handle X?".',
       parameters: {
@@ -2378,6 +2393,16 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't build a calendar file for that item: ${err.message}`; }
   },
 
+  request_tools: async ({ modules } = {}, ctx = {}) => {
+    const { modules: known, unknown } = normalizeRequestedModules(modules);
+    if (!known.length) return `I don't have module(s) called ${JSON.stringify(unknown)}. My modules: ${MODULE_INDEX} — or "all".`;
+    if (!ctx._requestedModules) ctx._requestedModules = new Set();
+    for (const m of known) ctx._requestedModules.add(m);
+    // Every pull is a surfacing miss — the tuning signal for triggers.
+    console.log(`[tools] surfacing miss — requested: ${known.join(', ')}${unknown.length ? ` (unknown: ${unknown.join(', ')})` : ''}`);
+    return `ok — ${known.join(', ')} tools are in my hands from my next step onward${unknown.length ? ` (no such module: ${unknown.join(', ')})` : ''}.`;
+  },
+
   schedule_find: async ({ query, include_resolved, limit } = {}) => {
     const q = String(query ?? '').trim();
     if (!q) return 'I need part of the item\'s name to search for.';
@@ -2858,10 +2883,17 @@ export function gcalWriteEnabled(settings = readSettingsSync()) {
   return !!cmd;
 }
 
-export function composeActiveTools(customTools, settings = readSettingsSync()) {
+export function composeActiveTools(customTools, settings = readSettingsSync(), opts = {}) {
   const webOn = webSearchEnabled(settings);
   const gcalWriteOn = gcalWriteEnabled(settings);
+  // Context-sensitive surfacing (tool-surfacing-build-spec): when a module
+  // Set is provided, only core + selected modules are advertised. Surfacing
+  // narrows on TOP of the existing gates (web opt-in, gcal write opt-in) —
+  // it never widens them. No Set → today's full-registry behavior.
+  const mods = opts.modules instanceof Set ? opts.modules : null;
+  const inScope = (name) => !mods || TOOL_MODULES[name] === CORE || mods.has(TOOL_MODULES[name]);
   const tools = BUILTIN_TOOLS.filter(t =>
+    inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
     (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
   if (Array.isArray(customTools)) {
@@ -2979,6 +3011,7 @@ export async function runToolCallLoop({
   executeTool = executeToolCall,
   toolCtx     = {},
   maxRounds   = MAX_TOOL_ROUNDS,
+  getTools    = null,
   signal,
 }) {
   if (typeof callUpstream !== 'function') throw new Error('callUpstream is required');
@@ -2991,7 +3024,10 @@ export async function runToolCallLoop({
     const payloadMessages = timeAnchor
       ? [...currentMsgs, { role: 'system', content: timeAnchor }]
       : currentMsgs;
-    data = await callUpstream(payloadMessages);
+    // Surfacing growth: request_tools may have widened the module set last
+    // round — recompose so the pulled tools are present THIS round. The set
+    // only ever grows within a turn (a chain never loses a tool mid-reach).
+    data = await callUpstream(payloadMessages, getTools ? getTools() : undefined);
 
     const choice  = data?.choices?.[0];
     const message = choice?.message;

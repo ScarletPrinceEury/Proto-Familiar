@@ -313,6 +313,15 @@
               <label for="tools-enabled">Enable tool use</label>
               <input type="checkbox" id="tools-enabled" checked>
             </div>
+            <div class="field-row">
+              <label for="tool-surfacing-toggle">Context-sensitive tools</label>
+              <input type="checkbox" id="tool-surfacing-toggle">
+            </div>
+            <div class="field-hint">Off by default while it's being tested. When on, your Familiar carries only the tool modules the moment calls for (a big token saving) — and can always pull any missing module itself mid-turn via its request_tools. Turn off if it ever seems unable to do something it should.</div>
+            <div class="field-row">
+              <label for="tool-sticky-turns">Tool stickiness (turns)</label>
+              <input type="number" id="tool-sticky-turns" value="2" min="0" max="10" step="1" style="width:4em">
+            </div>
             <p class="field-hint">Built-in tools always available: <code>get_datetime</code>, <code>get_session_info</code></p>
             <div class="field">
               <label for="custom-tools">Custom tools <span class="label-hint">(JSON array — advertise-only: the model sees and may call these, but nothing executes them yet; calls return a "not implemented" notice)</span></label>

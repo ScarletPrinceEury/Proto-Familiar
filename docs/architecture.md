@@ -136,6 +136,7 @@ ponderings injection, care-check framing) and as background loops
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── (quiet success)          Write-tool success results collapse at the `executeToolCall` boundary (0.8.13): a WRITE executor's success branch returns `quietOk(fullText, {id})` and the model sees `ok` (+ the new id when chaining needs it) instead of confirmation prose — success confirmations recur every turn the transcript survives, and carry nothing the model didn't imply by making the call. The safety contract: ONLY genuine success branches opt in (the boundary never classifies text, so a failure can never read as success); READ tools never opt in (the result IS the payload); load-bearing successes stay loud (contact_trusted_person, show_crisis_resources, schedule_push_to_google, schedule_export, memorize_now, village_upsert, convert_ids_to_slugs). Debug escape hatch: PROTO_FAMILIAR_QUIET_TOOLS_DISABLED=1 restores full prose
+├── tool-surfacing.js        Context-sensitive tool surfacing (0.8.15, opt-in/default-OFF) — decides WHICH tool modules travel on a chat turn, all in cheap code (no LLM picks the tool set): TOOL_MODULES maps every builtin to exactly one module (a strict two-way parity test guards the map); CORE (time, recall/save/file, schedule_find, interests, both crisis tools, request_tools) is ALWAYS advertised; other modules surface via TRIGGERS (regex over user message + previous reply, marker-block presence in the injected dynamic context, villager names) + a per-session sticky TTL (toolStickyTurns, default 2). Recovery contract: the always-visible request_tools tool carries the full MODULE_INDEX in its description and pulls a module into the SAME turn (next loop round grows the tool list via runToolCallLoop's getTools hook / the streaming round's payload.tools) — a miss costs one round and logs `[tools] surfacing miss` for trigger tuning. Gated by toolSurfacingEnabled + PROTO_FAMILIAR_TOOL_SURFACING_DISABLED=1. See docs/tool-surfacing-build-spec.md
 ├── macros.js                Shared macro substitution — `substituteMacros(text, settings)` resolves `{{user}}`/`{{char}}` to configured names. Applied at three boundaries: (1) LLM prompts at each call site (triage, reachout, pondering, tome-graduation, guide-chat), (2) tool results (`executeToolCall` result boundary — all executors covered automatically), (3) tool descriptions (`composeActiveTools`). Server-injected static/dynamic context blocks (temporal-format, surface-context, CARE CHECK, presence) bypass all three, so they author the literal 'my human' — never a macro. Lowercase fallbacks ('my human', 'the Familiar') are intentional for mid-sentence inline prose.
 ├── entity-ref.js            Validate phylactery:self/file.md#section refs; accepts legacy entity-core: prefix as alias
 ├── package.json
@@ -351,12 +352,20 @@ Currently owns:
   become structured strings into the loop; applies `substituteMacros` from
   `macros.js` to every tool return value at the result boundary, so all
   executors are covered even if they forget substitution individually) +
-  `composeActiveTools(customTools, settings)` (built-ins + the user's
+  `composeActiveTools(customTools, settings, opts)` (built-ins + the user's
   advertise-only custom tools; deep-clone walks every `description` string
   through `substituteToolMacros` → `macros.js` before the tool list is sent
-  to the provider; optional `settings` param defaults to `readSettingsSync()`)
+  to the provider; optional `settings` param defaults to `readSettingsSync()`;
+  `opts.modules` — a Set from `tool-surfacing.js` — narrows the built-ins to
+  core + the selected modules, applied BEFORE the web/gcal gates so surfacing
+  can only ever narrow, never widen)
   + `runToolCallLoop()` (the non-streaming multi-round loop; the
-  streaming variant lives in /api/chat because it is SSE transport).
+  streaming variant lives in /api/chat because it is SSE transport; its
+  `getTools` hook lets /api/chat re-compose the tool list between rounds so
+  a `request_tools` call grows the set within the same turn).
+  `request_tools` itself lives here as a core builtin: it validates the
+  requested module names against `tool-surfacing.js` and stashes them on
+  `toolCtx._requestedModules` for the recompose step.
   `initCerebellumTools()` receives the tome-storage capability, **the
   Village read/upsert functions, and `relayToDiscord`** from server.js at
   boot so `save_to_tome`, `village_lookup` / `village_upsert`, and

@@ -253,6 +253,12 @@ const state = {
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   notificationSounds:      true,    // in-app chime on new messages (default on)
+  // Context-sensitive tool surfacing (default OFF until behaviorally tested):
+  // only core + triggered tool modules are advertised per turn; the Familiar
+  // pulls anything else via request_tools. Sticky = extra turns a surfaced
+  // module stays (0-10).
+  toolSurfacingEnabled:    false,
+  toolStickyTurns:         2,
   wardTimeZone:            '',      // ward's IANA zone, auto-detected from the browser (see init overlay)
   // Google Calendar sync (0.8). Opt-in: idles until an iCal URL is pasted
   // and the toggle is on. Interval in minutes (hourly default; loop clamps
@@ -324,7 +330,7 @@ const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
-  'toolsEnabled', 'customTools',
+  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
@@ -2612,6 +2618,11 @@ function readSettingsFromUI() {
     state.postHistoryRole = ['system', 'user', 'assistant'].includes(v) ? v : 'system';
   }
   state.toolsEnabled      = $('tools-enabled').checked;
+  if ($('tool-surfacing-toggle')) state.toolSurfacingEnabled = $('tool-surfacing-toggle').checked;
+  if ($('tool-sticky-turns')) {
+    const n = parseInt($('tool-sticky-turns').value, 10);
+    state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
+  }
   state.customTools       = $('custom-tools').value;
   const wsEnabledEl = $('web-search-enabled');
   if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
@@ -2676,6 +2687,8 @@ function writeSettingsToUI() {
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
+  if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
+  if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
   if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
@@ -3563,6 +3576,7 @@ function init() {
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'memory-sweep-toggle',
+    'tool-surfacing-toggle', 'tool-sticky-turns',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
