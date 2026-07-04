@@ -97,6 +97,7 @@ import {
   enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
 import { expandWindow } from './recurrence.js';
+import { selectModules, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
 import {
   enqueueMemorization,
   enqueueSessionByDay,
@@ -448,7 +449,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         .find(m => m?.role === 'assistant' && typeof m.content === 'string')?.content ?? '';
       const turnText = `${typeof userMessage === 'string' ? userMessage : ''}\n${prevAssistant}`;
       let villagerNames = [];
-      try { villagerNames = ((await getVillageRegistryFile())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
+      try { villagerNames = ((await getVillageRegistry())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
       catch { /* registry unreadable → name-trigger degrades to keywords */ }
       const selection = selectModules({
         turnText,
