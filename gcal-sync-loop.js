@@ -28,11 +28,15 @@ const BASE_TICK_MS = 60_000;                 // how often the loop wakes to chec
 export const DEFAULT_SYNC_INTERVAL_MS = 60 * 60_000;  // hourly (§1.6)
 const MIN_SYNC_INTERVAL_MS = 5 * 60_000;     // floor so a heavy user can't hammer Google
 const MAX_SYNC_INTERVAL_MS = 24 * 60 * 60_000;
+// A FAILED sync retries on this short leash instead of burning the whole
+// configured interval — a transient blip (network, expired token, flaky CLI)
+// must not turn "hourly sync" into "an hour of silence per hiccup".
+export const FAILURE_RETRY_MS = 5 * 60_000;
 
 let _started      = false;
 let _interval     = null;
 let _activeTick   = null;
-let _lastSyncTs   = 0;
+let _nextDueTs    = 0;
 
 export function clampSyncIntervalMs(ms) {
   if (!Number.isFinite(ms)) return DEFAULT_SYNC_INTERVAL_MS;
@@ -98,7 +102,7 @@ export function startGcalSyncLoop({
 }) {
   if (_started) throw new Error('gcal sync loop already running');
   _started = true;
-  _lastSyncTs = 0;
+  _nextDueTs = 0;
 
   const fire = async () => {
     if (_activeTick) return;
@@ -107,12 +111,14 @@ export function startGcalSyncLoop({
         if (!(await isEnabled())) { onTick({ synced: false, reason: 'disabled' }); return; }
         const intervalMs = clampSyncIntervalMs(await getIntervalMs());
         const nowMs = now();
-        if (_lastSyncTs && nowMs - _lastSyncTs < intervalMs) {
+        if (nowMs < _nextDueTs) {
           onTick({ synced: false, reason: 'not_due' });
           return;
         }
-        _lastSyncTs = nowMs;
         const r = await runOneGcalSyncTick(tickConfig);
+        // Success consumes the full interval; failure retries on the short
+        // leash (never longer than the interval itself).
+        _nextDueTs = nowMs + (r?.synced ? intervalMs : Math.min(intervalMs, FAILURE_RETRY_MS));
         try { onTick(r); } catch (err) { onError(err); }
       } catch (err) {
         try { onError(err); } catch { /* swallow */ }
@@ -135,12 +141,12 @@ export async function stopGcalSyncLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
   const pending = _activeTick;
-  _started    = false;
-  _lastSyncTs = 0;
+  _started   = false;
+  _nextDueTs = 0;
   if (pending) { try { await pending; } catch { /* surfaced via onError */ } }
 }
 
 /** Force the next wake to sync regardless of the interval gate (the "Sync now" button). */
-export function resetGcalSyncCadence() { _lastSyncTs = 0; }
+export function resetGcalSyncCadence() { _nextDueTs = 0; }
 
 export function isRunning() { return _started; }

@@ -248,6 +248,10 @@ const state = {
   gcalIcalUrl:             '',
   gcalSyncIntervalMinutes: 60,
   gcalLookaheadDays:       365,   // how far ahead each pull fetches (clamped 30–1825)
+  // Event lead-time alerts: a "coming up" ping before any unresolved event
+  // node starts (synced or hand-added). Default ON — the timeblindness net.
+  eventAlertsEnabled:      true,
+  eventAlertLeadMinutes:   60,    // clamped 5–1440 server-side
   // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
   // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
   gcalSource:              'link',
@@ -321,6 +325,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
+  'eventAlertsEnabled', 'eventAlertLeadMinutes',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'gcalWriteEnabled', 'gcalWriteCommand',
   'trustedContacts', 'userDiscordWebhook',
@@ -390,10 +395,56 @@ function closeWebSearchModal() {
 function openGcalModal() {
   writeSettingsToUI();       // reflect current state into the modal fields
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
+  refreshGcalSyncStatus();   // "last sync / last error" health line
   $('gcal-modal')?.classList.remove('hidden');
 }
 function closeGcalModal() {
   $('gcal-modal')?.classList.add('hidden');
+}
+
+// The sync-health line in the gcal modal: when the last real attempt ran,
+// whether it worked, and the exact error when it didn't — so a dead URL or
+// an expired Google token stops being invisible.
+async function refreshGcalSyncStatus() {
+  const el = $('gcal-sync-status');
+  if (!el) return;
+  try {
+    const s = await (await fetch('/api/gcal/sync-status')).json();
+    if (!s || !s.lastAttemptAt) { el.textContent = 'No sync has run yet.'; el.style.color = ''; return; }
+    const ago = (iso) => {
+      const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins} min ago`;
+      const h = Math.round(mins / 60);
+      return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+    };
+    if (s.lastOutcome === 'ok') {
+      const c = s.lastChanges || {};
+      const parts = [c.new && `${c.new} new`, c.updated && `${c.updated} updated`, c.removed && `${c.removed} removed`].filter(Boolean);
+      el.textContent = `✓ Last synced ${ago(s.lastSuccessAt || s.lastAttemptAt)}${parts.length ? ` (${parts.join(', ')})` : ' (no changes)'}`;
+      el.style.color = 'var(--accent, #3a7)';
+    } else {
+      const okNote = s.lastSuccessAt ? ` Last success: ${ago(s.lastSuccessAt)}.` : ' It has never succeeded.';
+      el.textContent = `⚠ Last attempt (${ago(s.lastAttemptAt)}) failed: ${s.lastError || s.lastOutcome}.${okNote}`;
+      el.style.color = 'var(--danger, #c55)';
+    }
+  } catch {
+    el.textContent = 'Could not read sync status.';
+    el.style.color = '';
+  }
+}
+
+async function gcalSyncNow() {
+  const el = $('gcal-sync-status');
+  try {
+    await fetch('/api/gcal/sync-now', { method: 'POST' });
+    if (el) { el.textContent = 'Sync requested — it runs within the next minute…'; el.style.color = ''; }
+    // Poll a few times so the outcome shows without reopening the modal.
+    let tries = 0;
+    const poll = setInterval(async () => { tries++; await refreshGcalSyncStatus(); if (tries > 30) clearInterval(poll); }, 4000);
+  } catch {
+    if (el) el.textContent = 'Could not request a sync.';
+  }
 }
 
 // Show the API panel only for the API backend; the Google engine-id field only
@@ -2518,6 +2569,11 @@ function readSettingsFromUI() {
     const n = parseInt($('gcal-lookahead').value, 10);
     state.gcalLookaheadDays = Number.isInteger(n) && n >= 30 && n <= 1825 ? n : 365;
   }
+  if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
+  if ($('event-alerts-lead')) {
+    const n = parseInt($('event-alerts-lead').value, 10);
+    state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
+  }
   if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
@@ -2611,6 +2667,8 @@ function writeSettingsToUI() {
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
+  if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
@@ -3473,6 +3531,7 @@ function init() {
   $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
   $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
   $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  $('gcal-sync-now')?.addEventListener('click', gcalSyncNow);
   $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
   // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
@@ -3495,6 +3554,7 @@ function init() {
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
+    'event-alerts-toggle', 'event-alerts-lead',
     'gcal-write-toggle', 'gcal-write-command',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
@@ -8416,6 +8476,12 @@ function formatOutboxAsMessageContent(item) {
   if (item.kind === 'reminder') {
     if (body) return body;
     return title ? `*(reminder)* ${title}` : '';
+  }
+  if (item.kind === 'event_alert') {
+    // Title carries the event name, body the code-built countdown — show both.
+    const head = title ? `**${title}**` : '';
+    if (head && body) return `${head}\n${body}`;
+    return head || body;
   }
   return body || title || '';
 }

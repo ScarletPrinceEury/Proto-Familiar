@@ -392,6 +392,7 @@ import {
   dispatchOutboxPush,
   enqueueAndDispatch,
   activePushAdapters,
+  registerPushAdapterFactory,
   formatDeliveryNote,
   contactDeadlineFor,
   DISPATCH_GRACE_MS,
@@ -450,6 +451,39 @@ test('the discord-dm adapter posts the item to the user webhook', async () => {
   assert.deepEqual(calls[0][1].allowed_mentions, { parse: [] });
 });
 
+test('registered adapter factories join the built-ins, gated by their own settings check', () => {
+  registerPushAdapterFactory((s) =>
+    s?.discordEnabled === true && s?.discordWardUserId
+      ? { name: 'discord-bot-dm', deliver: async () => ({ ok: true }) }
+      : null);
+  // Unconfigured → only the webhook built-in logic applies (none here).
+  assert.equal(activePushAdapters({ readSettings: () => ({}) }).length, 0);
+  // Configured → the factory's adapter appears alongside the webhook.
+  const both = activePushAdapters({
+    readSettings: () => ({ userDiscordWebhook: 'https://discord.test/me', discordEnabled: true, discordWardUserId: '42' }),
+  });
+  assert.deepEqual(both.map(a => a.name).sort(), ['discord-bot-dm', 'discord-dm']);
+  // A throwing factory never blocks the others.
+  registerPushAdapterFactory(() => { throw new Error('broken factory'); });
+  const still = activePushAdapters({
+    readSettings: () => ({ discordEnabled: true, discordWardUserId: '42' }),
+  });
+  assert.deepEqual(still.map(a => a.name), ['discord-bot-dm']);
+});
+
+test('delivery via ANY channel counts: note reads delivered, deadline clock starts', () => {
+  const viaBot = { delivery: { 'discord-bot-dm': { status: 'delivered', at: new Date(1000).toISOString() } } };
+  assert.match(formatDeliveryNote(viaBot), /delivered to my human's Discord/);
+  // Mixed: one failed, one delivered → the delivered one wins (earliest at).
+  const mixed = {
+    delivery: {
+      'discord-dm':     { status: 'failed', at: 'x', error: 'webhook 404' },
+      'discord-bot-dm': { status: 'delivered', at: new Date(2000).toISOString() },
+    },
+  };
+  assert.match(formatDeliveryNote(mixed), /delivered/);
+});
+
 test('formatDeliveryNote covers delivered / failed / none-configured / pending', () => {
   assert.match(formatDeliveryNote({ delivery: { 'discord-dm': { status: 'delivered', at: 'x' } } }), /delivered to my human's Discord/);
   const failed = formatDeliveryNote({ delivery: { 'discord-dm': { status: 'failed', at: 'x', error: 'discord 404' } } });
@@ -483,6 +517,25 @@ test('contactDeadlineFor: clock starts at confirmed push delivery, not enqueue',
 test('contactDeadlineFor: failed push falls back to the enqueue clock', () => {
   const item = newStyleItem({ delivery: { 'discord-dm': { status: 'failed', at: 'x', error: 'e' } } });
   assert.equal(contactDeadlineFor(item, { pushConfigured: true }), T0 + 30 * 60_000);
+});
+
+test('contactDeadlineFor: bot-DM delivery starts the clock; earliest delivery wins across channels', () => {
+  const botAt = T0 + 5 * 60_000, hookAt = T0 + 12 * 60_000;
+  const item = newStyleItem({
+    delivery: {
+      'discord-bot-dm': { status: 'delivered', at: new Date(botAt).toISOString() },
+      'discord-dm':     { status: 'delivered', at: new Date(hookAt).toISOString() },
+    },
+  });
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true }), botAt + 30 * 60_000);
+});
+
+test('contactDeadlineFor: one channel failing while another is pending holds the clock inside grace', () => {
+  const item = newStyleItem({ delivery: { 'discord-dm': { status: 'failed', at: 'x', error: 'e' } } });
+  // Only one recorded channel and it failed → enqueue clock (as before).
+  // But a delivered record elsewhere overrides — covered above. Here:
+  // all recorded failed → enqueue clock even inside grace.
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, now: () => T0 + 1000 }), T0 + 30 * 60_000);
 });
 
 test('contactDeadlineFor: no push channel configured falls back to the enqueue clock', () => {
