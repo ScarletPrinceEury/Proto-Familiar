@@ -34,7 +34,7 @@ import {
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   exportSchedule,
   getHandoff, markHandoffConsumed,
-  getDueReminders, getRemindersHealth,
+  getDueReminders, getRemindersHealth, markEventAlerted,
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
@@ -51,6 +51,10 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
+import {
+  selectDueEventAlerts, formatEventAlert, alertWindowBounds,
+  clampLeadMinutes, ALERT_GRACE_MS,
+} from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
 import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
@@ -3155,14 +3159,40 @@ function startRemindersScheduler() {
       const r = await resolveScheduleNode({ id, resolution: 'fired' });
       if (!r.ok) throw new Error(r.error || 'resolve failed');
     },
+    // Event lead-time alerts (the timeblindness surface): unresolved
+    // type='event' nodes — synced from Google or added by hand — get a
+    // "coming up" ping a configurable lead before they start. Same tick,
+    // pure code gates, per-occurrence idempotent via payload.alerted_at /
+    // payload.alerts. All frames ward-local (see event-alerts.js).
+    getDueEventAlerts: async () => {
+      if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
+      const s = readSettingsSync();
+      if (s?.eventAlertsEnabled === false) return [];  // default-ON
+      const leadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
+      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs });
+      const [win, rec] = await Promise.all([
+        getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
+        listRecurring().catch(() => ({ nodes: [] })),
+      ]);
+      const windowNodes = Array.isArray(win) ? win : (win?.nodes ?? []);
+      const recurringNodes = Array.isArray(rec) ? rec : (rec?.nodes ?? []);
+      return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadMs, graceMs: ALERT_GRACE_MS })
+        .map(a => ({ ...a, ...formatEventAlert(a, { nowMs }) }));
+    },
+    markEventAlerted: async ({ id, occurrenceDate }) => {
+      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null });
+      if (!r.ok) throw new Error(r.error || 'mark_alerted failed');
+    },
     getHealth: getRemindersHealth,
     onTick: (r) => {
       for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
-      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label}": ${s.error}`);
+      for (const a of r.alerted || []) console.log(`[reminders] event alert "${a.label}" (${a.whenIso ?? ''})`);
+      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label ?? s.id}": ${s.error}`);
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
-  console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+  console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
 }
 
 // ── Google Calendar sync loop (0.8) ─────────────────────────────

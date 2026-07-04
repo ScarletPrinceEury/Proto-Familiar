@@ -183,6 +183,16 @@
           </div>
           <div class="field-hint">Off by default. When on, your Familiar reads your calendar (one-way) so your appointments show up in its sense of your day. Choose how to connect — and optionally allow write-back — in the configuration below.</div>
           <button class="btn-secondary" id="gcal-configure-btn" type="button">⚙ Configure calendar…</button>
+
+          <div class="field-row" style="margin-top:8px">
+            <label for="event-alerts-toggle">Event alerts</label>
+            <input type="checkbox" id="event-alerts-toggle" checked>
+          </div>
+          <div class="field" style="margin-top:4px">
+            <label for="event-alerts-lead">Alert lead time (minutes)</label>
+            <input type="number" id="event-alerts-lead" value="60" min="5" max="1440" step="5" style="width:6em">
+          </div>
+          <div class="field-hint">On by default. A "coming up" notice fires this many minutes before any event on your schedule starts — synced from Google or added by hand — so appointments don't rely on you noticing the time. All-day events don't ping (there's no start time to lead).</div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->

@@ -248,6 +248,10 @@ const state = {
   gcalIcalUrl:             '',
   gcalSyncIntervalMinutes: 60,
   gcalLookaheadDays:       365,   // how far ahead each pull fetches (clamped 30–1825)
+  // Event lead-time alerts: a "coming up" ping before any unresolved event
+  // node starts (synced or hand-added). Default ON — the timeblindness net.
+  eventAlertsEnabled:      true,
+  eventAlertLeadMinutes:   60,    // clamped 5–1440 server-side
   // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
   // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
   gcalSource:              'link',
@@ -321,6 +325,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
+  'eventAlertsEnabled', 'eventAlertLeadMinutes',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'gcalWriteEnabled', 'gcalWriteCommand',
   'trustedContacts', 'userDiscordWebhook',
@@ -2564,6 +2569,11 @@ function readSettingsFromUI() {
     const n = parseInt($('gcal-lookahead').value, 10);
     state.gcalLookaheadDays = Number.isInteger(n) && n >= 30 && n <= 1825 ? n : 365;
   }
+  if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
+  if ($('event-alerts-lead')) {
+    const n = parseInt($('event-alerts-lead').value, 10);
+    state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
+  }
   if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
@@ -2657,6 +2667,8 @@ function writeSettingsToUI() {
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
+  if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
@@ -3542,6 +3554,7 @@ function init() {
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
+    'event-alerts-toggle', 'event-alerts-lead',
     'gcal-write-toggle', 'gcal-write-command',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
@@ -8463,6 +8476,12 @@ function formatOutboxAsMessageContent(item) {
   if (item.kind === 'reminder') {
     if (body) return body;
     return title ? `*(reminder)* ${title}` : '';
+  }
+  if (item.kind === 'event_alert') {
+    // Title carries the event name, body the code-built countdown — show both.
+    const head = title ? `**${title}**` : '';
+    if (head && body) return `${head}\n${body}`;
+    return head || body;
   }
   return body || title || '';
 }

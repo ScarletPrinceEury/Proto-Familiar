@@ -195,6 +195,7 @@ export async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
 // How an outbox item reads when pushed to my human's own Discord.
 function formatItemForPush({ kind, title, body }) {
   const lead = kind === 'reminder'        ? '⏰'
+             : kind === 'event_alert'     ? '🕑'
              : kind === 'triage'          ? '💭'
              : kind === 'outbound_alert'  ? '📤'
              : kind === 'crisis_resources' ? '🆘'

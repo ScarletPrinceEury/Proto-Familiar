@@ -414,6 +414,46 @@ def get_due_reminders(
     return [_node_row_to_dict(row) for row in rows]
 
 
+def mark_alerted(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    occurrence_date: str | None = None,
+) -> bool:
+    """Record that a lead-time alert for this event has been delivered, so
+    the Node-side scan never re-pings the same moment (survives restarts —
+    the outbox dedup alone forgets once an item is acknowledged).
+
+    One-time events stamp payload.alerted_at; a recurring occurrence stamps
+    payload.alerts[YYYY-MM-DD] (mirroring payload.resolutions' keying). An
+    atomic read-merge-write here, rather than payload replacement from the
+    caller, so a concurrent sync update can't be clobbered.
+
+    Returns True if the node existed, False otherwise.
+    """
+    row = conn.execute(
+        "SELECT payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    ).fetchone()
+    if row is None:
+        return False
+    payload = json.loads(row["payload_json"] or "{}")
+    ts = now_iso()
+    if occurrence_date:
+        alerts = payload.get("alerts")
+        if not isinstance(alerts, dict):
+            alerts = {}
+        alerts[occurrence_date] = ts
+        payload["alerts"] = alerts
+    else:
+        payload["alerted_at"] = ts
+    conn.execute(
+        "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(payload), ts, id),
+    )
+    return True
+
+
 def reminders_health(conn: sqlite3.Connection) -> dict[str, Any]:
     """Quick observability surface for the reminders scheduler.
 
