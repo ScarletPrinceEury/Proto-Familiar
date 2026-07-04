@@ -744,6 +744,9 @@ export const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly',
 export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'ward', 'relationship', 'custom']);
 export const VALID_FILENAME_RE           = /^[\w]+\.md$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Pondering entry uids are slug-shaped since the 0.8.x id overhaul
+// ("ponder-x7k2m3"); legacy UUIDs coexist. Path-safe: alnum+dash, bounded.
+const INTENT_UID_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 // Derive a filesystem-safe slug from a human title or memory bullet.
 // Entity-core stores significant memories as `YYYY-MM-DD_slug.md`. Without
@@ -1815,7 +1818,7 @@ export const TOOL_EXECUTORS = {
         keys,
         learnedAt: new Date().toISOString(),
       });
-      return `Saved to Tome (entry: ${uid ?? 'unknown'}).`;
+      return quietOk(`Saved to Tome (entry: ${uid ?? 'unknown'}).`, { id: uid });
     } catch (err) {
       return `Failed to save to Tome: ${err.message}`;
     }
@@ -1862,14 +1865,14 @@ export const TOOL_EXECUTORS = {
       // me/ward standing truths read back in their own voice so I know where it landed.
       if (reg !== 'episodic') {
         const whose = reg === 'me' ? 'about myself' : "about my human";
-        return `Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`;
+        return quietOk(`Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`);
       }
       // For significant memories, hand back the composite key — it's how
       // the entry is addressed later (update_memory / delete_memory take
       // YYYY-MM-DD_slug for significant).
       if (slug) {
         const today = new Date().toISOString().slice(0, 10);
-        return `Memory saved (significant/${today}_${slug}).`;
+        return quietOk(`Memory saved (significant/${today}_${slug}).`);
       }
       return 'Memory saved.';
     } catch (err) { return `Failed to save memory: ${err.message}`; }
@@ -1886,12 +1889,12 @@ export const TOOL_EXECUTORS = {
     if (content.length > 8192) return 'Failed to update identity: content exceeds 8 KB limit.';
     try {
       const result = await appendIdentity({ category, filename, content: content.trim() });
-      return result.ok ? 'Identity file updated.' : `Identity update failed: ${result.error ?? 'unknown error'}`;
+      return result.ok ? quietOk('Identity file updated.') : `Identity update failed: ${result.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 
   snooze_deferred_intent: async ({ uid, index, minutes = 60 }) => {
-    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid UUID.';
+    if (typeof uid !== 'string' || !INTENT_UID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid entry uid.';
     const idx = Number(index);
     if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
       return 'Failed to snooze intent: index must be a non-negative integer.';
@@ -1900,13 +1903,13 @@ export const TOOL_EXECUTORS = {
       const data = await snoozeIntent({ uid, index: idx, minutes: Number(minutes) || 60 });
       if (data.alreadyDone) return 'Intent was already filed — nothing to snooze.';
       return data.ok
-        ? `Intent snoozed until ${data.snooze_until} — it will resurface after that.`
+        ? quietOk(`Intent snoozed until ${data.snooze_until} — it will resurface after that.`)
         : `Snooze failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to snooze intent: ${err.message}`; }
   },
 
   acknowledge_deferred_intent: async ({ uid, index }) => {
-    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to acknowledge intent: uid must be a valid UUID.';
+    if (typeof uid !== 'string' || !INTENT_UID_RE.test(uid)) return 'Failed to acknowledge intent: uid must be a valid entry uid.';
     const idx = Number(index);
     if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
       return 'Failed to acknowledge intent: index must be a non-negative integer.';
@@ -1914,7 +1917,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await markIntentActedOn({ uid, index: idx });
       if (data.alreadyDone) return 'Intent was already marked as filed.';
-      return data.ok ? 'Deferred intent marked as filed.' : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
+      return data.ok ? quietOk('Deferred intent marked as filed.') : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
 
@@ -1923,7 +1926,7 @@ export const TOOL_EXECUTORS = {
     const result = await confirmConsentMemories(ids);
     pruneConsentPending(ids).catch(() => {});
     const n = result?.confirmed ?? ids.length;
-    return `Consent confirmed for ${n} record(s). They are now stored permanently.`;
+    return quietOk(`Consent confirmed for ${n} record(s). They are now stored permanently.`);
   },
 
   memory_drop_pending: async ({ ids }) => {
@@ -1931,14 +1934,14 @@ export const TOOL_EXECUTORS = {
     const result = await dropPendingMemories(ids);
     pruneConsentPending(ids).catch(() => {});
     const n = result?.dropped ?? ids.length;
-    return `Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`;
+    return quietOk(`Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`);
   },
 
   graduation_acknowledge: async ({ ids }) => {
     if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of graduation notice IDs.';
     const result = await acknowledgeGraduations(ids);
     const n = result?.acknowledged ?? ids.length;
-    return `Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`;
+    return quietOk(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
   },
 
   // ── Knowledge-editing executors ────────────────────────────────────
@@ -1956,7 +1959,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy: 'familiar-toolcall' });
       if (!result.ok) return `Failed to update memory: ${result.error ?? 'phylactery unavailable'}`;
-      return `Memory ${granularity}/${date} updated.`;
+      return quietOk(`Memory ${granularity}/${date} updated.`);
     } catch (err) { return `Failed to update memory: ${err.message}`; }
   },
 
@@ -1967,7 +1970,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
       if (!result.ok) return `Failed to delete memory: ${result.error ?? 'phylactery unavailable'}`;
-      return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+      return quietOk(`Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory: ${err.message}`; }
   },
 
@@ -2019,7 +2022,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await moveMemoryDate({ id: mid, date: String(date).trim() });
       if (!res.ok) return `Failed to move memory ${mid}: ${res.error}`;
-      return `Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`;
+      return quietOk(`Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`);
     } catch (err) { return `Failed to move memory: ${err.message}`; }
   },
 
@@ -2031,7 +2034,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await updateMemoryById({ id: mid, content: content.trim() });
       if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
-      return `Memory ${mid} updated.`;
+      return quietOk(`Memory ${mid} updated.`);
     } catch (err) { return `Failed to update memory by id: ${err.message}`; }
   },
 
@@ -2041,7 +2044,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await deleteMemoryById({ id: mid });
       if (!res.ok) return `Failed to delete memory ${mid}: ${res.error}`;
-      return `Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+      return quietOk(`Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
   },
 
@@ -2073,7 +2076,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await rewriteIdentitySection({ category, filename, section, content });
       if (!result.ok) return `Failed to rewrite section: ${result.error ?? 'phylactery unavailable'}`;
-      return `Section "${section}" of ${category}/${filename} rewritten.`;
+      return quietOk(`Section "${section}" of ${category}/${filename} rewritten.`);
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
   },
 
@@ -2133,7 +2136,7 @@ export const TOOL_EXECUTORS = {
       const result = await createGraphEdge({ fromId, toId, type, weight });
       if (!result.ok) return `Failed to create graph edge: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.edge?.id;
-      return `Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`;
+      return quietOk(`Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`, { id });
     } catch (err) { return `Failed to create graph edge: ${err.message}`; }
   },
 
@@ -2155,7 +2158,7 @@ export const TOOL_EXECUTORS = {
       }
       const result = await updateGraphNode({ id, label, description, type, audience: resolvedAudience });
       if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph node ${id} updated.`;
+      return quietOk(`Graph node ${id} updated.`);
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
   },
 
@@ -2163,7 +2166,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteGraphNode({ id });
       if (!result.ok) return `Failed to delete graph node: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph node ${id} deleted (snapshot saved).`;
+      return quietOk(`Graph node ${id} deleted (snapshot saved).`);
     } catch (err) { return `Failed to delete graph node: ${err.message}`; }
   },
 
@@ -2174,7 +2177,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await updateGraphEdge({ id, type, weight });
       if (!result.ok) return `Failed to update graph edge: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph edge ${id} updated.`;
+      return quietOk(`Graph edge ${id} updated.`);
     } catch (err) { return `Failed to update graph edge: ${err.message}`; }
   },
 
@@ -2182,7 +2185,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteGraphEdge({ id });
       if (!result.ok) return `Failed to delete graph edge: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph edge ${id} deleted (snapshot saved).`;
+      return quietOk(`Graph edge ${id} deleted (snapshot saved).`);
     } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
   },
 
@@ -2200,7 +2203,7 @@ export const TOOL_EXECUTORS = {
         ...(Object.keys(payload).length ? { payload } : {}),
       });
       if (data?.ok === false) return `Failed to add event: ${data.error ?? 'unknown error'}`;
-      return `Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`;
+      return quietOk(`Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`, { id: data.id });
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
@@ -2216,7 +2219,7 @@ export const TOOL_EXECUTORS = {
         ...(Object.keys(payload).length ? { payload } : {}),
       });
       if (data?.ok === false) return `Failed to add task: ${data.error ?? 'unknown error'}`;
-      return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
+      return quietOk(`Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`, { id: data.id });
     } catch (err) { return `Failed to add task: ${err.message}`; }
   },
 
@@ -2231,7 +2234,7 @@ export const TOOL_EXECUTORS = {
       };
       const data = await addScheduleNode({ type: 'task', label, when, end, payload });
       if (data?.ok === false) return `Failed to add need: ${data.error ?? 'unknown error'}`;
-      return `Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`;
+      return quietOk(`Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`, { id: data.id });
     } catch (err) { return `Failed to add need: ${err.message}`; }
   },
 
@@ -2241,7 +2244,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await updateScheduleNode({ id, when: when.trim() });
       if (data?.ok === false) return `Failed to assign a time: ${data.error ?? 'unknown error'}`;
-      return `Done — that task now has a time (${when.trim()}), so it'll come due and surface on its own instead of floating. (id: ${id})`;
+      return quietOk(`Done — that task now has a time (${when.trim()}), so it'll come due and surface on its own instead of floating. (id: ${id})`, { id });
     } catch (err) { return `Failed to assign a time: ${err.message}`; }
   },
 
@@ -2262,7 +2265,7 @@ export const TOOL_EXECUTORS = {
       payload.snooze_until = until;
       const data = await updateScheduleNode({ id, payload });
       if (data?.ok === false) return `Failed to snooze task: ${data.error ?? 'unknown error'}`;
-      return `Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`;
+      return quietOk(`Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`, { id });
     } catch (err) { return `Failed to snooze task: ${err.message}`; }
   },
 
@@ -2276,7 +2279,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'reminder', label, when, payload });
       if (data?.ok === false) return `Failed to add reminder: ${data.error ?? 'unknown error'}`;
-      return `Reminder set (id: ${data.id}). It will be delivered into the chat at the chosen time (and pushed to {{user}}'s Discord when configured).`;
+      return quietOk(`Reminder set (id: ${data.id}). It will be delivered into the chat at the chosen time (and pushed to {{user}}'s Discord when configured).`, { id: data.id });
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
@@ -2288,7 +2291,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'phase', label, when, end, payload });
       if (data?.ok === false) return `Failed to add phase: ${data.error ?? 'unknown error'}`;
-      return `Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`;
+      return quietOk(`Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`, { id: data.id });
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -2305,8 +2308,8 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
       if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
       return occurrence_date
-        ? `Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`
-        : `Marked ${id} as ${resolution}.`;
+        ? quietOk(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`)
+        : quietOk(`Marked ${id} as ${resolution}.`);
     } catch (err) { return `Failed to resolve: ${err.message}`; }
   },
 
@@ -2317,7 +2320,7 @@ export const TOOL_EXECUTORS = {
       const data = await deleteScheduleNode({ id: sid });
       if (!data?.ok) return `I couldn't remove that schedule item: ${data?.error ?? 'Unruh unavailable'}.`;
       if (data.deleted === false) return `There's no schedule item with id ${sid} — nothing to remove (it may already be gone).`;
-      return `Removed schedule item ${sid}.`;
+      return quietOk(`Removed schedule item ${sid}.`);
     } catch (err) { return `I couldn't remove that schedule item: ${err.message}`; }
   },
 
@@ -2352,7 +2355,7 @@ export const TOOL_EXECUTORS = {
       const data = await addScheduleEdge({ src: s, dst: d, kind: k, payload: Object.keys(payload).length ? payload : undefined });
       if (!data?.ok) return `I couldn't connect those items: ${data?.error ?? 'Unruh unavailable'} (one of the ids may be stale).`;
       const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
-      return `Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`;
+      return quietOk(`Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`, { id: data.id });
     } catch (err) { return `I couldn't connect those items: ${err.message}`; }
   },
 
@@ -2482,7 +2485,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await bumpInterest({ topic, delta: d, source: 'familiar_tool' });
       if (data?.ok === false) return `Failed to bump interest: ${data.error ?? 'unknown error'}`;
-      return `Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`;
+      return quietOk(`Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`);
     } catch (err) { return `Failed to bump interest: ${err.message}`; }
   },
 
@@ -2491,7 +2494,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await setStandingInterest({ topic, weight });
       if (data?.ok === false) return `Failed to set standing value: ${data.error ?? 'unknown error'}`;
-      return `"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`;
+      return quietOk(`"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`);
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
   },
 
@@ -2894,6 +2897,39 @@ function substituteToolMacros(tool, settings) {
 }
 
 /**
+ * Quiet-success marker (0.8.x token economy). A WRITE executor's success
+ * branch returns quietOk(fullText, {id}) instead of prose; the result
+ * boundary collapses it to "ok" (+ the new id when downstream calls need
+ * it) — because a success confirmation the model already implied by making
+ * the call carries no new information, while its tokens recur every turn
+ * the transcript survives. The contract that keeps this safe:
+ *   - ONLY genuine success branches call quietOk. Failures, not-found
+ *     results, and partial outcomes keep returning full prose, loudly —
+ *     the boundary never classifies text, so a failure can never be
+ *     mistaken for success (the acknowledge-≠-acting lesson, applied to
+ *     results).
+ *   - READ tools (recall, schedule_find, look_up, …) never use it — their
+ *     result IS the payload.
+ *   - Tools whose success text is itself load-bearing (safety mirrors like
+ *     contact_trusted_person, high-stakes rarities like
+ *     schedule_push_to_google, data-returning writes like schedule_export)
+ *     stay loud by simply not opting in.
+ * Debug escape hatch: PROTO_FAMILIAR_QUIET_TOOLS_DISABLED=1 renders the
+ * full text everywhere.
+ */
+export function quietOk(fullText, { id } = {}) {
+  return { __quietOk: true, fullText: String(fullText ?? 'ok'), id: id ?? null };
+}
+
+function renderToolResult(raw) {
+  if (raw && typeof raw === 'object' && raw.__quietOk === true) {
+    if (process.env.PROTO_FAMILIAR_QUIET_TOOLS_DISABLED === '1') return raw.fullText;
+    return raw.id ? `ok (id: ${raw.id})` : 'ok';
+  }
+  return String(raw);
+}
+
+/**
  * Execute a tool by name. Returns the result string. Never throws —
  * a tool whose backing peer is down (or whose executor bugs out)
  * returns a structured failure INTO the loop, not a 500 out of the
@@ -2904,7 +2940,7 @@ export async function executeToolCall(name, argsJson, ctx = {}) {
     try {
       const args = argsJson ? JSON.parse(argsJson) : {};
       const t0   = Date.now();
-      const out  = String(await TOOL_EXECUTORS[name](args, ctx));
+      const out  = renderToolResult(await TOOL_EXECUTORS[name](args, ctx));
       console.log(`[tools] ${name} ok in ${Date.now() - t0}ms`);
       // Tool results flow back to me as tool-role messages I read. Resolve
       // {{user}} / {{char}} here, once, at the boundary — so no executor has
