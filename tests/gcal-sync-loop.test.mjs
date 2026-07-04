@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runOneGcalSyncTick, clampSyncIntervalMs, DEFAULT_SYNC_INTERVAL_MS } from '../gcal-sync-loop.js';
+import {
+  runOneGcalSyncTick, clampSyncIntervalMs, DEFAULT_SYNC_INTERVAL_MS,
+  startGcalSyncLoop, stopGcalSyncLoop, FAILURE_RETRY_MS,
+} from '../gcal-sync-loop.js';
 
 test('clampSyncIntervalMs: floors, ceils, and defaults', () => {
   assert.equal(clampSyncIntervalMs(60 * 60_000), 60 * 60_000);
@@ -59,4 +62,40 @@ test('ingest failure is reported, not thrown', async () => {
   });
   assert.equal(r.synced, false);
   assert.equal(r.reason, 'ingest_failed');
+});
+
+test('a failed sync retries on the short leash; success consumes the full interval', async () => {
+  let t = 0;
+  let ok = false;
+  const attempts = [];
+  startGcalSyncLoop({
+    baseTickMs: 5,
+    now: () => t,
+    isEnabled: async () => true,
+    getIntervalMs: async () => 60 * 60_000,
+    fetchSource: async () => { attempts.push(t); return ok ? { ok: true, icsText: 'x' } : { ok: false, error: 'boom' }; },
+    ingest: async () => ({ ok: true, new: [] }),
+  });
+  const settle = () => new Promise(r => setTimeout(r, 40));
+  try {
+    await settle();
+    assert.equal(attempts.length, 1, 'boot fire attempted once');
+    await settle();
+    assert.equal(attempts.length, 1, 'a failure does not re-attempt inside the leash');
+    t = FAILURE_RETRY_MS + 1;
+    await settle();
+    assert.equal(attempts.length, 2, 'retried once the failure leash elapsed — not the full hour');
+    ok = true;
+    t += FAILURE_RETRY_MS + 1;
+    await settle();
+    assert.equal(attempts.length, 3, 'second retry succeeded');
+    t += 30 * 60_000;
+    await settle();
+    assert.equal(attempts.length, 3, 'success consumed the full interval');
+    t += 31 * 60_000;
+    await settle();
+    assert.equal(attempts.length, 4, 'due again after the interval');
+  } finally {
+    await stopGcalSyncLoop();
+  }
 });

@@ -775,6 +775,12 @@
           <input type="number" id="gcal-lookahead" value="365" min="30" max="1825" step="1" style="width:6em">
           <div class="field-hint">How far ahead each pull fetches events — a year by default, so appointments months out are still picked up. (Clamped 30–1825 days.) The Familiar's chat briefing still focuses on the coming week; the full range shows in the schedule/Map view.</div>
         </div>
+
+        <div class="field" style="margin-top:10px">
+          <label>Sync health</label>
+          <div class="field-hint" id="gcal-sync-status">No sync has run yet.</div>
+          <button type="button" id="gcal-sync-now" class="btn-secondary" style="margin-top:6px">↻ Sync now</button>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" id="gcal-modal-cancel" type="button">Close</button>

@@ -390,10 +390,56 @@ function closeWebSearchModal() {
 function openGcalModal() {
   writeSettingsToUI();       // reflect current state into the modal fields
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
+  refreshGcalSyncStatus();   // "last sync / last error" health line
   $('gcal-modal')?.classList.remove('hidden');
 }
 function closeGcalModal() {
   $('gcal-modal')?.classList.add('hidden');
+}
+
+// The sync-health line in the gcal modal: when the last real attempt ran,
+// whether it worked, and the exact error when it didn't — so a dead URL or
+// an expired Google token stops being invisible.
+async function refreshGcalSyncStatus() {
+  const el = $('gcal-sync-status');
+  if (!el) return;
+  try {
+    const s = await (await fetch('/api/gcal/sync-status')).json();
+    if (!s || !s.lastAttemptAt) { el.textContent = 'No sync has run yet.'; el.style.color = ''; return; }
+    const ago = (iso) => {
+      const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins} min ago`;
+      const h = Math.round(mins / 60);
+      return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+    };
+    if (s.lastOutcome === 'ok') {
+      const c = s.lastChanges || {};
+      const parts = [c.new && `${c.new} new`, c.updated && `${c.updated} updated`, c.removed && `${c.removed} removed`].filter(Boolean);
+      el.textContent = `✓ Last synced ${ago(s.lastSuccessAt || s.lastAttemptAt)}${parts.length ? ` (${parts.join(', ')})` : ' (no changes)'}`;
+      el.style.color = 'var(--accent, #3a7)';
+    } else {
+      const okNote = s.lastSuccessAt ? ` Last success: ${ago(s.lastSuccessAt)}.` : ' It has never succeeded.';
+      el.textContent = `⚠ Last attempt (${ago(s.lastAttemptAt)}) failed: ${s.lastError || s.lastOutcome}.${okNote}`;
+      el.style.color = 'var(--danger, #c55)';
+    }
+  } catch {
+    el.textContent = 'Could not read sync status.';
+    el.style.color = '';
+  }
+}
+
+async function gcalSyncNow() {
+  const el = $('gcal-sync-status');
+  try {
+    await fetch('/api/gcal/sync-now', { method: 'POST' });
+    if (el) { el.textContent = 'Sync requested — it runs within the next minute…'; el.style.color = ''; }
+    // Poll a few times so the outcome shows without reopening the modal.
+    let tries = 0;
+    const poll = setInterval(async () => { tries++; await refreshGcalSyncStatus(); if (tries > 30) clearInterval(poll); }, 4000);
+  } catch {
+    if (el) el.textContent = 'Could not request a sync.';
+  }
 }
 
 // Show the API panel only for the API backend; the Google engine-id field only
@@ -3473,6 +3519,7 @@ function init() {
   $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
   $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
   $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  $('gcal-sync-now')?.addEventListener('click', gcalSyncNow);
   $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
   // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });

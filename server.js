@@ -51,7 +51,8 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
-import { startGcalSyncLoop, stopGcalSyncLoop } from './gcal-sync-loop.js';
+import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
+import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
 import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
 import {
   parseCredentials, buildAuthUrl, exchangeCode,
@@ -2399,6 +2400,20 @@ app.post('/api/gcal/google/disconnect', async (_req, res) => {
   res.json({ ok: true, connected: false });
 });
 
+// Last real sync attempt + outcome (written by the sync loop's onTick), so
+// the modal can show "last synced 20 min ago" / "failing since Tuesday:
+// invalid_grant" instead of pretending everything is fine.
+app.get('/api/gcal/sync-status', async (_req, res) => {
+  res.json((await readSyncStatus()) ?? {});
+});
+
+// "Sync now": clear the cadence gate so the next loop wake (≤60s away)
+// runs a real sync regardless of the configured interval.
+app.post('/api/gcal/sync-now', (_req, res) => {
+  resetGcalSyncCadence();
+  res.json({ ok: true, note: 'sync will run within the next minute' });
+});
+
 // Schedule
 app.get('/api/temporal/schedule', async (req, res) => {
   // Default to a wide ward-local window (yesterday → the configured look-ahead,
@@ -3275,6 +3290,10 @@ function startGcalSync() {
     // first import is observable without coupling the loop to the cue.
     routeNew: async (ids) => { if (ids.length) console.log(`[gcal] ${ids.length} new calendar item(s) flagged for projection`); },
     onTick: (r) => {
+      // Persist every real attempt so the UI can show "last sync / last
+      // error" — a dead URL or expired token must be visible, not just a
+      // console line ('disabled'/'not_due' wakes are skipped inside).
+      recordSyncOutcome(r).catch(() => {});
       if (r.synced) {
         const parts = [];
         if (r.new?.length)     parts.push(`${r.new.length} new`);
@@ -3283,7 +3302,7 @@ function startGcalSync() {
         if (parts.length) console.log(`[gcal] synced — ${parts.join(', ')}`);
         for (const uid of r.complex_series || []) console.log(`[gcal] RRULE for "${uid}" too complex to map as a series — materialised next 90 days as individual events`);
       } else if (r.reason === 'fetch_failed' || r.reason === 'ingest_failed') {
-        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error}`);
+        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error} — retrying within 5 minutes`);
       }
       // 'disabled' / 'not_due' are silent.
     },
