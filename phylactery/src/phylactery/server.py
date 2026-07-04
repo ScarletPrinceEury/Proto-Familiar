@@ -626,6 +626,16 @@ def graph_edge_delete(
 
 
 @mcp.tool()
+def graph_ids_to_slugs() -> dict[str, Any]:
+    """I convert every old-style hex id in my knowledge graph (nodes + edges)
+    into a readable slug, updating all references and embeddings in one
+    transaction. Mechanical and idempotent. Returns counts and the old→new
+    mapping.
+    """
+    return graph.ids_to_slugs(conn=_c())
+
+
+@mcp.tool()
 def graph_full(
     type: Optional[str] = None,
     limit: Optional[int] = None,

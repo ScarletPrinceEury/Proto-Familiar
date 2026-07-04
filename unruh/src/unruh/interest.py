@@ -49,7 +49,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import new_id, now_iso
+from .db import insert_with_slug_retry, new_id, now_iso
 
 # ── Allowed values. Surfaced as constants so tests + the MCP layer
 # can validate against them without re-typing strings. ──────────────
@@ -170,16 +170,17 @@ def _insert_node(
             f"unknown interest node type {node_type!r}; "
             f"expected one of {sorted(INTEREST_NODE_TYPES)}"
         )
-    node_id = new_id()
-    conn.execute(
+    # Readable slug id from the topic label — retried on collision.
+    return insert_with_slug_retry(
+        conn,
         """INSERT INTO nodes
                (id, layer, type, label, payload_json, when_ts, end_ts,
                 resolution, weight, last_touched, created_at, updated_at)
            VALUES (?, 'interest', ?, ?, ?, NULL, NULL,
                    NULL, ?, ?, ?, ?)""",
-        (node_id, node_type, label, json.dumps(payload or {}), weight, ts, ts, ts),
+        lambda nid: (nid, node_type, label, json.dumps(payload or {}), weight, ts, ts, ts),
+        label=label, kind=node_type,
     )
-    return node_id
 
 
 def _insert_edge(
@@ -198,13 +199,13 @@ def _insert_edge(
             f"unknown interest edge kind {kind!r}; "
             f"expected one of {sorted(INTEREST_EDGE_KINDS)}"
         )
-    edge_id = new_id()
-    conn.execute(
+    return insert_with_slug_retry(
+        conn,
         """INSERT INTO edges (id, src_id, dst_id, kind, payload_json, created_at)
            VALUES (?, ?, ?, ?, '{}', ?)""",
-        (edge_id, src_id, dst_id, kind, ts),
+        lambda eid: (eid, src_id, dst_id, kind, ts),
+        label=None, kind=kind,
     )
-    return edge_id
 
 
 def record(

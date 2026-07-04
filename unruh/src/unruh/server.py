@@ -39,7 +39,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from unruh import __version__
-from unruh.db import get_conn, now_iso
+from unruh.db import get_conn, ids_to_slugs, now_iso
 from unruh import schedule as sched
 from unruh import interest as interests
 from unruh import handoff as handoffs
@@ -419,6 +419,48 @@ def gcal_ingest(
             )
     except Exception as e:  # parse/DB failure must degrade, never crash the loop
         return _err(f"gcal_ingest failed: {e}", code="ingest_error")
+
+
+@mcp.tool()
+def unruh_ids_to_slugs() -> dict[str, Any]:
+    """I convert every old-style hex id in my temporal store (schedule and
+    interest nodes + edges) into a readable slug, updating all internal
+    references in one transaction. Mechanical and idempotent — running it
+    twice changes nothing more. Returns counts and the old→new mapping so
+    Proto-Familiar can update its own references.
+    """
+    try:
+        with get_conn() as conn:
+            return {"ok": True, **ids_to_slugs(conn)}
+    except Exception as e:
+        return _err(f"ids_to_slugs failed: {e}", code="migrate_error")
+
+
+@mcp.tool()
+def schedule_find(query: str, include_resolved: bool = False, limit: int = 20) -> dict[str, Any]:
+    """I use this to search my human's WHOLE schedule by name — any time
+    horizon, not just the week my briefing shows. It's how I find the id of
+    anything I can't currently see: a calendar appointment months out, an old
+    recurring series, a task that scrolled out of my context. I search, read
+    the matches' ids, then act (export, link, re-time, resolve).
+
+    Args:
+        query: substring to match against labels, case-insensitive.
+        include_resolved: True to also see done/cancelled items
+            (answers "did I already handle X?").
+        limit: max matches (default 20).
+
+    Returns: {ok: True, matches: [{id, type, label, when?, end?, resolution?}]}
+    — soonest-upcoming first, then undated, then past.
+    """
+    try:
+        with get_conn() as conn:
+            matches = sched.find_nodes(
+                conn, query=query, include_resolved=include_resolved, limit=limit,
+            )
+        return {"ok": True, "matches": matches}
+    except ValueError as e:
+        return _err(str(e))
 
 
 @mcp.tool()

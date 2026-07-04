@@ -20,7 +20,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, mkdirSync } from 'fs';
-import { randomUUID } from 'crypto';
+import { outboxSlugId, isLegacyId } from './slug-ids.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -85,7 +85,9 @@ export async function enqueueOutbox({ kind, originId, title, body = '', ts, meta
       const dup = items.find(i => !i.acknowledged && i.kind === kind && i.originId === originId);
       if (dup) return { id: dup.id, deduped: true };
     }
-    const id = randomUUID();
+    // Readable id ("relay-p4n8w2") — the kind IS the context when the
+    // Familiar greps this file to answer "did my message go out?".
+    const id = outboxSlugId(kind);
     // Spread meta first so core fields (id, kind, acknowledged, etc.) always win.
     const item = {
       ...(meta && typeof meta === 'object' ? meta : {}),
@@ -145,5 +147,25 @@ export async function updateOutboxMeta({ id, meta, tomesDir = DEFAULT_TOMES_DIR 
     Object.assign(item, meta);
     await writeAll(tomesDir, items);
     return { ok: true, found: true };
+  });
+}
+
+
+/**
+ * One-shot id tidy (0.8.x overhaul): re-key legacy-UUID item ids to readable
+ * slugs, and remap originIds through `mapping` (old→new schedule node ids
+ * from Unruh's re-key) so reminder dedup keys stay consistent. Runs under
+ * the same lock as every other outbox write. Returns counts.
+ */
+export async function rekeyOutboxIds({ mapping = {}, tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  return withLock(async () => {
+    const items = await readAll(tomesDir);
+    let ids = 0, origins = 0;
+    for (const it of items) {
+      if (it && isLegacyId(it.id)) { it.id = outboxSlugId(it.kind); ids++; }
+      if (it && it.originId && mapping[it.originId]) { it.originId = mapping[it.originId]; origins++; }
+    }
+    if (ids || origins) await writeAll(tomesDir, items);
+    return { ids, origins };
   });
 }

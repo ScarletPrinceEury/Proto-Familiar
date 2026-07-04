@@ -1562,6 +1562,47 @@ load-bearing invariant *"messages[0..injectedAt-1] is the same
 reference as the input"* — without it, the prefix-cache claim is
 hollow.
 
+## Id scheme (0.8.x overhaul) — readable slugs, opaque everywhere
+
+Model-facing ids are **label-derived word slugs with a short random
+suffix** — `dentist-k3`, `weekly-cleaning-8f`, `sister-mira-k3`; label-less
+rows (edges, handoffs) lean on their kind (`causes-x7k2`). Generated at the
+three id seams (`unruh/db.slug_id`, `phylactery/db.slug_id`,
+`pondering.shortPonderUid`), collision-checked at insert (`insert_with_slug_retry`
+regrows the suffix, uuid4 as the final fallback). Why: a 32-hex uuid costs
+~16 tokens per legend line and can't be read or reliably retyped by the
+model; a slug costs ~3 and self-documents in tool calls.
+
+**The invariants:**
+- **Ids are opaque TEXT everywhere.** Nothing parses id shape — old uuid4-hex
+  ids coexist with slugs forever; there is no migration and none is needed.
+  Never write code that infers meaning from an id's format (the label in a
+  slug is a *mnemonic snapshot at creation*, not a live pointer — renames
+  don't re-key).
+- **Path-facing validators accept both shapes.** `isValidEntryUid` /
+  `VALID_GRAPH_ID_RE` / the export-endpoint check are `alnum+dash, bounded
+  length` — traversal-proof without assuming UUID. Session ids, tome ids, and
+  job ids remain strict UUIDs (`isValidUUID`).
+- **Memories stay integer ids** (Phylactery autoincrement) — already cheap,
+  already surfaced by recall/list/read; not part of this scheme.
+- **Discovery is a capability, not a legend.** The `[schedule ids]` /
+  `[graph ids]` legends cover what's in view; `schedule_find` (label search,
+  any horizon) is how the Familiar reaches everything else — see below.
+- **Sessions and the outbox are model-facing too** (the Familiar browses
+  `logs/` and greps `tomes/.outbox.json` via list_files/read_file), so they
+  slug as well: session ids are `s-YYYYMMDD-xxxx` (the log FILENAME says
+  which day it was; `get_session_info` returns the current one), outbox item
+  ids are `<kind>-xxxxxx`. Session gates accept both shapes
+  (`isValidSessionId`). Old session LOGS keep their historical uuid names —
+  renaming archives would break cross-store references.
+- **`convert_ids_to_slugs`** (Familiar tool) is the one-shot mechanical
+  re-key for everything else: Unruh nodes/edges (`unruh_ids_to_slugs`, one
+  transaction, FK-safe), Phylactery graph (`graph_ids_to_slugs`, incl.
+  embedding rows), pondering uids, outbox item ids — and it follows the
+  node-id mapping through the JSON stores that reference them (outbox
+  originIds, projection-cue aging state, surface-event task_ids). Idempotent;
+  no LLM judgment anywhere.
+
 ## Significant memories — the composite-key contract (regression guard)
 
 This contract broke once already, silently, as a side effect of a fix.

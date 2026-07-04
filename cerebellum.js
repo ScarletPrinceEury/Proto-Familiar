@@ -49,7 +49,8 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode,
+  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes,
+  convertUnruhIds, convertGraphIds,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -61,17 +62,19 @@ import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
-import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
+import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
+import { rekeyCueState } from './gcal-projection.js';
+import { rekeyPonderingUids } from './pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './gcal-source.js';
 import {
   readToken as readGoogleToken, writeToken as writeGoogleToken,
   getFreshAccessToken as getGoogleAccessToken, buildEventResource, insertEvent as insertGoogleEvent,
   isConnected as googleConnected,
 } from './gcal-google.js';
-import { getRecentOfferInfo } from './surface-events.js';
+import { getRecentOfferInfo, rekeySurfaceEventIds } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1463,6 +1466,30 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_find',
+      description: 'I search {{user}}\'s WHOLE schedule by name — any time horizon, not just the week my [Temporal Context] briefing shows. My briefing only legends what\'s near; the store holds far more (like a year of synced calendar events), and this is how I reach any of it: when {{user}} asks "when\'s my dentist appointment?", when I need the id of something months out to export or link it, or when I want to check whether something already exists before adding a duplicate. I search, read the matches\' ids, then act. With include_resolved I can also answer "did I already handle X?".',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Part of the item\'s name, case-insensitive (e.g. "dentist").' },
+          include_resolved: { type: 'boolean', description: 'true to also see done/cancelled items. Default false.' },
+          limit: { type: 'number', description: 'Max matches (default 20).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'convert_ids_to_slugs',
+      description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my ponderings, and the outbox, with every internal cross-reference updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_push_to_google',
       description: 'I push one of {{user}}\'s schedule items INTO their real Google Calendar — the one path I have that actually changes their calendar, not just my own sense of it. Because it mutates their real calendar, I treat it with care: I confirm with {{user}} first that they want it added, and I only ADD a new entry (I never edit or delete their existing Google events). I pass the node `id`; the entry is generated from its stored fields in code (I never type calendar data myself) and imported through the tool {{user}} set up. This only appears when {{user}} has explicitly enabled calendar write-back, so its presence means they\'ve opted in — but I still ask before each push, since it lands in their actual calendar.',
       parameters: {
@@ -1768,6 +1795,7 @@ export const TOOL_EXECUTORS = {
   }),
 
   get_session_info: (_args, ctx) => JSON.stringify({
+    sessionId:    ctx?.sessionInfo?.sessionId ?? null,  // = this session's log filename in logs/
     startedAt:    ctx?.sessionInfo?.startedAt ?? null,
     messageCount: ctx?.sessionInfo?.messageCount ?? null,
     provider:     ctx?.sessionInfo?.provider ?? null,
@@ -2345,6 +2373,62 @@ export const TOOL_EXECUTORS = {
         `I share both links with {{user}} so they can pick whichever suits their device. (I only read their calendar — adding this is their choice, not a change I make to it.)`,
       ].join('\n');
     } catch (err) { return `I couldn't build a calendar file for that item: ${err.message}`; }
+  },
+
+  schedule_find: async ({ query, include_resolved, limit } = {}) => {
+    const q = String(query ?? '').trim();
+    if (!q) return 'I need part of the item\'s name to search for.';
+    try {
+      const data = await findScheduleNodes({
+        query: q,
+        includeResolved: include_resolved === true,
+        limit: Number.isFinite(Number(limit)) ? Number(limit) : 20,
+      });
+      if (!data?.ok) return `I couldn't search the schedule: ${data?.error ?? 'Unruh unavailable'}.`;
+      const matches = Array.isArray(data.matches) ? data.matches : [];
+      if (!matches.length) return `Nothing on the schedule matches "${q}"${include_resolved ? '' : ' (unresolved items only — pass include_resolved to search finished ones too)'}.`;
+      const lines = matches.map(m => {
+        const when = m.when ? (relativeTime(m.when, Date.now()) || m.when) : 'no time set';
+        const res = m.resolution ? ` [${m.resolution}]` : '';
+        return `- ${m.label} [${m.type}] — ${when}${res} (id: ${m.id})`;
+      });
+      return [`${matches.length} match(es) for "${q}":`, ...lines].join('\n');
+    } catch (err) { return `I couldn't search the schedule: ${err.message}`; }
+  },
+
+  convert_ids_to_slugs: async () => {
+    const report = [];
+    try {
+      // 1. Unruh (schedule + interests) — returns the node-id mapping that
+      //    Proto-Familiar's own JSON stores need to follow.
+      const unruh = await convertUnruhIds();
+      if (unruh?.ok) {
+        report.push(`temporal store: ${unruh.nodes ?? 0} node(s) + ${unruh.edges ?? 0} link(s) renamed`);
+        const mapping = unruh.mapping && typeof unruh.mapping === 'object' ? unruh.mapping : {};
+        if (Object.keys(mapping).length) {
+          const ob = await rekeyOutboxIds({ mapping }).catch(() => null);
+          const cue = await rekeyCueState(mapping).catch(() => null);
+          const se = await rekeySurfaceEventIds(mapping).catch(() => null);
+          report.push(`cross-references followed: outbox ${ob?.origins ?? 0}, calendar-cue ${cue?.moved ?? 0}, surface-history ${se?.moved ?? 0}`);
+        }
+      } else {
+        report.push(`temporal store: skipped (${unruh?.error ?? 'unavailable'})`);
+      }
+      // 2. Knowledge graph.
+      const graph = await convertGraphIds();
+      report.push(graph?.ok
+        ? `knowledge graph: ${graph.nodes ?? 0} node(s) + ${graph.edges ?? 0} edge(s) renamed`
+        : `knowledge graph: skipped (${graph?.error ?? 'unavailable'})`);
+      // 3. Ponderings + outbox item ids (local stores).
+      const pond = await rekeyPonderingUids().catch(err => ({ error: err?.message }));
+      report.push(pond?.error ? `ponderings: skipped (${pond.error})` : `ponderings: ${pond?.moved ?? 0} entry uid(s) shortened`);
+      const obIds = await rekeyOutboxIds({}).catch(() => null);
+      report.push(`outbox: ${obIds?.ids ?? 0} item id(s) shortened`);
+      report.push('Done. Old-style ids are gone from my active stores; session logs keep their historical names. Running this again is harmless.');
+      return report.join('\n');
+    } catch (err) {
+      return `The id tidy stopped partway: ${err.message}. Nothing was lost — every completed step is consistent, and running me again finishes the rest.`;
+    }
   },
 
   schedule_push_to_google: async ({ id } = {}) => {

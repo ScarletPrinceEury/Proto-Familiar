@@ -318,7 +318,7 @@ export function formatTemporalContext(payload) {
   }
   if (idLegend.length) {
     blocks.push([
-      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s)]',
+      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s). Anything NOT listed here — an appointment months out, an old series — I find with schedule_find(name)]',
       ...idLegend,
       // §5 legibility: a 📅 item is externally managed. Not forbidden — the
       // sync just owns its time/title (a hand-edit there loses on the next
