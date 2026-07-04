@@ -1,0 +1,199 @@
+/**
+ * Context-sensitive tool surfacing (docs/tool-surfacing-build-spec.md).
+ *
+ * Decides WHICH tool modules travel on a turn — never what any tool does.
+ * All decisions are cheap code (regex + block markers + a sticky TTL);
+ * no LLM ever picks the tool set. The safety floor: CORE modules (incl.
+ * both crisis tools and request_tools, the Familiar's own hand on the
+ * toolbox lid) are ALWAYS advertised, regardless of triggers or settings.
+ *
+ * ⚠ Safety-adjacent per CLAUDE.md: changes to CORE membership or the
+ * crisis rules need human sign-off.
+ *
+ * Recovery contract (the reason auto-surfacing is legal at all under the
+ * "reachable BY the Familiar" rule): request_tools carries the full module
+ * index in its always-visible description, and pulls a module's tools into
+ * the SAME turn (next round of the tool loop). A miss costs one round.
+ */
+
+// ── Module map: every Familiar-facing tool belongs to exactly one ──────
+// module. A parity test asserts full coverage of BUILTIN_TOOLS, so adding
+// a tool without a module fails the suite instead of silently vanishing.
+export const TOOL_MODULES = {
+  // core — always advertised (time, memory in/out, id discovery, filing,
+  // interests (human's call: they're character, not task), safety, the lid)
+  get_datetime: 'core', get_session_info: 'core',
+  recall: 'core', save_memory: 'core', save_to_tome: 'core',
+  update_identity: 'core', schedule_find: 'core',
+  interest_bump: 'core', interest_set_standing: 'core',
+  contact_trusted_person: 'core', show_crisis_resources: 'core',
+  get_trusted_contacts: 'core',   // pairs with contact_trusted_person
+  request_tools: 'core',
+
+  // schedule, split read/write (human's call: reads need result-reading,
+  // writes don't — and they trigger differently)
+  schedule_export: 'schedule-read',
+  schedule_add_event: 'schedule-write', schedule_add_task: 'schedule-write',
+  schedule_add_reminder: 'schedule-write', schedule_add_phase: 'schedule-write',
+  schedule_add_need: 'schedule-write', schedule_assign_time: 'schedule-write',
+  schedule_snooze_task: 'schedule-write', schedule_resolve: 'schedule-write',
+  schedule_delete: 'schedule-write', schedule_link: 'schedule-write',
+  schedule_push_to_google: 'schedule-write',  // keeps its gcalWriteEnabled gate too
+
+  'memory-edit': undefined, // (namespace note only — real entries below)
+  read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',
+  update_memory: 'memory-edit', update_memory_by_id: 'memory-edit',
+  delete_memory: 'memory-edit', delete_memory_by_id: 'memory-edit',
+  list_memories: 'memory-edit', move_memory_date: 'memory-edit',
+  memorize_now: 'memory-edit',
+  rewrite_identity_section: 'memory-edit',
+
+  create_graph_node: 'graph', find_graph_node: 'graph',
+  update_graph_node: 'graph', delete_graph_node: 'graph',
+  create_graph_edge: 'graph', find_graph_edges: 'graph',
+  update_graph_edge: 'graph', delete_graph_edge: 'graph',
+
+  village_lookup: 'village', village_upsert: 'village',
+  relay_message: 'village',
+
+  web_search: 'web', read_webpage: 'web', look_up: 'web',
+
+  acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
+  memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
+  graduation_acknowledge: 'acks',
+
+  list_files: 'files', read_file: 'files',
+
+  convert_ids_to_slugs: 'maintenance',
+};
+delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
+
+export const CORE = 'core';
+export const ALL_MODULES = [...new Set(Object.values(TOOL_MODULES))];
+
+// Human-readable index for request_tools' description — generated from the
+// map so it can't drift from reality.
+export const MODULE_INDEX =
+  'schedule-write (add/re-time/snooze/resolve/delete/link calendar items, push to Google), ' +
+  'schedule-read (export an item as .ics/link), ' +
+  'memory-edit (read/update/delete/list/move my memories, memorize-now, rewrite identity sections), ' +
+  'graph (my knowledge web: nodes + relationships), ' +
+  'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
+  'web (search, read pages, look up facts), ' +
+  'acks (file deferred intents, confirm/drop memory consent, graduation notices), ' +
+  'files (list/read my own folder), ' +
+  'maintenance (id tidy-up)';
+
+// ── Triggers ───────────────────────────────────────────────────────────
+// A module surfaces when its regex matches the turn text (user message +
+// the Familiar's previous reply) OR a marker block is present in the
+// injected dynamic context. Deliberately "somewhat generous" (human's
+// words): a false positive costs a few hundred tokens once; a false
+// negative costs one request_tools round. Tuned from the miss log.
+const TRIGGERS = {
+  'schedule-write': {
+    text: /\b(remind(er)?s?|schedul\w*|calendar|appointment|task|to-?dos?|deadline|due|postpone|resched\w*|cancel\w*|snooze|every (day|week|month|morning|night)|routine|phase|tonight|tomorrow|next (week|month)|at \d{1,2}([:.]\d{2})?\s?(am|pm)\b|\d{1,2}([:.]\d{2})\s?(am|pm)?\b|done with|finished|habit|meal|meds|medication)\b/i,
+    // Blocks that invite schedule ACTION travel with the write tools.
+    blocks: ['[Surface candidates', "[New on my human's calendar"],
+  },
+  'schedule-read': {
+    text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link))\b/i,
+    blocks: [],
+  },
+  'memory-edit': {
+    text: /\b(memor(y|ies)|remember(ed)?\b|forget|you (said|told|mentioned)|last (time|week|month)|back (then|when)|journal|diary|wrong date|that day)\b/i,
+    blocks: [],
+  },
+  graph: {
+    text: /\b(relationship(s)? (between|with)|connected|knows?\b|who (is|was) \w+ to|graph|web of)\b/i,
+    blocks: [],
+  },
+  village: {
+    text: /\b(discord|relay|dm\b|message (to|for|from)|tell (them|him|her)|villager|the village|send \w+ a)\b/i,
+    blocks: ['[CARE CHECK'],  // trusted-contact-adjacent flows
+  },
+  web: {
+    text: /\b(search|look (it|this|that|him|her|them)? ?up|google|online|internet|web(site|page)?|news|weather|price of|what does .{1,40} mean|definition)\b/i,
+    blocks: [],
+  },
+  acks: {
+    text: null,  // block-driven only: the notice and its tools travel together
+    blocks: ['[Deferred intents from my free time]', '[PENDING MEMORY CONSENT', '[GRADUATION NOTICE'],
+  },
+  files: {
+    text: /\b(your (files|folder|logs?)|session log|our (conversation|chat|talk) (on|from|about)|read (the|your) \w+ (file|log|tome))\b/i,
+    blocks: [],
+  },
+  maintenance: {
+    text: /\b(convert|tidy|migrate|old ids?|hex ids?)\b/i,
+    blocks: [],
+  },
+};
+
+/**
+ * Extra dynamic pattern: any registered villager name in the turn text
+ * surfaces the village module. Names are escaped; 1–2 char names skipped
+ * (too collision-prone).
+ */
+export function villagerNameRegex(names = []) {
+  const safe = names
+    .filter(n => typeof n === 'string' && n.trim().length >= 3)
+    .map(n => n.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return safe.length ? new RegExp(`\\b(${safe.join('|')})\\b`, 'i') : null;
+}
+
+/**
+ * Pick this turn's modules. Pure — sticky state is passed in/out.
+ *
+ * @param {object} p
+ * @param {string} p.turnText      user message + previous assistant reply
+ * @param {string} p.dynamicBlock  the assembled injected context (markers)
+ * @param {string[]} [p.villagerNames]
+ * @param {Set<string>} [p.sticky] modules still inside their sticky TTL
+ * @returns {Set<string>} modules to advertise (core NOT included — it's
+ *          implicit and unconditional at the compose layer)
+ */
+export function selectModules({ turnText = '', dynamicBlock = '', villagerNames = [], sticky = new Set() } = {}) {
+  const out = new Set(sticky);
+  for (const [mod, trig] of Object.entries(TRIGGERS)) {
+    if (trig.text && trig.text.test(turnText)) { out.add(mod); continue; }
+    if (trig.blocks.some(m => dynamicBlock.includes(m))) out.add(mod);
+  }
+  const nameRe = villagerNameRegex(villagerNames);
+  if (nameRe && nameRe.test(turnText)) out.add('village');
+  return out;
+}
+
+// ── Sticky TTL (per session, in-memory) ────────────────────────────────
+// A module surfaced/used/requested stays for `stickyTurns` further live
+// turns (default 2 — ward-tunable via toolStickyTurns). Server restart
+// clears it; worst case is one request_tools round.
+const _sticky = new Map();  // sessionId → Map(module → remaining turns)
+
+export function stickyModulesFor(sessionId) {
+  const m = _sticky.get(sessionId);
+  return m ? new Set(m.keys()) : new Set();
+}
+
+/** Advance one live turn: decay TTLs, then refresh the surfaced set. */
+export function tickSticky(sessionId, surfacedModules, stickyTurns = 2) {
+  if (!sessionId) return;
+  const ttl = Math.max(0, Math.min(10, Number(stickyTurns) || 0));
+  let m = _sticky.get(sessionId);
+  if (!m) { m = new Map(); _sticky.set(sessionId, m); }
+  for (const [mod, left] of m) (left <= 1) ? m.delete(mod) : m.set(mod, left - 1);
+  if (ttl > 0) for (const mod of surfacedModules) m.set(mod, ttl);
+  if (_sticky.size > 200) _sticky.delete(_sticky.keys().next().value); // drift cap
+}
+
+export function resetSticky() { _sticky.clear(); }
+
+/** Validate request_tools input → known module names ('all' → every one). */
+export function normalizeRequestedModules(raw) {
+  const asked = (Array.isArray(raw) ? raw : String(raw ?? '').split(/[\s,]+/))
+    .map(x => String(x).trim().toLowerCase()).filter(Boolean);
+  if (asked.includes('all')) return { modules: ALL_MODULES.filter(m => m !== CORE), unknown: [] };
+  const known = [], unknown = [];
+  for (const a of asked) (ALL_MODULES.includes(a) && a !== CORE ? known : unknown).push(a);
+  return { modules: known, unknown };
+}

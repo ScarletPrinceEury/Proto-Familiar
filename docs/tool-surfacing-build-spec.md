@@ -176,7 +176,19 @@ Mechanics:
 Each pass: tests alongside; `docs/architecture.md` updated in the same
 commit; the §2 invariants restated in code comments at the surfacing seam.
 
-## 8. Open questions (human decides before pass 1)
+## 8. Decisions (answered by the human, 0.8.15)
+
+1. **Schedule split read/write** — done (reads need result-reading, writes
+   don't and are quiet-success). `schedule_find` stays core (id discovery);
+   `schedule_export` is the read module.
+2. **interests → core**, and **save_memory/save_to_tome/update_identity →
+   core** (filing is character).
+3. **Sticky N=2 default, ward-tunable** (`toolStickyTurns`, 0–10).
+4. **Keywords: somewhat generous, regex-based** (`tool-surfacing.js`
+   TRIGGERS) — with the explicit goal that stretches of plain conversation
+   surface NO non-core modules at all. The miss log tunes from there.
+
+## 8b. Original open questions (kept for the record)
 
 1. **Module boundaries** (§3 table) — merge `interests` into core (2 small
    tools)? Split `schedule` into read/write? Current proposal keeps it
