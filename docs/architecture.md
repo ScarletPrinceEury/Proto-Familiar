@@ -274,11 +274,15 @@ in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudl
 - `POST /api/outbox/clear-acknowledged`
 - Since 0.4.0-alpha every user-facing enqueue goes through
   `cerebellum.enqueueAndDispatch`, which ALSO pushes the item to each
-  configured push channel (today: the human's own Discord webhook,
-  Settings → Trusted contacts → "My Discord webhook") and records the
-  per-channel outcome on the item as
-  `delivery: { 'discord-dm': { status, at, error? } }`. The browser
-  stays pull-based; its confirmation signal is the acknowledge.
+  configured push channel and records the per-channel outcome on the
+  item as `delivery: { '<adapter>': { status, at, error? } }`. Channels:
+  the human's own Discord webhook (`discord-dm`, Settings → Trusted
+  contacts → "My Discord webhook") and — since 0.8.x — the gateway
+  bot's DM to the ward (`discord-bot-dm`, active whenever
+  discordEnabled + bot token + ward user id are set; registered by
+  server.js via `registerPushAdapterFactory` so cerebellum never
+  imports the gateway). The browser stays pull-based; its confirmation
+  signal is the acknowledge.
 
 **Settings + Tailscale gate:** as before.
 
@@ -406,10 +410,16 @@ Currently owns:
   contacts, candidate tasks), calls the primary connection, parses the
   `wait` / `reach_out` / `contactHuman` decision.
 - **Channel adapters (push delivery)** — `activePushAdapters()` returns
-  the configured push channels (today: `discord-dm` from the human's
-  own webhook); `dispatchOutboxPush()` runs every adapter (a failing
+  the configured push channels: the built-in `discord-dm` (the human's
+  own webhook) plus whatever registered factories produce
+  (`registerPushAdapterFactory` — server.js registers `discord-bot-dm`,
+  the gateway bot DMing the ward via relayToDiscord's REST path).
+  `dispatchOutboxPush()` runs every adapter (a failing
   one never blocks the rest) and records per-channel
-  `delivery: { status, at, error? }` on the item;
+  `delivery: { status, at, error? }` on the item. Delivery detection is
+  channel-agnostic: `contactDeadlineFor` starts the escalation veto
+  clock at the EARLIEST confirmed delivery on any channel, and
+  `formatDeliveryNote` reads "delivered" if any channel landed;
   `enqueueAndDispatch()` is the default enqueuer for everything
   user-facing. `formatDeliveryNote()` renders one line of delivery
   state into the prompts the Familiar reads — a failed push is visible

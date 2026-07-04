@@ -83,6 +83,7 @@ import {
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
+  registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
   composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
@@ -2937,6 +2938,24 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
   startDiscordGateway();
+  // Bot-DM push channel: when the gateway can DM my human (token + ward's
+  // Discord user id configured), every outbox item — reminders, event
+  // alerts, warm reach-outs, triage check-ins — reaches them as a real
+  // Discord message, not only a banner waiting in the web app. Registered
+  // as a factory so cerebellum never imports the gateway (no cycle) and a
+  // Settings change applies on the next dispatch. Delivery is a plain REST
+  // call inside relayToDiscord, so it works even between WebSocket
+  // reconnects.
+  registerPushAdapterFactory((s) => {
+    const token  = typeof s?.discordBotToken   === 'string' ? s.discordBotToken.trim()   : '';
+    const wardId = typeof s?.discordWardUserId === 'string' ? s.discordWardUserId.trim() : '';
+    if (!token || !wardId || s?.discordEnabled !== true) return null;
+    if (process.env.PROTO_FAMILIAR_DISCORD_DISABLED === '1') return null;
+    return {
+      name: 'discord-bot-dm',
+      deliver: async (item) => relayToDiscord({ recipientUserId: wardId, message: formatItemForPush(item) }),
+    };
+  });
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────

@@ -206,7 +206,9 @@ export async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
 }
 
 // How an outbox item reads when pushed to my human's own Discord.
-function formatItemForPush({ kind, title, body }) {
+// Exported so registered channel adapters (the gateway bot-DM) format
+// identically to the built-in webhook.
+export function formatItemForPush({ kind, title, body }) {
   const lead = kind === 'reminder'        ? '⏰'
              : kind === 'event_alert'     ? '🕑'
              : kind === 'triage'          ? '💭'
@@ -217,10 +219,22 @@ function formatItemForPush({ kind, title, body }) {
   return body ? `${head}\n\n${body}` : head;
 }
 
+// Registered adapter factories — modules that own a channel (e.g. the
+// Discord gateway's bot-DM, registered by server.js at boot) plug in here
+// without cerebellum importing them (no import cycle). Each factory gets
+// the current settings and returns an adapter or null when its channel
+// isn't configured — evaluated fresh per dispatch so a Settings change
+// applies immediately, matching the built-in webhook's behaviour.
+const _pushAdapterFactories = [];
+
+export function registerPushAdapterFactory(factory) {
+  if (typeof factory === 'function') _pushAdapterFactories.push(factory);
+}
+
 /** The push adapters that are actually configured right now.
- *  Today: 'discord-dm' when Settings carries the bonded human's own
- *  webhook (userDiscordWebhook). Future channels slot in here the way
- *  modules slot into thalamus. */
+ *  Built-in: 'discord-dm' when Settings carries the bonded human's own
+ *  webhook (userDiscordWebhook). Plus whatever registered factories
+ *  produce (e.g. 'discord-bot-dm' when the gateway can DM my human). */
 export function activePushAdapters({ readSettings = readSettingsSync, fetchFn = fetch } = {}) {
   const adapters = [];
   const s = readSettings();
@@ -230,6 +244,12 @@ export function activePushAdapters({ readSettings = readSettingsSync, fetchFn = 
       name: 'discord-dm',
       deliver: async (item) => sendDiscordWebhook(hook, formatItemForPush(item), fetchFn),
     });
+  }
+  for (const factory of _pushAdapterFactories) {
+    try {
+      const a = factory(s);
+      if (a && a.name && typeof a.deliver === 'function') adapters.push(a);
+    } catch { /* a broken factory never blocks the built-ins */ }
   }
   return adapters;
 }
@@ -293,9 +313,14 @@ export async function enqueueAndDispatch(args, deps = {}) {
  * and it can weigh "they never saw me" against "they're ignoring me."
  */
 export function formatDeliveryNote(item, { hasPushChannel } = {}) {
-  const d = item?.delivery?.['discord-dm'];
-  if (d?.status === 'delivered') return "(delivered to my human's Discord)";
-  if (d?.status === 'failed')    return `(Discord push FAILED — ${d.error ?? 'unknown error'} — my human has NOT been notified outside this app)`;
+  // Any channel counts — webhook or gateway bot-DM; one confirmed delivery
+  // means my human could have seen me.
+  const recs = Object.values(item?.delivery ?? {});
+  if (recs.some(r => r?.status === 'delivered')) return "(delivered to my human's Discord)";
+  if (recs.length && recs.every(r => r?.status === 'failed')) {
+    const err = recs.find(r => r?.error)?.error ?? 'unknown error';
+    return `(Discord push FAILED — ${err} — my human has NOT been notified outside this app)`;
+  }
   const pushConfigured = hasPushChannel !== undefined ? hasPushChannel : activePushAdapters().length > 0;
   if (!pushConfigured) return '(no push channel configured — my human sees this only with the app open)';
   return '(push delivery pending)';
@@ -336,16 +361,23 @@ export function contactDeadlineFor(item, { pushConfigured, now = Date.now } = {}
   const delay = item.contactDelayMs;
   if (typeof delay !== 'number') return null;
 
-  const d = item.delivery?.['discord-dm'];
-  if (d?.status === 'delivered') {
-    const at = Date.parse(d.at);
-    if (Number.isFinite(at)) return at + delay;
-  }
+  // ANY channel's confirmed delivery starts the veto clock (earliest one —
+  // my human could have seen the check-in from that moment). Identical to
+  // the old single-webhook behaviour when only 'discord-dm' exists.
+  const recs = Object.values(item.delivery ?? {});
+  const deliveredAts = recs
+    .filter(r => r?.status === 'delivered')
+    .map(r => Date.parse(r.at))
+    .filter(Number.isFinite);
+  if (deliveredAts.length) return Math.min(...deliveredAts) + delay;
+
   const enq = Date.parse(item.ts);
   if (!Number.isFinite(enq)) return null;
-  if (d?.status === 'failed' || !pushConfigured) return enq + delay;
-  // Push configured but no record yet — give dispatch a grace window,
-  // then fall back to the enqueue clock.
+  const allFailed = recs.length > 0 && recs.every(r => r?.status === 'failed');
+  if (allFailed || !pushConfigured) return enq + delay;
+  // Push configured but no confirmed record yet — give dispatch a grace
+  // window, then fall back to the enqueue clock (a dead adapter can never
+  // block escalation forever).
   if (now() - enq > DISPATCH_GRACE_MS) return enq + delay;
   return null;
 }
