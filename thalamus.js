@@ -1230,6 +1230,7 @@ function wrapFile(filename, content, promptLabel) {
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
+import { buildStewardshipBlock } from './stewardship.js';
 import { nextProjectionCue } from './gcal-projection.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
@@ -1808,6 +1809,31 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const careBlock = buildCareCheckBlock(threat);
 
+    // ── Stewardship (docs/stewardship-build-spec.md, Pass 1) ──────────
+    //    The executive layer over the temporal world model: cheap code
+    //    picks a tiny, conditional agenda (opening brief / aging floaters
+    //    / anchor-drift), and I raise it in my own voice. Absent most
+    //    turns (that's the point — a block that renders every turn is
+    //    scenery), and it stands down entirely at moderate+ threat so it
+    //    never competes with triage. Side effects (the day's brief flag,
+    //    rotation cursors, first-contact samples) are gated to live turns
+    //    inside the module. Never throws into the chat path.
+    let stewardshipBlock = '';
+    try {
+      let stewardshipSettings = {};
+      try { stewardshipSettings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); } catch { /* fresh install */ }
+      stewardshipBlock = await buildStewardshipBlock({
+        liveTurn, staticOnly, threat,
+        settings: stewardshipSettings,
+        scheduleItems: temporalPayload?.schedule?.window ?? [],
+        lastUserMessageAt,
+        wardTimeZone: wardTimeZoneSetting(),
+        nowMs: Date.now(),
+      });
+    } catch (err) {
+      console.error('[thalamus] stewardship block failed (defaulting to empty):', err?.message ?? err);
+    }
+
     // ── Surface candidates (the consumer side of the personalization
     //    layer). Picks open schedule items that pass the hard gates
     //    (threat tier, routine phase, dedup window), attaches the
@@ -1980,6 +2006,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (careBlock)              dynamicSections.push(careBlock);
+    if (stewardshipBlock)       dynamicSections.push(stewardshipBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
     if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
 
@@ -2005,6 +2032,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       consentPendingBlock    ? 'consent'    : null,
       graduationBlock        ? 'graduation' : null,
       careBlock              ? 'care'       : null,
+      stewardshipBlock       ? 'stewardship' : null,
       temporalLines          ? 'temporal'   : null,
       surfaceCandidatesBlock ? 'surface'    : null,
     ].filter(Boolean).join(',');

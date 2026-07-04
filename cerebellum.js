@@ -55,6 +55,7 @@ import {
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory,
+  withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
@@ -91,6 +92,28 @@ const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 export function readSettingsSync() {
   try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
   catch { return {}; }
+}
+
+/**
+ * Merge a partial patch into settings.json — read-modify-write under the
+ * SAME per-file lock the PUT /api/settings endpoint uses, so a Familiar-side
+ * write (e.g. set_day_start_anchor) and a client sync can't clobber each
+ * other's fields. Atomic .tmp+rename, so the file is never torn. Only the
+ * keys in `patch` change; everything else is preserved.
+ */
+export async function writeSettingsPatch(patch = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { ok: false, error: 'patch must be an object' };
+  }
+  return withLock(SETTINGS_FILE, async () => {
+    let cur = {};
+    try { cur = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8')); } catch { /* first write */ }
+    const next = { ...cur, ...patch };
+    const tmp = SETTINGS_FILE + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
+    await fsp.rename(tmp, SETTINGS_FILE);
+    return { ok: true, settings: next };
+  });
 }
 
 export function primaryConnectionFrom(settings) {
@@ -1549,6 +1572,20 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'set_day_start_anchor',
+      description: 'I set the hour my human\'s day really begins — the ward-local time I use to decide when to open with what\'s coming (my stewardship opening brief). I reach for this when my stewardship block has watched enough mornings to tell me their real rhythm has drifted from the time I\'ve been opening on, or when my human tells me directly when their day starts. It writes one shared setting they can also see and change in Settings, so after I set it I tell them plainly in my own voice what I changed it to — the heads-up is mine to give.',
+      parameters: {
+        type: 'object',
+        properties: {
+          time: { type: 'string', description: 'The day-start time in 24-hour "HH:MM" ward-local wall-clock (e.g. "11:00"). Plain local time — no timezone math, no offset.' },
+        },
+        required: ['time'],
+      },
+    },
+  },
   // ── Crisis outreach tools ──────────────────────────────────────────────
   // For when {{user}} is actively present but in clear danger. These are
   // separate from the silence-triage loop (which fires only when the user
@@ -2521,6 +2558,23 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to set standing value: ${data.error ?? 'unknown error'}`;
       return quietOk(`"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`);
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
+  },
+
+  set_day_start_anchor: async ({ time } = {}) => {
+    const t = String(time ?? '').trim();
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
+      return `I couldn't set the day-start: "${time}" isn't a valid 24-hour time. I need "HH:MM" ward-local, like "09:00" or "11:30".`;
+    }
+    // Zero-pad the hour so the stored value is canonical "HH:MM".
+    const [h, m] = t.split(':');
+    const canonical = `${String(Number(h)).padStart(2, '0')}:${m}`;
+    try {
+      const res = await writeSettingsPatch({ dayStartAnchor: canonical });
+      if (res?.ok === false) return `I couldn't set the day-start: ${res.error ?? 'unknown error'}`;
+      // Loud on purpose: this is a shared setting my human should hear about,
+      // and I give the heads-up in my own words this turn.
+      return `Day-start anchor set to ${canonical} (ward-local). From now on I'll open the day with what's coming once my human first turns up after that time. I let them know I changed it.`;
+    } catch (err) { return `I couldn't set the day-start: ${err.message}`; }
   },
 
   // ── Crisis outreach executors ────────────────────────────────────────

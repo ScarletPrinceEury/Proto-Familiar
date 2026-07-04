@@ -1,6 +1,23 @@
 # Stewardship — timeblindness support & the executive layer (build spec)
 
-Status: **spec** (0.8.17-alpha). Implementation lands in passes, each its own PR.
+Status: **Pass 1 shipped** (0.8.18-alpha) — `stewardship.js` + the block,
+docket, opening brief, day-start anchor, and `set_day_start_anchor`.
+Passes 2–4 still to come, each its own PR.
+
+**Two implementation choices worth recording (Pass 1):**
+- *Rotation is self-contained, not on the surface-events ledger yet.* The
+  docket keeps its own re-offer cursors in `.stewardship-state.json`. The
+  spec's "outcomes ride the existing ledger" belongs with the routine
+  review (Pass 3), which is where outcome patterns are actually consumed;
+  wiring it in Pass 1 would couple the block to `surface-events` for no
+  present reader. A converted floater simply stops being floating and
+  drops out on its own.
+- *The heads-up for an anchor change is the Familiar's own words, not a
+  code-built outbox note.* `set_day_start_anchor` is only ever called
+  mid-conversation (the block suggests the drift; the Familiar adopts it),
+  so the natural heads-up is the Familiar saying so in the same turn —
+  which honours "the framing stays mine" better than a templated notice.
+  The setting is still observable in Settings, satisfying "one place."
 
 ## 0. The problem this solves
 

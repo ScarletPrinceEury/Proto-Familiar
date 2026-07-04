@@ -65,6 +65,8 @@ export const TOOL_MODULES = {
   list_files: 'files', read_file: 'files',
 
   convert_ids_to_slugs: 'maintenance',
+
+  set_day_start_anchor: 'stewardship',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 
@@ -82,7 +84,8 @@ export const MODULE_INDEX =
   'web (search, read pages, look up facts), ' +
   'acks (file deferred intents, confirm/drop memory consent, graduation notices), ' +
   'files (list/read my own folder), ' +
-  'maintenance (id tidy-up)';
+  'maintenance (id tidy-up), ' +
+  'stewardship (set the day-start time I open my human\'s day on)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +
@@ -93,8 +96,14 @@ export const MODULE_INDEX =
 const TRIGGERS = {
   'schedule-write': {
     text: /\b(remind(er)?s?|schedul\w*|calendar|appointment|task|to-?dos?|deadline|due|postpone|resched\w*|cancel\w*|snooze|every (day|week|month|morning|night)|routine|phase|tonight|tomorrow|next (week|month)|at \d{1,2}([:.]\d{2})?\s?(am|pm)\b|\d{1,2}([:.]\d{2})\s?(am|pm)?\b|done with|finished|habit|meal|meds|medication)\b/i,
-    // Blocks that invite schedule ACTION travel with the write tools.
-    blocks: ['[Surface candidates', "[New on my human's calendar"],
+    // Blocks that invite schedule ACTION travel with the write tools. The
+    // stewardship agenda offers aging floaters a place → I need the write
+    // tools to give them a time on the spot.
+    blocks: ['[Surface candidates', "[New on my human's calendar", '[My stewardship'],
+  },
+  stewardship: {
+    text: null,  // block-driven: the anchor-adjust tool travels with the agenda
+    blocks: ['[My stewardship'],
   },
   'schedule-read': {
     text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link))\b/i,
