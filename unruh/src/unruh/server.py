@@ -422,6 +422,33 @@ def gcal_ingest(
 
 
 @mcp.tool()
+def schedule_find(query: str, include_resolved: bool = False, limit: int = 20) -> dict[str, Any]:
+    """I use this to search my human's WHOLE schedule by name — any time
+    horizon, not just the week my briefing shows. It's how I find the id of
+    anything I can't currently see: a calendar appointment months out, an old
+    recurring series, a task that scrolled out of my context. I search, read
+    the matches' ids, then act (export, link, re-time, resolve).
+
+    Args:
+        query: substring to match against labels, case-insensitive.
+        include_resolved: True to also see done/cancelled items
+            (answers "did I already handle X?").
+        limit: max matches (default 20).
+
+    Returns: {ok: True, matches: [{id, type, label, when?, end?, resolution?}]}
+    — soonest-upcoming first, then undated, then past.
+    """
+    try:
+        with get_conn() as conn:
+            matches = sched.find_nodes(
+                conn, query=query, include_resolved=include_resolved, limit=limit,
+            )
+        return {"ok": True, "matches": matches}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def schedule_get(id: str) -> dict[str, Any]:
     """I use this to read one schedule node's full stored fields by id. I reach
     for it when I need an item's exact label/time/payload to act on it — e.g. to

@@ -17,11 +17,20 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { randomUUID } from 'crypto';
 import { PROVIDER_URLS } from './providers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
+
+// Short pondering uid ("ponder-x7k2m3") — 0.9 id overhaul. Same lookalike-free
+// alphabet as the Unruh/Phylactery slug ids; 6 chars ≈ 887M combinations,
+// plenty for one tome's entries (and the writer re-rolls on collision).
+const SLUG_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+export function shortPonderUid() {
+  let s = '';
+  for (let i = 0; i < 6; i++) s += SLUG_ALPHABET[Math.floor(Math.random() * SLUG_ALPHABET.length)];
+  return `ponder-${s}`;
+}
 
 export const PONDERINGS_TOME_NAME = "Familiar's Ponderings";
 export const PONDERINGS_TOME_DESC =
@@ -351,7 +360,11 @@ export async function ponderOnce({
   // the per-file lock across read + write so a concurrent
   // /api/temporal/ponderings DELETE or /api/tomes/:id PUT on the same
   // file serialises against this write rather than clobbering it.
-  const uid = randomUUID();
+  // Short slug uid ("ponder-x7k2m3") instead of a 36-char UUID — this uid
+  // rides the deferred-intents block in the prompt every turn an intent is
+  // pending, so its token weight matters. Uniqueness-checked against the
+  // tome's entries inside the locked read-modify-write below.
+  let uid = shortPonderUid();
   const now = new Date().toISOString();
   const topicPondered = isReflection
     ? `[reflection on ${(topic.outcomes ?? []).length} surface outcome(s)]`
@@ -359,6 +372,7 @@ export async function ponderOnce({
   let tomeId;
   await modifyTomeFile(file, (fresh) => {
     tomeId = fresh.id;
+    while (fresh.entries[uid]) uid = shortPonderUid();  // collision → fresh suffix
     fresh.entries[uid] = {
       uid,
       comment:             title,

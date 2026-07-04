@@ -49,7 +49,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode,
+  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -1417,6 +1417,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_find',
+      description: 'I search {{user}}\'s WHOLE schedule by name — any time horizon, not just the week my [Temporal Context] briefing shows. My briefing only legends what\'s near; the store holds far more (like a year of synced calendar events), and this is how I reach any of it: when {{user}} asks "when\'s my dentist appointment?", when I need the id of something months out to export or link it, or when I want to check whether something already exists before adding a duplicate. I search, read the matches\' ids, then act. With include_resolved I can also answer "did I already handle X?".',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Part of the item\'s name, case-insensitive (e.g. "dentist").' },
+          include_resolved: { type: 'boolean', description: 'true to also see done/cancelled items. Default false.' },
+          limit: { type: 'number', description: 'Max matches (default 20).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_push_to_google',
       description: 'I push one of {{user}}\'s schedule items INTO their real Google Calendar — the one path I have that actually changes their calendar, not just my own sense of it. Because it mutates their real calendar, I treat it with care: I confirm with {{user}} first that they want it added, and I only ADD a new entry (I never edit or delete their existing Google events). I pass the node `id`; the entry is generated from its stored fields in code (I never type calendar data myself) and imported through the tool {{user}} set up. This only appears when {{user}} has explicitly enabled calendar write-back, so its presence means they\'ve opted in — but I still ask before each push, since it lands in their actual calendar.',
       parameters: {
@@ -2299,6 +2315,27 @@ export const TOOL_EXECUTORS = {
         `I share both links with {{user}} so they can pick whichever suits their device. (I only read their calendar — adding this is their choice, not a change I make to it.)`,
       ].join('\n');
     } catch (err) { return `I couldn't build a calendar file for that item: ${err.message}`; }
+  },
+
+  schedule_find: async ({ query, include_resolved, limit } = {}) => {
+    const q = String(query ?? '').trim();
+    if (!q) return 'I need part of the item\'s name to search for.';
+    try {
+      const data = await findScheduleNodes({
+        query: q,
+        includeResolved: include_resolved === true,
+        limit: Number.isFinite(Number(limit)) ? Number(limit) : 20,
+      });
+      if (!data?.ok) return `I couldn't search the schedule: ${data?.error ?? 'Unruh unavailable'}.`;
+      const matches = Array.isArray(data.matches) ? data.matches : [];
+      if (!matches.length) return `Nothing on the schedule matches "${q}"${include_resolved ? '' : ' (unresolved items only — pass include_resolved to search finished ones too)'}.`;
+      const lines = matches.map(m => {
+        const when = m.when ? (relativeTime(m.when, Date.now()) || m.when) : 'no time set';
+        const res = m.resolution ? ` [${m.resolution}]` : '';
+        return `- ${m.label} [${m.type}] — ${when}${res} (id: ${m.id})`;
+      });
+      return [`${matches.length} match(es) for "${q}":`, ...lines].join('\n');
+    } catch (err) { return `I couldn't search the schedule: ${err.message}`; }
   },
 
   schedule_push_to_google: async ({ id } = {}) => {

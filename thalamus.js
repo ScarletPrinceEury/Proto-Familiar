@@ -902,6 +902,20 @@ export async function exportSchedule({ id }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/** Search the whole schedule layer by label substring — any horizon. The
+ *  id-discovery grep behind the Familiar's schedule_find tool. */
+export async function findScheduleNodes({ query, includeResolved = false, limit = 20 }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', matches: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_find',
+      arguments: { query, include_resolved: includeResolved, limit },
+    });
+    return parseToolText(r, { ok: false, matches: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), matches: [] }; }
+}
+
 /** Read one schedule node's stored fields by id (for native calendar
  *  write-back, which builds the Google event resource from the node). */
 export async function getScheduleNode({ id }) {

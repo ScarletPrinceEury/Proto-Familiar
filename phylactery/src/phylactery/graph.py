@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from phylactery.db import get_conn, new_id, now_iso
+from phylactery.db import get_conn, insert_with_slug_retry, new_id, now_iso
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_in_sql
 
@@ -181,11 +181,13 @@ def create_node(
         conn = get_conn()
     try:
         now = now_iso()
-        node_id = new_id()
+        # Readable slug id from the label ("sister-mira-k3") — collision-retried.
         with conn:
-            conn.execute(
+            node_id = insert_with_slug_retry(
+                conn,
                 "INSERT INTO graph_nodes(id,label,type,description,audience,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                (node_id, label, node_type or "", description or "", audience, now, now),
+                lambda nid: (nid, label, node_type or "", description or "", audience, now, now),
+                label=label, kind=node_type or "node",
             )
         _upsert_node_embedding(conn, node_id, label, description or "")
         return {"ok": True, "id": node_id, "label": label, "type": node_type or "", "description": description or ""}
@@ -316,11 +318,13 @@ def create_edge(
         conn = get_conn()
     try:
         now = now_iso()
-        edge_id = new_id()
+        # Edges have no label — the slug leans on the type ("knows-x7k2").
         with conn:
-            conn.execute(
+            edge_id = insert_with_slug_retry(
+                conn,
                 "INSERT INTO graph_edges(id,from_id,to_id,type,weight,audience,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (edge_id, from_id, to_id, edge_type, weight, audience, now, now),
+                lambda eid: (eid, from_id, to_id, edge_type, weight, audience, now, now),
+                label=None, kind=edge_type or "edge",
             )
         return {"ok": True, "id": edge_id, "fromId": from_id, "toId": to_id, "type": edge_type, "weight": weight}
     finally:

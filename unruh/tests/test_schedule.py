@@ -610,3 +610,74 @@ class TestLocalTime:
         assert row["when_ts"] == expected.isoformat(timespec="seconds")
         # Idempotent: a second run touches nothing (flag is set).
         assert migrate_timestamps_to_local(conn) == 0
+
+
+# ── Readable slug ids + schedule search (0.9 id overhaul) ──────────────
+
+
+class TestSlugIds:
+    def test_node_id_is_label_slug(self, conn):
+        nid = sched.add_node(conn, type="event", label="Dentist appointment",
+                             when="2026-07-02T14:00:00")
+        assert nid.startswith("dentist-appointment-")
+        assert len(nid) <= 32  # far shorter than uuid4 hex in practice
+
+    def test_edge_id_is_kind_slug(self, conn):
+        a = sched.add_node(conn, type="task", label="scan")
+        b = sched.add_node(conn, type="task", label="find")
+        eid = sched.add_edge(conn, src=a, dst=b, kind="requires")
+        assert eid.startswith("requires-")
+
+    def test_collision_retries_to_unique(self, conn):
+        # Same label many times: every id must still be unique.
+        ids = {sched.add_node(conn, type="task", label="water the plants")
+               for _ in range(40)}
+        assert len(ids) == 40
+
+    def test_unicode_label_falls_back_to_kind(self, conn):
+        nid = sched.add_node(conn, type="event", label="日本語のみ",
+                             when="2026-07-02T14:00:00")
+        assert nid.startswith("event-")  # no ascii words → kind + suffix
+
+    def test_old_hex_ids_still_addressable(self, conn):
+        # Coexistence: a legacy uuid4-hex row keeps working with every reader.
+        import uuid, json
+        legacy = uuid.uuid4().hex
+        conn.execute(
+            """INSERT INTO nodes (id, layer, type, label, payload_json, when_ts, end_ts,
+                                   resolution, weight, last_touched, created_at, updated_at)
+               VALUES (?, 'schedule', 'task', 'legacy row', '{}', NULL, NULL,
+                       NULL, NULL, NULL, '2026-01-01T00:00:00', '2026-01-01T00:00:00')""",
+            (legacy,),
+        )
+        assert sched.get_node(conn, id=legacy)["label"] == "legacy row"
+        assert sched.resolve(conn, id=legacy, resolution="done") is True
+
+
+class TestFindNodes:
+    def test_finds_by_substring_any_horizon(self, conn):
+        far = "2027-03-10T09:00:00"  # way beyond any briefing window
+        nid = sched.add_node(conn, type="event", label="Dentist — cleaning", when=far)
+        matches = sched.find_nodes(conn, query="dentist")
+        assert [m["id"] for m in matches] == [nid]
+        assert matches[0]["when"] == far
+
+    def test_case_insensitive_and_resolved_excluded_by_default(self, conn):
+        done = sched.add_node(conn, type="task", label="Dentist paperwork")
+        sched.resolve(conn, id=done, resolution="done")
+        live = sched.add_node(conn, type="task", label="dentist follow-up")
+        assert [m["id"] for m in sched.find_nodes(conn, query="DENTIST")] == [live]
+        both = sched.find_nodes(conn, query="dentist", include_resolved=True)
+        assert {m["id"] for m in both} == {done, live}
+
+    def test_upcoming_sorts_before_undated_and_past(self, conn):
+        past = sched.add_node(conn, type="event", label="thing past", when="2020-01-01T09:00:00")
+        undated = sched.add_node(conn, type="task", label="thing undated")
+        soon = sched.add_node(conn, type="event", label="thing soon", when="2099-01-01T09:00:00")
+        order = [m["id"] for m in sched.find_nodes(conn, query="thing")]
+        assert order == [soon, undated, past]
+
+    def test_empty_query_rejected(self, conn):
+        import pytest as _pytest
+        with _pytest.raises(ValueError):
+            sched.find_nodes(conn, query="   ")

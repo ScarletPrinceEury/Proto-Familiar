@@ -39,7 +39,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .db import new_id, now_iso, to_local_naive
+from .db import insert_with_slug_retry, new_id, now_iso, to_local_naive
 
 # ── Allowed values. Surfaced as constants so tests + the MCP layer
 # can validate without re-typing the strings. Adding a new value
@@ -131,16 +131,17 @@ def add_node(
     when = to_local_naive(when)
     end = to_local_naive(end)
 
-    node_id = new_id()
     ts = now_iso()
-    conn.execute(
+    # Readable slug id from the label ("dentist-k3") — retried on collision.
+    return insert_with_slug_retry(
+        conn,
         """INSERT INTO nodes
                (id, layer, type, label, payload_json, when_ts, end_ts,
                 resolution, weight, last_touched, created_at, updated_at)
            VALUES (?, 'schedule', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)""",
-        (node_id, type, label.strip(), json.dumps(payload or {}), when, end, ts, ts),
+        lambda nid: (nid, type, label.strip(), json.dumps(payload or {}), when, end, ts, ts),
+        label=label, kind=type,
     )
-    return node_id
 
 
 def add_edge(
@@ -163,13 +164,15 @@ def add_edge(
         raise ValueError("an edge cannot connect a node to itself")
 
     payload = validate_consequence_payload(payload)
-    edge_id = new_id()
-    conn.execute(
+    ts = now_iso()
+    # Edges have no label — the slug leans on the kind ("causes-x7k2").
+    return insert_with_slug_retry(
+        conn,
         """INSERT INTO edges (id, src_id, dst_id, kind, payload_json, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        (edge_id, src, dst, kind, json.dumps(payload or {}), now_iso()),
+        lambda eid: (eid, src, dst, kind, json.dumps(payload or {}), ts),
+        label=None, kind=kind,
     )
-    return edge_id
 
 
 def update_edge(conn: sqlite3.Connection, *, id: str, payload: dict) -> bool:
@@ -528,6 +531,39 @@ def _edge_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     payload = json.loads(row["payload_json"] or "{}")
     if payload: out["payload"] = payload
     return out
+
+
+def find_nodes(
+    conn: sqlite3.Connection,
+    *,
+    query: str,
+    include_resolved: bool = False,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Search the WHOLE schedule layer by label substring (case-insensitive),
+    any time horizon. This is the id-discovery grep: the chat briefing only
+    legends ~a week of items, but the store holds far more (e.g. a year of
+    synced calendar events) — this is how any of it becomes addressable.
+    Soonest-upcoming first, then undated, then past. Resolved nodes excluded
+    unless asked for (include_resolved covers "did I already do X?")."""
+    q = (query or "").strip()
+    if not q:
+        raise ValueError("query is required and must be non-empty")
+    like = f"%{q}%"
+    rows = conn.execute(
+        """SELECT * FROM nodes
+            WHERE layer = 'schedule' AND label LIKE ? COLLATE NOCASE
+              AND (? OR resolution IS NULL)
+            ORDER BY
+              CASE WHEN when_ts IS NULL THEN 1
+                   WHEN when_ts >= ? THEN 0
+                   ELSE 2 END,
+              CASE WHEN when_ts >= ? THEN when_ts ELSE NULL END ASC,
+              when_ts DESC
+            LIMIT ?""",
+        (like, 1 if include_resolved else 0, now_iso(), now_iso(), limit),
+    ).fetchall()
+    return [_node_row_to_dict(r) for r in rows]
 
 
 def get_node(conn: sqlite3.Connection, *, id: str) -> dict[str, Any] | None:
