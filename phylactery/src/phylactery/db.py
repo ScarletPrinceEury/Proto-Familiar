@@ -29,7 +29,7 @@ def new_id() -> str:
     return uuid.uuid4().hex
 
 
-# ── Readable ids (the 0.9 id overhaul; mirrors unruh/db.py) ────────────
+# ── Readable ids (the 0.8.x id overhaul; mirrors unruh/db.py) ────────────
 # Model-facing ids (graph nodes/edges) are label-derived slugs with a short
 # random suffix — "sister-mira-k3" — instead of uuid4 hex: ~3 tokens in a
 # legend line instead of ~16, self-documenting in tool calls. Writers retry

@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, readFileSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
+import { sessionSlugId } from './slug-ids.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -144,6 +145,13 @@ function isValidUUID(id) {
 // bounded length, alnum+dash only — no dots/slashes, still traversal-proof.
 function isValidEntryUid(uid) {
   return isValidUUID(uid) || (typeof uid === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(uid));
+}
+
+// Session ids additionally allow the readable slug shape ("s-20260704-x7k2")
+// alongside legacy crypto.randomUUID() values. Session ids name files in
+// logs/, so the same path-safety bound applies: alnum+dash, bounded length.
+function isValidSessionId(id) {
+  return isValidUUID(id) || (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(id));
 }
 
 const app = express();
@@ -972,7 +980,7 @@ app.post('/api/session/handoff', async (req, res) => {
 // as a stable common prefix; only id-carrying messages are diffed.
 app.post('/api/log', async (req, res) => {
   const { sessionId, startedAt, endedAt, provider, model, messages } = req.body;
-  if (!isValidUUID(sessionId))
+  if (!isValidSessionId(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   if (!Array.isArray(messages))
     return res.status(400).json({ error: 'messages must be an array.' });
@@ -1043,7 +1051,7 @@ app.get('/api/logs', async (_req, res) => {
 // GET /api/logs/:id — retrieve a full session log
 app.get('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidUUID(id))
+  if (!isValidSessionId(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const raw = await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8');
@@ -1057,7 +1065,7 @@ app.get('/api/logs/:id', async (req, res) => {
 // DELETE /api/logs/:id — remove a session log
 app.delete('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidUUID(id))
+  if (!isValidSessionId(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     await fsp.unlink(path.join(LOGS_DIR, `${id}.json`));
@@ -1432,7 +1440,7 @@ initCerebellumTools({
 // referenced in the initCerebellumTools call above (hoisted). Degrades to a
 // structured result; never throws into the tool loop.
 async function memorizeSessionNow({ sessionId, provider, apiKey, model, audienceTag }) {
-  if (!isValidUUID(sessionId)) return { ok: false, error: 'no-session' };
+  if (!isValidSessionId(sessionId)) return { ok: false, error: 'no-session' };
   let log;
   try {
     log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${sessionId}.json`), 'utf8'));
@@ -1472,7 +1480,7 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
     return res.status(400).json({ error: 'Request body required.' });
   }
   const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag } = body;
-  if (!isValidUUID(sessionId))
+  if (!isValidSessionId(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     if (scope === 'topic') {
@@ -1586,7 +1594,7 @@ app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) =
   let created = 0, enqueued = 0;
   const tag = (typeof source === 'string' && source.trim()) ? source.trim().slice(0, 40) : 'import';
   for (const seg of segs) {
-    const sessionId = randomUUID();
+    const sessionId = sessionSlugId();
     const startedAt = seg.messages.find(m => m.timestamp)?.timestamp ?? new Date().toISOString();
     const endedAt = [...seg.messages].reverse().find(m => m.timestamp)?.timestamp ?? startedAt;
     const log = {

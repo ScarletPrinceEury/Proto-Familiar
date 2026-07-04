@@ -132,3 +132,22 @@ export async function nextProjectionCue({ candidates, now = Date.now(), advance 
   if (advance) await writeCueState(nextState, { tomesDir });
   return buildCueBlock(items, { now });
 }
+
+
+/**
+ * One-shot id tidy: re-key aging-state entries whose node id was re-keyed by
+ * Unruh's ids_to_slugs (mapping: old→new). Keeps an item's turns-shown /
+ * first-seen intact across the id overhaul instead of resetting its aging.
+ */
+export async function rekeyCueState(mapping = {}, { tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  const state = await readCueState({ tomesDir });
+  let moved = 0;
+  const next = {};
+  for (const [id, entry] of Object.entries(state)) {
+    const target = mapping[id];
+    if (target) moved++;
+    next[target || id] = entry;
+  }
+  if (moved) await writeCueState(next, { tomesDir });
+  return { moved };
+}

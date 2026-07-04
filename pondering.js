@@ -22,7 +22,7 @@ import { PROVIDER_URLS } from './providers.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
 
-// Short pondering uid ("ponder-x7k2m3") — 0.9 id overhaul. Same lookalike-free
+// Short pondering uid ("ponder-x7k2m3") — 0.8.x id overhaul. Same lookalike-free
 // alphabet as the Unruh/Phylactery slug ids; 6 chars ≈ 887M combinations,
 // plenty for one tome's entries (and the writer re-rolls on collision).
 const SLUG_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
@@ -428,4 +428,31 @@ export async function ponderOnce({
     promotions:              parsed.promotions ?? null,
     wants_to_save:           wantsToSave,
   };
+}
+
+
+/**
+ * One-shot id tidy (0.8.x overhaul): re-key legacy-UUID pondering entry uids
+ * to short slugs, under the same modifyTomeFile lock as every other tome
+ * write. Deferred-intent references stay valid because intents live INSIDE
+ * the entry being re-keyed (the block re-reads uids fresh each turn).
+ */
+export async function rekeyPonderingUids(tomesDir = DEFAULT_TOMES_DIR) {
+  const LEGACY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[0-9a-f]{32}$/;
+  const { file } = await findOrCreatePonderingsTome(tomesDir);
+  let moved = 0;
+  await modifyTomeFile(file, (fresh) => {
+    const entries = fresh.entries || {};
+    for (const old of Object.keys(entries)) {
+      if (!LEGACY.test(old)) continue;
+      let next = shortPonderUid();
+      while (entries[next]) next = shortPonderUid();
+      entries[next] = { ...entries[old], uid: next };
+      delete entries[old];
+      moved++;
+    }
+    fresh.entries = entries;
+    return fresh;
+  });
+  return { moved };
 }

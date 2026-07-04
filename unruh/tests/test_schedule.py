@@ -681,3 +681,50 @@ class TestFindNodes:
         import pytest as _pytest
         with _pytest.raises(ValueError):
             sched.find_nodes(conn, query="   ")
+
+
+class TestIdsToSlugs:
+    def _legacy_node(self, conn, label, hexid=None):
+        import uuid, json as _json
+        nid = hexid or uuid.uuid4().hex
+        conn.execute(
+            """INSERT INTO nodes (id, layer, type, label, payload_json, when_ts, end_ts,
+                                   resolution, weight, last_touched, created_at, updated_at)
+               VALUES (?, 'schedule', 'task', ?, '{}', NULL, NULL,
+                       NULL, NULL, NULL, '2026-01-01T00:00:00', '2026-01-01T00:00:00')""",
+            (nid, label),
+        )
+        return nid
+
+    def test_rekeys_nodes_edges_and_references(self, conn):
+        from unruh.db import ids_to_slugs
+        import uuid
+        a = self._legacy_node(conn, "water the plants")
+        b = self._legacy_node(conn, "buy watering can")
+        # legacy edge id + references to legacy node ids
+        eid = uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO edges (id, src_id, dst_id, kind, payload_json, created_at) VALUES (?,?,?,?,'{}','2026-01-01T00:00:00')",
+            (eid, a, b, "requires"),
+        )
+        r = ids_to_slugs(conn)
+        assert r["nodes"] == 2 and r["edges"] == 1
+        new_a, new_b = r["mapping"][a], r["mapping"][b]
+        assert new_a.startswith("water-the-plants-")
+        # edge endpoints followed the re-key; edge id itself is kind-slugged
+        edge = conn.execute("SELECT * FROM edges").fetchone()
+        assert edge["src_id"] == new_a and edge["dst_id"] == new_b
+        assert edge["id"].startswith("requires-")
+        # old ids are gone
+        assert sched.get_node(conn, id=a) is None
+        assert sched.get_node(conn, id=new_a)["label"] == "water the plants"
+
+    def test_idempotent_and_slug_rows_untouched(self, conn):
+        from unruh.db import ids_to_slugs
+        slugged = sched.add_node(conn, type="task", label="already slugged")
+        legacy = self._legacy_node(conn, "old row")
+        r1 = ids_to_slugs(conn)
+        assert r1["nodes"] == 1 and legacy in r1["mapping"]
+        assert sched.get_node(conn, id=slugged) is not None  # untouched
+        r2 = ids_to_slugs(conn)
+        assert r2["nodes"] == 0 and r2["edges"] == 0 and r2["mapping"] == {}

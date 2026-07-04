@@ -66,6 +66,19 @@ function generateId() {
   });
 }
 
+// Readable session id ("s-20260704-x7k2") — mirrors slug-ids.js on the server
+// (browser can't import Node modules). Session ids name the log files the
+// Familiar browses with list_files, so the date prefix is real information;
+// message ids stay generateId() (internal, never a lookup key for the model).
+function generateSessionId() {
+  const ABC = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  let suf = '';
+  for (let i = 0; i < 4; i++) suf += ABC[Math.floor(Math.random() * ABC.length)];
+  return `s-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${suf}`;
+}
+
 // ── Tool calling ───────────────────────────────────────────────
 /**
  * Tool execution lives server-side in cerebellum.js as of 0.4.0-alpha:
@@ -607,7 +620,7 @@ function loadPersisted() {
   } catch { /* corrupt storage */ }
   // Ensure a session ID exists
   if (!state.sessionId) {
-    state.sessionId        = generateId();
+    state.sessionId        = generateSessionId();
     state.sessionStartedAt = new Date().toISOString();
     saveSettings();
   }
@@ -2723,7 +2736,7 @@ function resetSessionTimeout() {
  */
 function startNewSession() {
   if (_sessionTimeoutId) { clearTimeout(_sessionTimeoutId); _sessionTimeoutId = null; }
-  state.sessionId        = generateId();
+  state.sessionId        = generateSessionId();
   state.sessionStartedAt = new Date().toISOString();
   state.sessionEndedAt   = null;
   state.messages         = [];

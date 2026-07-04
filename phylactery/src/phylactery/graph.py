@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from phylactery.db import get_conn, insert_with_slug_retry, new_id, now_iso
+from phylactery.db import get_conn, insert_with_slug_retry, new_id, now_iso, slug_id
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_in_sql
 
@@ -514,3 +514,63 @@ def _delete_node_embedding(conn: sqlite3.Connection, node_id: str) -> None:
         conn.execute("DELETE FROM graph_node_vecs WHERE node_id=?", (node_id,))
     except Exception:
         pass
+
+
+_LEGACY_ID_RE = __import__("re").compile(
+    r"^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def ids_to_slugs(conn: sqlite3.Connection | None = None) -> dict:
+    """One-shot mechanical re-key of legacy hex/UUID graph ids to readable
+    slugs — nodes (label-derived) and edges (type-derived), updating
+    graph_edges.from_id/to_id and re-keying each node's embedding row.
+    Idempotent; one transaction; no judgment anywhere (dumb tech)."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        taken = {r["id"] for r in conn.execute("SELECT id FROM graph_nodes")}
+        taken |= {r["id"] for r in conn.execute("SELECT id FROM graph_edges")}
+        mapping: dict[str, str] = {}
+
+        def fresh(label, kind):
+            for suffix_len in (2, 3, 5):
+                cand = slug_id(label, kind=kind, suffix_len=suffix_len)
+                if cand not in taken:
+                    taken.add(cand)
+                    return cand
+            cand = new_id(); taken.add(cand); return cand
+
+        # PRAGMA foreign_keys is a no-op while a transaction is open — commit
+        # any in-flight implicit transaction first so the toggle applies.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with conn:
+                n_nodes = 0
+                for r in conn.execute("SELECT id, label, type, description FROM graph_nodes").fetchall():
+                    if not _LEGACY_ID_RE.match(r["id"]):
+                        continue
+                    new = fresh(r["label"], r["type"] or "node")
+                    mapping[r["id"]] = new
+                    conn.execute("UPDATE graph_nodes SET id=? WHERE id=?", (new, r["id"]))
+                    conn.execute("UPDATE graph_edges SET from_id=? WHERE from_id=?", (new, r["id"]))
+                    conn.execute("UPDATE graph_edges SET to_id=? WHERE to_id=?", (new, r["id"]))
+                    # Re-key the embedding row (vec0 can't UPDATE; delete+re-embed).
+                    _delete_node_embedding(conn, r["id"])
+                    _upsert_node_embedding(conn, new, r["label"], r["description"] or "")
+                    n_nodes += 1
+                n_edges = 0
+                for r in conn.execute("SELECT id, type FROM graph_edges").fetchall():
+                    if not _LEGACY_ID_RE.match(r["id"]):
+                        continue
+                    new = fresh(None, r["type"] or "edge")
+                    mapping[r["id"]] = new
+                    conn.execute("UPDATE graph_edges SET id=? WHERE id=?", (new, r["id"]))
+                    n_edges += 1
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+        return {"ok": True, "nodes": n_nodes, "edges": n_edges, "mapping": mapping}
+    finally:
+        if own:
+            conn.close()

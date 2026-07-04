@@ -360,3 +360,19 @@ export async function markReflected(nowMs = Date.now(), tomesDir = DEFAULT_TOMES
     await saveSurfaceEvents(store, tomesDir);
   });
 }
+
+
+/**
+ * One-shot id tidy (0.8.x overhaul): remap task_id fields through
+ * `mapping` (old→new schedule node ids from Unruh's re-key) so offer-dedup
+ * windows and reflection joins survive the id conversion.
+ */
+export async function rekeySurfaceEventIds(mapping = {}, tomesDir = DEFAULT_TOMES_DIR) {
+  const store = await loadSurfaceEvents(tomesDir);
+  let moved = 0;
+  for (const e of store.events) {
+    if (e?.task_id && mapping[e.task_id]) { e.task_id = mapping[e.task_id]; moved++; }
+  }
+  if (moved) await saveSurfaceEvents(store, tomesDir);
+  return { moved };
+}

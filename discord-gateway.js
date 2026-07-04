@@ -33,6 +33,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
+import { sessionSlugId } from './slug-ids.js';
 
 import { enrich, withLock } from './thalamus.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
@@ -873,7 +874,7 @@ async function sessionForLocation(locationKey, locationLabel, kind) {
       }
     }
     const fresh = {
-      sessionId: randomUUID(),
+      sessionId: sessionSlugId(),  // readable log filename (s-YYYYMMDD-xxxx)
       startedAt: new Date(nowMs).toISOString(),
       endedAt: null,
       provider: null,

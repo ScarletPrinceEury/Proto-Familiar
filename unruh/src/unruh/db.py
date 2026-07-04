@@ -82,7 +82,7 @@ def new_id() -> str:
     return uuid.uuid4().hex
 
 
-# ── Readable ids (the 0.9 id overhaul) ─────────────────────────────────
+# ── Readable ids (the 0.8.x id overhaul) ─────────────────────────────────
 #
 # Ids that reach the model's context are label-derived word slugs with a
 # short random suffix — "dentist-k3", "weekly-cleaning-8f" — instead of
@@ -145,6 +145,66 @@ def insert_with_slug_retry(conn, sql: str, args_for_id, *, label: str | None = N
     fallback = new_id()
     conn.execute(sql, args_for_id(fallback))
     return fallback
+
+
+_LEGACY_ID = re.compile(r"^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def ids_to_slugs(conn: sqlite3.Connection) -> dict:
+    """One-shot mechanical re-key: every legacy hex/UUID node and edge id
+    becomes a readable slug. Dumb tech by design — no judgment, no LLM:
+    read label → slug_id → UPDATE the row and every reference to it
+    (edges.src_id/dst_id), all in one transaction so a crash changes
+    nothing. Foreign keys are suspended for the duration because the
+    schema has no ON UPDATE CASCADE; the updates themselves keep every
+    reference consistent. Idempotent: slugged rows don't match the legacy
+    pattern and are skipped. Returns {nodes, edges, mapping} — the caller
+    (Proto-Familiar) applies `mapping` to its own JSON stores that
+    reference node ids (outbox originIds, projection-cue state, surface
+    events)."""
+    mapping: dict[str, str] = {}
+    taken = {r["id"] for r in conn.execute("SELECT id FROM nodes")}
+    taken |= {r["id"] for r in conn.execute("SELECT id FROM edges")}
+
+    def fresh(label: str | None, kind: str) -> str:
+        for suffix_len in (2, 3, 5):
+            cand = slug_id(label, kind=kind, suffix_len=suffix_len)
+            if cand not in taken:
+                taken.add(cand)
+                return cand
+        cand = new_id()
+        taken.add(cand)
+        return cand
+
+    # PRAGMA foreign_keys is a no-op while a transaction is open — commit any
+    # in-flight implicit transaction first so the toggle actually applies.
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with conn:  # one transaction: all-or-nothing
+            nodes = conn.execute("SELECT id, label, type FROM nodes").fetchall()
+            n_nodes = 0
+            for r in nodes:
+                if not _LEGACY_ID.match(r["id"]):
+                    continue
+                new = fresh(r["label"], r["type"] or "node")
+                mapping[r["id"]] = new
+                conn.execute("UPDATE nodes SET id=? WHERE id=?", (new, r["id"]))
+                conn.execute("UPDATE edges SET src_id=? WHERE src_id=?", (new, r["id"]))
+                conn.execute("UPDATE edges SET dst_id=? WHERE dst_id=?", (new, r["id"]))
+                n_nodes += 1
+            edges = conn.execute("SELECT id, kind FROM edges").fetchall()
+            n_edges = 0
+            for r in edges:
+                if not _LEGACY_ID.match(r["id"]):
+                    continue
+                new = fresh(None, r["kind"] or "edge")
+                mapping[r["id"]] = new
+                conn.execute("UPDATE edges SET id=? WHERE id=?", (new, r["id"]))
+                n_edges += 1
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    return {"nodes": n_nodes, "edges": n_edges, "mapping": mapping}
 
 
 def get_conn(db_path: Path | None = None) -> sqlite3.Connection:

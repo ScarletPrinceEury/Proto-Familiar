@@ -1539,7 +1539,7 @@ load-bearing invariant *"messages[0..injectedAt-1] is the same
 reference as the input"* — without it, the prefix-cache claim is
 hollow.
 
-## Id scheme (0.9 overhaul) — readable slugs, opaque everywhere
+## Id scheme (0.8.x overhaul) — readable slugs, opaque everywhere
 
 Model-facing ids are **label-derived word slugs with a short random
 suffix** — `dentist-k3`, `weekly-cleaning-8f`, `sister-mira-k3`; label-less
@@ -1565,6 +1565,20 @@ model; a slug costs ~3 and self-documents in tool calls.
 - **Discovery is a capability, not a legend.** The `[schedule ids]` /
   `[graph ids]` legends cover what's in view; `schedule_find` (label search,
   any horizon) is how the Familiar reaches everything else — see below.
+- **Sessions and the outbox are model-facing too** (the Familiar browses
+  `logs/` and greps `tomes/.outbox.json` via list_files/read_file), so they
+  slug as well: session ids are `s-YYYYMMDD-xxxx` (the log FILENAME says
+  which day it was; `get_session_info` returns the current one), outbox item
+  ids are `<kind>-xxxxxx`. Session gates accept both shapes
+  (`isValidSessionId`). Old session LOGS keep their historical uuid names —
+  renaming archives would break cross-store references.
+- **`convert_ids_to_slugs`** (Familiar tool) is the one-shot mechanical
+  re-key for everything else: Unruh nodes/edges (`unruh_ids_to_slugs`, one
+  transaction, FK-safe), Phylactery graph (`graph_ids_to_slugs`, incl.
+  embedding rows), pondering uids, outbox item ids — and it follows the
+  node-id mapping through the JSON stores that reference them (outbox
+  originIds, projection-cue aging state, surface-event task_ids). Idempotent;
+  no LLM judgment anywhere.
 
 ## Significant memories — the composite-key contract (regression guard)
 
