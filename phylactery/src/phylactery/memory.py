@@ -46,6 +46,16 @@ _DECAY_FLOOR_HIGH_CARE = 0.5
 _DEDUP_MERGE_MIN = 0.78       # ≈ cosine 0.90
 _DEDUP_IDENTICAL_MIN = 0.85   # ≈ cosine 0.95
 
+# The consent-review queue collapses MORE aggressively than the permanent store.
+# A not-yet-reviewed fact only needs to reach the ward ONCE; a reworded
+# restatement that lands just under the conservative store threshold should still
+# fold into its pending sibling instead of asking twice. Moderate on purpose:
+# high enough that two genuinely distinct pending facts stay separable for
+# review (over-merging pendings is the one lossy failure — the ward would review
+# a blob and lose the ability to keep one / drop the other), low enough to catch
+# same-fact paraphrases the 0.78 store bar misses. Tunable against real queues.
+_DEDUP_PENDING_MERGE_MIN = 0.70  # ≈ cosine 0.85
+
 
 def _derive_slug(title: str | None, content: str) -> str:
     source = (title or content[:80]).strip()
@@ -203,18 +213,29 @@ def _lexically_contained(new: str, existing: str) -> bool:
 
 
 def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str,
-                         standalone_only: bool = False):
+                         standalone_only: bool = False, *,
+                         threshold: float = _DEDUP_MERGE_MIN,
+                         ignore_audience: bool = False):
     """Nearest existing narrative memory to `content`, if it's similar enough to
     be a duplicate. Returns (id, content, consent_pending, similarity) or None.
     Degrades to None (→ normal insert) if embeddings are unavailable.
 
     standalone_only restricts the search to per-fact / significant rows (those
     with a slug), so a discrete extracted fact dedups against other discrete
-    facts and never folds itself into a date-bucketed daily journal blob."""
+    facts and never folds itself into a date-bucketed daily journal blob.
+
+    threshold is the minimum similarity to count as a duplicate — the confirmed
+    store uses the conservative default; the pending queue passes a looser bar.
+    ignore_audience drops the audience-scope filter: a not-yet-reviewed fact is a
+    duplicate of the same fact regardless of which room-tag it was derived under
+    (audience still gates where a memory SURFACES, just not whether it's a dup)."""
     try:
         from phylactery.embed import embed_text
         q_vec = embed_text(content)
-        aud_clause, aud_params = audience_filter_sql(audience)
+        if ignore_audience:
+            aud_clause, aud_params = "1=1", []
+        else:
+            aud_clause, aud_params = audience_filter_sql(audience)
         slug_clause = " AND m.slug IS NOT NULL" if standalone_only else ""
         row = conn.execute(f"""
             SELECT m.id, m.content, m.consent_pending, v.distance
@@ -228,17 +249,63 @@ def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str,
         if not row:
             return None
         sim = max(0.0, 1.0 - row["distance"] / 2.0)
-        if sim < _DEDUP_MERGE_MIN:
+        if sim < threshold:
             return None
         return (row["id"], row["content"], row["consent_pending"], sim)
     except Exception:
         return None
 
 
+def _dedup_merge_pending(conn, content, audience, now, standalone_only: bool):
+    """Dedup for a not-yet-reviewed (consent_pending) incoming fact.
+
+    The review queue's job is to show the ward each distinct new thing ONCE, so
+    it collapses harder than the permanent store and ignores audience scoping:
+      - near-dup of another PENDING fact → fold together, so the queue holds one
+        candidate instead of five paraphrases (the reported pile-up).
+      - near-dup of an already-CONFIRMED memory → DROP the incoming: the ward
+        already greenlit this, re-asking is the churn they complained about. The
+        confirmed row is left UNTOUCHED — new unreviewed wording never folds into
+        a memory that already passed consent (that would slip text past review).
+    Returns a create-style result on a hit, or None (caller inserts normally)."""
+    dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only,
+                               threshold=_DEDUP_PENDING_MERGE_MIN, ignore_audience=True)
+    if dup is None:
+        return None
+    dup_id, dup_content, dup_pending, sim = dup
+    import sys
+    if not dup_pending:
+        # Already known and consented — honour it silently, don't re-ask.
+        print(f"[phylactery] dedup: pending fact already held as confirmed memory {dup_id} "
+              f"(sim {sim:.2f}); dropped without re-asking", file=sys.stderr)
+        return {"ok": True, "id": dup_id, "merged": True, "already_known": True}
+    # Both pending — safe to collapse into the sibling already in the queue.
+    if sim >= _DEDUP_IDENTICAL_MIN or _lexically_contained(content, dup_content):
+        with conn:
+            conn.execute("UPDATE memories SET updated_at=? WHERE id=?", (now, dup_id))
+        print(f"[phylactery] dedup: pending restatement folded into pending {dup_id} "
+              f"(sim {sim:.2f})", file=sys.stderr)
+        return {"ok": True, "id": dup_id, "merged": True,
+                "identical": sim >= _DEDUP_IDENTICAL_MIN}
+    new_content = (dup_content or "") + "\n" + content
+    with conn:
+        conn.execute("UPDATE memories SET content=?, updated_at=? WHERE id=?", (new_content, now, dup_id))
+    _upsert_embedding(conn, dup_id, new_content)
+    print(f"[phylactery] dedup: pending detail merged into pending {dup_id} (sim {sim:.2f})", file=sys.stderr)
+    return {"ok": True, "id": dup_id, "merged": True}
+
+
 def _dedup_merge(conn, content, audience, consent_pending, now, source,
                  standalone_only: bool = False):
     """If `content` duplicates an existing memory, fold it in and return a
     create-style result; otherwise return None (caller inserts normally)."""
+    # A not-yet-reviewed fact takes the aggressive, audience-agnostic queue path
+    # (kept separate so the conservative confirmed-store behaviour below is
+    # unchanged — the threshold that protects long-term memory from conflating
+    # two real facts is never loosened).
+    if consent_pending:
+        return _dedup_merge_pending(conn, content, audience, now, standalone_only)
+
     dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only)
     if dup is None:
         return None

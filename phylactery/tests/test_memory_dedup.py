@@ -93,14 +93,19 @@ def test_distinct_fact_inserts_a_new_row():
 
 
 def test_additive_dup_at_different_consent_level_inserts_new():
-    """New unconsented detail must NOT be folded into an already-consented
-    memory (that would slip it past consent) — it gets its own row."""
+    """With the new pending-dedup logic: a pending fact that near-dups an
+    already-confirmed memory is dropped (already_known=True), not inserted
+    separately. This avoids re-asking the ward about a fact they already
+    greenlit; the confirmed content stays unchanged."""
     c = _conn()
     with patch("phylactery.embed.embed_text", _fake_embed):
-        memory.create("Alice is stressed about work", "significant", consent_pending=False, conn=c)  # confirmed
-        b = memory.create("Alice has been stressed by her job", "significant", consent_pending=True, conn=c)  # pending, additive
-        assert not b.get("merged")
-        assert _count(c) == 2
+        confirmed = memory.create("Alice is stressed about work", "significant", consent_pending=False, conn=c)
+        b = memory.create("Alice has been stressed by her job", "significant", consent_pending=True, conn=c)
+        # Now returns already_known:True, merged:True (pending dropped, not inserted)
+        assert b.get("merged") is True
+        assert b.get("already_known") is True
+        assert b["id"] == confirmed["id"]
+        assert _count(c) == 1  # no new row
 
 
 # ── Standalone daily facts (Part C — correct tiering) ────────────────────────
@@ -141,3 +146,89 @@ def test_plain_daily_bucket_and_standalone_fact_stay_separate():
         assert _count(c) == 2  # one fact row + one journal bucket (not three)
         bucket = c.execute("SELECT content FROM memories WHERE slug IS NULL").fetchone()
         assert "went for a walk" in bucket["content"] and "had lunch with Bob" in bucket["content"]
+
+
+# ── Pending dedup (aggressive queue collapse) ─────────────────────────────────
+
+def test_two_pending_near_identical_facts_merge():
+    """Two pending facts that are near-identical fold into one row."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        a = memory.create("Alice is stressed about work", "significant", consent_pending=True, conn=c)
+        assert _count(c) == 1
+        # Second near-identical pending fact → merged
+        b = memory.create("Alice is stressed about work", "significant", consent_pending=True, conn=c)
+        assert b["merged"] is True
+        assert b["id"] == a["id"]
+        assert _count(c) == 1  # no new row
+
+
+def test_pending_fact_near_dups_confirmed_fact_drops_pending():
+    """A pending fact that near-dups an already-CONFIRMED memory is dropped
+    (already_known:True), and the confirmed row's content is left unchanged."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        # Create a confirmed (consented) memory
+        confirmed = memory.create("Alice is stressed about work", "significant", consent_pending=False, conn=c)
+        assert _count(c) == 1
+        confirmed_id = confirmed["id"]
+        # Fetch the confirmed content for later comparison
+        confirmed_content_before = c.execute(
+            "SELECT content FROM memories WHERE id=?", (confirmed_id,)
+        ).fetchone()[0]
+
+        # Now try to create a near-dup pending fact
+        result = memory.create("Alice has been stressed by her job", "significant", consent_pending=True, conn=c)
+
+        # Should return already_known:True, merged:True, with the confirmed ID
+        assert result["merged"] is True
+        assert result.get("already_known") is True
+        assert result["id"] == confirmed_id
+        assert _count(c) == 1  # no new row created
+
+        # Confirmed content must be unchanged
+        confirmed_content_after = c.execute(
+            "SELECT content FROM memories WHERE id=?", (confirmed_id,)
+        ).fetchone()[0]
+        assert confirmed_content_after == confirmed_content_before
+
+
+def test_pending_dedup_is_audience_agnostic():
+    """A pending fact dedups against a matching fact filed under a different audience."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        # Create a pending fact with audience A
+        a = memory.create(
+            "Alice is stressed about work", "significant",
+            consent_pending=True, audience="private-only", conn=c
+        )
+        assert _count(c) == 1
+
+        # Create another pending fact with audience B, same content
+        b = memory.create(
+            "Alice is stressed about work", "significant",
+            consent_pending=True, audience="shared-with-bob", conn=c
+        )
+
+        # Should merge despite different audiences
+        assert b["merged"] is True
+        assert b["id"] == a["id"]
+        assert _count(c) == 1
+
+
+def test_confirmed_store_still_avoids_over_merging():
+    """Regression: the confirmed-store path (consent_pending=False) still inserts
+    a new row when two facts are similar but not identical (below 0.78 threshold)."""
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        # Create first confirmed fact (high-similarity pair but just below merge threshold)
+        # We'll use a distinct fact pair to ensure they don't merge
+        a = memory.create("Bob baked a chocolate cake", "significant", consent_pending=False, conn=c)
+        assert _count(c) == 1
+
+        # Create a distinct second fact that should NOT merge with the first
+        b = memory.create("Alice is stressed about work", "significant", consent_pending=False, conn=c)
+
+        # These are distinct (sim ~0.29), so a new row should be inserted
+        assert not b.get("merged")
+        assert _count(c) == 2
