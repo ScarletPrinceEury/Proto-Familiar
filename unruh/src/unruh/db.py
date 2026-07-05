@@ -16,14 +16,39 @@ doesn't wedge the DB.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DB_FILENAME = "unruh.db"
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+# The ward's local zone, resolved EXPLICITLY from the TZ env (Thalamus spawns
+# Unruh with TZ=wardTimeZone) via zoneinfo — NOT via the C runtime's local-time
+# resolution. `datetime.astimezone()` with no arg reads the platform local
+# zone, and on Windows the C runtime can't parse an IANA name like
+# "Europe/Berlin": it drops DST and applies the standard offset, landing every
+# converted time an hour off in summer. ZoneInfo uses the IANA tz database (the
+# `tzdata` dep guarantees it on Windows) and applies DST correctly for the
+# date. Returns None when TZ is unset/unknown → callers fall back to the old
+# co-located behaviour. Cached; the process is spawned per ward zone.
+_ZONE_CACHE: dict[str, ZoneInfo | None] = {}
+
+
+def _local_zone() -> ZoneInfo | None:
+    tz = os.environ.get("TZ")
+    if not tz:
+        return None
+    if tz not in _ZONE_CACHE:
+        try:
+            _ZONE_CACHE[tz] = ZoneInfo(tz)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            _ZONE_CACHE[tz] = None
+    return _ZONE_CACHE[tz]
 
 
 def default_db_path() -> Path:
@@ -45,8 +70,14 @@ def now_iso() -> str:
     keeping storage local too removes the entire class of UTC<->local
     conversion bugs (a model that drops the offset, or double-applies it).
     External instants (e.g. an iCal feed) are converted to local once at
-    their own ingest seam, never here. See docs/unruh-design.md."""
-    return datetime.now().isoformat(timespec="seconds")
+    their own ingest seam, never here. See docs/unruh-design.md.
+
+    "Now" is read in the ward's IANA zone (from TZ) so it agrees with
+    to_local_naive — the two are compared (reconcile's past/future check), so
+    they must share one definition of local."""
+    zone = _local_zone()
+    now = datetime.now(zone) if zone is not None else datetime.now()
+    return now.replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def to_local_naive(s: str | None) -> str | None:
@@ -70,7 +101,8 @@ def to_local_naive(s: str | None) -> str | None:
     except (TypeError, ValueError):
         return s
     if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
+        zone = _local_zone()
+        dt = (dt.astimezone(zone) if zone is not None else dt.astimezone()).replace(tzinfo=None)
     return dt.isoformat(timespec="seconds")
 
 

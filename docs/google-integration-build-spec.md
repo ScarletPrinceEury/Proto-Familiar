@@ -1,5 +1,14 @@
 # Google Calendar integration — build spec
 
+> **DST-correct time conversion (0.8.23-alpha).** `db.to_local_naive` (and
+> `now_iso`) converted offset-bearing timestamps via `datetime.astimezone()`
+> with no arg — the C runtime's local zone. On Windows the C runtime can't
+> parse an IANA `TZ` like "Europe/Berlin", so it dropped DST and landed every
+> summer event an hour early (a 2pm appointment showing as 1pm). Fixed by
+> resolving the ward's zone EXPLICITLY through `zoneinfo.ZoneInfo(TZ)`
+> (`db._local_zone`, shared by now + conversion so they can't disagree) and
+> adding the `tzdata` dependency so it works on Windows.
+
 > **Multi-calendar + attribution follow-up (0.8.22-alpha).** The sync now
 > reads SHARED calendars, not just an account's own primary — essential for
 > the recommended setup (a separate Familiar account with the ward's and
