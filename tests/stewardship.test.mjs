@@ -12,6 +12,8 @@ import {
   buildOpeningBrief,
   selectReadiness,
   buildStewardshipBlock,
+  recordRoutineReview,
+  readStewardshipState,
 } from '../stewardship.js';
 
 // ── tierAtLeastModerate ────────────────────────────────────────────
@@ -821,6 +823,134 @@ test('buildStewardshipBlock: readiness surfaces when event + unmet prerequisite 
     assert.match(result, /Standup/);
     assert.match(result, /needs/);
     assert.match(result, /still open/);
+  } finally {
+    fs.rmSync(tomesDir, { recursive: true });
+  }
+});
+
+// ── recordRoutineReview + buildStewardshipBlock integration ────────
+test('recordRoutineReview: stamps routineReviewAt and stores finding', async () => {
+  const tomesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'routine-review-'));
+  try {
+    const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+    const finding = 'dishes are slipping — shrink it?';
+    await recordRoutineReview(finding, now, tomesDir);
+    const state = await readStewardshipState(tomesDir);
+    assert.equal(state.routineReviewAt, now);
+    assert.ok(state.routineReviewFinding, 'finding should exist');
+    assert.equal(state.routineReviewFinding.text, finding);
+    assert.equal(state.routineReviewFinding.turnsLeft, 3);
+  } finally {
+    fs.rmSync(tomesDir, { recursive: true });
+  }
+});
+
+test('recordRoutineReview: null finding stamps time but clears finding', async () => {
+  const tomesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'routine-review-'));
+  try {
+    const now1 = new Date(2026, 6, 4, 10, 0, 0).getTime();
+    const now2 = new Date(2026, 6, 5, 10, 0, 0).getTime();
+    // First record a finding
+    await recordRoutineReview('something to say', now1, tomesDir);
+    // Then record null to clear it
+    await recordRoutineReview(null, now2, tomesDir);
+    const state = await readStewardshipState(tomesDir);
+    assert.equal(state.routineReviewAt, now2);
+    assert.equal(state.routineReviewFinding, undefined, 'finding should be cleared when null');
+  } finally {
+    fs.rmSync(tomesDir, { recursive: true });
+  }
+});
+
+test('recordRoutineReview: caps finding text at 500 chars', async () => {
+  const tomesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'routine-review-'));
+  try {
+    const now = Date.now();
+    const longText = 'x'.repeat(600);
+    await recordRoutineReview(longText, now, tomesDir);
+    const state = await readStewardshipState(tomesDir);
+    assert.equal(state.routineReviewFinding.text.length, 500);
+  } finally {
+    fs.rmSync(tomesDir, { recursive: true });
+  }
+});
+
+test('buildStewardshipBlock: surfaces routine review finding when present', async () => {
+  const tomesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stew-routine-'));
+  try {
+    const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+    const finding = 'dishes are slipping — shrink it?';
+    // Pre-set a routine review finding in state
+    await recordRoutineReview(finding, now - 10000, tomesDir);
+    // Now build the block with liveTurn=true, recent last message (no brief)
+    const oneMinuteAgo = new Date(2026, 6, 4, 9, 59, 0).toISOString();
+    const result = await buildStewardshipBlock({
+      liveTurn: true,
+      staticOnly: false,
+      threat: { tier: 'calm' },
+      settings: { stewardshipEnabled: true, dayStartAnchor: '09:00' },
+      nowMs: now,
+      lastUserMessageAt: oneMinuteAgo,
+      scheduleItems: [],
+      wardTimeZone: null,
+      tomesDir,
+    });
+    assert.match(result, /dishes are slipping/);
+  } finally {
+    fs.rmSync(tomesDir, { recursive: true });
+  }
+});
+
+test('buildStewardshipBlock: decrements turnsLeft on live turn', async () => {
+  const tomesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stew-routine-'));
+  try {
+    const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+    const finding = 'dishes are slipping — shrink it?';
+    const oneMinuteAgo = new Date(2026, 6, 4, 9, 59, 0).toISOString();
+    // Record initial finding (turnsLeft=3)
+    await recordRoutineReview(finding, now, tomesDir);
+    // First live turn call
+    await buildStewardshipBlock({
+      liveTurn: true,
+      staticOnly: false,
+      threat: { tier: 'calm' },
+      settings: { stewardshipEnabled: true, dayStartAnchor: '09:00' },
+      nowMs: now,
+      lastUserMessageAt: oneMinuteAgo,
+      scheduleItems: [],
+      wardTimeZone: null,
+      tomesDir,
+    });
+    let state = await readStewardshipState(tomesDir);
+    assert.equal(state.routineReviewFinding.turnsLeft, 2);
+    // Second live turn call
+    await buildStewardshipBlock({
+      liveTurn: true,
+      staticOnly: false,
+      threat: { tier: 'calm' },
+      settings: { stewardshipEnabled: true, dayStartAnchor: '09:00' },
+      nowMs: now,
+      lastUserMessageAt: oneMinuteAgo,
+      scheduleItems: [],
+      wardTimeZone: null,
+      tomesDir,
+    });
+    state = await readStewardshipState(tomesDir);
+    assert.equal(state.routineReviewFinding.turnsLeft, 1);
+    // Third live turn call
+    await buildStewardshipBlock({
+      liveTurn: true,
+      staticOnly: false,
+      threat: { tier: 'calm' },
+      settings: { stewardshipEnabled: true, dayStartAnchor: '09:00' },
+      nowMs: now,
+      lastUserMessageAt: oneMinuteAgo,
+      scheduleItems: [],
+      wardTimeZone: null,
+      tomesDir,
+    });
+    state = await readStewardshipState(tomesDir);
+    assert.equal(state.routineReviewFinding, undefined, 'finding should be cleared after turnsLeft reaches 0');
   } finally {
     fs.rmSync(tomesDir, { recursive: true });
   }

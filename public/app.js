@@ -267,6 +267,8 @@ const state = {
   dayStartGapHours:        3,        // inactivity gap before a message counts as "first contact today"
   briefLookaheadDays:      3,        // how far ahead the opening brief looks
   docketMinAgeDays:        3,        // days a task floats before I start offering it a place
+  routineReviewEnabled:    true,     // weekly routine review riding the reflection slot (Pass 3)
+  routineReviewDays:       7,        // cadence for the routine review
   wardTimeZone:            '',      // ward's IANA zone, auto-detected from the browser (see init overlay)
   // Google Calendar sync (0.8). Opt-in: idles until an iCal URL is pasted
   // and the toggle is on. Interval in minutes (hourly default; loop clamps
@@ -340,6 +342,7 @@ const SERVER_SYNCED_KEYS = [
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
   'stewardshipEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
+  'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
@@ -2652,6 +2655,11 @@ function readSettingsFromUI() {
     const n = parseInt($('docket-min-age-days').value, 10);
     state.docketMinAgeDays = Number.isInteger(n) && n >= 0 && n <= 60 ? n : 3;
   }
+  if ($('routine-review-toggle')) state.routineReviewEnabled = $('routine-review-toggle').checked;
+  if ($('routine-review-days')) {
+    const n = parseInt($('routine-review-days').value, 10);
+    state.routineReviewDays = Number.isInteger(n) && n >= 1 && n <= 60 ? n : 7;
+  }
   state.customTools       = $('custom-tools').value;
   const wsEnabledEl = $('web-search-enabled');
   if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
@@ -2723,6 +2731,8 @@ function writeSettingsToUI() {
   if ($('day-start-gap-hours')) setIfNotFocused($('day-start-gap-hours'), 'value', state.dayStartGapHours ?? 3);
   if ($('brief-lookahead-days')) setIfNotFocused($('brief-lookahead-days'), 'value', state.briefLookaheadDays ?? 3);
   if ($('docket-min-age-days')) setIfNotFocused($('docket-min-age-days'), 'value', state.docketMinAgeDays ?? 3);
+  if ($('routine-review-toggle')) setIfNotFocused($('routine-review-toggle'), 'checked', state.routineReviewEnabled !== false);
+  if ($('routine-review-days')) setIfNotFocused($('routine-review-days'), 'value', state.routineReviewDays ?? 7);
   if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
@@ -3612,6 +3622,7 @@ function init() {
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
+    'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',

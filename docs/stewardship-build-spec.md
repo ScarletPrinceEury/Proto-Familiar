@@ -16,8 +16,20 @@ each prerequisite task (reusing an existing open one, never duplicating),
 and links `requires` edges — SUGGESTED, prunable per instance (the template
 proposes, the instance decides). `schedule_add_event` now hints when a
 tagged event has a matching template. Templates are the Familiar's own
-editable objects (no ward UI — that's deliberate per §3.2). Passes 3–4
-still to come.
+editable objects (no ward UI — that's deliberate per §3.2).
+**Pass 3 shipped** (0.8.21-alpha) — routine review: `routine-review.js`
+(pure ledger + due-check + the pivot-menu prompt section) rides ONE
+reflection tick (no new LLM call). A review is due only when the weekly
+cadence has elapsed AND the fulfilment ledger actually shows a routine
+slipping (a good week manufactures nothing). Code counts met/missed; the
+reflection prompt gains the pivot menu (keep / shrink / move / make
+enjoyable / swap / shelve — "not ready yet" is a finding) and emits a
+first-person `routine_review` finding; the stewardship block surfaces it
+as slot 4 for a few turns so the Familiar raises it at a good moment and
+acts via chat tools. Default-ON toggle + `routineReviewDays` +
+`PROTO_FAMILIAR_ROUTINE_REVIEW_DISABLED=1`; it borrows the reflection slot
+without colonizing the pondering loop, and inherits the block's
+moderate+-threat stand-down. Pass 4 (villager scheduling) still to come.
 
 **Why split Pass 2:** 2a is entirely JS/HTML riding data already in the
 temporal payload (edges + node payload) — zero Python. 2b needs new Unruh

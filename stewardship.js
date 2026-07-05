@@ -167,6 +167,29 @@ async function writeState(tomesDir, state) {
   await fsp.rename(tmp, file);
 }
 
+/** Read the stewardship state (e.g. so the reflection loop can check when the
+ *  last routine review ran). Never throws — returns {} on any failure. */
+export async function readStewardshipState(tomesDir = DEFAULT_TOMES_DIR) {
+  return readState(tomesDir);
+}
+
+/**
+ * Record the outcome of a weekly routine review (stewardship Pass 3): stamp
+ * the cadence clock always, and stash the Familiar's finding for the block to
+ * surface when present. Called from the reflection follow-through. A finding
+ * shows for a few live turns (turnsLeft) so the Familiar can weave it in at a
+ * good moment, then clears itself.
+ */
+export async function recordRoutineReview(finding, nowMs = Date.now(), tomesDir = DEFAULT_TOMES_DIR) {
+  const state = await readState(tomesDir);
+  state.routineReviewAt = nowMs;
+  const text = (typeof finding === 'string' ? finding.trim() : '').slice(0, 500);
+  if (text) state.routineReviewFinding = { text, turnsLeft: 3 };
+  else delete state.routineReviewFinding;
+  await writeState(tomesDir, state);
+  return { ok: true };
+}
+
 /**
  * Assemble the stewardship block for this turn (or "" — the common case).
  * Orchestration only; the selection logic above is pure and unit-tested.
@@ -256,7 +279,21 @@ export async function buildStewardshipBlock(opts = {}) {
     }
   }
 
-  // 4. Anchor learning — once I've watched enough mornings, surface the drift
+  // 4. Routine review — a considered weekly finding about a slipping routine,
+  //    authored in my own voice during a reflection tick. I raise it at a good
+  //    moment; it shows for a few turns, then clears.
+  if (slots > 0 && state.routineReviewFinding?.text) {
+    bullets.push(state.routineReviewFinding.text);
+    slots -= 1;
+    if (liveTurn) {
+      const left = Number(state.routineReviewFinding.turnsLeft) || 0;
+      if (left <= 1) delete state.routineReviewFinding;
+      else state.routineReviewFinding = { text: state.routineReviewFinding.text, turnsLeft: left - 1 };
+      dirty = true;
+    }
+  }
+
+  // 5. Anchor learning — once I've watched enough mornings, surface the drift
   //    so I can adopt my human's real rhythm via set_day_start_anchor.
   if (slots > 0 && (state.firstContactSamples?.length ?? 0) >= MIN_SAMPLES_FOR_ANCHOR && state.anchorSuggestedOn !== today) {
     const observed = medianHHMM(state.firstContactSamples);

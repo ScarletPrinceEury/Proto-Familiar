@@ -201,6 +201,15 @@
             <input type="number" id="docket-min-age-days" value="3" min="0" max="60" step="1" style="width:4em">
           </div>
           <div class="field-hint">How long an untimed "someday" task drifts before your Familiar starts offering to give it a real place on your schedule.</div>
+          <div class="field-row">
+            <label for="routine-review-toggle">Routine review</label>
+            <input type="checkbox" id="routine-review-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Once a week — and only if a tracked routine (from "Track unmet needs") is actually slipping — your Familiar quietly reviews how it's going and, at a good moment, offers a real pivot rather than nagging: a smaller version, a better time, making it enjoyable, swapping it, or setting it down for now. It rides an existing reflection (no extra AI calls) and never grades you — it calibrates the routine to you. Needs "Track unmet needs" on to have anything to review.</div>
+          <div class="field-row">
+            <label for="routine-review-days">Review every (days)</label>
+            <input type="number" id="routine-review-days" value="7" min="1" max="60" step="1" style="width:4em">
+          </div>
 
           <div class="field-row" style="margin-top:8px">
             <label for="gcal-toggle">Google Calendar sync</label>
