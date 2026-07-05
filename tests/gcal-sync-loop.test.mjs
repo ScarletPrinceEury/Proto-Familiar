@@ -99,3 +99,100 @@ test('a failed sync retries on the short leash; success consumes the full interv
     await stopGcalSyncLoop();
   }
 });
+
+test('multi-snapshot: fetchSource returning snapshots[] ingests each with calendarId', async () => {
+  const ingests = [];
+  const r = await runOneGcalSyncTick({
+    fetchSource: async () => ({
+      ok: true,
+      snapshots: [
+        { events: [{ uid: 'e1' }], calendarId: 'calA' },
+        { events: [{ uid: 'e2' }], calendarId: 'calB' },
+      ],
+    }),
+    ingest: async (args) => {
+      ingests.push(args);
+      return { ok: true, new: ['n' + args.calendarId], updated: [], removed: [] };
+    },
+  });
+  assert.equal(ingests.length, 2, 'ingest called once per snapshot');
+  assert.equal(ingests[0].calendarId, 'calA');
+  assert.equal(ingests[1].calendarId, 'calB');
+  assert.deepEqual(r.new, ['ncalA', 'ncalB'], 'new ids from all snapshots collected');
+  assert.equal(r.synced, true);
+});
+
+test('multi-snapshot: one calendar fails, others succeed → synced:true', async () => {
+  const ingests = [];
+  const r = await runOneGcalSyncTick({
+    fetchSource: async () => ({
+      ok: true,
+      snapshots: [
+        { events: [{ uid: 'e1' }], calendarId: 'calA' },
+        { events: [{ uid: 'e2' }], calendarId: 'calB' },
+      ],
+    }),
+    ingest: async (args) => {
+      ingests.push(args);
+      // calA fails, calB succeeds
+      if (args.calendarId === 'calA') return { ok: false, error: 'auth failed' };
+      return { ok: true, new: ['ncalB'], updated: [], removed: [] };
+    },
+  });
+  assert.equal(ingests.length, 2);
+  assert.equal(r.synced, true, 'synced should be true if any calendar succeeds');
+  assert.deepEqual(r.new, ['ncalB']);
+});
+
+test('multi-snapshot: all calendars fail → synced:false, reason ingest_failed', async () => {
+  const r = await runOneGcalSyncTick({
+    fetchSource: async () => ({
+      ok: true,
+      snapshots: [
+        { events: [{ uid: 'e1' }], calendarId: 'calA' },
+        { events: [{ uid: 'e2' }], calendarId: 'calB' },
+      ],
+    }),
+    ingest: async () => ({ ok: false, error: 'unruh down' }),
+  });
+  assert.equal(r.synced, false);
+  assert.equal(r.reason, 'ingest_failed');
+});
+
+test('multi-snapshot: attribution passed to ingest per snapshot', async () => {
+  const ingests = [];
+  const r = await runOneGcalSyncTick({
+    fetchSource: async () => ({
+      ok: true,
+      snapshots: [
+        { events: [{ uid: 'e1' }], calendarId: 'calA', attribution: { kind: 'ward' } },
+        { events: [{ uid: 'e2' }], calendarId: 'calB', attribution: { kind: 'villager', ref: 'v1' } },
+      ],
+    }),
+    ingest: async (args) => {
+      ingests.push(args);
+      return { ok: true, new: [], updated: [], removed: [] };
+    },
+  });
+  assert.equal(ingests[0].attribution.kind, 'ward');
+  assert.equal(ingests[1].attribution.kind, 'villager');
+  assert.equal(ingests[1].attribution.ref, 'v1');
+});
+
+test('legacy single-snapshot (no snapshots array) still works', async () => {
+  const ingests = [];
+  const r = await runOneGcalSyncTick({
+    fetchSource: async () => ({
+      ok: true,
+      icsText: 'BEGIN:VCALENDAR...',
+      reconcileDeletes: true,
+    }),
+    ingest: async (args) => {
+      ingests.push(args);
+      return { ok: true, new: ['legacy'], updated: [], removed: [] };
+    },
+  });
+  assert.equal(ingests.length, 1);
+  assert.equal(ingests[0].icsText, 'BEGIN:VCALENDAR...');
+  assert.equal(ingests[0].reconcileDeletes, true);
+});

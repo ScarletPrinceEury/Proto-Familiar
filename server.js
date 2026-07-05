@@ -64,8 +64,13 @@ import {
   readToken as readGoogleToken, writeToken as writeGoogleToken,
   clearToken as clearGoogleToken, publicStatus as googlePublicStatus,
   getFreshAccessToken, listEvents as listGoogleEvents,
+  listCalendars as listGoogleCalendars, hasCalendarListScope,
   normalizeGoogleEvents, isConnected as googleConnected,
 } from './gcal-google.js';
+import {
+  resolveAttribution, isIgnored, wardCalendarId,
+  writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
+} from './gcal-attribution.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
@@ -2426,7 +2431,22 @@ function googleRedirectUri(req) {
 }
 
 app.get('/api/gcal/google/status', async (_req, res) => {
-  res.json(googlePublicStatus(await readGoogleToken()));
+  const store = await readGoogleToken();
+  // sharedScope tells the UI whether a reconnect is needed to read shared
+  // calendars (the widened scope). Old tokens lack it.
+  res.json({ ...googlePublicStatus(store), sharedScope: hasCalendarListScope(store) });
+});
+
+// Discovered calendars (what the last sync saw) + their current attribution,
+// for the calendars/attribution panel. Read-only; attribution itself is set
+// through the normal settings sync (gcalCalendarAttribution) or the Familiar's
+// gcal_attribute_calendar tool.
+app.get('/api/gcal/calendars', async (_req, res) => {
+  const cache = await readCalendarCache().catch(() => ({}));
+  const cals = Array.isArray(cache?.calendars) ? cache.calendars : [];
+  const s = readSettingsSync();
+  const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+  res.json({ calendars: cals.map(c => ({ ...c, attribution: resolveAttribution(c, map) })) });
 });
 
 // Door 1, step A: store the Cloud-Console OAuth client.
@@ -3415,20 +3435,85 @@ function gcalSourceConfigured(s) {
 // tier, reworked). Refreshes the access token as needed, lists a forward
 // window (cancellations included), and returns normalized events for the
 // same gcal_ingest. Windowed → reconcileDeletes:false. Never throws.
+// Native Google: enumerate every calendar the account can read — its own AND
+// any shared into it — and emit one per-calendar snapshot, each attributed
+// from the ward-set map. Falls back to the single primary calendar when the
+// stored token predates the calendar-list scope (the UI prompts a reconnect).
 async function fetchGoogleSource() {
   const store = await readGoogleToken();
   if (!googleConnected(store)) return { ok: false, error: 'Google account not connected' };
   const fresh = await getFreshAccessToken(store, { save: (s) => writeGoogleToken(s) });
   if (!fresh.ok) return { ok: false, error: fresh.error };
+  const s = readSettingsSync();
+  const attributionMap = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+  const now = new Date();
+  const timeMin = now.toISOString();
+  const timeMax = new Date(now.getTime() + gcalLookaheadDays(s) * 86_400_000).toISOString();
+
+  let calendars = null;
   try {
-    const now = new Date();
-    const timeMin = now.toISOString();
-    const timeMax = new Date(now.getTime() + gcalLookaheadDays() * 86_400_000).toISOString();
-    const items = await listGoogleEvents({ accessToken: fresh.accessToken, timeMin, timeMax });
-    return { ok: true, events: normalizeGoogleEvents(items), reconcileDeletes: false };
+    calendars = await listGoogleCalendars({ accessToken: fresh.accessToken });
   } catch (err) {
-    return { ok: false, error: err?.message ?? String(err) };
+    console.warn(`[gcal] calendar list unavailable (${err?.message ?? err}) — syncing primary only; reconnect to grant shared-calendar read`);
   }
+
+  // No list (old scope / API hiccup) → the historical single-calendar path.
+  if (!calendars || !calendars.length) {
+    try {
+      const items = await listGoogleEvents({ accessToken: fresh.accessToken, calendarId: 'primary', timeMin, timeMax });
+      return { ok: true, snapshots: [{ calendarId: 'primary', events: normalizeGoogleEvents(items, 'primary'), reconcileDeletes: false, includeLegacy: true }] };
+    } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+  }
+
+  // Remember what's out there so the ward/Familiar can attribute it.
+  await writeCalendarCache(calendars.map(c => ({ ...c, source: 'google' }))).catch(() => {});
+  const wardCal = wardCalendarId(calendars, attributionMap);
+
+  const snapshots = [];
+  for (const cal of calendars) {
+    if (isIgnored(cal, attributionMap)) continue;   // ward marked this one skip
+    let items;
+    try { items = await listGoogleEvents({ accessToken: fresh.accessToken, calendarId: cal.id, timeMin, timeMax }); }
+    catch (err) { console.warn(`[gcal] calendar "${cal.summary}" fetch failed: ${err?.message ?? err}`); continue; }
+    snapshots.push({
+      calendarId: cal.id,
+      events: normalizeGoogleEvents(items, cal.id),
+      attribution: resolveAttribution(cal, attributionMap),
+      // Native is a windowed API read (showDeleted carries cancellations),
+      // so it never uses the delete-reconcile pass — kept false as before.
+      reconcileDeletes: false,
+      includeLegacy: cal.id === wardCal,
+    });
+  }
+  if (!snapshots.length) return { ok: false, error: 'no syncable calendars (all ignored or failed)' };
+  return { ok: true, snapshots };
+}
+
+// iCal link tier, now multi-feed: the primary gcalIcalUrl plus any extra feeds
+// in gcalIcalUrls ([{url,label}]). Each feed is its own attributable calendar,
+// keyed by its URL; the primary feed adopts the pre-multi-calendar rows.
+async function fetchIcalSnapshots(s) {
+  const attributionMap = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+  const feeds = [];
+  if (s?.gcalIcalUrl && String(s.gcalIcalUrl).trim()) feeds.push({ url: String(s.gcalIcalUrl).trim(), primary: true });
+  for (const extra of (Array.isArray(s?.gcalIcalUrls) ? s.gcalIcalUrls : [])) {
+    const url = String(extra?.url ?? '').trim();
+    if (url) feeds.push({ url, label: extra?.label });
+  }
+  if (!feeds.length) return { ok: false, error: 'no iCal URL configured' };
+  await writeCalendarCache(feeds.map(f => ({ id: f.url, summary: f.label || f.url, primary: !!f.primary, source: 'ical' }))).catch(() => {});
+  const snapshots = [];
+  for (const f of feeds) {
+    const res = await fetchIcal(f.url);
+    if (!res.ok) { console.warn(`[gcal] iCal feed failed: ${res.error ?? 'unknown'}`); continue; }
+    snapshots.push({
+      calendarId: f.url, icsText: res.icsText,
+      attribution: resolveAttribution({ id: f.url, summary: f.label || f.url, primary: !!f.primary }, attributionMap),
+      reconcileDeletes: true, includeLegacy: !!f.primary,
+    });
+  }
+  if (!snapshots.length) return { ok: false, error: 'all iCal feeds failed' };
+  return { ok: true, snapshots };
 }
 
 function startGcalSync() {
@@ -3453,7 +3538,7 @@ function startGcalSync() {
       const src = s?.gcalSource || 'link';
       if (src === 'google') return fetchGoogleSource();
       if (src === 'gogcli' || src === 'gcalcli') {
-        const command = gcalCliCommandFor(s);
+        const baseCommand = gcalCliCommandFor(s);
         const format = s?.gcalCliFormat || (src === 'gcalcli' ? 'json' : 'ics');
         // Hand the command the look-ahead window via {timeMin}/{timeMax}/
         // {dateMin}/{dateMax}/{days} tokens, so a CLI that takes a date range
@@ -3462,14 +3547,32 @@ function startGcalSync() {
         const now = new Date();
         const timeMin = now.toISOString();
         const timeMax = new Date(now.getTime() + lookaheadDays * 86_400_000).toISOString();
-        return fetchViaCli({ command, format, timeMin, timeMax, lookaheadDays });
+        // Multi-calendar CLI: for each configured calendar, substitute the
+        // {calendar} token and run the command once. No calendars listed →
+        // the single legacy invocation (back-compat).
+        const attributionMap = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+        const cals = Array.isArray(s?.gcalCliCalendars) ? s.gcalCliCalendars.filter(c => c?.name) : [];
+        if (!cals.length) return fetchViaCli({ command: baseCommand, format, timeMin, timeMax, lookaheadDays });
+        await writeCalendarCache(cals.map((c, i) => ({ id: c.name, summary: c.label || c.name, primary: i === 0, source: src }))).catch(() => {});
+        const snapshots = [];
+        for (let i = 0; i < cals.length; i++) {
+          const c = cals[i];
+          const command = baseCommand.replaceAll('{calendar}', c.name);
+          const res = await fetchViaCli({ command, format, timeMin, timeMax, lookaheadDays });
+          if (!res.ok) { console.warn(`[gcal] CLI calendar "${c.name}" failed: ${res.error ?? 'unknown'}`); continue; }
+          snapshots.push({
+            calendarId: c.name, icsText: res.icsText, events: res.events,
+            attribution: resolveAttribution({ id: c.name, summary: c.label || c.name, primary: i === 0 }, attributionMap),
+            reconcileDeletes: res.reconcileDeletes === true, includeLegacy: i === 0,
+          });
+        }
+        if (!snapshots.length) return { ok: false, error: 'all CLI calendars failed' };
+        return { ok: true, snapshots };
       }
-      const res = await fetchIcal(s?.gcalIcalUrl);
-      if (!res.ok) return res;
-      return { ok: true, icsText: res.icsText, reconcileDeletes: true };
+      return fetchIcalSnapshots(s);
     },
-    ingest: async ({ icsText, events, reconcileDeletes }) =>
-      ingestGcal({ icsText, events, reconcileDeletes }),
+    ingest: async ({ icsText, events, reconcileDeletes, calendarId, includeLegacy, attribution }) =>
+      ingestGcal({ icsText, events, reconcileDeletes, calendarId, includeLegacy, attribution }),
     // routeNew: the `new` ids are already flagged needs_projection at
     // insert (the cue reads that flag, Pass 3). This stays a log hook so a
     // first import is observable without coupling the loop to the cue.

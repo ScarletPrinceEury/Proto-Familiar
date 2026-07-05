@@ -40,6 +40,16 @@ import { relativeTime } from './relative-time.js';
  *
  * Returns the input string unchanged if it can't be parsed as a date.
  */
+// 📅 marks a Google-synced node; when it comes from a calendar attributed to
+// someone OTHER than my human (a shared calendar — a villager's, a club's),
+// the marker names them so the Familiar reads whose event it is.
+function gcalMarkerFor(node) {
+  if (node?.payload?.source !== 'gcal') return '';
+  const a = node.payload?.gcal_attribution;
+  if (a && a.kind && a.kind !== 'ward' && a.kind !== 'unassigned' && a.label) return ` 📅 ${a.label}`;
+  return ' 📅';
+}
+
 function formatLocalTime(iso, opts = {}) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -210,9 +220,9 @@ export function formatTemporalContext(payload) {
         const whenText = when ? `${when} — ` : '';
         const type = item.type ? `[${item.type}] ` : '';
         // 📅 marks an item the Google-Calendar sync manages (§5) — the
-        // Familiar can tell which fields aren't its to hand-edit.
-        const gcal = item.payload?.source === 'gcal' ? ' 📅' : '';
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcal}${obstacleSuffix(item)}`);
+        // Familiar can tell which fields aren't its to hand-edit; a shared
+        // calendar also names whose it is.
+        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}${obstacleSuffix(item)}`);
       }
     }
     if (reminders.length) {
@@ -319,8 +329,7 @@ export function formatTemporalContext(payload) {
     if (!n?.id || seenScheduleIds.has(n.id)) continue;
     seenScheduleIds.add(n.id);
     if (n.payload?.source === 'gcal') anyGcal = true;
-    const marker = n.payload?.source === 'gcal' ? ' 📅' : '';
-    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${marker} = ${n.id}`);
+    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${gcalMarkerFor(n)} = ${n.id}`);
   }
   if (idLegend.length) {
     blocks.push([
