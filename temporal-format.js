@@ -197,6 +197,12 @@ export function formatTemporalContext(payload) {
       const texturePart = phase.payload?.texture ? ` — ${phase.payload.texture}` : '';
       schedLines.push(`Current phase: ${phaseLabel}${span}${texturePart}`);
     }
+    // Obstacle tags (stewardship Pass 2) rendered as ⟨outside⟩ so I can see
+    // which items carry a real barrier for my human — and know a tag is set.
+    const obstacleSuffix = (item) => {
+      const t = Array.isArray(item.payload?.obstacle_tags) ? item.payload.obstacle_tags.filter(Boolean) : [];
+      return t.length ? ` ⟨${t.join(', ')}⟩` : '';
+    };
     if (upcoming.length) {
       schedLines.push('Upcoming in this window:');
       for (const item of upcoming) {
@@ -206,7 +212,7 @@ export function formatTemporalContext(payload) {
         // 📅 marks an item the Google-Calendar sync manages (§5) — the
         // Familiar can tell which fields aren't its to hand-edit.
         const gcal = item.payload?.source === 'gcal' ? ' 📅' : '';
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcal}`);
+        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcal}${obstacleSuffix(item)}`);
       }
     }
     if (reminders.length) {
@@ -232,7 +238,7 @@ export function formatTemporalContext(payload) {
         const floatDays = Number.isFinite(created)
           ? Math.floor((nowMs - created) / (24 * 3600 * 1000)) : null;
         const ageTag = (floatDays != null && floatDays >= 1) ? ` (floating ${floatDays}d — no time set)` : '';
-        schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}`);
+        schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}${obstacleSuffix(item)}`);
       }
     }
     if (resolved.length) {

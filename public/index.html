@@ -178,6 +178,40 @@
           <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
 
           <div class="field-row" style="margin-top:8px">
+            <label for="stewardship-toggle">Stewardship</label>
+            <input type="checkbox" id="stewardship-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Instead of your whole schedule sitting in your Familiar's context every turn (where it turns into wallpaper it stops noticing), this hands it a short, changing agenda: opening your day with what's coming, and nudging vague "I ought to…" tasks that have been floating without a time toward a real spot. It picks <em>what</em> matters in plain code; <em>how</em> it raises it stays your Familiar's own voice. It stands down whenever you're in distress. The settings below tune it.</div>
+          <div class="field-row">
+            <label for="day-start-anchor">Day starts at</label>
+            <input type="time" id="day-start-anchor" value="09:00" style="width:8em">
+          </div>
+          <div class="field-hint">When your Familiar opens your day with the "here's what's coming" brief — the earliest time it'll treat your first message as the real start of your day (not a late-night one still going). It can learn your actual rhythm over time and adjust this itself, always telling you when it does.</div>
+          <div class="field-row">
+            <label for="day-start-gap-hours">…after a gap of (hours)</label>
+            <input type="number" id="day-start-gap-hours" value="3" min="0" max="24" step="1" style="width:4em">
+          </div>
+          <div class="field-hint">How long a quiet stretch has to precede a message for it to count as the day's first contact — stops an unbroken late-morning conversation from re-opening the day.</div>
+          <div class="field-row">
+            <label for="brief-lookahead-days">Brief looks ahead (days)</label>
+            <input type="number" id="brief-lookahead-days" value="3" min="1" max="14" step="1" style="width:4em">
+          </div>
+          <div class="field-row">
+            <label for="docket-min-age-days">Nudge floating tasks after (days)</label>
+            <input type="number" id="docket-min-age-days" value="3" min="0" max="60" step="1" style="width:4em">
+          </div>
+          <div class="field-hint">How long an untimed "someday" task drifts before your Familiar starts offering to give it a real place on your schedule.</div>
+          <div class="field-row">
+            <label for="routine-review-toggle">Routine review</label>
+            <input type="checkbox" id="routine-review-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Once a week — and only if a tracked routine (from "Track unmet needs") is actually slipping — your Familiar quietly reviews how it's going and, at a good moment, offers a real pivot rather than nagging: a smaller version, a better time, making it enjoyable, swapping it, or setting it down for now. It rides an existing reflection (no extra AI calls) and never grades you — it calibrates the routine to you. Needs "Track unmet needs" on to have anything to review.</div>
+          <div class="field-row">
+            <label for="routine-review-days">Review every (days)</label>
+            <input type="number" id="routine-review-days" value="7" min="1" max="60" step="1" style="width:4em">
+          </div>
+
+          <div class="field-row" style="margin-top:8px">
             <label for="gcal-toggle">Google Calendar sync</label>
             <input type="checkbox" id="gcal-toggle">
           </div>
@@ -1401,6 +1435,9 @@
                   <option value="monthly_last_fri">monthly — last Friday</option>
                   <option value="monthly_last_sun">monthly — last Sunday</option>
                 </select>
+              </label>
+              <label title="Short barrier tags for what this asks of you — e.g. 'outside' when it means leaving the house. Comma-separated. Your Familiar keeps tagged items on its radar and checks their prerequisites in time.">Obstacles (optional)
+                <input type="text" id="te-sched-obstacles" placeholder="outside, phone-call">
               </label>
             </div>
             <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">

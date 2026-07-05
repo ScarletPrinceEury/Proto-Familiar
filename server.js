@@ -98,6 +98,8 @@ import {
 } from './cerebellum.js';
 import { expandWindow } from './recurrence.js';
 import { selectModules, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
+import { readStewardshipState, recordRoutineReview } from './stewardship.js';
+import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './routine-review.js';
 import {
   enqueueMemorization,
   enqueueSessionByDay,
@@ -3054,6 +3056,29 @@ const httpServer = app.listen(PORT, HOST, async () => {
 // (readSettingsSync / primaryConnectionFrom live in cerebellum.js —
 // single reader implementation shared by routes, loops, and triage.)
 
+// Routine review (stewardship Pass 3) rides the reflection slot. A review is
+// due when it's ON, the weekly cadence has elapsed, and the fulfilment ledger
+// actually shows a routine slipping (a good week manufactures nothing). The
+// assessment is computed once per reflection decision and stashed so
+// getReflectionInput can reuse the ledger without a second listRecurring call.
+let _pendingRoutineReview = null;   // { ledger } when a review claims this tick
+async function assessRoutineReviewDue() {
+  const s = readSettingsSync();
+  if (routineReviewHardDisabled() || s?.routineReviewEnabled === false) return null; // default ON
+  const st = await readStewardshipState().catch(() => ({}));
+  const reviewDays = Number.isFinite(Number(s?.routineReviewDays)) ? Number(s.routineReviewDays) : 7;
+  // Cheap cadence gate before any Unruh round-trip.
+  if ((Date.now() - (Number(st?.routineReviewAt) || 0)) < reviewDays * 24 * 3600 * 1000) return null;
+  try {
+    const rec = await listRecurring();
+    const anchors = Array.isArray(rec?.nodes) ? rec.nodes : [];
+    const ledger = buildNeedsLedger(anchors.filter(isNeedWindow), Date.now(), 7);
+    return isRoutineReviewDue({ lastReviewAt: Number(st?.routineReviewAt) || 0, reviewDays, ledger })
+      ? { ledger }
+      : null;
+  } catch { return null; }
+}
+
 function startAutonomousPondering() {
   if (process.env.PROTO_FAMILIAR_PONDERING_DISABLED === '1') {
     console.log('[pondering] PROTO_FAMILIAR_PONDERING_DISABLED=1 — autonomous loop is OFF');
@@ -3080,7 +3105,13 @@ function startAutonomousPondering() {
     // input shape; the result still writes to the ponderings tome,
     // and if the LLM lifted a pattern to identity-layer confidence
     // an additional updateIdentitySection() lands.
-    shouldReflect: async () => shouldReflectNow(),
+    shouldReflect: async () => {
+      // A due routine review can claim a reflection tick even in a quiet
+      // week (so it stays ~weekly), riding the same call — never a new one.
+      _pendingRoutineReview = await assessRoutineReviewDue();
+      if (_pendingRoutineReview) return true;
+      return shouldReflectNow();
+    },
     getReflectionInput: async () => {
       const outcomes = await getNewOutcomesSinceLastReflection();
       const id = await getIdentityAll().catch(() => ({}));
@@ -3158,7 +3189,17 @@ function startAutonomousPondering() {
           if (dates.length) recentMissedNeeds.push({ label: n.label, dates });
         }
       } catch { /* Unruh down → no missed-need cues this cycle */ }
-      return { mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds };
+      // If a routine review claimed this tick (set in shouldReflect just
+      // above), attach the pivot-menu section built from the week's ledger,
+      // and flag the input so the follow-through stamps the cadence. Consume
+      // the pending assessment so it can't leak into a later tick.
+      const review = _pendingRoutineReview;
+      _pendingRoutineReview = null;
+      const routineReviewSection = review ? buildRoutineReviewSection(review.ledger) : '';
+      return {
+        mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds,
+        routineReviewSection, isRoutineReview: !!review,
+      };
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
       const s    = readSettingsSync();
@@ -3216,6 +3257,15 @@ function startAutonomousPondering() {
           addScheduleEdge({ src: co.src_id, dst: co.dst_id, kind: 'causes', payload })
             .then(r => console.log(`[pondering] reflection → ${r?.ok ? `promoted noticing to tentative cause (${co.from} → ${co.to})` : 'failed to promote'} `))
             .catch(err => console.error('[pondering] promotion failed:', err?.message ?? err));
+        }
+        // Routine review (stewardship Pass 3): when this reflection carried the
+        // weekly review, stamp the cadence clock (always, so it doesn't re-fire
+        // every tick) and stash the finding for the stewardship block to
+        // surface — even if the LLM concluded there was nothing to raise.
+        if (topic?.isRoutineReview) {
+          recordRoutineReview(result?.routine_review || null)
+            .then(() => console.log(`[pondering] routine review → ${result?.routine_review ? 'finding stored' : 'no finding this week'}`))
+            .catch(err => console.error('[pondering] routine review record failed:', err?.message ?? err));
         }
       }
       return result;

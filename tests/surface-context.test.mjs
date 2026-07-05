@@ -416,3 +416,69 @@ test('formatSurfaceCandidatesBlock: high-confidence omits the probe nudge', () =
   assert.doesNotMatch(block, /confidence on the consequences here is low/);
   assert.match(block, /Eury crashes within 4h/);
 });
+
+// ── Obstacle tags boost ────────────────────────────────────────────
+test('selectSurfaceCandidates: task with obstacle_tags gets obstacleTags in output', async () => {
+  const out = await selectSurfaceCandidates({
+    openTasks: [{
+      id: 'shop', label: 'grocery shopping', type: 'task',
+      payload: { obstacle_tags: ['outside'] },
+    }],
+    threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+    edges: [], scheduleNodes: [],
+  });
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].obstacleTags, ['outside']);
+});
+
+test('selectSurfaceCandidates: obstacle tags boost consequenceReasons with "barrier" keyword', async () => {
+  const out = await selectSurfaceCandidates({
+    openTasks: [{
+      id: 'call', label: 'call parent', type: 'task',
+      payload: { obstacle_tags: ['phone'] },
+    }],
+    threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+    edges: [], scheduleNodes: [],
+  });
+  assert.equal(out.length, 1);
+  const reasons = out[0].consequenceReasons.join(' ').toLowerCase();
+  assert.match(reasons, /barrier/i);
+});
+
+test('selectSurfaceCandidates: obstacle tags increase consequencePressure by +1', async () => {
+  const openTasks = [
+    {
+      id: 'noTags', label: 'task without tags', type: 'task',
+      payload: {},
+    },
+    {
+      id: 'withTags', label: 'task with tags', type: 'task',
+      payload: { obstacle_tags: ['outside'] },
+    },
+  ];
+  const out = await selectSurfaceCandidates({
+    openTasks, threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+    edges: [], scheduleNodes: [],
+  });
+  assert.equal(out.length, 2);
+  const tagged = out.find(c => c.id === 'withTags');
+  const untagged = out.find(c => c.id === 'noTags');
+  assert.ok(tagged.consequencePressure > untagged.consequencePressure,
+    'tagged task should have higher pressure');
+  assert.equal(tagged.consequencePressure - untagged.consequencePressure, 1,
+    'pressure boost should be exactly +1 for obstacle tags');
+});
+
+test('selectSurfaceCandidates: obstacle tags in rendered candidate block', async () => {
+  const out = await selectSurfaceCandidates({
+    openTasks: [{
+      id: 'call', label: 'phone call to clinic', type: 'task',
+      payload: { obstacle_tags: ['phone'] },
+    }],
+    threat: calm, routinePhaseLabel: '', personModel: '', surfacingHistory: {}, now: NOW,
+    edges: [], scheduleNodes: [],
+  });
+  const block = formatSurfaceCandidatesBlock(out);
+  assert.match(block, /phone/i);
+  assert.match(block, /barrier/i);
+});

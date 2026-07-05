@@ -259,6 +259,16 @@ const state = {
   // module stays (0-10).
   toolSurfacingEnabled:    false,
   toolStickyTurns:         2,
+  // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
+  // executive layer that opens the day, surfaces aging floaters, and learns
+  // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
+  stewardshipEnabled:      true,
+  dayStartAnchor:          '09:00',
+  dayStartGapHours:        3,        // inactivity gap before a message counts as "first contact today"
+  briefLookaheadDays:      3,        // how far ahead the opening brief looks
+  docketMinAgeDays:        3,        // days a task floats before I start offering it a place
+  routineReviewEnabled:    true,     // weekly routine review riding the reflection slot (Pass 3)
+  routineReviewDays:       7,        // cadence for the routine review
   wardTimeZone:            '',      // ward's IANA zone, auto-detected from the browser (see init overlay)
   // Google Calendar sync (0.8). Opt-in: idles until an iCal URL is pasted
   // and the toggle is on. Interval in minutes (hourly default; loop clamps
@@ -331,6 +341,8 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
+  'stewardshipEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
+  'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
@@ -2623,6 +2635,31 @@ function readSettingsFromUI() {
     const n = parseInt($('tool-sticky-turns').value, 10);
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
   }
+  if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
+  if ($('day-start-anchor')) {
+    const t = String($('day-start-anchor').value ?? '').trim();
+    if (/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
+      const [h, m] = t.split(':');
+      state.dayStartAnchor = `${String(Number(h)).padStart(2, '0')}:${m}`;
+    }
+  }
+  if ($('day-start-gap-hours')) {
+    const n = parseInt($('day-start-gap-hours').value, 10);
+    state.dayStartGapHours = Number.isInteger(n) && n >= 0 && n <= 24 ? n : 3;
+  }
+  if ($('brief-lookahead-days')) {
+    const n = parseInt($('brief-lookahead-days').value, 10);
+    state.briefLookaheadDays = Number.isInteger(n) && n >= 1 && n <= 14 ? n : 3;
+  }
+  if ($('docket-min-age-days')) {
+    const n = parseInt($('docket-min-age-days').value, 10);
+    state.docketMinAgeDays = Number.isInteger(n) && n >= 0 && n <= 60 ? n : 3;
+  }
+  if ($('routine-review-toggle')) state.routineReviewEnabled = $('routine-review-toggle').checked;
+  if ($('routine-review-days')) {
+    const n = parseInt($('routine-review-days').value, 10);
+    state.routineReviewDays = Number.isInteger(n) && n >= 1 && n <= 60 ? n : 7;
+  }
   state.customTools       = $('custom-tools').value;
   const wsEnabledEl = $('web-search-enabled');
   if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
@@ -2689,6 +2726,13 @@ function writeSettingsToUI() {
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
+  if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
+  if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
+  if ($('day-start-gap-hours')) setIfNotFocused($('day-start-gap-hours'), 'value', state.dayStartGapHours ?? 3);
+  if ($('brief-lookahead-days')) setIfNotFocused($('brief-lookahead-days'), 'value', state.briefLookaheadDays ?? 3);
+  if ($('docket-min-age-days')) setIfNotFocused($('docket-min-age-days'), 'value', state.docketMinAgeDays ?? 3);
+  if ($('routine-review-toggle')) setIfNotFocused($('routine-review-toggle'), 'checked', state.routineReviewEnabled !== false);
+  if ($('routine-review-days')) setIfNotFocused($('routine-review-days'), 'value', state.routineReviewDays ?? 7);
   if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
@@ -3577,6 +3621,8 @@ function init() {
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns',
+    'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
+    'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
@@ -8085,6 +8131,8 @@ function teToggleScheduleForm(show) {
     if (stakes) stakes.value = '';
     const repeat = $('te-sched-repeat');
     if (repeat) repeat.value = '';
+    const obstacles = $('te-sched-obstacles');
+    if (obstacles) obstacles.value = '';
     setTimeout(() => $('te-sched-label')?.focus(), 0);
   }
 }
@@ -8132,9 +8180,12 @@ async function teSaveScheduleNode() {
   const stakesTier = $('te-sched-stakes')?.value || '';
   const repeatPreset = $('te-sched-repeat')?.value || '';
   const recurrence = teRepeatToRecurrence(repeatPreset);
+  const obstacleTags = String($('te-sched-obstacles')?.value || '')
+    .split(/[,\n]/).map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 8);
   const payload = {};
   if (stakesTier)  payload.stakes_tier = stakesTier;
   if (recurrence)  payload.recurrence  = recurrence;
+  if (obstacleTags.length) payload.obstacle_tags = obstacleTags;
   const hasPayload = Object.keys(payload).length > 0;
   try {
     const r = await fetch('/api/temporal/schedule', {

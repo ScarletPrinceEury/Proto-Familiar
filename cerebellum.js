@@ -50,11 +50,13 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
   addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes,
+  templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory,
+  withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
@@ -91,6 +93,48 @@ const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 export function readSettingsSync() {
   try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); }
   catch { return {}; }
+}
+
+/**
+ * Merge a partial patch into settings.json — read-modify-write under the
+ * SAME per-file lock the PUT /api/settings endpoint uses, so a Familiar-side
+ * write (e.g. set_day_start_anchor) and a client sync can't clobber each
+ * other's fields. Atomic .tmp+rename, so the file is never torn. Only the
+ * keys in `patch` change; everything else is preserved.
+ */
+export async function writeSettingsPatch(patch = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { ok: false, error: 'patch must be an object' };
+  }
+  return withLock(SETTINGS_FILE, async () => {
+    let cur = {};
+    try { cur = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8')); } catch { /* first write */ }
+    const next = { ...cur, ...patch };
+    const tmp = SETTINGS_FILE + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
+    await fsp.rename(tmp, SETTINGS_FILE);
+    return { ok: true, settings: next };
+  });
+}
+
+/**
+ * Normalise obstacle tags to a clean short list. Accepts an array or a
+ * comma/space-separated string. Lowercased, trimmed, de-duped, each tag
+ * capped in length and the list capped in count — a barrier vocabulary,
+ * not free text. Returns [] for anything unusable.
+ */
+export function normalizeObstacleTags(raw) {
+  const arr = Array.isArray(raw) ? raw : String(raw ?? '').split(/[,\n]/);
+  const seen = new Set();
+  const out = [];
+  for (const t of arr) {
+    const tag = String(t ?? '').trim().toLowerCase().slice(0, 30);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 export function primaryConnectionFrom(settings) {
@@ -1278,6 +1322,7 @@ export const BUILTIN_TOOLS = [
           when:  { type: 'string', description: 'Start time. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-01T14:00:00". The time I write is the time it happens.' },
           end:   { type: 'string', description: 'Optional end time, same format (YYYY-MM-DDTHH:MM:SS, local).' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
+          obstacle_tags: { type: 'array', items: { type: 'string' }, description: 'Optional short barrier tags for what this event asks of {{user}} — e.g. ["outside"] when it means leaving the house, which for my human is a real obstacle. I set these so I keep the event on their radar as it approaches and so I can check its prerequisites are ready in time. Keep tags short and reusable (a barrier vocabulary, not a sentence): "outside", "phone-call", "social", "early".' },
         },
         required: ['label', 'when'],
       },
@@ -1303,6 +1348,7 @@ export const BUILTIN_TOOLS = [
             description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
           },
           recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
+          obstacle_tags: { type: 'array', items: { type: 'string' }, description: 'Optional short barrier tags for what this task asks of {{user}} — e.g. ["outside"] when it means leaving the house, which for my human is a real obstacle. I set these so an outside-the-house errand stays on my radar. Keep tags short and reusable (a barrier vocabulary, not a sentence): "outside", "phone-call", "social", "early".' },
         },
         required: ['label'],
       },
@@ -1500,6 +1546,58 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'template_upsert',
+      description: 'I create or adjust a requirement TEMPLATE — a reusable bundle of what a KIND of barrier asks of {{user}}. The tag "outside" (leaving the house) might need "clean clothes" and "shoes by the door". I build these as I learn what my human actually needs, and I adjust them over time — they are mine to grow, not a fixed checklist. Later, when I tag an event with that barrier, I apply the template to SUGGEST its prerequisites (template_apply). One template per tag: upserting a tag that exists replaces its contents.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tag: { type: 'string', description: 'The obstacle tag this template keys off (e.g. "outside"). Matches the obstacle_tags I put on events/tasks.' },
+          label: { type: 'string', description: 'Human-readable name for the bundle (e.g. "leaving the house").' },
+          prerequisites: { type: 'array', items: { type: 'string' }, description: 'Ordered list of short prerequisite task labels — the things that need to be true/done first (e.g. ["clean clothes", "shoes by the door"]).' },
+        },
+        required: ['tag', 'label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_list',
+      description: 'I list my requirement templates — the barrier bundles I\'ve built — so I can see what I have and what each one pulls in before I apply or adjust it.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_delete',
+      description: 'I remove a requirement template I no longer want, by its tag.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tag: { type: 'string', description: 'The obstacle tag whose template to delete.' },
+        },
+        required: ['tag'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_apply',
+      description: 'I apply a requirement template to an event I\'ve tagged with a barrier — this SUGGESTS the template\'s prerequisites as tasks the event requires, so I can check they\'re ready in time (they show up in my stewardship readiness as the event approaches). It only proposes: I prune anything that doesn\'t apply this time by resolving or unlinking it, because my human\'s barriers vary by day. I reach for this right after adding an event tagged with a barrier that has a template (e.g. an "outside" appointment). Prerequisites that already exist as open tasks are reused, not duplicated.',
+      parameters: {
+        type: 'object',
+        properties: {
+          event_id: { type: 'string', description: 'The id of the tagged event to apply matching templates to — from the [schedule ids] legend in [Temporal Context], or the id I got back when I created it.' },
+        },
+        required: ['event_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'convert_ids_to_slugs',
       description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my ponderings, and the outbox, with every internal cross-reference updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -1546,6 +1644,20 @@ export const BUILTIN_TOOLS = [
           weight: { type: 'number', description: 'Optional weight; defaults to 1.0. Standing values bypass decay so this is just initial intensity.' },
         },
         required: ['topic'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_day_start_anchor',
+      description: 'I set the hour my human\'s day really begins — the ward-local time I use to decide when to open with what\'s coming (my stewardship opening brief). I reach for this when my stewardship block has watched enough mornings to tell me their real rhythm has drifted from the time I\'ve been opening on, or when my human tells me directly when their day starts. It writes one shared setting they can also see and change in Settings, so after I set it I tell them plainly in my own voice what I changed it to — the heads-up is mine to give.',
+      parameters: {
+        type: 'object',
+        properties: {
+          time: { type: 'string', description: 'The day-start time in 24-hour "HH:MM" ward-local wall-clock (e.g. "11:00"). Plain local time — no timezone math, no offset.' },
+        },
+        required: ['time'],
       },
     },
   },
@@ -2209,26 +2321,45 @@ export const TOOL_EXECUTORS = {
   // subprocess. Returns short strings the model can quote back as
   // confirmation.
 
-  schedule_add_event: async ({ label, when, end, recurrence }) => {
+  schedule_add_event: async ({ label, when, end, recurrence, obstacle_tags }) => {
     if (!label || typeof label !== 'string') return 'Failed to add event: label (string) is required';
     try {
       const payload = recurrence ? { recurrence } : {};
+      const tags = normalizeObstacleTags(obstacle_tags);
+      if (tags.length) payload.obstacle_tags = tags;
       const data = await addScheduleNode({
         type: 'event', label, when, end,
         ...(Object.keys(payload).length ? { payload } : {}),
       });
       if (data?.ok === false) return `Failed to add event: ${data.error ?? 'unknown error'}`;
+      // Discovery: if this event carries a barrier tag that has a template,
+      // tell me so I can pull its prerequisites in with template_apply. Only
+      // when tags are present (one extra call, gated) and only surfaced loud
+      // when there's actually a template to apply.
+      let templateHint = '';
+      if (tags.length) {
+        try {
+          const tl = await templateList();
+          if (tl?.ok) {
+            const hits = (tl.templates ?? []).filter(t => tags.includes(String(t.tag).toLowerCase()));
+            if (hits.length) templateHint = ` There's a template for ${hits.map(t => `"${t.tag}"`).join(', ')} — I can apply it with template_apply (event_id: ${data.id}) to suggest its prerequisites.`;
+          }
+        } catch { /* discovery is best-effort; never blocks the add */ }
+      }
+      if (templateHint) return `Event added (id: ${data.id}).${templateHint}`;
       return quietOk(`Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`, { id: data.id });
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
-  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence }) => {
+  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence, obstacle_tags }) => {
     if (!label || typeof label !== 'string') return 'Failed to add task: label (string) is required';
     try {
       const payload = {};
       if (stakes_tier) payload.stakes_tier = stakes_tier;
       if (consequence_model) payload.consequence_model = consequence_model;
       if (recurrence) payload.recurrence = recurrence;
+      const tags = normalizeObstacleTags(obstacle_tags);
+      if (tags.length) payload.obstacle_tags = tags;
       const data = await addScheduleNode({
         type: 'task', label, when,
         ...(Object.keys(payload).length ? { payload } : {}),
@@ -2424,6 +2555,93 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't search the schedule: ${err.message}`; }
   },
 
+  template_upsert: async ({ tag, label, prerequisites } = {}) => {
+    const t = String(tag ?? '').trim().toLowerCase();
+    if (!t) return 'I need a tag for the template — the barrier it keys off (e.g. "outside").';
+    const lbl = String(label ?? '').trim();
+    if (!lbl) return 'I need a label for the template — its human name (e.g. "leaving the house").';
+    const prereqs = Array.isArray(prerequisites)
+      ? prerequisites.map(p => String(p ?? '').trim()).filter(Boolean)
+      : String(prerequisites ?? '').split(/[,\n]/).map(p => p.trim()).filter(Boolean);
+    try {
+      const data = await templateUpsert({ tag: t, label: lbl, prerequisites: prereqs });
+      if (!data?.ok) return `I couldn't save that template: ${data?.error ?? 'Unruh unavailable'}.`;
+      const tpl = data.template ?? {};
+      const list = (tpl.prerequisites ?? prereqs);
+      return quietOk(`Template "${tpl.label ?? lbl}" (tag: ${tpl.tag ?? t}) saved — needs: ${list.length ? list.join(', ') : '(nothing yet)'}. I'll suggest these when I apply it to an event tagged "${tpl.tag ?? t}".`);
+    } catch (err) { return `I couldn't save that template: ${err.message}`; }
+  },
+
+  template_list: async () => {
+    try {
+      const data = await templateList();
+      if (!data?.ok) return `I couldn't read my templates: ${data?.error ?? 'Unruh unavailable'}.`;
+      const tpls = Array.isArray(data.templates) ? data.templates : [];
+      if (!tpls.length) return 'I have no requirement templates yet. I build them with template_upsert as I learn what a barrier needs.';
+      const lines = tpls.map(t => `- ${t.label} (tag: ${t.tag}) → ${(t.prerequisites ?? []).join(', ') || '(nothing yet)'}`);
+      return [`My requirement templates (${tpls.length}):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read my templates: ${err.message}`; }
+  },
+
+  template_delete: async ({ tag } = {}) => {
+    const t = String(tag ?? '').trim().toLowerCase();
+    if (!t) return 'I need the tag of the template to delete.';
+    try {
+      const data = await templateDelete({ tag: t });
+      if (!data?.ok) return `I couldn't delete that template: ${data?.error ?? 'Unruh unavailable'}.`;
+      return data.deleted
+        ? quietOk(`Template for "${t}" deleted.`)
+        : `I had no template for "${t}" to delete.`;
+    } catch (err) { return `I couldn't delete that template: ${err.message}`; }
+  },
+
+  template_apply: async ({ event_id } = {}) => {
+    const id = String(event_id ?? '').trim();
+    if (!id) return "I need the event's id to apply a template to it — from the [schedule ids] legend in my [Temporal Context].";
+    try {
+      const res = await getScheduleNode({ id });
+      const ev = (res && typeof res.node === 'object') ? res.node : res;
+      if (!ev || !ev.id) return `I couldn't find a schedule item with id ${id}.`;
+      const tags = Array.isArray(ev.payload?.obstacle_tags) ? ev.payload.obstacle_tags.filter(Boolean).map(x => String(x).toLowerCase()) : [];
+      if (!tags.length) return `"${ev.label ?? id}" has no barrier tags, so there's no template to apply. I can add tags with obstacle_tags when I create or edit it.`;
+      const tl = await templateList();
+      if (!tl?.ok) return `I couldn't read my templates: ${tl?.error ?? 'Unruh unavailable'}.`;
+      const byTag = new Map((tl.templates ?? []).map(t => [String(t.tag).toLowerCase(), t]));
+      const matched = tags.filter(t => byTag.has(t));
+      if (!matched.length) return `No template matches this event's tags (${tags.join(', ')}). I can build one with template_upsert.`;
+
+      const applied = [], skipped = [], seen = new Set();
+      for (const tag of matched) {
+        for (const prereqLabel of (byTag.get(tag).prerequisites ?? [])) {
+          const key = String(prereqLabel).trim().toLowerCase();
+          if (!key || seen.has(key)) continue;   // dedup prerequisites within this apply
+          seen.add(key);
+          // Resolve-or-create the prerequisite task (reuse an existing open one).
+          let prereqId = null, reused = false;
+          const found = await findScheduleNodes({ query: prereqLabel, includeResolved: false, limit: 10 });
+          if (found?.ok) {
+            const exact = (found.matches ?? []).find(m => m.type === 'task' && !m.resolution && String(m.label).trim().toLowerCase() === key);
+            if (exact) { prereqId = exact.id; reused = true; }
+          }
+          if (!prereqId) {
+            const created = await addScheduleNode({ type: 'task', label: prereqLabel });
+            if (!created?.ok || !created.id) { skipped.push(`${prereqLabel} (couldn't create)`); continue; }
+            prereqId = created.id;
+          }
+          if (prereqId === ev.id) { skipped.push(`${prereqLabel} (same as the event)`); continue; }
+          const edge = await addScheduleEdge({ src: ev.id, dst: prereqId, kind: 'requires' });
+          if (!edge?.ok) { skipped.push(`${prereqLabel} (couldn't link)`); continue; }
+          applied.push(`${prereqLabel}${reused ? ' (existing task)' : ' (new task)'}`);
+        }
+      }
+      if (!applied.length && !skipped.length) return `Nothing to suggest for "${ev.label ?? id}" — the matching template(s) have no prerequisites yet.`;
+      const head = applied.length
+        ? `Suggested for "${ev.label ?? id}", now required before it: ${applied.join(', ')}. These are suggestions — I prune any that don't apply this time by resolving or unlinking them. They'll show in my readiness as the event nears.`
+        : `Nothing new to add for "${ev.label ?? id}".`;
+      return skipped.length ? `${head} (Skipped: ${skipped.join('; ')}.)` : head;
+    } catch (err) { return `I couldn't apply the template: ${err.message}`; }
+  },
+
   convert_ids_to_slugs: async () => {
     const report = [];
     try {
@@ -2521,6 +2739,23 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to set standing value: ${data.error ?? 'unknown error'}`;
       return quietOk(`"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`);
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
+  },
+
+  set_day_start_anchor: async ({ time } = {}) => {
+    const t = String(time ?? '').trim();
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
+      return `I couldn't set the day-start: "${time}" isn't a valid 24-hour time. I need "HH:MM" ward-local, like "09:00" or "11:30".`;
+    }
+    // Zero-pad the hour so the stored value is canonical "HH:MM".
+    const [h, m] = t.split(':');
+    const canonical = `${String(Number(h)).padStart(2, '0')}:${m}`;
+    try {
+      const res = await writeSettingsPatch({ dayStartAnchor: canonical });
+      if (res?.ok === false) return `I couldn't set the day-start: ${res.error ?? 'unknown error'}`;
+      // Loud on purpose: this is a shared setting my human should hear about,
+      // and I give the heads-up in my own words this turn.
+      return `Day-start anchor set to ${canonical} (ward-local). From now on I'll open the day with what's coming once my human first turns up after that time. I let them know I changed it.`;
+    } catch (err) { return `I couldn't set the day-start: ${err.message}`; }
   },
 
   // ── Crisis outreach executors ────────────────────────────────────────

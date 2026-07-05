@@ -105,7 +105,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds }) {
+export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, routineReviewSection = '' }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
@@ -178,7 +178,7 @@ OR, if I'm confident enough to lift something to identity, recalibrate a forecas
   ]
 }
 
-The heading must be a single markdown heading line starting with "## ". In edge_calibrations each entry needs an edge_id from the projected list plus at least one of: certainty, observed:true (only if I've genuinely seen it happen), or note. In promotions each entry needs a co_occurs edge_id from the noticed list (the rest is optional — certainty defaults to low). I leave both arrays empty when I have nothing honest to grade or promote.`;
+The heading must be a single markdown heading line starting with "## ". In edge_calibrations each entry needs an edge_id from the projected list plus at least one of: certainty, observed:true (only if I've genuinely seen it happen), or note. In promotions each entry needs a co_occurs edge_id from the noticed list (the rest is optional — certainty defaults to low). I leave both arrays empty when I have nothing honest to grade or promote.${routineReviewSection ? `\n\n${routineReviewSection}` : ''}`;
 }
 
 // ── LLM call ─────────────────────────────────────────────────────
@@ -283,6 +283,13 @@ export function parsePondering(raw) {
       proms.push(out);
     }
     if (proms.length) result.promotions = proms;
+  }
+  // routine_review (stewardship Pass 3): a single first-person finding the
+  // Familiar will raise about a slipping routine. Only present when this
+  // reflection carried the weekly-review section. A string or null.
+  if (parsed.routine_review && typeof parsed.routine_review === 'string') {
+    const line = parsed.routine_review.trim().slice(0, 500);
+    if (line) result.routine_review = line;
   }
   // wants_to_save: optional list of deferred-action intents the
   // Familiar surfaced while pondering. Each entry is a hint to act on
@@ -426,6 +433,7 @@ export async function ponderOnce({
     what_lapses_cost_update: parsed.what_lapses_cost_update ?? null,
     edge_calibrations:       parsed.edge_calibrations ?? null,
     promotions:              parsed.promotions ?? null,
+    routine_review:          parsed.routine_review ?? null,
     wants_to_save:           wantsToSave,
   };
 }

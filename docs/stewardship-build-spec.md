@@ -1,6 +1,57 @@
 # Stewardship — timeblindness support & the executive layer (build spec)
 
-Status: **spec** (0.8.17-alpha). Implementation lands in passes, each its own PR.
+Status: **Pass 1 shipped** (0.8.18-alpha) — `stewardship.js` + the block,
+docket, opening brief, day-start anchor, and `set_day_start_anchor`.
+**Pass 2a shipped** (0.8.19-alpha) — requirement *readiness* (walks the
+`requires`/`depends_on` edges the Familiar already authors via
+`schedule_link` and surfaces unmet prerequisites of an approaching event),
+plus *obstacle tags* (a `payload.obstacle_tags` barrier vocabulary the
+Familiar sets at creation and the ward sets in the temporal editor) and
+the *obstacle radar* (a gentle surface-context priority nudge for tagged
+tasks). **Pass 2b shipped** (0.8.20-alpha) — living templates: an Unruh `templates`
+table (keyed by obstacle tag, one per barrier) + `template_upsert` /
+`template_list` / `template_delete` MCP tools, and a JS `template_apply`
+that reads an event's obstacle tags, matches templates, resolve-or-creates
+each prerequisite task (reusing an existing open one, never duplicating),
+and links `requires` edges — SUGGESTED, prunable per instance (the template
+proposes, the instance decides). `schedule_add_event` now hints when a
+tagged event has a matching template. Templates are the Familiar's own
+editable objects (no ward UI — that's deliberate per §3.2).
+**Pass 3 shipped** (0.8.21-alpha) — routine review: `routine-review.js`
+(pure ledger + due-check + the pivot-menu prompt section) rides ONE
+reflection tick (no new LLM call). A review is due only when the weekly
+cadence has elapsed AND the fulfilment ledger actually shows a routine
+slipping (a good week manufactures nothing). Code counts met/missed; the
+reflection prompt gains the pivot menu (keep / shrink / move / make
+enjoyable / swap / shelve — "not ready yet" is a finding) and emits a
+first-person `routine_review` finding; the stewardship block surfaces it
+as slot 4 for a few turns so the Familiar raises it at a good moment and
+acts via chat tools. Default-ON toggle + `routineReviewDays` +
+`PROTO_FAMILIAR_ROUTINE_REVIEW_DISABLED=1`; it borrows the reflection slot
+without colonizing the pondering loop, and inherits the block's
+moderate+-threat stand-down. Pass 4 (villager scheduling) still to come.
+
+**Why split Pass 2:** 2a is entirely JS/HTML riding data already in the
+temporal payload (edges + node payload) — zero Python. 2b needs new Unruh
+storage + MCP tools + tests, a genuinely separate surface. Splitting keeps
+each PR complete and verifiable rather than one sprawling half-tested
+change; readiness is independently useful today on hand-authored or
+Familiar-authored `requires` edges.
+
+**Two implementation choices worth recording (Pass 1):**
+- *Rotation is self-contained, not on the surface-events ledger yet.* The
+  docket keeps its own re-offer cursors in `.stewardship-state.json`. The
+  spec's "outcomes ride the existing ledger" belongs with the routine
+  review (Pass 3), which is where outcome patterns are actually consumed;
+  wiring it in Pass 1 would couple the block to `surface-events` for no
+  present reader. A converted floater simply stops being floating and
+  drops out on its own.
+- *The heads-up for an anchor change is the Familiar's own words, not a
+  code-built outbox note.* `set_day_start_anchor` is only ever called
+  mid-conversation (the block suggests the drift; the Familiar adopts it),
+  so the natural heads-up is the Familiar saying so in the same turn —
+  which honours "the framing stays mine" better than a templated notice.
+  The setting is still observable in Settings, satisfying "one place."
 
 ## 0. The problem this solves
 

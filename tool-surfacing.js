@@ -39,6 +39,8 @@ export const TOOL_MODULES = {
   schedule_snooze_task: 'schedule-write', schedule_resolve: 'schedule-write',
   schedule_delete: 'schedule-write', schedule_link: 'schedule-write',
   schedule_push_to_google: 'schedule-write',  // keeps its gcalWriteEnabled gate too
+  template_upsert: 'schedule-write', template_delete: 'schedule-write',
+  template_apply: 'schedule-write', template_list: 'schedule-read',
 
   'memory-edit': undefined, // (namespace note only — real entries below)
   read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',
@@ -65,6 +67,8 @@ export const TOOL_MODULES = {
   list_files: 'files', read_file: 'files',
 
   convert_ids_to_slugs: 'maintenance',
+
+  set_day_start_anchor: 'stewardship',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 
@@ -74,15 +78,16 @@ export const ALL_MODULES = [...new Set(Object.values(TOOL_MODULES))];
 // Human-readable index for request_tools' description — generated from the
 // map so it can't drift from reality.
 export const MODULE_INDEX =
-  'schedule-write (add/re-time/snooze/resolve/delete/link calendar items, push to Google), ' +
-  'schedule-read (export an item as .ics/link), ' +
+  'schedule-write (add/re-time/snooze/resolve/delete/link calendar items, requirement templates, push to Google), ' +
+  'schedule-read (export an item as .ics/link, list requirement templates), ' +
   'memory-edit (read/update/delete/list/move my memories, memorize-now, rewrite identity sections), ' +
   'graph (my knowledge web: nodes + relationships), ' +
   'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
   'web (search, read pages, look up facts), ' +
   'acks (file deferred intents, confirm/drop memory consent, graduation notices), ' +
   'files (list/read my own folder), ' +
-  'maintenance (id tidy-up)';
+  'maintenance (id tidy-up), ' +
+  'stewardship (set the day-start time I open my human\'s day on)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +
@@ -92,12 +97,18 @@ export const MODULE_INDEX =
 // negative costs one request_tools round. Tuned from the miss log.
 const TRIGGERS = {
   'schedule-write': {
-    text: /\b(remind(er)?s?|schedul\w*|calendar|appointment|task|to-?dos?|deadline|due|postpone|resched\w*|cancel\w*|snooze|every (day|week|month|morning|night)|routine|phase|tonight|tomorrow|next (week|month)|at \d{1,2}([:.]\d{2})?\s?(am|pm)\b|\d{1,2}([:.]\d{2})\s?(am|pm)?\b|done with|finished|habit|meal|meds|medication)\b/i,
-    // Blocks that invite schedule ACTION travel with the write tools.
-    blocks: ['[Surface candidates', "[New on my human's calendar"],
+    text: /\b(remind(er)?s?|schedul\w*|calendar|appointment|task|to-?dos?|deadline|due|postpone|resched\w*|cancel\w*|snooze|every (day|week|month|morning|night)|routine|phase|tonight|tomorrow|next (week|month)|at \d{1,2}([:.]\d{2})?\s?(am|pm)\b|\d{1,2}([:.]\d{2})\s?(am|pm)?\b|done with|finished|habit|meal|meds|medication|template|prerequisite|before I (can|go)|leaving the house|clean clothes|laundry)\b/i,
+    // Blocks that invite schedule ACTION travel with the write tools. The
+    // stewardship agenda offers aging floaters a place → I need the write
+    // tools to give them a time on the spot.
+    blocks: ['[Surface candidates', "[New on my human's calendar", '[My stewardship'],
+  },
+  stewardship: {
+    text: null,  // block-driven: the anchor-adjust tool travels with the agenda
+    blocks: ['[My stewardship'],
   },
   'schedule-read': {
-    text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link))\b/i,
+    text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link)|template)\b/i,
     blocks: [],
   },
   'memory-edit': {
