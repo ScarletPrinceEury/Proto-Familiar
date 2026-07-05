@@ -964,6 +964,34 @@ export async function getScheduleNode({ id }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// ── Requirement templates (stewardship Pass 2b) ──────────────────
+export async function templateUpsert({ tag, label, prerequisites }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'template_upsert', arguments: { tag, label, prerequisites } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function templateList() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', templates: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'template_list', arguments: {} });
+    return parseToolText(r, { ok: false, templates: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), templates: [] }; }
+}
+
+export async function templateDelete({ tag }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'template_delete', arguments: { tag } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 // ── Google Calendar ingestion wrapper (0.8) ──────────────────────
 //
 // The Node adapters (gcal-source.js for the link tier; gogcli/gcalcli in

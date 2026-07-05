@@ -41,6 +41,7 @@ from mcp.server.fastmcp import FastMCP
 from unruh import __version__
 from unruh.db import get_conn, ids_to_slugs, now_iso
 from unruh import schedule as sched
+from unruh import templates as tmpl
 from unruh import interest as interests
 from unruh import handoff as handoffs
 from unruh import gcal as gcal_ingest_mod
@@ -459,6 +460,66 @@ def schedule_find(query: str, include_resolved: bool = False, limit: int = 20) -
                 conn, query=query, include_resolved=include_resolved, limit=limit,
             )
         return {"ok": True, "matches": matches}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def template_upsert(tag: str, label: str, prerequisites: list[str] | None = None) -> dict[str, Any]:
+    """I create or adjust a requirement TEMPLATE — a reusable bundle of what a
+    KIND of barrier asks of my human. Tag "outside" (leaving the house) might
+    need "clean clothes", "shoes by the door". I build these as I learn what my
+    human actually needs and adjust them over time; they are mine to grow.
+    Later, when I tag an event with that barrier, I apply the template to
+    SUGGEST its prerequisites (template_apply). One template per tag — upserting
+    an existing tag replaces its contents and keeps its id.
+
+    Args:
+        tag: the obstacle tag this template keys off (e.g. "outside"),
+            lower-cased.
+        label: human-readable name for the bundle (e.g. "leaving the house").
+        prerequisites: ordered list of short prerequisite task labels
+            (e.g. ["clean clothes", "shoes by the door"]).
+
+    Returns: {ok: True, template: {id, tag, label, prerequisites, ...}}.
+    """
+    try:
+        with get_conn() as conn:
+            tpl = tmpl.upsert_template(conn, tag=tag, label=label, prerequisites=prerequisites)
+        return {"ok": True, "template": tpl}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def template_list() -> dict[str, Any]:
+    """I list my requirement templates — the barrier bundles I've built — so I
+    can see what I have and what each one pulls in before I apply it.
+
+    Returns: {ok: True, templates: [{id, tag, label, prerequisites, ...}]}.
+    """
+    try:
+        with get_conn() as conn:
+            tpls = tmpl.list_templates(conn)
+        return {"ok": True, "templates": tpls}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def template_delete(tag: str) -> dict[str, Any]:
+    """I remove a requirement template I no longer want, by its tag.
+
+    Args:
+        tag: the obstacle tag whose template to delete.
+
+    Returns: {ok: True, deleted: bool} — deleted is False if no template
+    existed for that tag.
+    """
+    try:
+        with get_conn() as conn:
+            deleted = tmpl.delete_template(conn, tag=tag)
+        return {"ok": True, "deleted": deleted}
     except ValueError as e:
         return _err(str(e))
 

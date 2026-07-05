@@ -50,6 +50,7 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
   addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes,
+  templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
@@ -1545,6 +1546,58 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'template_upsert',
+      description: 'I create or adjust a requirement TEMPLATE — a reusable bundle of what a KIND of barrier asks of {{user}}. The tag "outside" (leaving the house) might need "clean clothes" and "shoes by the door". I build these as I learn what my human actually needs, and I adjust them over time — they are mine to grow, not a fixed checklist. Later, when I tag an event with that barrier, I apply the template to SUGGEST its prerequisites (template_apply). One template per tag: upserting a tag that exists replaces its contents.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tag: { type: 'string', description: 'The obstacle tag this template keys off (e.g. "outside"). Matches the obstacle_tags I put on events/tasks.' },
+          label: { type: 'string', description: 'Human-readable name for the bundle (e.g. "leaving the house").' },
+          prerequisites: { type: 'array', items: { type: 'string' }, description: 'Ordered list of short prerequisite task labels — the things that need to be true/done first (e.g. ["clean clothes", "shoes by the door"]).' },
+        },
+        required: ['tag', 'label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_list',
+      description: 'I list my requirement templates — the barrier bundles I\'ve built — so I can see what I have and what each one pulls in before I apply or adjust it.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_delete',
+      description: 'I remove a requirement template I no longer want, by its tag.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tag: { type: 'string', description: 'The obstacle tag whose template to delete.' },
+        },
+        required: ['tag'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_apply',
+      description: 'I apply a requirement template to an event I\'ve tagged with a barrier — this SUGGESTS the template\'s prerequisites as tasks the event requires, so I can check they\'re ready in time (they show up in my stewardship readiness as the event approaches). It only proposes: I prune anything that doesn\'t apply this time by resolving or unlinking it, because my human\'s barriers vary by day. I reach for this right after adding an event tagged with a barrier that has a template (e.g. an "outside" appointment). Prerequisites that already exist as open tasks are reused, not duplicated.',
+      parameters: {
+        type: 'object',
+        properties: {
+          event_id: { type: 'string', description: 'The id of the tagged event to apply matching templates to — from the [schedule ids] legend in [Temporal Context], or the id I got back when I created it.' },
+        },
+        required: ['event_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'convert_ids_to_slugs',
       description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my ponderings, and the outbox, with every internal cross-reference updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -2279,6 +2332,21 @@ export const TOOL_EXECUTORS = {
         ...(Object.keys(payload).length ? { payload } : {}),
       });
       if (data?.ok === false) return `Failed to add event: ${data.error ?? 'unknown error'}`;
+      // Discovery: if this event carries a barrier tag that has a template,
+      // tell me so I can pull its prerequisites in with template_apply. Only
+      // when tags are present (one extra call, gated) and only surfaced loud
+      // when there's actually a template to apply.
+      let templateHint = '';
+      if (tags.length) {
+        try {
+          const tl = await templateList();
+          if (tl?.ok) {
+            const hits = (tl.templates ?? []).filter(t => tags.includes(String(t.tag).toLowerCase()));
+            if (hits.length) templateHint = ` There's a template for ${hits.map(t => `"${t.tag}"`).join(', ')} — I can apply it with template_apply (event_id: ${data.id}) to suggest its prerequisites.`;
+          }
+        } catch { /* discovery is best-effort; never blocks the add */ }
+      }
+      if (templateHint) return `Event added (id: ${data.id}).${templateHint}`;
       return quietOk(`Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`, { id: data.id });
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
@@ -2485,6 +2553,93 @@ export const TOOL_EXECUTORS = {
       });
       return [`${matches.length} match(es) for "${q}":`, ...lines].join('\n');
     } catch (err) { return `I couldn't search the schedule: ${err.message}`; }
+  },
+
+  template_upsert: async ({ tag, label, prerequisites } = {}) => {
+    const t = String(tag ?? '').trim().toLowerCase();
+    if (!t) return 'I need a tag for the template — the barrier it keys off (e.g. "outside").';
+    const lbl = String(label ?? '').trim();
+    if (!lbl) return 'I need a label for the template — its human name (e.g. "leaving the house").';
+    const prereqs = Array.isArray(prerequisites)
+      ? prerequisites.map(p => String(p ?? '').trim()).filter(Boolean)
+      : String(prerequisites ?? '').split(/[,\n]/).map(p => p.trim()).filter(Boolean);
+    try {
+      const data = await templateUpsert({ tag: t, label: lbl, prerequisites: prereqs });
+      if (!data?.ok) return `I couldn't save that template: ${data?.error ?? 'Unruh unavailable'}.`;
+      const tpl = data.template ?? {};
+      const list = (tpl.prerequisites ?? prereqs);
+      return quietOk(`Template "${tpl.label ?? lbl}" (tag: ${tpl.tag ?? t}) saved — needs: ${list.length ? list.join(', ') : '(nothing yet)'}. I'll suggest these when I apply it to an event tagged "${tpl.tag ?? t}".`);
+    } catch (err) { return `I couldn't save that template: ${err.message}`; }
+  },
+
+  template_list: async () => {
+    try {
+      const data = await templateList();
+      if (!data?.ok) return `I couldn't read my templates: ${data?.error ?? 'Unruh unavailable'}.`;
+      const tpls = Array.isArray(data.templates) ? data.templates : [];
+      if (!tpls.length) return 'I have no requirement templates yet. I build them with template_upsert as I learn what a barrier needs.';
+      const lines = tpls.map(t => `- ${t.label} (tag: ${t.tag}) → ${(t.prerequisites ?? []).join(', ') || '(nothing yet)'}`);
+      return [`My requirement templates (${tpls.length}):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read my templates: ${err.message}`; }
+  },
+
+  template_delete: async ({ tag } = {}) => {
+    const t = String(tag ?? '').trim().toLowerCase();
+    if (!t) return 'I need the tag of the template to delete.';
+    try {
+      const data = await templateDelete({ tag: t });
+      if (!data?.ok) return `I couldn't delete that template: ${data?.error ?? 'Unruh unavailable'}.`;
+      return data.deleted
+        ? quietOk(`Template for "${t}" deleted.`)
+        : `I had no template for "${t}" to delete.`;
+    } catch (err) { return `I couldn't delete that template: ${err.message}`; }
+  },
+
+  template_apply: async ({ event_id } = {}) => {
+    const id = String(event_id ?? '').trim();
+    if (!id) return "I need the event's id to apply a template to it — from the [schedule ids] legend in my [Temporal Context].";
+    try {
+      const res = await getScheduleNode({ id });
+      const ev = (res && typeof res.node === 'object') ? res.node : res;
+      if (!ev || !ev.id) return `I couldn't find a schedule item with id ${id}.`;
+      const tags = Array.isArray(ev.payload?.obstacle_tags) ? ev.payload.obstacle_tags.filter(Boolean).map(x => String(x).toLowerCase()) : [];
+      if (!tags.length) return `"${ev.label ?? id}" has no barrier tags, so there's no template to apply. I can add tags with obstacle_tags when I create or edit it.`;
+      const tl = await templateList();
+      if (!tl?.ok) return `I couldn't read my templates: ${tl?.error ?? 'Unruh unavailable'}.`;
+      const byTag = new Map((tl.templates ?? []).map(t => [String(t.tag).toLowerCase(), t]));
+      const matched = tags.filter(t => byTag.has(t));
+      if (!matched.length) return `No template matches this event's tags (${tags.join(', ')}). I can build one with template_upsert.`;
+
+      const applied = [], skipped = [], seen = new Set();
+      for (const tag of matched) {
+        for (const prereqLabel of (byTag.get(tag).prerequisites ?? [])) {
+          const key = String(prereqLabel).trim().toLowerCase();
+          if (!key || seen.has(key)) continue;   // dedup prerequisites within this apply
+          seen.add(key);
+          // Resolve-or-create the prerequisite task (reuse an existing open one).
+          let prereqId = null, reused = false;
+          const found = await findScheduleNodes({ query: prereqLabel, includeResolved: false, limit: 10 });
+          if (found?.ok) {
+            const exact = (found.matches ?? []).find(m => m.type === 'task' && !m.resolution && String(m.label).trim().toLowerCase() === key);
+            if (exact) { prereqId = exact.id; reused = true; }
+          }
+          if (!prereqId) {
+            const created = await addScheduleNode({ type: 'task', label: prereqLabel });
+            if (!created?.ok || !created.id) { skipped.push(`${prereqLabel} (couldn't create)`); continue; }
+            prereqId = created.id;
+          }
+          if (prereqId === ev.id) { skipped.push(`${prereqLabel} (same as the event)`); continue; }
+          const edge = await addScheduleEdge({ src: ev.id, dst: prereqId, kind: 'requires' });
+          if (!edge?.ok) { skipped.push(`${prereqLabel} (couldn't link)`); continue; }
+          applied.push(`${prereqLabel}${reused ? ' (existing task)' : ' (new task)'}`);
+        }
+      }
+      if (!applied.length && !skipped.length) return `Nothing to suggest for "${ev.label ?? id}" — the matching template(s) have no prerequisites yet.`;
+      const head = applied.length
+        ? `Suggested for "${ev.label ?? id}", now required before it: ${applied.join(', ')}. These are suggestions — I prune any that don't apply this time by resolving or unlinking them. They'll show in my readiness as the event nears.`
+        : `Nothing new to add for "${ev.label ?? id}".`;
+      return skipped.length ? `${head} (Skipped: ${skipped.join('; ')}.)` : head;
+    } catch (err) { return `I couldn't apply the template: ${err.message}`; }
   },
 
   convert_ids_to_slugs: async () => {

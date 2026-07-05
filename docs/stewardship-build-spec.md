@@ -8,10 +8,16 @@ docket, opening brief, day-start anchor, and `set_day_start_anchor`.
 plus *obstacle tags* (a `payload.obstacle_tags` barrier vocabulary the
 Familiar sets at creation and the ward sets in the temporal editor) and
 the *obstacle radar* (a gentle surface-context priority nudge for tagged
-tasks). Pass 2b (living templates — the Unruh-side storage + CRUD that
-*produces* `requires` edges in bulk) is deferred to its own PR: it's the
-producer of the edges 2a consumes, so consumer-first is the right order
-and each ships complete. Passes 3–4 still to come.
+tasks). **Pass 2b shipped** (0.8.20-alpha) — living templates: an Unruh `templates`
+table (keyed by obstacle tag, one per barrier) + `template_upsert` /
+`template_list` / `template_delete` MCP tools, and a JS `template_apply`
+that reads an event's obstacle tags, matches templates, resolve-or-creates
+each prerequisite task (reusing an existing open one, never duplicating),
+and links `requires` edges — SUGGESTED, prunable per instance (the template
+proposes, the instance decides). `schedule_add_event` now hints when a
+tagged event has a matching template. Templates are the Familiar's own
+editable objects (no ward UI — that's deliberate per §3.2). Passes 3–4
+still to come.
 
 **Why split Pass 2:** 2a is entirely JS/HTML riding data already in the
 temporal payload (edges + node payload) — zero Python. 2b needs new Unruh
