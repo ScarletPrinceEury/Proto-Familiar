@@ -156,6 +156,30 @@ export function villagerNameRegex(names = []) {
 }
 
 /**
+ * Diagnostic: explain WHY each module would surface for a turn — which regex
+ * matched which substrings, which block markers were present, which villager
+ * names hit. Pure; drives the ward-facing regex tracer (no effect on live
+ * selection). Returns [{ module, textMatches:[...], blockMatches:[...], via }].
+ */
+export function explainSelection({ turnText = '', dynamicBlock = '', villagerNames = [] } = {}) {
+  const collect = (re, hay) => {
+    if (!re) return [];
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+    return [...new Set([...String(hay).matchAll(g)].map(m => m[0]).filter(Boolean))];
+  };
+  const out = [];
+  for (const [mod, trig] of Object.entries(TRIGGERS)) {
+    const textMatches = collect(trig.text, turnText);
+    const blockMatches = (trig.blocks || []).filter(b => dynamicBlock.includes(b));
+    if (textMatches.length || blockMatches.length) out.push({ module: mod, textMatches, blockMatches });
+  }
+  const nameRe = villagerNameRegex(villagerNames);
+  const nameMatches = collect(nameRe, turnText);
+  if (nameMatches.length) out.push({ module: 'village', textMatches: nameMatches, blockMatches: [], via: 'villager-name' });
+  return out;
+}
+
+/**
  * Pick this turn's modules. Pure — sticky state is passed in/out.
  *
  * @param {object} p

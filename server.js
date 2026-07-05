@@ -102,7 +102,7 @@ import {
   enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
 import { expandWindow } from './recurrence.js';
-import { selectModules, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
+import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
 import { readStewardshipState, recordRoutineReview } from './stewardship.js';
 import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './routine-review.js';
 import {
@@ -999,6 +999,34 @@ function interestEngagementDelta({ responseChars = 0, spanMessages = 0 } = {}) {
 // returns the computed deltas for debugging but never blocks or fails
 // the conversation. Degrades silently when Unruh is down.
 const ENGAGE_MAX_TOPICS = 32; // sanity cap; real sessions have a handful
+
+// Ward-facing regex/trigger tracer (0.8.25): given the session's turns, report
+// per turn WHICH regexes/signals fired — tool-surfacing modules (with the exact
+// matched substrings) and crisis-signal contributions — so the ward can tune
+// the RegExes. The tome-keyword analyzer runs client-side (its corpus is client
+// world-info). Localhost-gated like every endpoint (the Tailscale middleware).
+app.post('/api/diagnostics/session-trace', async (req, res) => {
+  const { turns, analyzers } = req.body ?? {};
+  if (!Array.isArray(turns)) return badRequest(res, 'turns (array) is required');
+  const want = new Set(Array.isArray(analyzers) && analyzers.length ? analyzers : ['surfacing', 'threat']);
+  let villagerNames = [];
+  try { villagerNames = ((await getVillageRegistry())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
+  catch { /* registry unreadable → name triggers just won't show */ }
+  const out = turns.slice(0, 500).map((t, i) => {
+    const user = typeof t?.user === 'string' ? t.user : '';
+    const assistant = typeof t?.assistant === 'string' ? t.assistant : '';
+    const turnText = `${user}\n${assistant}`;
+    const entry = { i, user };
+    if (want.has('surfacing')) {
+      entry.surfacing = explainSelection({ turnText, dynamicBlock: typeof t?.dynamicBlock === 'string' ? t.dynamicBlock : '', villagerNames });
+    }
+    if (want.has('threat')) {
+      entry.threat = scoreMessage(user);   // threat scores the user message only, as live
+    }
+    return entry;
+  });
+  res.json({ ok: true, turns: out });
+});
 
 app.post('/api/interest/engage', async (req, res) => {
   const { topics, responseChars } = req.body ?? {};
