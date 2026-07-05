@@ -646,4 +646,251 @@ for (const name of toolModuleNames) {
   );
 }
 
+// ── explainSelection tests ────────────────────────────────────────
+
+import { explainSelection } from '../tool-surfacing.js';
+
+{
+  // Schedule reminder → 'schedule-write' with non-empty textMatches
+  const result = explainSelection({
+    turnText: 'remind me tomorrow at 2pm to call the dentist',
+    dynamicBlock: '',
+    villagerNames: [],
+  });
+  const scheduleEntry = result.find(e => e.module === 'schedule-write');
+  assert.strictEqual(
+    scheduleEntry !== undefined,
+    true,
+    'Should surface schedule-write for reminder text',
+  );
+  assert.strictEqual(
+    Array.isArray(scheduleEntry.textMatches),
+    true,
+    'textMatches should be an array',
+  );
+  assert.strictEqual(
+    scheduleEntry.textMatches.length > 0,
+    true,
+    'textMatches should be non-empty',
+  );
+  // Check that common words are present
+  const matchedStr = scheduleEntry.textMatches.join('|').toLowerCase();
+  assert.strictEqual(
+    matchedStr.includes('remind') || matchedStr.includes('tomorrow'),
+    true,
+    'Should match remind or tomorrow',
+  );
+}
+
+{
+  // Deduplication: same word twice → appears once in textMatches
+  const result = explainSelection({
+    turnText: 'remind me, remind me to do something',
+    dynamicBlock: '',
+    villagerNames: [],
+  });
+  const scheduleEntry = result.find(e => e.module === 'schedule-write');
+  assert.strictEqual(
+    scheduleEntry !== undefined,
+    true,
+    'Should surface schedule-write',
+  );
+  // Count occurrences of 'remind' (case-insensitive)
+  const remindCount = scheduleEntry.textMatches.filter(
+    m => m.toLowerCase() === 'remind'
+  ).length;
+  assert.strictEqual(
+    remindCount <= 1,
+    true,
+    'Duplicate "remind" should appear at most once in deduplicated array',
+  );
+}
+
+{
+  // Plain chit-chat → no schedule-write or other action modules
+  const result = explainSelection({
+    turnText: 'how was your movie',
+    dynamicBlock: '',
+    villagerNames: [],
+  });
+  const scheduleEntry = result.find(e => e.module === 'schedule-write');
+  const webEntry = result.find(e => e.module === 'web');
+  const memoryEntry = result.find(e => e.module === 'memory-edit');
+  assert.strictEqual(
+    scheduleEntry === undefined,
+    true,
+    'Plain chit-chat should not trigger schedule-write',
+  );
+  assert.strictEqual(
+    webEntry === undefined,
+    true,
+    'Plain chit-chat should not trigger web',
+  );
+  assert.strictEqual(
+    memoryEntry === undefined,
+    true,
+    'Plain chit-chat should not trigger memory-edit',
+  );
+}
+
+{
+  // Dynamic block with [PENDING MEMORY CONSENT → 'acks' with blockMatches
+  const result = explainSelection({
+    turnText: '',
+    dynamicBlock: 'some text [PENDING MEMORY CONSENT more text',
+    villagerNames: [],
+  });
+  const acksEntry = result.find(e => e.module === 'acks');
+  assert.strictEqual(
+    acksEntry !== undefined,
+    true,
+    'Should surface acks for PENDING MEMORY CONSENT block',
+  );
+  assert.strictEqual(
+    Array.isArray(acksEntry.blockMatches),
+    true,
+    'blockMatches should be an array',
+  );
+  assert.strictEqual(
+    acksEntry.blockMatches.length > 0,
+    true,
+    'blockMatches should be non-empty',
+  );
+  assert.strictEqual(
+    acksEntry.blockMatches.includes('[PENDING MEMORY CONSENT'),
+    true,
+    'Should find [PENDING MEMORY CONSENT marker',
+  );
+}
+
+{
+  // Dynamic block with [My stewardship → 'schedule-write' with blockMatches
+  const result = explainSelection({
+    turnText: '',
+    dynamicBlock: 'agenda: [My stewardship\nsome items',
+    villagerNames: [],
+  });
+  const scheduleEntry = result.find(e => e.module === 'schedule-write');
+  assert.strictEqual(
+    scheduleEntry !== undefined,
+    true,
+    'Should surface schedule-write for [My stewardship block',
+  );
+  assert.strictEqual(
+    scheduleEntry.blockMatches.includes('[My stewardship'),
+    true,
+    'Should find [My stewardship marker',
+  );
+}
+
+{
+  // Villager name (3+ chars) → 'village' with via='villager-name'
+  const result = explainSelection({
+    turnText: 'tell Mochi hello',
+    dynamicBlock: '',
+    villagerNames: ['Mochi'],
+  });
+  const villageEntry = result.find(e => e.module === 'village');
+  assert.strictEqual(
+    villageEntry !== undefined,
+    true,
+    'Should surface village for villager name',
+  );
+  assert.strictEqual(
+    villageEntry.via,
+    'villager-name',
+    'via should be set to villager-name',
+  );
+  assert.strictEqual(
+    villageEntry.textMatches.includes('Mochi'),
+    true,
+    'textMatches should contain the villager name',
+  );
+  assert.deepStrictEqual(
+    villageEntry.blockMatches,
+    [],
+    'blockMatches should be empty for name-based match',
+  );
+}
+
+{
+  // Short villager name (2 chars) ignored
+  const result = explainSelection({
+    turnText: 'tell Jo hello',
+    dynamicBlock: '',
+    villagerNames: ['Jo'],  // 2 chars, should be ignored
+  });
+  const villageEntry = result.find(e => e.module === 'village' && e.via === 'villager-name');
+  assert.strictEqual(
+    villageEntry === undefined,
+    true,
+    '2-char name should be ignored in villagerName triggers',
+  );
+}
+
+{
+  // Empty inputs → empty array
+  const result = explainSelection({
+    turnText: '',
+    dynamicBlock: '',
+    villagerNames: [],
+  });
+  assert.strictEqual(
+    result.length,
+    0,
+    'Empty inputs should return empty array',
+  );
+}
+
+{
+  // No parameters passed → empty array (defaults)
+  const result = explainSelection();
+  assert.strictEqual(
+    result.length,
+    0,
+    'No parameters should return empty array',
+  );
+}
+
+{
+  // Multiple modules triggered in one turn
+  const result = explainSelection({
+    turnText: 'remind me tomorrow and search for recipes',
+    dynamicBlock: '',
+    villagerNames: [],
+  });
+  const scheduleEntry = result.find(e => e.module === 'schedule-write');
+  const webEntry = result.find(e => e.module === 'web');
+  assert.strictEqual(
+    scheduleEntry !== undefined,
+    true,
+    'Should surface schedule-write for reminder',
+  );
+  assert.strictEqual(
+    webEntry !== undefined,
+    true,
+    'Should surface web for search',
+  );
+}
+
+{
+  // Block match and text match both present for same module
+  const result = explainSelection({
+    turnText: 'remind me tomorrow',
+    dynamicBlock: '[My stewardship\nstuff',
+    villagerNames: [],
+  });
+  const scheduleEntry = result.find(e => e.module === 'schedule-write');
+  assert.strictEqual(
+    scheduleEntry.textMatches.length > 0,
+    true,
+    'Should have text matches',
+  );
+  assert.strictEqual(
+    scheduleEntry.blockMatches.length > 0,
+    true,
+    'Should have block matches',
+  );
+}
+
 console.log('[tool-surfacing] All tests passed');

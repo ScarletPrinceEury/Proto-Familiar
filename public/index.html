@@ -442,6 +442,13 @@
             <div class="action-row" style="margin-top:4px">
               <button id="diagnostics-btn" class="btn-secondary">🩺 Generate diagnostic report</button>
             </div>
+            <p class="field-hint" style="margin-top:10px">Trace which regexes/keywords fired for each turn of the current session — for tuning triggers.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="trace-surfacing-btn" class="btn-secondary">🔎 Trace tool surfacing</button>
+            </div>
+            <div class="action-row" style="margin-top:4px">
+              <button id="trace-config-btn" class="btn-secondary">⚙ Trace… (choose signals)</button>
+            </div>
           </div>
         </div>
 
@@ -912,6 +919,33 @@
       <div class="modal-footer">
         <button id="diagnostics-copy"     class="btn-secondary">Copy</button>
         <button id="diagnostics-download" class="btn-secondary">Download .txt</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Regex/trigger tracer modal -->
+  <div class="modal-backdrop hidden" id="trace-modal" role="dialog" aria-modal="true" aria-labelledby="trace-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="trace-modal-title">Trigger trace</h2>
+        <button class="icon-btn modal-close" id="trace-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint">For each turn of the current session, which regexes/keywords fired. Runs locally against this session — nothing is stored. Tune triggers, re-run.</p>
+        <div class="field-row" style="flex-wrap:wrap;gap:12px;align-items:center">
+          <label><input type="checkbox" id="trace-a-surfacing" checked> Tool surfacing</label>
+          <label><input type="checkbox" id="trace-a-threat"> Threat signals</label>
+          <label><input type="checkbox" id="trace-a-tomes"> Tome keywords</label>
+          <label style="margin-left:auto">Last <input type="number" id="trace-last-n" value="0" min="0" max="500" step="1" style="width:4em"> turns <span class="field-hint">(0 = all)</span></label>
+        </div>
+        <div class="action-row" style="margin:6px 0">
+          <button id="trace-run" class="btn-send">Run trace</button>
+        </div>
+        <pre id="trace-output" class="pi-pre" style="max-height: 60vh;"></pre>
+      </div>
+      <div class="modal-footer">
+        <button id="trace-copy"     class="btn-secondary">Copy</button>
+        <button id="trace-download" class="btn-secondary">Download .txt</button>
       </div>
     </div>
   </div>

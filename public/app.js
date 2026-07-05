@@ -3932,6 +3932,27 @@ function init() {
   });
   $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
 
+  // Trigger tracer (regex/keyword diagnostic)
+  $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
+  $('trace-config-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: false, autoRun: false }));
+  $('trace-run')?.addEventListener('click', runSessionTrace);
+  $('trace-modal-close')?.addEventListener('click', () => $('trace-modal')?.classList.add('hidden'));
+  $('trace-copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('trace-output')?.textContent || '');
+      $('trace-copy').textContent = 'Copied ✓';
+      setTimeout(() => { $('trace-copy').textContent = 'Copy'; }, 1500);
+    } catch { /* clipboard denied — the pre is selectable */ }
+  });
+  $('trace-download')?.addEventListener('click', () => {
+    const blob = new Blob([$('trace-output')?.textContent || ''], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'trigger-trace.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
   // Knowledge editor (Phylactery)
   $('knowledge-btn').addEventListener('click', openKnowledgeModal);
   $('knowledge-modal-close').addEventListener('click', closeKnowledgeModal);
@@ -5797,6 +5818,112 @@ async function buildDiagnosticReport() {
   }
 
   return lines.join('\n');
+}
+
+// ── Regex/trigger tracer (ward diagnostic) ──────────────────────
+// Per-turn, which regexes/keywords fired: tool-surfacing modules + threat
+// signals (via the server, the real modules) and tome keywords (client-side,
+// the real matcher). For tuning triggers. Nothing is stored.
+function traceGatherTurns(lastN) {
+  const msgs = Array.isArray(state.messages) ? state.messages : [];
+  const turns = [];
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i]?.role !== 'user' || typeof msgs[i].content !== 'string') continue;
+    let prevAssistant = '';
+    for (let j = i - 1; j >= 0; j--) {
+      if (msgs[j]?.role === 'assistant' && typeof msgs[j].content === 'string') { prevAssistant = msgs[j].content; break; }
+    }
+    turns.push({ user: msgs[i].content, assistant: prevAssistant, timestamp: msgs[i].timestamp });
+  }
+  return (lastN > 0 && turns.length > lastN) ? turns.slice(-lastN) : turns;
+}
+
+function traceTomeEntries() {
+  return Object.values(state.tomeCache ?? {})
+    .filter(t => t && t.enabled !== false)
+    .flatMap(t => Object.values(t.entries ?? {}));
+}
+
+async function runSessionTrace() {
+  const out = $('trace-output');
+  if (!out) return;
+  const analyzers = [];
+  if ($('trace-a-surfacing')?.checked) analyzers.push('surfacing');
+  if ($('trace-a-threat')?.checked)    analyzers.push('threat');
+  const doTomes = !!$('trace-a-tomes')?.checked;
+  const lastN = Math.max(0, parseInt($('trace-last-n')?.value, 10) || 0);
+  const turns = traceGatherTurns(lastN);
+  if (!turns.length) { out.textContent = 'No user turns in this session yet.'; return; }
+  if (!analyzers.length && !doTomes) { out.textContent = 'Tick at least one signal to trace.'; return; }
+  out.textContent = 'Tracing…';
+
+  let serverTurns = [];
+  if (analyzers.length) {
+    try {
+      const r = await fetch('/api/diagnostics/session-trace', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turns: turns.map(t => ({ user: t.user, assistant: t.assistant })), analyzers }),
+      });
+      const data = await r.json();
+      if (data?.ok === false) throw new Error(data.error || 'trace failed');
+      serverTurns = Array.isArray(data?.turns) ? data.turns : [];
+    } catch (err) { out.textContent = `Trace failed: ${err.message}`; return; }
+  }
+
+  const tomeEntries = doTomes ? traceTomeEntries() : [];
+  const jstr = (s) => JSON.stringify(String(s));
+  const active = [...analyzers, ...(doTomes ? ['tomes'] : [])];
+  const lines = [
+    `Trigger trace — ${turns.length} turn(s) · signals: ${active.join(', ')}`,
+    '(surfacing = tool-surfacing text-regex + villager names; block-marker triggers depend on live context and are not replayed. tome keywords matched against each turn\'s user message.)',
+    '',
+  ];
+  turns.forEach((t, i) => {
+    const sv = serverTurns.find(s => s.i === i) ?? {};
+    const u = String(t.user || '').replace(/\s+/g, ' ').trim();
+    lines.push(`── Turn ${i + 1}${t.timestamp ? ` · ${t.timestamp}` : ''} ─────────────────────────`);
+    lines.push(`user: ${u.length > 240 ? u.slice(0, 240) + '…' : u}`);
+    if (analyzers.includes('surfacing')) {
+      const s = Array.isArray(sv.surfacing) ? sv.surfacing : [];
+      if (!s.length) lines.push('  [surfacing] core only — no module triggered');
+      else for (const m of s) {
+        const bits = [];
+        if (m.textMatches?.length)  bits.push(`matched ${m.textMatches.map(jstr).join(', ')}`);
+        if (m.blockMatches?.length) bits.push(`block ${m.blockMatches.join(', ')}`);
+        if (m.via) bits.push(`via ${m.via}`);
+        lines.push(`  [surfacing] ${m.module} ← ${bits.join('; ')}`);
+      }
+    }
+    if (analyzers.includes('threat')) {
+      const th = sv.threat ?? { level: 0, signals: [] };
+      if (!th.signals?.length) lines.push('  [threat] no signals');
+      else {
+        lines.push(`  [threat] level ${th.level >= 0 ? '+' : ''}${th.level}`);
+        for (const sig of th.signals) lines.push(`    ${sig.tier}/${sig.id}${sig.damped ? ' (damped)' : ''} ← ${jstr(sig.match)}`);
+      }
+    }
+    if (doTomes) {
+      const fired = [];
+      for (const e of tomeEntries) {
+        const hitKeys = (e.keys ?? []).filter(k => k && k.trim() && matchKeyword(t.user, k, e));
+        if (hitKeys.length) fired.push(`  [tome] "${e.comment || e.uid || '(entry)'}" ← ${hitKeys.map(jstr).join(', ')}`);
+      }
+      lines.push(fired.length ? fired.join('\n') : '  [tome] none');
+    }
+    lines.push('');
+  });
+  out.textContent = lines.join('\n');
+}
+
+function openTraceModal({ surfacingOnly = false, autoRun = false } = {}) {
+  if (surfacingOnly) {
+    if ($('trace-a-surfacing')) $('trace-a-surfacing').checked = true;
+    if ($('trace-a-threat'))    $('trace-a-threat').checked = false;
+    if ($('trace-a-tomes'))     $('trace-a-tomes').checked = false;
+  }
+  $('trace-modal')?.classList.remove('hidden');
+  if (autoRun) runSessionTrace();
+  else if ($('trace-output')) $('trace-output').textContent = '';
 }
 
 async function openDiagnosticsModal() {
