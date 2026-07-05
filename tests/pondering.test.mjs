@@ -648,3 +648,93 @@ test('buildPonderPrompt: documents tell kind in wants_to_save schema', () => {
   assert.match(prompt, /"tell"/);
   assert.match(prompt, /conversational intent/i);
 });
+
+// ── routine_review field (stewardship Pass 3) ──────────────────────
+
+test('parsePondering: routine_review absent → field omitted', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+  }));
+  assert.equal(r.routine_review, undefined);
+});
+
+test('parsePondering: routine_review with valid string → preserved (trimmed)', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    routine_review: '  dishes are slipping — shrink it?  ',
+  }));
+  assert.equal(r.routine_review, 'dishes are slipping — shrink it?');
+});
+
+test('parsePondering: routine_review null → field omitted', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    routine_review: null,
+  }));
+  assert.equal(r.routine_review, undefined);
+});
+
+test('parsePondering: routine_review empty string → field omitted', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    routine_review: '   ',
+  }));
+  assert.equal(r.routine_review, undefined);
+});
+
+test('parsePondering: routine_review caps at 500 chars', () => {
+  const longText = 'x'.repeat(600);
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    routine_review: longText,
+  }));
+  assert.equal(r.routine_review.length, 500);
+});
+
+test('ponderOnce: reflection mode with routine_review section returns the field', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: {
+        mode: 'reflection',
+        outcomes: [],
+        existingNotes: '',
+        routineReviewSection: 'I notice the dishes are piling up…',
+      },
+      provider: 'nanogpt',
+      apiKey:   'fake',
+      model:    'fake',
+      callLLM:  async () => JSON.stringify({
+        title: 'routine review reflection',
+        content: 'I see the pattern',
+        routine_review: 'The dishes routine is slipping this week. Let me shrink it to just the mugs.',
+      }),
+      tomesDir: dir,
+    });
+    assert.equal(result.routine_review, 'The dishes routine is slipping this week. Let me shrink it to just the mugs.');
+  } finally { cleanup(); }
+});
+
+test('ponderOnce: routine_review field returned in result (reflection mode)', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: {
+        mode: 'reflection',
+        outcomes: [],
+        existingNotes: '',
+        routineReviewSection: 'section',
+      },
+      provider: 'nanogpt',
+      apiKey:   'fake',
+      model:    'fake',
+      callLLM:  async () => JSON.stringify({
+        title: 't',
+        content: 'c',
+        routine_review: 'Dishes keep slipping — let me shrink it.',
+      }),
+      tomesDir: dir,
+    });
+    assert.equal(result.routine_review, 'Dishes keep slipping — let me shrink it.');
+  } finally { cleanup(); }
+});

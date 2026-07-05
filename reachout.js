@@ -60,6 +60,10 @@ export function getWarmVillagers(registry) {
 // ── Prompt ───────────────────────────────────────────────────────
 
 export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase }) {
+  const silenceLine = wardSilencePhrase
+    ? `- My human was last around ${wardSilencePhrase} ago. They're not in distress — I'm reaching out because I want to, not because I'm worried.`
+    : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). They're not in distress — if I reach out, it's because I want to.`;
+
   const tellsBlock = (pendingTells && pendingTells.length)
     ? `\nThings I already noted I wanted to bring up with my human (from my own quiet thinking — I flagged these as "tell"):\n${pendingTells.map(t => `  - (uid ${t.uid}, index ${t.index}) ${t.summary}`).join('\n')}\nIf I reach out to my human and one of these is what I want to say, I include its uid + index as tellUid/tellIndex so the system knows I've finally said it.`
     : '';
@@ -77,7 +81,7 @@ ${identityBlock}
 ${nowBlock}
 
 What I have to work with:
-- My human was last around ${wardSilencePhrase} ago. They're not in distress — I'm reaching out because I want to, not because I'm worried.
+${silenceLine}
 ${sessionBlock}${tellsBlock}
 ${villagersBlock}
 
@@ -143,7 +147,7 @@ export function parseReachoutDecision(raw) {
 export async function decideReachoutViaLLM({
   pendingTells = [],
   warmVillagers = [],
-  wardSilenceMs = 0,
+  wardSilenceMs = null,   // null = no activity record (phrased honestly, not as "just now")
   now = Date.now,
   callLLM = defaultCallLLM,
   enrichFn = (opts) => enrich('', opts),
@@ -162,9 +166,9 @@ export async function decideReachoutViaLLM({
     getRecentMessagesFn({ limit: 6 }).catch(() => []),
   ]);
 
-  const lastUserAt = new Date(nowMs - wardSilenceMs).toISOString();
+  const lastUserAt = Number.isFinite(wardSilenceMs) ? new Date(nowMs - wardSilenceMs).toISOString() : null;
   const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
-  const wardSilencePhrase = relativeTime(lastUserAt, nowMs) || 'a little while';
+  const wardSilencePhrase = lastUserAt ? (relativeTime(lastUserAt, nowMs) || 'a little while') : null;
 
   const sessionBlock = (recentMessages && recentMessages.length)
     ? `\nThe last things my human and I talked about (so anything I reach out about connects to our actual life, not nothing):\n${recentMessages.map(m => {

@@ -44,6 +44,7 @@ from . import schedule as sched
 _SYNC_OWNED_KEYS = (
     "source", "gcal_uid", "gcal_last_modified", "all_day",
     "location", "description", "recurrence", "gcal_expanded_from",
+    "gcal_calendar_id", "gcal_attribution",
 )
 
 
@@ -63,23 +64,95 @@ def _sync_payload(ev: dict[str, Any]) -> dict[str, Any]:
         out["recurrence"] = ev["recurrence"]
     if ev.get("expanded_from"):
         out["gcal_expanded_from"] = ev["expanded_from"]
+    # Which source calendar this event came from (multi-calendar support) and,
+    # if the ward/Familiar told us, who that calendar belongs to. Both are
+    # sync-owned: refreshed from the snapshot + the attribution map each pass.
+    if ev.get("gcal_calendar_id"):
+        out["gcal_calendar_id"] = ev["gcal_calendar_id"]
+    if ev.get("gcal_attribution"):
+        out["gcal_attribution"] = ev["gcal_attribution"]
     return out
 
 
-def list_gcal_nodes(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
-    """Every schedule node the sync manages (payload.source == 'gcal'),
-    keyed by its gcal_uid. One query — the reconcile compares the snapshot
-    against this whole set."""
+def _is_gcal_event(node) -> bool:
+    """A node the deletion-reconcile is ALLOWED to cancel: a genuine Google
+    *event*, never a hand-authored phase or need-window. The reconcile query
+    already filters source == 'gcal', but this is the belt-and-suspenders
+    guard against a mislabeled node ever being erased (the routines/phases
+    data-loss guard): type must be 'event' (phases are 'phase', needs are
+    'task', so both are excluded here) and it must not be a tracked need.
+
+    NOTE: recurrence is NOT a disqualifier — Google's own recurring series are
+    stored as type='event' anchors carrying payload.recurrence, and the
+    reconcile MUST be able to cancel such an anchor when the series is replaced
+    by expanded occurrences. Hand-authored recurring routines are protected by
+    the type gate (they're phases/tasks) AND by the source=='gcal' filter (a
+    hand-authored node is never source='gcal'), so this stays safe."""
+    if node["type"] != "event":
+        return False
+    payload = json.loads(node["payload_json"] or "{}")
+    return not payload.get("need")
+
+
+def dedupe_gcal_nodes(
+    conn: sqlite3.Connection,
+    *,
+    calendar_id: str | None = None,
+    include_legacy: bool = False,
+) -> tuple[dict[str, sqlite3.Row], list[str]]:
+    """Sync-managed nodes (payload.source == 'gcal') keyed by gcal_uid, plus
+    the ids of unresolved DUPLICATE nodes that should be cancelled.
+
+    When `calendar_id` is given, the set is SCOPED to that source calendar
+    (multi-calendar): a snapshot of calendar A must never reconcile calendar
+    B's events. `include_legacy` also folds in nodes with no stored
+    gcal_calendar_id — the pre-multi-calendar rows, which belonged to the
+    single calendar then in use; the ward's own calendar adopts them on its
+    next sync (its ingest stamps the id). With no calendar_id, every gcal node
+    is returned (single-calendar / back-compat behaviour).
+
+    Historically the ingest could create two nodes with one gcal_uid (a
+    RECURRENCE-ID override sharing its series' UID before the parser learned
+    to split them). Reconcile needs exactly one live node per uid, so per uid
+    we keep the best row — unresolved beats resolved, then the most recently
+    updated — and report the other unresolved rows as duplicates for the
+    caller to cancel. Resolved extras are history; they stay.
+    """
     rows = conn.execute(
         """SELECT * FROM nodes
             WHERE layer = 'schedule'
-              AND json_extract(payload_json, '$.source') = 'gcal'"""
+              AND json_extract(payload_json, '$.source') = 'gcal'
+            ORDER BY updated_at ASC, id ASC"""
     ).fetchall()
     out: dict[str, sqlite3.Row] = {}
+    duplicates: list[str] = []
     for r in rows:
-        uid = json.loads(r["payload_json"] or "{}").get("gcal_uid")
-        if uid:
+        payload = json.loads(r["payload_json"] or "{}")
+        uid = payload.get("gcal_uid")
+        if not uid:
+            continue
+        if calendar_id is not None:
+            row_cal = payload.get("gcal_calendar_id")
+            if row_cal != calendar_id and not (include_legacy and not row_cal):
+                continue  # a different calendar's node — out of this snapshot's scope
+        prev = out.get(uid)
+        if prev is None:
             out[uid] = r
+            continue
+        # Prefer the unresolved row; among equals, the later-updated one
+        # (rows arrive updated_at-ascending, so `r` is the later).
+        prev_open, r_open = prev["resolution"] is None, r["resolution"] is None
+        keep, drop = (r, prev) if (r_open or not prev_open) else (prev, r)
+        out[uid] = keep
+        if drop["resolution"] is None:
+            duplicates.append(drop["id"])
+    return out, duplicates
+
+
+def list_gcal_nodes(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    """Every schedule node the sync manages, keyed by gcal_uid — one row per
+    uid (the keeper row when historical duplicates exist)."""
+    out, _ = dedupe_gcal_nodes(conn)
     return out
 
 
@@ -146,6 +219,9 @@ def gcal_ingest(
     events: list[dict[str, Any]] | None = None,
     reconcile_deletes: bool = True,
     now: str | None = None,
+    calendar_id: str | None = None,
+    include_legacy: bool = False,
+    attribution: dict | None = None,
 ) -> dict[str, Any]:
     """Reconcile a Google-Calendar snapshot into the schedule layer.
 
@@ -153,6 +229,13 @@ def gcal_ingest(
     `events` (already-normalized events from the gogcli/gcalcli adapters).
     Returns `{ok, new, updated, unchanged, removed, complex_series}` — the
     id lists the sync loop routes (only `new` reaches the projection cue).
+
+    `calendar_id` scopes the reconcile to ONE source calendar (multi-calendar):
+    dedupe + deletion only ever touch that calendar's nodes, so calendar A's
+    snapshot never disturbs calendar B. `include_legacy` folds pre-multi-
+    calendar rows (no stored calendar id) into this calendar's scope — set for
+    the ward's own calendar so it adopts the old single-calendar rows. When
+    `calendar_id` is None the behaviour is the original single-calendar one.
     """
     from . import ical  # local import keeps the module import-light
 
@@ -173,16 +256,42 @@ def gcal_ingest(
         complex_series = parsed["complex_series"]
     events = events or []
 
-    existing = list_gcal_nodes(conn)
+    # Stamp the source calendar + its attribution onto every event in this
+    # snapshot (the single stamping point, so the iCal path — parsed here — is
+    # attributed the same as the pre-normalized native/CLI events). _sync_payload
+    # then persists both onto each node.
+    if calendar_id or attribution is not None:
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            if calendar_id and not ev.get("gcal_calendar_id"):
+                ev["gcal_calendar_id"] = calendar_id
+            if attribution is not None:
+                ev["gcal_attribution"] = attribution
+
+    existing, duplicate_ids = dedupe_gcal_nodes(
+        conn, calendar_id=calendar_id, include_legacy=include_legacy,
+    )
     seen_uids: set[str] = set()
     new_ids: list[str] = []
     updated_ids: list[str] = []
     unchanged_ids: list[str] = []
     removed_ids: list[str] = []
 
+    # Heal historical duplicates (two live nodes sharing one gcal_uid):
+    # cancel every non-keeper so the ward's schedule shows each Google
+    # event exactly once again.
+    for did in duplicate_ids:
+        sched.resolve(conn, id=did, resolution="cancelled")
+        removed_ids.append(did)
+
     for ev in events:
         uid = ev.get("uid")
-        if not uid:
+        if not uid or uid in seen_uids:
+            # A repeated uid within one snapshot would make the reconcile
+            # flip-flop and duplicate nodes; first occurrence wins, the
+            # rest are a feed anomaly (the parser splits legitimate
+            # RECURRENCE-ID overrides into distinct uids upstream).
             continue
         seen_uids.add(uid)
         node = existing.get(uid)
@@ -230,10 +339,17 @@ def gcal_ingest(
 
     # Deletion reconcile — only on a confirmed-good full snapshot that parsed
     # at least one event, and only for still-future nodes (§1.3 guards).
+    # `existing` is already scoped to source == 'gcal' (and, when given, to
+    # this calendar_id), but _is_gcal_event is the hard data-loss guard: a
+    # phase, a need-window, or a recurring routine is NEVER cancelled here,
+    # even if something mislabeled it — deletion touches genuine Google events
+    # only.
     if reconcile_deletes and events:
         for uid, node in existing.items():
             if uid in seen_uids or node["resolution"]:
                 continue
+            if not _is_gcal_event(node):
+                continue  # never cancel a phase / need / recurring node
             when_local = to_local_naive(node["when_ts"]) if node["when_ts"] else None
             if when_local and when_local < now_local:
                 continue  # past / aged-out occurrence → not a deletion

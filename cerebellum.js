@@ -38,6 +38,8 @@ import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
 import { listOwnFiles, readOwnFile } from './own-files.js';
+import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
+import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -49,11 +51,14 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode,
+  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes,
+  templateUpsert, templateList, templateDelete,
+  convertUnruhIds, convertGraphIds,
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory,
+  withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
@@ -61,17 +66,20 @@ import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { pruneConsentPending } from './memorization.js';
-import { enqueueOutbox, listOutbox, updateOutboxMeta } from './outbox.js';
+import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
+import { rekeyCueState } from './gcal-projection.js';
+import { TOOL_MODULES, CORE, MODULE_INDEX, normalizeRequestedModules } from './tool-surfacing.js';
+import { rekeyPonderingUids } from './pondering.js';
 import { pushIcsViaCli, resolveWriteCommand } from './gcal-source.js';
 import {
   readToken as readGoogleToken, writeToken as writeGoogleToken,
   getFreshAccessToken as getGoogleAccessToken, buildEventResource, insertEvent as insertGoogleEvent,
   isConnected as googleConnected,
 } from './gcal-google.js';
-import { getRecentOfferInfo } from './surface-events.js';
+import { getRecentOfferInfo, rekeySurfaceEventIds } from './surface-events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -89,6 +97,48 @@ export function readSettingsSync() {
   catch { return {}; }
 }
 
+/**
+ * Merge a partial patch into settings.json — read-modify-write under the
+ * SAME per-file lock the PUT /api/settings endpoint uses, so a Familiar-side
+ * write (e.g. set_day_start_anchor) and a client sync can't clobber each
+ * other's fields. Atomic .tmp+rename, so the file is never torn. Only the
+ * keys in `patch` change; everything else is preserved.
+ */
+export async function writeSettingsPatch(patch = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { ok: false, error: 'patch must be an object' };
+  }
+  return withLock(SETTINGS_FILE, async () => {
+    let cur = {};
+    try { cur = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8')); } catch { /* first write */ }
+    const next = { ...cur, ...patch };
+    const tmp = SETTINGS_FILE + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
+    await fsp.rename(tmp, SETTINGS_FILE);
+    return { ok: true, settings: next };
+  });
+}
+
+/**
+ * Normalise obstacle tags to a clean short list. Accepts an array or a
+ * comma/space-separated string. Lowercased, trimmed, de-duped, each tag
+ * capped in length and the list capped in count — a barrier vocabulary,
+ * not free text. Returns [] for anything unusable.
+ */
+export function normalizeObstacleTags(raw) {
+  const arr = Array.isArray(raw) ? raw : String(raw ?? '').split(/[,\n]/);
+  const seen = new Set();
+  const out = [];
+  for (const t of arr) {
+    const tag = String(t ?? '').trim().toLowerCase().slice(0, 30);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 export function primaryConnectionFrom(settings) {
   const id    = settings?.primaryConnectionId;
   const conns = Array.isArray(settings?.connections) ? settings.connections : [];
@@ -104,12 +154,15 @@ export function primaryConnectionFrom(settings) {
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
-export const TRIAGE_LOG_FILE = path.join(LOGS_DIR, 'triage-events.jsonl');
+export const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
+export const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
 
-export async function appendTriageEventLog(entry) {
+// Shared JSONL event-log primitives — triage and warm reach-out both use
+// them, so decisions from either loop are auditable the same way.
+async function appendEventLog(file, entry) {
   try {
     await fsp.appendFile(
-      TRIAGE_LOG_FILE,
+      file,
       JSON.stringify({ ...entry, loggedAt: new Date().toISOString() }) + '\n',
       'utf8',
     );
@@ -117,9 +170,9 @@ export async function appendTriageEventLog(entry) {
 }
 
 // Newest first. Tolerates a missing or partially corrupt log file.
-export async function readTriageEvents() {
+async function readEventLog(file) {
   try {
-    const raw   = await fsp.readFile(TRIAGE_LOG_FILE, 'utf8');
+    const raw   = await fsp.readFile(file, 'utf8');
     const lines  = raw.split('\n').filter(l => l.trim());
     return lines
       .map(l => { try { return JSON.parse(l); } catch { return null; } })
@@ -129,6 +182,16 @@ export async function readTriageEvents() {
     return [];
   }
 }
+
+export const appendTriageEventLog   = (entry) => appendEventLog(TRIAGE_LOG_FILE, entry);
+export const readTriageEvents       = ()      => readEventLog(TRIAGE_LOG_FILE);
+// The warm loop's deliberations were fully silent ("llm_said_wait" and
+// every gate outcome vanished), so "he never reaches out" was
+// indistinguishable from "the loop never ran". Every LLM deliberation
+// lands here now (gates like cooldown/disabled stay unlogged — they fire
+// every tick and carry no decision).
+export const appendReachoutEventLog = (entry) => appendEventLog(REACHOUT_LOG_FILE, entry);
+export const readReachoutEvents     = ()      => readEventLog(REACHOUT_LOG_FILE);
 
 // Read the last N user/assistant messages from the most recently updated
 // session log file. Used by decideTriageViaLLM to ground the triage
@@ -193,8 +256,11 @@ export async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
 }
 
 // How an outbox item reads when pushed to my human's own Discord.
-function formatItemForPush({ kind, title, body }) {
+// Exported so registered channel adapters (the gateway bot-DM) format
+// identically to the built-in webhook.
+export function formatItemForPush({ kind, title, body }) {
   const lead = kind === 'reminder'        ? '⏰'
+             : kind === 'event_alert'     ? '🕑'
              : kind === 'triage'          ? '💭'
              : kind === 'outbound_alert'  ? '📤'
              : kind === 'crisis_resources' ? '🆘'
@@ -203,10 +269,22 @@ function formatItemForPush({ kind, title, body }) {
   return body ? `${head}\n\n${body}` : head;
 }
 
+// Registered adapter factories — modules that own a channel (e.g. the
+// Discord gateway's bot-DM, registered by server.js at boot) plug in here
+// without cerebellum importing them (no import cycle). Each factory gets
+// the current settings and returns an adapter or null when its channel
+// isn't configured — evaluated fresh per dispatch so a Settings change
+// applies immediately, matching the built-in webhook's behaviour.
+const _pushAdapterFactories = [];
+
+export function registerPushAdapterFactory(factory) {
+  if (typeof factory === 'function') _pushAdapterFactories.push(factory);
+}
+
 /** The push adapters that are actually configured right now.
- *  Today: 'discord-dm' when Settings carries the bonded human's own
- *  webhook (userDiscordWebhook). Future channels slot in here the way
- *  modules slot into thalamus. */
+ *  Built-in: 'discord-dm' when Settings carries the bonded human's own
+ *  webhook (userDiscordWebhook). Plus whatever registered factories
+ *  produce (e.g. 'discord-bot-dm' when the gateway can DM my human). */
 export function activePushAdapters({ readSettings = readSettingsSync, fetchFn = fetch } = {}) {
   const adapters = [];
   const s = readSettings();
@@ -216,6 +294,12 @@ export function activePushAdapters({ readSettings = readSettingsSync, fetchFn = 
       name: 'discord-dm',
       deliver: async (item) => sendDiscordWebhook(hook, formatItemForPush(item), fetchFn),
     });
+  }
+  for (const factory of _pushAdapterFactories) {
+    try {
+      const a = factory(s);
+      if (a && a.name && typeof a.deliver === 'function') adapters.push(a);
+    } catch { /* a broken factory never blocks the built-ins */ }
   }
   return adapters;
 }
@@ -279,9 +363,14 @@ export async function enqueueAndDispatch(args, deps = {}) {
  * and it can weigh "they never saw me" against "they're ignoring me."
  */
 export function formatDeliveryNote(item, { hasPushChannel } = {}) {
-  const d = item?.delivery?.['discord-dm'];
-  if (d?.status === 'delivered') return "(delivered to my human's Discord)";
-  if (d?.status === 'failed')    return `(Discord push FAILED — ${d.error ?? 'unknown error'} — my human has NOT been notified outside this app)`;
+  // Any channel counts — webhook or gateway bot-DM; one confirmed delivery
+  // means my human could have seen me.
+  const recs = Object.values(item?.delivery ?? {});
+  if (recs.some(r => r?.status === 'delivered')) return "(delivered to my human's Discord)";
+  if (recs.length && recs.every(r => r?.status === 'failed')) {
+    const err = recs.find(r => r?.error)?.error ?? 'unknown error';
+    return `(Discord push FAILED — ${err} — my human has NOT been notified outside this app)`;
+  }
   const pushConfigured = hasPushChannel !== undefined ? hasPushChannel : activePushAdapters().length > 0;
   if (!pushConfigured) return '(no push channel configured — my human sees this only with the app open)';
   return '(push delivery pending)';
@@ -322,16 +411,23 @@ export function contactDeadlineFor(item, { pushConfigured, now = Date.now } = {}
   const delay = item.contactDelayMs;
   if (typeof delay !== 'number') return null;
 
-  const d = item.delivery?.['discord-dm'];
-  if (d?.status === 'delivered') {
-    const at = Date.parse(d.at);
-    if (Number.isFinite(at)) return at + delay;
-  }
+  // ANY channel's confirmed delivery starts the veto clock (earliest one —
+  // my human could have seen the check-in from that moment). Identical to
+  // the old single-webhook behaviour when only 'discord-dm' exists.
+  const recs = Object.values(item.delivery ?? {});
+  const deliveredAts = recs
+    .filter(r => r?.status === 'delivered')
+    .map(r => Date.parse(r.at))
+    .filter(Number.isFinite);
+  if (deliveredAts.length) return Math.min(...deliveredAts) + delay;
+
   const enq = Date.parse(item.ts);
   if (!Number.isFinite(enq)) return null;
-  if (d?.status === 'failed' || !pushConfigured) return enq + delay;
-  // Push configured but no record yet — give dispatch a grace window,
-  // then fall back to the enqueue clock.
+  const allFailed = recs.length > 0 && recs.every(r => r?.status === 'failed');
+  if (allFailed || !pushConfigured) return enq + delay;
+  // Push configured but no confirmed record yet — give dispatch a grace
+  // window, then fall back to the enqueue clock (a dead adapter can never
+  // block escalation forever).
   if (now() - enq > DISPATCH_GRACE_MS) return enq + delay;
   return null;
 }
@@ -695,6 +791,9 @@ export const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly',
 export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'ward', 'relationship', 'custom']);
 export const VALID_FILENAME_RE           = /^[\w]+\.md$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Pondering entry uids are slug-shaped since the 0.8.x id overhaul
+// ("ponder-x7k2m3"); legacy UUIDs coexist. Path-safe: alnum+dash, bounded.
+const INTENT_UID_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 // Derive a filesystem-safe slug from a human title or memory bullet.
 // Entity-core stores significant memories as `YYYY-MM-DD_slug.md`. Without
@@ -1225,6 +1324,7 @@ export const BUILTIN_TOOLS = [
           when:  { type: 'string', description: 'Start time. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-01T14:00:00". The time I write is the time it happens.' },
           end:   { type: 'string', description: 'Optional end time, same format (YYYY-MM-DDTHH:MM:SS, local).' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
+          obstacle_tags: { type: 'array', items: { type: 'string' }, description: 'Optional short barrier tags for what this event asks of {{user}} — e.g. ["outside"] when it means leaving the house, which for my human is a real obstacle. I set these so I keep the event on their radar as it approaches and so I can check its prerequisites are ready in time. Keep tags short and reusable (a barrier vocabulary, not a sentence): "outside", "phone-call", "social", "early".' },
         },
         required: ['label', 'when'],
       },
@@ -1250,8 +1350,40 @@ export const BUILTIN_TOOLS = [
             description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
           },
           recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
+          obstacle_tags: { type: 'array', items: { type: 'string' }, description: 'Optional short barrier tags for what this task asks of {{user}} — e.g. ["outside"] when it means leaving the house, which for my human is a real obstacle. I set these so an outside-the-house errand stays on my radar. Keep tags short and reusable (a barrier vocabulary, not a sentence): "outside", "phone-call", "social", "early".' },
         },
         required: ['label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_add_hold',
+      description: 'I keep a stretch of {{user}}\'s time FREE — a "hold" that blocks a day or window so nothing gets booked over it. I use this when {{user}} asks me to protect time: a rest day, a buffer before something big, "keep Thursday clear". A hold is not an appointment — it\'s protected empty space — but it counts as BUSY whenever I coordinate availability with anyone, so their free time stays theirs. To lift a hold I resolve or delete it like any node.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Short name for what the time is held for (e.g. "rest day", "buffer before the move", "kept clear").' },
+          when:  { type: 'string', description: 'When the hold starts. Format: YYYY-MM-DDTHH:MM:SS — local, no offset. For a whole day held clear, use the day\'s start (e.g. "2026-07-09T00:00:00") with an end at day\'s close.' },
+          end:   { type: 'string', description: 'Optional end of the held window, same format. Omit to hold roughly the hour from "when".' },
+          recurrence: { type: 'object', description: 'Optional. Repeats the hold (e.g. {freq:"weekly", byweekday:4} to keep every Thursday clear). Same shape as the other schedule tools.' },
+        },
+        required: ['label', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_availability',
+      description: 'I check {{user}}\'s coarse FREE/BUSY over the next days — which mornings, afternoons, and evenings are open versus taken — WITHOUT naming what fills them. I use this to answer "am I free Thursday?", or to work out a time with someone {{user}} has permitted to coordinate their schedule. It reports day-parts only, never labels, so the free/busy is safe to share with a permitted person. (Holds count as busy.)',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: 'How many days ahead to check (default 7).' },
+        },
+        required: [],
       },
     },
   },
@@ -1417,6 +1549,121 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'request_tools',
+      description: 'My full toolbox is bigger than what I\'m currently holding — most modules only surface when the moment calls for them. If I need a tool that isn\'t in my hands right now, I name its module here and I\'ll have those tools THIS turn, on my very next step. Modules: ' + MODULE_INDEX + '. Passing "all" hands me everything at once. This is also how I answer "what can you do?" honestly: the list above is complete, and I can pull any module to check its details. If I reach for a tool and it isn\'t there, this is ALWAYS the recovery — never "I can\'t do that."',
+      parameters: {
+        type: 'object',
+        properties: {
+          modules: { type: 'string', description: 'Module name(s), comma-separated — e.g. "schedule-write" or "graph, village" — or "all".' },
+        },
+        required: ['modules'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_find',
+      description: 'I search {{user}}\'s WHOLE schedule by name — any time horizon, not just the week my [Temporal Context] briefing shows. My briefing only legends what\'s near; the store holds far more (like a year of synced calendar events), and this is how I reach any of it: when {{user}} asks "when\'s my dentist appointment?", when I need the id of something months out to export or link it, or when I want to check whether something already exists before adding a duplicate. I search, read the matches\' ids, then act. With include_resolved I can also answer "did I already handle X?".',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Part of the item\'s name, case-insensitive (e.g. "dentist").' },
+          include_resolved: { type: 'boolean', description: 'true to also see done/cancelled items. Default false.' },
+          limit: { type: 'number', description: 'Max matches (default 20).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_upsert',
+      description: 'I create or adjust a requirement TEMPLATE — a reusable bundle of what a KIND of barrier asks of {{user}}. The tag "outside" (leaving the house) might need "clean clothes" and "shoes by the door". I build these as I learn what my human actually needs, and I adjust them over time — they are mine to grow, not a fixed checklist. Later, when I tag an event with that barrier, I apply the template to SUGGEST its prerequisites (template_apply). One template per tag: upserting a tag that exists replaces its contents.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tag: { type: 'string', description: 'The obstacle tag this template keys off (e.g. "outside"). Matches the obstacle_tags I put on events/tasks.' },
+          label: { type: 'string', description: 'Human-readable name for the bundle (e.g. "leaving the house").' },
+          prerequisites: { type: 'array', items: { type: 'string' }, description: 'Ordered list of short prerequisite task labels — the things that need to be true/done first (e.g. ["clean clothes", "shoes by the door"]).' },
+        },
+        required: ['tag', 'label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_list',
+      description: 'I list my requirement templates — the barrier bundles I\'ve built — so I can see what I have and what each one pulls in before I apply or adjust it.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_delete',
+      description: 'I remove a requirement template I no longer want, by its tag.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tag: { type: 'string', description: 'The obstacle tag whose template to delete.' },
+        },
+        required: ['tag'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'template_apply',
+      description: 'I apply a requirement template to an event I\'ve tagged with a barrier — this SUGGESTS the template\'s prerequisites as tasks the event requires, so I can check they\'re ready in time (they show up in my stewardship readiness as the event approaches). It only proposes: I prune anything that doesn\'t apply this time by resolving or unlinking it, because my human\'s barriers vary by day. I reach for this right after adding an event tagged with a barrier that has a template (e.g. an "outside" appointment). Prerequisites that already exist as open tasks are reused, not duplicated.',
+      parameters: {
+        type: 'object',
+        properties: {
+          event_id: { type: 'string', description: 'The id of the tagged event to apply matching templates to — from the [schedule ids] legend in [Temporal Context], or the id I got back when I created it.' },
+        },
+        required: ['event_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'gcal_list_calendars',
+      description: 'I list the calendars the Google sync can see — my human\'s own AND any shared into their account (a partner\'s, family, the sports club) — with who each is currently attributed to. I reach for this when my human mentions a shared calendar, or when I want to check whether a calendar is correctly attributed before I read its events as belonging to the right person. The ids I read here are what gcal_attribute_calendar takes.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'gcal_attribute_calendar',
+      description: 'I tell the sync WHO a shared calendar belongs to, so its events are attributed correctly instead of blurring into one pile. I set a calendar to: "ward" (my human\'s own), "villager" (a person in their village — I give the villager id from village_lookup as ref), "phylactery" (someone/something with a knowledge-graph node — a friend, family member, the club — ref is the node id), "unassigned" (synced but not yet attributed), or "ignore" (skip syncing it — e.g. a holidays feed). I get calendar_id from gcal_list_calendars. This is mine to set as I learn whose calendar is whose.',
+      parameters: {
+        type: 'object',
+        properties: {
+          calendar_id: { type: 'string', description: 'The calendar\'s id, from gcal_list_calendars (a Google calendar id/email, an iCal URL, or a CLI calendar name).' },
+          kind: { type: 'string', enum: ['ward', 'villager', 'phylactery', 'unassigned', 'ignore'], description: 'Whose calendar it is (see the tool description).' },
+          ref: { type: 'string', description: 'For "villager": the villager id (from village_lookup). For "phylactery": the knowledge-graph node id. Omit for ward/unassigned/ignore.' },
+          label: { type: 'string', description: 'Optional short name for how this calendar shows up (e.g. "Mom", "sports club"). Defaults to the calendar\'s own name.' },
+        },
+        required: ['calendar_id', 'kind'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'convert_ids_to_slugs',
+      description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my ponderings, and the outbox, with every internal cross-reference updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_push_to_google',
       description: 'I push one of {{user}}\'s schedule items INTO their real Google Calendar — the one path I have that actually changes their calendar, not just my own sense of it. Because it mutates their real calendar, I treat it with care: I confirm with {{user}} first that they want it added, and I only ADD a new entry (I never edit or delete their existing Google events). I pass the node `id`; the entry is generated from its stored fields in code (I never type calendar data myself) and imported through the tool {{user}} set up. This only appears when {{user}} has explicitly enabled calendar write-back, so its presence means they\'ve opted in — but I still ask before each push, since it lands in their actual calendar.',
       parameters: {
@@ -1455,6 +1702,20 @@ export const BUILTIN_TOOLS = [
           weight: { type: 'number', description: 'Optional weight; defaults to 1.0. Standing values bypass decay so this is just initial intensity.' },
         },
         required: ['topic'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_day_start_anchor',
+      description: 'I set the hour my human\'s day really begins — the ward-local time I use to decide when to open with what\'s coming (my stewardship opening brief). I reach for this when my stewardship block has watched enough mornings to tell me their real rhythm has drifted from the time I\'ve been opening on, or when my human tells me directly when their day starts. It writes one shared setting they can also see and change in Settings, so after I set it I tell them plainly in my own voice what I changed it to — the heads-up is mine to give.',
+      parameters: {
+        type: 'object',
+        properties: {
+          time: { type: 'string', description: 'The day-start time in 24-hour "HH:MM" ward-local wall-clock (e.g. "11:00"). Plain local time — no timezone math, no offset.' },
+        },
+        required: ['time'],
       },
     },
   },
@@ -1722,6 +1983,7 @@ export const TOOL_EXECUTORS = {
   }),
 
   get_session_info: (_args, ctx) => JSON.stringify({
+    sessionId:    ctx?.sessionInfo?.sessionId ?? null,  // = this session's log filename in logs/
     startedAt:    ctx?.sessionInfo?.startedAt ?? null,
     messageCount: ctx?.sessionInfo?.messageCount ?? null,
     provider:     ctx?.sessionInfo?.provider ?? null,
@@ -1741,7 +2003,7 @@ export const TOOL_EXECUTORS = {
         keys,
         learnedAt: new Date().toISOString(),
       });
-      return `Saved to Tome (entry: ${uid ?? 'unknown'}).`;
+      return quietOk(`Saved to Tome (entry: ${uid ?? 'unknown'}).`, { id: uid });
     } catch (err) {
       return `Failed to save to Tome: ${err.message}`;
     }
@@ -1788,14 +2050,14 @@ export const TOOL_EXECUTORS = {
       // me/ward standing truths read back in their own voice so I know where it landed.
       if (reg !== 'episodic') {
         const whose = reg === 'me' ? 'about myself' : "about my human";
-        return `Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`;
+        return quietOk(`Saved as a standing truth ${whose} (recalled when relevant, not on my always-injected surface).`);
       }
       // For significant memories, hand back the composite key — it's how
       // the entry is addressed later (update_memory / delete_memory take
       // YYYY-MM-DD_slug for significant).
       if (slug) {
         const today = new Date().toISOString().slice(0, 10);
-        return `Memory saved (significant/${today}_${slug}).`;
+        return quietOk(`Memory saved (significant/${today}_${slug}).`);
       }
       return 'Memory saved.';
     } catch (err) { return `Failed to save memory: ${err.message}`; }
@@ -1812,12 +2074,12 @@ export const TOOL_EXECUTORS = {
     if (content.length > 8192) return 'Failed to update identity: content exceeds 8 KB limit.';
     try {
       const result = await appendIdentity({ category, filename, content: content.trim() });
-      return result.ok ? 'Identity file updated.' : `Identity update failed: ${result.error ?? 'unknown error'}`;
+      return result.ok ? quietOk('Identity file updated.') : `Identity update failed: ${result.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 
   snooze_deferred_intent: async ({ uid, index, minutes = 60 }) => {
-    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid UUID.';
+    if (typeof uid !== 'string' || !INTENT_UID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid entry uid.';
     const idx = Number(index);
     if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
       return 'Failed to snooze intent: index must be a non-negative integer.';
@@ -1826,13 +2088,13 @@ export const TOOL_EXECUTORS = {
       const data = await snoozeIntent({ uid, index: idx, minutes: Number(minutes) || 60 });
       if (data.alreadyDone) return 'Intent was already filed — nothing to snooze.';
       return data.ok
-        ? `Intent snoozed until ${data.snooze_until} — it will resurface after that.`
+        ? quietOk(`Intent snoozed until ${data.snooze_until} — it will resurface after that.`)
         : `Snooze failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to snooze intent: ${err.message}`; }
   },
 
   acknowledge_deferred_intent: async ({ uid, index }) => {
-    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return 'Failed to acknowledge intent: uid must be a valid UUID.';
+    if (typeof uid !== 'string' || !INTENT_UID_RE.test(uid)) return 'Failed to acknowledge intent: uid must be a valid entry uid.';
     const idx = Number(index);
     if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
       return 'Failed to acknowledge intent: index must be a non-negative integer.';
@@ -1840,7 +2102,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await markIntentActedOn({ uid, index: idx });
       if (data.alreadyDone) return 'Intent was already marked as filed.';
-      return data.ok ? 'Deferred intent marked as filed.' : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
+      return data.ok ? quietOk('Deferred intent marked as filed.') : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
 
@@ -1849,7 +2111,7 @@ export const TOOL_EXECUTORS = {
     const result = await confirmConsentMemories(ids);
     pruneConsentPending(ids).catch(() => {});
     const n = result?.confirmed ?? ids.length;
-    return `Consent confirmed for ${n} record(s). They are now stored permanently.`;
+    return quietOk(`Consent confirmed for ${n} record(s). They are now stored permanently.`);
   },
 
   memory_drop_pending: async ({ ids }) => {
@@ -1857,14 +2119,14 @@ export const TOOL_EXECUTORS = {
     const result = await dropPendingMemories(ids);
     pruneConsentPending(ids).catch(() => {});
     const n = result?.dropped ?? ids.length;
-    return `Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`;
+    return quietOk(`Dropped ${n} consent-pending record(s). (Auto-snapshot taken before deletion.)`);
   },
 
   graduation_acknowledge: async ({ ids }) => {
     if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of graduation notice IDs.';
     const result = await acknowledgeGraduations(ids);
     const n = result?.acknowledged ?? ids.length;
-    return `Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`;
+    return quietOk(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
   },
 
   // ── Knowledge-editing executors ────────────────────────────────────
@@ -1882,7 +2144,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await updateMemory({ granularity, date: key.date, slug: key.slug ?? undefined, content: content.trim(), editedBy: 'familiar-toolcall' });
       if (!result.ok) return `Failed to update memory: ${result.error ?? 'phylactery unavailable'}`;
-      return `Memory ${granularity}/${date} updated.`;
+      return quietOk(`Memory ${granularity}/${date} updated.`);
     } catch (err) { return `Failed to update memory: ${err.message}`; }
   },
 
@@ -1893,7 +2155,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteMemory({ granularity, date: key.date, slug: key.slug ?? undefined });
       if (!result.ok) return `Failed to delete memory: ${result.error ?? 'phylactery unavailable'}`;
-      return `Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+      return quietOk(`Memory ${granularity}/${date} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory: ${err.message}`; }
   },
 
@@ -1945,7 +2207,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await moveMemoryDate({ id: mid, date: String(date).trim() });
       if (!res.ok) return `Failed to move memory ${mid}: ${res.error}`;
-      return `Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`;
+      return quietOk(`Moved memory ${mid} to ${String(date).trim()}. Only the day changed; the content is untouched.`);
     } catch (err) { return `Failed to move memory: ${err.message}`; }
   },
 
@@ -1957,7 +2219,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await updateMemoryById({ id: mid, content: content.trim() });
       if (!res.ok) return `Failed to update memory ${mid}: ${res.error}`;
-      return `Memory ${mid} updated.`;
+      return quietOk(`Memory ${mid} updated.`);
     } catch (err) { return `Failed to update memory by id: ${err.message}`; }
   },
 
@@ -1967,7 +2229,7 @@ export const TOOL_EXECUTORS = {
     try {
       const res = await deleteMemoryById({ id: mid });
       if (!res.ok) return `Failed to delete memory ${mid}: ${res.error}`;
-      return `Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`;
+      return quietOk(`Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
   },
 
@@ -1999,7 +2261,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await rewriteIdentitySection({ category, filename, section, content });
       if (!result.ok) return `Failed to rewrite section: ${result.error ?? 'phylactery unavailable'}`;
-      return `Section "${section}" of ${category}/${filename} rewritten.`;
+      return quietOk(`Section "${section}" of ${category}/${filename} rewritten.`);
     } catch (err) { return `Failed to rewrite section: ${err.message}`; }
   },
 
@@ -2059,7 +2321,7 @@ export const TOOL_EXECUTORS = {
       const result = await createGraphEdge({ fromId, toId, type, weight });
       if (!result.ok) return `Failed to create graph edge: ${result.error ?? 'phylactery unavailable'}`;
       const id = result.result?.id ?? result.result?.edge?.id;
-      return `Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`;
+      return quietOk(`Graph edge created: ${fromId} -${type}-> ${toId}${id ? ` (id=${id})` : ''}.`, { id });
     } catch (err) { return `Failed to create graph edge: ${err.message}`; }
   },
 
@@ -2081,7 +2343,7 @@ export const TOOL_EXECUTORS = {
       }
       const result = await updateGraphNode({ id, label, description, type, audience: resolvedAudience });
       if (!result.ok) return `Failed to update graph node: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph node ${id} updated.`;
+      return quietOk(`Graph node ${id} updated.`);
     } catch (err) { return `Failed to update graph node: ${err.message}`; }
   },
 
@@ -2089,7 +2351,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteGraphNode({ id });
       if (!result.ok) return `Failed to delete graph node: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph node ${id} deleted (snapshot saved).`;
+      return quietOk(`Graph node ${id} deleted (snapshot saved).`);
     } catch (err) { return `Failed to delete graph node: ${err.message}`; }
   },
 
@@ -2100,7 +2362,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await updateGraphEdge({ id, type, weight });
       if (!result.ok) return `Failed to update graph edge: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph edge ${id} updated.`;
+      return quietOk(`Graph edge ${id} updated.`);
     } catch (err) { return `Failed to update graph edge: ${err.message}`; }
   },
 
@@ -2108,7 +2370,7 @@ export const TOOL_EXECUTORS = {
     try {
       const result = await deleteGraphEdge({ id });
       if (!result.ok) return `Failed to delete graph edge: ${result.error ?? 'phylactery unavailable'}`;
-      return `Graph edge ${id} deleted (snapshot saved).`;
+      return quietOk(`Graph edge ${id} deleted (snapshot saved).`);
     } catch (err) { return `Failed to delete graph edge: ${err.message}`; }
   },
 
@@ -2117,32 +2379,51 @@ export const TOOL_EXECUTORS = {
   // subprocess. Returns short strings the model can quote back as
   // confirmation.
 
-  schedule_add_event: async ({ label, when, end, recurrence }) => {
+  schedule_add_event: async ({ label, when, end, recurrence, obstacle_tags }) => {
     if (!label || typeof label !== 'string') return 'Failed to add event: label (string) is required';
     try {
       const payload = recurrence ? { recurrence } : {};
+      const tags = normalizeObstacleTags(obstacle_tags);
+      if (tags.length) payload.obstacle_tags = tags;
       const data = await addScheduleNode({
         type: 'event', label, when, end,
         ...(Object.keys(payload).length ? { payload } : {}),
       });
       if (data?.ok === false) return `Failed to add event: ${data.error ?? 'unknown error'}`;
-      return `Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`;
+      // Discovery: if this event carries a barrier tag that has a template,
+      // tell me so I can pull its prerequisites in with template_apply. Only
+      // when tags are present (one extra call, gated) and only surfaced loud
+      // when there's actually a template to apply.
+      let templateHint = '';
+      if (tags.length) {
+        try {
+          const tl = await templateList();
+          if (tl?.ok) {
+            const hits = (tl.templates ?? []).filter(t => tags.includes(String(t.tag).toLowerCase()));
+            if (hits.length) templateHint = ` There's a template for ${hits.map(t => `"${t.tag}"`).join(', ')} — I can apply it with template_apply (event_id: ${data.id}) to suggest its prerequisites.`;
+          }
+        } catch { /* discovery is best-effort; never blocks the add */ }
+      }
+      if (templateHint) return `Event added (id: ${data.id}).${templateHint}`;
+      return quietOk(`Event added (id: ${data.id}). It will surface in my [Temporal Context] when its time approaches.`, { id: data.id });
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
-  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence }) => {
+  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence, obstacle_tags }) => {
     if (!label || typeof label !== 'string') return 'Failed to add task: label (string) is required';
     try {
       const payload = {};
       if (stakes_tier) payload.stakes_tier = stakes_tier;
       if (consequence_model) payload.consequence_model = consequence_model;
       if (recurrence) payload.recurrence = recurrence;
+      const tags = normalizeObstacleTags(obstacle_tags);
+      if (tags.length) payload.obstacle_tags = tags;
       const data = await addScheduleNode({
         type: 'task', label, when,
         ...(Object.keys(payload).length ? { payload } : {}),
       });
       if (data?.ok === false) return `Failed to add task: ${data.error ?? 'unknown error'}`;
-      return `Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`;
+      return quietOk(`Task added (id: ${data.id}). It will surface until resolved via schedule_resolve.`, { id: data.id });
     } catch (err) { return `Failed to add task: ${err.message}`; }
   },
 
@@ -2157,8 +2438,31 @@ export const TOOL_EXECUTORS = {
       };
       const data = await addScheduleNode({ type: 'task', label, when, end, payload });
       if (data?.ok === false) return `Failed to add need: ${data.error ?? 'unknown error'}`;
-      return `Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`;
+      return quietOk(`Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`, { id: data.id });
     } catch (err) { return `Failed to add need: ${err.message}`; }
+  },
+
+  schedule_add_hold: async ({ label, when, end, recurrence } = {}) => {
+    if (!label || typeof label !== 'string') return 'Failed to add hold: label (string) is required.';
+    if (!when || typeof when !== 'string' || !when.trim()) return 'Failed to add hold: when (local ISO time) is required — a hold blocks a time.';
+    try {
+      const payload = recurrence && typeof recurrence === 'object' ? { recurrence } : {};
+      const data = await addScheduleNode({ type: 'hold', label, when, end, ...(Object.keys(payload).length ? { payload } : {}) });
+      if (data?.ok === false) return `Failed to add hold: ${data.error ?? 'unknown error'}`;
+      return quietOk(`Held "${label}" (id: ${data.id}). That time reads as busy when I coordinate with anyone, so it stays ${'{{user}}'}'s.`, { id: data.id });
+    } catch (err) { return `Failed to add hold: ${err.message}`; }
+  },
+
+  schedule_availability: async ({ days } = {}) => {
+    const d = Number.isFinite(Number(days)) ? Math.max(1, Math.min(30, Math.round(Number(days)))) : 7;
+    try {
+      const win = await getScheduleWindow({ limit: 400 });
+      if (win?.ok === false) return `I couldn't read the schedule: ${win.error ?? 'Unruh unavailable'}.`;
+      const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+      const avail = computeAvailability(nodes, { nowMs: Date.now(), days: d });
+      const lines = formatAvailabilityLines(avail);
+      return [`${'{{user}}'}'s coarse availability over the next ${d} days (free/busy only, no labels):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read the schedule: ${err.message}`; }
   },
 
   schedule_assign_time: async ({ id, when }) => {
@@ -2167,7 +2471,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await updateScheduleNode({ id, when: when.trim() });
       if (data?.ok === false) return `Failed to assign a time: ${data.error ?? 'unknown error'}`;
-      return `Done — that task now has a time (${when.trim()}), so it'll come due and surface on its own instead of floating. (id: ${id})`;
+      return quietOk(`Done — that task now has a time (${when.trim()}), so it'll come due and surface on its own instead of floating. (id: ${id})`, { id });
     } catch (err) { return `Failed to assign a time: ${err.message}`; }
   },
 
@@ -2188,7 +2492,7 @@ export const TOOL_EXECUTORS = {
       payload.snooze_until = until;
       const data = await updateScheduleNode({ id, payload });
       if (data?.ok === false) return `Failed to snooze task: ${data.error ?? 'unknown error'}`;
-      return `Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`;
+      return quietOk(`Task snoozed (id: ${id}). It will stop surfacing for ~${mins} min (until ${until}), then come back to me on its own.`, { id });
     } catch (err) { return `Failed to snooze task: ${err.message}`; }
   },
 
@@ -2202,7 +2506,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'reminder', label, when, payload });
       if (data?.ok === false) return `Failed to add reminder: ${data.error ?? 'unknown error'}`;
-      return `Reminder set (id: ${data.id}). It will be delivered into the chat at the chosen time (and pushed to {{user}}'s Discord when configured).`;
+      return quietOk(`Reminder set (id: ${data.id}). It will be delivered into the chat at the chosen time (and pushed to {{user}}'s Discord when configured).`, { id: data.id });
     } catch (err) { return `Failed to add reminder: ${err.message}`; }
   },
 
@@ -2214,7 +2518,7 @@ export const TOOL_EXECUTORS = {
       if (recurrence) payload.recurrence = recurrence;
       const data = await addScheduleNode({ type: 'phase', label, when, end, payload });
       if (data?.ok === false) return `Failed to add phase: ${data.error ?? 'unknown error'}`;
-      return `Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`;
+      return quietOk(`Phase added (id: ${data.id}). It will appear in {{user}}'s daily routine at that time of day.`, { id: data.id });
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
@@ -2231,8 +2535,8 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
       if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
       return occurrence_date
-        ? `Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`
-        : `Marked ${id} as ${resolution}.`;
+        ? quietOk(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`)
+        : quietOk(`Marked ${id} as ${resolution}.`);
     } catch (err) { return `Failed to resolve: ${err.message}`; }
   },
 
@@ -2243,7 +2547,7 @@ export const TOOL_EXECUTORS = {
       const data = await deleteScheduleNode({ id: sid });
       if (!data?.ok) return `I couldn't remove that schedule item: ${data?.error ?? 'Unruh unavailable'}.`;
       if (data.deleted === false) return `There's no schedule item with id ${sid} — nothing to remove (it may already be gone).`;
-      return `Removed schedule item ${sid}.`;
+      return quietOk(`Removed schedule item ${sid}.`);
     } catch (err) { return `I couldn't remove that schedule item: ${err.message}`; }
   },
 
@@ -2278,7 +2582,7 @@ export const TOOL_EXECUTORS = {
       const data = await addScheduleEdge({ src: s, dst: d, kind: k, payload: Object.keys(payload).length ? payload : undefined });
       if (!data?.ok) return `I couldn't connect those items: ${data?.error ?? 'Unruh unavailable'} (one of the ids may be stale).`;
       const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
-      return `Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`;
+      return quietOk(`Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`, { id: data.id });
     } catch (err) { return `I couldn't connect those items: ${err.message}`; }
   },
 
@@ -2299,6 +2603,192 @@ export const TOOL_EXECUTORS = {
         `I share both links with {{user}} so they can pick whichever suits their device. (I only read their calendar — adding this is their choice, not a change I make to it.)`,
       ].join('\n');
     } catch (err) { return `I couldn't build a calendar file for that item: ${err.message}`; }
+  },
+
+  request_tools: async ({ modules } = {}, ctx = {}) => {
+    const { modules: known, unknown } = normalizeRequestedModules(modules);
+    if (!known.length) return `I don't have module(s) called ${JSON.stringify(unknown)}. My modules: ${MODULE_INDEX} — or "all".`;
+    if (!ctx._requestedModules) ctx._requestedModules = new Set();
+    for (const m of known) ctx._requestedModules.add(m);
+    // Every pull is a surfacing miss — the tuning signal for triggers.
+    console.log(`[tools] surfacing miss — requested: ${known.join(', ')}${unknown.length ? ` (unknown: ${unknown.join(', ')})` : ''}`);
+    return `ok — ${known.join(', ')} tools are in my hands from my next step onward${unknown.length ? ` (no such module: ${unknown.join(', ')})` : ''}.`;
+  },
+
+  schedule_find: async ({ query, include_resolved, limit } = {}) => {
+    const q = String(query ?? '').trim();
+    if (!q) return 'I need part of the item\'s name to search for.';
+    try {
+      const data = await findScheduleNodes({
+        query: q,
+        includeResolved: include_resolved === true,
+        limit: Number.isFinite(Number(limit)) ? Number(limit) : 20,
+      });
+      if (!data?.ok) return `I couldn't search the schedule: ${data?.error ?? 'Unruh unavailable'}.`;
+      const matches = Array.isArray(data.matches) ? data.matches : [];
+      if (!matches.length) return `Nothing on the schedule matches "${q}"${include_resolved ? '' : ' (unresolved items only — pass include_resolved to search finished ones too)'}.`;
+      const lines = matches.map(m => {
+        const when = m.when ? (relativeTime(m.when, Date.now()) || m.when) : 'no time set';
+        const res = m.resolution ? ` [${m.resolution}]` : '';
+        return `- ${m.label} [${m.type}] — ${when}${res} (id: ${m.id})`;
+      });
+      return [`${matches.length} match(es) for "${q}":`, ...lines].join('\n');
+    } catch (err) { return `I couldn't search the schedule: ${err.message}`; }
+  },
+
+  template_upsert: async ({ tag, label, prerequisites } = {}) => {
+    const t = String(tag ?? '').trim().toLowerCase();
+    if (!t) return 'I need a tag for the template — the barrier it keys off (e.g. "outside").';
+    const lbl = String(label ?? '').trim();
+    if (!lbl) return 'I need a label for the template — its human name (e.g. "leaving the house").';
+    const prereqs = Array.isArray(prerequisites)
+      ? prerequisites.map(p => String(p ?? '').trim()).filter(Boolean)
+      : String(prerequisites ?? '').split(/[,\n]/).map(p => p.trim()).filter(Boolean);
+    try {
+      const data = await templateUpsert({ tag: t, label: lbl, prerequisites: prereqs });
+      if (!data?.ok) return `I couldn't save that template: ${data?.error ?? 'Unruh unavailable'}.`;
+      const tpl = data.template ?? {};
+      const list = (tpl.prerequisites ?? prereqs);
+      return quietOk(`Template "${tpl.label ?? lbl}" (tag: ${tpl.tag ?? t}) saved — needs: ${list.length ? list.join(', ') : '(nothing yet)'}. I'll suggest these when I apply it to an event tagged "${tpl.tag ?? t}".`);
+    } catch (err) { return `I couldn't save that template: ${err.message}`; }
+  },
+
+  gcal_list_calendars: async () => {
+    try {
+      const cache = await readCalendarCache();
+      const cals = Array.isArray(cache?.calendars) ? cache.calendars : [];
+      if (!cals.length) return 'I have no calendars on record yet — the Google sync populates this the first time it runs with a connected account (or configured feeds).';
+      const s = readSettingsSync();
+      const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+      const lines = cals.map(c => {
+        const a = resolveAttribution(c, map);
+        const who = a.kind === 'ward' ? 'my human' : a.kind === 'unassigned' ? 'unattributed' : `${a.kind}${a.ref ? ` (${a.ref})` : ''}${a.label && a.label !== c.summary ? ` — "${a.label}"` : ''}`;
+        return `- ${c.summary}${c.primary ? ' (primary)' : ''} → ${who}\n    id: ${c.id}`;
+      });
+      return [`Calendars the sync can see (${cals.length}):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read my calendars: ${err.message}`; }
+  },
+
+  gcal_attribute_calendar: async ({ calendar_id, kind, ref, label } = {}) => {
+    const id = String(calendar_id ?? '').trim();
+    if (!id) return 'I need the calendar_id — from gcal_list_calendars.';
+    const norm = normalizeAttributionEntry({ kind, ref, label });
+    if (!norm.ok) return `I couldn't attribute that calendar: ${norm.error}.`;
+    try {
+      const s = readSettingsSync();
+      const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? { ...s.gcalCalendarAttribution } : {};
+      map[id] = norm.entry;
+      const res = await writeSettingsPatch({ gcalCalendarAttribution: map });
+      if (res?.ok === false) return `I couldn't attribute that calendar: ${res.error ?? 'unknown error'}`;
+      const e = norm.entry;
+      const who = e.kind === 'ward' ? 'my human' : e.kind === 'ignore' ? 'ignored (won\'t sync)' : `${e.kind}${e.ref ? ` ${e.ref}` : ''}${e.label ? ` — "${e.label}"` : ''}`;
+      return `Done — that calendar is now attributed to ${who}. Its events will carry that from the next sync.`;
+    } catch (err) { return `I couldn't attribute that calendar: ${err.message}`; }
+  },
+
+  template_list: async () => {
+    try {
+      const data = await templateList();
+      if (!data?.ok) return `I couldn't read my templates: ${data?.error ?? 'Unruh unavailable'}.`;
+      const tpls = Array.isArray(data.templates) ? data.templates : [];
+      if (!tpls.length) return 'I have no requirement templates yet. I build them with template_upsert as I learn what a barrier needs.';
+      const lines = tpls.map(t => `- ${t.label} (tag: ${t.tag}) → ${(t.prerequisites ?? []).join(', ') || '(nothing yet)'}`);
+      return [`My requirement templates (${tpls.length}):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read my templates: ${err.message}`; }
+  },
+
+  template_delete: async ({ tag } = {}) => {
+    const t = String(tag ?? '').trim().toLowerCase();
+    if (!t) return 'I need the tag of the template to delete.';
+    try {
+      const data = await templateDelete({ tag: t });
+      if (!data?.ok) return `I couldn't delete that template: ${data?.error ?? 'Unruh unavailable'}.`;
+      return data.deleted
+        ? quietOk(`Template for "${t}" deleted.`)
+        : `I had no template for "${t}" to delete.`;
+    } catch (err) { return `I couldn't delete that template: ${err.message}`; }
+  },
+
+  template_apply: async ({ event_id } = {}) => {
+    const id = String(event_id ?? '').trim();
+    if (!id) return "I need the event's id to apply a template to it — from the [schedule ids] legend in my [Temporal Context].";
+    try {
+      const res = await getScheduleNode({ id });
+      const ev = (res && typeof res.node === 'object') ? res.node : res;
+      if (!ev || !ev.id) return `I couldn't find a schedule item with id ${id}.`;
+      const tags = Array.isArray(ev.payload?.obstacle_tags) ? ev.payload.obstacle_tags.filter(Boolean).map(x => String(x).toLowerCase()) : [];
+      if (!tags.length) return `"${ev.label ?? id}" has no barrier tags, so there's no template to apply. I can add tags with obstacle_tags when I create or edit it.`;
+      const tl = await templateList();
+      if (!tl?.ok) return `I couldn't read my templates: ${tl?.error ?? 'Unruh unavailable'}.`;
+      const byTag = new Map((tl.templates ?? []).map(t => [String(t.tag).toLowerCase(), t]));
+      const matched = tags.filter(t => byTag.has(t));
+      if (!matched.length) return `No template matches this event's tags (${tags.join(', ')}). I can build one with template_upsert.`;
+
+      const applied = [], skipped = [], seen = new Set();
+      for (const tag of matched) {
+        for (const prereqLabel of (byTag.get(tag).prerequisites ?? [])) {
+          const key = String(prereqLabel).trim().toLowerCase();
+          if (!key || seen.has(key)) continue;   // dedup prerequisites within this apply
+          seen.add(key);
+          // Resolve-or-create the prerequisite task (reuse an existing open one).
+          let prereqId = null, reused = false;
+          const found = await findScheduleNodes({ query: prereqLabel, includeResolved: false, limit: 10 });
+          if (found?.ok) {
+            const exact = (found.matches ?? []).find(m => m.type === 'task' && !m.resolution && String(m.label).trim().toLowerCase() === key);
+            if (exact) { prereqId = exact.id; reused = true; }
+          }
+          if (!prereqId) {
+            const created = await addScheduleNode({ type: 'task', label: prereqLabel });
+            if (!created?.ok || !created.id) { skipped.push(`${prereqLabel} (couldn't create)`); continue; }
+            prereqId = created.id;
+          }
+          if (prereqId === ev.id) { skipped.push(`${prereqLabel} (same as the event)`); continue; }
+          const edge = await addScheduleEdge({ src: ev.id, dst: prereqId, kind: 'requires' });
+          if (!edge?.ok) { skipped.push(`${prereqLabel} (couldn't link)`); continue; }
+          applied.push(`${prereqLabel}${reused ? ' (existing task)' : ' (new task)'}`);
+        }
+      }
+      if (!applied.length && !skipped.length) return `Nothing to suggest for "${ev.label ?? id}" — the matching template(s) have no prerequisites yet.`;
+      const head = applied.length
+        ? `Suggested for "${ev.label ?? id}", now required before it: ${applied.join(', ')}. These are suggestions — I prune any that don't apply this time by resolving or unlinking them. They'll show in my readiness as the event nears.`
+        : `Nothing new to add for "${ev.label ?? id}".`;
+      return skipped.length ? `${head} (Skipped: ${skipped.join('; ')}.)` : head;
+    } catch (err) { return `I couldn't apply the template: ${err.message}`; }
+  },
+
+  convert_ids_to_slugs: async () => {
+    const report = [];
+    try {
+      // 1. Unruh (schedule + interests) — returns the node-id mapping that
+      //    Proto-Familiar's own JSON stores need to follow.
+      const unruh = await convertUnruhIds();
+      if (unruh?.ok) {
+        report.push(`temporal store: ${unruh.nodes ?? 0} node(s) + ${unruh.edges ?? 0} link(s) renamed`);
+        const mapping = unruh.mapping && typeof unruh.mapping === 'object' ? unruh.mapping : {};
+        if (Object.keys(mapping).length) {
+          const ob = await rekeyOutboxIds({ mapping }).catch(() => null);
+          const cue = await rekeyCueState(mapping).catch(() => null);
+          const se = await rekeySurfaceEventIds(mapping).catch(() => null);
+          report.push(`cross-references followed: outbox ${ob?.origins ?? 0}, calendar-cue ${cue?.moved ?? 0}, surface-history ${se?.moved ?? 0}`);
+        }
+      } else {
+        report.push(`temporal store: skipped (${unruh?.error ?? 'unavailable'})`);
+      }
+      // 2. Knowledge graph.
+      const graph = await convertGraphIds();
+      report.push(graph?.ok
+        ? `knowledge graph: ${graph.nodes ?? 0} node(s) + ${graph.edges ?? 0} edge(s) renamed`
+        : `knowledge graph: skipped (${graph?.error ?? 'unavailable'})`);
+      // 3. Ponderings + outbox item ids (local stores).
+      const pond = await rekeyPonderingUids().catch(err => ({ error: err?.message }));
+      report.push(pond?.error ? `ponderings: skipped (${pond.error})` : `ponderings: ${pond?.moved ?? 0} entry uid(s) shortened`);
+      const obIds = await rekeyOutboxIds({}).catch(() => null);
+      report.push(`outbox: ${obIds?.ids ?? 0} item id(s) shortened`);
+      report.push('Done. Old-style ids are gone from my active stores; session logs keep their historical names. Running this again is harmless.');
+      return report.join('\n');
+    } catch (err) {
+      return `The id tidy stopped partway: ${err.message}. Nothing was lost — every completed step is consistent, and running me again finishes the rest.`;
+    }
   },
 
   schedule_push_to_google: async ({ id } = {}) => {
@@ -2352,7 +2842,7 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await bumpInterest({ topic, delta: d, source: 'familiar_tool' });
       if (data?.ok === false) return `Failed to bump interest: ${data.error ?? 'unknown error'}`;
-      return `Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`;
+      return quietOk(`Interest "${topic}" bumped by ${delta}. It will surface in my [Temporal Context] interests block, weighted accordingly.`);
     } catch (err) { return `Failed to bump interest: ${err.message}`; }
   },
 
@@ -2361,8 +2851,25 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await setStandingInterest({ topic, weight });
       if (data?.ok === false) return `Failed to set standing value: ${data.error ?? 'unknown error'}`;
-      return `"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`;
+      return quietOk(`"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`);
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
+  },
+
+  set_day_start_anchor: async ({ time } = {}) => {
+    const t = String(time ?? '').trim();
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
+      return `I couldn't set the day-start: "${time}" isn't a valid 24-hour time. I need "HH:MM" ward-local, like "09:00" or "11:30".`;
+    }
+    // Zero-pad the hour so the stored value is canonical "HH:MM".
+    const [h, m] = t.split(':');
+    const canonical = `${String(Number(h)).padStart(2, '0')}:${m}`;
+    try {
+      const res = await writeSettingsPatch({ dayStartAnchor: canonical });
+      if (res?.ok === false) return `I couldn't set the day-start: ${res.error ?? 'unknown error'}`;
+      // Loud on purpose: this is a shared setting my human should hear about,
+      // and I give the heads-up in my own words this turn.
+      return `Day-start anchor set to ${canonical} (ward-local). From now on I'll open the day with what's coming once my human first turns up after that time. I let them know I changed it.`;
+    } catch (err) { return `I couldn't set the day-start: ${err.message}`; }
   },
 
   // ── Crisis outreach executors ────────────────────────────────────────
@@ -2725,10 +3232,17 @@ export function gcalWriteEnabled(settings = readSettingsSync()) {
   return !!cmd;
 }
 
-export function composeActiveTools(customTools, settings = readSettingsSync()) {
+export function composeActiveTools(customTools, settings = readSettingsSync(), opts = {}) {
   const webOn = webSearchEnabled(settings);
   const gcalWriteOn = gcalWriteEnabled(settings);
+  // Context-sensitive surfacing (tool-surfacing-build-spec): when a module
+  // Set is provided, only core + selected modules are advertised. Surfacing
+  // narrows on TOP of the existing gates (web opt-in, gcal write opt-in) —
+  // it never widens them. No Set → today's full-registry behavior.
+  const mods = opts.modules instanceof Set ? opts.modules : null;
+  const inScope = (name) => !mods || TOOL_MODULES[name] === CORE || mods.has(TOOL_MODULES[name]);
   const tools = BUILTIN_TOOLS.filter(t =>
+    inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
     (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
   if (Array.isArray(customTools)) {
@@ -2764,6 +3278,39 @@ function substituteToolMacros(tool, settings) {
 }
 
 /**
+ * Quiet-success marker (0.8.x token economy). A WRITE executor's success
+ * branch returns quietOk(fullText, {id}) instead of prose; the result
+ * boundary collapses it to "ok" (+ the new id when downstream calls need
+ * it) — because a success confirmation the model already implied by making
+ * the call carries no new information, while its tokens recur every turn
+ * the transcript survives. The contract that keeps this safe:
+ *   - ONLY genuine success branches call quietOk. Failures, not-found
+ *     results, and partial outcomes keep returning full prose, loudly —
+ *     the boundary never classifies text, so a failure can never be
+ *     mistaken for success (the acknowledge-≠-acting lesson, applied to
+ *     results).
+ *   - READ tools (recall, schedule_find, look_up, …) never use it — their
+ *     result IS the payload.
+ *   - Tools whose success text is itself load-bearing (safety mirrors like
+ *     contact_trusted_person, high-stakes rarities like
+ *     schedule_push_to_google, data-returning writes like schedule_export)
+ *     stay loud by simply not opting in.
+ * Debug escape hatch: PROTO_FAMILIAR_QUIET_TOOLS_DISABLED=1 renders the
+ * full text everywhere.
+ */
+export function quietOk(fullText, { id } = {}) {
+  return { __quietOk: true, fullText: String(fullText ?? 'ok'), id: id ?? null };
+}
+
+function renderToolResult(raw) {
+  if (raw && typeof raw === 'object' && raw.__quietOk === true) {
+    if (process.env.PROTO_FAMILIAR_QUIET_TOOLS_DISABLED === '1') return raw.fullText;
+    return raw.id ? `ok (id: ${raw.id})` : 'ok';
+  }
+  return String(raw);
+}
+
+/**
  * Execute a tool by name. Returns the result string. Never throws —
  * a tool whose backing peer is down (or whose executor bugs out)
  * returns a structured failure INTO the loop, not a 500 out of the
@@ -2774,7 +3321,7 @@ export async function executeToolCall(name, argsJson, ctx = {}) {
     try {
       const args = argsJson ? JSON.parse(argsJson) : {};
       const t0   = Date.now();
-      const out  = String(await TOOL_EXECUTORS[name](args, ctx));
+      const out  = renderToolResult(await TOOL_EXECUTORS[name](args, ctx));
       console.log(`[tools] ${name} ok in ${Date.now() - t0}ms`);
       // Tool results flow back to me as tool-role messages I read. Resolve
       // {{user}} / {{char}} here, once, at the boundary — so no executor has
@@ -2813,6 +3360,7 @@ export async function runToolCallLoop({
   executeTool = executeToolCall,
   toolCtx     = {},
   maxRounds   = MAX_TOOL_ROUNDS,
+  getTools    = null,
   signal,
 }) {
   if (typeof callUpstream !== 'function') throw new Error('callUpstream is required');
@@ -2825,7 +3373,10 @@ export async function runToolCallLoop({
     const payloadMessages = timeAnchor
       ? [...currentMsgs, { role: 'system', content: timeAnchor }]
       : currentMsgs;
-    data = await callUpstream(payloadMessages);
+    // Surfacing growth: request_tools may have widened the module set last
+    // round — recompose so the pulled tools are present THIS round. The set
+    // only ever grows within a turn (a chain never loses a tool mid-reach).
+    data = await callUpstream(payloadMessages, getTools ? getTools() : undefined);
 
     const choice  = data?.choices?.[0];
     const message = choice?.message;

@@ -40,6 +40,16 @@ import { relativeTime } from './relative-time.js';
  *
  * Returns the input string unchanged if it can't be parsed as a date.
  */
+// 📅 marks a Google-synced node; when it comes from a calendar attributed to
+// someone OTHER than my human (a shared calendar — a villager's, a club's),
+// the marker names them so the Familiar reads whose event it is.
+function gcalMarkerFor(node) {
+  if (node?.payload?.source !== 'gcal') return '';
+  const a = node.payload?.gcal_attribution;
+  if (a && a.kind && a.kind !== 'ward' && a.kind !== 'unassigned' && a.label) return ` 📅 ${a.label}`;
+  return ' 📅';
+}
+
 function formatLocalTime(iso, opts = {}) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -197,6 +207,12 @@ export function formatTemporalContext(payload) {
       const texturePart = phase.payload?.texture ? ` — ${phase.payload.texture}` : '';
       schedLines.push(`Current phase: ${phaseLabel}${span}${texturePart}`);
     }
+    // Obstacle tags (stewardship Pass 2) rendered as ⟨outside⟩ so I can see
+    // which items carry a real barrier for my human — and know a tag is set.
+    const obstacleSuffix = (item) => {
+      const t = Array.isArray(item.payload?.obstacle_tags) ? item.payload.obstacle_tags.filter(Boolean) : [];
+      return t.length ? ` ⟨${t.join(', ')}⟩` : '';
+    };
     if (upcoming.length) {
       schedLines.push('Upcoming in this window:');
       for (const item of upcoming) {
@@ -204,9 +220,9 @@ export function formatTemporalContext(payload) {
         const whenText = when ? `${when} — ` : '';
         const type = item.type ? `[${item.type}] ` : '';
         // 📅 marks an item the Google-Calendar sync manages (§5) — the
-        // Familiar can tell which fields aren't its to hand-edit.
-        const gcal = item.payload?.source === 'gcal' ? ' 📅' : '';
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcal}`);
+        // Familiar can tell which fields aren't its to hand-edit; a shared
+        // calendar also names whose it is.
+        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}${obstacleSuffix(item)}`);
       }
     }
     if (reminders.length) {
@@ -232,7 +248,7 @@ export function formatTemporalContext(payload) {
         const floatDays = Number.isFinite(created)
           ? Math.floor((nowMs - created) / (24 * 3600 * 1000)) : null;
         const ageTag = (floatDays != null && floatDays >= 1) ? ` (floating ${floatDays}d — no time set)` : '';
-        schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}`);
+        schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}${obstacleSuffix(item)}`);
       }
     }
     if (resolved.length) {
@@ -313,12 +329,11 @@ export function formatTemporalContext(payload) {
     if (!n?.id || seenScheduleIds.has(n.id)) continue;
     seenScheduleIds.add(n.id);
     if (n.payload?.source === 'gcal') anyGcal = true;
-    const marker = n.payload?.source === 'gcal' ? ' 📅' : '';
-    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${marker} = ${n.id}`);
+    idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${gcalMarkerFor(n)} = ${n.id}`);
   }
   if (idLegend.length) {
     blocks.push([
-      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s)]',
+      '[schedule ids — to give a floating task a time (schedule_assign_time), park one (schedule_snooze_task), mark one done/cancelled (schedule_resolve), remove one entirely incl. a phase (schedule_delete), or connect two so I see how they bear on each other (schedule_link), pass the id(s). Anything NOT listed here — an appointment months out, an old series — I find with schedule_find(name)]',
       ...idLegend,
       // §5 legibility: a 📅 item is externally managed. Not forbidden — the
       // sync just owns its time/title (a hand-edit there loses on the next

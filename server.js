@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, readFileSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
+import { sessionSlugId } from './slug-ids.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -34,7 +35,7 @@ import {
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   exportSchedule,
   getHandoff, markHandoffConsumed,
-  getDueReminders, getRemindersHealth,
+  getDueReminders, getRemindersHealth, markEventAlerted,
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
@@ -51,15 +52,25 @@ import {
 } from './surface-events.js';
 import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedIntents } from './recent-ponderings.js';
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
-import { startGcalSyncLoop, stopGcalSyncLoop } from './gcal-sync-loop.js';
+import {
+  selectDueEventAlerts, formatEventAlert, alertWindowBounds,
+  clampLeadMinutes, ALERT_GRACE_MS,
+} from './event-alerts.js';
+import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
+import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
 import { fetchIcal, fetchViaCli, cliPresetHint } from './gcal-source.js';
 import {
   parseCredentials, buildAuthUrl, exchangeCode,
   readToken as readGoogleToken, writeToken as writeGoogleToken,
   clearToken as clearGoogleToken, publicStatus as googlePublicStatus,
   getFreshAccessToken, listEvents as listGoogleEvents,
+  listCalendars as listGoogleCalendars, hasCalendarListScope,
   normalizeGoogleEvents, isConnected as googleConnected,
 } from './gcal-google.js';
+import {
+  resolveAttribution, isIgnored, wardCalendarId,
+  writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
+} from './gcal-attribution.js';
 import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
@@ -77,6 +88,8 @@ import {
   readSettingsSync, primaryConnectionFrom,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
+  appendReachoutEventLog, readReachoutEvents,
+  registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
   composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
@@ -89,6 +102,9 @@ import {
   enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
 import { expandWindow } from './recurrence.js';
+import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
+import { readStewardshipState, recordRoutineReview } from './stewardship.js';
+import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './routine-review.js';
 import {
   enqueueMemorization,
   enqueueSessionByDay,
@@ -133,10 +149,24 @@ const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
 // Only allow UUID-shaped IDs to prevent path traversal and bound input size.
-// Used for session IDs, tome IDs, entry UIDs, and memorization job IDs — all
-// of which are generated via crypto.randomUUID() and share the same shape.
+// Used for session IDs, tome IDs, and memorization job IDs — all generated
+// via crypto.randomUUID() and sharing the same shape.
 function isValidUUID(id) {
   return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
+}
+
+// Entry UIDs additionally allow the 0.8.x slug shape ("ponder-x7k2m3")
+// alongside legacy crypto.randomUUID() values. Same safety properties:
+// bounded length, alnum+dash only — no dots/slashes, still traversal-proof.
+function isValidEntryUid(uid) {
+  return isValidUUID(uid) || (typeof uid === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(uid));
+}
+
+// Session ids additionally allow the readable slug shape ("s-20260704-x7k2")
+// alongside legacy crypto.randomUUID() values. Session ids name files in
+// logs/, so the same path-safety bound applies: alnum+dash, bounded length.
+function isValidSessionId(id) {
+  return isValidUUID(id) || (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(id));
 }
 
 const app = express();
@@ -412,8 +442,34 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
+  // Context-sensitive tool surfacing (tool-surfacing-build-spec): when the
+  // ward has it on, only core + triggered modules are advertised; everything
+  // stays reachable via request_tools (same-turn recovery). Default OFF.
+  let surfacing = null;   // { selection:Set, used:Set } when active
   if (loopMode) {
-    const activeTools = composeActiveTools(customTools);
+    const sset = readSettingsSync();
+    const surfOn = sset?.toolSurfacingEnabled === true
+      && process.env.PROTO_FAMILIAR_TOOL_SURFACING_DISABLED !== '1';
+    let activeTools;
+    if (surfOn) {
+      const prevAssistant = [...(Array.isArray(messages) ? messages : [])].reverse()
+        .find(m => m?.role === 'assistant' && typeof m.content === 'string')?.content ?? '';
+      const turnText = `${typeof userMessage === 'string' ? userMessage : ''}\n${prevAssistant}`;
+      let villagerNames = [];
+      try { villagerNames = ((await getVillageRegistry())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
+      catch { /* registry unreadable → name-trigger degrades to keywords */ }
+      const selection = selectModules({
+        turnText,
+        dynamicBlock: enriched?.dynamic ?? '',
+        villagerNames,
+        sticky: stickyModulesFor(sessionInfo?.sessionId),
+      });
+      surfacing = { selection, used: new Set() };
+      activeTools = composeActiveTools(customTools, sset, { modules: selection });
+      console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised`);
+    } else {
+      activeTools = composeActiveTools(customTools);
+    }
     if (activeTools.length > 0) {
       payload.tools = activeTools;
       payload.tool_choice = 'auto';
@@ -440,6 +496,27 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       audienceTag,
       apiKey,
     };
+    if (surfacing) toolCtx._requestedModules = new Set();
+    // request_tools grew the set → the next round advertises the union.
+    // Growth-only within a turn; undefined = keep the current payload.tools.
+    const recomposeTools = () => {
+      if (!surfacing || !toolCtx._requestedModules?.size) return undefined;
+      const union = new Set([...surfacing.selection, ...toolCtx._requestedModules]);
+      return composeActiveTools(customTools, readSettingsSync(), { modules: union });
+    };
+    const tickSurfacing = (toolNamesUsed = []) => {
+      if (!surfacing) return;
+      for (const n of toolNamesUsed) {
+        const m = TOOL_MODULES[n];
+        if (m && m !== 'core') surfacing.used.add(m);
+      }
+      tickSticky(
+        sessionInfo?.sessionId,
+        new Set([...surfacing.selection, ...(toolCtx._requestedModules ?? []), ...surfacing.used]),
+        Number(readSettingsSync()?.toolStickyTurns ?? 2),
+      );
+    };
+
     const upstreamUrl = url;
     const authHeaders = {
       'Content-Type':  'application/json',
@@ -482,13 +559,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     if (!stream) {
       try {
         const { data, toolRounds } = await runToolCallLoop({
-          callUpstream: async (msgs) => {
+          getTools: recomposeTools,
+          callUpstream: async (msgs, roundTools) => {
             let r;
             try {
               r = await fetch(upstreamUrl, {
                 method:  'POST',
                 headers: authHeaders,
-                body:    JSON.stringify({ ...payload, messages: msgs, stream: false }),
+                body:    JSON.stringify({ ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false }),
                 signal:  ac.signal,
               });
             } catch (err) {
@@ -518,7 +596,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           toolCtx,
           signal: ac.signal,
         });
-        req.off('close', onClientClose);
+        tickSurfacing();
+    req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
         // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
@@ -545,7 +624,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // M8 idle-mode outcome reporting: fire-and-forget after response sent.
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';
-          if (enriched.surfacedBookmarks?.length > 0) {
+          tickSurfacing((toolRounds ?? []).flatMap(r => (r.toolCalls ?? []).map(tc => tc.function?.name)));
+        if (enriched.surfacedBookmarks?.length > 0) {
             reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
               .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
           }
@@ -673,6 +753,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         })));
         if (clientGone()) return;
         res.write(`data: ${JSON.stringify({ _toolRound: { toolCalls, results, content: fullContent || null, timestamp } })}\n\n`);
+        if (surfacing) {
+          for (const tc of toolCalls) {
+            const m = TOOL_MODULES[tc.function?.name];
+            if (m && m !== 'core') surfacing.used.add(m);
+          }
+          const grown = recomposeTools();
+          if (grown) payload.tools = grown;  // next round carries the pulled module
+        }
         currentMsgs = [
           ...currentMsgs,
           { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
@@ -912,6 +1000,34 @@ function interestEngagementDelta({ responseChars = 0, spanMessages = 0 } = {}) {
 // the conversation. Degrades silently when Unruh is down.
 const ENGAGE_MAX_TOPICS = 32; // sanity cap; real sessions have a handful
 
+// Ward-facing regex/trigger tracer (0.8.25): given the session's turns, report
+// per turn WHICH regexes/signals fired — tool-surfacing modules (with the exact
+// matched substrings) and crisis-signal contributions — so the ward can tune
+// the RegExes. The tome-keyword analyzer runs client-side (its corpus is client
+// world-info). Localhost-gated like every endpoint (the Tailscale middleware).
+app.post('/api/diagnostics/session-trace', async (req, res) => {
+  const { turns, analyzers } = req.body ?? {};
+  if (!Array.isArray(turns)) return badRequest(res, 'turns (array) is required');
+  const want = new Set(Array.isArray(analyzers) && analyzers.length ? analyzers : ['surfacing', 'threat']);
+  let villagerNames = [];
+  try { villagerNames = ((await getVillageRegistry())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
+  catch { /* registry unreadable → name triggers just won't show */ }
+  const out = turns.slice(0, 500).map((t, i) => {
+    const user = typeof t?.user === 'string' ? t.user : '';
+    const assistant = typeof t?.assistant === 'string' ? t.assistant : '';
+    const turnText = `${user}\n${assistant}`;
+    const entry = { i, user };
+    if (want.has('surfacing')) {
+      entry.surfacing = explainSelection({ turnText, dynamicBlock: typeof t?.dynamicBlock === 'string' ? t.dynamicBlock : '', villagerNames });
+    }
+    if (want.has('threat')) {
+      entry.threat = scoreMessage(user);   // threat scores the user message only, as live
+    }
+    return entry;
+  });
+  res.json({ ok: true, turns: out });
+});
+
 app.post('/api/interest/engage', async (req, res) => {
   const { topics, responseChars } = req.body ?? {};
   if (!Array.isArray(topics) || topics.length === 0) {
@@ -965,7 +1081,7 @@ app.post('/api/session/handoff', async (req, res) => {
 // as a stable common prefix; only id-carrying messages are diffed.
 app.post('/api/log', async (req, res) => {
   const { sessionId, startedAt, endedAt, provider, model, messages } = req.body;
-  if (!isValidUUID(sessionId))
+  if (!isValidSessionId(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   if (!Array.isArray(messages))
     return res.status(400).json({ error: 'messages must be an array.' });
@@ -1036,7 +1152,7 @@ app.get('/api/logs', async (_req, res) => {
 // GET /api/logs/:id — retrieve a full session log
 app.get('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidUUID(id))
+  if (!isValidSessionId(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const raw = await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8');
@@ -1050,7 +1166,7 @@ app.get('/api/logs/:id', async (req, res) => {
 // DELETE /api/logs/:id — remove a session log
 app.delete('/api/logs/:id', async (req, res) => {
   const { id } = req.params;
-  if (!isValidUUID(id))
+  if (!isValidSessionId(id))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     await fsp.unlink(path.join(LOGS_DIR, `${id}.json`));
@@ -1094,6 +1210,17 @@ app.get('/api/active-session', async (_req, res) => {
 app.get('/api/triage-events', async (_req, res) => {
   try {
     res.json(await readTriageEvents());
+  } catch {
+    res.json([]);
+  }
+});
+
+// Warm reach-out decision log (mirror of /api/triage-events): every LLM
+// deliberation — including "wait" — with its reasoning surface, so "he
+// never reaches out" is auditable instead of a black box.
+app.get('/api/reachout-events', async (_req, res) => {
+  try {
+    res.json(await readReachoutEvents());
   } catch {
     res.json([]);
   }
@@ -1242,7 +1369,7 @@ app.put('/api/tomes/:id', async (req, res) => {
     await modifyTome(id, (existing) => {
       const safe = {};
       for (const [uid, entry] of Object.entries(entries)) {
-        if (!isValidUUID(uid)) continue;
+        if (!isValidEntryUid(uid)) continue;
         safe[uid] = entry;
       }
       return {
@@ -1294,7 +1421,7 @@ app.delete('/api/tomes/:id', async (req, res) => {
 app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
   const { id, uid } = req.params;
   if (!isValidUUID(id)) return res.status(400).json({ error: 'Invalid tome ID.' });
-  if (!isValidUUID(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
+  if (!isValidEntryUid(uid)) return res.status(400).json({ error: 'Invalid entry UID.' });
   let entryMissing = false;
   try {
     await modifyTome(id, (tome) => {
@@ -1425,7 +1552,7 @@ initCerebellumTools({
 // referenced in the initCerebellumTools call above (hoisted). Degrades to a
 // structured result; never throws into the tool loop.
 async function memorizeSessionNow({ sessionId, provider, apiKey, model, audienceTag }) {
-  if (!isValidUUID(sessionId)) return { ok: false, error: 'no-session' };
+  if (!isValidSessionId(sessionId)) return { ok: false, error: 'no-session' };
   let log;
   try {
     log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${sessionId}.json`), 'utf8'));
@@ -1465,7 +1592,7 @@ app.post('/api/memorize', express.text({ type: ['text/plain', 'application/json'
     return res.status(400).json({ error: 'Request body required.' });
   }
   const { sessionId, scope, topicId, topicLabel, messageRange, messages, provider, apiKey, model, audienceTag } = body;
-  if (!isValidUUID(sessionId))
+  if (!isValidSessionId(sessionId))
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     if (scope === 'topic') {
@@ -1579,7 +1706,7 @@ app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) =
   let created = 0, enqueued = 0;
   const tag = (typeof source === 'string' && source.trim()) ? source.trim().slice(0, 40) : 'import';
   for (const seg of segs) {
-    const sessionId = randomUUID();
+    const sessionId = sessionSlugId();
     const startedAt = seg.messages.find(m => m.timestamp)?.timestamp ?? new Date().toISOString();
     const endedAt = [...seg.messages].reverse().find(m => m.timestamp)?.timestamp ?? startedAt;
     const log = {
@@ -2265,7 +2392,7 @@ app.delete('/api/temporal/ponderings/:uid', async (req, res) => {
 // so it stops resurfacing in the deferred-intents block (Pillar B).
 app.post('/api/ponderings/intents/acted-on', async (req, res) => {
   const { uid, index } = req.body;
-  if (!isValidUUID(uid)) return res.status(400).json({ error: 'uid must be a valid UUID' });
+  if (!isValidEntryUid(uid)) return res.status(400).json({ error: 'uid must be a valid UUID or slug uid' });
   const idx = Number(index);
   if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
     return res.status(400).json({ error: 'index must be a non-negative integer' });
@@ -2302,7 +2429,7 @@ app.post('/api/temporal/interests/set-standing', async (req, res) => {
 // node's stored fields — the model never types a calendar value (§3).
 app.get('/api/schedule/:id/export.ics', async (req, res) => {
   const id = String(req.params.id || '');
-  if (!/^[a-fA-F0-9]{32}$/.test(id)) return res.status(400).json({ error: 'invalid schedule id' });
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(id)) return res.status(400).json({ error: 'invalid schedule id' });
   try {
     const data = await exportSchedule({ id });
     if (!data?.ok || !data.ics) {
@@ -2332,7 +2459,22 @@ function googleRedirectUri(req) {
 }
 
 app.get('/api/gcal/google/status', async (_req, res) => {
-  res.json(googlePublicStatus(await readGoogleToken()));
+  const store = await readGoogleToken();
+  // sharedScope tells the UI whether a reconnect is needed to read shared
+  // calendars (the widened scope). Old tokens lack it.
+  res.json({ ...googlePublicStatus(store), sharedScope: hasCalendarListScope(store) });
+});
+
+// Discovered calendars (what the last sync saw) + their current attribution,
+// for the calendars/attribution panel. Read-only; attribution itself is set
+// through the normal settings sync (gcalCalendarAttribution) or the Familiar's
+// gcal_attribute_calendar tool.
+app.get('/api/gcal/calendars', async (_req, res) => {
+  const cache = await readCalendarCache().catch(() => ({}));
+  const cals = Array.isArray(cache?.calendars) ? cache.calendars : [];
+  const s = readSettingsSync();
+  const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+  res.json({ calendars: cals.map(c => ({ ...c, attribution: resolveAttribution(c, map) })) });
 });
 
 // Door 1, step A: store the Cloud-Console OAuth client.
@@ -2399,10 +2541,28 @@ app.post('/api/gcal/google/disconnect', async (_req, res) => {
   res.json({ ok: true, connected: false });
 });
 
+// Last real sync attempt + outcome (written by the sync loop's onTick), so
+// the modal can show "last synced 20 min ago" / "failing since Tuesday:
+// invalid_grant" instead of pretending everything is fine.
+app.get('/api/gcal/sync-status', async (_req, res) => {
+  res.json((await readSyncStatus()) ?? {});
+});
+
+// "Sync now": clear the cadence gate so the next loop wake (≤60s away)
+// runs a real sync regardless of the configured interval.
+app.post('/api/gcal/sync-now', (_req, res) => {
+  resetGcalSyncCadence();
+  res.json({ ok: true, note: 'sync will run within the next minute' });
+});
+
 // Schedule
 app.get('/api/temporal/schedule', async (req, res) => {
-  const from_ts = req.query.from || undefined;
-  const to_ts   = req.query.to   || undefined;
+  // Default to a wide ward-local window (yesterday → the configured look-ahead,
+  // a year by default) so synced calendar events across the whole horizon show
+  // in the Map/schedule view, not just the next 7 days. An explicit ?from/?to
+  // still overrides.
+  const from_ts = req.query.from || wardLocalShiftedISO(-1);
+  const to_ts   = req.query.to   || wardLocalShiftedISO(gcalLookaheadDays());
   const limit   = Number.isFinite(+req.query.limit) ? +req.query.limit : 200;
   try {
     // Standard window — picks up anchor-in-window items only.
@@ -2902,6 +3062,24 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
   startDiscordGateway();
+  // Bot-DM push channel: when the gateway can DM my human (token + ward's
+  // Discord user id configured), every outbox item — reminders, event
+  // alerts, warm reach-outs, triage check-ins — reaches them as a real
+  // Discord message, not only a banner waiting in the web app. Registered
+  // as a factory so cerebellum never imports the gateway (no cycle) and a
+  // Settings change applies on the next dispatch. Delivery is a plain REST
+  // call inside relayToDiscord, so it works even between WebSocket
+  // reconnects.
+  registerPushAdapterFactory((s) => {
+    const token  = typeof s?.discordBotToken   === 'string' ? s.discordBotToken.trim()   : '';
+    const wardId = typeof s?.discordWardUserId === 'string' ? s.discordWardUserId.trim() : '';
+    if (!token || !wardId || s?.discordEnabled !== true) return null;
+    if (process.env.PROTO_FAMILIAR_DISCORD_DISABLED === '1') return null;
+    return {
+      name: 'discord-bot-dm',
+      deliver: async (item) => relayToDiscord({ recipientUserId: wardId, message: formatItemForPush(item) }),
+    };
+  });
 });
 
 // ── Autonomous pondering loop (step 4a) ─────────────────────────────
@@ -2925,6 +3103,29 @@ const httpServer = app.listen(PORT, HOST, async () => {
 //     user scale are both applied.
 // (readSettingsSync / primaryConnectionFrom live in cerebellum.js —
 // single reader implementation shared by routes, loops, and triage.)
+
+// Routine review (stewardship Pass 3) rides the reflection slot. A review is
+// due when it's ON, the weekly cadence has elapsed, and the fulfilment ledger
+// actually shows a routine slipping (a good week manufactures nothing). The
+// assessment is computed once per reflection decision and stashed so
+// getReflectionInput can reuse the ledger without a second listRecurring call.
+let _pendingRoutineReview = null;   // { ledger } when a review claims this tick
+async function assessRoutineReviewDue() {
+  const s = readSettingsSync();
+  if (routineReviewHardDisabled() || s?.routineReviewEnabled === false) return null; // default ON
+  const st = await readStewardshipState().catch(() => ({}));
+  const reviewDays = Number.isFinite(Number(s?.routineReviewDays)) ? Number(s.routineReviewDays) : 7;
+  // Cheap cadence gate before any Unruh round-trip.
+  if ((Date.now() - (Number(st?.routineReviewAt) || 0)) < reviewDays * 24 * 3600 * 1000) return null;
+  try {
+    const rec = await listRecurring();
+    const anchors = Array.isArray(rec?.nodes) ? rec.nodes : [];
+    const ledger = buildNeedsLedger(anchors.filter(isNeedWindow), Date.now(), 7);
+    return isRoutineReviewDue({ lastReviewAt: Number(st?.routineReviewAt) || 0, reviewDays, ledger })
+      ? { ledger }
+      : null;
+  } catch { return null; }
+}
 
 function startAutonomousPondering() {
   if (process.env.PROTO_FAMILIAR_PONDERING_DISABLED === '1') {
@@ -2952,7 +3153,13 @@ function startAutonomousPondering() {
     // input shape; the result still writes to the ponderings tome,
     // and if the LLM lifted a pattern to identity-layer confidence
     // an additional updateIdentitySection() lands.
-    shouldReflect: async () => shouldReflectNow(),
+    shouldReflect: async () => {
+      // A due routine review can claim a reflection tick even in a quiet
+      // week (so it stays ~weekly), riding the same call — never a new one.
+      _pendingRoutineReview = await assessRoutineReviewDue();
+      if (_pendingRoutineReview) return true;
+      return shouldReflectNow();
+    },
     getReflectionInput: async () => {
       const outcomes = await getNewOutcomesSinceLastReflection();
       const id = await getIdentityAll().catch(() => ({}));
@@ -3030,7 +3237,17 @@ function startAutonomousPondering() {
           if (dates.length) recentMissedNeeds.push({ label: n.label, dates });
         }
       } catch { /* Unruh down → no missed-need cues this cycle */ }
-      return { mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds };
+      // If a routine review claimed this tick (set in shouldReflect just
+      // above), attach the pivot-menu section built from the week's ledger,
+      // and flag the input so the follow-through stamps the cadence. Consume
+      // the pending assessment so it can't leak into a later tick.
+      const review = _pendingRoutineReview;
+      _pendingRoutineReview = null;
+      const routineReviewSection = review ? buildRoutineReviewSection(review.ledger) : '';
+      return {
+        mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds,
+        routineReviewSection, isRoutineReview: !!review,
+      };
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
       const s    = readSettingsSync();
@@ -3089,6 +3306,15 @@ function startAutonomousPondering() {
             .then(r => console.log(`[pondering] reflection → ${r?.ok ? `promoted noticing to tentative cause (${co.from} → ${co.to})` : 'failed to promote'} `))
             .catch(err => console.error('[pondering] promotion failed:', err?.message ?? err));
         }
+        // Routine review (stewardship Pass 3): when this reflection carried the
+        // weekly review, stamp the cadence clock (always, so it doesn't re-fire
+        // every tick) and stash the finding for the stewardship block to
+        // surface — even if the LLM concluded there was nothing to raise.
+        if (topic?.isRoutineReview) {
+          recordRoutineReview(result?.routine_review || null)
+            .then(() => console.log(`[pondering] routine review → ${result?.routine_review ? 'finding stored' : 'no finding this week'}`))
+            .catch(err => console.error('[pondering] routine review record failed:', err?.message ?? err));
+        }
       }
       return result;
     },
@@ -3136,14 +3362,40 @@ function startRemindersScheduler() {
       const r = await resolveScheduleNode({ id, resolution: 'fired' });
       if (!r.ok) throw new Error(r.error || 'resolve failed');
     },
+    // Event lead-time alerts (the timeblindness surface): unresolved
+    // type='event' nodes — synced from Google or added by hand — get a
+    // "coming up" ping a configurable lead before they start. Same tick,
+    // pure code gates, per-occurrence idempotent via payload.alerted_at /
+    // payload.alerts. All frames ward-local (see event-alerts.js).
+    getDueEventAlerts: async () => {
+      if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
+      const s = readSettingsSync();
+      if (s?.eventAlertsEnabled === false) return [];  // default-ON
+      const leadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
+      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs });
+      const [win, rec] = await Promise.all([
+        getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
+        listRecurring().catch(() => ({ nodes: [] })),
+      ]);
+      const windowNodes = Array.isArray(win) ? win : (win?.nodes ?? []);
+      const recurringNodes = Array.isArray(rec) ? rec : (rec?.nodes ?? []);
+      return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadMs, graceMs: ALERT_GRACE_MS })
+        .map(a => ({ ...a, ...formatEventAlert(a, { nowMs }) }));
+    },
+    markEventAlerted: async ({ id, occurrenceDate }) => {
+      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null });
+      if (!r.ok) throw new Error(r.error || 'mark_alerted failed');
+    },
     getHealth: getRemindersHealth,
     onTick: (r) => {
       for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
-      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label}": ${s.error}`);
+      for (const a of r.alerted || []) console.log(`[reminders] event alert "${a.label}" (${a.whenIso ?? ''})`);
+      for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label ?? s.id}": ${s.error}`);
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
-  console.log('[reminders] Scheduler ENABLED. Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+  console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
 }
 
 // ── Google Calendar sync loop (0.8) ─────────────────────────────
@@ -3173,7 +3425,29 @@ function gcalCliCommandFor(s) {
 // conceptually cover): 90 days ahead, matching the recurrence-expansion
 // horizon. A windowed read, so deletions are caught via showDeleted, not
 // reconcile.
-const GCAL_READ_HORIZON_DAYS = 90;
+const GCAL_DEFAULT_LOOKAHEAD_DAYS = 365;  // a year ahead by default
+const GCAL_MIN_LOOKAHEAD_DAYS = 30;
+const GCAL_MAX_LOOKAHEAD_DAYS = 1825;     // ~5 years
+
+// How far ahead a pull fetches, ward-configurable (gcalLookaheadDays).
+function gcalLookaheadDays(s = readSettingsSync()) {
+  const n = Number(s?.gcalLookaheadDays);
+  if (!Number.isFinite(n)) return GCAL_DEFAULT_LOOKAHEAD_DAYS;
+  return Math.max(GCAL_MIN_LOOKAHEAD_DAYS, Math.min(GCAL_MAX_LOOKAHEAD_DAYS, Math.round(n)));
+}
+
+// A ward-local-naive ISO timestamp `deltaDays` from now, keeping the current
+// wall-clock time. Whole-day arithmetic in a UTC frame avoids server-tz drift;
+// the result stays in the ward's local frame (matching stored when_ts), which
+// is what the schedule window query compares against. Used to default the
+// Map/schedule view to a wide window without a tz mismatch.
+function wardLocalShiftedISO(deltaDays, tz = readSettingsSync()?.wardTimeZone || null) {
+  const nowIso = wardLocalNowISO(tz);            // "YYYY-MM-DDTHH:MM:SS" ward-local
+  const [datePart, timePart] = nowIso.split('T');
+  const [y, m, d] = datePart.split('-').map(Number);
+  const shifted = new Date(Date.UTC(y, m - 1, d) + deltaDays * 86_400_000);
+  return `${shifted.toISOString().slice(0, 10)}T${timePart || '00:00:00'}`;
+}
 
 // Sync (sources other than google are decided synchronously from settings;
 // google needs an async token-store read, handled in isEnabled/fetchSource).
@@ -3189,20 +3463,85 @@ function gcalSourceConfigured(s) {
 // tier, reworked). Refreshes the access token as needed, lists a forward
 // window (cancellations included), and returns normalized events for the
 // same gcal_ingest. Windowed → reconcileDeletes:false. Never throws.
+// Native Google: enumerate every calendar the account can read — its own AND
+// any shared into it — and emit one per-calendar snapshot, each attributed
+// from the ward-set map. Falls back to the single primary calendar when the
+// stored token predates the calendar-list scope (the UI prompts a reconnect).
 async function fetchGoogleSource() {
   const store = await readGoogleToken();
   if (!googleConnected(store)) return { ok: false, error: 'Google account not connected' };
   const fresh = await getFreshAccessToken(store, { save: (s) => writeGoogleToken(s) });
   if (!fresh.ok) return { ok: false, error: fresh.error };
+  const s = readSettingsSync();
+  const attributionMap = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+  const now = new Date();
+  const timeMin = now.toISOString();
+  const timeMax = new Date(now.getTime() + gcalLookaheadDays(s) * 86_400_000).toISOString();
+
+  let calendars = null;
   try {
-    const now = new Date();
-    const timeMin = now.toISOString();
-    const timeMax = new Date(now.getTime() + GCAL_READ_HORIZON_DAYS * 86_400_000).toISOString();
-    const items = await listGoogleEvents({ accessToken: fresh.accessToken, timeMin, timeMax });
-    return { ok: true, events: normalizeGoogleEvents(items), reconcileDeletes: false };
+    calendars = await listGoogleCalendars({ accessToken: fresh.accessToken });
   } catch (err) {
-    return { ok: false, error: err?.message ?? String(err) };
+    console.warn(`[gcal] calendar list unavailable (${err?.message ?? err}) — syncing primary only; reconnect to grant shared-calendar read`);
   }
+
+  // No list (old scope / API hiccup) → the historical single-calendar path.
+  if (!calendars || !calendars.length) {
+    try {
+      const items = await listGoogleEvents({ accessToken: fresh.accessToken, calendarId: 'primary', timeMin, timeMax });
+      return { ok: true, snapshots: [{ calendarId: 'primary', events: normalizeGoogleEvents(items, 'primary'), reconcileDeletes: false, includeLegacy: true }] };
+    } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+  }
+
+  // Remember what's out there so the ward/Familiar can attribute it.
+  await writeCalendarCache(calendars.map(c => ({ ...c, source: 'google' }))).catch(() => {});
+  const wardCal = wardCalendarId(calendars, attributionMap);
+
+  const snapshots = [];
+  for (const cal of calendars) {
+    if (isIgnored(cal, attributionMap)) continue;   // ward marked this one skip
+    let items;
+    try { items = await listGoogleEvents({ accessToken: fresh.accessToken, calendarId: cal.id, timeMin, timeMax }); }
+    catch (err) { console.warn(`[gcal] calendar "${cal.summary}" fetch failed: ${err?.message ?? err}`); continue; }
+    snapshots.push({
+      calendarId: cal.id,
+      events: normalizeGoogleEvents(items, cal.id),
+      attribution: resolveAttribution(cal, attributionMap),
+      // Native is a windowed API read (showDeleted carries cancellations),
+      // so it never uses the delete-reconcile pass — kept false as before.
+      reconcileDeletes: false,
+      includeLegacy: cal.id === wardCal,
+    });
+  }
+  if (!snapshots.length) return { ok: false, error: 'no syncable calendars (all ignored or failed)' };
+  return { ok: true, snapshots };
+}
+
+// iCal link tier, now multi-feed: the primary gcalIcalUrl plus any extra feeds
+// in gcalIcalUrls ([{url,label}]). Each feed is its own attributable calendar,
+// keyed by its URL; the primary feed adopts the pre-multi-calendar rows.
+async function fetchIcalSnapshots(s) {
+  const attributionMap = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+  const feeds = [];
+  if (s?.gcalIcalUrl && String(s.gcalIcalUrl).trim()) feeds.push({ url: String(s.gcalIcalUrl).trim(), primary: true });
+  for (const extra of (Array.isArray(s?.gcalIcalUrls) ? s.gcalIcalUrls : [])) {
+    const url = String(extra?.url ?? '').trim();
+    if (url) feeds.push({ url, label: extra?.label });
+  }
+  if (!feeds.length) return { ok: false, error: 'no iCal URL configured' };
+  await writeCalendarCache(feeds.map(f => ({ id: f.url, summary: f.label || f.url, primary: !!f.primary, source: 'ical' }))).catch(() => {});
+  const snapshots = [];
+  for (const f of feeds) {
+    const res = await fetchIcal(f.url);
+    if (!res.ok) { console.warn(`[gcal] iCal feed failed: ${res.error ?? 'unknown'}`); continue; }
+    snapshots.push({
+      calendarId: f.url, icsText: res.icsText,
+      attribution: resolveAttribution({ id: f.url, summary: f.label || f.url, primary: !!f.primary }, attributionMap),
+      reconcileDeletes: true, includeLegacy: !!f.primary,
+    });
+  }
+  if (!snapshots.length) return { ok: false, error: 'all iCal feeds failed' };
+  return { ok: true, snapshots };
 }
 
 function startGcalSync() {
@@ -3227,21 +3566,50 @@ function startGcalSync() {
       const src = s?.gcalSource || 'link';
       if (src === 'google') return fetchGoogleSource();
       if (src === 'gogcli' || src === 'gcalcli') {
-        const command = gcalCliCommandFor(s);
+        const baseCommand = gcalCliCommandFor(s);
         const format = s?.gcalCliFormat || (src === 'gcalcli' ? 'json' : 'ics');
-        return fetchViaCli({ command, format });  // ok:false includes reconcileDeletes-safe skip
+        // Hand the command the look-ahead window via {timeMin}/{timeMax}/
+        // {dateMin}/{dateMax}/{days} tokens, so a CLI that takes a date range
+        // fetches the whole horizon instead of its narrow default.
+        const lookaheadDays = gcalLookaheadDays(s);
+        const now = new Date();
+        const timeMin = now.toISOString();
+        const timeMax = new Date(now.getTime() + lookaheadDays * 86_400_000).toISOString();
+        // Multi-calendar CLI: for each configured calendar, substitute the
+        // {calendar} token and run the command once. No calendars listed →
+        // the single legacy invocation (back-compat).
+        const attributionMap = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+        const cals = Array.isArray(s?.gcalCliCalendars) ? s.gcalCliCalendars.filter(c => c?.name) : [];
+        if (!cals.length) return fetchViaCli({ command: baseCommand, format, timeMin, timeMax, lookaheadDays });
+        await writeCalendarCache(cals.map((c, i) => ({ id: c.name, summary: c.label || c.name, primary: i === 0, source: src }))).catch(() => {});
+        const snapshots = [];
+        for (let i = 0; i < cals.length; i++) {
+          const c = cals[i];
+          const command = baseCommand.replaceAll('{calendar}', c.name);
+          const res = await fetchViaCli({ command, format, timeMin, timeMax, lookaheadDays });
+          if (!res.ok) { console.warn(`[gcal] CLI calendar "${c.name}" failed: ${res.error ?? 'unknown'}`); continue; }
+          snapshots.push({
+            calendarId: c.name, icsText: res.icsText, events: res.events,
+            attribution: resolveAttribution({ id: c.name, summary: c.label || c.name, primary: i === 0 }, attributionMap),
+            reconcileDeletes: res.reconcileDeletes === true, includeLegacy: i === 0,
+          });
+        }
+        if (!snapshots.length) return { ok: false, error: 'all CLI calendars failed' };
+        return { ok: true, snapshots };
       }
-      const res = await fetchIcal(s?.gcalIcalUrl);
-      if (!res.ok) return res;
-      return { ok: true, icsText: res.icsText, reconcileDeletes: true };
+      return fetchIcalSnapshots(s);
     },
-    ingest: async ({ icsText, events, reconcileDeletes }) =>
-      ingestGcal({ icsText, events, reconcileDeletes }),
+    ingest: async ({ icsText, events, reconcileDeletes, calendarId, includeLegacy, attribution }) =>
+      ingestGcal({ icsText, events, reconcileDeletes, calendarId, includeLegacy, attribution }),
     // routeNew: the `new` ids are already flagged needs_projection at
     // insert (the cue reads that flag, Pass 3). This stays a log hook so a
     // first import is observable without coupling the loop to the cue.
     routeNew: async (ids) => { if (ids.length) console.log(`[gcal] ${ids.length} new calendar item(s) flagged for projection`); },
     onTick: (r) => {
+      // Persist every real attempt so the UI can show "last sync / last
+      // error" — a dead URL or expired token must be visible, not just a
+      // console line ('disabled'/'not_due' wakes are skipped inside).
+      recordSyncOutcome(r).catch(() => {});
       if (r.synced) {
         const parts = [];
         if (r.new?.length)     parts.push(`${r.new.length} new`);
@@ -3250,7 +3618,7 @@ function startGcalSync() {
         if (parts.length) console.log(`[gcal] synced — ${parts.join(', ')}`);
         for (const uid of r.complex_series || []) console.log(`[gcal] RRULE for "${uid}" too complex to map as a series — materialised next 90 days as individual events`);
       } else if (r.reason === 'fetch_failed' || r.reason === 'ingest_failed') {
-        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error}`);
+        console.warn(`[gcal] sync skipped (${r.reason}): ${r.error} — retrying within 5 minutes`);
       }
       // 'disabled' / 'not_due' are silent.
     },
@@ -3327,16 +3695,20 @@ function startSilenceTriage() {
 // is elevated (triage owns that). Default-ON; toggle warmthEnabled in
 // Settings or hard-disable with PROTO_FAMILIAR_WARMTH_DISABLED=1.
 
-// Quiet hours for warm knocks — my human's configured night (local server
-// time). Start==end disables the window. Defaults to 23:00–08:00.
-function isWarmthQuietHours(now = new Date()) {
+// Quiet hours for warm knocks — my human's configured night, on MY HUMAN'S
+// clock (wardTimeZone), not the server's. A UTC container with a ward hours
+// away used to shift the 23–08 window onto their daytime and silently
+// suppress warm outreach for whole active stretches — the same cross-zone
+// bug class 0.7.86 fixed for reminders. Start==end disables the window.
+// Defaults to 23:00–08:00 ward-local.
+function isWarmthQuietHours() {
   const s = readSettingsSync();
   let start = Number(s?.warmthQuietHoursStart);
   let end   = Number(s?.warmthQuietHoursEnd);
   if (!Number.isInteger(start) || start < 0 || start > 23) start = 23;
   if (!Number.isInteger(end)   || end   < 0 || end   > 23) end   = 8;
   if (start === end) return false; // window disabled
-  const h = now.getHours();
+  const h = Number(wardLocalNowISO(s?.wardTimeZone).slice(11, 13));
   return start < end ? (h >= start && h < end) : (h >= start || h < end);
 }
 
@@ -3400,7 +3772,21 @@ function startReachout() {
       if (r.reason === 'reached_ward')         console.log(`[reachout] warm knock to my human: "${r.decision?.message?.slice(0, 80)}…"`);
       else if (r.reason === 'reached_villager') console.log(`[reachout] warm reach to ${r.villager?.name}: "${r.decision?.message?.slice(0, 60)}…"`);
       else if (r.reason === 'delivery_failed')  console.warn(`[reachout] delivery failed (${r.target}): ${r.error}`);
-      // wait / crisis_defer / quiet_hours / in_cooldown / disabled are silent.
+      // Every DELIBERATION (an LLM decision happened — including "wait")
+      // lands in the reachout event log so the loop is auditable via
+      // /api/reachout-events. Pure gate outcomes (cooldown/disabled/
+      // quiet-hours/crisis-defer) fire every tick and stay unlogged.
+      const deliberated = ['llm_said_wait', 'reached_ward', 'reached_villager', 'delivery_failed', 'unknown_villager', 'rate_limited'];
+      if (deliberated.includes(r.reason)) {
+        appendReachoutEventLog({
+          reason:         r.reason,
+          target:         r.target ?? null,
+          villager:       r.villager?.name ?? null,
+          messagePreview: r.decision?.message?.slice(0, 120) ?? null,
+          nextCheckInMs:  r.nextCheckInMs ?? null,
+          error:          r.error ?? null,
+        }).catch(() => {});
+      }
     },
     onError: (err) => console.error('[reachout]', err?.message ?? err),
   });

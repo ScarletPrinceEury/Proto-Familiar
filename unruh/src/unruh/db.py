@@ -16,14 +16,39 @@ doesn't wedge the DB.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DB_FILENAME = "unruh.db"
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+# The ward's local zone, resolved EXPLICITLY from the TZ env (Thalamus spawns
+# Unruh with TZ=wardTimeZone) via zoneinfo — NOT via the C runtime's local-time
+# resolution. `datetime.astimezone()` with no arg reads the platform local
+# zone, and on Windows the C runtime can't parse an IANA name like
+# "Europe/Berlin": it drops DST and applies the standard offset, landing every
+# converted time an hour off in summer. ZoneInfo uses the IANA tz database (the
+# `tzdata` dep guarantees it on Windows) and applies DST correctly for the
+# date. Returns None when TZ is unset/unknown → callers fall back to the old
+# co-located behaviour. Cached; the process is spawned per ward zone.
+_ZONE_CACHE: dict[str, ZoneInfo | None] = {}
+
+
+def _local_zone() -> ZoneInfo | None:
+    tz = os.environ.get("TZ")
+    if not tz:
+        return None
+    if tz not in _ZONE_CACHE:
+        try:
+            _ZONE_CACHE[tz] = ZoneInfo(tz)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            _ZONE_CACHE[tz] = None
+    return _ZONE_CACHE[tz]
 
 
 def default_db_path() -> Path:
@@ -45,8 +70,14 @@ def now_iso() -> str:
     keeping storage local too removes the entire class of UTC<->local
     conversion bugs (a model that drops the offset, or double-applies it).
     External instants (e.g. an iCal feed) are converted to local once at
-    their own ingest seam, never here. See docs/unruh-design.md."""
-    return datetime.now().isoformat(timespec="seconds")
+    their own ingest seam, never here. See docs/unruh-design.md.
+
+    "Now" is read in the ward's IANA zone (from TZ) so it agrees with
+    to_local_naive — the two are compared (reconcile's past/future check), so
+    they must share one definition of local."""
+    zone = _local_zone()
+    now = datetime.now(zone) if zone is not None else datetime.now()
+    return now.replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def to_local_naive(s: str | None) -> str | None:
@@ -70,14 +101,142 @@ def to_local_naive(s: str | None) -> str | None:
     except (TypeError, ValueError):
         return s
     if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
+        zone = _local_zone()
+        dt = (dt.astimezone(zone) if zone is not None else dt.astimezone()).replace(tzinfo=None)
     return dt.isoformat(timespec="seconds")
 
 
 def new_id() -> str:
-    """Generate an opaque node/edge id. UUID4 — short enough to print
-    in prompts, long enough to never collide in practice."""
+    """Generate an opaque fallback id (UUID4 hex). Prefer slug_id() for
+    anything a model reads — 32-hex ids tokenize terribly and carry no
+    meaning. This remains for internal rows and as the collision-exhausted
+    fallback; old hex ids stay valid forever (ids are opaque TEXT)."""
     return uuid.uuid4().hex
+
+
+# ── Readable ids (the 0.8.x id overhaul) ─────────────────────────────────
+#
+# Ids that reach the model's context are label-derived word slugs with a
+# short random suffix — "dentist-k3", "weekly-cleaning-8f" — instead of
+# uuid4 hex. Why: a 32-hex id costs ~16 tokens in every legend line and the
+# model can neither read nor reliably retype it; a slug costs ~3, self-
+# documents in tool calls, and the suffix keeps it collision-safe (writers
+# retry with a fresh suffix on a PK collision). Old hex ids coexist —
+# nothing parses id shape anywhere; they're opaque keys.
+
+_SLUG_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/O/1/l/i lookalikes
+_SLUG_MAX_LABEL = 20   # chars of slugified label kept (whole words)
+
+
+def _slugify(label: str) -> str:
+    """Lowercase-ascii-dash the label and keep the first couple of words."""
+    out = []
+    prev_dash = True  # suppress leading dashes
+    for ch in (label or "").lower():
+        if ch.isascii() and (ch.isalnum()):
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    slug = "".join(out).strip("-")
+    if len(slug) > _SLUG_MAX_LABEL:
+        cut = slug[:_SLUG_MAX_LABEL]
+        slug = cut[: cut.rfind("-")] if "-" in cut else cut
+    return slug
+
+
+def slug_id(label: str | None = None, *, kind: str = "node", suffix_len: int = 2) -> str:
+    """A readable id: `<label-slug>-<suffix>` (e.g. "dentist-k3"), falling
+    back to `<kind>-<suffix>` ("causes-x7k2") when there's no usable label.
+    NOT guaranteed unique — the caller inserts and retries on a PK collision
+    (see insert_with_slug_retry); the suffix makes accidental guesses miss
+    safely rather than hit someone else's row."""
+    import secrets
+    base = _slugify(label or "")
+    if not base:
+        base = _slugify(kind) or "id"
+        suffix_len = max(suffix_len, 4)  # label-less ids lean on the suffix
+    suffix = "".join(secrets.choice(_SLUG_ALPHABET) for _ in range(suffix_len))
+    return f"{base}-{suffix}"
+
+
+def insert_with_slug_retry(conn, sql: str, args_for_id, *, label: str | None = None, kind: str = "node") -> str:
+    """Run an INSERT whose first parameter is the new id, generating a slug
+    id and retrying with a longer suffix on a PK collision (then uuid4 as the
+    final fallback). `args_for_id(id)` returns the full parameter tuple.
+    Returns the id that stuck."""
+    for attempt, suffix_len in enumerate((2, 3, 5)):
+        candidate = slug_id(label, kind=kind, suffix_len=suffix_len)
+        try:
+            conn.execute(sql, args_for_id(candidate))
+            return candidate
+        except sqlite3.IntegrityError as e:
+            if "UNIQUE" not in str(e) and "PRIMARY KEY" not in str(e):
+                raise  # a real constraint problem, not an id collision
+    fallback = new_id()
+    conn.execute(sql, args_for_id(fallback))
+    return fallback
+
+
+_LEGACY_ID = re.compile(r"^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def ids_to_slugs(conn: sqlite3.Connection) -> dict:
+    """One-shot mechanical re-key: every legacy hex/UUID node and edge id
+    becomes a readable slug. Dumb tech by design — no judgment, no LLM:
+    read label → slug_id → UPDATE the row and every reference to it
+    (edges.src_id/dst_id), all in one transaction so a crash changes
+    nothing. Foreign keys are suspended for the duration because the
+    schema has no ON UPDATE CASCADE; the updates themselves keep every
+    reference consistent. Idempotent: slugged rows don't match the legacy
+    pattern and are skipped. Returns {nodes, edges, mapping} — the caller
+    (Proto-Familiar) applies `mapping` to its own JSON stores that
+    reference node ids (outbox originIds, projection-cue state, surface
+    events)."""
+    mapping: dict[str, str] = {}
+    taken = {r["id"] for r in conn.execute("SELECT id FROM nodes")}
+    taken |= {r["id"] for r in conn.execute("SELECT id FROM edges")}
+
+    def fresh(label: str | None, kind: str) -> str:
+        for suffix_len in (2, 3, 5):
+            cand = slug_id(label, kind=kind, suffix_len=suffix_len)
+            if cand not in taken:
+                taken.add(cand)
+                return cand
+        cand = new_id()
+        taken.add(cand)
+        return cand
+
+    # PRAGMA foreign_keys is a no-op while a transaction is open — commit any
+    # in-flight implicit transaction first so the toggle actually applies.
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with conn:  # one transaction: all-or-nothing
+            nodes = conn.execute("SELECT id, label, type FROM nodes").fetchall()
+            n_nodes = 0
+            for r in nodes:
+                if not _LEGACY_ID.match(r["id"]):
+                    continue
+                new = fresh(r["label"], r["type"] or "node")
+                mapping[r["id"]] = new
+                conn.execute("UPDATE nodes SET id=? WHERE id=?", (new, r["id"]))
+                conn.execute("UPDATE edges SET src_id=? WHERE src_id=?", (new, r["id"]))
+                conn.execute("UPDATE edges SET dst_id=? WHERE dst_id=?", (new, r["id"]))
+                n_nodes += 1
+            edges = conn.execute("SELECT id, kind FROM edges").fetchall()
+            n_edges = 0
+            for r in edges:
+                if not _LEGACY_ID.match(r["id"]):
+                    continue
+                new = fresh(None, r["kind"] or "edge")
+                mapping[r["id"]] = new
+                conn.execute("UPDATE edges SET id=? WHERE id=?", (new, r["id"]))
+                n_edges += 1
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    return {"nodes": n_nodes, "edges": n_edges, "mapping": mapping}
 
 
 def get_conn(db_path: Path | None = None) -> sqlite3.Connection:

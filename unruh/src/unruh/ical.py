@@ -37,6 +37,24 @@ Recurrence handling (§1.4):
     horizon, each with a stable synthetic uid "<uid>#<YYYY-MM-DD>" so the
     next sync reconciles them idempotently. The series is never silently
     dropped.
+
+Modified instances (RECURRENCE-ID):
+  A Google feed sends a "change this occurrence only" edit as a SECOND
+  VEVENT sharing the series UID, distinguished by RECURRENCE-ID (the
+  original occurrence's start). Feeding two events with one uid into the
+  reconcile corrupts the series (duplicate nodes, the anchor's recurrence
+  clobbered by the single edited instance), so overrides are resolved
+  HERE, at the parse seam:
+  - VEVENTs are grouped by UID; the one without RECURRENCE-ID is the
+    series anchor, the rest are overrides.
+  - Each override becomes its own event with the synthetic uid
+    "<uid>#<original-occurrence-date>" — the SAME key scheme the §1.4
+    expansion uses, so an occurrence that was materialised before the
+    edit reconciles to an update, not a duplicate.
+  - A series with overrides is always expanded (never kept as a mapped
+    anchor — the subset can't express "this occurrence moved"), with the
+    overridden original dates excluded so the moved instance doesn't
+    also show at its old time.
 """
 
 from __future__ import annotations
@@ -463,11 +481,36 @@ def expand_rrule(
 # ── VEVENT → normalized events ─────────────────────────────────────────
 
 
-def _vevent_to_normalized(props: dict[str, Any], *, now: datetime) -> list[dict[str, Any]]:
+def _align_to_frame(dt: datetime | None, frame: datetime | None) -> datetime | None:
+    """Best-effort: express `dt` in the same awareness/zone frame as `frame`
+    so wall-clock string keys (exdates, occurrence dates) compare correctly.
+    Real feeds keep DTSTART and RECURRENCE-ID in one frame; mixed frames are
+    pathological and get a lossless-as-possible fallback."""
+    if dt is None or frame is None:
+        return dt
+    if dt.tzinfo is not None and frame.tzinfo is not None:
+        return dt.astimezone(frame.tzinfo)
+    if dt.tzinfo is not None and frame.tzinfo is None:
+        return dt.replace(tzinfo=None)
+    if dt.tzinfo is None and frame.tzinfo is not None:
+        return dt.replace(tzinfo=frame.tzinfo)
+    return dt
+
+
+def _vevent_to_normalized(
+    props: dict[str, Any],
+    *,
+    now: datetime,
+    force_expand: bool = False,
+    extra_exdates: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Turn one VEVENT's collected properties into normalized event(s).
 
     One event normally; a recurring VEVENT whose RRULE doesn't fit the
     subset fans out into per-occurrence events with synthetic uids (§1.4).
+    `force_expand` skips the subset mapping (a series with RECURRENCE-ID
+    overrides can't stay a mapped anchor); `extra_exdates` adds excluded
+    occurrence keys (the overrides' original dates) to the expansion.
     """
     uid = props.get("uid")
     if not uid:
@@ -493,9 +536,10 @@ def _vevent_to_normalized(props: dict[str, Any], *, now: datetime) -> list[dict[
     if not rrule or dtstart is None or status == "cancelled":
         return [{**base, "start": base_start_iso, "end": base_end_iso, "recurrence": None}]
 
-    mapped = map_rrule_to_subset(rrule, dtstart)
-    if mapped is not None:
-        return [{**base, "start": base_start_iso, "end": base_end_iso, "recurrence": mapped}]
+    if not force_expand:
+        mapped = map_rrule_to_subset(rrule, dtstart)
+        if mapped is not None:
+            return [{**base, "start": base_start_iso, "end": base_end_iso, "recurrence": mapped}]
 
     # §1.4 fallback — materialise the next 90 days as individual events.
     horizon_end = now + timedelta(days=FALLBACK_HORIZON_DAYS)
@@ -508,7 +552,9 @@ def _vevent_to_normalized(props: dict[str, Any], *, now: datetime) -> list[dict[
         ws = now.replace(tzinfo=None)
         we = horizon_end.replace(tzinfo=None)
     win_start = dtstart if dtstart > ws else ws
-    exdates = props.get("_exdates") or set()
+    exdates = set(props.get("_exdates") or set())
+    if extra_exdates:
+        exdates |= extra_exdates
     occs = expand_rrule(rrule, dtstart, window_start=win_start, window_end=we, exdates=exdates)
     dur = (end_dt - dtstart) if (end_dt and dtstart) else None
     out = []
@@ -521,6 +567,63 @@ def _vevent_to_normalized(props: dict[str, Any], *, now: datetime) -> list[dict[
             "recurrence": None,
             "expanded_from": uid,
         })
+    return out
+
+
+def _override_to_normalized(props: dict[str, Any], series_uid: str, orig_date: str) -> dict[str, Any]:
+    """One RECURRENCE-ID override VEVENT → one standalone normalized event,
+    keyed by the ORIGINAL occurrence date (stable even if the instance is
+    moved again later). A cancelled override keeps status='cancelled' so an
+    already-materialised occurrence node gets resolved downstream."""
+    dtstart, all_day = props.get("_start", (None, False))
+    end_dt = props.get("_end")
+    status = "cancelled" if str(props.get("status", "")).upper() == "CANCELLED" else "confirmed"
+    return {
+        "uid": f"{series_uid}#{orig_date}",
+        "summary": props.get("summary") or "(untitled)",
+        "start": dtstart.isoformat() if dtstart else None,
+        "end": end_dt.isoformat() if end_dt else None,
+        "all_day": bool(all_day),
+        "recurrence": None,
+        "location": props.get("location"),
+        "description": props.get("description"),
+        "status": status,
+        "last_modified": props.get("last_modified"),
+        "expanded_from": series_uid,
+    }
+
+
+def _normalize_uid_group(
+    uid: str,
+    anchor: dict[str, Any] | None,
+    overrides: list[dict[str, Any]],
+    *,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Resolve one UID's anchor + RECURRENCE-ID overrides into events whose
+    uids are all distinct — the reconcile downstream requires one event per
+    uid per snapshot."""
+    if not overrides:
+        return _vevent_to_normalized(anchor, now=now) if anchor else []
+
+    anchor_start = anchor.get("_start", (None, False))[0] if anchor else None
+    out: list[dict[str, Any]] = []
+    override_exdates: set[str] = set()
+    for ov in overrides:
+        rid = _align_to_frame(ov.get("_recurrence_id"), anchor_start)
+        if rid is None:
+            continue  # an override we can't place is safer skipped than misfiled
+        override_exdates.add(rid.strftime("%Y%m%d"))
+        override_exdates.add(rid.strftime("%Y%m%dT%H%M%S"))
+        out.append(_override_to_normalized(ov, uid, rid.strftime("%Y-%m-%d")))
+
+    if anchor is not None:
+        # A series carrying overrides is always expanded: the mapped-subset
+        # recurrence can't express "this one occurrence moved", and the
+        # overridden original dates must not render at their old times.
+        out = _vevent_to_normalized(
+            anchor, now=now, force_expand=True, extra_exdates=override_exdates,
+        ) + out
     return out
 
 
@@ -537,8 +640,10 @@ def parse_ical(text: str, *, now: datetime | None = None) -> dict[str, Any]:
     if now is None:
         now = datetime.now()
     lines = _unfold(text or "")
-    events: list[dict[str, Any]] = []
-    complex_series: list[str] = []
+    # Pass 1 — collect every VEVENT's properties. Overrides (RECURRENCE-ID)
+    # share their series' UID, so events can only be normalized after the
+    # whole feed is read and grouped.
+    vevents: list[dict[str, Any]] = []
     cur: dict[str, Any] | None = None
     for line in lines:
         upper = line.strip().upper()
@@ -547,10 +652,7 @@ def parse_ical(text: str, *, now: datetime | None = None) -> dict[str, Any]:
             continue
         if upper == "END:VEVENT":
             if cur is not None:
-                normalized = _vevent_to_normalized(cur, now=now)
-                if any(e.get("expanded_from") for e in normalized):
-                    complex_series.append(cur.get("uid"))
-                events.extend(normalized)
+                vevents.append(cur)
             cur = None
             continue
         if cur is None:
@@ -576,10 +678,35 @@ def parse_ical(text: str, *, now: datetime | None = None) -> dict[str, Any]:
             cur["last_modified"] = dt.isoformat() if dt else None
         elif name == "RRULE":
             cur["_rrule"] = _parse_rrule(value)
+        elif name == "RECURRENCE-ID":
+            dt, _ = _parse_dt(value, params)
+            cur["_recurrence_id"] = dt
         elif name == "EXDATE":
             for token in value.split(","):
                 dt, _ = _parse_dt(token, params)
                 if dt is not None:
                     cur["_exdates"].add(dt.strftime("%Y%m%d"))
                     cur["_exdates"].add(dt.strftime("%Y%m%dT%H%M%S"))
-    return {"events": events, "complex_series": [u for u in complex_series if u]}
+
+    # Pass 2 — group by UID (anchor vs overrides), then normalize each group.
+    groups: dict[str, dict[str, Any]] = {}
+    for props in vevents:
+        uid = props.get("uid")
+        if not uid:
+            continue
+        g = groups.setdefault(uid, {"anchor": None, "overrides": []})
+        if props.get("_recurrence_id") is not None:
+            g["overrides"].append(props)
+        else:
+            g["anchor"] = props
+
+    events: list[dict[str, Any]] = []
+    complex_series: list[str] = []
+    for uid, g in groups.items():
+        normalized = _normalize_uid_group(uid, g["anchor"], g["overrides"], now=now)
+        # Only a genuinely-expanded RRULE is "complex" (drives the Node-side
+        # log line); an override-forced expansion is expected behaviour.
+        if not g["overrides"] and any(e.get("expanded_from") for e in normalized):
+            complex_series.append(uid)
+        events.extend(normalized)
+    return {"events": events, "complex_series": complex_series}

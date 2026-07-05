@@ -33,14 +33,15 @@ formatter in thalamus.js / temporal-format.js stays clean.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from unruh import __version__
-from unruh.db import get_conn, now_iso
+from unruh.db import get_conn, ids_to_slugs, now_iso
 from unruh import schedule as sched
+from unruh import templates as tmpl
 from unruh import interest as interests
 from unruh import handoff as handoffs
 from unruh import gcal as gcal_ingest_mod
@@ -52,6 +53,17 @@ mcp = FastMCP("unruh")
 def _now_iso() -> str:
     # Delegates to the canonical local-naive now (db.now_iso) — one source.
     return now_iso()
+
+
+def _window_base(now: str | None) -> datetime:
+    """Parse the caller's local-naive `now` to a datetime for window math,
+    falling back to the local clock if it's missing/unparseable."""
+    if now:
+        try:
+            return datetime.fromisoformat(now)
+        except (TypeError, ValueError):
+            pass
+    return datetime.now()
 
 
 def _err(message: str, code: str = "bad_request") -> dict[str, Any]:
@@ -380,6 +392,9 @@ def gcal_ingest(
     ics_text: str | None = None,
     events: list | None = None,
     reconcile_deletes: bool = True,
+    calendar_id: str | None = None,
+    include_legacy: bool = False,
+    attribution: dict | None = None,
 ) -> dict[str, Any]:
     """I use this to fold my human's Google Calendar into their schedule. The
     Node sync loop hands me either a raw `.ics` feed (`ics_text`) or already-
@@ -396,6 +411,12 @@ def gcal_ingest(
         reconcile_deletes: True for a confirmed-good FULL snapshot (an event
             that vanished from Google is cancelled here). A windowed/partial
             read passes False so it can't cancel events outside its window.
+        calendar_id: the source calendar this snapshot is for. Scopes the
+            reconcile to that one calendar so a full sync of one shared
+            calendar never cancels another's events.
+        include_legacy: fold pre-multi-calendar rows (no stored calendar id)
+            into this calendar's scope — set for the ward's own calendar so it
+            adopts the old single-calendar rows.
 
     Returns: {ok, new: [...ids], updated: [...], unchanged: [...],
     removed: [...], complex_series: [...uids]}. Only `new` ever reaches me.
@@ -405,9 +426,113 @@ def gcal_ingest(
             return gcal_ingest_mod.gcal_ingest(
                 conn, ics_text=ics_text, events=events,
                 reconcile_deletes=reconcile_deletes,
+                calendar_id=calendar_id, include_legacy=include_legacy,
+                attribution=attribution,
             )
     except Exception as e:  # parse/DB failure must degrade, never crash the loop
         return _err(f"gcal_ingest failed: {e}", code="ingest_error")
+
+
+@mcp.tool()
+def unruh_ids_to_slugs() -> dict[str, Any]:
+    """I convert every old-style hex id in my temporal store (schedule and
+    interest nodes + edges) into a readable slug, updating all internal
+    references in one transaction. Mechanical and idempotent — running it
+    twice changes nothing more. Returns counts and the old→new mapping so
+    Proto-Familiar can update its own references.
+    """
+    try:
+        with get_conn() as conn:
+            return {"ok": True, **ids_to_slugs(conn)}
+    except Exception as e:
+        return _err(f"ids_to_slugs failed: {e}", code="migrate_error")
+
+
+@mcp.tool()
+def schedule_find(query: str, include_resolved: bool = False, limit: int = 20) -> dict[str, Any]:
+    """I use this to search my human's WHOLE schedule by name — any time
+    horizon, not just the week my briefing shows. It's how I find the id of
+    anything I can't currently see: a calendar appointment months out, an old
+    recurring series, a task that scrolled out of my context. I search, read
+    the matches' ids, then act (export, link, re-time, resolve).
+
+    Args:
+        query: substring to match against labels, case-insensitive.
+        include_resolved: True to also see done/cancelled items
+            (answers "did I already handle X?").
+        limit: max matches (default 20).
+
+    Returns: {ok: True, matches: [{id, type, label, when?, end?, resolution?}]}
+    — soonest-upcoming first, then undated, then past.
+    """
+    try:
+        with get_conn() as conn:
+            matches = sched.find_nodes(
+                conn, query=query, include_resolved=include_resolved, limit=limit,
+            )
+        return {"ok": True, "matches": matches}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def template_upsert(tag: str, label: str, prerequisites: list[str] | None = None) -> dict[str, Any]:
+    """I create or adjust a requirement TEMPLATE — a reusable bundle of what a
+    KIND of barrier asks of my human. Tag "outside" (leaving the house) might
+    need "clean clothes", "shoes by the door". I build these as I learn what my
+    human actually needs and adjust them over time; they are mine to grow.
+    Later, when I tag an event with that barrier, I apply the template to
+    SUGGEST its prerequisites (template_apply). One template per tag — upserting
+    an existing tag replaces its contents and keeps its id.
+
+    Args:
+        tag: the obstacle tag this template keys off (e.g. "outside"),
+            lower-cased.
+        label: human-readable name for the bundle (e.g. "leaving the house").
+        prerequisites: ordered list of short prerequisite task labels
+            (e.g. ["clean clothes", "shoes by the door"]).
+
+    Returns: {ok: True, template: {id, tag, label, prerequisites, ...}}.
+    """
+    try:
+        with get_conn() as conn:
+            tpl = tmpl.upsert_template(conn, tag=tag, label=label, prerequisites=prerequisites)
+        return {"ok": True, "template": tpl}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def template_list() -> dict[str, Any]:
+    """I list my requirement templates — the barrier bundles I've built — so I
+    can see what I have and what each one pulls in before I apply it.
+
+    Returns: {ok: True, templates: [{id, tag, label, prerequisites, ...}]}.
+    """
+    try:
+        with get_conn() as conn:
+            tpls = tmpl.list_templates(conn)
+        return {"ok": True, "templates": tpls}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def template_delete(tag: str) -> dict[str, Any]:
+    """I remove a requirement template I no longer want, by its tag.
+
+    Args:
+        tag: the obstacle tag whose template to delete.
+
+    Returns: {ok: True, deleted: bool} — deleted is False if no template
+    existed for that tag.
+    """
+    try:
+        with get_conn() as conn:
+            deleted = tmpl.delete_template(conn, tag=tag)
+        return {"ok": True, "deleted": deleted}
+    except ValueError as e:
+        return _err(str(e))
 
 
 @mcp.tool()
@@ -471,6 +596,31 @@ def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
     with get_conn() as conn:
         due = sched.get_due_reminders(conn, now=now, limit=limit)
     return {"ok": True, "reminders": due}
+
+
+@mcp.tool()
+def schedule_mark_alerted(id: str, occurrence_date: str | None = None) -> dict[str, Any]:
+    """I use this to remember that my human has already been pinged about an
+    upcoming event, so I never nag them twice about the same moment. The
+    Node-side alert scan calls it right after a "coming up" notice is
+    delivered. One-time events record `alerted_at`; a recurring occurrence
+    records under `alerts[YYYY-MM-DD]`.
+
+    Args:
+        id: the schedule node id.
+        occurrence_date: YYYY-MM-DD of the specific occurrence, for
+            recurring events; omit for a one-time event.
+
+    Returns: {ok: True} or the standard not-found error shape.
+    """
+    try:
+        with get_conn() as conn:
+            found = sched.mark_alerted(conn, id=id, occurrence_date=occurrence_date)
+        if not found:
+            return _err(f"no schedule node with id {id!r}", code="not_found")
+        return {"ok": True}
+    except Exception as e:
+        return _err(f"schedule_mark_alerted failed: {e}", code="bad_request")
 
 
 @mcp.tool()
@@ -710,7 +860,16 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
     """
     with get_conn() as conn:
         phase = sched.current_phase(conn, at=now)
-        window = sched.get_window(conn, from_ts=None, to_ts=None, limit=50)
+        # Render window for the chat briefing: the last 12h and the next 7
+        # DAYS. The forward reach matches the recurrence-expansion horizon
+        # thalamus uses, so non-recurring events (e.g. a synced calendar
+        # appointment next Tuesday) surface alongside recurring ones instead
+        # of only showing within ±12h. The full fetched range (a year) lives
+        # in the schedule/Map view; this keeps the per-turn briefing bounded.
+        base = _window_base(now)
+        win_from = (base - timedelta(hours=12)).isoformat(timespec="seconds")
+        win_to = (base + timedelta(days=7)).isoformat(timespec="seconds")
+        window = sched.get_window(conn, from_ts=win_from, to_ts=win_to, limit=50)
         # Full routine — every live phase, date-independent. The
         # Familiar needs the day's shape, not just "which phase right
         # now." current_phase still rides along separately so the

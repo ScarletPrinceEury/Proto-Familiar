@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0.0",
+    # IANA tz database for zoneinfo — required on Windows (no system zoneinfo)
+    # so ward-local time conversion applies DST correctly (see db._local_zone).
+    "tzdata>=2024.1",
 ]
 
 [dependency-groups]

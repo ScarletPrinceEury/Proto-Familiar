@@ -37,11 +37,19 @@ let _consecutiveOverdueGrowth = 0;
  * Run one reminders tick. Pure-ish — getDueReminders / fireReminder
  * are injected so tests can drive every branch.
  *
- * Returns { fired: [...], skipped: [...] } for observability.
+ * Also carries the event lead-time alert pass ("coming up: …" pings for
+ * type='event' nodes) when the optional getDueEventAlerts /
+ * markEventAlerted pair is provided — same tick, same enqueue-then-mark
+ * discipline, no second timer.
+ *
+ * Returns { fired: [...], skipped: [...], alerted: [...] } for
+ * observability.
  */
 export async function runOneReminderTick({
   getDueReminders,
   fireReminder,           // async ({id, label}) => marks resolved=fired
+  getDueEventAlerts,      // optional: async () => [{id,label,occurrenceDate,title,body}]
+  markEventAlerted,       // optional: async ({id, occurrenceDate}) => durable "already pinged"
   enqueueOutboxFn = enqueueOutbox,
   now             = Date.now,
 }) {
@@ -70,7 +78,32 @@ export async function runOneReminderTick({
       skipped.push({ id: r.id, label: r.label, error: err?.message ?? String(err) });
     }
   }
-  return { fired, skipped };
+
+  // Event lead-time alerts — enqueue first, mark second, exactly like
+  // reminders: a failed mark re-alerts next tick and the outbox dedup
+  // (originId = node id + occurrence) absorbs the retry.
+  const alerted = [];
+  if (typeof getDueEventAlerts === 'function' && typeof markEventAlerted === 'function') {
+    let dueAlerts = [];
+    try { dueAlerts = (await getDueEventAlerts()) || []; }
+    catch (err) { skipped.push({ id: '(event-alert-scan)', error: err?.message ?? String(err) }); }
+    for (const a of dueAlerts) {
+      try {
+        await enqueueOutboxFn({
+          kind:     'event_alert',
+          originId: `event-alert:${a.id}:${a.occurrenceDate ?? 'once'}`,
+          title:    a.title,
+          body:     a.body,
+          ts:       new Date(now()).toISOString(),
+        });
+        await markEventAlerted({ id: a.id, occurrenceDate: a.occurrenceDate ?? null });
+        alerted.push(a);
+      } catch (err) {
+        skipped.push({ id: a.id, label: a.label, error: err?.message ?? String(err) });
+      }
+    }
+  }
+  return { fired, skipped, alerted };
 }
 
 /**
@@ -89,6 +122,8 @@ export async function runOneReminderTick({
 export function startRemindersLoop({
   getDueReminders,
   fireReminder,
+  getDueEventAlerts,
+  markEventAlerted,
   getHealth,
   enqueueOutboxFn = enqueueOutbox,
   tickMs    = DEFAULT_TICK_MS,
@@ -106,7 +141,7 @@ export function startRemindersLoop({
     _activeTick = (async () => {
       try {
         if (!(await isEnabled())) { onTick({ skipped: true, reason: 'disabled' }); return; }
-        const result = await runOneReminderTick({ getDueReminders, fireReminder, enqueueOutboxFn });
+        const result = await runOneReminderTick({ getDueReminders, fireReminder, getDueEventAlerts, markEventAlerted, enqueueOutboxFn });
         // Health check (best-effort; never blocks delivery).
         if (typeof getHealth === 'function') {
           try {

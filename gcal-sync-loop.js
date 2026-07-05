@@ -28,11 +28,15 @@ const BASE_TICK_MS = 60_000;                 // how often the loop wakes to chec
 export const DEFAULT_SYNC_INTERVAL_MS = 60 * 60_000;  // hourly (§1.6)
 const MIN_SYNC_INTERVAL_MS = 5 * 60_000;     // floor so a heavy user can't hammer Google
 const MAX_SYNC_INTERVAL_MS = 24 * 60 * 60_000;
+// A FAILED sync retries on this short leash instead of burning the whole
+// configured interval — a transient blip (network, expired token, flaky CLI)
+// must not turn "hourly sync" into "an hour of silence per hiccup".
+export const FAILURE_RETRY_MS = 5 * 60_000;
 
 let _started      = false;
 let _interval     = null;
 let _activeTick   = null;
-let _lastSyncTs   = 0;
+let _nextDueTs    = 0;
 
 export function clampSyncIntervalMs(ms) {
   if (!Number.isFinite(ms)) return DEFAULT_SYNC_INTERVAL_MS;
@@ -42,14 +46,18 @@ export function clampSyncIntervalMs(ms) {
 /**
  * Run one sync. Pure-ish — all I/O injected.
  *
- *   fetchSource  async () => { ok, icsText?, events?, reconcileDeletes? }
- *                The adapter; ok:false on ANY failure (never throws).
- *   ingest       async ({ icsText, events, reconcileDeletes }) =>
+ *   fetchSource  async () => { ok, snapshots?: [...], icsText?, events?, reconcileDeletes? }
+ *                The adapter; ok:false on ANY failure (never throws). May
+ *                return a LIST of per-calendar snapshots (multi-calendar) or a
+ *                single legacy snapshot (icsText/events at top level).
+ *   ingest       async ({ icsText, events, reconcileDeletes, calendarId, includeLegacy }) =>
  *                { ok, new, updated, removed }
  *   routeNew     async (newIds[]) => void  (flags them for the projection cue)
  *
  * Returns { synced, reason, new, updated, removed }. synced:false reasons:
- *   'fetch_failed' | 'ingest_failed'
+ *   'fetch_failed' | 'ingest_failed'. With multiple calendars, the tick
+ *   succeeds if AT LEAST ONE calendar ingested — one bad calendar never
+ *   blanks the others (per-source independence, CLAUDE.md).
  */
 export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async () => {} }) {
   if (typeof fetchSource !== 'function') throw new Error('fetchSource is required');
@@ -60,29 +68,41 @@ export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async
     return { synced: false, reason: 'fetch_failed', error: src?.error ?? 'unknown' };
   }
 
-  const result = await ingest({
-    icsText: src.icsText,
-    events: src.events,
-    // A windowed/partial read tells the adapter so; default to a full
-    // reconcile for the link tier (a complete snapshot).
-    reconcileDeletes: src.reconcileDeletes !== false,
-  }).catch(err => ({ ok: false, error: err?.message ?? String(err) }));
+  // Normalise to a list of per-calendar snapshots. A legacy single-snapshot
+  // source (no `snapshots`) is wrapped as one unscoped snapshot so old
+  // adapters keep working unchanged.
+  const snapshots = Array.isArray(src.snapshots)
+    ? src.snapshots
+    : [{ icsText: src.icsText, events: src.events, reconcileDeletes: src.reconcileDeletes, calendarId: src.calendarId, includeLegacy: src.includeLegacy }];
 
-  if (!result || result.ok === false) {
-    return { synced: false, reason: 'ingest_failed', error: result?.error ?? 'unknown' };
+  const newIds = [], updatedIds = [], removedIds = [], complex = [];
+  let anyOk = false, lastErr = null;
+  for (const snap of snapshots) {
+    const result = await ingest({
+      icsText: snap.icsText,
+      events: snap.events,
+      // A windowed/partial read tells the adapter so; default to a full
+      // reconcile for the link tier (a complete snapshot).
+      reconcileDeletes: snap.reconcileDeletes !== false,
+      calendarId: snap.calendarId,
+      includeLegacy: snap.includeLegacy === true,
+      attribution: snap.attribution,
+    }).catch(err => ({ ok: false, error: err?.message ?? String(err) }));
+    if (!result || result.ok === false) { lastErr = result?.error ?? 'unknown'; continue; }
+    anyOk = true;
+    if (Array.isArray(result.new))            newIds.push(...result.new);
+    if (Array.isArray(result.updated))        updatedIds.push(...result.updated);
+    if (Array.isArray(result.removed))        removedIds.push(...result.removed);
+    if (Array.isArray(result.complex_series)) complex.push(...result.complex_series);
   }
 
-  const newIds = Array.isArray(result.new) ? result.new : [];
+  if (!anyOk) {
+    return { synced: false, reason: 'ingest_failed', error: lastErr ?? 'unknown' };
+  }
   if (newIds.length) {
     try { await routeNew(newIds); } catch { /* projection cue is best-effort */ }
   }
-  return {
-    synced: true,
-    new: newIds,
-    updated: Array.isArray(result.updated) ? result.updated : [],
-    removed: Array.isArray(result.removed) ? result.removed : [],
-    complex_series: Array.isArray(result.complex_series) ? result.complex_series : [],
-  };
+  return { synced: true, new: newIds, updated: updatedIds, removed: removedIds, complex_series: complex };
 }
 
 // ── Singleton lifecycle ──────────────────────────────────────────
@@ -98,7 +118,7 @@ export function startGcalSyncLoop({
 }) {
   if (_started) throw new Error('gcal sync loop already running');
   _started = true;
-  _lastSyncTs = 0;
+  _nextDueTs = 0;
 
   const fire = async () => {
     if (_activeTick) return;
@@ -107,12 +127,14 @@ export function startGcalSyncLoop({
         if (!(await isEnabled())) { onTick({ synced: false, reason: 'disabled' }); return; }
         const intervalMs = clampSyncIntervalMs(await getIntervalMs());
         const nowMs = now();
-        if (_lastSyncTs && nowMs - _lastSyncTs < intervalMs) {
+        if (nowMs < _nextDueTs) {
           onTick({ synced: false, reason: 'not_due' });
           return;
         }
-        _lastSyncTs = nowMs;
         const r = await runOneGcalSyncTick(tickConfig);
+        // Success consumes the full interval; failure retries on the short
+        // leash (never longer than the interval itself).
+        _nextDueTs = nowMs + (r?.synced ? intervalMs : Math.min(intervalMs, FAILURE_RETRY_MS));
         try { onTick(r); } catch (err) { onError(err); }
       } catch (err) {
         try { onError(err); } catch { /* swallow */ }
@@ -135,12 +157,12 @@ export async function stopGcalSyncLoop() {
   if (!_started) return;
   if (_interval) { clearInterval(_interval); _interval = null; }
   const pending = _activeTick;
-  _started    = false;
-  _lastSyncTs = 0;
+  _started   = false;
+  _nextDueTs = 0;
   if (pending) { try { await pending; } catch { /* surfaced via onError */ } }
 }
 
 /** Force the next wake to sync regardless of the interval gate (the "Sync now" button). */
-export function resetGcalSyncCadence() { _lastSyncTs = 0; }
+export function resetGcalSyncCadence() { _nextDueTs = 0; }
 
 export function isRunning() { return _started; }

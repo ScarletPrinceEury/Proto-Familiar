@@ -100,13 +100,38 @@ export async function fetchIcal(url, { fetchFn = globalThis.fetch, timeoutMs = F
 
 const CLI_PRESETS = {
   // Documented starting points — the ward overrides the command to match
-  // their installed tool/version. Both default to an iCal export so the
-  // bytes route straight through Unruh's existing parser.
+  // their installed tool/version. The {dateMin}/{dateMax} tokens are
+  // substituted with the look-ahead window so the read covers the whole
+  // horizon, not the tool's (often narrow) default.
+  //
+  // HONESTY NOTE on gcalcli: its agenda/table output is human-facing —
+  // no JSON mode, and its TSV carries no stable event ids, which the
+  // reconcile requires. The preset below therefore runs but FAILS the
+  // JSON parse visibly (surfaced in the modal's "Sync health" line)
+  // rather than ingesting garbage; the setup guide tells the ward to
+  // supply a command/wrapper that actually emits .ics or JSON, or to
+  // use the native Google-account source. Do not "fix" this by parsing
+  // TSV — without ids, reconcile can't be idempotent (§1.1).
   gogcli:  { hint: 'gogcli calendar events --ics', format: 'ics' },
-  gcalcli: { hint: 'gcalcli --nocolor agenda --details=all', format: 'json' },
+  gcalcli: { hint: 'gcalcli --nocolor agenda --details=all {dateMin} {dateMax}', format: 'json' },
 };
 
 export function cliPresetHint(name) { return CLI_PRESETS[name]?.hint ?? ''; }
+
+// Substitute the look-ahead window tokens into a read command, so a CLI that
+// accepts a date range fetches the whole horizon instead of its default
+// window. Tokens: {timeMin}/{timeMax} (ISO-8601), {dateMin}/{dateMax}
+// (YYYY-MM-DD), {days} (the integer look-ahead). A command with none is run
+// verbatim (the tool uses its own default).
+export function applyCliWindowTokens(command, { timeMin, timeMax, lookaheadDays } = {}) {
+  const dateOf = (iso) => (typeof iso === 'string' ? iso.slice(0, 10) : '');
+  return String(command || '')
+    .replaceAll('{timeMin}', timeMin || '')
+    .replaceAll('{timeMax}', timeMax || '')
+    .replaceAll('{dateMin}', dateOf(timeMin))
+    .replaceAll('{dateMax}', dateOf(timeMax))
+    .replaceAll('{days}', String(lookaheadDays ?? ''));
+}
 
 /**
  * Map a loose JSON event (whatever a CLI emits) to the normalized-event
@@ -158,10 +183,13 @@ function defaultCliRunner(command, { timeoutMs = CLI_TIMEOUT_MS } = {}) {
  * @param {object} p
  * @param {string} p.command   the full command line to run
  * @param {'ics'|'json'} [p.format='ics']
+ * @param {string} [p.timeMin] ISO start of the look-ahead window (token sub)
+ * @param {string} [p.timeMax] ISO end of the look-ahead window (token sub)
+ * @param {number} [p.lookaheadDays]
  * @param {Function} [p.runner] injectable (tests); default spawns via exec
  */
-export async function fetchViaCli({ command, format = 'ics', runner = defaultCliRunner } = {}) {
-  const cmd = typeof command === 'string' ? command.trim() : '';
+export async function fetchViaCli({ command, format = 'ics', timeMin, timeMax, lookaheadDays, runner = defaultCliRunner } = {}) {
+  const cmd = applyCliWindowTokens(typeof command === 'string' ? command.trim() : '', { timeMin, timeMax, lookaheadDays });
   if (!cmd) return { ok: false, error: 'no calendar command configured' };
   let res;
   try {

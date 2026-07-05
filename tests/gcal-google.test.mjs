@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseCredentials, buildAuthUrl, exchangeCode, refreshAccessToken,
-  getFreshAccessToken, listEvents, normalizeGoogleEvents, buildEventResource,
+  getFreshAccessToken, listEvents, listCalendars, hasCalendarListScope,
+  normalizeGoogleEvents, buildEventResource,
   insertEvent, isConnected, publicStatus, SCOPE,
 } from '../gcal-google.js';
 
@@ -125,4 +126,48 @@ test('isConnected / publicStatus never leak tokens', () => {
   assert.deepEqual(pub, { connected: true, hasCredentials: true, account: 'me@x.com', scope: SCOPE });
   assert.ok(!JSON.stringify(pub).includes('SECRET'));
   assert.equal(isConnected({ client_id: 'i' }), false);  // creds but no token
+});
+
+test('listCalendars: fetches, pagineates, returns [{id, summary, primary}]', async () => {
+  const calls = [];
+  const fetchFn = async (url, opts) => {
+    calls.push({ url, auth: opts.headers?.Authorization });
+    if (calls.length === 1) {
+      return jsonRes({
+        items: [
+          { id: 'primary@g', summary: 'My calendar', primary: true, accessRole: 'owner' },
+          { id: 'mom@g', summary: 'Mom', primary: false, accessRole: 'reader' },
+        ],
+        nextPageToken: 'page2',
+      });
+    }
+    return jsonRes({ items: [{ id: 'shared@g', summary: 'Shared', primary: false }] });
+  };
+  const cals = await listCalendars({ accessToken: 'TOK', fetchFn });
+  assert.equal(cals.length, 3);
+  assert.equal(cals[0].id, 'primary@g');
+  assert.equal(cals[0].primary, true);
+  assert.equal(cals[1].id, 'mom@g');
+  assert.equal(cals[1].primary, false);
+  assert.equal(calls[0].auth, 'Bearer TOK');
+  assert.match(calls[0].url, /calendarList/);
+  assert.match(calls[0].url, /showHidden=true/);
+});
+
+test('normalizeGoogleEvents stamps gcal_calendar_id on each event', () => {
+  const items = [
+    { id: 'e1', summary: 'Event 1', start: { dateTime: '2099-07-02T14:00:00Z' } },
+    { id: 'e2', summary: 'Event 2', start: { date: '2099-07-03' } },
+  ];
+  const evs = normalizeGoogleEvents(items, 'mycal@g');
+  assert.equal(evs.length, 2);
+  assert.equal(evs[0].gcal_calendar_id, 'mycal@g');
+  assert.equal(evs[1].gcal_calendar_id, 'mycal@g');
+});
+
+test('hasCalendarListScope: detects when calendar.readonly is granted', () => {
+  assert.equal(hasCalendarListScope({ scope: SCOPE }), true);
+  assert.equal(hasCalendarListScope({ scope: 'https://www.googleapis.com/auth/calendar.events' }), false);
+  assert.equal(hasCalendarListScope({ scope: 'https://www.googleapis.com/auth/calendar.readonly' }), true);
+  assert.equal(hasCalendarListScope({ scope: 'https://www.googleapis.com/auth/calendar' }), true);
 });

@@ -887,6 +887,21 @@ export async function getRemindersHealth() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/** Record that an event's lead-time alert was delivered (one-time:
+ *  payload.alerted_at; recurring: payload.alerts[occurrence_date]) so the
+ *  alert scan never re-pings the same moment. Best-effort. */
+export async function markEventAlerted({ id, occurrence_date = null }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_mark_alerted',
+      arguments: occurrence_date ? { id, occurrence_date } : { id },
+    });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 /**
  * Build the export artifacts (.ics text + "add to Google" URL) for a
  * schedule node, in Unruh's code — the Familiar passes an id and never
@@ -902,6 +917,42 @@ export async function exportSchedule({ id }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/** Mechanical id re-key in Unruh: legacy hex ids → readable slugs.
+ *  Returns {ok, nodes, edges, mapping} — mapping is applied by the caller
+ *  to Proto-Familiar's own JSON stores that reference node ids. */
+export async function convertUnruhIds() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'unruh_ids_to_slugs', arguments: {} });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/** Mechanical id re-key in Phylactery's knowledge graph. */
+export async function convertGraphIds() {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const result = await callTool('graph_ids_to_slugs', {});
+    return (result && typeof result === 'object') ? result : { ok: true, result };
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/** Search the whole schedule layer by label substring — any horizon. The
+ *  id-discovery grep behind the Familiar's schedule_find tool. */
+export async function findScheduleNodes({ query, includeResolved = false, limit = 20 }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', matches: [] };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_find',
+      arguments: { query, include_resolved: includeResolved, limit },
+    });
+    return parseToolText(r, { ok: false, matches: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), matches: [] }; }
+}
+
 /** Read one schedule node's stored fields by id (for native calendar
  *  write-back, which builds the Google event resource from the node). */
 export async function getScheduleNode({ id }) {
@@ -913,6 +964,34 @@ export async function getScheduleNode({ id }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// ── Requirement templates (stewardship Pass 2b) ──────────────────
+export async function templateUpsert({ tag, label, prerequisites }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'template_upsert', arguments: { tag, label, prerequisites } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function templateList() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', templates: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'template_list', arguments: {} });
+    return parseToolText(r, { ok: false, templates: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), templates: [] }; }
+}
+
+export async function templateDelete({ tag }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'template_delete', arguments: { tag } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 // ── Google Calendar ingestion wrapper (0.8) ──────────────────────
 //
 // The Node adapters (gcal-source.js for the link tier; gogcli/gcalcli in
@@ -921,13 +1000,16 @@ export async function getScheduleNode({ id }) {
 // removed}. Best-effort like every Unruh-facing call — a down peer or a
 // failed ingest degrades to ok:false and the sync loop simply skips this
 // tick. Pass exactly one of icsText / events.
-export async function ingestGcal({ icsText, events, reconcileDeletes = true } = {}) {
+export async function ingestGcal({ icsText, events, reconcileDeletes = true, calendarId, includeLegacy = false, attribution } = {}) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected', new: [], updated: [], removed: [] };
   try {
     const args = { reconcile_deletes: reconcileDeletes };
     if (icsText !== undefined) args.ics_text = icsText;
     if (events  !== undefined) args.events  = events;
+    if (calendarId)            args.calendar_id = calendarId;
+    if (includeLegacy)         args.include_legacy = true;
+    if (attribution)           args.attribution = attribution;
     const r = await unruhClient.callTool({ name: 'gcal_ingest', arguments: args });
     return parseToolText(r, { ok: false, new: [], updated: [], removed: [] });
   } catch (err) {
@@ -1179,6 +1261,7 @@ function wrapFile(filename, content, promptLabel) {
 // import here for enrich()'s internal use; everything else imports
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
+import { buildStewardshipBlock } from './stewardship.js';
 import { nextProjectionCue } from './gcal-projection.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
@@ -1757,6 +1840,32 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         });
     const careBlock = buildCareCheckBlock(threat);
 
+    // ── Stewardship (docs/stewardship-build-spec.md, Pass 1) ──────────
+    //    The executive layer over the temporal world model: cheap code
+    //    picks a tiny, conditional agenda (opening brief / aging floaters
+    //    / anchor-drift), and I raise it in my own voice. Absent most
+    //    turns (that's the point — a block that renders every turn is
+    //    scenery), and it stands down entirely at moderate+ threat so it
+    //    never competes with triage. Side effects (the day's brief flag,
+    //    rotation cursors, first-contact samples) are gated to live turns
+    //    inside the module. Never throws into the chat path.
+    let stewardshipBlock = '';
+    try {
+      let stewardshipSettings = {};
+      try { stewardshipSettings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); } catch { /* fresh install */ }
+      stewardshipBlock = await buildStewardshipBlock({
+        liveTurn, staticOnly, threat,
+        settings: stewardshipSettings,
+        scheduleItems: temporalPayload?.schedule?.window ?? [],
+        scheduleEdges: temporalPayload?.schedule?.edges ?? [],
+        lastUserMessageAt,
+        wardTimeZone: wardTimeZoneSetting(),
+        nowMs: Date.now(),
+      });
+    } catch (err) {
+      console.error('[thalamus] stewardship block failed (defaulting to empty):', err?.message ?? err);
+    }
+
     // ── Surface candidates (the consumer side of the personalization
     //    layer). Picks open schedule items that pass the hard gates
     //    (threat tier, routine phase, dedup window), attaches the
@@ -1929,6 +2038,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (careBlock)              dynamicSections.push(careBlock);
+    if (stewardshipBlock)       dynamicSections.push(stewardshipBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
     if (surfaceCandidatesBlock) dynamicSections.push(surfaceCandidatesBlock);
 
@@ -1954,6 +2064,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       consentPendingBlock    ? 'consent'    : null,
       graduationBlock        ? 'graduation' : null,
       careBlock              ? 'care'       : null,
+      stewardshipBlock       ? 'stewardship' : null,
       temporalLines          ? 'temporal'   : null,
       surfaceCandidatesBlock ? 'surface'    : null,
     ].filter(Boolean).join(',');

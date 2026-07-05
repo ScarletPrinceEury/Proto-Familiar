@@ -66,6 +66,19 @@ function generateId() {
   });
 }
 
+// Readable session id ("s-20260704-x7k2") — mirrors slug-ids.js on the server
+// (browser can't import Node modules). Session ids name the log files the
+// Familiar browses with list_files, so the date prefix is real information;
+// message ids stay generateId() (internal, never a lookup key for the model).
+function generateSessionId() {
+  const ABC = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  let suf = '';
+  for (let i = 0; i < 4; i++) suf += ABC[Math.floor(Math.random() * ABC.length)];
+  return `s-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${suf}`;
+}
+
 // ── Tool calling ───────────────────────────────────────────────
 /**
  * Tool execution lives server-side in cerebellum.js as of 0.4.0-alpha:
@@ -240,6 +253,22 @@ const state = {
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   notificationSounds:      true,    // in-app chime on new messages (default on)
+  // Context-sensitive tool surfacing (default OFF until behaviorally tested):
+  // only core + triggered tool modules are advertised per turn; the Familiar
+  // pulls anything else via request_tools. Sticky = extra turns a surfaced
+  // module stays (0-10).
+  toolSurfacingEnabled:    false,
+  toolStickyTurns:         2,
+  // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
+  // executive layer that opens the day, surfaces aging floaters, and learns
+  // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
+  stewardshipEnabled:      true,
+  dayStartAnchor:          '09:00',
+  dayStartGapHours:        3,        // inactivity gap before a message counts as "first contact today"
+  briefLookaheadDays:      3,        // how far ahead the opening brief looks
+  docketMinAgeDays:        3,        // days a task floats before I start offering it a place
+  routineReviewEnabled:    true,     // weekly routine review riding the reflection slot (Pass 3)
+  routineReviewDays:       7,        // cadence for the routine review
   wardTimeZone:            '',      // ward's IANA zone, auto-detected from the browser (see init overlay)
   // Google Calendar sync (0.8). Opt-in: idles until an iCal URL is pasted
   // and the toggle is on. Interval in minutes (hourly default; loop clamps
@@ -247,6 +276,11 @@ const state = {
   gcalEnabled:             false,
   gcalIcalUrl:             '',
   gcalSyncIntervalMinutes: 60,
+  gcalLookaheadDays:       365,   // how far ahead each pull fetches (clamped 30–1825)
+  // Event lead-time alerts: a "coming up" ping before any unresolved event
+  // node starts (synced or hand-added). Default ON — the timeblindness net.
+  eventAlertsEnabled:      true,
+  eventAlertLeadMinutes:   60,    // clamped 5–1440 server-side
   // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
   // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
   gcalSource:              'link',
@@ -256,6 +290,11 @@ const state = {
   // requires a CLI source. Blank command → the source preset's import command.
   gcalWriteEnabled:        false,
   gcalWriteCommand:        '',
+  // Multi-calendar (shared calendars): attribution map keyed by calendar id
+  // → {kind, ref, label}; extra iCal feeds; CLI calendar names.
+  gcalCalendarAttribution: {},
+  gcalIcalUrls:            [],   // [{url, label}] extra iCal feeds beyond gcalIcalUrl
+  gcalCliCalendars:        [],   // [{name, label}] calendars for the {calendar} token
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -306,7 +345,9 @@ const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
-  'toolsEnabled', 'customTools',
+  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
+  'stewardshipEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
+  'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
@@ -319,9 +360,11 @@ const SERVER_SYNCED_KEYS = [
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
   'wardTimeZone',
-  'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes',
+  'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
+  'eventAlertsEnabled', 'eventAlertLeadMinutes',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'gcalWriteEnabled', 'gcalWriteCommand',
+  'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -389,10 +432,120 @@ function closeWebSearchModal() {
 function openGcalModal() {
   writeSettingsToUI();       // reflect current state into the modal fields
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
+  refreshGcalSyncStatus();   // "last sync / last error" health line
+  renderGcalCalendars();     // the discovered-calendars + attribution panel
   $('gcal-modal')?.classList.remove('hidden');
 }
 function closeGcalModal() {
   $('gcal-modal')?.classList.add('hidden');
+}
+
+// The sync-health line in the gcal modal: when the last real attempt ran,
+// whether it worked, and the exact error when it didn't — so a dead URL or
+// an expired Google token stops being invisible.
+async function refreshGcalSyncStatus() {
+  const el = $('gcal-sync-status');
+  if (!el) return;
+  try {
+    const s = await (await fetch('/api/gcal/sync-status')).json();
+    if (!s || !s.lastAttemptAt) { el.textContent = 'No sync has run yet.'; el.style.color = ''; return; }
+    const ago = (iso) => {
+      const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins} min ago`;
+      const h = Math.round(mins / 60);
+      return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+    };
+    if (s.lastOutcome === 'ok') {
+      const c = s.lastChanges || {};
+      const parts = [c.new && `${c.new} new`, c.updated && `${c.updated} updated`, c.removed && `${c.removed} removed`].filter(Boolean);
+      el.textContent = `✓ Last synced ${ago(s.lastSuccessAt || s.lastAttemptAt)}${parts.length ? ` (${parts.join(', ')})` : ' (no changes)'}`;
+      el.style.color = 'var(--accent, #3a7)';
+    } else {
+      const okNote = s.lastSuccessAt ? ` Last success: ${ago(s.lastSuccessAt)}.` : ' It has never succeeded.';
+      el.textContent = `⚠ Last attempt (${ago(s.lastAttemptAt)}) failed: ${s.lastError || s.lastOutcome}.${okNote}`;
+      el.style.color = 'var(--danger, #c55)';
+    }
+  } catch {
+    el.textContent = 'Could not read sync status.';
+    el.style.color = '';
+  }
+}
+
+async function gcalSyncNow() {
+  const el = $('gcal-sync-status');
+  try {
+    await fetch('/api/gcal/sync-now', { method: 'POST' });
+    if (el) { el.textContent = 'Sync requested — it runs within the next minute…'; el.style.color = ''; }
+    // Poll a few times so the outcome shows without reopening the modal.
+    let tries = 0;
+    const poll = setInterval(async () => { tries++; await refreshGcalSyncStatus(); if (tries > 30) clearInterval(poll); }, 4000);
+  } catch {
+    if (el) el.textContent = 'Could not request a sync.';
+  }
+}
+
+// ── Calendars & attribution (multi-calendar) ─────────────────────
+const GCAL_ATTR_KINDS = [
+  { v: 'ward',       t: 'Me (my calendar)' },
+  { v: 'villager',   t: 'A villager' },
+  { v: 'phylactery', t: 'A graph node (friend/family/club)' },
+  { v: 'unassigned', t: 'Unassigned' },
+  { v: 'ignore',     t: "Ignore (don't sync)" },
+];
+
+// Parse "label | value" lines into {label, value}; a bare line is value-only.
+function parseLabeledLines(text) {
+  return String(text || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const i = l.indexOf('|');
+    return i >= 0 ? { label: l.slice(0, i).trim(), value: l.slice(i + 1).trim() } : { label: '', value: l };
+  }).filter(x => x.value);
+}
+
+async function renderGcalCalendars() {
+  const list = $('gcal-cal-list');
+  if (!list) return;
+  list.innerHTML = '<div class="field-hint">Loading…</div>';
+  let cals = [];
+  try { cals = (await (await fetch('/api/gcal/calendars')).json())?.calendars || []; }
+  catch { list.innerHTML = '<div class="field-hint">Could not load calendars.</div>'; return; }
+  if (!cals.length) {
+    list.innerHTML = '<div class="field-hint">No calendars seen yet — run ↻ Sync now with a connected account or configured feeds, then refresh.</div>';
+    return;
+  }
+  const map = (state.gcalCalendarAttribution && typeof state.gcalCalendarAttribution === 'object') ? state.gcalCalendarAttribution : {};
+  list.innerHTML = '';
+  for (const c of cals) {
+    const cur = map[c.id] || c.attribution || { kind: c.primary ? 'ward' : 'unassigned' };
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px';
+    const name = document.createElement('span');
+    name.textContent = (c.summary || c.id) + (c.primary ? ' (primary)' : '');
+    name.title = c.id;
+    name.style.cssText = 'flex:1 1 140px;min-width:120px;overflow:hidden;text-overflow:ellipsis';
+    const sel = document.createElement('select');
+    for (const k of GCAL_ATTR_KINDS) {
+      const o = document.createElement('option'); o.value = k.v; o.textContent = k.t;
+      if (k.v === cur.kind) o.selected = true;
+      sel.appendChild(o);
+    }
+    const ref = document.createElement('input');
+    ref.type = 'text'; ref.placeholder = 'id (villager/node)'; ref.value = cur.ref || '';
+    ref.style.cssText = 'width:11em';
+    const needsRef = (k) => k === 'villager' || k === 'phylactery';
+    ref.classList.toggle('hidden', !needsRef(cur.kind));
+    const save = () => {
+      const kind = sel.value;
+      const entry = { kind };
+      if (needsRef(kind)) { const r = ref.value.trim(); if (r) entry.ref = r; }
+      state.gcalCalendarAttribution = { ...(state.gcalCalendarAttribution || {}), [c.id]: entry };
+      saveSettings();
+    };
+    sel.onchange = () => { ref.classList.toggle('hidden', !needsRef(sel.value)); save(); };
+    ref.onchange = save;
+    row.append(name, sel, ref);
+    list.appendChild(row);
+  }
 }
 
 // Show the API panel only for the API backend; the Google engine-id field only
@@ -430,6 +583,15 @@ async function refreshGoogleCalStatus() {
     if (s.connected) {
       el.textContent = '✓ Connected to Google' + (s.account ? ` (${s.account})` : '');
       el.style.color = 'var(--accent, #3a7)';
+      // Shared calendars need the widened read scope; an older connection
+      // must reconnect once to grant it.
+      const note = $('gcal-cal-note');
+      if (note) {
+        if (s.sharedScope === false) {
+          note.textContent = '⚠ This connection can only read your own calendar. Reconnect (Connect Google Calendar) to also pull calendars shared into your account.';
+          note.style.color = 'var(--danger, #c55)';
+        } else { note.textContent = ''; note.style.color = ''; }
+      }
     } else if (s.hasCredentials) {
       el.textContent = 'Credentials loaded — click Connect to finish signing in.';
       el.style.color = '';
@@ -606,7 +768,7 @@ function loadPersisted() {
   } catch { /* corrupt storage */ }
   // Ensure a session ID exists
   if (!state.sessionId) {
-    state.sessionId        = generateId();
+    state.sessionId        = generateSessionId();
     state.sessionStartedAt = new Date().toISOString();
     saveSettings();
   }
@@ -2513,11 +2675,22 @@ function readSettingsFromUI() {
     const n = parseInt($('gcal-interval').value, 10);
     state.gcalSyncIntervalMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
   }
+  if ($('gcal-lookahead')) {
+    const n = parseInt($('gcal-lookahead').value, 10);
+    state.gcalLookaheadDays = Number.isInteger(n) && n >= 30 && n <= 1825 ? n : 365;
+  }
+  if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
+  if ($('event-alerts-lead')) {
+    const n = parseInt($('event-alerts-lead').value, 10);
+    state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
+  }
   if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
   if ($('gcal-write-toggle')) state.gcalWriteEnabled = $('gcal-write-toggle').checked;
   if ($('gcal-write-command')) state.gcalWriteCommand = $('gcal-write-command').value.trim();
+  if ($('gcal-ical-urls')) state.gcalIcalUrls = parseLabeledLines($('gcal-ical-urls').value).map(x => ({ url: x.value, ...(x.label ? { label: x.label } : {}) }));
+  if ($('gcal-cli-calendars')) state.gcalCliCalendars = parseLabeledLines($('gcal-cli-calendars').value).map(x => ({ name: x.value, ...(x.label ? { label: x.label } : {}) }));
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2538,6 +2711,36 @@ function readSettingsFromUI() {
     state.postHistoryRole = ['system', 'user', 'assistant'].includes(v) ? v : 'system';
   }
   state.toolsEnabled      = $('tools-enabled').checked;
+  if ($('tool-surfacing-toggle')) state.toolSurfacingEnabled = $('tool-surfacing-toggle').checked;
+  if ($('tool-sticky-turns')) {
+    const n = parseInt($('tool-sticky-turns').value, 10);
+    state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
+  }
+  if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
+  if ($('day-start-anchor')) {
+    const t = String($('day-start-anchor').value ?? '').trim();
+    if (/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
+      const [h, m] = t.split(':');
+      state.dayStartAnchor = `${String(Number(h)).padStart(2, '0')}:${m}`;
+    }
+  }
+  if ($('day-start-gap-hours')) {
+    const n = parseInt($('day-start-gap-hours').value, 10);
+    state.dayStartGapHours = Number.isInteger(n) && n >= 0 && n <= 24 ? n : 3;
+  }
+  if ($('brief-lookahead-days')) {
+    const n = parseInt($('brief-lookahead-days').value, 10);
+    state.briefLookaheadDays = Number.isInteger(n) && n >= 1 && n <= 14 ? n : 3;
+  }
+  if ($('docket-min-age-days')) {
+    const n = parseInt($('docket-min-age-days').value, 10);
+    state.docketMinAgeDays = Number.isInteger(n) && n >= 0 && n <= 60 ? n : 3;
+  }
+  if ($('routine-review-toggle')) state.routineReviewEnabled = $('routine-review-toggle').checked;
+  if ($('routine-review-days')) {
+    const n = parseInt($('routine-review-days').value, 10);
+    state.routineReviewDays = Number.isInteger(n) && n >= 1 && n <= 60 ? n : 7;
+  }
   state.customTools       = $('custom-tools').value;
   const wsEnabledEl = $('web-search-enabled');
   if (wsEnabledEl) state.webSearchEnabled = wsEnabledEl.checked;
@@ -2602,14 +2805,28 @@ function writeSettingsToUI() {
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
+  if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
+  if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
+  if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
+  if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
+  if ($('day-start-gap-hours')) setIfNotFocused($('day-start-gap-hours'), 'value', state.dayStartGapHours ?? 3);
+  if ($('brief-lookahead-days')) setIfNotFocused($('brief-lookahead-days'), 'value', state.briefLookaheadDays ?? 3);
+  if ($('docket-min-age-days')) setIfNotFocused($('docket-min-age-days'), 'value', state.docketMinAgeDays ?? 3);
+  if ($('routine-review-toggle')) setIfNotFocused($('routine-review-toggle'), 'checked', state.routineReviewEnabled !== false);
+  if ($('routine-review-days')) setIfNotFocused($('routine-review-days'), 'value', state.routineReviewDays ?? 7);
   if ($('gcal-toggle')) setIfNotFocused($('gcal-toggle'), 'checked', state.gcalEnabled === true);
   if ($('gcal-ical-url')) setIfNotFocused($('gcal-ical-url'), 'value', state.gcalIcalUrl ?? '');
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
+  if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
+  if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
   if ($('gcal-write-toggle')) setIfNotFocused($('gcal-write-toggle'), 'checked', state.gcalWriteEnabled === true);
   if ($('gcal-write-command')) setIfNotFocused($('gcal-write-command'), 'value', state.gcalWriteCommand ?? '');
+  if ($('gcal-ical-urls')) setIfNotFocused($('gcal-ical-urls'), 'value', (state.gcalIcalUrls || []).map(x => x.label ? `${x.label} | ${x.url}` : x.url).join('\n'));
+  if ($('gcal-cli-calendars')) setIfNotFocused($('gcal-cli-calendars'), 'value', (state.gcalCliCalendars || []).map(x => x.label ? `${x.label} | ${x.name}` : x.name).join('\n'));
   if (typeof syncGcalSourcePanels === 'function') syncGcalSourcePanels();
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
@@ -2717,7 +2934,7 @@ function resetSessionTimeout() {
  */
 function startNewSession() {
   if (_sessionTimeoutId) { clearTimeout(_sessionTimeoutId); _sessionTimeoutId = null; }
-  state.sessionId        = generateId();
+  state.sessionId        = generateSessionId();
   state.sessionStartedAt = new Date().toISOString();
   state.sessionEndedAt   = null;
   state.messages         = [];
@@ -3467,6 +3684,8 @@ function init() {
   $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
   $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
   $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  $('gcal-sync-now')?.addEventListener('click', gcalSyncNow);
+  $('gcal-cal-refresh')?.addEventListener('click', renderGcalCalendars);
   $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
   // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
@@ -3485,11 +3704,16 @@ function init() {
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'memory-sweep-toggle',
+    'tool-surfacing-toggle', 'tool-sticky-turns',
+    'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
+    'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
-    'gcal-source', 'gcal-cli-command', 'gcal-cli-format',
+    'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
+    'event-alerts-toggle', 'event-alerts-lead',
     'gcal-write-toggle', 'gcal-write-command',
+    'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',
@@ -3707,6 +3931,27 @@ function init() {
     } catch { alert('Copy failed — select and copy manually.'); }
   });
   $('diagnostics-download').addEventListener('click', downloadDiagnosticReport);
+
+  // Trigger tracer (regex/keyword diagnostic)
+  $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
+  $('trace-config-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: false, autoRun: false }));
+  $('trace-run')?.addEventListener('click', runSessionTrace);
+  $('trace-modal-close')?.addEventListener('click', () => $('trace-modal')?.classList.add('hidden'));
+  $('trace-copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('trace-output')?.textContent || '');
+      $('trace-copy').textContent = 'Copied ✓';
+      setTimeout(() => { $('trace-copy').textContent = 'Copy'; }, 1500);
+    } catch { /* clipboard denied — the pre is selectable */ }
+  });
+  $('trace-download')?.addEventListener('click', () => {
+    const blob = new Blob([$('trace-output')?.textContent || ''], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'trigger-trace.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
 
   // Knowledge editor (Phylactery)
   $('knowledge-btn').addEventListener('click', openKnowledgeModal);
@@ -5573,6 +5818,112 @@ async function buildDiagnosticReport() {
   }
 
   return lines.join('\n');
+}
+
+// ── Regex/trigger tracer (ward diagnostic) ──────────────────────
+// Per-turn, which regexes/keywords fired: tool-surfacing modules + threat
+// signals (via the server, the real modules) and tome keywords (client-side,
+// the real matcher). For tuning triggers. Nothing is stored.
+function traceGatherTurns(lastN) {
+  const msgs = Array.isArray(state.messages) ? state.messages : [];
+  const turns = [];
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i]?.role !== 'user' || typeof msgs[i].content !== 'string') continue;
+    let prevAssistant = '';
+    for (let j = i - 1; j >= 0; j--) {
+      if (msgs[j]?.role === 'assistant' && typeof msgs[j].content === 'string') { prevAssistant = msgs[j].content; break; }
+    }
+    turns.push({ user: msgs[i].content, assistant: prevAssistant, timestamp: msgs[i].timestamp });
+  }
+  return (lastN > 0 && turns.length > lastN) ? turns.slice(-lastN) : turns;
+}
+
+function traceTomeEntries() {
+  return Object.values(state.tomeCache ?? {})
+    .filter(t => t && t.enabled !== false)
+    .flatMap(t => Object.values(t.entries ?? {}));
+}
+
+async function runSessionTrace() {
+  const out = $('trace-output');
+  if (!out) return;
+  const analyzers = [];
+  if ($('trace-a-surfacing')?.checked) analyzers.push('surfacing');
+  if ($('trace-a-threat')?.checked)    analyzers.push('threat');
+  const doTomes = !!$('trace-a-tomes')?.checked;
+  const lastN = Math.max(0, parseInt($('trace-last-n')?.value, 10) || 0);
+  const turns = traceGatherTurns(lastN);
+  if (!turns.length) { out.textContent = 'No user turns in this session yet.'; return; }
+  if (!analyzers.length && !doTomes) { out.textContent = 'Tick at least one signal to trace.'; return; }
+  out.textContent = 'Tracing…';
+
+  let serverTurns = [];
+  if (analyzers.length) {
+    try {
+      const r = await fetch('/api/diagnostics/session-trace', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turns: turns.map(t => ({ user: t.user, assistant: t.assistant })), analyzers }),
+      });
+      const data = await r.json();
+      if (data?.ok === false) throw new Error(data.error || 'trace failed');
+      serverTurns = Array.isArray(data?.turns) ? data.turns : [];
+    } catch (err) { out.textContent = `Trace failed: ${err.message}`; return; }
+  }
+
+  const tomeEntries = doTomes ? traceTomeEntries() : [];
+  const jstr = (s) => JSON.stringify(String(s));
+  const active = [...analyzers, ...(doTomes ? ['tomes'] : [])];
+  const lines = [
+    `Trigger trace — ${turns.length} turn(s) · signals: ${active.join(', ')}`,
+    '(surfacing = tool-surfacing text-regex + villager names; block-marker triggers depend on live context and are not replayed. tome keywords matched against each turn\'s user message.)',
+    '',
+  ];
+  turns.forEach((t, i) => {
+    const sv = serverTurns.find(s => s.i === i) ?? {};
+    const u = String(t.user || '').replace(/\s+/g, ' ').trim();
+    lines.push(`── Turn ${i + 1}${t.timestamp ? ` · ${t.timestamp}` : ''} ─────────────────────────`);
+    lines.push(`user: ${u.length > 240 ? u.slice(0, 240) + '…' : u}`);
+    if (analyzers.includes('surfacing')) {
+      const s = Array.isArray(sv.surfacing) ? sv.surfacing : [];
+      if (!s.length) lines.push('  [surfacing] core only — no module triggered');
+      else for (const m of s) {
+        const bits = [];
+        if (m.textMatches?.length)  bits.push(`matched ${m.textMatches.map(jstr).join(', ')}`);
+        if (m.blockMatches?.length) bits.push(`block ${m.blockMatches.join(', ')}`);
+        if (m.via) bits.push(`via ${m.via}`);
+        lines.push(`  [surfacing] ${m.module} ← ${bits.join('; ')}`);
+      }
+    }
+    if (analyzers.includes('threat')) {
+      const th = sv.threat ?? { level: 0, signals: [] };
+      if (!th.signals?.length) lines.push('  [threat] no signals');
+      else {
+        lines.push(`  [threat] level ${th.level >= 0 ? '+' : ''}${th.level}`);
+        for (const sig of th.signals) lines.push(`    ${sig.tier}/${sig.id}${sig.damped ? ' (damped)' : ''} ← ${jstr(sig.match)}`);
+      }
+    }
+    if (doTomes) {
+      const fired = [];
+      for (const e of tomeEntries) {
+        const hitKeys = (e.keys ?? []).filter(k => k && k.trim() && matchKeyword(t.user, k, e));
+        if (hitKeys.length) fired.push(`  [tome] "${e.comment || e.uid || '(entry)'}" ← ${hitKeys.map(jstr).join(', ')}`);
+      }
+      lines.push(fired.length ? fired.join('\n') : '  [tome] none');
+    }
+    lines.push('');
+  });
+  out.textContent = lines.join('\n');
+}
+
+function openTraceModal({ surfacingOnly = false, autoRun = false } = {}) {
+  if (surfacingOnly) {
+    if ($('trace-a-surfacing')) $('trace-a-surfacing').checked = true;
+    if ($('trace-a-threat'))    $('trace-a-threat').checked = false;
+    if ($('trace-a-tomes'))     $('trace-a-tomes').checked = false;
+  }
+  $('trace-modal')?.classList.remove('hidden');
+  if (autoRun) runSessionTrace();
+  else if ($('trace-output')) $('trace-output').textContent = '';
 }
 
 async function openDiagnosticsModal() {
@@ -7992,6 +8343,8 @@ function teToggleScheduleForm(show) {
     if (stakes) stakes.value = '';
     const repeat = $('te-sched-repeat');
     if (repeat) repeat.value = '';
+    const obstacles = $('te-sched-obstacles');
+    if (obstacles) obstacles.value = '';
     setTimeout(() => $('te-sched-label')?.focus(), 0);
   }
 }
@@ -8039,9 +8392,12 @@ async function teSaveScheduleNode() {
   const stakesTier = $('te-sched-stakes')?.value || '';
   const repeatPreset = $('te-sched-repeat')?.value || '';
   const recurrence = teRepeatToRecurrence(repeatPreset);
+  const obstacleTags = String($('te-sched-obstacles')?.value || '')
+    .split(/[,\n]/).map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 8);
   const payload = {};
   if (stakesTier)  payload.stakes_tier = stakesTier;
   if (recurrence)  payload.recurrence  = recurrence;
+  if (obstacleTags.length) payload.obstacle_tags = obstacleTags;
   const hasPayload = Object.keys(payload).length > 0;
   try {
     const r = await fetch('/api/temporal/schedule', {
@@ -8410,6 +8766,12 @@ function formatOutboxAsMessageContent(item) {
   if (item.kind === 'reminder') {
     if (body) return body;
     return title ? `*(reminder)* ${title}` : '';
+  }
+  if (item.kind === 'event_alert') {
+    // Title carries the event name, body the code-built countdown — show both.
+    const head = title ? `**${title}**` : '';
+    if (head && body) return `${head}\n${body}`;
+    return head || body;
   }
   return body || title || '';
 }
@@ -9093,6 +9455,7 @@ function vlRenderCatDetail(cat) {
     </div>
     <div>
       <div class="vl-field-label">Grants <span class="field-hint">(what this category lets someone know or see)</span></div>
+      <div class="field-hint" style="margin-bottom:4px">Known grant: <code>schedule</code> (string) = <code>coarse</code> or <code>full</code> — lets people in this category coordinate ${esc(state.userName || 'my human')}'s time. <em>coarse</em> shares only free/busy day-parts (never what fills them); <em>full</em> also names what's on. Add a person to this category to permit them.</div>
       <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${grantRows}</div>
       ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Grant</button></div>` : ''}
     </div>

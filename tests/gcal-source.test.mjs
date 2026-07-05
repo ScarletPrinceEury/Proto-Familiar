@@ -147,3 +147,26 @@ test('pushIcsViaCli: no command / nothing valid → ok:false, never throws', asy
   assert.equal((await pushIcsViaCli({ icsText: ICS, command: '' })).ok, false);
   assert.equal((await pushIcsViaCli({ icsText: 'not ics', command: 'x', runner: async () => ({ code: 0 }) })).ok, false);
 });
+
+import { applyCliWindowTokens } from '../gcal-source.js';
+
+test('applyCliWindowTokens: substitutes the look-ahead window tokens', () => {
+  const out = applyCliWindowTokens('tool --from {dateMin} --to {dateMax} --iso {timeMin} {timeMax} --n {days}', {
+    timeMin: '2026-07-01T00:00:00.000Z', timeMax: '2027-07-01T00:00:00.000Z', lookaheadDays: 365,
+  });
+  assert.equal(out, 'tool --from 2026-07-01 --to 2027-07-01 --iso 2026-07-01T00:00:00.000Z 2027-07-01T00:00:00.000Z --n 365');
+});
+
+test('applyCliWindowTokens: a command with no tokens is unchanged', () => {
+  assert.equal(applyCliWindowTokens('gogcli calendar events --ics', {}), 'gogcli calendar events --ics');
+});
+
+test('fetchViaCli: substitutes window tokens into the command before running', async () => {
+  let received = '';
+  const runner = async (cmd) => { received = cmd; return { code: 0, stdout: ICS, stderr: '', failed: false }; };
+  await fetchViaCli({
+    command: 'gcalcli agenda {dateMin} {dateMax}', format: 'ics', runner,
+    timeMin: '2026-07-01T00:00:00Z', timeMax: '2027-07-01T00:00:00Z', lookaheadDays: 365,
+  });
+  assert.equal(received, 'gcalcli agenda 2026-07-01 2027-07-01');
+});

@@ -178,11 +178,55 @@
           <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
 
           <div class="field-row" style="margin-top:8px">
+            <label for="stewardship-toggle">Stewardship</label>
+            <input type="checkbox" id="stewardship-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Instead of your whole schedule sitting in your Familiar's context every turn (where it turns into wallpaper it stops noticing), this hands it a short, changing agenda: opening your day with what's coming, and nudging vague "I ought to…" tasks that have been floating without a time toward a real spot. It picks <em>what</em> matters in plain code; <em>how</em> it raises it stays your Familiar's own voice. It stands down whenever you're in distress. The settings below tune it.</div>
+          <div class="field-row">
+            <label for="day-start-anchor">Day starts at</label>
+            <input type="time" id="day-start-anchor" value="09:00" style="width:8em">
+          </div>
+          <div class="field-hint">When your Familiar opens your day with the "here's what's coming" brief — the earliest time it'll treat your first message as the real start of your day (not a late-night one still going). It can learn your actual rhythm over time and adjust this itself, always telling you when it does.</div>
+          <div class="field-row">
+            <label for="day-start-gap-hours">…after a gap of (hours)</label>
+            <input type="number" id="day-start-gap-hours" value="3" min="0" max="24" step="1" style="width:4em">
+          </div>
+          <div class="field-hint">How long a quiet stretch has to precede a message for it to count as the day's first contact — stops an unbroken late-morning conversation from re-opening the day.</div>
+          <div class="field-row">
+            <label for="brief-lookahead-days">Brief looks ahead (days)</label>
+            <input type="number" id="brief-lookahead-days" value="3" min="1" max="14" step="1" style="width:4em">
+          </div>
+          <div class="field-row">
+            <label for="docket-min-age-days">Nudge floating tasks after (days)</label>
+            <input type="number" id="docket-min-age-days" value="3" min="0" max="60" step="1" style="width:4em">
+          </div>
+          <div class="field-hint">How long an untimed "someday" task drifts before your Familiar starts offering to give it a real place on your schedule.</div>
+          <div class="field-row">
+            <label for="routine-review-toggle">Routine review</label>
+            <input type="checkbox" id="routine-review-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Once a week — and only if a tracked routine (from "Track unmet needs") is actually slipping — your Familiar quietly reviews how it's going and, at a good moment, offers a real pivot rather than nagging: a smaller version, a better time, making it enjoyable, swapping it, or setting it down for now. It rides an existing reflection (no extra AI calls) and never grades you — it calibrates the routine to you. Needs "Track unmet needs" on to have anything to review.</div>
+          <div class="field-row">
+            <label for="routine-review-days">Review every (days)</label>
+            <input type="number" id="routine-review-days" value="7" min="1" max="60" step="1" style="width:4em">
+          </div>
+
+          <div class="field-row" style="margin-top:8px">
             <label for="gcal-toggle">Google Calendar sync</label>
             <input type="checkbox" id="gcal-toggle">
           </div>
           <div class="field-hint">Off by default. When on, your Familiar reads your calendar (one-way) so your appointments show up in its sense of your day. Choose how to connect — and optionally allow write-back — in the configuration below.</div>
           <button class="btn-secondary" id="gcal-configure-btn" type="button">⚙ Configure calendar…</button>
+
+          <div class="field-row" style="margin-top:8px">
+            <label for="event-alerts-toggle">Event alerts</label>
+            <input type="checkbox" id="event-alerts-toggle" checked>
+          </div>
+          <div class="field" style="margin-top:4px">
+            <label for="event-alerts-lead">Alert lead time (minutes)</label>
+            <input type="number" id="event-alerts-lead" value="60" min="5" max="1440" step="5" style="width:6em">
+          </div>
+          <div class="field-hint">On by default. A "coming up" notice fires this many minutes before any event on your schedule starts — synced from Google or added by hand — so appointments don't rely on you noticing the time. All-day events don't ping (there's no start time to lead).</div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->
@@ -303,6 +347,15 @@
               <label for="tools-enabled">Enable tool use</label>
               <input type="checkbox" id="tools-enabled" checked>
             </div>
+            <div class="field-row">
+              <label for="tool-surfacing-toggle">Context-sensitive tools</label>
+              <input type="checkbox" id="tool-surfacing-toggle">
+            </div>
+            <div class="field-hint">Off by default while it's being tested. When on, your Familiar carries only the tool modules the moment calls for (a big token saving) — and can always pull any missing module itself mid-turn via its request_tools. Turn off if it ever seems unable to do something it should.</div>
+            <div class="field-row">
+              <label for="tool-sticky-turns">Tool stickiness (turns)</label>
+              <input type="number" id="tool-sticky-turns" value="2" min="0" max="10" step="1" style="width:4em">
+            </div>
             <p class="field-hint">Built-in tools always available: <code>get_datetime</code>, <code>get_session_info</code></p>
             <div class="field">
               <label for="custom-tools">Custom tools <span class="label-hint">(JSON array — advertise-only: the model sees and may call these, but nothing executes them yet; calls return a "not implemented" notice)</span></label>
@@ -388,6 +441,13 @@
             <p class="field-hint">Generate a plain-text report with system info, the recent in-app event log, and the last sent prompt summary. Paste into a bug report.</p>
             <div class="action-row" style="margin-top:4px">
               <button id="diagnostics-btn" class="btn-secondary">🩺 Generate diagnostic report</button>
+            </div>
+            <p class="field-hint" style="margin-top:10px">Trace which regexes/keywords fired for each turn of the current session — for tuning triggers.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="trace-surfacing-btn" class="btn-secondary">🔎 Trace tool surfacing</button>
+            </div>
+            <div class="action-row" style="margin-top:4px">
+              <button id="trace-config-btn" class="btn-secondary">⚙ Trace… (choose signals)</button>
             </div>
           </div>
         </div>
@@ -732,9 +792,10 @@
                 <li>Install it (its README covers your OS).</li>
                 <li>Run its one-time sign-in once — <code>gcalcli list</code> opens a browser to authorize.</li>
                 <li>Check it works: <code>gcalcli agenda</code> should print your events.</li>
-                <li>Back here: leave <em>Command</em> blank for the default, or paste your exact read command (e.g. <code>gcalcli agenda --details=all</code>), and set <em>Command output</em> to match what it prints (<code>.ics</code> or JSON).</li>
+                <li><strong>Important:</strong> gcalcli's own table/agenda output is meant for humans, not machines — the sync needs a command that prints an <code>.ics</code> feed or a JSON array of events (with stable event ids). Paste the exact command that does that for your version into <em>Command</em>, and set <em>Command output</em> to match. If your version can't, a small wrapper script (or the <strong>Google account</strong> source above) is the reliable route — check "Sync health" below after saving to confirm reads actually parse.</li>
               </ol>
               <p style="margin-top:8px">Any other tool that can print your calendar as an <code>.ics</code> feed or a JSON array of events works too — point the <em>Command</em> field at it. (For <code>gogcli</code> specifically, follow that project's own setup; if you're not already using it, the gcalcli route or the Google-account option above are the well-trodden ones.)</p>
+              <p style="margin-top:8px"><strong>Fetch the whole window.</strong> Many tools only return the next few days by default. Put your tool's date-range flags in the <em>Command</em> and use these tokens — they're filled in with the “Look ahead” window each pull: <code>{dateMin}</code>/<code>{dateMax}</code> (YYYY-MM-DD), <code>{timeMin}</code>/<code>{timeMax}</code> (full ISO), <code>{days}</code>. E.g. <code>gcalcli --nocolor agenda --details=all {dateMin} {dateMax}</code>, or your <code>gogcli</code> read command with its own from/to flags pointed at <code>{dateMin}</code>/<code>{dateMax}</code>.</p>
             </div>
           </details>
           <div class="field">
@@ -768,6 +829,37 @@
           <label for="gcal-interval">Sync every (minutes)</label>
           <input type="number" id="gcal-interval" value="60" min="5" max="1440" step="5" style="width:6em">
           <div class="field-hint">How often it re-reads the calendar. Hourly suits most people; tighten it if you re-plan through the day, widen it if your plans rarely move. (Clamped to 5 min – 24 h.)</div>
+        </div>
+        <div class="field">
+          <label for="gcal-lookahead">Look ahead (days)</label>
+          <input type="number" id="gcal-lookahead" value="365" min="30" max="1825" step="1" style="width:6em">
+          <div class="field-hint">How far ahead each pull fetches events — a year by default, so appointments months out are still picked up. (Clamped 30–1825 days.) The Familiar's chat briefing still focuses on the coming week; the full range shows in the schedule/Map view.</div>
+        </div>
+
+        <div class="field" style="margin-top:10px">
+          <label>Calendars &amp; who they belong to</label>
+          <div class="field-hint">Every calendar the sync can see — your own <em>and</em> any shared into your account (a partner's, family, a club). Tell it whose each one is so events are attributed to the right person instead of blurring together. Set to <strong>Ignore</strong> to skip a noisy one (holidays, birthdays). Your Familiar can also set these itself as it learns whose calendar is whose.</div>
+          <div class="field-hint" id="gcal-cal-note" style="margin-top:4px"></div>
+          <div id="gcal-cal-list" style="margin-top:6px"></div>
+          <button type="button" id="gcal-cal-refresh" class="btn-secondary" style="margin-top:6px">↻ Refresh calendar list</button>
+        </div>
+
+        <details class="field" style="margin-top:8px">
+          <summary style="cursor:pointer">Extra iCal feeds (for the link method)</summary>
+          <div class="field-hint" style="margin-top:6px">The link method above reads one iCal URL. To pull additional shared calendars this way, add each calendar's own secret iCal address (Google Calendar → a calendar's Settings → “Secret address in iCal format”). One per line, optionally <code>label | url</code>.</div>
+          <textarea id="gcal-ical-urls" rows="3" spellcheck="false" placeholder="Mom | https://calendar.google.com/calendar/ical/…/basic.ics" style="width:100%"></textarea>
+        </details>
+
+        <details class="field" style="margin-top:4px">
+          <summary style="cursor:pointer">Extra calendars (for the command-line methods)</summary>
+          <div class="field-hint" style="margin-top:6px">To read several calendars through gcalcli/gogcli, list their calendar names here (one per line, optionally <code>label | name</code>) and put a <code>{calendar}</code> token in the command above — it's run once per calendar.</div>
+          <textarea id="gcal-cli-calendars" rows="3" spellcheck="false" placeholder="sports club | Club Team Calendar" style="width:100%"></textarea>
+        </details>
+
+        <div class="field" style="margin-top:10px">
+          <label>Sync health</label>
+          <div class="field-hint" id="gcal-sync-status">No sync has run yet.</div>
+          <button type="button" id="gcal-sync-now" class="btn-secondary" style="margin-top:6px">↻ Sync now</button>
         </div>
       </div>
       <div class="modal-footer">
@@ -827,6 +919,33 @@
       <div class="modal-footer">
         <button id="diagnostics-copy"     class="btn-secondary">Copy</button>
         <button id="diagnostics-download" class="btn-secondary">Download .txt</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Regex/trigger tracer modal -->
+  <div class="modal-backdrop hidden" id="trace-modal" role="dialog" aria-modal="true" aria-labelledby="trace-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="trace-modal-title">Trigger trace</h2>
+        <button class="icon-btn modal-close" id="trace-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint">For each turn of the current session, which regexes/keywords fired. Runs locally against this session — nothing is stored. Tune triggers, re-run.</p>
+        <div class="field-row" style="flex-wrap:wrap;gap:12px;align-items:center">
+          <label><input type="checkbox" id="trace-a-surfacing" checked> Tool surfacing</label>
+          <label><input type="checkbox" id="trace-a-threat"> Threat signals</label>
+          <label><input type="checkbox" id="trace-a-tomes"> Tome keywords</label>
+          <label style="margin-left:auto">Last <input type="number" id="trace-last-n" value="0" min="0" max="500" step="1" style="width:4em"> turns <span class="field-hint">(0 = all)</span></label>
+        </div>
+        <div class="action-row" style="margin:6px 0">
+          <button id="trace-run" class="btn-send">Run trace</button>
+        </div>
+        <pre id="trace-output" class="pi-pre" style="max-height: 60vh;"></pre>
+      </div>
+      <div class="modal-footer">
+        <button id="trace-copy"     class="btn-secondary">Copy</button>
+        <button id="trace-download" class="btn-secondary">Download .txt</button>
       </div>
     </div>
   </div>
@@ -1370,6 +1489,9 @@
                   <option value="monthly_last_fri">monthly — last Friday</option>
                   <option value="monthly_last_sun">monthly — last Sunday</option>
                 </select>
+              </label>
+              <label title="Short barrier tags for what this asks of you — e.g. 'outside' when it means leaving the house. Comma-separated. Your Familiar keeps tagged items on its radar and checks their prerequisites in time.">Obstacles (optional)
+                <input type="text" id="te-sched-obstacles" placeholder="outside, phone-call">
               </label>
             </div>
             <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end">

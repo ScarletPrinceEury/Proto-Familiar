@@ -1,5 +1,31 @@
 # Google Calendar integration — build spec
 
+> **DST-correct time conversion (0.8.23-alpha).** `db.to_local_naive` (and
+> `now_iso`) converted offset-bearing timestamps via `datetime.astimezone()`
+> with no arg — the C runtime's local zone. On Windows the C runtime can't
+> parse an IANA `TZ` like "Europe/Berlin", so it dropped DST and landed every
+> summer event an hour early (a 2pm appointment showing as 1pm). Fixed by
+> resolving the ward's zone EXPLICITLY through `zoneinfo.ZoneInfo(TZ)`
+> (`db._local_zone`, shared by now + conversion so they can't disagree) and
+> adding the `tzdata` dependency so it works on Windows.
+
+> **Multi-calendar + attribution follow-up (0.8.22-alpha).** The sync now
+> reads SHARED calendars, not just an account's own primary — essential for
+> the recommended setup (a separate Familiar account with the ward's and
+> clubs' calendars shared into it). Every calendar is an attributable *source*
+> (`gcal-attribution.js`): the ward or the Familiar tags it as the ward / a
+> Villager / a Phylactery node / unassigned / ignore, events carry that
+> attribution (`payload.gcal_attribution`, shown as "📅 <name>"), and the sync
+> ingests PER calendar so one calendar's snapshot never disturbs another's.
+> Native OAuth enumerates calendars (`listCalendars`, scope widened to
+> `calendar.readonly` — one-time reconnect); the link tier takes multiple iCal
+> feeds; the CLI takes a `{calendar}` token run per configured calendar.
+> **Reconcile hardening (data-loss fix):** deletion-reconcile is now
+> per-calendar AND can only ever cancel a genuine Google *event* — a phase, a
+> need-window, or a recurring routine is never touched (`_is_gcal_event`
+> guard), even if mislabeled. Familiar tools: `gcal_list_calendars`,
+> `gcal_attribute_calendar`.
+
 > **Milestone: 0.8 (the next minor).** This is its own milestone, so the whole
 > feature shares ONE minor bump: it lands as `0.8.0-alpha`; sub-passes and
 > follow-ups inside it bump PATCH (the consequence-graph two-pass precedent —
