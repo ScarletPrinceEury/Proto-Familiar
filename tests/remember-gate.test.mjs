@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gateForCategory, resolveRememberGate } from '../memorization.js';
+import { gateForCategory, resolveRememberGate, wardStandingActive } from '../memorization.js';
 
 // ── gateForCategory: single-category resolution against one map ───────────────
 
@@ -87,4 +87,101 @@ test('resolveRememberGate: one un-agreed ask villager still forces ask', () => {
   const agreed   = { remember: { health_info: 'ask' }, standingConsent: { wardAgreed: true, villagerAgreed: true } };
   const unagreed = { remember: { health_info: 'ask' } };
   assert.equal(resolveRememberGate('health_info', [agreed, unagreed], null), 'ask');
+});
+
+// ── Ward standing consent: time-gated auto-confirm for ward-self facts ────────
+
+test('wardStandingActive: standing window active (until > now) → true', () => {
+  const now = 1000;
+  const standing = { emotional_content: { until: 1500 } };
+  assert.equal(wardStandingActive(standing, 'emotional_content', now), true);
+});
+
+test('wardStandingActive: standing window expired (until < now) → false', () => {
+  const now = 1500;
+  const standing = { emotional_content: { until: 1000 } };
+  assert.equal(wardStandingActive(standing, 'emotional_content', now), false);
+});
+
+test('wardStandingActive: until === now (not >) → false', () => {
+  const now = 1000;
+  const standing = { emotional_content: { until: 1000 } };
+  assert.equal(wardStandingActive(standing, 'emotional_content', now), false);
+});
+
+test('wardStandingActive: missing category → false', () => {
+  const standing = { health_info: { until: 2000 } };
+  assert.equal(wardStandingActive(standing, 'emotional_content', 1000), false);
+});
+
+test('wardStandingActive: non-number until → false', () => {
+  const standing = { emotional_content: { until: 'not-a-number' } };
+  assert.equal(wardStandingActive(standing, 'emotional_content', 1000), false);
+});
+
+test('wardStandingActive: null/undefined standing → false', () => {
+  assert.equal(wardStandingActive(null, 'emotional_content', 1000), false);
+  assert.equal(wardStandingActive(undefined, 'emotional_content', 1000), false);
+});
+
+test('wardStandingActive: uses Date.now() when nowMs omitted', () => {
+  const future = Date.now() + 86400000; // 1 day from now
+  const standing = { emotional_content: { until: future } };
+  assert.equal(wardStandingActive(standing, 'emotional_content'), true);
+});
+
+// ── Ward standing consent applied to resolveRememberGate ────────────────────
+
+test('resolveRememberGate: ward-self fact, ask gate, standing window active → auto-confirm true', () => {
+  const ward = { emotional_content: 'ask' };
+  const standing = { emotional_content: { until: Date.now() + 86400000 } }; // 1 day in future
+  assert.equal(
+    resolveRememberGate('emotional_content', [], ward, standing),
+    'true'
+  );
+});
+
+test('resolveRememberGate: ward-self fact, ask gate, standing window expired → stays ask', () => {
+  const ward = { emotional_content: 'ask' };
+  const standing = { emotional_content: { until: Date.now() - 1000 } }; // 1 second in past
+  assert.equal(
+    resolveRememberGate('emotional_content', [], ward, standing),
+    'ask'
+  );
+});
+
+test('resolveRememberGate: ward-self fact, false gate, standing active → stays false', () => {
+  const ward = { emotional_content: false };
+  const standing = { emotional_content: { until: Date.now() + 86400000 } };
+  assert.equal(
+    resolveRememberGate('emotional_content', [], ward, standing),
+    'false'
+  );
+});
+
+test('resolveRememberGate: ward-self fact, true gate, standing active → stays true', () => {
+  const ward = { emotional_content: true };
+  const standing = { emotional_content: { until: Date.now() + 86400000 } };
+  assert.equal(
+    resolveRememberGate('emotional_content', [], ward, standing),
+    'true'
+  );
+});
+
+test('resolveRememberGate: villager-subject fact with standing → standing ignored', () => {
+  const villager = { remember: { health_info: 'ask' } };
+  const standing = { health_info: { until: Date.now() + 86400000 } };
+  // With villager subject, standing consent is ignored (villager path unchanged)
+  assert.equal(
+    resolveRememberGate('health_info', [villager], null, standing),
+    'ask'
+  );
+});
+
+test('resolveRememberGate: ward-self, null standing map → gate unchanged', () => {
+  const ward = { emotional_content: 'ask' };
+  assert.equal(
+    resolveRememberGate('emotional_content', [], ward, null),
+    'ask'
+  );
 });

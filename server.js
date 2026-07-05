@@ -27,6 +27,7 @@ import {
   createSnapshot, restoreSnapshot,
   exportBackup, restoreBackup, runLifecyclePass,
   getRememberMap, setRememberMap,
+  getStandingConsent, setStandingConsent,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
@@ -2119,10 +2120,13 @@ app.post('/api/entity/lifecycle', async (req, res) => {
 });
 
 // Ward remember-consent map — governs per-category memory storage policy.
+// The GET carries the active standing-consent windows alongside the map so the
+// settings panel renders both in one fetch.
 app.get('/api/entity/ward/remember', async (_req, res) => {
   const map = await getRememberMap();
   if (!map) return gatewayDown(res, 'phylactery not connected');
-  res.json({ map });
+  const standing = await getStandingConsent();
+  res.json({ map, standing: standing ?? {} });
 });
 
 app.put('/api/entity/ward/remember', async (req, res) => {
@@ -2131,6 +2135,30 @@ app.put('/api/entity/ward/remember', async (req, res) => {
     return badRequest(res, 'map (object) is required');
   const result = await setRememberMap(map);
   if (!result?.ok) return res.status(400).json({ error: result?.errors ?? result?.error ?? 'update failed' });
+  res.json(result);
+});
+
+// Standing consent — the time-boxed "trust his judgment for a while" window for
+// one category. The client names a preset duration; the server derives the
+// exact epoch-ms expiry (a machine value produced by code, never typed) so the
+// window's end is unambiguous and timezone-free. An empty/absent window clears.
+const STANDING_WINDOW_MS = {
+  '6h':  6  * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d':  7  * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+app.put('/api/entity/ward/remember/standing', async (req, res) => {
+  const { category, window } = req.body ?? {};
+  if (!category || typeof category !== 'string') return badRequest(res, 'category is required');
+  let until = null;
+  if (window) {
+    const dur = STANDING_WINDOW_MS[window];
+    if (!dur) return badRequest(res, `unknown window: ${window} (use 6h/24h/7d/30d)`);
+    until = Date.now() + dur;
+  }
+  const result = await setStandingConsent(category, until, window || '');
+  if (!result?.ok) return res.status(400).json({ error: result?.error ?? 'update failed' });
   res.json(result);
 });
 

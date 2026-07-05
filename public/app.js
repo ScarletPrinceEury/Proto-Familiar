@@ -7025,6 +7025,7 @@ async function keOpenRememberMap() {
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
     const map = data.map ?? {};
+    const standing = data.standing ?? {};
     const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
     const labels = {
       basics: 'Basics (name, age, daily facts)',
@@ -7042,11 +7043,31 @@ async function keOpenRememberMap() {
       ].join('');
       return `<select id="rm-${cat}" class="ke-select">${opts}</select>`;
     }
+    // Standing consent only makes sense on an 'ask' category — the middle tier
+    // that auto-keeps new facts for a window instead of checking each one.
+    function standingFor(cat) {
+      const active = standing[cat];
+      const cur = (active && typeof active.until === 'number' && active.until > Date.now()) ? (active.window ?? '') : '';
+      const until = cur ? new Date(active.until).toLocaleString() : '';
+      const opts = [
+        `<option value="" ${cur === '' ? 'selected' : ''}>Ask me each time</option>`,
+        `<option value="6h"  ${cur === '6h'  ? 'selected' : ''}>Trust me for 6 hours</option>`,
+        `<option value="24h" ${cur === '24h' ? 'selected' : ''}>Trust me for 24 hours</option>`,
+        `<option value="7d"  ${cur === '7d'  ? 'selected' : ''}>Trust me for 7 days</option>`,
+        `<option value="30d" ${cur === '30d' ? 'selected' : ''}>Trust me for 30 days</option>`,
+      ].join('');
+      const activeNote = cur ? `<span class="field-hint" style="margin-left:.5rem">trusted until ${esc(until)}</span>` : '';
+      const hidden = map[cat] === 'ask' ? '' : ' style="display:none"';
+      return `<div class="ke-standing-row"${hidden} data-cat="${cat}">
+        <span class="field-hint">While I'm asking, standing consent:</span>
+        <select id="rst-${cat}" class="ke-select">${opts}</select>${activeNote}</div>`;
+    }
     const rows = categories.map(cat => `
       <div class="ke-meta-row">
         <label class="ke-meta-label" for="rm-${cat}">${esc(labels[cat])}</label>
         ${selFor(cat)}
-      </div>`).join('');
+      </div>
+      ${standingFor(cat)}`).join('');
     det.innerHTML = `
       <div class="ke-detail-header"><h3>Ward · Remember settings</h3></div>
       <p class="field-hint">Controls how I handle information about <strong>my human themselves</strong>, per category.
@@ -7054,10 +7075,21 @@ async function keOpenRememberMap() {
         "Store freely" means I remember it immediately.
         "Ask first" means I store it as pending and surface it for confirmation.
         "Never store" means I drop it silently — use with care.</p>
+      <p class="field-hint">On an "Ask first" category you can also give me <strong>standing consent</strong> for a while —
+        "trust my judgment for the next few hours/days". While that window is open I quietly keep new facts of that kind
+        without checking each one with you, then go back to asking when it lapses. A gentler middle ground than flipping
+        the whole category to "Store freely" forever.</p>
       ${rows}
       <div class="ke-actions">
         <button id="ke-rm-save" class="btn-send">Save</button>
       </div>`;
+    // Show/hide each standing row live as its category select changes.
+    for (const cat of categories) {
+      det.querySelector(`#rm-${cat}`)?.addEventListener('change', (e) => {
+        const row = det.querySelector(`.ke-standing-row[data-cat="${cat}"]`);
+        if (row) row.style.display = e.target.value === 'ask' ? '' : 'none';
+      });
+    }
     $('ke-rm-save').addEventListener('click', async () => {
       const newMap = {};
       for (const cat of categories) {
@@ -7069,6 +7101,21 @@ async function keOpenRememberMap() {
         body: JSON.stringify({ map: newMap }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      // Persist standing-consent windows for 'ask' categories only — the server
+      // clears any lingering window on a category that isn't asking anyway. Skip
+      // unchanged windows so re-saving the panel doesn't keep re-stamping the
+      // expiry forward.
+      for (const cat of categories) {
+        if (newMap[cat] !== 'ask') continue;
+        const win = det.querySelector(`#rst-${cat}`)?.value ?? '';
+        const active = standing[cat];
+        const cur = (active && active.until > Date.now()) ? (active.window ?? '') : '';
+        if (win === cur) continue;
+        await fetch('/api/entity/ward/remember/standing', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category: cat, window: win || null }),
+        }).catch(() => {});
+      }
       alert('Remember settings saved.');
       keOpenRememberMap();
     });

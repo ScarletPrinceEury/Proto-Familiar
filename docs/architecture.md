@@ -160,9 +160,9 @@ ponderings injection, care-check framing) and as background loops
 │   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit
 │   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED)
 │   ├── src/phylactery/backup.py      Pillar H — passphrase-encrypted single-file export/restore
-│   ├── src/phylactery/remember.py    Pillar I — ward remember-consent map (per-category true/false/ask policy)
+│   ├── src/phylactery/remember.py    Pillar I — ward remember-consent map (true/false/ask) + time-boxed standing consent
 │   ├── src/phylactery/snapshot.py + audience.py + embed.py + db.py
-│   ├── data/                SQLite database + snapshots + backups + remember_map.json (auto-created, git-ignored)
+│   ├── data/                SQLite database + snapshots + backups + remember_map.json + remember_standing.json (auto-created, git-ignored)
 │   └── tests/               pytest contract tests (test_graduation.py + test_retrieval_decay.py)
 │
 ├── unruh/                   In-tree Python module (Unruh — temporal context)
@@ -816,6 +816,35 @@ The merge marker rides back through `memory_create` → `thalamus.createMemoryFu
 → `memorization.js`, which skips re-queuing a merged dup for consent. This is
 what stopped the "82 queued, only 5 new" duplicate pile-up.
 
+**Pending-queue dedup (0.8.27):** the confirmed store's conservative bar leaves
+the *review* queue noisier than it should be — a reworded restatement of a
+not-yet-reviewed fact lands just under 0.78 and both survive as separate
+pendings. So a `consent_pending` incoming fact now takes a distinct path
+(`_dedup_merge_pending`, separate from the untouched confirmed-store logic):
+a looser threshold (`_DEDUP_PENDING_MERGE_MIN = 0.70`) and **audience-agnostic**
+matching (the same pending fact is a dup regardless of the room-tag it was
+derived under; audience still gates where a memory *surfaces*). Two directions:
+a pending near-dup of another *pending* fact folds together (one queue candidate,
+not five paraphrases); a pending near-dup of an already-*confirmed* memory is
+**dropped** as `already_known` — the ward already greenlit it, so re-asking is
+suppressed — and the confirmed row is left byte-unchanged (unreviewed wording
+never folds into a consented memory). The confirmed-store threshold that protects
+long-term memory from conflating two real facts is never loosened.
+
+**Ward standing consent (0.8.27):** the middle tier between "ask about every
+fact" and flipping a whole category to permanent "Store freely". Per category,
+the ward can open a time-boxed window ("trust his judgment for 6h/24h/7d/30d");
+while it's open, an `'ask'` category's ward-self facts auto-confirm (stored, not
+queued). Stored as an absolute epoch-ms expiry in `remember_standing.json`
+(no timezone math — a machine value the server derives from the chosen preset,
+never typed). Phylactery tools `remember_standing_get` / `remember_standing_set`
+(`remember.py`, returns active-only grants) → thalamus `getStandingConsent` /
+`setStandingConsent` → the gate in `memorization.resolveRememberGate`
+(`wardStandingActive` promotes `'ask'`→`'true'`; never overrides `'false'`, never
+touches villager-subject facts). Surfaced in the Ward · Remember settings panel;
+when the pending queue reaches ≥4 items the Familiar's consent block reminds it
+it can *offer* the ward standing consent (the grant is the ward's to make).
+
 **Auto-graph (0.8.1):** the same extraction call also returns `relations` —
 concrete edges between named entities (person/place/organisation/pet/condition/
 thing; never abstractions). `parseRelations` normalises and within-job-dedups
@@ -1226,6 +1255,13 @@ All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus
   - thalamus.js helpers `getRememberMap()` / `setRememberMap()`
   - HTTP routes `GET /api/entity/ward/remember`, `PUT /api/entity/ward/remember`
   - KE Identity pane: "Remember settings" row always visible under the `ward` category header
+  - **Standing consent (0.8.27):** the time-boxed middle tier — per `'ask'` category,
+    a window ("trust his judgment for 6h/24h/7d/30d") that auto-confirms ward-self facts
+    while open. Absolute epoch-ms expiry in `remember_standing.json`; tools
+    `remember_standing_get` / `remember_standing_set`, thalamus `getStandingConsent()` /
+    `setStandingConsent()`, `PUT /api/entity/ward/remember/standing` (server derives the
+    expiry from the preset — no typed timestamp), gated in `resolveRememberGate`
+    (`wardStandingActive`; only promotes `'ask'`→`'true'`, never overrides `'false'`).
   - **Wired into the memorization gate** (`memorization.js`): the Village registry's
     per-villager `remember` map covers facts about *other* people; the ward is not a
     villager, so facts about my human themselves (no matched villager subject) are gated
