@@ -239,6 +239,13 @@ PREVIEWS (parse + segment, no writes); with `commit` places foreign logs by date
 (one imported session per date) and enqueues them for immediate ingestion. Parsers
 in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudly).
 
+**Diagnostics (ward-facing, localhost-gated):** `POST /api/diagnostics/session-trace`
+— the regex/trigger tracer (0.8.25); per turn, runs the real tool-surfacing +
+crisis-signal modules and reports which regex matched which text. Nothing stored.
+**Google Calendar (0.8):** the OAuth endpoints (`/api/gcal/google/*`) plus
+`GET /api/gcal/calendars` — discovered calendars + their attribution, for the
+multi-calendar panel.
+
 **Temporal editor (M9):**
 - `GET /api/temporal/interests` — live + standing with decay metadata
 - `POST /api/temporal/interests/bump` — manual engagement bump
@@ -296,15 +303,28 @@ in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudl
 
 **Settings + Tailscale gate:** as before.
 
-**Autonomous-loop boot** (`app.listen()` callback):
-- `startMemorizationWorker()`
-- `startAutonomousPondering()` — Settings-toggleable + env-var off-switch
-- `startRemindersScheduler()`
+**Autonomous-loop boot** (`app.listen()` callback). Every loop has a
+Settings toggle + `PROTO_FAMILIAR_*_DISABLED=1` env off-switch (the ones that
+write to the canonical self default OFF):
+- `startMemorizationWorker()` — drains the session-memorization queue
+- `startAutonomousPondering()`
+- `startRemindersScheduler()` — due reminders + event lead-time alerts
+- `startGcalSync()` — Google Calendar sync (0.8; opt-in). Multi-calendar +
+  attribution since 0.8.22; DST-correct since 0.8.23
 - `startSilenceTriage()`
+- `startReachout()` — warm non-crisis reach-out
+- `startMemorySweep()` — passive coverage sweep, enqueues idled/uningested
+  day-slices into the memorization pipeline (default ON)
 - `startVillageSync()` — village registry boot reconciliation + default-category seeding
 - `startDiscordGateway()` — supervisor idles until Settings carry a bot
   token + the toggle; follows Settings changes within 30s; hard
   off-switch `PROTO_FAMILIAR_DISCORD_DISABLED=1`
+- `startTomeGraduationLoop()` — tome→Phylactery graduation (opt-in, default OFF)
+- `startNeedsTrackingLoop()` — needs-fulfilment ledger worker (opt-in, default OFF)
+
+(Stewardship and the routine review are NOT standalone loops — the block
+rides `enrich()` on chat turns, and the weekly review rides a pondering
+reflection tick; see stewardship.js / routine-review.js.)
 
 Each loop has a `stop*()` function called from the SIGTERM /
 SIGINT / SIGHUP handler so clean shutdown awaits any in-flight tick.
