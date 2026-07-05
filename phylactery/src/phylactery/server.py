@@ -50,6 +50,8 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
   Ward consent (Pillar I):
     remember_map_get        — read the ward's remember consent map
     remember_map_set        — write the ward's remember consent map
+    remember_standing_get   — read the ward's active standing-consent windows
+    remember_standing_set   — open/close a per-category standing-consent window
 
 Original design by Zari Lewis (Psycheros). See docs/phylactery-build-spec.md.
 """
@@ -777,6 +779,36 @@ def remember_map_set(map: dict[str, Any]) -> dict[str, Any]:
     Returns {"ok": true, "map": ...} on success, {"ok": false, "errors": [...]} on validation failure.
     """
     return remember.set_map(map)
+
+
+@mcp.tool()
+def remember_standing_get() -> dict[str, Any]:
+    """I use this to read my human's ACTIVE standing-consent windows — the
+    categories where they've told me to trust my judgment and keep new facts for
+    a while without checking each one with them.
+
+    Returns a map keyed by category (only ones open right now); each value is
+    {until, window, grantedAt} where `until` is an epoch-ms expiry. An empty map
+    means every 'ask' category still asks me per-fact.
+    """
+    return remember.get_standing()
+
+
+@mcp.tool()
+def remember_standing_set(category: str, until: Any = None, window: str = "") -> dict[str, Any]:
+    """I use this to open or close a standing-consent window for one category —
+    the middle ground between asking about every fact and remembering a whole
+    category forever.
+
+    category: one of basics, emotional_content, health_info, relationships,
+      whereabouts.
+    until: an epoch-ms instant in the future to trust that category until, or
+      null/0 to close the window now.
+    window: an optional label for the duration ('6h', '7d') — display only.
+
+    Returns {"ok": true, "standing": <active grants>} or {"ok": false, "error": ...}.
+    """
+    return remember.set_standing(category, until, window or None)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

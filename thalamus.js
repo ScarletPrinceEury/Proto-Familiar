@@ -1998,6 +1998,15 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
               ),
               'If my human says to keep them, I call memory_confirm_consent with the id(s); if not, memory_drop_pending.',
             ];
+            // If the asking is piling up, I remember there's a gentler option: my
+            // human can grant me STANDING CONSENT for a category (Settings →
+            // Knowledge → Ward · Remember settings) — "trust your judgment for a
+            // while" — so I keep that kind of thing without checking each one. I
+            // offer it in my own voice when the per-item asking is wearing on
+            // them; the grant is theirs to make, not mine to assume.
+            if (cpItems.length >= 4) {
+              lines.push("If confirming these one by one is wearing on my human, I can offer them standing consent for a category in their Remember settings — a time-boxed \"trust me for a while\" so I stop asking about each fact of that kind. Their choice to grant, mine to gently suggest.");
+            }
             consentPendingBlock = lines.join('\n');
           }
         }
@@ -2344,6 +2353,24 @@ export async function getRememberMap() {
 export async function setRememberMap(map) {
   return callTool('remember_map_set', { map }).catch(err => {
     console.warn('[thalamus] setRememberMap failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+// Standing consent — the time-boxed "trust his judgment for a while" windows
+// that let an 'ask' category auto-confirm without the ward ruling on each fact.
+// Degrades to an empty map so the memorization gate simply falls back to
+// per-fact asking if Phylactery is unreachable (never fails a memorization).
+export async function getStandingConsent() {
+  return callTool('remember_standing_get', {}).catch(err => {
+    console.warn('[thalamus] getStandingConsent failed (degraded):', err?.message ?? err);
+    return {};
+  });
+}
+
+export async function setStandingConsent(category, until, window) {
+  return callTool('remember_standing_set', { category, until, window: window ?? '' }).catch(err => {
+    console.warn('[thalamus] setStandingConsent failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
   });
 }

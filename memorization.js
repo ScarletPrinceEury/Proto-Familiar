@@ -44,13 +44,29 @@ export function gateForCategory(category, remMap) {
   return category === 'basics' ? 'true' : 'ask';
 }
 
+// Is a ward standing-consent window open for this category right now? The map
+// is Phylactery's active-only projection (expired windows already filtered), but
+// we re-check `until` against the current instant so a window that lapsed
+// between the fetch and here can't auto-confirm. Epoch-ms throughout — no
+// timezone math (the expiry is an absolute instant produced by code).
+export function wardStandingActive(wardStanding, category, nowMs = Date.now()) {
+  const entry = wardStanding?.[category];
+  const until = entry?.until;
+  return typeof until === 'number' && until > nowMs;
+}
+
 // Resolve the effective gate for a fact. When no villager subject matched,
-// the fact is about my human themselves → the ward remember map gates it.
+// the fact is about my human themselves → the ward remember map gates it, and an
+// open standing-consent window promotes that category's 'ask' to auto-confirm.
 // Otherwise the most restrictive map among the matched villagers wins
 // (false beats ask beats true).
-export function resolveRememberGate(category, subjectVillagers, wardRemember) {
+export function resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding = null) {
   if (!subjectVillagers || subjectVillagers.length === 0) {
-    return gateForCategory(category, wardRemember);
+    const gate = gateForCategory(category, wardRemember);
+    // Standing consent only ever RELAXES an 'ask' to auto-confirm — it never
+    // overrides an explicit 'false' (never store) or touches 'true'.
+    if (gate === 'ask' && wardStandingActive(wardStanding, category)) return 'true';
+    return gate;
   }
   let gate = 'true';
   for (const v of subjectVillagers) {
@@ -123,7 +139,7 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, graphRelate } from './thalamus.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate } from './thalamus.js';
 import { getRegistry, standingConsentActive } from './village.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
@@ -568,6 +584,11 @@ async function processJob(job) {
   // defaults: basics=true, rest=ask) if Phylactery is unreachable.
   const wardRemember = await getRememberMap().catch(() => null);
 
+  // Active standing-consent windows (ward said "trust your judgment for a
+  // while" on some categories). Fetched once per job; degrades to {} → the gate
+  // simply falls back to per-fact asking. Only affects ward-self facts.
+  const wardStanding = await getStandingConsent().catch(() => ({}));
+
   const audience = job.audienceTag ?? 'ward-private';
   // The day this slice actually belongs to. Day-scoped jobs (segmentByDay) carry
   // the calendar date as topicId — pass it as the memory's date_key so a slice
@@ -595,7 +616,7 @@ async function processJob(job) {
 
     // Apply the remember gate (ward map for self-facts, most-restrictive
     // villager map for facts about others).
-    const gate = resolveRememberGate(category, subjectVillagers, wardRemember);
+    const gate = resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding);
     if (gate === 'false') continue; // drop silently
 
     // Derive WHERE this fact may surface (audience), in code — the extractor is
