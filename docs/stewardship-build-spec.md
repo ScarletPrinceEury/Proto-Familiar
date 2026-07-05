@@ -2,7 +2,23 @@
 
 Status: **Pass 1 shipped** (0.8.18-alpha) — `stewardship.js` + the block,
 docket, opening brief, day-start anchor, and `set_day_start_anchor`.
-Passes 2–4 still to come, each its own PR.
+**Pass 2a shipped** (0.8.19-alpha) — requirement *readiness* (walks the
+`requires`/`depends_on` edges the Familiar already authors via
+`schedule_link` and surfaces unmet prerequisites of an approaching event),
+plus *obstacle tags* (a `payload.obstacle_tags` barrier vocabulary the
+Familiar sets at creation and the ward sets in the temporal editor) and
+the *obstacle radar* (a gentle surface-context priority nudge for tagged
+tasks). Pass 2b (living templates — the Unruh-side storage + CRUD that
+*produces* `requires` edges in bulk) is deferred to its own PR: it's the
+producer of the edges 2a consumes, so consumer-first is the right order
+and each ships complete. Passes 3–4 still to come.
+
+**Why split Pass 2:** 2a is entirely JS/HTML riding data already in the
+temporal payload (edges + node payload) — zero Python. 2b needs new Unruh
+storage + MCP tools + tests, a genuinely separate surface. Splitting keeps
+each PR complete and verifiable rather than one sprawling half-tested
+change; readiness is independently useful today on hand-authored or
+Familiar-authored `requires` edges.
 
 **Two implementation choices worth recording (Pass 1):**
 - *Rotation is self-contained, not on the surface-events ledger yet.* The

@@ -10,6 +10,7 @@ import {
   medianHHMM,
   selectDocket,
   buildOpeningBrief,
+  selectReadiness,
   buildStewardshipBlock,
 } from '../stewardship.js';
 
@@ -608,6 +609,218 @@ test('buildStewardshipBlock: includes header when content renders', async () => 
     });
     assert.match(result, /\[My stewardship/);
     assert.match(result, /I raise these in my own voice/);
+  } finally {
+    fs.rmSync(tomesDir, { recursive: true });
+  }
+});
+
+// ── selectReadiness ────────────────────────────────────────────────
+test('selectReadiness: event with unmet requires prerequisite in-window → returned', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19); // next day, within 48h
+  const items = [
+    { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+  });
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].id, 'event1');
+  assert.deepEqual(result[0].label, 'Team meeting');
+  assert.ok(result[0].unmet.includes('Prepare slides'));
+});
+
+test('selectReadiness: prerequisite with resolution=done → NOT returned', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const items = [
+    { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: 'done' },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+  });
+  assert.equal(result.length, 0, 'event should not be returned (prereq is met)');
+});
+
+test('selectReadiness: edge kind causes (not requires) → NOT returned', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const items = [
+    { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'causes' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+  });
+  assert.equal(result.length, 0, 'event should not be returned (causes, not requires)');
+});
+
+test('selectReadiness: direction check — reversed edge → NOT returned', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const items = [
+    { id: 'event1', label: 'Team meeting', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Prepare slides', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'task1', dst: 'event1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+  });
+  assert.equal(result.length, 0, 'event should not be returned (wrong edge direction)');
+});
+
+test('selectReadiness: event outside lead window (10 days ahead) → NOT returned', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen = new Date(2026, 7, 14, 14, 0, 0).toISOString().slice(0, 19); // 10 days away
+  const items = [
+    { id: 'event1', label: 'Future meeting', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Prepare', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+  });
+  assert.equal(result.length, 0, 'event should not be returned (outside lead window)');
+});
+
+test('selectReadiness: cooldown — flaggedAt item within 6h → NOT returned', () => {
+  const now = Date.now();
+  const oneHourAgo = now - 3600 * 1000;
+  const eventWhen = new Date(now + 2 * 3600 * 1000).toISOString().slice(0, 19);
+  const items = [
+    { id: 'event1', label: 'Call', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Notes', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+    flaggedAt: { event1: oneHourAgo }, cooldownMs: 6 * 3600 * 1000,
+  });
+  assert.equal(result.length, 0, 'event should be excluded (within cooldown)');
+});
+
+test('selectReadiness: cooldown — flaggedAt older than 6h → returned', () => {
+  const now = Date.now();
+  const sevenHoursAgo = now - 7 * 3600 * 1000;
+  const eventWhen = new Date(now + 2 * 3600 * 1000).toISOString().slice(0, 19);
+  const items = [
+    { id: 'event1', label: 'Call', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Notes', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+    flaggedAt: { event1: sevenHoursAgo }, cooldownMs: 6 * 3600 * 1000,
+  });
+  assert.equal(result.length, 1, 'event should be returned (outside cooldown)');
+});
+
+test('selectReadiness: depends_on kind works same as requires', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const items = [
+    { id: 'event1', label: 'Meeting', type: 'event', when: eventWhen, resolution: null },
+    { id: 'task1', label: 'Prep', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'depends_on' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+  });
+  assert.equal(result.length, 1);
+  assert.ok(result[0].unmet.includes('Prep'));
+});
+
+test('selectReadiness: obstacleTags — event with obstacle_tags payload', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const items = [
+    {
+      id: 'event1', label: 'Outside task', type: 'event', when: eventWhen, resolution: null,
+      payload: { obstacle_tags: ['outside'] },
+    },
+    { id: 'task1', label: 'Prep', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48,
+  });
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].obstacleTags, ['outside']);
+});
+
+test('selectReadiness: max caps the number returned', () => {
+  const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+  const eventWhen1 = new Date(2026, 6, 5, 10, 0, 0).toISOString().slice(0, 19);
+  const eventWhen2 = new Date(2026, 6, 5, 14, 0, 0).toISOString().slice(0, 19);
+  const eventWhen3 = new Date(2026, 6, 5, 18, 0, 0).toISOString().slice(0, 19);
+  const items = [
+    { id: 'event1', label: 'First', type: 'event', when: eventWhen1, resolution: null },
+    { id: 'event2', label: 'Second', type: 'event', when: eventWhen2, resolution: null },
+    { id: 'event3', label: 'Third', type: 'event', when: eventWhen3, resolution: null },
+    { id: 'task1', label: 'Prep', type: 'task', when: null, resolution: null },
+  ];
+  const edges = [
+    { src: 'event1', dst: 'task1', kind: 'requires' },
+    { src: 'event2', dst: 'task1', kind: 'requires' },
+    { src: 'event3', dst: 'task1', kind: 'requires' },
+  ];
+  const result = selectReadiness({
+    items, edges, nowMs: now, wardTimeZone: null, leadHours: 48, max: 2,
+  });
+  assert.equal(result.length, 2, 'result should be capped to max=2');
+  assert.equal(result[0].id, 'event1', 'first item should be soonest-first');
+});
+
+test('buildStewardshipBlock: readiness surfaces when event + unmet prerequisite in-window', async () => {
+  const tomesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stew-readiness-'));
+  try {
+    const now = new Date(2026, 6, 4, 10, 0, 0).getTime();
+    const eventWhen = new Date(2026, 6, 4, 12, 0, 0).toISOString().slice(0, 19); // 2 hours ahead
+    const scheduleItems = [
+      { id: 'event1', label: 'Standup', type: 'event', when: eventWhen, resolution: null },
+      { id: 'task1', label: 'Prep notes', type: 'task', when: null, resolution: null },
+    ];
+    const scheduleEdges = [
+      { src: 'event1', dst: 'task1', kind: 'requires' },
+    ];
+    const result = await buildStewardshipBlock({
+      liveTurn: true,
+      staticOnly: false,
+      threat: { tier: 'calm' },
+      settings: { stewardshipEnabled: true, dayStartAnchor: '09:00' },
+      nowMs: now,
+      lastUserMessageAt: new Date(2026, 6, 4, 5, 0, 0).toISOString(),
+      scheduleItems,
+      scheduleEdges,
+      wardTimeZone: null,
+      tomesDir,
+    });
+    assert.match(result, /Standup/);
+    assert.match(result, /needs/);
+    assert.match(result, /still open/);
   } finally {
     fs.rmSync(tomesDir, { recursive: true });
   }

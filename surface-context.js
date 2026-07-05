@@ -264,6 +264,19 @@ export async function selectSurfaceCandidates({
     const { reasons: consequenceReasons, pressure: consequencePressure } =
       summarizeConsequences(task.id, edgeList, nodeById, now);
 
+    // Obstacle radar (stewardship Pass 2): a task tagged with a real
+    // barrier for my human — going outside, a phone call — earns a gentle
+    // priority nudge and a plain "why", so it stays on the radar instead of
+    // sliding under the easier tasks. Pure-code read of the task's own tags.
+    const obstacleTags = Array.isArray(task.payload?.obstacle_tags)
+      ? task.payload.obstacle_tags.filter(Boolean) : [];
+    const reasons = [...consequenceReasons];
+    let pressure = consequencePressure;
+    if (obstacleTags.length) {
+      reasons.push(`a barrier here: ${obstacleTags.join(', ')} — worth keeping on my human's radar`);
+      pressure += 1;
+    }
+
     candidates.push({
       id: task.id,
       label: task.label,
@@ -277,8 +290,9 @@ export async function selectSurfaceCandidates({
       taskSpecific,
       confidence,
       ageDays,
-      consequenceReasons,
-      consequencePressure,
+      obstacleTags,
+      consequenceReasons: reasons,
+      consequencePressure: pressure,
     });
   }
 

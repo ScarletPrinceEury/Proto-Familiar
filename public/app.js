@@ -8120,6 +8120,8 @@ function teToggleScheduleForm(show) {
     if (stakes) stakes.value = '';
     const repeat = $('te-sched-repeat');
     if (repeat) repeat.value = '';
+    const obstacles = $('te-sched-obstacles');
+    if (obstacles) obstacles.value = '';
     setTimeout(() => $('te-sched-label')?.focus(), 0);
   }
 }
@@ -8167,9 +8169,12 @@ async function teSaveScheduleNode() {
   const stakesTier = $('te-sched-stakes')?.value || '';
   const repeatPreset = $('te-sched-repeat')?.value || '';
   const recurrence = teRepeatToRecurrence(repeatPreset);
+  const obstacleTags = String($('te-sched-obstacles')?.value || '')
+    .split(/[,\n]/).map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 8);
   const payload = {};
   if (stakesTier)  payload.stakes_tier = stakesTier;
   if (recurrence)  payload.recurrence  = recurrence;
+  if (obstacleTags.length) payload.obstacle_tags = obstacleTags;
   const hasPayload = Object.keys(payload).length > 0;
   try {
     const r = await fetch('/api/temporal/schedule', {

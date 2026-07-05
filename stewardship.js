@@ -44,6 +44,7 @@ const MAX_SAMPLES = 30;                 // first-contact ring buffer
 const MIN_SAMPLES_FOR_ANCHOR = 14;      // days of data before I trust a rhythm
 const ANCHOR_DRIFT_MIN = 90;            // minutes of drift before I suggest adopting
 const DOCKET_COOLDOWN_MS = 3 * DAY_MS;  // a floater I offered rests before I re-offer it
+const READINESS_COOLDOWN_MS = 6 * 3600 * 1000; // an unmet-prereq flag rests ~6h before I raise it again
 const AGENDA_CAP = 3;
 
 // ── pure time helpers ──────────────────────────────────────────────────
@@ -120,6 +121,39 @@ export function buildOpeningBrief({ items = [], nowMs = Date.now(), lookaheadDay
   return `My human's just arrived. The shape of their next days:\n${lines.join('\n')}`;
 }
 
+/** Approaching events/tasks whose `requires` / `depends_on` prerequisites
+ *  are still unresolved. Pure. Direction matches schedule_link: an edge
+ *  reads "src requires dst", so for item E the prerequisites are the `dst`
+ *  of edges whose `src` is E. Only prerequisites I can actually see in the
+ *  window AND that are unresolved count — I never invent a blocker. */
+export function selectReadiness({ items = [], edges = [], nowMs = Date.now(), wardTimeZone = null, leadHours = 48, flaggedAt = {}, cooldownMs = READINESS_COOLDOWN_MS, max = 2 } = {}) {
+  const lower = naive(wardLocalNowISO(wardTimeZone, nowMs - 3600e3));
+  const upper = naive(wardLocalNowISO(wardTimeZone, nowMs + leadHours * 3600e3));
+  const byId = new Map();
+  for (const it of items) if (it && it.id) byId.set(it.id, it);
+  const out = [];
+  for (const it of items) {
+    if (!it || !it.id || it.resolution || !it.when) continue;
+    if (!['event', 'task', 'reminder', 'hold'].includes(it.type)) continue;
+    const w = naive(it.when);
+    if (w < lower || w > upper) continue;
+    const last = Number(flaggedAt[it.id]);
+    if (Number.isFinite(last) && (nowMs - last) < cooldownMs) continue;
+    const unmet = [];
+    for (const e of edges) {
+      if (!e || e.src !== it.id) continue;
+      if (e.kind !== 'requires' && e.kind !== 'depends_on') continue;
+      const prereq = byId.get(e.dst);
+      if (prereq && !prereq.resolution) unmet.push(prereq.label ?? prereq.id ?? 'something');
+    }
+    if (!unmet.length) continue;
+    const tags = Array.isArray(it.payload?.obstacle_tags) ? it.payload.obstacle_tags.filter(Boolean) : [];
+    out.push({ id: it.id, label: it.label ?? '(untitled)', when: w, unmet, obstacleTags: tags });
+  }
+  out.sort((a, b) => (a.when < b.when ? -1 : a.when > b.when ? 1 : 0));  // soonest first
+  return out.slice(0, Math.max(0, max));
+}
+
 // ── state I/O (never throws) ───────────────────────────────────────────
 async function readState(tomesDir) {
   try { return JSON.parse(await fsp.readFile(path.join(tomesDir, STATE_FILE), 'utf8')) || {}; }
@@ -143,7 +177,7 @@ async function writeState(tomesDir, state) {
 export async function buildStewardshipBlock(opts = {}) {
   const {
     liveTurn = false, staticOnly = false, threat = { tier: 'calm' },
-    settings = {}, scheduleItems = [], lastUserMessageAt = null,
+    settings = {}, scheduleItems = [], scheduleEdges = [], lastUserMessageAt = null,
     wardTimeZone = null, nowMs = Date.now(), tomesDir = DEFAULT_TOMES_DIR,
   } = opts;
 
@@ -158,6 +192,7 @@ export async function buildStewardshipBlock(opts = {}) {
   const gapHours     = num(settings.dayStartGapHours, 3);
   const lookaheadDays = num(settings.briefLookaheadDays, 3);
   const minAgeDays   = num(settings.docketMinAgeDays, 3);
+  const readinessLeadHours = num(settings.readinessLeadHours, 48);
 
   const { day: today, hhmm: nowHHMM, nowMin } = wardNowParts(wardTimeZone, nowMs);
   const state = await readState(tomesDir);
@@ -186,7 +221,27 @@ export async function buildStewardshipBlock(opts = {}) {
     }
   }
 
-  // 2. Docket — aging floaters, at most once per ward-local day.
+  // 2. Readiness — an approaching event whose prerequisites are still open.
+  //    Time-sensitive, so it's NOT once-per-day gated; a per-event ~6h
+  //    cooldown keeps it from nagging while I stay responsive.
+  if (slots > 0) {
+    const ready = selectReadiness({
+      items: scheduleItems, edges: scheduleEdges, nowMs, wardTimeZone,
+      leadHours: readinessLeadHours, flaggedAt: state.readinessFlaggedAt ?? {}, max: slots,
+    });
+    for (const r of ready) {
+      const tagNote = r.obstacleTags.length ? ` (this one means ${r.obstacleTags.join(', ')})` : '';
+      bullets.push(`"${r.label}" (${r.when.slice(0, 10)} ${r.when.slice(11, 16)}) needs ${r.unmet.join(', ')} sorted first — still open${tagNote}. I check in while there's time.`);
+    }
+    slots -= ready.length;
+    if (ready.length && liveTurn) {
+      state.readinessFlaggedAt = { ...(state.readinessFlaggedAt ?? {}) };
+      for (const r of ready) state.readinessFlaggedAt[r.id] = nowMs;
+      dirty = true;
+    }
+  }
+
+  // 3. Docket — aging floaters, at most once per ward-local day.
   if (state.docketOfferedOn !== today && slots > 0) {
     const picks = selectDocket({ items: scheduleItems, nowMs, minAgeDays, offeredAt: state.offeredAt ?? {}, max: slots });
     for (const f of picks) {
@@ -201,7 +256,7 @@ export async function buildStewardshipBlock(opts = {}) {
     }
   }
 
-  // 3. Anchor learning — once I've watched enough mornings, surface the drift
+  // 4. Anchor learning — once I've watched enough mornings, surface the drift
   //    so I can adopt my human's real rhythm via set_day_start_anchor.
   if (slots > 0 && (state.firstContactSamples?.length ?? 0) >= MIN_SAMPLES_FOR_ANCHOR && state.anchorSuggestedOn !== today) {
     const observed = medianHHMM(state.firstContactSamples);

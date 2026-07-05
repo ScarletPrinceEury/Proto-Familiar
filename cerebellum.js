@@ -116,6 +116,26 @@ export async function writeSettingsPatch(patch = {}) {
   });
 }
 
+/**
+ * Normalise obstacle tags to a clean short list. Accepts an array or a
+ * comma/space-separated string. Lowercased, trimmed, de-duped, each tag
+ * capped in length and the list capped in count — a barrier vocabulary,
+ * not free text. Returns [] for anything unusable.
+ */
+export function normalizeObstacleTags(raw) {
+  const arr = Array.isArray(raw) ? raw : String(raw ?? '').split(/[,\n]/);
+  const seen = new Set();
+  const out = [];
+  for (const t of arr) {
+    const tag = String(t ?? '').trim().toLowerCase().slice(0, 30);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 export function primaryConnectionFrom(settings) {
   const id    = settings?.primaryConnectionId;
   const conns = Array.isArray(settings?.connections) ? settings.connections : [];
@@ -1301,6 +1321,7 @@ export const BUILTIN_TOOLS = [
           when:  { type: 'string', description: 'Start time. Format: YYYY-MM-DDTHH:MM:SS — the local time my [Now] block shows, no UTC offset. E.g. "2026-06-01T14:00:00". The time I write is the time it happens.' },
           end:   { type: 'string', description: 'Optional end time, same format (YYYY-MM-DDTHH:MM:SS, local).' },
           recurrence: { type: 'object', description: 'Optional. Repeats this event. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N (every N units), until?: "YYYY-MM-DD" (cut-off date), bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Monday repeats Mondays. Examples: {freq:"weekly"} for a regular meet-up; {freq:"monthly", bysetpos:-1, byweekday:5} for "last Friday of every month"; {freq:"yearly"} for an anniversary.' },
+          obstacle_tags: { type: 'array', items: { type: 'string' }, description: 'Optional short barrier tags for what this event asks of {{user}} — e.g. ["outside"] when it means leaving the house, which for my human is a real obstacle. I set these so I keep the event on their radar as it approaches and so I can check its prerequisites are ready in time. Keep tags short and reusable (a barrier vocabulary, not a sentence): "outside", "phone-call", "social", "early".' },
         },
         required: ['label', 'when'],
       },
@@ -1326,6 +1347,7 @@ export const BUILTIN_TOOLS = [
             description: 'Optional free-text note on what specifically happens if THIS task lapses (e.g. "loses UC payment for the month", "tax fine of £100 + interest"). Lives on the task and informs my framing when I later consider surfacing it.',
           },
           recurrence: { type: 'object', description: 'Optional. Repeats this task. Shape: {freq: "daily"|"weekly"|"monthly"|"yearly", interval?: N, until?: "YYYY-MM-DD", bysetpos?: -1|1|2|3|4, byweekday?: 0..6 (0=Sun, 5=Fri)}. The "when" stays the FIRST occurrence — weekly anchored on a Sunday repeats Sundays. Examples: {freq:"weekly"} for weekly cleaning; {freq:"monthly", bysetpos:-1, byweekday:5} for "pay the bill every last Friday".' },
+          obstacle_tags: { type: 'array', items: { type: 'string' }, description: 'Optional short barrier tags for what this task asks of {{user}} — e.g. ["outside"] when it means leaving the house, which for my human is a real obstacle. I set these so an outside-the-house errand stays on my radar. Keep tags short and reusable (a barrier vocabulary, not a sentence): "outside", "phone-call", "social", "early".' },
         },
         required: ['label'],
       },
@@ -2246,10 +2268,12 @@ export const TOOL_EXECUTORS = {
   // subprocess. Returns short strings the model can quote back as
   // confirmation.
 
-  schedule_add_event: async ({ label, when, end, recurrence }) => {
+  schedule_add_event: async ({ label, when, end, recurrence, obstacle_tags }) => {
     if (!label || typeof label !== 'string') return 'Failed to add event: label (string) is required';
     try {
       const payload = recurrence ? { recurrence } : {};
+      const tags = normalizeObstacleTags(obstacle_tags);
+      if (tags.length) payload.obstacle_tags = tags;
       const data = await addScheduleNode({
         type: 'event', label, when, end,
         ...(Object.keys(payload).length ? { payload } : {}),
@@ -2259,13 +2283,15 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to add event: ${err.message}`; }
   },
 
-  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence }) => {
+  schedule_add_task: async ({ label, when, stakes_tier, consequence_model, recurrence, obstacle_tags }) => {
     if (!label || typeof label !== 'string') return 'Failed to add task: label (string) is required';
     try {
       const payload = {};
       if (stakes_tier) payload.stakes_tier = stakes_tier;
       if (consequence_model) payload.consequence_model = consequence_model;
       if (recurrence) payload.recurrence = recurrence;
+      const tags = normalizeObstacleTags(obstacle_tags);
+      if (tags.length) payload.obstacle_tags = tags;
       const data = await addScheduleNode({
         type: 'task', label, when,
         ...(Object.keys(payload).length ? { payload } : {}),

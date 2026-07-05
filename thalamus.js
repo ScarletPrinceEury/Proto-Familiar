@@ -1826,6 +1826,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         liveTurn, staticOnly, threat,
         settings: stewardshipSettings,
         scheduleItems: temporalPayload?.schedule?.window ?? [],
+        scheduleEdges: temporalPayload?.schedule?.edges ?? [],
         lastUserMessageAt,
         wardTimeZone: wardTimeZoneSetting(),
         nowMs: Date.now(),
