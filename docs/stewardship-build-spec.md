@@ -29,7 +29,25 @@ as slot 4 for a few turns so the Familiar raises it at a good moment and
 acts via chat tools. Default-ON toggle + `routineReviewDays` +
 `PROTO_FAMILIAR_ROUTINE_REVIEW_DISABLED=1`; it borrows the reflection slot
 without colonizing the pondering loop, and inherits the block's
-moderate+-threat stand-down. Pass 4 (villager scheduling) still to come.
+moderate+-threat stand-down.
+**Pass 4 shipped** (0.8.24-alpha) — villager scheduling. The permission
+tier the ward controls is the EXISTING `schedule` category grant
+(audience.js GRANT_LADDERS: false / 'coarse' / 'full') — a villager is
+permitted by being in a category granted `schedule`, so this reuses the V3
+audience model rather than a parallel per-villager field (the category
+editor now surfaces the grant with a hint). `schedule-availability.js`
+derives coarse free/busy per day-part, LABEL-FREE by construction (never
+emits what fills a slot — the structural privacy guarantee; 'full' may
+additionally name items, the ward's choice). On a permitted villager's
+Discord DM turn the Familiar gets a coarse availability block injected (no
+grant → nothing); `schedule_availability` is the Familiar's own free/busy
+check on ward turns. A `hold` node type ('keep this free', via
+`schedule_add_hold`) counts as busy in availability and the temporal
+surfaces. **Boundary:** Discord turns run no tools (handleTurn has no tool
+loop), so a permitted villager gets availability as *disclosure* and
+coordinates coarsely; actual booking happens on a ward turn
+(schedule_add_event) — full in-DM booking would need a Discord tool
+carve-out, deliberately out of scope. This is the last stewardship pass.
 
 **Why split Pass 2:** 2a is entirely JS/HTML riding data already in the
 temporal payload (edges + node payload) — zero Python. 2b needs new Unruh

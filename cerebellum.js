@@ -39,6 +39,7 @@ import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 import { PROVIDER_URLS } from './providers.js';
 import { listOwnFiles, readOwnFile } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
+import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -1358,6 +1359,37 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_add_hold',
+      description: 'I keep a stretch of {{user}}\'s time FREE — a "hold" that blocks a day or window so nothing gets booked over it. I use this when {{user}} asks me to protect time: a rest day, a buffer before something big, "keep Thursday clear". A hold is not an appointment — it\'s protected empty space — but it counts as BUSY whenever I coordinate availability with anyone, so their free time stays theirs. To lift a hold I resolve or delete it like any node.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Short name for what the time is held for (e.g. "rest day", "buffer before the move", "kept clear").' },
+          when:  { type: 'string', description: 'When the hold starts. Format: YYYY-MM-DDTHH:MM:SS — local, no offset. For a whole day held clear, use the day\'s start (e.g. "2026-07-09T00:00:00") with an end at day\'s close.' },
+          end:   { type: 'string', description: 'Optional end of the held window, same format. Omit to hold roughly the hour from "when".' },
+          recurrence: { type: 'object', description: 'Optional. Repeats the hold (e.g. {freq:"weekly", byweekday:4} to keep every Thursday clear). Same shape as the other schedule tools.' },
+        },
+        required: ['label', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_availability',
+      description: 'I check {{user}}\'s coarse FREE/BUSY over the next days — which mornings, afternoons, and evenings are open versus taken — WITHOUT naming what fills them. I use this to answer "am I free Thursday?", or to work out a time with someone {{user}} has permitted to coordinate their schedule. It reports day-parts only, never labels, so the free/busy is safe to share with a permitted person. (Holds count as busy.)',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: 'How many days ahead to check (default 7).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_add_need',
       description: 'I set up a recurring NEED-WINDOW for {{user}} — a daily need like a meal, medication, or winding down for sleep — as a time WINDOW (opens → closes) it should happen within, not a fixed appointment. This is how I keep track of whether their basic needs are actually getting met over time: each day the window is met or missed, and that running record tells me how {{user}} is really doing. I set these up once I understand their rhythm. "Skipped" then means something concrete — the window passed unmet — instead of a vague worry, and I can attach what a miss tends to cost via schedule_link. For a one-off task I use schedule_add_task; this is specifically for a recurring need I want to track the fulfilment of.',
       parameters: {
@@ -2408,6 +2440,29 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to add need: ${data.error ?? 'unknown error'}`;
       return quietOk(`Need-window added (id: ${data.id}) — "${label}", tracked each day as met or missed.`, { id: data.id });
     } catch (err) { return `Failed to add need: ${err.message}`; }
+  },
+
+  schedule_add_hold: async ({ label, when, end, recurrence } = {}) => {
+    if (!label || typeof label !== 'string') return 'Failed to add hold: label (string) is required.';
+    if (!when || typeof when !== 'string' || !when.trim()) return 'Failed to add hold: when (local ISO time) is required — a hold blocks a time.';
+    try {
+      const payload = recurrence && typeof recurrence === 'object' ? { recurrence } : {};
+      const data = await addScheduleNode({ type: 'hold', label, when, end, ...(Object.keys(payload).length ? { payload } : {}) });
+      if (data?.ok === false) return `Failed to add hold: ${data.error ?? 'unknown error'}`;
+      return quietOk(`Held "${label}" (id: ${data.id}). That time reads as busy when I coordinate with anyone, so it stays ${'{{user}}'}'s.`, { id: data.id });
+    } catch (err) { return `Failed to add hold: ${err.message}`; }
+  },
+
+  schedule_availability: async ({ days } = {}) => {
+    const d = Number.isFinite(Number(days)) ? Math.max(1, Math.min(30, Math.round(Number(days)))) : 7;
+    try {
+      const win = await getScheduleWindow({ limit: 400 });
+      if (win?.ok === false) return `I couldn't read the schedule: ${win.error ?? 'Unruh unavailable'}.`;
+      const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+      const avail = computeAvailability(nodes, { nowMs: Date.now(), days: d });
+      const lines = formatAvailabilityLines(avail);
+      return [`${'{{user}}'}'s coarse availability over the next ${d} days (free/busy only, no labels):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read the schedule: ${err.message}`; }
   },
 
   schedule_assign_time: async ({ id, when }) => {

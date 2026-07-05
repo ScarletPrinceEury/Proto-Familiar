@@ -9328,6 +9328,7 @@ function vlRenderCatDetail(cat) {
     </div>
     <div>
       <div class="vl-field-label">Grants <span class="field-hint">(what this category lets someone know or see)</span></div>
+      <div class="field-hint" style="margin-bottom:4px">Known grant: <code>schedule</code> (string) = <code>coarse</code> or <code>full</code> — lets people in this category coordinate ${esc(state.userName || 'my human')}'s time. <em>coarse</em> shares only free/busy day-parts (never what fills them); <em>full</em> also names what's on. Add a person to this category to permit them.</div>
       <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${grantRows}</div>
       ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Grant</button></div>` : ''}
     </div>

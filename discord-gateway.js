@@ -35,7 +35,8 @@ import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { sessionSlugId } from './slug-ids.js';
 
-import { enrich, withLock } from './thalamus.js';
+import { enrich, withLock, getScheduleWindow } from './thalamus.js';
+import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
@@ -715,6 +716,25 @@ export function carriedExchange(messages, { currentSpeaker = null, lookback = 5,
   return [];
 }
 
+// ── Availability for a permitted villager (Pass 4) ───────────────
+// On a villager-DM turn, if the ward has granted this villager the `schedule`
+// grant ('coarse' | 'full'), fetch the window and build the LABEL-FREE
+// availability block so the Familiar can coordinate. Absent grant → '' (the
+// villager never learns anything about the schedule). Never throws.
+async function availabilityBlockFor(decision, audienceGrants) {
+  try {
+    if (decision?.kind !== 'villager-dm') return '';
+    const grant = audienceGrants?.schedule;
+    if (grant !== 'coarse' && grant !== 'full') return '';
+    const win = await getScheduleWindow({ limit: 400 });
+    const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+    return buildAvailabilityBlock(nodes, { grant, nowMs: Date.now(), days: 7 });
+  } catch (err) {
+    console.error('[discord] availability block failed:', err?.message ?? err);
+    return '';
+  }
+}
+
 // ── Presence preamble (my own orientation, first person) ─────────
 
 function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false }) {
@@ -1299,7 +1319,8 @@ async function handleTurn(gw, msg, decision) {
     directedAt,
   });
 
-  const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
+  const availability = await availabilityBlockFor(decision, audienceGrants);
+  const systemContent = [enriched.static, preamble, availability].filter(Boolean).join('\n\n---\n\n');
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
