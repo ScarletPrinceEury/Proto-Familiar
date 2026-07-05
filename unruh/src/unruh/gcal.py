@@ -76,17 +76,22 @@ def _sync_payload(ev: dict[str, Any]) -> dict[str, Any]:
 
 def _is_gcal_event(node) -> bool:
     """A node the deletion-reconcile is ALLOWED to cancel: a genuine Google
-    *event*, never a hand-authored phase / need / recurring routine. The
-    reconcile query already filters source == 'gcal', but this is the
-    belt-and-suspenders guard against a mislabeled node ever being erased
-    (the routines/phases data-loss guard). type must be 'event', and it must
-    carry no recurrence and not be a tracked need."""
+    *event*, never a hand-authored phase or need-window. The reconcile query
+    already filters source == 'gcal', but this is the belt-and-suspenders
+    guard against a mislabeled node ever being erased (the routines/phases
+    data-loss guard): type must be 'event' (phases are 'phase', needs are
+    'task', so both are excluded here) and it must not be a tracked need.
+
+    NOTE: recurrence is NOT a disqualifier — Google's own recurring series are
+    stored as type='event' anchors carrying payload.recurrence, and the
+    reconcile MUST be able to cancel such an anchor when the series is replaced
+    by expanded occurrences. Hand-authored recurring routines are protected by
+    the type gate (they're phases/tasks) AND by the source=='gcal' filter (a
+    hand-authored node is never source='gcal'), so this stays safe."""
     if node["type"] != "event":
         return False
     payload = json.loads(node["payload_json"] or "{}")
-    if payload.get("recurrence") or payload.get("need"):
-        return False
-    return True
+    return not payload.get("need")
 
 
 def dedupe_gcal_nodes(

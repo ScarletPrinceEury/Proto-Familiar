@@ -627,15 +627,17 @@ def test_need_never_cancelled_by_gcal_reconcile(conn):
     assert need_id not in r["removed"], "Need should never be cancelled"
 
 
-def test_recurring_node_never_cancelled_by_gcal_reconcile(conn):
-    # A recurring routine (with recurrence dict) marked as gcal should not be
-    # cancelled. Create a recurring event with recurrence set.
-    recur_id = sched.add_node(
+def test_hand_authored_recurring_routine_never_cancelled_by_gcal_reconcile(conn):
+    # A hand-authored recurring routine (NOT source='gcal') is out of the
+    # reconcile scope entirely — a gcal snapshot never touches it. This is the
+    # real "don't erase my routines" invariant. (By contrast a Google recurring
+    # event ANCHOR — source='gcal', type='event', payload.recurrence — IS
+    # reconcilable when its series is replaced by expanded occurrences; see
+    # test_override_ingest_round_trip. The _is_gcal_event guard deliberately
+    # does NOT treat recurrence as a disqualifier, only type!='event' / need.)
+    routine_id = sched.add_node(
         conn, type="event", label="Weekly standup", when="2099-07-02T10:00:00",
-        payload={
-            "source": "gcal", "gcal_uid": "recurring_mislabeled@g",
-            "recurrence": {"freq": "weekly"}
-        }
+        payload={"recurrence": {"freq": "weekly"}},   # no source → hand-authored
     )
     ev = {
         "uid": "other@g", "summary": "Meeting", "start": "2099-07-02T14:00:00",
@@ -643,4 +645,4 @@ def test_recurring_node_never_cancelled_by_gcal_reconcile(conn):
         "description": None, "status": "confirmed", "last_modified": None,
     }
     r = gcal.gcal_ingest(conn, events=[ev], reconcile_deletes=True)
-    assert recur_id not in r["removed"], "Recurring node should never be cancelled"
+    assert routine_id not in r["removed"], "Hand-authored recurring routine must never be cancelled"
