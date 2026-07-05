@@ -46,7 +46,10 @@ from .db import insert_with_slug_retry, new_id, now_iso, to_local_naive
 # means updating the migration's comment + this set + (probably) the
 # formatter; the DB itself is schema-permissive on these columns. ──
 
-SCHEDULE_NODE_TYPES = {"event", "task", "phase", "state", "reminder"}
+# 'hold' (Pass 4): a ward-protected "keep this time free" block. Time-occupying
+# like an event (needs a `when`), but its meaning is negative space — the
+# availability derivation counts it as BUSY so it can't be booked over.
+SCHEDULE_NODE_TYPES = {"event", "task", "phase", "state", "reminder", "hold"}
 SCHEDULE_EDGE_KINDS = {
     "causes", "requires", "depends_on", "blocks", "during", "carries_forward",
     # co_occurs_with: src and dst overlapped in time — a NOTICED correlation,
@@ -120,7 +123,7 @@ def add_node(
         raise ValueError(f"unknown schedule node type {type!r}; expected one of {sorted(SCHEDULE_NODE_TYPES)}")
     if not label or not label.strip():
         raise ValueError("label is required and must be non-empty")
-    if type in {"event", "phase", "state", "reminder"} and not when:
+    if type in {"event", "phase", "state", "reminder", "hold"} and not when:
         raise ValueError(f"node type {type!r} requires a 'when' timestamp")
     if type == "phase" and not end:
         raise ValueError("phase nodes require an 'end' timestamp")

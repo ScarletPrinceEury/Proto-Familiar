@@ -42,6 +42,7 @@ export const TOOL_MODULES = {
   template_upsert: 'schedule-write', template_delete: 'schedule-write',
   template_apply: 'schedule-write', template_list: 'schedule-read',
   gcal_list_calendars: 'schedule-read', gcal_attribute_calendar: 'schedule-write',
+  schedule_add_hold: 'schedule-write', schedule_availability: 'schedule-read',
 
   'memory-edit': undefined, // (namespace note only — real entries below)
   read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',
@@ -98,7 +99,7 @@ export const MODULE_INDEX =
 // negative costs one request_tools round. Tuned from the miss log.
 const TRIGGERS = {
   'schedule-write': {
-    text: /\b(remind(er)?s?|schedul\w*|calendar|appointment|task|to-?dos?|deadline|due|postpone|resched\w*|cancel\w*|snooze|every (day|week|month|morning|night)|routine|phase|tonight|tomorrow|next (week|month)|at \d{1,2}([:.]\d{2})?\s?(am|pm)\b|\d{1,2}([:.]\d{2})\s?(am|pm)?\b|done with|finished|habit|meal|meds|medication|template|prerequisite|before I (can|go)|leaving the house|clean clothes|laundry)\b/i,
+    text: /\b(remind(er)?s?|schedul\w*|calendar|appointment|task|to-?dos?|deadline|due|postpone|resched\w*|cancel\w*|snooze|every (day|week|month|morning|night)|routine|phase|tonight|tomorrow|next (week|month)|at \d{1,2}([:.]\d{2})?\s?(am|pm)\b|\d{1,2}([:.]\d{2})\s?(am|pm)?\b|done with|finished|habit|meal|meds|medication|template|prerequisite|before I (can|go)|leaving the house|clean clothes|laundry|hold\b|keep (\w+ )?(free|clear)|block off|protect (the |my )?(day|time))\b/i,
     // Blocks that invite schedule ACTION travel with the write tools. The
     // stewardship agenda offers aging floaters a place → I need the write
     // tools to give them a time on the spot.
@@ -109,7 +110,7 @@ const TRIGGERS = {
     blocks: ['[My stewardship'],
   },
   'schedule-read': {
-    text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link)|template|shared calendar|whose calendar|calendars?\b)\b/i,
+    text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link)|template|shared calendar|whose calendar|calendars?\b|availab(le|ility)|free\/busy|am I free|when (am|are) (I|you) free)\b/i,
     blocks: [],
   },
   'memory-edit': {

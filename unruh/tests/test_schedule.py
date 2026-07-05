@@ -93,6 +93,63 @@ class TestAddNode:
             sched.add_node(conn, type="task", label="   ")
 
 
+class TestHold:
+    """M13 — 'hold' node type: a ward-protected "keep this time free" block.
+    Time-occupying like an event (needs a `when`), but marks time as busy in
+    availability derivations so it can't be booked over."""
+
+    def test_hold_round_trip(self, conn):
+        nid = sched.add_node(conn, type="hold", label="rest day", when="2099-07-09T00:00:00")
+        row = conn.execute("SELECT * FROM nodes WHERE id = ?", (nid,)).fetchone()
+        assert row["type"] == "hold"
+        assert row["label"] == "rest day"
+        assert row["layer"] == "schedule"
+
+    def test_hold_requires_when(self, conn):
+        with pytest.raises(ValueError, match="requires a 'when'"):
+            sched.add_node(conn, type="hold", label="rest day")
+
+    def test_hold_with_end(self, conn):
+        nid = sched.add_node(
+            conn,
+            type="hold",
+            label="buffer",
+            when="2099-07-09T00:00:00",
+            end="2099-07-09T23:59:59"
+        )
+        row = conn.execute("SELECT when_ts, end_ts FROM nodes WHERE id=?", (nid,)).fetchone()
+        assert row["when_ts"] == "2099-07-09T00:00:00"
+        assert row["end_ts"] == "2099-07-09T23:59:59"
+
+    def test_hold_is_in_schedule_node_types(self):
+        assert "hold" in sched.SCHEDULE_NODE_TYPES
+
+    def test_hold_queryable_like_events(self, conn):
+        now = datetime.now(timezone.utc)
+        when = _iso(now + timedelta(hours=2))
+        nid = sched.add_node(conn, type="hold", label="rest day", when=when)
+        result = sched.get_window(conn)
+        assert any(n["id"] == nid and n["type"] == "hold" for n in result["nodes"])
+
+    def test_hold_can_be_resolved(self, conn):
+        nid = sched.add_node(conn, type="hold", label="rest", when="2099-07-09T00:00:00")
+        assert sched.resolve(conn, id=nid, resolution="cancelled")
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (nid,)).fetchone()
+        assert row["resolution"] == "cancelled"
+
+    def test_hold_can_be_updated(self, conn):
+        nid = sched.add_node(conn, type="hold", label="old", when="2099-07-09T00:00:00")
+        assert sched.update_node(conn, id=nid, label="new hold")
+        row = conn.execute("SELECT label FROM nodes WHERE id=?", (nid,)).fetchone()
+        assert row["label"] == "new hold"
+
+    def test_hold_can_be_deleted(self, conn):
+        nid = sched.add_node(conn, type="hold", label="rest", when="2099-07-09T00:00:00")
+        assert sched.delete_node(conn, id=nid)
+        row = conn.execute("SELECT id FROM nodes WHERE id=?", (nid,)).fetchone()
+        assert row is None
+
+
 class TestAddEdge:
     def test_edge_round_trip(self, conn):
         a = sched.add_node(conn, type="task", label="prep")
