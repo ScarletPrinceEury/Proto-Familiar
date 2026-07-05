@@ -38,6 +38,7 @@ import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
 import { listOwnFiles, readOwnFile } from './own-files.js';
+import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -1598,6 +1599,31 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'gcal_list_calendars',
+      description: 'I list the calendars the Google sync can see — my human\'s own AND any shared into their account (a partner\'s, family, the sports club) — with who each is currently attributed to. I reach for this when my human mentions a shared calendar, or when I want to check whether a calendar is correctly attributed before I read its events as belonging to the right person. The ids I read here are what gcal_attribute_calendar takes.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'gcal_attribute_calendar',
+      description: 'I tell the sync WHO a shared calendar belongs to, so its events are attributed correctly instead of blurring into one pile. I set a calendar to: "ward" (my human\'s own), "villager" (a person in their village — I give the villager id from village_lookup as ref), "phylactery" (someone/something with a knowledge-graph node — a friend, family member, the club — ref is the node id), "unassigned" (synced but not yet attributed), or "ignore" (skip syncing it — e.g. a holidays feed). I get calendar_id from gcal_list_calendars. This is mine to set as I learn whose calendar is whose.',
+      parameters: {
+        type: 'object',
+        properties: {
+          calendar_id: { type: 'string', description: 'The calendar\'s id, from gcal_list_calendars (a Google calendar id/email, an iCal URL, or a CLI calendar name).' },
+          kind: { type: 'string', enum: ['ward', 'villager', 'phylactery', 'unassigned', 'ignore'], description: 'Whose calendar it is (see the tool description).' },
+          ref: { type: 'string', description: 'For "villager": the villager id (from village_lookup). For "phylactery": the knowledge-graph node id. Omit for ward/unassigned/ignore.' },
+          label: { type: 'string', description: 'Optional short name for how this calendar shows up (e.g. "Mom", "sports club"). Defaults to the calendar\'s own name.' },
+        },
+        required: ['calendar_id', 'kind'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'convert_ids_to_slugs',
       description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my ponderings, and the outbox, with every internal cross-reference updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -2570,6 +2596,39 @@ export const TOOL_EXECUTORS = {
       const list = (tpl.prerequisites ?? prereqs);
       return quietOk(`Template "${tpl.label ?? lbl}" (tag: ${tpl.tag ?? t}) saved — needs: ${list.length ? list.join(', ') : '(nothing yet)'}. I'll suggest these when I apply it to an event tagged "${tpl.tag ?? t}".`);
     } catch (err) { return `I couldn't save that template: ${err.message}`; }
+  },
+
+  gcal_list_calendars: async () => {
+    try {
+      const cache = await readCalendarCache();
+      const cals = Array.isArray(cache?.calendars) ? cache.calendars : [];
+      if (!cals.length) return 'I have no calendars on record yet — the Google sync populates this the first time it runs with a connected account (or configured feeds).';
+      const s = readSettingsSync();
+      const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? s.gcalCalendarAttribution : {};
+      const lines = cals.map(c => {
+        const a = resolveAttribution(c, map);
+        const who = a.kind === 'ward' ? 'my human' : a.kind === 'unassigned' ? 'unattributed' : `${a.kind}${a.ref ? ` (${a.ref})` : ''}${a.label && a.label !== c.summary ? ` — "${a.label}"` : ''}`;
+        return `- ${c.summary}${c.primary ? ' (primary)' : ''} → ${who}\n    id: ${c.id}`;
+      });
+      return [`Calendars the sync can see (${cals.length}):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read my calendars: ${err.message}`; }
+  },
+
+  gcal_attribute_calendar: async ({ calendar_id, kind, ref, label } = {}) => {
+    const id = String(calendar_id ?? '').trim();
+    if (!id) return 'I need the calendar_id — from gcal_list_calendars.';
+    const norm = normalizeAttributionEntry({ kind, ref, label });
+    if (!norm.ok) return `I couldn't attribute that calendar: ${norm.error}.`;
+    try {
+      const s = readSettingsSync();
+      const map = (s?.gcalCalendarAttribution && typeof s.gcalCalendarAttribution === 'object') ? { ...s.gcalCalendarAttribution } : {};
+      map[id] = norm.entry;
+      const res = await writeSettingsPatch({ gcalCalendarAttribution: map });
+      if (res?.ok === false) return `I couldn't attribute that calendar: ${res.error ?? 'unknown error'}`;
+      const e = norm.entry;
+      const who = e.kind === 'ward' ? 'my human' : e.kind === 'ignore' ? 'ignored (won\'t sync)' : `${e.kind}${e.ref ? ` ${e.ref}` : ''}${e.label ? ` — "${e.label}"` : ''}`;
+      return `Done — that calendar is now attributed to ${who}. Its events will carry that from the next sync.`;
+    } catch (err) { return `I couldn't attribute that calendar: ${err.message}`; }
   },
 
   template_list: async () => {

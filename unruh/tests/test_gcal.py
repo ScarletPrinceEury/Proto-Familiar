@@ -432,3 +432,215 @@ def test_ingest_heals_historical_duplicate_nodes(conn):
               AND resolution IS NULL"""
     ).fetchone()["n"]
     assert live == 1
+
+
+# ── Multi-calendar scoping + attribution (build spec §1.5.1) ─────────────
+
+def test_dedupe_with_calendar_id_scope(conn):
+    # Two calendars' events must never interfere with each other. Insert
+    # two events from different calendars; the dedupe for calendar A should
+    # only see calendar A's nodes.
+    ev_a = {
+        "uid": "a@g", "summary": "Event A", "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    ev_b = {
+        "uid": "b@g", "summary": "Event B", "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r1 = gcal.gcal_ingest(conn, events=[ev_a], calendar_id="calA")
+    r2 = gcal.gcal_ingest(conn, events=[ev_b], calendar_id="calB")
+    assert len(r1["new"]) == 1 and len(r2["new"]) == 1
+    id_a, id_b = r1["new"][0], r2["new"][0]
+
+    # Verify both nodes have the right calendar_id in payload
+    node_a = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (id_a,)).fetchone()
+    payload_a = json.loads(node_a["payload_json"])
+    assert payload_a["gcal_calendar_id"] == "calA"
+
+    node_b = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (id_b,)).fetchone()
+    payload_b = json.loads(node_b["payload_json"])
+    assert payload_b["gcal_calendar_id"] == "calB"
+
+
+def test_reconcile_deletes_scoped_to_calendar(conn):
+    # When syncing calendar A with a confirmed empty snapshot, calendar B's
+    # events must NOT be cancelled. Insert events from both calendars.
+    future = "2099-07-02T14:00:00"
+    ev_a = {
+        "uid": "scopea@g", "summary": "From A", "start": future,
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    ev_b = {
+        "uid": "scopeb@g", "summary": "From B", "start": future,
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r1 = gcal.gcal_ingest(conn, events=[ev_a], calendar_id="calA")
+    r2 = gcal.gcal_ingest(conn, events=[ev_b], calendar_id="calB")
+    id_a, id_b = r1["new"][0], r2["new"][0]
+
+    # Now re-sync calendar A with a different event (empty snapshot for ev_a)
+    # and reconcile_deletes=True. ev_a should be cancelled, but ev_b untouched.
+    ev_a_new = {
+        "uid": "new_a@g", "summary": "Another from A", "start": future,
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r3 = gcal.gcal_ingest(conn, events=[ev_a_new], calendar_id="calA", reconcile_deletes=True)
+    assert id_a in r3["removed"], "Event A should be cancelled"
+    assert id_b not in r3["removed"], "Event B should NOT be cancelled"
+
+    node_b_after = conn.execute("SELECT resolution FROM nodes WHERE id=?", (id_b,)).fetchone()
+    assert node_b_after["resolution"] is None, "Event B should remain unresolved"
+
+
+def test_include_legacy_adopts_nodes_into_calendar(conn):
+    # A pre-multi-calendar node (no gcal_calendar_id) should be adopted by the
+    # ward's calendar when include_legacy=True. Create a legacy node, then
+    # sync the ward's calendar.
+    legacy_payload = {
+        "source": "gcal",
+        "gcal_uid": "legacy@g",
+        "gcal_last_modified": None,
+        "all_day": False,
+    }
+    legacy_id = sched.add_node(
+        conn, type="event", label="Legacy event", when="2099-07-02T14:00:00",
+        payload=legacy_payload
+    )
+    # Verify it has no gcal_calendar_id
+    node = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (legacy_id,)).fetchone()
+    p = json.loads(node["payload_json"])
+    assert "gcal_calendar_id" not in p
+
+    # Now sync the ward's calendar with a different event, and include_legacy=True
+    # The legacy node should be considered part of this calendar's scope, so if
+    # it's missing from the snapshot, it gets cancelled.
+    ev_ward = {
+        "uid": "ward@g", "summary": "Ward event", "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r = gcal.gcal_ingest(conn, events=[ev_ward], calendar_id="calWard", include_legacy=True, reconcile_deletes=True)
+    assert legacy_id in r["removed"], "Legacy node should be reconciled (cancelled) when in scope"
+
+    # Now test with include_legacy=False: the legacy node should NOT be reconciled
+    legacy_id2 = sched.add_node(
+        conn, type="event", label="Another legacy", when="2099-07-02T15:00:00",
+        payload={"source": "gcal", "gcal_uid": "legacy2@g"}
+    )
+    r2 = gcal.gcal_ingest(conn, events=[ev_ward], calendar_id="calWard", include_legacy=False, reconcile_deletes=True)
+    assert legacy_id2 not in r2["removed"], "Legacy node should NOT be reconciled when include_legacy=False"
+
+
+def test_attribution_stamped_on_ingest(conn):
+    # attribution parameter stamps the kind/ref/label onto each event's payload
+    future = "2099-07-02T14:00:00"
+    ev = {
+        "uid": "attr@g", "summary": "Calendar item", "start": future,
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    attribution = {"kind": "villager", "ref": "v123", "label": "Mom"}
+    r = gcal.gcal_ingest(
+        conn, events=[ev], calendar_id="calMom",
+        attribution=attribution
+    )
+    assert len(r["new"]) == 1
+    node_id = r["new"][0]
+
+    node = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (node_id,)).fetchone()
+    payload = json.loads(node["payload_json"])
+    assert payload["gcal_attribution"] == attribution, "Attribution should be stamped"
+    assert payload["gcal_calendar_id"] == "calMom"
+
+
+def test_attribution_preserved_on_update(conn):
+    # When an event is updated (LAST-MODIFIED changed), the attribution should
+    # persist (it's in the sync-owned keys). Create, then update.
+    future = "2099-07-02T14:00:00"
+    ev = {
+        "uid": "attr2@g", "summary": "Item", "start": future,
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": "2099-07-01T10:00:00Z",
+    }
+    attr1 = {"kind": "ward", "label": "My calendar"}
+    r1 = gcal.gcal_ingest(conn, events=[ev], calendar_id="calA", attribution=attr1)
+    node_id = r1["new"][0]
+
+    # Now update with a newer LAST-MODIFIED and different attribution
+    ev_updated = dict(ev)
+    ev_updated["last_modified"] = "2099-07-02T10:00:00Z"
+    ev_updated["summary"] = "Item (rescheduled)"
+    attr2 = {"kind": "villager", "ref": "v1", "label": "Friend"}
+    r2 = gcal.gcal_ingest(conn, events=[ev_updated], calendar_id="calA", attribution=attr2)
+    assert node_id in r2["updated"]
+
+    node = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (node_id,)).fetchone()
+    payload = json.loads(node["payload_json"])
+    # The new attribution should be applied
+    assert payload["gcal_attribution"] == attr2
+
+
+# ── Data-loss guards (critical reconciliation safety) ─────────────────────
+
+def test_phase_never_cancelled_by_gcal_reconcile(conn):
+    # A hand-authored phase with source='gcal' (mislabeled) should NEVER be
+    # cancelled by reconciliation. Create a phase with gcal source, then
+    # reconcile with different events.
+    phase_id = sched.add_node(
+        conn, type="phase", label="Morning", when="2099-07-02T07:00:00",
+        end="2099-07-02T08:00:00",
+        payload={"source": "gcal", "gcal_uid": "mislabeled_phase@g"}
+    )
+    # Sync with a different event, reconcile_deletes=True
+    ev = {
+        "uid": "real@g", "summary": "Real event", "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r = gcal.gcal_ingest(conn, events=[ev], reconcile_deletes=True)
+    # The phase should NOT be in removed (the _is_gcal_event guard)
+    assert phase_id not in r["removed"], "Phase should never be cancelled"
+    node = conn.execute("SELECT resolution FROM nodes WHERE id=?", (phase_id,)).fetchone()
+    assert node["resolution"] is None
+
+
+def test_need_never_cancelled_by_gcal_reconcile(conn):
+    # A tracked need window with source='gcal' should NEVER be cancelled.
+    # Create a need and reconcile.
+    need_id = sched.add_node(
+        conn, type="event", label="Medication", when="2099-07-02T09:00:00",
+        end="2099-07-02T09:15:00",
+        payload={"source": "gcal", "gcal_uid": "mislabeled_need@g", "need": True}
+    )
+    ev = {
+        "uid": "real2@g", "summary": "Real", "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r = gcal.gcal_ingest(conn, events=[ev], reconcile_deletes=True)
+    assert need_id not in r["removed"], "Need should never be cancelled"
+
+
+def test_recurring_node_never_cancelled_by_gcal_reconcile(conn):
+    # A recurring routine (with recurrence dict) marked as gcal should not be
+    # cancelled. Create a recurring event with recurrence set.
+    recur_id = sched.add_node(
+        conn, type="event", label="Weekly standup", when="2099-07-02T10:00:00",
+        payload={
+            "source": "gcal", "gcal_uid": "recurring_mislabeled@g",
+            "recurrence": {"freq": "weekly"}
+        }
+    )
+    ev = {
+        "uid": "other@g", "summary": "Meeting", "start": "2099-07-02T14:00:00",
+        "end": None, "all_day": False, "recurrence": None, "location": None,
+        "description": None, "status": "confirmed", "last_modified": None,
+    }
+    r = gcal.gcal_ingest(conn, events=[ev], reconcile_deletes=True)
+    assert recur_id not in r["removed"], "Recurring node should never be cancelled"

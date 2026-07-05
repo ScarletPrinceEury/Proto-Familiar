@@ -32,8 +32,18 @@ const TOKEN_FILE = '.gcal-google-token.json';
 const AUTH_ENDPOINT  = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const API_BASE       = 'https://www.googleapis.com/calendar/v3';
-// Read + write to events (write-back needs insert). Not full-calendar scope.
-export const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+// calendar.events = read + write events on any calendar the account can
+// access (write-back needs insert). calendar.readonly is ADDED so we can
+// enumerate the account's calendar list (calendarList.list) and read events
+// on shared calendars — the multi-calendar support. Widening the scope means
+// existing users reconnect once to grant the read; it never removes write.
+export const SCOPE = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly';
+// True once the stored grant includes the calendar-list read scope. Used to
+// tell the ward whether a reconnect is needed to pull shared calendars.
+export function hasCalendarListScope(store) {
+  const granted = String(store?.scope ?? '');
+  return granted.includes('calendar.readonly') || /auth\/calendar(\s|$)/.test(granted);
+}
 
 // ── OAuth client config (from a Cloud-Console credentials.json) ──────
 
@@ -165,11 +175,44 @@ export async function listEvents({ accessToken, calendarId = 'primary', timeMin,
   return items;
 }
 
+/**
+ * Every calendar the account can access — its own AND any shared into it —
+ * via calendarList.list. Paginates. Returns [{id, summary, primary, accessRole,
+ * backgroundColor}]. Needs the calendar.readonly (or calendar) scope; on a
+ * token that predates the scope widening this returns a 403 the caller
+ * surfaces as "reconnect to pull shared calendars".
+ */
+export async function listCalendars({ accessToken, fetchFn = globalThis.fetch, maxPages = 20 }) {
+  const cals = [];
+  let pageToken = null;
+  for (let i = 0; i < maxPages; i++) {
+    const params = new URLSearchParams({ maxResults: '250', showHidden: 'true', ...(pageToken ? { pageToken } : {}) });
+    const res = await fetchFn(`${API_BASE}/users/me/calendarList?${params}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const text = await res.text();
+    let body; try { body = JSON.parse(text); } catch { body = {}; }
+    if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
+    for (const c of (body.items || [])) {
+      cals.push({
+        id: c.id, summary: c.summaryOverride || c.summary || c.id,
+        primary: !!c.primary, accessRole: c.accessRole || '',
+      });
+    }
+    pageToken = body.nextPageToken;
+    if (!pageToken) break;
+  }
+  return cals;
+}
+
 /** Google event resources → the shared normalized-event shape. Google's API
  *  shape (id, summary, start.dateTime/date, status, updated) already lines up
- *  with the normaliser, so this reuses it rather than duplicating the map. */
-export function normalizeGoogleEvents(items) {
-  return normalizeCliEvents(items);
+ *  with the normaliser, so this reuses it rather than duplicating the map.
+ *  `calendarId` stamps each normalized event with its source calendar. */
+export function normalizeGoogleEvents(items, calendarId) {
+  const evs = normalizeCliEvents(items);
+  if (calendarId) for (const e of evs) e.gcal_calendar_id = calendarId;
+  return evs;
 }
 
 /**

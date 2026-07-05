@@ -41,6 +41,7 @@ export const TOOL_MODULES = {
   schedule_push_to_google: 'schedule-write',  // keeps its gcalWriteEnabled gate too
   template_upsert: 'schedule-write', template_delete: 'schedule-write',
   template_apply: 'schedule-write', template_list: 'schedule-read',
+  gcal_list_calendars: 'schedule-read', gcal_attribute_calendar: 'schedule-write',
 
   'memory-edit': undefined, // (namespace note only — real entries below)
   read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',
@@ -108,7 +109,7 @@ const TRIGGERS = {
     blocks: ['[My stewardship'],
   },
   'schedule-read': {
-    text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link)|template)\b/i,
+    text: /\b(export|\.ics|add (it |this )?to (my|the|your) calendar|calendar (file|link)|template|shared calendar|whose calendar|calendars?\b)\b/i,
     blocks: [],
   },
   'memory-edit': {

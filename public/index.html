@@ -830,6 +830,26 @@
         </div>
 
         <div class="field" style="margin-top:10px">
+          <label>Calendars &amp; who they belong to</label>
+          <div class="field-hint">Every calendar the sync can see — your own <em>and</em> any shared into your account (a partner's, family, a club). Tell it whose each one is so events are attributed to the right person instead of blurring together. Set to <strong>Ignore</strong> to skip a noisy one (holidays, birthdays). Your Familiar can also set these itself as it learns whose calendar is whose.</div>
+          <div class="field-hint" id="gcal-cal-note" style="margin-top:4px"></div>
+          <div id="gcal-cal-list" style="margin-top:6px"></div>
+          <button type="button" id="gcal-cal-refresh" class="btn-secondary" style="margin-top:6px">↻ Refresh calendar list</button>
+        </div>
+
+        <details class="field" style="margin-top:8px">
+          <summary style="cursor:pointer">Extra iCal feeds (for the link method)</summary>
+          <div class="field-hint" style="margin-top:6px">The link method above reads one iCal URL. To pull additional shared calendars this way, add each calendar's own secret iCal address (Google Calendar → a calendar's Settings → “Secret address in iCal format”). One per line, optionally <code>label | url</code>.</div>
+          <textarea id="gcal-ical-urls" rows="3" spellcheck="false" placeholder="Mom | https://calendar.google.com/calendar/ical/…/basic.ics" style="width:100%"></textarea>
+        </details>
+
+        <details class="field" style="margin-top:4px">
+          <summary style="cursor:pointer">Extra calendars (for the command-line methods)</summary>
+          <div class="field-hint" style="margin-top:6px">To read several calendars through gcalcli/gogcli, list their calendar names here (one per line, optionally <code>label | name</code>) and put a <code>{calendar}</code> token in the command above — it's run once per calendar.</div>
+          <textarea id="gcal-cli-calendars" rows="3" spellcheck="false" placeholder="sports club | Club Team Calendar" style="width:100%"></textarea>
+        </details>
+
+        <div class="field" style="margin-top:10px">
           <label>Sync health</label>
           <div class="field-hint" id="gcal-sync-status">No sync has run yet.</div>
           <button type="button" id="gcal-sync-now" class="btn-secondary" style="margin-top:6px">↻ Sync now</button>

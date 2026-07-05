@@ -290,6 +290,11 @@ const state = {
   // requires a CLI source. Blank command → the source preset's import command.
   gcalWriteEnabled:        false,
   gcalWriteCommand:        '',
+  // Multi-calendar (shared calendars): attribution map keyed by calendar id
+  // → {kind, ref, label}; extra iCal feeds; CLI calendar names.
+  gcalCalendarAttribution: {},
+  gcalIcalUrls:            [],   // [{url, label}] extra iCal feeds beyond gcalIcalUrl
+  gcalCliCalendars:        [],   // [{name, label}] calendars for the {calendar} token
   tomeGraduationTidy:      'pointer',
   warmthQuietHoursStart:   23,
   warmthQuietHoursEnd:     8,
@@ -359,6 +364,7 @@ const SERVER_SYNCED_KEYS = [
   'eventAlertsEnabled', 'eventAlertLeadMinutes',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'gcalWriteEnabled', 'gcalWriteCommand',
+  'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordBotToken', 'discordWardUserId',
 ];
@@ -427,6 +433,7 @@ function openGcalModal() {
   writeSettingsToUI();       // reflect current state into the modal fields
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
   refreshGcalSyncStatus();   // "last sync / last error" health line
+  renderGcalCalendars();     // the discovered-calendars + attribution panel
   $('gcal-modal')?.classList.remove('hidden');
 }
 function closeGcalModal() {
@@ -478,6 +485,69 @@ async function gcalSyncNow() {
   }
 }
 
+// ── Calendars & attribution (multi-calendar) ─────────────────────
+const GCAL_ATTR_KINDS = [
+  { v: 'ward',       t: 'Me (my calendar)' },
+  { v: 'villager',   t: 'A villager' },
+  { v: 'phylactery', t: 'A graph node (friend/family/club)' },
+  { v: 'unassigned', t: 'Unassigned' },
+  { v: 'ignore',     t: "Ignore (don't sync)" },
+];
+
+// Parse "label | value" lines into {label, value}; a bare line is value-only.
+function parseLabeledLines(text) {
+  return String(text || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const i = l.indexOf('|');
+    return i >= 0 ? { label: l.slice(0, i).trim(), value: l.slice(i + 1).trim() } : { label: '', value: l };
+  }).filter(x => x.value);
+}
+
+async function renderGcalCalendars() {
+  const list = $('gcal-cal-list');
+  if (!list) return;
+  list.innerHTML = '<div class="field-hint">Loading…</div>';
+  let cals = [];
+  try { cals = (await (await fetch('/api/gcal/calendars')).json())?.calendars || []; }
+  catch { list.innerHTML = '<div class="field-hint">Could not load calendars.</div>'; return; }
+  if (!cals.length) {
+    list.innerHTML = '<div class="field-hint">No calendars seen yet — run ↻ Sync now with a connected account or configured feeds, then refresh.</div>';
+    return;
+  }
+  const map = (state.gcalCalendarAttribution && typeof state.gcalCalendarAttribution === 'object') ? state.gcalCalendarAttribution : {};
+  list.innerHTML = '';
+  for (const c of cals) {
+    const cur = map[c.id] || c.attribution || { kind: c.primary ? 'ward' : 'unassigned' };
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px';
+    const name = document.createElement('span');
+    name.textContent = (c.summary || c.id) + (c.primary ? ' (primary)' : '');
+    name.title = c.id;
+    name.style.cssText = 'flex:1 1 140px;min-width:120px;overflow:hidden;text-overflow:ellipsis';
+    const sel = document.createElement('select');
+    for (const k of GCAL_ATTR_KINDS) {
+      const o = document.createElement('option'); o.value = k.v; o.textContent = k.t;
+      if (k.v === cur.kind) o.selected = true;
+      sel.appendChild(o);
+    }
+    const ref = document.createElement('input');
+    ref.type = 'text'; ref.placeholder = 'id (villager/node)'; ref.value = cur.ref || '';
+    ref.style.cssText = 'width:11em';
+    const needsRef = (k) => k === 'villager' || k === 'phylactery';
+    ref.classList.toggle('hidden', !needsRef(cur.kind));
+    const save = () => {
+      const kind = sel.value;
+      const entry = { kind };
+      if (needsRef(kind)) { const r = ref.value.trim(); if (r) entry.ref = r; }
+      state.gcalCalendarAttribution = { ...(state.gcalCalendarAttribution || {}), [c.id]: entry };
+      saveSettings();
+    };
+    sel.onchange = () => { ref.classList.toggle('hidden', !needsRef(sel.value)); save(); };
+    ref.onchange = save;
+    row.append(name, sel, ref);
+    list.appendChild(row);
+  }
+}
+
 // Show the API panel only for the API backend; the Google engine-id field only
 // for Google; the Marginalia "no key" hint only for Marginalia.
 function syncWebSearchPanels() {
@@ -513,6 +583,15 @@ async function refreshGoogleCalStatus() {
     if (s.connected) {
       el.textContent = '✓ Connected to Google' + (s.account ? ` (${s.account})` : '');
       el.style.color = 'var(--accent, #3a7)';
+      // Shared calendars need the widened read scope; an older connection
+      // must reconnect once to grant it.
+      const note = $('gcal-cal-note');
+      if (note) {
+        if (s.sharedScope === false) {
+          note.textContent = '⚠ This connection can only read your own calendar. Reconnect (Connect Google Calendar) to also pull calendars shared into your account.';
+          note.style.color = 'var(--danger, #c55)';
+        } else { note.textContent = ''; note.style.color = ''; }
+      }
     } else if (s.hasCredentials) {
       el.textContent = 'Credentials loaded — click Connect to finish signing in.';
       el.style.color = '';
@@ -2610,6 +2689,8 @@ function readSettingsFromUI() {
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
   if ($('gcal-write-toggle')) state.gcalWriteEnabled = $('gcal-write-toggle').checked;
   if ($('gcal-write-command')) state.gcalWriteCommand = $('gcal-write-command').value.trim();
+  if ($('gcal-ical-urls')) state.gcalIcalUrls = parseLabeledLines($('gcal-ical-urls').value).map(x => ({ url: x.value, ...(x.label ? { label: x.label } : {}) }));
+  if ($('gcal-cli-calendars')) state.gcalCliCalendars = parseLabeledLines($('gcal-cli-calendars').value).map(x => ({ name: x.value, ...(x.label ? { label: x.label } : {}) }));
   if ($('tome-graduation-tidy')) state.tomeGraduationTidy = $('tome-graduation-tidy').value === 'delete' ? 'delete' : 'pointer';
   if ($('warmth-quiet-start')) {
     const n = parseInt($('warmth-quiet-start').value, 10);
@@ -2744,6 +2825,8 @@ function writeSettingsToUI() {
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
   if ($('gcal-write-toggle')) setIfNotFocused($('gcal-write-toggle'), 'checked', state.gcalWriteEnabled === true);
   if ($('gcal-write-command')) setIfNotFocused($('gcal-write-command'), 'value', state.gcalWriteCommand ?? '');
+  if ($('gcal-ical-urls')) setIfNotFocused($('gcal-ical-urls'), 'value', (state.gcalIcalUrls || []).map(x => x.label ? `${x.label} | ${x.url}` : x.url).join('\n'));
+  if ($('gcal-cli-calendars')) setIfNotFocused($('gcal-cli-calendars'), 'value', (state.gcalCliCalendars || []).map(x => x.label ? `${x.label} | ${x.name}` : x.name).join('\n'));
   if (typeof syncGcalSourcePanels === 'function') syncGcalSourcePanels();
   if ($('tome-graduation-tidy'))   setIfNotFocused($('tome-graduation-tidy'),   'value',   state.tomeGraduationTidy === 'delete' ? 'delete' : 'pointer');
   if ($('warmth-quiet-start')) setIfNotFocused($('warmth-quiet-start'), 'value',   state.warmthQuietHoursStart ?? 23);
@@ -3602,6 +3685,7 @@ function init() {
   $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
   $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
   $('gcal-sync-now')?.addEventListener('click', gcalSyncNow);
+  $('gcal-cal-refresh')?.addEventListener('click', renderGcalCalendars);
   $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
   // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
@@ -3629,6 +3713,7 @@ function init() {
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead',
     'gcal-write-toggle', 'gcal-write-command',
+    'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
     'system-prompt', 'char-profile',
     'user-profile', 'post-history-prompt', 'post-history-role', 'tools-enabled', 'custom-tools',

@@ -392,6 +392,9 @@ def gcal_ingest(
     ics_text: str | None = None,
     events: list | None = None,
     reconcile_deletes: bool = True,
+    calendar_id: str | None = None,
+    include_legacy: bool = False,
+    attribution: dict | None = None,
 ) -> dict[str, Any]:
     """I use this to fold my human's Google Calendar into their schedule. The
     Node sync loop hands me either a raw `.ics` feed (`ics_text`) or already-
@@ -408,6 +411,12 @@ def gcal_ingest(
         reconcile_deletes: True for a confirmed-good FULL snapshot (an event
             that vanished from Google is cancelled here). A windowed/partial
             read passes False so it can't cancel events outside its window.
+        calendar_id: the source calendar this snapshot is for. Scopes the
+            reconcile to that one calendar so a full sync of one shared
+            calendar never cancels another's events.
+        include_legacy: fold pre-multi-calendar rows (no stored calendar id)
+            into this calendar's scope — set for the ward's own calendar so it
+            adopts the old single-calendar rows.
 
     Returns: {ok, new: [...ids], updated: [...], unchanged: [...],
     removed: [...], complex_series: [...uids]}. Only `new` ever reaches me.
@@ -417,6 +426,8 @@ def gcal_ingest(
             return gcal_ingest_mod.gcal_ingest(
                 conn, ics_text=ics_text, events=events,
                 reconcile_deletes=reconcile_deletes,
+                calendar_id=calendar_id, include_legacy=include_legacy,
+                attribution=attribution,
             )
     except Exception as e:  # parse/DB failure must degrade, never crash the loop
         return _err(f"gcal_ingest failed: {e}", code="ingest_error")

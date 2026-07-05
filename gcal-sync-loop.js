@@ -46,14 +46,18 @@ export function clampSyncIntervalMs(ms) {
 /**
  * Run one sync. Pure-ish — all I/O injected.
  *
- *   fetchSource  async () => { ok, icsText?, events?, reconcileDeletes? }
- *                The adapter; ok:false on ANY failure (never throws).
- *   ingest       async ({ icsText, events, reconcileDeletes }) =>
+ *   fetchSource  async () => { ok, snapshots?: [...], icsText?, events?, reconcileDeletes? }
+ *                The adapter; ok:false on ANY failure (never throws). May
+ *                return a LIST of per-calendar snapshots (multi-calendar) or a
+ *                single legacy snapshot (icsText/events at top level).
+ *   ingest       async ({ icsText, events, reconcileDeletes, calendarId, includeLegacy }) =>
  *                { ok, new, updated, removed }
  *   routeNew     async (newIds[]) => void  (flags them for the projection cue)
  *
  * Returns { synced, reason, new, updated, removed }. synced:false reasons:
- *   'fetch_failed' | 'ingest_failed'
+ *   'fetch_failed' | 'ingest_failed'. With multiple calendars, the tick
+ *   succeeds if AT LEAST ONE calendar ingested — one bad calendar never
+ *   blanks the others (per-source independence, CLAUDE.md).
  */
 export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async () => {} }) {
   if (typeof fetchSource !== 'function') throw new Error('fetchSource is required');
@@ -64,29 +68,41 @@ export async function runOneGcalSyncTick({ fetchSource, ingest, routeNew = async
     return { synced: false, reason: 'fetch_failed', error: src?.error ?? 'unknown' };
   }
 
-  const result = await ingest({
-    icsText: src.icsText,
-    events: src.events,
-    // A windowed/partial read tells the adapter so; default to a full
-    // reconcile for the link tier (a complete snapshot).
-    reconcileDeletes: src.reconcileDeletes !== false,
-  }).catch(err => ({ ok: false, error: err?.message ?? String(err) }));
+  // Normalise to a list of per-calendar snapshots. A legacy single-snapshot
+  // source (no `snapshots`) is wrapped as one unscoped snapshot so old
+  // adapters keep working unchanged.
+  const snapshots = Array.isArray(src.snapshots)
+    ? src.snapshots
+    : [{ icsText: src.icsText, events: src.events, reconcileDeletes: src.reconcileDeletes, calendarId: src.calendarId, includeLegacy: src.includeLegacy }];
 
-  if (!result || result.ok === false) {
-    return { synced: false, reason: 'ingest_failed', error: result?.error ?? 'unknown' };
+  const newIds = [], updatedIds = [], removedIds = [], complex = [];
+  let anyOk = false, lastErr = null;
+  for (const snap of snapshots) {
+    const result = await ingest({
+      icsText: snap.icsText,
+      events: snap.events,
+      // A windowed/partial read tells the adapter so; default to a full
+      // reconcile for the link tier (a complete snapshot).
+      reconcileDeletes: snap.reconcileDeletes !== false,
+      calendarId: snap.calendarId,
+      includeLegacy: snap.includeLegacy === true,
+      attribution: snap.attribution,
+    }).catch(err => ({ ok: false, error: err?.message ?? String(err) }));
+    if (!result || result.ok === false) { lastErr = result?.error ?? 'unknown'; continue; }
+    anyOk = true;
+    if (Array.isArray(result.new))            newIds.push(...result.new);
+    if (Array.isArray(result.updated))        updatedIds.push(...result.updated);
+    if (Array.isArray(result.removed))        removedIds.push(...result.removed);
+    if (Array.isArray(result.complex_series)) complex.push(...result.complex_series);
   }
 
-  const newIds = Array.isArray(result.new) ? result.new : [];
+  if (!anyOk) {
+    return { synced: false, reason: 'ingest_failed', error: lastErr ?? 'unknown' };
+  }
   if (newIds.length) {
     try { await routeNew(newIds); } catch { /* projection cue is best-effort */ }
   }
-  return {
-    synced: true,
-    new: newIds,
-    updated: Array.isArray(result.updated) ? result.updated : [],
-    removed: Array.isArray(result.removed) ? result.removed : [],
-    complex_series: Array.isArray(result.complex_series) ? result.complex_series : [],
-  };
+  return { synced: true, new: newIds, updated: updatedIds, removed: removedIds, complex_series: complex };
 }
 
 // ── Singleton lifecycle ──────────────────────────────────────────

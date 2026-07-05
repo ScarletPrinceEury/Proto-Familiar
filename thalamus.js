@@ -1000,13 +1000,16 @@ export async function templateDelete({ tag }) {
 // removed}. Best-effort like every Unruh-facing call — a down peer or a
 // failed ingest degrades to ok:false and the sync loop simply skips this
 // tick. Pass exactly one of icsText / events.
-export async function ingestGcal({ icsText, events, reconcileDeletes = true } = {}) {
+export async function ingestGcal({ icsText, events, reconcileDeletes = true, calendarId, includeLegacy = false, attribution } = {}) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected', new: [], updated: [], removed: [] };
   try {
     const args = { reconcile_deletes: reconcileDeletes };
     if (icsText !== undefined) args.ics_text = icsText;
     if (events  !== undefined) args.events  = events;
+    if (calendarId)            args.calendar_id = calendarId;
+    if (includeLegacy)         args.include_legacy = true;
+    if (attribution)           args.attribution = attribution;
     const r = await unruhClient.callTool({ name: 'gcal_ingest', arguments: args });
     return parseToolText(r, { ok: false, new: [], updated: [], removed: [] });
   } catch (err) {
