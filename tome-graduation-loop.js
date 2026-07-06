@@ -20,7 +20,7 @@ import {
   modifyTomeFile, appendIdentity, createMemoryFull, searchMemory, enrich,
   searchGraphNodes, createGraphNode, createGraphEdge, getGraphSubgraph,
 } from './thalamus.js';
-import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, connectionForFeature } from './cerebellum.js';
 import { PROVIDER_URLS } from './providers.js';
 import { substituteMacros } from './macros.js';
 import { runOneGraduationTick, EXCLUDED_TOME_NAMES } from './tome-graduation.js';
@@ -115,7 +115,7 @@ async function callLLM({ provider, apiKey, model, prompt }) {
 
 async function decideGraduation(candidates) {
   const s = readSettingsSync();
-  const conn = primaryConnectionFrom(s);
+  const conn = connectionForFeature(s, 'tomeGraduation');
   if (!conn?.apiKey || !conn?.model || !PROVIDER_URLS[conn.provider]) {
     throw new Error('no usable primary connection');
   }

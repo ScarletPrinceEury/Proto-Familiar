@@ -324,6 +324,11 @@ const state = {
   discordBotToken:   '',
   discordWardUserId: '',
 
+  // Per-feature connection routing: { <feature>: <connectionId> }. Absent/empty
+  // for a feature → it uses the primary connection. Backend reads via
+  // connectionForFeature(). Synced so the server-side loops can honour it.
+  featureConnections: {},
+
   // Session audience (Village Support V2).
   // Tracks who is physically present during this session so the Familiar
   // can reference them and (in V3) gate knowledge appropriately.
@@ -368,6 +373,7 @@ const SERVER_SYNCED_KEYS = [
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
+  'featureConnections',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -438,6 +444,60 @@ function loadGcalTab() {
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
   refreshGcalSyncStatus();   // "last sync / last error" health line
   renderGcalCalendars();     // the discovered-calendars + attribution panel
+}
+
+// ── Connections modal ────────────────────────────────────────────────────────
+// The provider/key/model editor, saved connections + fallbacks, and per-feature
+// connection routing — moved out of the sidebar into one modal.
+function openConnectionsModal() {
+  $('connections-modal')?.classList.remove('hidden');
+  bindResizableModal('connections-modal-inner', 'pf-connections-modal-size');
+  writeSettingsToUI();        // populate provider/key/model/params from state
+  renderConnectionsList();    // saved connections + fallback order
+  renderFeatureConnectionRows(); // per-feature "which connection" dropdowns
+}
+function closeConnectionsModal() {
+  $('connections-modal')?.classList.add('hidden');
+}
+
+// Every background job that calls a model. Key = the feature id the backend
+// resolves via connectionForFeature(); label = what the ward sees. Chat itself
+// always uses the primary + fallbacks and isn't listed.
+const FEATURE_CONNECTIONS = [
+  { key: 'pondering',      label: 'Autonomous pondering' },
+  { key: 'memorization',   label: 'Memorization & coverage sweep' },
+  { key: 'triage',         label: 'Crisis triage (safety check-ins)' },
+  { key: 'reachout',       label: 'Warm reach-outs' },
+  { key: 'tomeGraduation', label: 'Tome graduation' },
+  // Session-handoff summaries are generated client-side on the chat connection,
+  // so they already follow whatever you're chatting on — no separate routing.
+];
+
+// Build the per-feature connection dropdowns. Options are the saved connections
+// (by id) plus "Primary (default)". Selection persists to state.featureConnections
+// and syncs to the server, where the loops read it.
+function renderFeatureConnectionRows() {
+  const host = $('feature-connection-rows');
+  if (!host) return;
+  const conns = Array.isArray(state.connections) ? state.connections : [];
+  const assigned = (state.featureConnections && typeof state.featureConnections === 'object') ? state.featureConnections : {};
+  host.innerHTML = FEATURE_CONNECTIONS.map(f => {
+    const cur = assigned[f.key] || '';
+    const opts = ['<option value="">Primary (default)</option>']
+      .concat(conns.map(c => `<option value="${esc(c.id)}" ${c.id === cur ? 'selected' : ''}>${esc(c.name || c.model || c.id)}</option>`))
+      .join('');
+    return `<div class="field-row"><label for="fc-${f.key}">${esc(f.label)}</label>` +
+           `<select id="fc-${f.key}" class="ke-select" data-feature="${f.key}">${opts}</select></div>`;
+  }).join('');
+  host.querySelectorAll('select[data-feature]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const next = { ...(state.featureConnections || {}) };
+      if (sel.value) next[sel.dataset.feature] = sel.value;
+      else delete next[sel.dataset.feature];
+      state.featureConnections = next;
+      saveSettings();
+    });
+  });
 }
 
 // The sync-health line in the gcal modal: when the last real attempt ran,
@@ -3680,6 +3740,11 @@ function init() {
     el.addEventListener('change', () => { readSettingsFromUI(); syncWebSearchPanels(); });
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
+
+  // Connections modal (provider/key/model editor + saved connections + per-feature routing).
+  $('connections-btn')?.addEventListener('click', openConnectionsModal);
+  $('connections-modal-close')?.addEventListener('click', closeConnectionsModal);
+  $('connections-modal')?.addEventListener('click', e => { if (e.target === $('connections-modal')) closeConnectionsModal(); });
 
   // Google Calendar config (now the "Calendar" tab in the Unruh modal —
   // populated by loadGcalTab() on tab-switch; no standalone modal anymore).

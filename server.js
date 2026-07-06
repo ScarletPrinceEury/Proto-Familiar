@@ -86,7 +86,7 @@ import { buildTimeAnchorBlock, wardLocalNowISO } from './relative-time.js';
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
 import {
-  readSettingsSync, primaryConnectionFrom,
+  readSettingsSync, primaryConnectionFrom, connectionForFeature,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
@@ -3177,7 +3177,7 @@ function startAutonomousPondering() {
     isEnabled: async () => {
       const s = readSettingsSync();
       if (s.ponderingEnabled === false) return false;
-      const conn = primaryConnectionFrom(s);
+      const conn = connectionForFeature(s, 'pondering');
       return !!(conn?.apiKey && conn?.provider && conn?.model);
     },
     getIntervalScale: async () => {
@@ -3291,8 +3291,8 @@ function startAutonomousPondering() {
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
       const s    = readSettingsSync();
-      const conn = primaryConnectionFrom(s);
-      if (!conn?.apiKey) throw new Error('no primary connection configured');
+      const conn = connectionForFeature(s, 'pondering');
+      if (!conn?.apiKey) throw new Error('no connection configured for pondering');
       const result = await ponderOnce({
         topic,
         provider: conn.provider,
@@ -3762,7 +3762,7 @@ function startReachout() {
     isEnabled: async () => {
       const s = readSettingsSync();
       if (s.warmthEnabled === false) return false;          // default-ON (undefined = on)
-      const conn = primaryConnectionFrom(s);
+      const conn = connectionForFeature(s, 'reachout');
       return !!(conn?.apiKey && conn?.provider && conn?.model);
     },
     getThreat,
@@ -3860,7 +3860,7 @@ function startMemorySweep() {
       const s = readSettingsSync();
       return s.memorySweepEnabled !== false; // default-ON (undefined = on)
     },
-    getConnection: () => primaryConnectionFrom(readSettingsSync()),
+    getConnection: () => connectionForFeature(readSettingsSync(), 'memorization'),
     onTick: (r) => { if (r.acted) console.log(`[sweep] enqueued ${r.enqueued} slice(s) across ${r.days} past day(s)`); },
     onError: (err) => console.warn('[sweep] tick error:', err?.message ?? err),
   });

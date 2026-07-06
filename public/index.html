@@ -67,82 +67,11 @@
         <!-- Connection -->
         <div class="sidebar-section">
           <h3 class="section-label">Connection</h3>
-
-          <div class="field">
-            <label for="provider-select">Provider</label>
-            <select id="provider-select">
-              <option value="nanogpt">NanoGPT</option>
-              <option value="zai">Z.ai — Standard API</option>
-              <option value="zai-coding">Z.ai — Coding Plan</option>
-              <option value="google">Google AI Studio — Gemini</option>
-            </select>
+          <div class="action-row">
+            <button id="connections-btn" class="btn-secondary">🔌 Connections &amp; models…</button>
           </div>
-
-          <div class="field">
-            <label for="api-key">API Key</label>
-            <div class="input-with-reveal">
-              <input type="password" id="api-key" placeholder="Bearer token…" autocomplete="off" spellcheck="false">
-              <button class="reveal-btn" data-target="api-key" aria-label="Show / hide key" title="Show / hide">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              </button>
-            </div>
-            <p class="field-hint" id="api-key-autofill-hint" style="display:none;">Filled from a saved connection with the same provider.</p>
-          </div>
-
-          <div class="field">
-            <label for="model-input">Model</label>
-            <input list="model-suggestions" id="model-input" placeholder="e.g. gpt-4o-mini" autocomplete="off" spellcheck="false">
-            <datalist id="model-suggestions"></datalist>
-          </div>
-
-          <div class="field-row">
-            <label for="streaming-toggle">Streaming</label>
-            <input type="checkbox" id="streaming-toggle" checked>
-          </div>
-
-          <div class="field">
-            <label for="temperature">Temperature: <span id="temp-display">0.8</span></label>
-            <input type="range" id="temperature" min="0" max="2" step="0.05" value="0.8">
-          </div>
-
-          <div class="field">
-            <label for="max-tokens">Max Tokens</label>
-            <input type="number" id="max-tokens" value="2048" min="128" max="128000" step="128">
-          </div>
-
-          <div class="field">
-            <label for="thalamus-dynamic-depth">Context-cache depth</label>
-            <input type="number" id="thalamus-dynamic-depth" value="4" min="1" max="50" step="1">
-            <div class="field-hint">How many messages from the end of the conversation the dynamic-thalamus block (memories / graph / temporal) is injected at. Identity stays at the top (cacheable); dynamic stuff goes here. Smaller = better model attention, larger = more cache hits on long sessions.</div>
-          </div>
-
-
+          <p class="field-hint">Your provider, API key, model, generation settings, saved connections &amp; fallbacks, and which connection each feature uses — all in one place.</p>
         </div>
-
-        <!-- Saved Connections & Fallbacks -->
-        <div class="sidebar-section collapsible" id="section-connections">
-          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-connections">
-            Saved Connections
-            <span class="chevron">▾</span>
-          </button>
-          <div class="section-content" id="content-connections">
-            <p class="field-hint">Save the fields above as a named connection. The first one is your <strong>primary</strong>; the rest are tried in order as <strong>fallbacks</strong> when a request fails or returns empty content.</p>
-
-            <ul id="connections-list" class="connections-list" aria-label="Saved connections"></ul>
-
-            <div class="field connection-save-row">
-              <input type="text" id="connection-name-input" placeholder="Name this connection (e.g. Primary, Work, Backup)" maxlength="64" spellcheck="false">
-              <button id="save-connection-btn" class="btn-secondary" type="button">+ Save current as connection</button>
-            </div>
-
-            <div class="field">
-              <label for="max-empty-retries">Retries on empty response</label>
-              <input type="number" id="max-empty-retries" min="0" max="10" step="1" value="2">
-              <p class="field-hint">If the model returns no content, retry the same connection this many times before moving to the next fallback.</p>
-            </div>
-          </div>
-        </div>
-
 
         <!-- Tools -->
         <div class="sidebar-section collapsible collapsed" id="section-tools">
@@ -429,6 +358,77 @@
 
   <!-- Hidden file input for profile/prompt imports -->
   <input type="file" id="file-input" accept=".txt,.md,.json" style="display:none" aria-hidden="true">
+
+  <!-- Connections modal (moved from the sidebar) -->
+  <div class="modal-backdrop hidden" id="connections-modal" role="dialog" aria-modal="true" aria-labelledby="connections-modal-title">
+    <div class="modal modal-wide modal-resizable" id="connections-modal-inner">
+      <div class="modal-header">
+        <h2 class="modal-title" id="connections-modal-title">Connections &amp; models</h2>
+        <button class="icon-btn modal-close" id="connections-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" style="overflow:auto; padding:12px">
+        <h3 class="section-label" style="margin-top:0">Active connection</h3>
+        <div class="field">
+          <label for="provider-select">Provider</label>
+          <select id="provider-select">
+            <option value="nanogpt">NanoGPT</option>
+            <option value="zai">Z.ai — Standard API</option>
+            <option value="zai-coding">Z.ai — Coding Plan</option>
+            <option value="google">Google AI Studio — Gemini</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="api-key">API Key</label>
+          <div class="input-with-reveal">
+            <input type="password" id="api-key" placeholder="Bearer token…" autocomplete="off" spellcheck="false">
+            <button class="reveal-btn" data-target="api-key" aria-label="Show / hide key" title="Show / hide">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <p class="field-hint" id="api-key-autofill-hint" style="display:none;">Filled from a saved connection with the same provider.</p>
+        </div>
+        <div class="field">
+          <label for="model-input">Model</label>
+          <input list="model-suggestions" id="model-input" placeholder="e.g. gpt-4o-mini" autocomplete="off" spellcheck="false">
+          <datalist id="model-suggestions"></datalist>
+        </div>
+        <div class="field-row">
+          <label for="streaming-toggle">Streaming</label>
+          <input type="checkbox" id="streaming-toggle" checked>
+        </div>
+        <div class="field">
+          <label for="temperature">Temperature: <span id="temp-display">0.8</span></label>
+          <input type="range" id="temperature" min="0" max="2" step="0.05" value="0.8">
+        </div>
+        <div class="field">
+          <label for="max-tokens">Max Tokens</label>
+          <input type="number" id="max-tokens" value="2048" min="128" max="128000" step="128">
+        </div>
+        <div class="field">
+          <label for="thalamus-dynamic-depth">Context-cache depth</label>
+          <input type="number" id="thalamus-dynamic-depth" value="4" min="1" max="50" step="1">
+          <div class="field-hint">How many messages from the end of the conversation the dynamic-thalamus block (memories / graph / temporal) is injected at. Identity stays at the top (cacheable); dynamic stuff goes here. Smaller = better model attention, larger = more cache hits on long sessions.</div>
+        </div>
+
+        <h3 class="section-label" style="margin-top:16px">Saved connections &amp; fallbacks</h3>
+        <p class="field-hint">Save the fields above as a named connection. The first one is your <strong>primary</strong>; the rest are tried in order as <strong>fallbacks</strong> when a request fails or returns empty content.</p>
+        <ul id="connections-list" class="connections-list" aria-label="Saved connections"></ul>
+        <div class="field connection-save-row">
+          <input type="text" id="connection-name-input" placeholder="Name this connection (e.g. Primary, Work, Backup)" maxlength="64" spellcheck="false">
+          <button id="save-connection-btn" class="btn-secondary" type="button">+ Save current as connection</button>
+        </div>
+        <div class="field">
+          <label for="max-empty-retries">Retries on empty response</label>
+          <input type="number" id="max-empty-retries" min="0" max="10" step="1" value="2">
+          <p class="field-hint">If the model returns no content, retry the same connection this many times before moving to the next fallback.</p>
+        </div>
+
+        <h3 class="section-label" style="margin-top:16px">Which connection each feature uses</h3>
+        <p class="field-hint">Every background job that calls a model can run on its own connection — handy for pointing cheap/idle work at a cheaper model while chat stays on your best one. "Primary" means it follows your primary connection above.</p>
+        <div id="feature-connection-rows"></div>
+      </div>
+    </div>
+  </div>
 
   <!-- Prompt inspector modal -->
   <div class="modal-backdrop hidden" id="prompt-inspector-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-inspector-title">
