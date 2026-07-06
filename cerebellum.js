@@ -2233,12 +2233,15 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
   },
 
-  recall: async ({ query, limit } = {}) => {
+  recall: async ({ query, limit } = {}, ctx = {}) => {
     const q = String(query ?? '').trim();
     if (!q) return 'I need something to recall — a topic, a name, or a fact to check.';
     const n = Math.min(20, Math.max(1, parseInt(limit, 10) || 5));
+    // Scope recall to what this turn may see (never ward-private on a gated
+    // villager turn; unscoped for ward/web). One decision, in discordReadAudiences.
+    const audiences = discordReadAudiences(ctx);
     try {
-      const res   = await searchMemory({ query: q, maxResults: n });
+      const res   = await searchMemory({ query: q, maxResults: n, audiences });
       const items = Array.isArray(res?.results) ? res.results : [];
       if (items.length === 0) return `I searched my memory for "${q}" and found nothing close — this looks new to me.`;
       const lines = items.map((r, i) => {
@@ -2250,6 +2253,33 @@ export const TOOL_EXECUTORS = {
       return `What I already hold close to "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
     } catch (err) {
       return `I couldn't reach my memory to recall just now (${err.message}).`;
+    }
+  },
+
+  // Villager → ward handoff. On a Discord DM with one of {{user}}'s people I have
+  // no other way to reach {{user}} — this passes what was just said up to them.
+  // Only ever moves information TOWARD {{user}} (never a leak, never covert: it's
+  // {{user}}'s own Familiar telling them about their villager), so it isn't grant-
+  // gated. Delivery rides enqueueAndDispatch → every channel {{user}} has (web
+  // banner + their Discord DM), deduped on the villager+content originId.
+  relay_to_ward: async ({ summary, from } = {}, ctx = {}) => {
+    const via = ctx?.viaVillager;
+    if (!via) return "There's no villager here to relay from — I only pass things up to {{user}} from someone in their Village.";
+    const note = String(summary ?? '').trim();
+    if (!note) return 'I need to say what to pass along to {{user}} before I can relay it.';
+    const who = (String(from ?? '').trim() || via.name || 'someone from the Village');
+    try {
+      await enqueueAndDispatch({
+        kind:     'relay_to_ward',
+        // Dedup identical re-sends from the same villager; a genuinely new note
+        // (different text) gets its own banner.
+        originId: `relay:${via.id ?? who}:${note.slice(0, 80)}`,
+        title:    `${who} asked me to pass something along`,
+        body:     note,
+      });
+      return quietOk(`Passed along to {{user}}: "${note.slice(0, 80)}${note.length > 80 ? '…' : ''}"`);
+    } catch (err) {
+      return `I couldn't reach {{user}} to pass that along just now (${err.message}). I'll tell ${who} it didn't go through.`;
     }
   },
 
@@ -3275,6 +3305,98 @@ function substituteToolMacros(tool, settings) {
     return node;
   };
   return walk(tool);
+}
+
+// ── Discord clearance-gated tools (discord-tools-build-spec) ─────────────────
+// On a Discord turn the Familiar's tools follow the SPEAKER's clearances. Ward
+// alone → full parity; a villager → relay + the grant-authorised subset;
+// stranger → none. The gate on RESULTS (audience-scoped reads) lives in the
+// executors + toolCtx; this decides only WHICH tools appear. Selection is an
+// explicit, fail-closed allowlist for villagers (a tool not named is absent,
+// whatever module it's in) — the ward's identity/graph/edit surface can never
+// leak onto a villager turn just because it shares a module with a safe read.
+
+export const RELAY_TO_WARD_TOOL_NAME = 'relay_to_ward';
+
+export const RELAY_TO_WARD_TOOL = {
+  type: 'function',
+  function: {
+    name: RELAY_TO_WARD_TOOL_NAME,
+    description: "I use this to hand something from {{user}}'s villager up to {{user}} themselves — a confirmation, a request, a plan, anything they'd want to know or act on — so it reaches them even though right now I'm only in a DM with this one person, not with {{user}}. I reach for it whenever what was just said matters to {{user}}, not only when I'm explicitly asked to pass it on. It reaches {{user}} on every channel they've set up. I pass along what was actually said — I never invent it.",
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: "What to pass to {{user}}, in my own clear words (e.g. 'Schmidt confirmed Tuesday 15:00 and wants email confirmation from you')." },
+        from:    { type: 'string', description: "Who this is from — the villager's name. I already know who I'm talking to here." },
+      },
+      required: ['summary'],
+    },
+  },
+};
+
+// Fail-closed per-grant allowlist of tool NAMES for a villager turn. Read tools
+// only in Pass 1 (writes join in Pass 2). Grant ladders (audience.js):
+// schedule:false|'coarse'|'full', memories:false|'shared'|true,
+// contacts:false|'care-visible'|true.
+export function villagerToolNames(grants = {}) {
+  const names = new Set([RELAY_TO_WARD_TOOL_NAME, 'get_datetime']);
+  const sched = grants.schedule;
+  const mem   = grants.memories;
+  const con   = grants.contacts;
+  // Schedule: availability/free-busy at any rung (never private labels — enforced
+  // in the read, and Unruh nodes carry no private-label leak for availability).
+  if (sched === 'coarse' || sched === 'full') {
+    names.add('schedule_availability');
+    names.add('schedule_find');
+  }
+  if (sched === 'full') {
+    names.add('schedule_export');
+    names.add('template_list');
+    names.add('gcal_list_calendars');
+  }
+  // Memory: audience-scoped recall (the executor scopes it to the room).
+  if (mem === 'shared' || mem === true) {
+    names.add('recall');
+  }
+  // Contacts: care-visible read; full adds the reach-out action (safety mirror
+  // still applies inside contact_trusted_person).
+  if (con === 'care-visible' || con === true) {
+    names.add('get_trusted_contacts');
+  }
+  if (con === true) {
+    names.add('contact_trusted_person');
+  }
+  return names;
+}
+
+// The audience scope for a memory/graph READ on a Discord turn — the safety
+// gate expressed as ONE pure, testable decision (reused by every gated read,
+// this pass's `recall` and the writes/reads to come). Ward or web (not a gated
+// discord turn) → undefined = unscoped (sees all, unchanged). A gated non-ward
+// turn → the room's visible-audience set, FAIL-CLOSED to [] (→ Phylactery
+// '0=1', nothing surfaces) if it's somehow absent, so a bug can never widen a
+// villager's read to ward-private.
+export function discordReadAudiences(ctx = {}) {
+  const gated = ctx?.discord === true && ctx?.wardPrivate === false;
+  if (!gated) return undefined;
+  return Array.isArray(ctx.audiences) ? ctx.audiences : [];
+}
+
+/**
+ * Compose the tool list for one Discord turn.
+ *   - ward (isWard)      → full web-chat parity (composeActiveTools).
+ *   - registered villager → relay + villagerToolNames(grants), macro-resolved.
+ *   - stranger / neither → [] (no tools, unchanged from today).
+ */
+export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools } = {}) {
+  if (isWard) return composeActiveTools(customTools, settings);
+  if (!isVillager) return [];
+  const allow = villagerToolNames(grants);
+  const picked = BUILTIN_TOOLS.filter(t => allow.has(t.function?.name));
+  if (allow.has(RELAY_TO_WARD_TOOL_NAME)) picked.push(RELAY_TO_WARD_TOOL);
+  // Same macro boundary the web path uses — {{user}}/{{char}} resolved in every
+  // description the model reads.
+  return picked.map(t => substituteToolMacros(t, settings));
 }
 
 /**

@@ -2245,8 +2245,16 @@ export async function dropPendingMemories(ids) {
  * Phylactery's memory_search; the caller formats it. Never the restricted
  * variant: recall is a ward-private act.
  */
-export async function searchMemory({ query, maxResults = 5 }) {
-  return callTool('memory_search', { query, instanceId: 'proto-familiar', maxResults });
+// `audiences` (optional) is the Pillar E recall gate — the SET of audience tags
+// the room may see (from visibleAudiences()). Omitted/undefined → ward sees all
+// (unscoped). An empty array → nothing surfaces ('0=1' server-side). Passing it
+// is how a gated (non-ward) Discord turn keeps ward-private memory out of a tool
+// result.
+export async function searchMemory({ query, maxResults = 5, audiences } = {}) {
+  return callTool('memory_search', {
+    query, instanceId: 'proto-familiar', maxResults,
+    ...(audiences !== undefined ? { audiences } : {}),
+  });
 }
 
 export async function searchMemoryRestricted({ query, roomAudience, threshold = 0.70 }) {
