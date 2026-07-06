@@ -116,29 +116,6 @@
             <div class="field-hint">How many messages from the end of the conversation the dynamic-thalamus block (memories / graph / temporal) is injected at. Identity stays at the top (cacheable); dynamic stuff goes here. Smaller = better model attention, larger = more cache hits on long sessions.</div>
           </div>
 
-          <div class="field-row">
-            <label for="handoff-toggle">Session handoff</label>
-            <input type="checkbox" id="handoff-toggle" checked>
-          </div>
-          <div class="field-hint">When on, the end of a session runs a short summary (cheapest connection) so the next session resumes mid-thought via the temporal context. One small extra generation per session boundary — turn off to save it.</div>
-
-          <div class="field-row">
-            <label for="pondering-toggle">Autonomous pondering</label>
-            <input type="checkbox" id="pondering-toggle" checked>
-          </div>
-          <div class="field-hint">When on, your Familiar thinks on its own during idle periods — picking topics from accrued interest weights and writing real entries to its Ponderings tome (which it can later reference in chat). Cadence is conservative (30 min – 6 hr depending on tier) and only runs when interests have been accrued; fresh installs stay silent. Off skips the whole thing.</div>
-
-          <div class="field">
-            <label for="pondering-scale">Pondering interval scale</label>
-            <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
-            <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
-          </div>
-
-          <div class="field-row" style="margin-top:8px">
-            <label for="memory-sweep-toggle">Memory coverage sweep</label>
-            <input type="checkbox" id="memory-sweep-toggle" checked>
-          </div>
-          <div class="field-hint">On by default. A slow background pass (every ~10 min) that memorizes any <em>past</em> day whose conversations never got ingested — for when a session didn't roll over cleanly (you switched sessions or cleared history). It only enqueues into the normal memorization worker (no extra LLM calls of its own) and skips the current day (handled live) and days already done. See the Coverage tab in the Knowledge editor. Off leaves memorization to session-end and the Memorize-now button only.</div>
 
         </div>
 
@@ -166,88 +143,6 @@
           </div>
         </div>
 
-        <!-- Names -->
-        <div class="sidebar-section">
-          <h3 class="section-label">Names</h3>
-          <div class="field">
-            <label for="user-name">User name</label>
-            <input type="text" id="user-name" placeholder="User" maxlength="64" spellcheck="false">
-          </div>
-          <div class="field">
-            <label for="char-name">AI name</label>
-            <input type="text" id="char-name" placeholder="Assistant" maxlength="64" spellcheck="false">
-          </div>
-          <p class="field-hint">Use <code>{{user}}</code> and <code>{{char}}</code> in prompts to insert these names. <code>{{elapsedTime}}</code> is the gap between the two most recent user messages in the chat history; <code>{{timeSinceLastSession}}</code> is the gap since the previous session ended.</p>
-        </div>
-
-        <!-- System Prompt -->
-        <div class="sidebar-section collapsible" id="section-system">
-          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-system">
-            System Prompt
-            <span class="chevron">▾</span>
-          </button>
-          <div class="section-content" id="content-system">
-            <textarea id="system-prompt" rows="5" placeholder="Core instructions for the AI…"></textarea>
-            <div class="field-actions">
-              <button class="btn-secondary import-btn" data-target="system-prompt">↑ Import file</button>
-              <button class="btn-ghost clear-field-btn" data-target="system-prompt">✕ Clear</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Character Profile -->
-        <div class="sidebar-section collapsible" id="section-char">
-          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-char">
-            Character Profile
-            <span class="chevron">▾</span>
-          </button>
-          <div class="section-content" id="content-char">
-            <textarea id="char-profile" rows="5" placeholder="Name, personality, background, speech patterns…"></textarea>
-            <div class="field-actions">
-              <button class="btn-secondary import-btn" data-target="char-profile">↑ Import file</button>
-              <button class="btn-ghost clear-field-btn" data-target="char-profile">✕ Clear</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- User Profile -->
-        <div class="sidebar-section collapsible" id="section-user">
-          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-user">
-            User Profile
-            <span class="chevron">▾</span>
-          </button>
-          <div class="section-content" id="content-user">
-            <textarea id="user-profile" rows="5" placeholder="Your name, preferences, context the AI should know about you…"></textarea>
-            <div class="field-actions">
-              <button class="btn-secondary import-btn" data-target="user-profile">↑ Import file</button>
-              <button class="btn-ghost clear-field-btn" data-target="user-profile">✕ Clear</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Post-History Prompt -->
-        <div class="sidebar-section collapsible" id="section-posthist">
-          <button class="section-label collapse-toggle" aria-expanded="true" aria-controls="content-posthist">
-            Post-History Prompt
-            <span class="chevron">▾</span>
-          </button>
-          <div class="section-content" id="content-posthist">
-            <p class="field-hint">Injected after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions. Choose the role it's sent as below.</p>
-            <textarea id="post-history-prompt" rows="4" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
-            <div class="field-actions">
-              <label class="field-label" style="margin-right:auto;display:flex;align-items:center;gap:0.4em;font-size:0.82em">
-                Role
-                <select id="post-history-role" style="font-size:1em">
-                  <option value="system">system</option>
-                  <option value="user">user</option>
-                  <option value="assistant">assistant</option>
-                </select>
-              </label>
-              <button class="btn-secondary import-btn" data-target="post-history-prompt">↑ Import file</button>
-              <button class="btn-ghost clear-field-btn" data-target="post-history-prompt">✕ Clear</button>
-            </div>
-          </div>
-        </div>
 
         <!-- Tools -->
         <div class="sidebar-section collapsible collapsed" id="section-tools">
@@ -747,6 +642,8 @@
         <button class="ke-tab"               data-tab="graph"     role="tab">Graph</button>
         <button class="ke-tab"               data-tab="identity"  role="tab">Identity</button>
         <button class="ke-tab"               data-tab="snapshots" role="tab">Snapshots</button>
+        <button class="ke-tab"               data-tab="prompts"   role="tab">Prompts</button>
+        <button class="ke-tab"               data-tab="behaviour" role="tab">Behaviour</button>
       </div>
       <div class="modal-body ke-body">
         <div class="ke-pane ke-pane-active" id="ke-pane-memories">
@@ -888,6 +785,90 @@
               <button id="ke-backup-restore" class="btn-ghost">Restore…</button>
             </div>
           </div>
+        </div>
+
+        <!-- PROMPTS PANE — base prompts (moved from the sidebar) -->
+        <div class="ke-pane" id="ke-pane-prompts" style="overflow:auto; padding:12px">
+          <div class="field">
+            <label for="user-name">User name</label>
+            <input type="text" id="user-name" placeholder="User" maxlength="64" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="char-name">AI name</label>
+            <input type="text" id="char-name" placeholder="Assistant" maxlength="64" spellcheck="false">
+          </div>
+          <p class="field-hint">Use <code>{{user}}</code> and <code>{{char}}</code> in prompts to insert these names. <code>{{elapsedTime}}</code> is the gap between the two most recent user messages in the chat history; <code>{{timeSinceLastSession}}</code> is the gap since the previous session ended.</p>
+
+          <div class="field" style="margin-top:12px">
+            <label for="system-prompt">System prompt</label>
+            <textarea id="system-prompt" rows="5" placeholder="Core instructions for the AI…"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="system-prompt">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="system-prompt">✕ Clear</button>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:12px">
+            <label for="char-profile">Character profile</label>
+            <textarea id="char-profile" rows="5" placeholder="Name, personality, background, speech patterns…"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="char-profile">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="char-profile">✕ Clear</button>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:12px">
+            <label for="user-profile">User profile</label>
+            <textarea id="user-profile" rows="5" placeholder="Your name, preferences, context the AI should know about you…"></textarea>
+            <div class="field-actions">
+              <button class="btn-secondary import-btn" data-target="user-profile">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="user-profile">✕ Clear</button>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:12px">
+            <label for="post-history-prompt">Post-history prompt</label>
+            <p class="field-hint">Injected after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions. Choose the role it's sent as below.</p>
+            <textarea id="post-history-prompt" rows="4" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
+            <div class="field-actions">
+              <label class="field-label" style="margin-right:auto;display:flex;align-items:center;gap:0.4em;font-size:0.82em">
+                Role
+                <select id="post-history-role" style="font-size:1em">
+                  <option value="system">system</option>
+                  <option value="user">user</option>
+                  <option value="assistant">assistant</option>
+                </select>
+              </label>
+              <button class="btn-secondary import-btn" data-target="post-history-prompt">↑ Import file</button>
+              <button class="btn-ghost clear-field-btn" data-target="post-history-prompt">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- BEHAVIOUR PANE — the Familiar's autonomous-self settings (moved from the sidebar) -->
+        <div class="ke-pane" id="ke-pane-behaviour" style="overflow:auto; padding:12px">
+          <div class="field-row" style="margin-top:0">
+            <label for="handoff-toggle">Session handoff</label>
+            <input type="checkbox" id="handoff-toggle" checked>
+          </div>
+          <div class="field-hint">When on, the end of a session runs a short summary (cheapest connection) so the next session resumes mid-thought via the temporal context. One small extra generation per session boundary — turn off to save it.</div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="pondering-toggle">Autonomous pondering</label>
+            <input type="checkbox" id="pondering-toggle" checked>
+          </div>
+          <div class="field-hint">When on, your Familiar thinks on its own during idle periods — picking topics from accrued interest weights and writing real entries to its Ponderings tome (which it can later reference in chat). Cadence is conservative (30 min – 6 hr depending on tier) and only runs when interests have been accrued; fresh installs stay silent. Off skips the whole thing.</div>
+          <div class="field">
+            <label for="pondering-scale">Pondering interval scale</label>
+            <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
+            <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
+          </div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="memory-sweep-toggle">Memory coverage sweep</label>
+            <input type="checkbox" id="memory-sweep-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. A slow background pass (every ~10 min) that memorizes any <em>past</em> day whose conversations never got ingested — for when a session didn't roll over cleanly (you switched sessions or cleared history). It only enqueues into the normal memorization worker (no extra LLM calls of its own) and skips the current day (handled live) and days already done. See the Coverage tab. Off leaves memorization to session-end and the Memorize-now button only.</div>
         </div>
       </div>
     </div>

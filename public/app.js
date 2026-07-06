@@ -5958,7 +5958,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
