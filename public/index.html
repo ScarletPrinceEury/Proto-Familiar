@@ -344,6 +344,8 @@
               rows="1"
               placeholder="Type a message…"
               aria-label="Message input"
+              autocomplete="off"
+              data-gramm="false"
             ></textarea>
             <button id="send-btn" class="btn-send" title="Send (Enter)" aria-label="Send message">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
@@ -785,7 +787,7 @@
 
           <div class="field" style="margin-top:12px">
             <label for="system-prompt">System prompt</label>
-            <textarea id="system-prompt" rows="5" placeholder="Core instructions for the AI…"></textarea>
+            <textarea id="system-prompt" rows="5" autocomplete="off" placeholder="Core instructions for the AI…"></textarea>
             <div class="field-actions">
               <button class="btn-secondary import-btn" data-target="system-prompt">↑ Import file</button>
               <button class="btn-ghost clear-field-btn" data-target="system-prompt">✕ Clear</button>
@@ -794,7 +796,7 @@
 
           <div class="field" style="margin-top:12px">
             <label for="char-profile">Character profile</label>
-            <textarea id="char-profile" rows="5" placeholder="Name, personality, background, speech patterns…"></textarea>
+            <textarea id="char-profile" rows="5" autocomplete="off" placeholder="Name, personality, background, speech patterns…"></textarea>
             <div class="field-actions">
               <button class="btn-secondary import-btn" data-target="char-profile">↑ Import file</button>
               <button class="btn-ghost clear-field-btn" data-target="char-profile">✕ Clear</button>
@@ -803,7 +805,7 @@
 
           <div class="field" style="margin-top:12px">
             <label for="user-profile">User profile</label>
-            <textarea id="user-profile" rows="5" placeholder="Your name, preferences, context the AI should know about you…"></textarea>
+            <textarea id="user-profile" rows="5" autocomplete="off" placeholder="Your name, preferences, context the AI should know about you…"></textarea>
             <div class="field-actions">
               <button class="btn-secondary import-btn" data-target="user-profile">↑ Import file</button>
               <button class="btn-ghost clear-field-btn" data-target="user-profile">✕ Clear</button>
@@ -813,7 +815,7 @@
           <div class="field" style="margin-top:12px">
             <label for="post-history-prompt">Post-history prompt</label>
             <p class="field-hint">Injected after the conversation history, right before the AI responds. Use for in-character direction or formatting instructions. Choose the role it's sent as below.</p>
-            <textarea id="post-history-prompt" rows="4" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
+            <textarea id="post-history-prompt" rows="4" autocomplete="off" placeholder="e.g. [Write {{char}}'s next reply, staying in character.]"></textarea>
             <div class="field-actions">
               <label class="field-label" style="margin-right:auto;display:flex;align-items:center;gap:0.4em;font-size:0.82em">
                 Role
