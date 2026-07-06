@@ -3416,13 +3416,11 @@ function initTailscaleToggle() {
 }
 
 // ── Logs modal ──────────────────────────────────────────────
-function openLogsModal() {
-  $('logs-modal').classList.remove('hidden');
-  refreshLogsList();
-}
-
+// Saved Sessions now lives as the "Sessions" tab in the Knowledge (Phylactery)
+// modal — refreshed by keSwitchTab('sessions'). Picking a session to load closes
+// the whole modal (back to chat), which is what closeLogsModal now does.
 function closeLogsModal() {
-  $('logs-modal').classList.add('hidden');
+  closeKnowledgeModal();
 }
 
 async function refreshLogsList() {
@@ -3871,12 +3869,8 @@ function init() {
   // ── Tailscale / external-access toggle ───────────────────────
   initTailscaleToggle();
 
-  // ── Logs modal ────────────────────────────────────────────
-  $('logs-btn').addEventListener('click', openLogsModal);
-  $('logs-modal-close').addEventListener('click', closeLogsModal);
-  $('logs-modal').addEventListener('click', e => {
-    if (e.target === $('logs-modal')) closeLogsModal();
-  });
+  // Saved Sessions is now the "Sessions" tab in the Knowledge modal
+  // (refreshed on tab-switch); no standalone Logs modal to wire.
 
   // ── Topic system ─────────────────────────────────────────────
   $('new-topic-btn').addEventListener('click', openTopicNameModal);
@@ -5958,7 +5952,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots', 'prompts', 'behaviour'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots', 'sessions', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -6028,6 +6022,7 @@ function keSwitchTab(tab) {
   }
   if (tab === 'identity')   keLoadIdentity();
   if (tab === 'snapshots')  keLoadSnapshots();
+  if (tab === 'sessions')   refreshLogsList();
 }
 
 function keSetDetail(paneId, html) { $(paneId).innerHTML = html; }
