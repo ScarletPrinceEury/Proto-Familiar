@@ -39,7 +39,8 @@ import { enrich, withLock, getScheduleWindow } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
-import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
+import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -749,6 +750,14 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
       `I am in a private Discord DM with ${speakerName} — someone from {{user}}'s Village, not {{user}} themselves. ` +
       'I am still myself: same voice, same temperament. The context I carry into this room is what my human has granted this person; whatever I don\'t find in my context, I simply don\'t have here.',
     );
+    // Capability awareness: I am not stuck merely talking here. If something said
+    // matters to {{user}}, I can hand it up to them myself (I don't have to be
+    // in a DM with {{user}} to reach them); and within what {{user}} has cleared
+    // this person for, I can actually act — the tools I hold this turn are the
+    // ones their clearance allows, and I only reach for what's genuinely there.
+    lines.push(
+      `If ${speakerName} says something {{user}} would want to know or act on, I pass it up to {{user}} myself rather than promising and leaving it — and within this person's clearance I can act here, not only talk.`,
+    );
   } else {
     const present = (participants ?? []).map(p => p.name).filter(Boolean).join(', ');
     lines.push(
@@ -921,7 +930,11 @@ async function touchLocation(locationKey, sessionId) {
 
 // ── LLM call ──────────────────────────────────────────────────────
 
-async function callChat({ conn, messages, settings }) {
+// Raw provider call — returns the parsed response object (with choices[0].message
+// .tool_calls / finish_reason), and accepts an optional `tools` array. This is
+// the shape runToolCallLoop's callUpstream needs. callChat below is the plain
+// string wrapper for the no-tools path.
+async function callChatRaw({ conn, messages, settings, tools }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const resp = await fetch(url, {
@@ -936,12 +949,18 @@ async function callChat({ conn, messages, settings }) {
       stream:      false,
       temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
       max_tokens:  1024,
+      ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
     }),
   });
   const text = await resp.text();
   if (!resp.ok) throw new Error(`provider ${conn.provider} returned ${resp.status}: ${text.slice(0, 200)}`);
   const data = JSON.parse(text);
   if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'provider error'));
+  return data;
+}
+
+async function callChat({ conn, messages, settings }) {
+  const data = await callChatRaw({ conn, messages, settings });
   const content = data.choices?.[0]?.message?.content ?? '';
   if (!content.trim()) throw new Error('provider returned empty content');
   return content;
@@ -1344,7 +1363,79 @@ async function handleTurn(gw, msg, decision) {
     { role: 'user', content: userContent },
   ];
 
-  const rawReply = await callChat({ conn, messages: apiMessages, settings });
+  // Discord clearance-gated tools (discord-tools-build-spec). The Familiar's
+  // tools this turn follow the SPEAKER: ward alone → full web-chat parity; a
+  // villager → the universal relay + their grant-authorised subset; a stranger →
+  // none. Off via PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED=1 or the Settings toggle;
+  // default on. No tools → the plain single call, exactly as before.
+  const toolsOn = process.env.PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED !== '1'
+    && settings.discordToolsEnabled !== false;
+  const isVillager = !decision.isWard && !!decision.villager;
+  const discordTools = toolsOn
+    ? composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings })
+    : [];
+
+  let rawReply;
+  if (discordTools.length) {
+    // The result gate rides in toolCtx: a non-ward turn is wardPrivate:false and
+    // carries the room's visible-audience set, so audience-scoped reads (recall)
+    // return only what this room may see — never ward-private. viaVillager lets
+    // relay_to_ward name who it's passing along from.
+    const toolCtx = {
+      discord:     true,
+      wardPrivate: audienceTag === 'ward-private',
+      audienceTag,
+      audiences:   audienceVisible,
+      grants:      audienceGrants ?? {},
+      apiKey:      conn.apiKey,
+      viaVillager: isVillager
+        ? { id: decision.villager?.id ?? null, name: decision.speakerName ?? decision.villager?.name ?? null }
+        : null,
+    };
+    // On a villager turn, audit every state-mutating tool with the causing
+    // villager before it runs — a villager-driven write is never silent. Reads
+    // and the ward's own turns run unwrapped.
+    const executeTool = isVillager
+      ? async (name, argsJson, tctx) => {
+          if (VILLAGER_WRITE_TOOLS.has(name)) {
+            let parsed; try { parsed = argsJson ? JSON.parse(argsJson) : {}; } catch { parsed = { _raw: String(argsJson).slice(0, 200) }; }
+            await logDiscordWrite({ villager: tctx?.viaVillager, tool: name, args: parsed, locationKey: decision.locationKey });
+          }
+          return executeToolCall(name, argsJson, tctx);
+        }
+      : executeToolCall;
+    try {
+      const { data } = await runToolCallLoop({
+        callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings, tools: roundTools ?? discordTools }),
+        baseMessages: apiMessages,
+        getTools:     () => discordTools,
+        executeTool,
+        toolCtx,
+      });
+      rawReply = data?.choices?.[0]?.message?.content ?? '';
+    } catch (err) {
+      // A whole-loop failure (e.g. provider error) must never cost the person a
+      // reply — fall back to a plain no-tools call.
+      console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
+      rawReply = await callChat({ conn, messages: apiMessages, settings }).catch(() => '');
+    }
+    // A tool chain can end with no closing text — don't send an empty message;
+    // accumulate the turn and stay quiet, like an abstain.
+    if (!rawReply || !rawReply.trim()) {
+      session.messages = [
+        ...(session.messages ?? []),
+        { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      ];
+      session.audienceTag = audienceTag;
+      session.updatedAt   = new Date().toISOString();
+      await writeSessionLog(session);
+      await touchLocation(decision.locationKey, session.sessionId);
+      console.log(`[discord] tool turn produced no closing text in ${decision.locationKey} — stayed quiet`);
+      return;
+    }
+  } else {
+    rawReply = await callChat({ conn, messages: apiMessages, settings });
+  }
 
   // Ambient 'llm' turn where I chose to stay quiet: accumulate the
   // message into the room (so the context is there next time) and send

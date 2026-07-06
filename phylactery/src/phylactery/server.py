@@ -182,6 +182,7 @@ def memory_create(
     confidence: Optional[float] = None,
     standalone: Optional[bool] = None,
     register: Optional[str] = None,
+    source_meta: Optional[dict] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to store a new memory about my human or our world. I reach for it
@@ -207,6 +208,7 @@ def memory_create(
         confidence=float(confidence) if confidence is not None else 1.0,
         standalone=bool(standalone),
         register=register or "episodic",
+        source_meta=source_meta if isinstance(source_meta, dict) else None,
         conn=_c(),
     )
     if not result.get("ok"):

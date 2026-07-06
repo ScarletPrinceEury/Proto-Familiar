@@ -500,6 +500,10 @@
             <div class="field checkbox-field">
               <label><input type="checkbox" id="discord-enabled"> Enable Discord presence</label>
             </div>
+            <div class="field checkbox-field">
+              <label><input type="checkbox" id="discord-tools-enabled"> Let your Familiar use tools on Discord</label>
+            </div>
+            <p class="field-hint">When on, your Familiar can <em>act</em> on Discord, not just talk — gated by each speaker's clearance. Alone with you it has its full toolset; a Villager gets only what their category grants (e.g. a scheduling-cleared Villager can check your availability or add a hold; a memory-cleared one can recall or note things). Villagers can always ask it to pass something up to you. Every Villager-caused change is recorded with who made it (<code>GET /api/discord-writes</code>). Hard off-switch: <code>PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED=1</code>.</p>
             <div class="field">
               <label for="discord-bot-token">Bot token <span class="label-hint">(from the Developer Portal)</span></label>
               <input type="password" id="discord-bot-token" placeholder="Bot token…" spellcheck="false" autocomplete="off">

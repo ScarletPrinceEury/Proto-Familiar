@@ -320,6 +320,7 @@ const state = {
   // get gated context, guild replies only when @-mentioned. The token
   // is server-synced so the gateway (which runs server-side) can read it.
   discordEnabled:    false,
+  discordToolsEnabled: true,   // clearance-gated tools on Discord turns; default ON
   discordBotToken:   '',
   discordWardUserId: '',
 
@@ -366,7 +367,7 @@ const SERVER_SYNCED_KEYS = [
   'gcalWriteEnabled', 'gcalWriteCommand',
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
-  'discordEnabled', 'discordBotToken', 'discordWardUserId',
+  'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -2775,6 +2776,8 @@ function readSettingsFromUI() {
   if (udwEl) state.userDiscordWebhook = udwEl.value.trim();
   const denEl = $('discord-enabled');
   if (denEl) state.discordEnabled = denEl.checked;
+  const dteEl = $('discord-tools-enabled');
+  if (dteEl) state.discordToolsEnabled = dteEl.checked;
   const dbtEl = $('discord-bot-token');
   if (dbtEl) state.discordBotToken = dbtEl.value.trim();
   const dwuEl = $('discord-ward-user-id');
@@ -2854,6 +2857,7 @@ function writeSettingsToUI() {
   syncWebSearchPanels();
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
+  setIfNotFocused($('discord-tools-enabled'), 'checked', state.discordToolsEnabled !== false);
   setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
   setIfNotFocused($('discord-ward-user-id'), 'value', state.discordWardUserId ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
@@ -3720,7 +3724,7 @@ function init() {
     'web-search-enabled', 'web-search-max-results', 'web-search-max-chars',
     'web-search-api-key', 'web-search-google-cse-id',
     'user-discord-webhook',
-    'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
+    'discord-enabled', 'discord-tools-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
