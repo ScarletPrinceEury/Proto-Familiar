@@ -4,8 +4,12 @@ import {
   villagerToolNames,
   composeDiscordTools,
   discordReadAudiences,
+  discordWriteProvenance,
   RELAY_TO_WARD_TOOL_NAME,
   RELAY_TO_WARD_TOOL,
+  VILLAGER_WRITE_TOOLS,
+  DISCORD_SCHEDULE_WRITE_TOOLS,
+  DISCORD_MEMORY_WRITE_TOOLS,
 } from '../cerebellum.js';
 
 // ── villagerToolNames: grant-based tool allowlist ────────────────────
@@ -32,14 +36,16 @@ test('villagerToolNames: schedule=coarse → schedule_availability and schedule_
   assert(!names.has('schedule_add_event'), 'should not contain schedule_add_event');
 });
 
-test('villagerToolNames: schedule=full → all schedule read tools plus template_list and gcal_list_calendars', () => {
+test('villagerToolNames: schedule=full → all schedule read tools plus template_list, gcal_list_calendars, and write tools', () => {
   const names = villagerToolNames({ schedule: 'full' });
   assert(names.has('schedule_availability'), 'should contain schedule_availability');
   assert(names.has('schedule_find'), 'should contain schedule_find');
   assert(names.has('schedule_export'), 'should contain schedule_export');
   assert(names.has('template_list'), 'should contain template_list');
   assert(names.has('gcal_list_calendars'), 'should contain gcal_list_calendars');
-  assert(!names.has('schedule_add_event'), 'should not contain schedule_add_event (write)');
+  // Pass 2: write tools now included
+  assert(names.has('schedule_add_event'), 'should contain schedule_add_event (write)');
+  assert(names.has('template_upsert'), 'should contain template_upsert (write)');
 });
 
 test('villagerToolNames: memories=shared → recall but not save_memory', () => {
@@ -48,10 +54,12 @@ test('villagerToolNames: memories=shared → recall but not save_memory', () => 
   assert(!names.has('save_memory'), 'should not contain save_memory');
 });
 
-test('villagerToolNames: memories=true → recall but not save_memory', () => {
+test('villagerToolNames: memories=true → recall AND memory write tools', () => {
   const names = villagerToolNames({ memories: true });
   assert(names.has('recall'), 'should contain recall');
-  assert(!names.has('save_memory'), 'should not contain save_memory');
+  // Pass 2: write tools now included
+  assert(names.has('save_memory'), 'should contain save_memory (write)');
+  assert(names.has('update_memory_by_id'), 'should contain update_memory_by_id (write)');
 });
 
 test('villagerToolNames: contacts=care-visible → get_trusted_contacts but NOT contact_trusted_person', () => {
@@ -80,9 +88,12 @@ test('villagerToolNames: combined grants', () => {
   assert(names.has('contact_trusted_person'), 'should have contact_trusted_person');
   // And the relay
   assert(names.has(RELAY_TO_WARD_TOOL_NAME), 'should have relay_to_ward');
-  // But not writes
-  assert(!names.has('save_memory'), 'should not contain save_memory');
-  assert(!names.has('update_identity'), 'should not contain update_identity');
+  // Pass 2: writes now included when granted
+  assert(names.has('save_memory'), 'should contain save_memory (write)');
+  assert(names.has('schedule_add_event'), 'should contain schedule_add_event (write)');
+  // But NOT ward-only or identity operations
+  assert(!names.has('update_identity'), 'should not contain update_identity (ward-only)');
+  assert(!names.has('delete_memory_by_id'), 'should not contain delete_memory_by_id (ward-only delete)');
 });
 
 // ── composeDiscordTools: ward vs villager vs stranger ────────────────
@@ -250,4 +261,156 @@ test('discordReadAudiences: gated turn, audiences non-array (string) → [] (fai
 
 test('discordReadAudiences: no argument → undefined (unscoped default)', () => {
   assert.equal(discordReadAudiences(), undefined);
+});
+
+// ── Pass 2: Write tools, provenance, audit logging ──────────────────────
+
+test('VILLAGER_WRITE_TOOLS is a Set containing schedule and memory writes', () => {
+  assert(VILLAGER_WRITE_TOOLS instanceof Set, 'should be a Set');
+  // Schedule writes
+  assert(VILLAGER_WRITE_TOOLS.has('schedule_add_event'), 'should have schedule_add_event');
+  assert(VILLAGER_WRITE_TOOLS.has('schedule_add_hold'), 'should have schedule_add_hold');
+  assert(VILLAGER_WRITE_TOOLS.has('schedule_delete'), 'should have schedule_delete');
+  assert(VILLAGER_WRITE_TOOLS.has('template_upsert'), 'should have template_upsert');
+  // Memory writes
+  assert(VILLAGER_WRITE_TOOLS.has('save_memory'), 'should have save_memory');
+  assert(VILLAGER_WRITE_TOOLS.has('update_memory_by_id'), 'should have update_memory_by_id');
+  // Non-writes should NOT be in VILLAGER_WRITE_TOOLS
+  assert(!VILLAGER_WRITE_TOOLS.has('recall'), 'should not have recall (read-only)');
+  assert(!VILLAGER_WRITE_TOOLS.has('schedule_availability'), 'should not have schedule_availability (read-only)');
+  assert(!VILLAGER_WRITE_TOOLS.has('relay_to_ward'), 'should not have relay_to_ward (notification)');
+});
+
+test('DISCORD_SCHEDULE_WRITE_TOOLS is an array of schedule mutations', () => {
+  assert(Array.isArray(DISCORD_SCHEDULE_WRITE_TOOLS), 'should be an array');
+  assert(DISCORD_SCHEDULE_WRITE_TOOLS.includes('schedule_add_event'), 'should include schedule_add_event');
+  assert(DISCORD_SCHEDULE_WRITE_TOOLS.includes('schedule_add_hold'), 'should include schedule_add_hold');
+  assert(DISCORD_SCHEDULE_WRITE_TOOLS.includes('schedule_delete'), 'should include schedule_delete');
+  assert(DISCORD_SCHEDULE_WRITE_TOOLS.includes('template_upsert'), 'should include template_upsert');
+  // No memory writes should be in schedule array
+  assert(!DISCORD_SCHEDULE_WRITE_TOOLS.includes('save_memory'), 'should not have save_memory');
+});
+
+test('DISCORD_MEMORY_WRITE_TOOLS is an array of memory mutations', () => {
+  assert(Array.isArray(DISCORD_MEMORY_WRITE_TOOLS), 'should be an array');
+  assert(DISCORD_MEMORY_WRITE_TOOLS.includes('save_memory'), 'should include save_memory');
+  assert(DISCORD_MEMORY_WRITE_TOOLS.includes('update_memory_by_id'), 'should include update_memory_by_id');
+  assert(DISCORD_MEMORY_WRITE_TOOLS.includes('move_memory_date'), 'should include move_memory_date');
+  assert(DISCORD_MEMORY_WRITE_TOOLS.includes('memorize_now'), 'should include memorize_now');
+  // Deletes are ward-only
+  assert(!DISCORD_MEMORY_WRITE_TOOLS.includes('delete_memory_by_id'), 'should not have delete_memory_by_id (ward-only)');
+  assert(!DISCORD_MEMORY_WRITE_TOOLS.includes('delete_memory'), 'should not have delete_memory (ward-only)');
+});
+
+test('villagerToolNames: schedule=full includes all schedule write tools', () => {
+  const names = villagerToolNames({ schedule: 'full' });
+  for (const tool of DISCORD_SCHEDULE_WRITE_TOOLS) {
+    assert(names.has(tool), `should include ${tool}`);
+  }
+});
+
+test('villagerToolNames: schedule=coarse excludes all schedule write tools', () => {
+  const names = villagerToolNames({ schedule: 'coarse' });
+  for (const tool of DISCORD_SCHEDULE_WRITE_TOOLS) {
+    assert(!names.has(tool), `should not include ${tool}`);
+  }
+});
+
+test('villagerToolNames: memories=true includes all memory write tools', () => {
+  const names = villagerToolNames({ memories: true });
+  for (const tool of DISCORD_MEMORY_WRITE_TOOLS) {
+    assert(names.has(tool), `should include ${tool}`);
+  }
+});
+
+test('villagerToolNames: memories=shared excludes all memory write tools', () => {
+  const names = villagerToolNames({ memories: 'shared' });
+  for (const tool of DISCORD_MEMORY_WRITE_TOOLS) {
+    assert(!names.has(tool), `should not include ${tool}`);
+  }
+  // But should still have recall
+  assert(names.has('recall'), 'should still have recall');
+});
+
+test('villagerToolNames: schedule=full does NOT include schedule_push_to_google (ward-only)', () => {
+  const names = villagerToolNames({ schedule: 'full' });
+  assert(!names.has('schedule_push_to_google'), 'should not have schedule_push_to_google (ward-only external write)');
+});
+
+// ── discordWriteProvenance: audit trail for villager-caused writes ────────────
+
+test('discordWriteProvenance: empty context → null', () => {
+  assert.equal(discordWriteProvenance({}), null);
+});
+
+test('discordWriteProvenance: ward private turn (wardPrivate:true) → null', () => {
+  const result = discordWriteProvenance({
+    discord: true,
+    wardPrivate: true,
+    viaVillager: { id: 'v1', name: 'Bob' },
+  });
+  assert.equal(result, null, 'ward-private turns have no provenance');
+});
+
+test('discordWriteProvenance: no discord flag → null', () => {
+  const result = discordWriteProvenance({
+    wardPrivate: false,
+    viaVillager: { id: 'v1', name: 'Bob' },
+  });
+  assert.equal(result, null);
+});
+
+test('discordWriteProvenance: gated villager turn with viaVillager → provenance object', () => {
+  const result = discordWriteProvenance({
+    discord: true,
+    wardPrivate: false,
+    audienceTag: 'villager:v1',
+    viaVillager: { id: 'v1', name: 'Bob' },
+  });
+  assert(result !== null, 'should return an object');
+  assert.equal(result.audience, 'villager:v1', 'audience should match audienceTag');
+  assert.equal(result.sourceMeta.via, 'discord-villager', 'via should be discord-villager');
+  assert.equal(result.sourceMeta.villager, 'Bob', 'villager should be the name');
+  assert.equal(result.sourceMeta.villagerId, 'v1', 'villagerId should be the id');
+});
+
+test('discordWriteProvenance: villager with missing id → sourceMeta has via and villager, no villagerId', () => {
+  const result = discordWriteProvenance({
+    discord: true,
+    wardPrivate: false,
+    viaVillager: { name: 'Alice' },
+  });
+  assert(result !== null, 'should return an object');
+  assert.equal(result.sourceMeta.via, 'discord-villager');
+  assert.equal(result.sourceMeta.villager, 'Alice');
+  assert(!('villagerId' in result.sourceMeta), 'should not have villagerId key when id is missing');
+});
+
+test('discordWriteProvenance: gated turn but no viaVillager → null', () => {
+  const result = discordWriteProvenance({
+    discord: true,
+    wardPrivate: false,
+    audienceTag: 'villager:v1',
+  });
+  assert.equal(result, null, 'requires viaVillager to return provenance');
+});
+
+test('discordWriteProvenance: villager with no name in viaVillager → defaults to "a villager"', () => {
+  const result = discordWriteProvenance({
+    discord: true,
+    wardPrivate: false,
+    viaVillager: { id: 'v99' },
+  });
+  assert(result !== null, 'should return an object');
+  assert.equal(result.sourceMeta.villager, 'a villager', 'should use default name');
+});
+
+test('discordWriteProvenance: no audienceTag → audience is undefined', () => {
+  const result = discordWriteProvenance({
+    discord: true,
+    wardPrivate: false,
+    viaVillager: { id: 'v1', name: 'Bob' },
+  });
+  assert(result !== null, 'should return an object');
+  assert.equal(result.audience, undefined, 'audience should be undefined when audienceTag is missing');
 });

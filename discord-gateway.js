@@ -39,7 +39,8 @@ import { enrich, withLock, getScheduleWindow } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
-import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
+import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -749,6 +750,14 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
       `I am in a private Discord DM with ${speakerName} — someone from {{user}}'s Village, not {{user}} themselves. ` +
       'I am still myself: same voice, same temperament. The context I carry into this room is what my human has granted this person; whatever I don\'t find in my context, I simply don\'t have here.',
     );
+    // Capability awareness: I am not stuck merely talking here. If something said
+    // matters to {{user}}, I can hand it up to them myself (I don't have to be
+    // in a DM with {{user}} to reach them); and within what {{user}} has cleared
+    // this person for, I can actually act — the tools I hold this turn are the
+    // ones their clearance allows, and I only reach for what's genuinely there.
+    lines.push(
+      `If ${speakerName} says something {{user}} would want to know or act on, I pass it up to {{user}} myself rather than promising and leaving it — and within this person's clearance I can act here, not only talk.`,
+    );
   } else {
     const present = (participants ?? []).map(p => p.name).filter(Boolean).join(', ');
     lines.push(
@@ -1383,12 +1392,24 @@ async function handleTurn(gw, msg, decision) {
         ? { id: decision.villager?.id ?? null, name: decision.speakerName ?? decision.villager?.name ?? null }
         : null,
     };
+    // On a villager turn, audit every state-mutating tool with the causing
+    // villager before it runs — a villager-driven write is never silent. Reads
+    // and the ward's own turns run unwrapped.
+    const executeTool = isVillager
+      ? async (name, argsJson, tctx) => {
+          if (VILLAGER_WRITE_TOOLS.has(name)) {
+            let parsed; try { parsed = argsJson ? JSON.parse(argsJson) : {}; } catch { parsed = { _raw: String(argsJson).slice(0, 200) }; }
+            await logDiscordWrite({ villager: tctx?.viaVillager, tool: name, args: parsed, locationKey: decision.locationKey });
+          }
+          return executeToolCall(name, argsJson, tctx);
+        }
+      : executeToolCall;
     try {
       const { data } = await runToolCallLoop({
         callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings, tools: roundTools ?? discordTools }),
         baseMessages: apiMessages,
         getTools:     () => discordTools,
-        executeTool:  executeToolCall,
+        executeTool,
         toolCtx,
       });
       rawReply = data?.choices?.[0]?.message?.content ?? '';

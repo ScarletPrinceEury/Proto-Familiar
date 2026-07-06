@@ -1227,6 +1227,18 @@ app.get('/api/reachout-events', async (_req, res) => {
   }
 });
 
+// Villager-write audit trail (Discord tools). Every state-mutating tool a
+// villager triggered through the Familiar, with who caused it — so a
+// villager-driven write is auditable, not silent.
+app.get('/api/discord-writes', async (_req, res) => {
+  try {
+    const { readDiscordWrites } = await import('./discord-write-log.js');
+    res.json(await readDiscordWrites({ limit: 200 }));
+  } catch {
+    res.json([]);
+  }
+});
+
 // Health check
 app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
 app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));

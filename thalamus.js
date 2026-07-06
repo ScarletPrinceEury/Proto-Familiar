@@ -2164,7 +2164,7 @@ export async function reportSurfacingOutcomes({ responseText, bookmarks }) {
  * @param {{ content: string, granularity: string, date?: string, slug?: string, instanceId?: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-export async function createMemory({ content, granularity = 'daily', date, slug, register = 'episodic', instanceId = 'proto-familiar' }) {
+export async function createMemory({ content, granularity = 'daily', date, slug, register = 'episodic', audience, sourceMeta, instanceId = 'proto-familiar' }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2172,6 +2172,11 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
     const args = { content, granularity, date: date ?? today, instanceId };
     if (slug) args.slug = slug;
     if (register && register !== 'episodic') args.register = register;
+    // Audience clamp + provenance for a write caused by someone acting through me
+    // (a villager on Discord) — the record then carries WHO caused it and lands in
+    // the room's circle, not ward-private.
+    if (audience) args.audience = audience;
+    if (sourceMeta && typeof sourceMeta === 'object') args.source_meta = sourceMeta;
     await mcpClient.callTool({ name: 'memory_create', arguments: args });
     console.log(`[thalamus] createMemory() saved ${granularity}${register !== 'episodic' ? `/${register}` : ''} memory${slug ? ` (slug=${slug})` : ''}`);
     return { ok: true };

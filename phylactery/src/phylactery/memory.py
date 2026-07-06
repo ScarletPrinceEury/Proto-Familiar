@@ -67,6 +67,25 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+def _source_label(source_json: str | None) -> str | None:
+    """A compact 'who caused this' label for recall results — surfaced ONLY when a
+    memory was written by someone other than me (e.g. a villager acting through me
+    on Discord). Returns None for my own memorization writes (the common case) so
+    normal results stay clean. This is the Familiar-facing half of provenance: it
+    lets me SEE a memory's source when I recall it, and decide whether to trust it."""
+    if not source_json:
+        return None
+    try:
+        s = json.loads(source_json)
+    except Exception:
+        return None
+    via = s.get("via")
+    if not via or via == "memorization":
+        return None
+    who = s.get("villager") or s.get("author")
+    return f"{who} (via {via})" if who else str(via)
+
+
 def _row_to_thin(row: sqlite3.Row) -> dict:
     """Thin projection for recall results — id rides in, body stays server-side."""
     return {
@@ -138,7 +157,7 @@ def search(
             # KNN via sqlite-vec.
             rows = conn.execute(f"""
                 SELECT m.id, m.granularity, m.register, m.date_key, m.content, m.audience,
-                       m.care_weight, m.last_recalled_at,
+                       m.care_weight, m.last_recalled_at, m.source_json,
                        v.distance
                 FROM memory_vecs v
                 JOIN memories m ON m.id = v.memory_id
@@ -154,8 +173,12 @@ def search(
                 similarity = max(0.0, 1.0 - dist / 2.0)
                 dw = _decay_weight(r["last_recalled_at"], r["care_weight"])
                 score = similarity * dw
-                scored.append({"id": r["id"], "granularity": r["granularity"], "register": r["register"],
-                               "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": round(score, 4)})
+                item = {"id": r["id"], "granularity": r["granularity"], "register": r["register"],
+                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": round(score, 4)}
+                lbl = _source_label(r["source_json"])
+                if lbl:
+                    item["source"] = lbl
+                scored.append(item)
             scored.sort(key=lambda x: x["score"], reverse=True)
             results = scored[:max_results]
         except Exception:
@@ -354,6 +377,7 @@ def create(
     confidence: float = 1.0,
     standalone: bool = False,
     register: str = "episodic",
+    source_meta: dict | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     if granularity not in VALID_GRANULARITIES:
@@ -392,7 +416,14 @@ def create(
             dk = date_key or _today()
             slug = None
 
-        source = json.dumps({"author": source_author, "via": "memorization", "at": now})
+        # Provenance. `source_meta` (when a write is attributable to someone other
+        # than me — e.g. a villager acting through me on Discord) is merged in and
+        # may override `via`, so a memory carries WHO caused it. This is what lets
+        # the Familiar reevaluate later whether to trust a given source.
+        src = {"author": source_author, "via": "memorization", "at": now}
+        if source_meta:
+            src.update(source_meta)
+        source = json.dumps(src)
 
         # Semantic dedup/merge — fold a near-identical fact into an existing
         # memory instead of piling up paraphrase duplicates (the consent-queue

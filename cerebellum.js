@@ -2028,7 +2028,7 @@ export const TOOL_EXECUTORS = {
     return "Done — I've set this conversation to be drawn into my long-term memory now, so it carries across to wherever we talk next. I'll still check with you before keeping anything sensitive.";
   },
 
-  save_memory: async ({ content, granularity, title, register }) => {
+  save_memory: async ({ content, granularity, title, register }, ctx = {}) => {
     if (!content || typeof content !== 'string' || !content.trim()) return 'Failed to save memory: content is required.';
     if (content.length > 8192) return 'Failed to save memory: content exceeds 8 KB limit.';
     // A me/ward standing truth is identity-grade: filed as a standalone
@@ -2045,7 +2045,14 @@ export const TOOL_EXECUTORS = {
       slug = deriveMemorySlug(title) ?? deriveMemorySlug(content) ?? `memory-${Date.now()}`;
     }
     try {
-      const result = await createMemory({ content: content.trim(), granularity: effGranularity, slug, register: reg });
+      // On a villager Discord turn, stamp who caused this write and land it in
+      // the room's circle (never ward-private) — provenance so I can weigh the
+      // source later. Ward/web writes are my own authorship, unchanged.
+      const prov = discordWriteProvenance(ctx);
+      const result = await createMemory({
+        content: content.trim(), granularity: effGranularity, slug, register: reg,
+        ...(prov ? { audience: prov.audience, sourceMeta: prov.sourceMeta } : {}),
+      });
       if (!result.ok) return `Memory save failed: ${result.error ?? 'unknown error'}`;
       // me/ward standing truths read back in their own voice so I know where it landed.
       if (reg !== 'episodic') {
@@ -2248,7 +2255,10 @@ export const TOOL_EXECUTORS = {
         const score = ((r.score ?? r.vectorScore ?? 0) * 100).toFixed(0);
         const addr  = [r.granularity, r.date].filter(Boolean).join('/');
         const idTag = r.id != null ? `, id ${r.id}` : '';
-        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match) ${(r.excerpt ?? r.content ?? '').trim()}`;
+        // Provenance rides in when a memory wasn't mine to author (a villager put
+        // it here) — so I can see the source and weigh how much to trust it.
+        const srcTag = r.source ? ` [source: ${r.source}]` : '';
+        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}`;
       });
       return `What I already hold close to "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
     } catch (err) {
@@ -3334,10 +3344,24 @@ export const RELAY_TO_WARD_TOOL = {
   },
 };
 
-// Fail-closed per-grant allowlist of tool NAMES for a villager turn. Read tools
-// only in Pass 1 (writes join in Pass 2). Grant ladders (audience.js):
-// schedule:false|'coarse'|'full', memories:false|'shared'|true,
-// contacts:false|'care-visible'|true.
+// The state-mutating tools a villager can reach (schedule:'full' / memories:true).
+// Exported so the gateway can audit-log exactly these on a villager turn — every
+// villager-caused write records who caused it. Destructive deletes and the
+// external Google-push are deliberately absent (ward-only).
+export const DISCORD_SCHEDULE_WRITE_TOOLS = [
+  'schedule_add_event', 'schedule_add_task', 'schedule_add_reminder',
+  'schedule_add_phase', 'schedule_add_need', 'schedule_add_hold',
+  'schedule_assign_time', 'schedule_snooze_task', 'schedule_resolve',
+  'schedule_delete', 'schedule_link',
+  'template_upsert', 'template_delete', 'template_apply',
+  'gcal_attribute_calendar',
+];
+export const DISCORD_MEMORY_WRITE_TOOLS = ['save_memory', 'update_memory_by_id', 'move_memory_date', 'memorize_now'];
+export const VILLAGER_WRITE_TOOLS = new Set([...DISCORD_SCHEDULE_WRITE_TOOLS, ...DISCORD_MEMORY_WRITE_TOOLS]);
+
+// Fail-closed per-grant allowlist of tool NAMES for a villager turn. Grant
+// ladders (audience.js): schedule:false|'coarse'|'full',
+// memories:false|'shared'|true, contacts:false|'care-visible'|true.
 export function villagerToolNames(grants = {}) {
   const names = new Set([RELAY_TO_WARD_TOOL_NAME, 'get_datetime']);
   const sched = grants.schedule;
@@ -3353,10 +3377,20 @@ export function villagerToolNames(grants = {}) {
     names.add('schedule_export');
     names.add('template_list');
     names.add('gcal_list_calendars');
+    // Writes (Pass 2). Every one is audit-logged with the causing villager. The
+    // external real-calendar push (schedule_push_to_google) stays ward-only — a
+    // villager shouldn't mutate {{user}}'s actual Google calendar from a DM.
+    for (const w of DISCORD_SCHEDULE_WRITE_TOOLS) names.add(w);
   }
   // Memory: audience-scoped recall (the executor scopes it to the room).
   if (mem === 'shared' || mem === true) {
     names.add('recall');
+  }
+  // Memory writes (Pass 2): contribute/correct/re-file, each stamped with the
+  // villager's provenance so I can weigh the source later. DELETES stay ward-only
+  // (destroying {{user}}'s memory from a villager DM is a different risk class).
+  if (mem === true) {
+    for (const w of DISCORD_MEMORY_WRITE_TOOLS) names.add(w);
   }
   // Contacts: care-visible read; full adds the reach-out action (safety mirror
   // still applies inside contact_trusted_person).
@@ -3380,6 +3414,25 @@ export function discordReadAudiences(ctx = {}) {
   const gated = ctx?.discord === true && ctx?.wardPrivate === false;
   if (!gated) return undefined;
   return Array.isArray(ctx.audiences) ? ctx.audiences : [];
+}
+
+// Provenance + audience clamp for a WRITE a villager caused by acting through me
+// on Discord. Null on ward/web turns (my own authorship, no clamp). Reused by
+// every gated write executor so attribution is UNIFORM — a villager-caused write
+// always records who caused it and lands in the room's circle, never ward-private.
+// This is what makes "let a villager contribute, then judge the source later"
+// real rather than write-only bookkeeping.
+export function discordWriteProvenance(ctx = {}) {
+  const via = ctx?.viaVillager;
+  if (!(ctx?.discord === true && ctx?.wardPrivate === false && via)) return null;
+  return {
+    audience: ctx.audienceTag || undefined,
+    sourceMeta: {
+      via:      'discord-villager',
+      villager: via.name || 'a villager',
+      ...(via.id ? { villagerId: via.id } : {}),
+    },
+  };
 }
 
 /**
