@@ -24,7 +24,7 @@
 
 import { PROVIDER_URLS } from './providers.js';
 import { enrich } from './thalamus.js';
-import { readSettingsSync, primaryConnectionFrom, getRecentSessionMessages } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages } from './cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
@@ -154,7 +154,7 @@ export async function decideReachoutViaLLM({
   getRecentMessagesFn = getRecentSessionMessages,
 } = {}) {
   const s = readSettingsSync();
-  const conn = primaryConnectionFrom(s);
+  const conn = connectionForFeature(s, 'reachout');
   if (!conn?.apiKey || !conn?.model) return { action: 'wait' };
   const url = PROVIDER_URLS[conn.provider];
   if (!url) return { action: 'wait' };

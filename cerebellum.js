@@ -145,6 +145,22 @@ export function primaryConnectionFrom(settings) {
   return conns.find(c => c?.id === id) ?? null;
 }
 
+// Resolve the connection a given background feature should run on. The ward can
+// assign a specific saved connection per feature (settings.featureConnections,
+// set in the Connections modal) — unset, or a stale/invalid id, falls back to the
+// primary. Same shape as primaryConnectionFrom. Crisis triage is assignable too:
+// that is the ward's explicit, recorded choice — with no assignment it uses the
+// primary like everything else, so the safe default is unchanged.
+export function connectionForFeature(settings, feature) {
+  const map = settings?.featureConnections;
+  const id  = (map && typeof map === 'object') ? map[feature] : null;
+  if (id && Array.isArray(settings?.connections)) {
+    const c = settings.connections.find(x => x?.id === id && x?.apiKey && x?.model);
+    if (c) return c;
+  }
+  return primaryConnectionFrom(settings);
+}
+
 // ── Triage event log ─────────────────────────────────────────────
 // Persistent log for all triage decisions — survives outbox
 // acknowledgement so past reach-outs are always visible for debugging
@@ -529,7 +545,9 @@ export async function checkAndFirePendingContacts({
 
 export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const s = readSettingsSync();
-  const conn = primaryConnectionFrom(s);
+  // Ward-assignable per-feature connection (the ward's explicit, recorded choice
+  // to allow this for triage; unset → primary, so the safe default is unchanged).
+  const conn = connectionForFeature(s, 'triage');
   if (!conn?.apiKey) return { action: 'wait' };
 
   const url = PROVIDER_URLS[conn.provider];

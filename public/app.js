@@ -324,6 +324,11 @@ const state = {
   discordBotToken:   '',
   discordWardUserId: '',
 
+  // Per-feature connection routing: { <feature>: <connectionId> }. Absent/empty
+  // for a feature → it uses the primary connection. Backend reads via
+  // connectionForFeature(). Synced so the server-side loops can honour it.
+  featureConnections: {},
+
   // Session audience (Village Support V2).
   // Tracks who is physically present during this session so the Familiar
   // can reference them and (in V3) gate knowledge appropriately.
@@ -368,6 +373,7 @@ const SERVER_SYNCED_KEYS = [
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
+  'featureConnections',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -430,15 +436,68 @@ function closeWebSearchModal() {
 // Google Calendar config lives in a modal (the out-of-the-box toggle stays in
 // the sidebar; everything else — source, sign-in, write-back, interval — opens
 // here, mirroring the web-search backend modal).
-function openGcalModal() {
-  writeSettingsToUI();       // reflect current state into the modal fields
+// Google Calendar now lives as the "Calendar" tab in the Unruh (temporal) modal
+// rather than a standalone modal. teSwitchTab('calendar') calls this to populate
+// + refresh the panel; there's no modal to open/close anymore.
+function loadGcalTab() {
+  writeSettingsToUI();       // reflect current state into the fields
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
   refreshGcalSyncStatus();   // "last sync / last error" health line
   renderGcalCalendars();     // the discovered-calendars + attribution panel
-  $('gcal-modal')?.classList.remove('hidden');
 }
-function closeGcalModal() {
-  $('gcal-modal')?.classList.add('hidden');
+
+// ── Connections modal ────────────────────────────────────────────────────────
+// The provider/key/model editor, saved connections + fallbacks, and per-feature
+// connection routing — moved out of the sidebar into one modal.
+function openConnectionsModal() {
+  $('connections-modal')?.classList.remove('hidden');
+  bindResizableModal('connections-modal-inner', 'pf-connections-modal-size');
+  writeSettingsToUI();        // populate provider/key/model/params from state
+  renderConnectionsList();    // saved connections + fallback order
+  renderFeatureConnectionRows(); // per-feature "which connection" dropdowns
+}
+function closeConnectionsModal() {
+  $('connections-modal')?.classList.add('hidden');
+}
+
+// Every background job that calls a model. Key = the feature id the backend
+// resolves via connectionForFeature(); label = what the ward sees. Chat itself
+// always uses the primary + fallbacks and isn't listed.
+const FEATURE_CONNECTIONS = [
+  { key: 'pondering',      label: 'Autonomous pondering' },
+  { key: 'memorization',   label: 'Memorization & coverage sweep' },
+  { key: 'triage',         label: 'Crisis triage (safety check-ins)' },
+  { key: 'reachout',       label: 'Warm reach-outs' },
+  { key: 'tomeGraduation', label: 'Tome graduation' },
+  // Session-handoff summaries are generated client-side on the chat connection,
+  // so they already follow whatever you're chatting on — no separate routing.
+];
+
+// Build the per-feature connection dropdowns. Options are the saved connections
+// (by id) plus "Primary (default)". Selection persists to state.featureConnections
+// and syncs to the server, where the loops read it.
+function renderFeatureConnectionRows() {
+  const host = $('feature-connection-rows');
+  if (!host) return;
+  const conns = Array.isArray(state.connections) ? state.connections : [];
+  const assigned = (state.featureConnections && typeof state.featureConnections === 'object') ? state.featureConnections : {};
+  host.innerHTML = FEATURE_CONNECTIONS.map(f => {
+    const cur = assigned[f.key] || '';
+    const opts = ['<option value="">Primary (default)</option>']
+      .concat(conns.map(c => `<option value="${esc(c.id)}" ${c.id === cur ? 'selected' : ''}>${esc(c.name || c.model || c.id)}</option>`))
+      .join('');
+    return `<div class="field-row"><label for="fc-${f.key}">${esc(f.label)}</label>` +
+           `<select id="fc-${f.key}" class="ke-select" data-feature="${f.key}">${opts}</select></div>`;
+  }).join('');
+  host.querySelectorAll('select[data-feature]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const next = { ...(state.featureConnections || {}) };
+      if (sel.value) next[sel.dataset.feature] = sel.value;
+      else delete next[sel.dataset.feature];
+      state.featureConnections = next;
+      saveSettings();
+    });
+  });
 }
 
 // The sync-health line in the gcal modal: when the last real attempt ran,
@@ -3417,13 +3476,11 @@ function initTailscaleToggle() {
 }
 
 // ── Logs modal ──────────────────────────────────────────────
-function openLogsModal() {
-  $('logs-modal').classList.remove('hidden');
-  refreshLogsList();
-}
-
+// Saved Sessions now lives as the "Sessions" tab in the Knowledge (Phylactery)
+// modal — refreshed by keSwitchTab('sessions'). Picking a session to load closes
+// the whole modal (back to chat), which is what closeLogsModal now does.
 function closeLogsModal() {
-  $('logs-modal').classList.add('hidden');
+  closeKnowledgeModal();
 }
 
 async function refreshLogsList() {
@@ -3684,13 +3741,15 @@ function init() {
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
 
-  // Google Calendar config modal (mirrors the web-search backend modal).
-  $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
-  $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
-  $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  // Connections modal (provider/key/model editor + saved connections + per-feature routing).
+  $('connections-btn')?.addEventListener('click', openConnectionsModal);
+  $('connections-modal-close')?.addEventListener('click', closeConnectionsModal);
+  $('connections-modal')?.addEventListener('click', e => { if (e.target === $('connections-modal')) closeConnectionsModal(); });
+
+  // Google Calendar config (now the "Calendar" tab in the Unruh modal —
+  // populated by loadGcalTab() on tab-switch; no standalone modal anymore).
   $('gcal-sync-now')?.addEventListener('click', gcalSyncNow);
   $('gcal-cal-refresh')?.addEventListener('click', renderGcalCalendars);
-  $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
   // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
   $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
@@ -3875,12 +3934,8 @@ function init() {
   // ── Tailscale / external-access toggle ───────────────────────
   initTailscaleToggle();
 
-  // ── Logs modal ────────────────────────────────────────────
-  $('logs-btn').addEventListener('click', openLogsModal);
-  $('logs-modal-close').addEventListener('click', closeLogsModal);
-  $('logs-modal').addEventListener('click', e => {
-    if (e.target === $('logs-modal')) closeLogsModal();
-  });
+  // Saved Sessions is now the "Sessions" tab in the Knowledge modal
+  // (refreshed on tab-switch); no standalone Logs modal to wire.
 
   // ── Topic system ─────────────────────────────────────────────
   $('new-topic-btn').addEventListener('click', openTopicNameModal);
@@ -5962,7 +6017,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots', 'sessions', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -6032,6 +6087,7 @@ function keSwitchTab(tab) {
   }
   if (tab === 'identity')   keLoadIdentity();
   if (tab === 'snapshots')  keLoadSnapshots();
+  if (tab === 'sessions')   refreshLogsList();
 }
 
 function keSetDetail(paneId, html) { $(paneId).innerHTML = html; }
@@ -7456,7 +7512,7 @@ async function saveLoreEditorEntry() {
 // only with the Familiar (the `interest_set_standing` tool); don't add a
 // ward control for it.
 
-const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation', 'calendar'];
 
 function openTemporalModal() {
   $('temporal-modal').classList.remove('hidden');
@@ -7481,6 +7537,7 @@ function teSwitchTab(name) {
   else if (name === 'schedule')   teReloadScheduleView();
   else if (name === 'routine')    teLoadRoutine();
   else if (name === 'handoff')    teLoadHandoff();
+  else if (name === 'calendar')   loadGcalTab();
 }
 
 function teEscapeHtml(s) {
