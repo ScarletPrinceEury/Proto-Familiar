@@ -430,15 +430,14 @@ function closeWebSearchModal() {
 // Google Calendar config lives in a modal (the out-of-the-box toggle stays in
 // the sidebar; everything else — source, sign-in, write-back, interval — opens
 // here, mirroring the web-search backend modal).
-function openGcalModal() {
-  writeSettingsToUI();       // reflect current state into the modal fields
+// Google Calendar now lives as the "Calendar" tab in the Unruh (temporal) modal
+// rather than a standalone modal. teSwitchTab('calendar') calls this to populate
+// + refresh the panel; there's no modal to open/close anymore.
+function loadGcalTab() {
+  writeSettingsToUI();       // reflect current state into the fields
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
   refreshGcalSyncStatus();   // "last sync / last error" health line
   renderGcalCalendars();     // the discovered-calendars + attribution panel
-  $('gcal-modal')?.classList.remove('hidden');
-}
-function closeGcalModal() {
-  $('gcal-modal')?.classList.add('hidden');
 }
 
 // The sync-health line in the gcal modal: when the last real attempt ran,
@@ -3684,13 +3683,10 @@ function init() {
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
 
-  // Google Calendar config modal (mirrors the web-search backend modal).
-  $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
-  $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
-  $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  // Google Calendar config (now the "Calendar" tab in the Unruh modal —
+  // populated by loadGcalTab() on tab-switch; no standalone modal anymore).
   $('gcal-sync-now')?.addEventListener('click', gcalSyncNow);
   $('gcal-cal-refresh')?.addEventListener('click', renderGcalCalendars);
-  $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
   // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
   $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
@@ -7456,7 +7452,7 @@ async function saveLoreEditorEntry() {
 // only with the Familiar (the `interest_set_standing` tool); don't add a
 // ward control for it.
 
-const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation'];
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation', 'calendar'];
 
 function openTemporalModal() {
   $('temporal-modal').classList.remove('hidden');
@@ -7481,6 +7477,7 @@ function teSwitchTab(name) {
   else if (name === 'schedule')   teReloadScheduleView();
   else if (name === 'routine')    teLoadRoutine();
   else if (name === 'handoff')    teLoadHandoff();
+  else if (name === 'calendar')   loadGcalTab();
 }
 
 function teEscapeHtml(s) {
