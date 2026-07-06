@@ -7456,7 +7456,7 @@ async function saveLoreEditorEntry() {
 // only with the Familiar (the `interest_set_standing` tool); don't add a
 // ward control for it.
 
-const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation'];
 
 function openTemporalModal() {
   $('temporal-modal').classList.remove('hidden');

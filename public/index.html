@@ -158,75 +158,12 @@
           <div class="field-hint">On by default. A slow background pass (every ~10 min) that memorizes any <em>past</em> day whose conversations never got ingested — for when a session didn't roll over cleanly (you switched sessions or cleared history). It only enqueues into the normal memorization worker (no extra LLM calls of its own) and skips the current day (handled live) and days already done. See the Coverage tab in the Knowledge editor. Off leaves memorization to session-end and the Memorize-now button only.</div>
 
           <div class="field-row" style="margin-top:8px">
-            <label for="tome-graduation-toggle">Graduate tome knowledge</label>
-            <input type="checkbox" id="tome-graduation-toggle">
-          </div>
-          <div class="field-hint">Off by default. When on, your Familiar periodically moves durable facts that have piled up in its tomes into their proper home — its own identity, yours, or its memory — and tidies the tome. Turn it on once you're happy with how it files things in chat. (It leaves keyword-lore alone, and builds graph relationships from relational facts.)</div>
-          <div class="field-row">
-            <label for="tome-graduation-tidy">…and the graduated entry</label>
-            <select id="tome-graduation-tidy">
-              <option value="pointer">leave a breadcrumb</option>
-              <option value="delete">delete it</option>
-            </select>
-          </div>
-          <div class="field-hint">"Delete" removes the entry once the fact is safely in Phylactery — best if your tomes are cluttered. "Breadcrumb" keeps a small pointer so keyword triggers still resolve.</div>
-
-          <div class="field-row" style="margin-top:8px">
-            <label for="needs-tracking-toggle">Track unmet needs</label>
-            <input type="checkbox" id="needs-tracking-toggle">
-          </div>
-          <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
-
-          <div class="field-row" style="margin-top:8px">
-            <label for="stewardship-toggle">Stewardship</label>
-            <input type="checkbox" id="stewardship-toggle" checked>
-          </div>
-          <div class="field-hint">On by default. Instead of your whole schedule sitting in your Familiar's context every turn (where it turns into wallpaper it stops noticing), this hands it a short, changing agenda: opening your day with what's coming, and nudging vague "I ought to…" tasks that have been floating without a time toward a real spot. It picks <em>what</em> matters in plain code; <em>how</em> it raises it stays your Familiar's own voice. It stands down whenever you're in distress. The settings below tune it.</div>
-          <div class="field-row">
-            <label for="day-start-anchor">Day starts at</label>
-            <input type="time" id="day-start-anchor" value="09:00" style="width:8em">
-          </div>
-          <div class="field-hint">When your Familiar opens your day with the "here's what's coming" brief — the earliest time it'll treat your first message as the real start of your day (not a late-night one still going). It can learn your actual rhythm over time and adjust this itself, always telling you when it does.</div>
-          <div class="field-row">
-            <label for="day-start-gap-hours">…after a gap of (hours)</label>
-            <input type="number" id="day-start-gap-hours" value="3" min="0" max="24" step="1" style="width:4em">
-          </div>
-          <div class="field-hint">How long a quiet stretch has to precede a message for it to count as the day's first contact — stops an unbroken late-morning conversation from re-opening the day.</div>
-          <div class="field-row">
-            <label for="brief-lookahead-days">Brief looks ahead (days)</label>
-            <input type="number" id="brief-lookahead-days" value="3" min="1" max="14" step="1" style="width:4em">
-          </div>
-          <div class="field-row">
-            <label for="docket-min-age-days">Nudge floating tasks after (days)</label>
-            <input type="number" id="docket-min-age-days" value="3" min="0" max="60" step="1" style="width:4em">
-          </div>
-          <div class="field-hint">How long an untimed "someday" task drifts before your Familiar starts offering to give it a real place on your schedule.</div>
-          <div class="field-row">
-            <label for="routine-review-toggle">Routine review</label>
-            <input type="checkbox" id="routine-review-toggle" checked>
-          </div>
-          <div class="field-hint">On by default. Once a week — and only if a tracked routine (from "Track unmet needs") is actually slipping — your Familiar quietly reviews how it's going and, at a good moment, offers a real pivot rather than nagging: a smaller version, a better time, making it enjoyable, swapping it, or setting it down for now. It rides an existing reflection (no extra AI calls) and never grades you — it calibrates the routine to you. Needs "Track unmet needs" on to have anything to review.</div>
-          <div class="field-row">
-            <label for="routine-review-days">Review every (days)</label>
-            <input type="number" id="routine-review-days" value="7" min="1" max="60" step="1" style="width:4em">
-          </div>
-
-          <div class="field-row" style="margin-top:8px">
             <label for="gcal-toggle">Google Calendar sync</label>
             <input type="checkbox" id="gcal-toggle">
           </div>
           <div class="field-hint">Off by default. When on, your Familiar reads your calendar (one-way) so your appointments show up in its sense of your day. Choose how to connect — and optionally allow write-back — in the configuration below.</div>
           <button class="btn-secondary" id="gcal-configure-btn" type="button">⚙ Configure calendar…</button>
 
-          <div class="field-row" style="margin-top:8px">
-            <label for="event-alerts-toggle">Event alerts</label>
-            <input type="checkbox" id="event-alerts-toggle" checked>
-          </div>
-          <div class="field" style="margin-top:4px">
-            <label for="event-alerts-lead">Alert lead time (minutes)</label>
-            <input type="number" id="event-alerts-lead" value="60" min="5" max="1440" step="5" style="width:6em">
-          </div>
-          <div class="field-hint">On by default. A "coming up" notice fires this many minutes before any event on your schedule starts — synced from Google or added by hand — so appointments don't rely on you noticing the time. All-day events don't ping (there's no start time to lead).</div>
         </div>
 
         <!-- Saved Connections & Fallbacks -->
@@ -1123,6 +1060,21 @@
           <button class="icon-btn modal-close" id="tomes-modal-close" aria-label="Close">✕</button>
         </div>
       </div>
+      <div class="modal-body tome-graduation-settings" style="border-bottom:1px solid var(--border, #333); padding-bottom:10px">
+        <div class="field-row" style="margin-top:0">
+          <label for="tome-graduation-toggle">Graduate tome knowledge</label>
+          <input type="checkbox" id="tome-graduation-toggle">
+        </div>
+        <div class="field-hint">Off by default. When on, your Familiar periodically moves durable facts that have piled up in its tomes into their proper home — its own identity, yours, or its memory — and tidies the tome. Turn it on once you're happy with how it files things in chat. (It leaves keyword-lore alone, and builds graph relationships from relational facts.)</div>
+        <div class="field-row">
+          <label for="tome-graduation-tidy">…and the graduated entry</label>
+          <select id="tome-graduation-tidy">
+            <option value="pointer">leave a breadcrumb</option>
+            <option value="delete">delete it</option>
+          </select>
+        </div>
+        <div class="field-hint">"Delete" removes the entry once the fact is safely in Phylactery — best if your tomes are cluttered. "Breadcrumb" keeps a small pointer so keyword triggers still resolve.</div>
+      </div>
       <div class="modal-body" id="tomes-list">
         <p class="logs-loading">Loading…</p>
       </div>
@@ -1403,6 +1355,7 @@
         <button class="ke-tab"               data-temporal-tab="schedule"   role="tab">Schedule</button>
         <button class="ke-tab"               data-temporal-tab="routine"    role="tab">Routine</button>
         <button class="ke-tab"               data-temporal-tab="handoff"    role="tab">Handoff</button>
+        <button class="ke-tab"               data-temporal-tab="automation" role="tab">Automation</button>
       </div>
       <div class="modal-body ke-body">
 
@@ -1572,6 +1525,59 @@
             <span id="te-handoff-summary" class="field-hint" style="margin-left:auto"></span>
           </div>
           <div class="ke-list" id="te-handoff-list" style="height: calc(100% - 40px); overflow:auto"></div>
+        </div>
+
+        <!-- AUTOMATION PANE — Unruh's autonomous behaviours -->
+        <div class="ke-pane" id="te-pane-automation" style="overflow:auto">
+          <div class="field-row" style="margin-top:0">
+            <label for="needs-tracking-toggle">Track unmet needs</label>
+            <input type="checkbox" id="needs-tracking-toggle">
+          </div>
+          <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="stewardship-toggle">Stewardship</label>
+            <input type="checkbox" id="stewardship-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Instead of your whole schedule sitting in your Familiar's context every turn (where it turns into wallpaper it stops noticing), this hands it a short, changing agenda: opening your day with what's coming, and nudging vague "I ought to…" tasks that have been floating without a time toward a real spot. It picks <em>what</em> matters in plain code; <em>how</em> it raises it stays your Familiar's own voice. It stands down whenever you're in distress. The settings below tune it.</div>
+          <div class="field-row">
+            <label for="day-start-anchor">Day starts at</label>
+            <input type="time" id="day-start-anchor" value="09:00" style="width:8em">
+          </div>
+          <div class="field-hint">When your Familiar opens your day with the "here's what's coming" brief — the earliest time it'll treat your first message as the real start of your day (not a late-night one still going). It can learn your actual rhythm over time and adjust this itself, always telling you when it does.</div>
+          <div class="field-row">
+            <label for="day-start-gap-hours">…after a gap of (hours)</label>
+            <input type="number" id="day-start-gap-hours" value="3" min="0" max="24" step="1" style="width:4em">
+          </div>
+          <div class="field-hint">How long a quiet stretch has to precede a message for it to count as the day's first contact — stops an unbroken late-morning conversation from re-opening the day.</div>
+          <div class="field-row">
+            <label for="brief-lookahead-days">Brief looks ahead (days)</label>
+            <input type="number" id="brief-lookahead-days" value="3" min="1" max="14" step="1" style="width:4em">
+          </div>
+          <div class="field-row">
+            <label for="docket-min-age-days">Nudge floating tasks after (days)</label>
+            <input type="number" id="docket-min-age-days" value="3" min="0" max="60" step="1" style="width:4em">
+          </div>
+          <div class="field-hint">How long an untimed "someday" task drifts before your Familiar starts offering to give it a real place on your schedule.</div>
+          <div class="field-row">
+            <label for="routine-review-toggle">Routine review</label>
+            <input type="checkbox" id="routine-review-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. Once a week — and only if a tracked routine (from "Track unmet needs") is actually slipping — your Familiar quietly reviews how it's going and, at a good moment, offers a real pivot rather than nagging: a smaller version, a better time, making it enjoyable, swapping it, or setting it down for now. It rides an existing reflection (no extra AI calls) and never grades you — it calibrates the routine to you. Needs "Track unmet needs" on to have anything to review.</div>
+          <div class="field-row">
+            <label for="routine-review-days">Review every (days)</label>
+            <input type="number" id="routine-review-days" value="7" min="1" max="60" step="1" style="width:4em">
+          </div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="event-alerts-toggle">Event alerts</label>
+            <input type="checkbox" id="event-alerts-toggle" checked>
+          </div>
+          <div class="field" style="margin-top:4px">
+            <label for="event-alerts-lead">Alert lead time (minutes)</label>
+            <input type="number" id="event-alerts-lead" value="60" min="5" max="1440" step="5" style="width:6em">
+          </div>
+          <div class="field-hint">On by default. A "coming up" notice fires this many minutes before any event on your schedule starts — synced from Google or added by hand — so appointments don't rely on you noticing the time. All-day events don't ping (there's no start time to lead).</div>
         </div>
 
       </div>
