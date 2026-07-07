@@ -129,7 +129,7 @@ file grows a storage concern.
 ```json
 {
   "id": "<sha256 of bytes>",
-  "slug": "img-x7k2m3",
+  "slugs": ["mug-tea-desk-x7", "img-x7k2m3"],
   "kind": "image",
   "mime": "image/jpeg",
   "bytes": 412803,
@@ -143,12 +143,22 @@ file grows a storage concern.
 
 - `id` = sha256 of the stored bytes → **dedup is free** (the same photo sent
   twice is one asset; a second save returns the existing id).
-- `slug` = the **model-facing id** (`slug-ids.js` pattern: `img-` +
-  `shortSlug(6)`, assigned at first save) — every surface I read (stand-ins,
-  `view_image` arguments, `/api/media` listings shown in UI) uses the slug,
-  never the raw hash; a 64-char sha costs tokens and carries no meaning to
-  me. Store functions resolve either form (ids are opaque strings; nothing
-  parses shape). This is the repo-wide readable-id rule (CLAUDE.md).
+- `slug` = the **model-facing id**, and per the repo slug rule it is
+  **meaning-bearing** (`slugify(label)-xx`, the Phylactery/Unruh
+  `slug_id` pattern — content words + 2-char suffix), because I search by
+  remembering what a thing *is*. The label problem for images: at save time
+  there may be nothing to slugify (the description arrives later,
+  describe-on-demand). So: at arrival, mint from the best label present — a
+  ward caption or a meaningful filename (`garden-sketch-v2.png` →
+  `garden-sketch-v2-x7`; camera noise like `IMG_2043`/`PXL_…` is not a
+  label) — else the honest fallback `img-x7k2m3`. **When the description
+  first lands, a meaning-bearing alias is minted from its key words**
+  (`mug-tea-desk-x7`) and becomes the preferred form on every
+  freshly-rendered surface — stand-ins are built at send time from asset
+  meta, so history "upgrades" its readability automatically. Every slug an
+  asset has ever carried resolves forever (`slugs: [...]` on the meta; ids
+  are opaque strings, session logs are never rewritten). The raw sha never
+  reaches a surface I read.
 - `kind` is an enum with one member today (`image`) and room for
   `video` / `audio` / `frame` later — consumers switch on it, never on mime
   sniffing.
@@ -341,10 +351,11 @@ assembly.
 - **The stand-in format is code-built** (the model never composes it):
 
   ```
-  [image img-x7k2m3: a mug of tea on a cluttered desk, sticky notes on the monitor — shared by my human, 7 Jul 14:31]
+  [image mug-tea-desk-x7: a mug of tea on a cluttered desk, sticky notes on the monitor — shared by my human, 7 Jul 14:31]
   ```
 
-  The readable slug (never the raw sha), description text (or
+  The meaning-bearing slug (never the raw sha; the undescribed form shows
+  the arrival slug), description text (or
   `not yet described` / `no vision connection available to look`), source, and
   a machine timestamp rendered by the existing `relative-time.js`/formatting
   helpers. The id in the stand-in is what makes `view_image` operable (§10).

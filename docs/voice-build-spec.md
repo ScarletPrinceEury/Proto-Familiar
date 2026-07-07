@@ -274,7 +274,8 @@ the machine in the right order, with these six mechanisms:
    start and **defer** — skip the tick, try again next tick — if they are on
    the defer list:
    - **Defers:** pondering, memorization drain, memory sweep, tome
-     graduation, gcal sync, needs-tracking, routine review. All of them are
+     graduation, gcal sync, needs-tracking, routine review, media
+     retention (§9). All of them are
      minutes-scale background work; nothing is lost by running 20 minutes
      later (their own gates re-qualify work when they resume).
    - **NEVER defers:** silence-triage, threat recording, reminders + event
@@ -554,12 +555,34 @@ does not.
   memo saves as `kind:'audio'` (vision-spec store), gets transcribed once by
   the offline ASR (better accuracy, latency-free path), transcript cached on
   the asset (the describe-once pattern verbatim), and rides chat as a
-  stand-in: `[voice note note-x7k2m3, 0:41 — transcript: "…" — shared by my
-  human, 7 Jul 14:31]`. Ids on every model-facing surface are **readable
-  slugs** (`slug-ids.js` — the 0.8.x id overhaul, now a CLAUDE.md rule),
-  never raw hashes; the slug makes a future `listen_again`/`view_image`
-  sibling operable. In this milestone the transcript IS the content, so no
-  re-listen tool ships (§15).
+  stand-in: `[voice note oat-milk-list-x7, 0:41 — transcript: "…" — shared
+  by my human, 7 Jul 14:31]`. Ids on every model-facing surface are
+  **meaning-bearing slugs** (the `slugify(label)-xx` house pattern, now a
+  CLAUDE.md rule) — and voice notes get theirs honestly at arrival, because
+  transcription happens at ingest: the slug is minted from the transcript's
+  key words, so I can grep my own assets by what was *said*. The slug makes
+  a future `listen_again`/`view_image` sibling operable. In this milestone
+  the transcript IS the content, so no re-listen tool ships (§15).
+- **Voice-note retention is curation, not a cron delete (ward-decided).**
+  Audio bytes are kept for `voiceNoteRetentionDays` (default **14** — "a
+  week or two"), then a slow retention pass lets **me** decide what stays
+  audio: `media-retention-loop.js`, the tome-graduation shape reused —
+  code gates select candidates (audio assets past the window, not already
+  stripped, not flagged `keep`), then ONE batched LLM judgment in my own
+  voice over their transcripts + context: *the transcript survives either
+  way — I keep the sound itself only when the sound is the point: a voice I
+  love saying something worth re-hearing, a moment where tone carried what
+  words didn't.* Keeps get `keep: true` (never re-judged; the ward can also
+  flag keep from the media list in the UI); the rest go through
+  `stripAudio(id)` — bytes deleted, meta + transcript + slugs survive,
+  `audio: {deletedAt, reason}` recorded, stand-ins unchanged (they were
+  transcript-built already), a stripped asset renders `[audio let go —
+  transcript kept]` if re-requested. Daily-ish tick (6 h), defers during
+  live calls (§4.3) and at moderate+ threat (the standard opt-in-loop
+  posture), never throws. Default ON (the ward asked for it as the
+  default); off-switch `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1` +
+  Settings toggle. Images are untouched by this loop — the vision spec's
+  keep-forever stands.
 - **Memorization:** call sessions flow through the existing session
   memorization with their audienceTag. Nothing new — that was the point of
   the §1 shape.
@@ -629,7 +652,9 @@ does not.
   **'note'** (ward-decided), `voiceGuestThreshold` (Pass 0-calibrated),
   `voiceEnhanceEnabled` on-if-budget-holds, `voiceAudioTaggingEnabled` off,
   `readAloudByDefault` off, `voiceEscalationFactor` 0.5, `voiceKeepAudio`
-  off, `voiceProactiveJoin` off, `voiceTts` {tier, voice, rate} from the
+  off, `voiceNoteRetentionDays` 14 (+ the media-retention loop toggle,
+  default ON, off-switch `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1`),
+  `voiceProactiveJoin` off, `voiceTts` {tier, voice, rate} from the
   curated menu, ASR model choice per ward language (German + English
   first-class; LID when two are enabled).
 - **Failure table** (every row inside the turn/call, none reaches chat as an
@@ -697,10 +722,11 @@ call — must arrive as an extension of this spine:
   audience re-resolution; presence modes + ambient pacing in voice;
   transcript sessions; `voice_join`/`voice_leave` tools (first-person
   descriptions); Phylactery `maintenance_defer`.
-- **Pass 4 — who is speaking + proactive voice.** Voiceprint enrollment UI +
-  storage; guest watchdog + `voiceGuestPolicy` presence switch; diarization
-  stage for mixed streams; the `voice-call` push adapter + delivery
-  recording; ward sign-offs from §10 resolved and wired.
+- **Pass 4 — who is speaking + proactive voice + curation.** Voiceprint
+  enrollment UI + storage; guest watchdog + `voiceGuestPolicy` presence
+  switch; diarization stage for mixed streams; the `voice-call` push adapter
+  + delivery recording; the media-retention loop (§9); ward sign-offs from
+  §10 resolved and wired.
 - Each pass: `docs/architecture.md` in the same commit; per-loop off-switch
   in the same commit as any new loop.
 
@@ -768,7 +794,8 @@ call — must arrive as an extension of this spine:
 5. **TTS voice** — the curated menu ships several built-in voices with
    previews (§6.5); the specific default we pick together at Pass 2. (Open —
    by design.)
-6. **Voice-note retention** — keep audio assets forever like images, or
-   transcript-only after N days? Spec proposes keep (they're small and
-   they're memories). (Still open — not addressed in review 1; needed by
-   Pass 1.)
+6. **Voice-note retention** — **SETTLED: keep ~two weeks, then I curate.**
+   Audio kept `voiceNoteRetentionDays` (14); a regular retention pass has me
+   go through the aged audio myself and decide which sounds to keep, the
+   rest dropping to transcript-only (§9). Default ON. (Ward, spec
+   review 2.)
