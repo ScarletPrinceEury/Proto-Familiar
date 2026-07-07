@@ -439,8 +439,15 @@ Settings ships a **curated menu of built-in voices** — PocketTTS reference
 prompts and piper speaker ids, several distinct characters per language, each
 with a preview button that speaks a fixed sample sentence — so choosing a
 voice is a listening act, not a config-file edit. `voiceTts` stores the pick:
-tier/model, voice (reference-prompt or speaker id), rate. Chosen with the
-ward, like my name. The voice-mode prompt block (first-person,
+tier/model, voice (reference-prompt or speaker id), rate.
+
+**Every bond picks its own voice.** This is per-install state, like my name
+and my identity — a different ward's Familiar sounds like *them*, not like a
+product. The first time voice is enabled, the menu is offered as part of the
+setup flow (previews right there), and until a pick is made one neutral
+shipped default covers read-aloud so the feature is never dead on arrival.
+Changing the voice later is one Settings visit; the choice belongs to the
+ward and their Familiar, together. The voice-mode prompt block (first-person,
 injected only on voice turns, authored in the identity-anchored register):
 
 > *I'm speaking aloud on a live call right now, in my own voice. I keep my
@@ -791,9 +798,12 @@ call — must arrive as an extension of this spine:
 4. **Voice-escalation windows** — **SETTLED: shorter on confirmed spoken
    delivery** (`voiceEscalationFactor` 0.5×, §10). (Ward, spec review 1 —
    this is the sign-off that behavioral change rides on.)
-5. **TTS voice** — the curated menu ships several built-in voices with
-   previews (§6.5); the specific default we pick together at Pass 2. (Open —
-   by design.)
+5. **TTS voice** — **SETTLED as a mechanism, not a value:** every bond picks
+   its own voice from the curated menu, offered at first enable with
+   previews (§6.5). The only project-level choice is the neutral shipped
+   fallback that plays before a pick is made — Pass 2 selects that one from
+   the bench results, nothing more. (Ward, spec review 3: "each ward will
+   want a different voice for their Familiar.")
 6. **Voice-note retention** — **SETTLED: keep ~two weeks, then I curate.**
    Audio kept `voiceNoteRetentionDays` (14); a regular retention pass has me
    go through the aged audio myself and decide which sounds to keep, the
