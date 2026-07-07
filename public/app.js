@@ -6017,7 +6017,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots', 'sessions', 'prompts', 'behaviour'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'remember', 'snapshots', 'sessions', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -6086,6 +6086,7 @@ function keSwitchTab(tab) {
     else                        { keSetGraphView('list'); keLoadGraphNodes(); }
   }
   if (tab === 'identity')   keLoadIdentity();
+  if (tab === 'remember')   keOpenRememberMap();
   if (tab === 'snapshots')  keLoadSnapshots();
   if (tab === 'sessions')   refreshLogsList();
 }
@@ -7022,14 +7023,15 @@ async function keLoadIdentity() {
         list.appendChild(row);
       }
       if (isWard) {
-        // Always expose Remember settings even when there are no ward files yet.
+        // Remember settings live in their own tab now; this row is a cross-link
+        // kept for discoverability from the ward's identity section.
         any = true;
         const rmRow = document.createElement('div');
         rmRow.className = 'ke-row ke-row-settings';
         rmRow.innerHTML = `
           <div class="ke-row-title">Remember settings</div>
-          <div class="ke-row-sub">Memory storage policy per category</div>`;
-        rmRow.addEventListener('click', keOpenRememberMap);
+          <div class="ke-row-sub">Memory storage policy per category → Remember tab</div>`;
+        rmRow.addEventListener('click', () => keSwitchTab('remember'));
         list.appendChild(rmRow);
       }
     }
@@ -7078,7 +7080,7 @@ function keOpenIdentity(category, file) {
 
 // ── Remember-consent map ─────────────────────────────────────────────────────
 async function keOpenRememberMap() {
-  const det = $('ke-id-detail');
+  const det = $('ke-remember-detail');
   det.innerHTML = '<p class="logs-loading">Loading remember settings…</p>';
   try {
     const res = await fetch('/api/entity/ward/remember');
@@ -9369,7 +9371,7 @@ function vlRenderPersonDetail(villager) {
       <textarea id="vl-p-private-notes" placeholder="Sensitive context, for you and the Familiar only…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.privateNotes ?? '')}</textarea>
     </div>
     <div>
-      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Remember tab)</span></div>
       <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
     </div>
     <div>
