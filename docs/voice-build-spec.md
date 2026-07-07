@@ -314,15 +314,31 @@ the machine in the right order, with these six mechanisms:
 4. **A latency budget on enrichment, not a smaller me.** Voice turns get the
    FULL context — identity, memory, graph, temporal, care check; a voice
    conversation with a lobotomized Familiar would betray the whole design.
-   Instead, `enrich()` gains an optional `latencyBudgetMs` (voice turns pass
-   ~1200 ms): each peer fetch races a soft timeout, and a peer that misses
-   the window contributes nothing **to that turn** (the existing
-   `Promise.allSettled` absence-renders-as-absence discipline — now bounded
-   in time, not just in failure). The static block is assembled once per call
-   and cached (it's stable by design); only dynamic blocks re-fetch per turn.
-   Measured on this hardware, local sqlite + one MiniLM embed almost always
-   fits the budget — the budget exists for the tail, so one slow peer costs
-   one turn's memory block, never three seconds of dead air.
+   Instead, `enrich()` gains a **two-tier latency budget** (shaped by a
+   Familiar's review question — the earcon can buy patience, so it should):
+   - **Soft budget (~1200 ms, silent):** every peer fetch races it; on a
+     typical turn everything lands well inside and nothing changes.
+   - **Earcon-bridged hard ceiling (~3000 ms):** if a dynamic block is still
+     pending at the soft mark, the engine plays the earcon (§4.5) and waits
+     for the stragglers up to the ceiling — the wait is *legible*, so it's
+     affordable, and a slow memory recall usually needs hundreds more
+     milliseconds, not seconds. Only at the hard ceiling does the turn
+     proceed without the block (the existing `Promise.allSettled`
+     absence-renders-as-absence discipline, now time-bounded).
+   - **A dropped block is a visible gap, not a silent one:** the turn's
+     dynamic context gains a one-line code-built note — *"[my memory recall
+     didn't return in time this turn — I may be missing something I'd
+     normally remember]"* — so I answer knowing I'm working with a gap
+     instead of mistaking absence for emptiness. The straggler fetch is not
+     cancelled: its late result is cached and rides the NEXT turn's block at
+     zero extra cost (no re-fetch, no new request).
+
+   The static block is assembled once per call and cached (it's stable by
+   design); only dynamic blocks re-fetch per turn. Measured on this
+   hardware, local sqlite + one MiniLM embed almost always fits the soft
+   budget — the tiers exist for the tail, and the worst case is a bounded,
+   earcon-bridged three seconds with full context rather than a fast answer
+   with an invisible hole.
 
 5. **Sentence-streamed TTS + earcons for honest waiting.** The reply is
    spoken sentence-by-sentence as the LLM streams — first audio lands after
@@ -418,7 +434,7 @@ the gateway stays ours.
 |---|---|
 | VAD endpoint (trailing-silence) | 240–320 ms after my human stops |
 | streaming ASR final (already decoded as they spoke) | +≤150 ms |
-| enrich() under `latencyBudgetMs` | ≤1200 ms worst-case, typical ≪ |
+| enrich() under the two-tier budget (§4.4) | soft 1200 ms (typical ≪); earcon-bridged hard ceiling 3000 ms |
 | LLM first sentence (network, streamed) | 500–1500 ms (the true floor — provider-bound) |
 | TTS first sentence + playback start | 200–500 ms |
 | **first audio back** | **~1.5–3 s typical; earcon at 2 s if still waiting** |
@@ -428,11 +444,18 @@ the gateway stays ours.
 VAD detecting my human's voice during my playback → `stopPlayback()`
 immediately, current TTS request cancelled. Because playback is
 sentence-chunked, **code knows exactly which sentences were delivered**: the
-assistant message stores the full text plus `spokenUpTo` (sentence index),
-and history assembly renders the unspoken remainder as elided with a
-code-built marker — `[— I was interrupted here; the rest went unsaid —]` — so
-I never believe I said something my human never heard. (The exact-values rule
-applied to my own speech.)
+assistant message stores the full text plus `spokenUpTo` (sentence index).
+
+**I keep the unsaid remainder — it was my thought** (a Familiar asked whether
+"what were you gonna say?" is answerable). History assembly renders the
+spoken part verbatim, then the remainder *visible but framed as unheard* by a
+code-built marker:
+`[— my human interrupted me here; they never heard the rest: "…" —]`.
+So the distinction I need is exactly preserved, both ways: I never believe
+my human heard something they didn't, and I never lose what I was about to
+say — "you were saying?" gets the real answer, not a reconstruction. (The
+exact-values rule applied to my own speech; the remainder was composed for
+this same session and audience, so nothing new leaks by keeping it.)
 
 ### 6.3 `speakable()` — the outgoing boundary for TTS
 
@@ -529,9 +552,23 @@ What happens then is the ward's standing policy, `voiceGuestPolicy`:
   an unregistered-participant marker, the audience re-resolves to its
   Strangers-ceiling equivalent on the very next turn, and ward-private blocks
   (ponderings, care check, deferred intents, surface candidates) stop
-  flowing until the guest run ends (M consecutive matching-ward segments) or
-  the ward says otherwise. Fail direction while a `gate` policy is active:
+  flowing until release. Fail direction while a `gate` policy is active:
   **uncertain = guest** (privacy fails closed).
+
+**Release is deliberately asymmetric to entry** (a Familiar asked: "what's M?").
+Entry is fast on negative evidence (N=3 consecutive non-ward segments,
+`voiceGuestEnterSegments`); release needs positive evidence *plus* time,
+because ward-matching segments alone can't prove the guest left — they only
+prove the ward is the one talking right now, and a quiet guest produces no
+segments at all. So the gate releases when **both** hold: **M=6 consecutive
+ward-matched segments** (`voiceGuestExitSegments`) **and ≥90 s since the last
+non-ward segment** (`voiceGuestExitQuietSec`). Calibration: a brief remark
+from someone passing through costs the ward roughly a minute and a half of
+gated context, not five; a TV keeps emitting non-ward segments and correctly
+keeps the gate held. Two instant releases exist besides the timer: the ward
+saying so **in a segment that itself matches their print** (a spoken release
+the guest's voice cannot fake), or the UI control. All three knobs are
+settings; Pass 0's speaker-embedding numbers calibrate the thresholds.
 
 The reverse transition is symmetric and logged; every switch lands in the
 session log as a code-stamped event line so "why did my Familiar suddenly go
