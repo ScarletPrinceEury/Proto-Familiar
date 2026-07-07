@@ -117,21 +117,41 @@ no GPU. Two properties shape everything in §4:
    calls) — their CPU cost is small, their latency cost when starved is what
    §4 protects.
 
-**Pass 0 is a benchmark, not product code — and it has a concrete shape:**
-`scripts/voice-bench.mjs` downloads the candidate models (pinned URLs +
-checksums, same fetcher Pass 1 will reuse), runs them against **bundled
-fixture audio** (short speech clips per target language — German and English —
-plus noise-mixed variants of the same clips for the enhancement/bad-mic
-story), and measures with `perf_hooks`: ASR RTF at 1 and 2 concurrent
-streams, TTS time-to-first-chunk and per-sentence latency for both tiers,
-speaker-embedding cost per segment, enhancement cost per second of audio.
-Then the **interference phase**: spawn Phylactery via thalamus, run a
-`mem_search` loop, and record enrich-path latency with and without full audio
-load running. The script writes `docs/voice-bench-results.md` (a committed
-markdown table + the raw JSON beside it) — the numbers land in the repo, not
-in a terminal scrollback, and this spec's "~" estimates are superseded by
-that file before Pass 2 ships. Re-runnable on any future machine, so "will
-it work on X hardware" is always one command.
+**Pass 0 is a ward-facing benchmark tool** — because the people who own the
+target machines are wards, not developers at a terminal. The house precedent
+is the regex/trigger tracer (0.8.25): a Debug-section diagnostic with a
+button, honest progress, and copy/download output. Concretely:
+
+- **The measuring core is a module** (`voice-bench.js`): downloads the
+  candidate models on explicit consent (size named up front; pinned URLs +
+  sha256 checksums, the same fetcher Pass 1 reuses; optional delete-after),
+  runs them against **bundled fixture audio** (short speech clips with known
+  reference transcripts per target language — German and English — plus
+  runtime noise-mixing of the same clips for the enhancement/bad-mic story),
+  and measures with `perf_hooks`: ASR RTF at 1 and 2 concurrent streams +
+  **WER against the bundled references** (code-computed, clean vs noisy vs
+  noisy+enhanced), TTS time-to-first-chunk and per-sentence latency for both
+  tiers, speaker-embedding cost per segment, enhancement cost per second of
+  audio. Then the **interference phase**: run a `mem_search` loop through
+  the live thalamus and record enrich-path latency with and without full
+  audio load running.
+- **The ward-facing surface** — Settings → Debug → "Voice benchmark": one
+  button, staged progress ("downloading models 2/6…", "ASR, two streams…",
+  "interference…"), a reminder to run on AC power, and a finished **report**
+  rendered in the modal with Copy and Download buttons — a markdown table +
+  the raw JSON, stamped with code-read machine facts (CPU model, cores, RAM,
+  OS, Node version, app version). Also persisted to
+  `logs/voice-bench-<date>.json` so it survives the modal. **The report is
+  the deliverable a ward sends back** (paste it in chat, attach it to an
+  issue); whoever holds the repo commits it as
+  `docs/voice-bench-results.md`, which supersedes this spec's "~" estimates
+  before Pass 2 ships.
+- A thin `scripts/voice-bench.mjs` CLI wraps the same module for developer
+  convenience — same report, no UI.
+
+Endpoint (`POST /api/diagnostics/voice-bench` + a progress poll) sits behind
+the same localhost/Tailscale gate as everything; nothing runs unattended, no
+loop, nothing stored beyond the report file and (if kept) the models.
 
 ---
 
@@ -710,10 +730,13 @@ call — must arrive as an extension of this spine:
 
 ## 13. Build order (passes)
 
-- **Pass 0 — the bench.** `scripts/voice-bench.mjs`: measure ASR RTF (1 and
-  2 streams), TTS sentence latency, speaker-embed cost, concurrent
-  `mem_search` interference, on the X380. Record results in this doc; pick
-  the default model tiers from data. No product code.
+- **Pass 0 — the bench tool.** `voice-bench.js` (measuring core) + the
+  Settings → Debug "Voice benchmark" surface + the model fetcher + bundled
+  fixtures + the CLI wrapper (§0.5). This IS a small shippable feature
+  (wards run it and send reports back — it's also how German-speaking
+  testers verify the German ASR pick on their own hardware); results from
+  the X380 land as `docs/voice-bench-results.md` and pick the default model
+  tiers before Pass 2.
 - **Pass 1 — the spine.** `audio-worker.mjs` + supervision + thread caps;
   model fetcher with pinned checksums; voice-note path end-to-end (asset →
   offline transcript → stand-in in chat); **read-aloud** (per-message 🔊 +
@@ -760,6 +783,10 @@ call — must arrive as an extension of this spine:
   triage check-in fire DURING the call — and are spoken.
 - Ward voice transcripts move the threat tier (if signed ON); a villager's
   voice never does; partials never do.
+- A ward on a stock install can run the voice benchmark from Settings →
+  Debug with no terminal: consent → progress → a copyable/downloadable
+  report carrying machine facts + all measurements; the same run is
+  reproducible via the CLI wrapper.
 - With `voiceEnabled` OFF, the 🔊 read-aloud button still speaks a reply
   (TTS-only worker load, no ASR model in memory, no capture path exists);
   `readAloudByDefault` speaks each new reply as it lands.
