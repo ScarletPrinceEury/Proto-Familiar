@@ -369,6 +369,31 @@ Chat history is injected with `[HH:MM]` prefixes (Discord) or `⫸HH:MM⫷` pref
 
 **If you add a new path that delivers LLM output to a human or a platform:** apply `stripLlmTimestamps` (server) or `stripDisplayTimestamps` (browser) before the message leaves the system. This includes new outbox kinds, new relay functions, new channel adapters, and any future LLM response forwarded to a UI. Do not only apply it at render time — the stored content must also be clean.
 
+## ⚠️ Model-facing ids are readable slugs — mandatory for every new id
+
+Any identifier the Familiar can ever read — in a tool result, a stand-in, a
+prompt block, an outbox item, a session log it opens via `read_file`, a UI
+surface it's told about — is a **short readable slug**, never a UUID or raw
+hash. The shared helpers are `slug-ids.js` (Node) and `db.slug_id` in Unruh /
+Phylactery (Python); the lookalike-free alphabet and the patterns
+(`s-YYYYMMDD-xxxx` sessions, `<kind>-xxxxxx` outbox items, `img-xxxxxx`
+media) live there. Rationale: a 36-char UUID costs ~16 tokens and carries
+zero meaning; a slug is cheap and self-describing (the kind prefix IS the
+context when the Familiar greps a state file).
+
+Rules:
+
+- **New id-bearing surface → slug id, in the same commit.** No "UUID now,
+  slug later."
+- **Internal machine keys may stay hashes** (e.g. a content-addressed sha256
+  filename for dedup) — but then the model-facing alias is a slug and every
+  accessor resolves both forms.
+- **Ids are opaque strings to consumers.** Nothing parses shape; validators
+  accept legacy UUIDs/hex forever (`isLegacyId` exists for converters, not
+  for gatekeeping).
+- This is the exact-values principle applied to naming: code mints the id,
+  the model only ever repeats it.
+
 ## Other repo conventions worth knowing
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.

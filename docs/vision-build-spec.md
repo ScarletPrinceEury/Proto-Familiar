@@ -92,7 +92,7 @@ gains a new **optional sibling field**:
 
 ```json
 { "role": "user", "content": "look what I made", "timestamp": "…", "id": "…",
-  "attachments": [ { "id": "<sha256>", "kind": "image", "mime": "image/jpeg" } ] }
+  "attachments": [ { "id": "img-x7k2m3", "kind": "image", "mime": "image/jpeg" } ] }
 ```
 
 - Stored session logs, `state.messages`, Discord session logs, the
@@ -129,6 +129,7 @@ file grows a storage concern.
 ```json
 {
   "id": "<sha256 of bytes>",
+  "slug": "img-x7k2m3",
   "kind": "image",
   "mime": "image/jpeg",
   "bytes": 412803,
@@ -142,6 +143,12 @@ file grows a storage concern.
 
 - `id` = sha256 of the stored bytes → **dedup is free** (the same photo sent
   twice is one asset; a second save returns the existing id).
+- `slug` = the **model-facing id** (`slug-ids.js` pattern: `img-` +
+  `shortSlug(6)`, assigned at first save) — every surface I read (stand-ins,
+  `view_image` arguments, `/api/media` listings shown in UI) uses the slug,
+  never the raw hash; a 64-char sha costs tokens and carries no meaning to
+  me. Store functions resolve either form (ids are opaque strings; nothing
+  parses shape). This is the repo-wide readable-id rule (CLAUDE.md).
 - `kind` is an enum with one member today (`image`) and room for
   `video` / `audio` / `frame` later — consumers switch on it, never on mime
   sniffing.
@@ -334,10 +341,10 @@ assembly.
 - **The stand-in format is code-built** (the model never composes it):
 
   ```
-  [image a3f9c2e1: a mug of tea on a cluttered desk, sticky notes on the monitor — shared by my human, 7 Jul 14:31]
+  [image img-x7k2m3: a mug of tea on a cluttered desk, sticky notes on the monitor — shared by my human, 7 Jul 14:31]
   ```
 
-  Id (short-form, enough to address), description text (or
+  The readable slug (never the raw sha), description text (or
   `not yet described` / `no vision connection available to look`), source, and
   a machine timestamp rendered by the existing `relative-time.js`/formatting
   helpers. The id in the stand-in is what makes `view_image` operable (§10).

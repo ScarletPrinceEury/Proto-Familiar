@@ -34,15 +34,19 @@ platform), several independent engines. We use:
 | engine | model (default tier) | size / cost (est. — Pass 0 verifies) | role |
 |---|---|---|---|
 | **VAD** | silero-vad (onnx) | ~2 MB, negligible CPU | gate everything: no speech → no ASR, no bytes kept |
-| **Streaming ASR** | streaming zipformer transducer, int8, per-language | ~40–100 MB, RTF ~0.1–0.3 on 2 threads | live transcription with partials + endpointing |
+| **Streaming ASR** | streaming zipformer transducer, int8, per-language | ~40–100 MB, RTF ~0.1–0.3 on 2 threads | live transcription with partials + endpointing. **German is a first-class target** (the next tester cohort) — the zoo carries German/multilingual streaming models; Pass 0 picks and verifies the German default alongside English |
 | **Offline ASR** | sense-voice / moonshine small (optional) | ~100–200 MB | voice-note transcription, where latency doesn't matter and accuracy does |
-| **TTS** | piper/VITS voice (fast tier) | ~20–60 MB, faster than realtime on 2 threads | my voice. Optional quality tier (kokoro int8) if the bench allows |
+| **TTS (default tier)** | **PocketTTS** (Kyutai CALM, ~100M params; sherpa-onnx node API supported) | ~100–250 MB, ~200 ms first chunk, multiple× realtime on CPU — X380 numbers from Pass 0 | my voice. Multilingual incl. German (verify quality in Pass 0); voices selected via curated reference prompts (§6.5) |
+| **TTS (floor tier)** | piper/VITS voice | ~20–60 MB, faster than realtime on 2 threads | the §4.6 shedding target when the machine struggles, and the read-aloud floor on weak hardware |
+| **Speech enhancement** | GTCRN denoiser | small; per-stream cost measured in Pass 0 | cleans bad-microphone input ahead of ASR + speaker checks — most wards won't have voice-isolating mics. Toggle `voiceEnhanceEnabled`, default ON for calls if the RTF budget holds |
+| **Spoken language ID** | whisper-based LID | ~tens of MB | when the ward enables two ASR languages (German household, English internet), LID routes each utterance to the right decoder — code-gated, per VAD segment |
 | **Speaker embedding** | 3D-Speaker / WeSpeaker (onnx) | ~20–70 MB, ~tens of ms per utterance | ward voiceprint enrollment, guest-voice watchdog, diarization for mixed streams |
 | **Keyword spotting** | zipformer KWS small | ~15 MB | name-activation in strict-mode calls; wake word on the horizon |
 | **Punctuation** | small punct model (optional) | ~30 MB | legible transcripts in session logs |
+| **Audio tagging** | zipformer audio tagging (AudioSet labels) | ~30–80 MB | **opt-in toggle, default OFF** — annotation-only in this milestone (§8.4); the long-term care-detection ambitions are their own ward-signed spec |
 
-Not used: audio tagging, language ID, speech enhancement — add only when a
-real need shows up.
+Not used: source separation, singing/music synthesis — add only when a real
+need shows up.
 
 **Model files are machine artifacts:** fetched on first enable by
 `scripts/ensure-audio-models.mjs` into `models/audio/` (git-ignored) from
@@ -113,11 +117,21 @@ no GPU. Two properties shape everything in §4:
    calls) — their CPU cost is small, their latency cost when starved is what
    §4 protects.
 
-**Pass 0 is a benchmark, not code:** run the chosen models on the actual
-machine (RTF for ASR under 1 and 2 concurrent streams, TTS latency per
-sentence, speaker-embedding cost, all while a `mem_search` loop runs) and
-record the numbers in this doc. Every "~" above becomes a measured value
-before Pass 2 ships.
+**Pass 0 is a benchmark, not product code — and it has a concrete shape:**
+`scripts/voice-bench.mjs` downloads the candidate models (pinned URLs +
+checksums, same fetcher Pass 1 will reuse), runs them against **bundled
+fixture audio** (short speech clips per target language — German and English —
+plus noise-mixed variants of the same clips for the enhancement/bad-mic
+story), and measures with `perf_hooks`: ASR RTF at 1 and 2 concurrent
+streams, TTS time-to-first-chunk and per-sentence latency for both tiers,
+speaker-embedding cost per segment, enhancement cost per second of audio.
+Then the **interference phase**: spawn Phylactery via thalamus, run a
+`mem_search` loop, and record enrich-path latency with and without full audio
+load running. The script writes `docs/voice-bench-results.md` (a committed
+markdown table + the raw JSON beside it) — the numbers land in the repo, not
+in a terminal scrollback, and this spec's "~" estimates are superseded by
+that file before Pass 2 ships. Re-runnable on any future machine, so "will
+it work on X hardware" is always one command.
 
 ---
 
@@ -168,7 +182,9 @@ before Pass 2 ships.
   "Phylactery and Unruh keep answering." Out of process, the server stays
   I/O-bound no matter what the models do.
 - **Hard thread caps, set at session creation** (ONNX Runtime intra-op
-  threads): VAD 1, ASR 2, TTS 2, speaker/KWS 1. The worker's peak concurrent
+  threads): VAD 1, ASR 2, TTS 2, speaker/KWS/LID 1; the GTCRN enhancement
+  stage rides inside its stream's ASR budget (it processes the same VAD
+  segment the decoder is about to eat). The worker's peak concurrent
   compute is capped at **`audioThreads` (default 3)** by its internal
   scheduler — on a 4c/8t machine that always leaves a physical core's worth
   of headroom for Node + the Python children even mid-burst.
@@ -334,7 +350,12 @@ the gateway stays ours.
   stream per speaking user (per-SSRC), mapped to a user id → resolved through
   the Village registry exactly like a text message's author: ward /
   villager / stranger. `capabilities.perSpeakerStreams: true` — the engine
-  skips the diarization stage entirely on this adapter.
+  skips the diarization stage entirely on this adapter. (To be clear on
+  terms: **Opus is Discord's audio codec**, a transport detail the adapter
+  decodes to PCM — it has nothing to do with the LLM. Whatever chat model
+  the ward points a location at — GLM, a small Gemma, anything on the
+  connection list — never receives audio in any form; it only ever sees the
+  transcript text, like every other message.)
 - **Roster = audience, re-resolved on every join/leave**, not just per
   message: `onRosterChange` re-runs the audience resolution *immediately*, so
   a stranger stepping into the channel gates the very next sentence I speak.
@@ -413,8 +434,12 @@ also the first consumer of the diarization stage + guest watchdog in §8.)
 
 ### 6.5 My voice is part of my identity
 
-`voiceTts` settings: model/voice id, speaker id (multi-speaker models), rate.
-Chosen with the ward, like my name. The voice-mode prompt block (first-person,
+Settings ships a **curated menu of built-in voices** — PocketTTS reference
+prompts and piper speaker ids, several distinct characters per language, each
+with a preview button that speaks a fixed sample sentence — so choosing a
+voice is a listening act, not a config-file edit. `voiceTts` stores the pick:
+tier/model, voice (reference-prompt or speaker id), rate. Chosen with the
+ward, like my name. The voice-mode prompt block (first-person,
 injected only on voice turns, authored in the identity-anchored register):
 
 > *I'm speaking aloud on a live call right now, in my own voice. I keep my
@@ -497,6 +522,26 @@ registry entry, like `remember` consent) and enrolled from a labeled clip the
 ward provides; without one, a villager on a mixed stream is just a guest
 label with a name only if introduced in conversation.
 
+### 8.4 Audio tagging (opt-in, annotation-only — for now)
+
+`voiceAudioTaggingEnabled` (default **OFF**): when on, VAD-rejected and
+speech-adjacent segments run through the audio-tagging model, and
+code-classified tags above a confidence floor become **context annotation
+lines** in the session, machine-stamped, nothing more: *"[I can hear a dog
+barking / glass breaking / a television in the background]"*. Tags never move
+the threat tier, never trigger an action, never persist beyond the session —
+in this milestone they only make me a better listener to the room I'm in.
+
+**The long-term ambition is named here so nobody builds it casually:** sound
+classes like distressed shouting, breaking objects, or the acoustic patterns
+of purging could one day matter to the care I owe my human — a ward with an
+eating disorder, a household where violence happens. That is *detection that
+changes when I act on safety*, which makes it **safety-critical by
+definition: its own spec, its own ward sign-off, evidence-informed
+thresholds, and honest false-positive/false-negative accounting** before a
+single tag touches the caring spine. The toggle ships now; the care wiring
+does not.
+
 ## 9. Memory, assets, retention
 
 - **Raw call audio is ephemeral by default.** PCM lives in ring buffers long
@@ -509,9 +554,11 @@ label with a name only if introduced in conversation.
   memo saves as `kind:'audio'` (vision-spec store), gets transcribed once by
   the offline ASR (better accuracy, latency-free path), transcript cached on
   the asset (the describe-once pattern verbatim), and rides chat as a
-  stand-in: `[voice note a3f9c2e1, 0:41 — transcript: "…" — shared by my
-  human, 7 Jul 14:31]`. The id makes a future `listen_again`/`view_image`
-  sibling operable; in this milestone the transcript IS the content, so no
+  stand-in: `[voice note note-x7k2m3, 0:41 — transcript: "…" — shared by my
+  human, 7 Jul 14:31]`. Ids on every model-facing surface are **readable
+  slugs** (`slug-ids.js` — the 0.8.x id overhaul, now a CLAUDE.md rule),
+  never raw hashes; the slug makes a future `listen_again`/`view_image`
+  sibling operable. In this milestone the transcript IS the content, so no
   re-listen tool ships (§15).
 - **Memorization:** call sessions flow through the existing session
   memorization with their audienceTag. Nothing new — that was the point of
@@ -530,10 +577,21 @@ label with a name only if introduced in conversation.
   by doctrine. Sign-off line: confirm ON, or it ships dark with the wiring in
   place.
 - **Audible triage delivery** (§7) changes *how* a check-in lands, never
-  *whether*. The deliberation prompts, tier gates, cool-downs, and escalation
-  deadlines in `silence-triage-loop.js` / `cerebellum.js` are **untouched**
-  by this spec. Any future idea of voice-*specific* triage behavior is a
-  separate ward-signed spec.
+  *whether*. The deliberation prompts, tier gates, and cool-downs in
+  `silence-triage-loop.js` are **untouched** by this spec. One deliberate,
+  **ward-directed** exception on the escalation side (signed off in the
+  first spec review): a check-in that was **confirmed spoken** into a live
+  call **with the ward present in the roster at delivery** starts a
+  *shorter* acknowledgement window — they demonstrably heard me, so silence
+  after a spoken check-in means more than silence after a banner they may
+  never have seen. Implementation: `contactDeadlineFor` applies
+  `voiceEscalationFactor` (default **0.5×** the per-tier
+  `CONTACT_ESCALATION_DELAY_MS`, clamped [0.25, 1]) only when
+  `delivery['voice-call'].status === 'delivered'` AND the ward was in the
+  call at that moment — both machine facts. Every other delivery path keeps
+  today's windows. This tightens toward action, never away from it — the
+  direction the proactivity doctrine permits without ceremony; the reverse
+  would not be.
 - **Observed voice is threat-neutral** (lurk/strict observation, villager and
   guest speech) — mirrors the V8 observe path exactly.
 - **The guest watchdog gates privacy, never safety:** a `gate` switch strips
@@ -545,20 +603,35 @@ label with a name only if introduced in conversation.
 
 ## 11. Settings & off-switches
 
-- `voiceEnabled` — master toggle, **default OFF** (a microphone is opt-in in
-  a way a pasted photo is not). Hard off-switch
-  `PROTO_FAMILIAR_VOICE_DISABLED=1` ships in the same commit as Pass 1.
-  Disabled = worker never spawns, adapters never register, voice locations
-  render inert, voice-note transcription degrades to `[voice note — I
-  couldn't listen; voice is disabled]`.
+- **Listening and speaking are separate consents.** `voiceEnabled` governs
+  everything that *hears* — mic capture, calls, STT, voice-note
+  transcription — and is **default OFF** (a microphone is opt-in in a way a
+  pasted photo is not). Disabled = no ASR/VAD/speaker models load, adapters
+  never register, voice locations render inert, voice-note transcription
+  degrades to `[voice note — I couldn't listen; voice is disabled]`.
+- **Read-aloud (TTS-only) does not require `voiceEnabled`** — it's an
+  accessibility surface, not a listening one, and hard-of-hearing wards are
+  exactly who it serves. Every assistant message in the web UI gets a 🔊
+  **"read this aloud" button** (`POST /api/voice/tts` → the worker loads the
+  TTS model alone → audio streams to the browser; `speakable()` applies; the
+  first-ever use offers the model download with a size note before
+  fetching). A `readAloudByDefault` toggle speaks each new reply as it
+  arrives, barge-in by pressing the button again or typing. Lands in
+  **Pass 1** — it needs no call engine, no adapters, just the worker and one
+  endpoint.
+- Hard off-switch `PROTO_FAMILIAR_VOICE_DISABLED=1` ships in the same commit
+  as Pass 1 and kills *all* of it — worker, calls, read-aloud.
 - Per-surface: `voiceDiscordEnabled`, `voiceWebEnabled`; per-location voice
   presence mode + connection id (existing registry fields).
 - Knobs with defaults (constants until tuning proves otherwise):
   `audioThreads` 3, `voiceMaxDecoders` 2, `voiceMaxCalls` 1,
   `voiceModelIdleMin` 10, `latencyBudgetMs` 1200, `voiceGuestPolicy`
-  'ignore', `voiceGuestThreshold` (Pass 0-calibrated), `voiceKeepAudio` off,
-  `voiceProactiveJoin` off, `voiceTts` {model, speaker, rate}, ASR model
-  choice per ward language.
+  **'note'** (ward-decided), `voiceGuestThreshold` (Pass 0-calibrated),
+  `voiceEnhanceEnabled` on-if-budget-holds, `voiceAudioTaggingEnabled` off,
+  `readAloudByDefault` off, `voiceEscalationFactor` 0.5, `voiceKeepAudio`
+  off, `voiceProactiveJoin` off, `voiceTts` {tier, voice, rate} from the
+  curated menu, ASR model choice per ward language (German + English
+  first-class; LID when two are enabled).
 - **Failure table** (every row inside the turn/call, none reaches chat as an
   error): worker crash → adapter plays nothing, call ends with a text notice
   in the location + outbox, chat unaffected; model download failed → voice
@@ -611,8 +684,10 @@ call — must arrive as an extension of this spine:
   the default model tiers from data. No product code.
 - **Pass 1 — the spine.** `audio-worker.mjs` + supervision + thread caps;
   model fetcher with pinned checksums; voice-note path end-to-end (asset →
-  offline transcript → stand-in in chat); `voiceEnabled` + env off-switch;
-  `/api/voice/status`. *Milestone `0.X.0`.*
+  offline transcript → stand-in in chat); **read-aloud** (per-message 🔊 +
+  `readAloudByDefault` + `POST /api/voice/tts`, the curated voice menu with
+  previews); `voiceEnabled` + env off-switch; `/api/voice/status`.
+  *Milestone `0.X.0`.*
 - **Pass 2 — first live conversation.** `call-engine.js` + web voice adapter
   (push-to-talk, then VAD mode); streaming ASR turns; sentence-streamed TTS +
   barge-in + `speakable()`; the compute governor (call-state file, deferral
@@ -652,16 +727,24 @@ call — must arrive as an extension of this spine:
   triage check-in fire DURING the call — and are spoken.
 - Ward voice transcripts move the threat tier (if signed ON); a villager's
   voice never does; partials never do.
+- With `voiceEnabled` OFF, the 🔊 read-aloud button still speaks a reply
+  (TTS-only worker load, no ASR model in memory, no capture path exists);
+  `readAloudByDefault` speaks each new reply as it lands.
+- The noise-mixed German fixture transcribes acceptably with
+  `voiceEnhanceEnabled` on (Pass 0 defines the WER bar) — the bad-microphone
+  story is tested, not assumed.
 - `PROTO_FAMILIAR_VOICE_DISABLED=1` — no worker process exists, all voice
-  surfaces degrade to their honest text fallbacks.
+  surfaces (including read-aloud) degrade to their honest text fallbacks.
 
 ## 15. Out of scope (this milestone)
 
 - Speech-to-speech or audio-native LLM turns (transcripts ride the
   OpenAI-compatible text surface; an `input_audio` content-part is a future
   materializer extension, per the vision spec's seam).
-- Voice cloning of the ward or villagers; my TTS voice is a stock model
-  voice.
+- Voice **cloning of the ward or villagers** — even though PocketTTS can
+  zero-shot clone from reference audio, my voice comes from the curated
+  built-in menu only. Cloning a real person's voice is a consent/identity
+  question this milestone deliberately does not open.
 - Music/media playback, sound-scene tagging, singing.
 - Telegram / TeamSpeak / WhatsApp / Mumble adapters (the contract is the
   deliverable here; §3).
@@ -669,17 +752,23 @@ call — must arrive as an extension of this spine:
 - A `listen_again` re-listen tool (transcripts carry the content; revisit
   when audio-native models make re-listening mean something).
 
-## 16. Ward decisions (open — answer before or during the named pass)
+## 16. Ward decisions (first review round held — mostly settled)
 
-1. **Threat scoring of ward voice transcripts** (§10) — confirm default ON,
-   with the finals-only + ward-stream-only guards. (Pass 2.)
-2. **`voiceGuestPolicy` default** — spec proposes `ignore` (least surprise;
-   the feature is discovered, then chosen). If your instinct is `gate`-by-
-   default for your own setup, that's one settings line. (Pass 4.)
-3. **`voiceEnabled` default OFF** — confirm (mirrors the canonical-writer
-   loops' posture: things that can hear default quiet). (Pass 1.)
-4. **Voice-note retention** — keep audio assets forever like images, or
+1. **Threat scoring of ward voice transcripts** — **SETTLED: ON**, with the
+   finals-only + ward-stream-only guards. (Ward, spec review 1.)
+2. **`voiceGuestPolicy` default** — **SETTLED: `note`**. (Ward, spec
+   review 1.)
+3. **`voiceEnabled` default OFF** — **SETTLED: OFF for everything that
+   listens**, with the read-aloud TTS surface explicitly independent of it
+   (§11) so hard-of-hearing wards get a speaking Familiar without opening a
+   microphone. (Ward, spec review 1.)
+4. **Voice-escalation windows** — **SETTLED: shorter on confirmed spoken
+   delivery** (`voiceEscalationFactor` 0.5×, §10). (Ward, spec review 1 —
+   this is the sign-off that behavioral change rides on.)
+5. **TTS voice** — the curated menu ships several built-in voices with
+   previews (§6.5); the specific default we pick together at Pass 2. (Open —
+   by design.)
+6. **Voice-note retention** — keep audio assets forever like images, or
    transcript-only after N days? Spec proposes keep (they're small and
-   they're memories). (Pass 1.)
-5. **TTS voice** — pick my voice together. Not a technical decision, which
-   is why it's on this list. (Pass 2.)
+   they're memories). (Still open — not addressed in review 1; needed by
+   Pass 1.)
