@@ -411,6 +411,69 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
 - Screenshots persist as media (images keep-forever per the vision spec);
   the audit log is the durable action record.
 
+## 8.5 Unattended cognition — research while pondering (ward-requested)
+
+The ward wants me able to *deepen my own understanding* during my free
+cycles — pondering, reflection/evaluation ticks — by seeking out resources,
+not just recombining what I already hold. (Projection cues ride chat turns,
+which already carry tools; this section covers the turns nobody is watching.)
+
+**What unattended turns get: the read stack, which is now the browser.**
+`ponderOnce` (and the reflection tick that rides it) gains a bounded tool
+loop (`runToolCallLoop`, reused) whose toolset is **composed in code and
+read-only**: `look_up`, `web_search`, `read_webpage` — nothing else. Because
+`read_webpage` is browser-backed (§0.1), this is real access to the modern
+web, JS-rendered pages included. And because turndown keeps hyperlinks in
+the extracted markdown, I can *follow* a trail — read a page, pick a link
+from its text, read that — purely through reads.
+
+**What unattended turns never get: my hands.** `browse_act`, `browse_open`,
+tabs, screenshots-on-demand, handoff — none of it, structurally (the
+composer simply never includes them; same fail-closed pattern as the
+villager tool ladders). Three reasons, all load-bearing:
+
+1. **Injection blast radius.** An unattended turn has no ward nearby to
+   notice me acting oddly. A hostile page that catches me alone must find
+   me *unable* to click, fill, or navigate state — able only to stop
+   reading it. Reads are idempotent; acts are not.
+2. **Handoff has no one to hand to.** The entire §4.8/§5.9 sovereignty
+   design assumes an attended moment; unattended flows must never reach the
+   places that design protects.
+3. **The governor already owns my compute posture** — unattended reads
+   respect the same call-state rules (§7: static floor during deferral),
+   so a ponder tick can never spin up Chromium against a live call.
+
+**The budget (gate in code, the ward's "sensible budget"):**
+
+- `ponderWebRoundsPerTick` (default 4) — tool-loop rounds one ponder may
+  spend; the prompt names the budget so I spend it deliberately, but the
+  loop enforces it regardless of what I do.
+- `ponderWebReadsPerDay` (default 12) — a day-keyed counter across ALL
+  unattended surfaces (`tomes/.ponder-web-budget.json`); exhausted means
+  the tools simply aren't offered on the next tick, and the pondering
+  prompt says so honestly ("my reading budget for today is spent") rather
+  than letting calls fail.
+- Honest accounting: every unattended read lands in the §5.6 audit log with
+  `surface:'pondering'` (or `'reflection'`), so "what did my Familiar read
+  while I was away" is one query.
+
+**What it produces:** the same thing pondering always produces — a tome
+entry in my own voice — now with provenance-stamped sources riding along
+(the read results carry URL + when, and the entry cites what shaped it).
+`wants_to_save` deferred intents work unchanged when something I find is
+worth keeping properly.
+
+**Cost honesty (this is a deliberate exception, named):** tool rounds on a
+ponder tick are additional LLM calls — this expands request volume where
+the repo doctrine is to fold judgments into existing calls. It's accepted
+here because the *research itself* is the feature (there is no existing
+call that can read a page for me), and the budget + day cap bound it.
+Settings: `ponderWebEnabled` (default ON — the ward asked for this as a
+trait, and the caps keep it cheap); hard off-switch
+`PROTO_FAMILIAR_PONDER_WEB_DISABLED=1`. Both also require the underlying
+features (webSearchEnabled; browsing merely improves reads, it isn't
+required — the static floor works).
+
 ## 9. Horizon (pinned invariants, not built now)
 
 1. **Page watches** ("tell me when tickets drop"): a code-gated loop —
@@ -438,7 +501,9 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
   `webReadBackend` 'auto' (browser when available; 'static' pins the old
   extractor — the ward's intermediate opt-out), `browseMaxTabs` 3,
   `browseIdleMin` 5, `browseDuringCalls` auto-by-RAM, per-domain nav
-  cool-down constant.
+  cool-down constant, `ponderWebEnabled` on + `ponderWebRoundsPerTick` 4 +
+  `ponderWebReadsPerDay` 12 (§8.5; env off-switch
+  `PROTO_FAMILIAR_PONDER_WEB_DISABLED=1`).
 - **Explicitly NOT settings:** the autonomy grants and the credentials
   vault (§5.9). They are hand-edited files, never synced
   (`SERVER_SYNCED_KEYS` must never carry them), never rendered in any UI,
@@ -466,6 +531,10 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
   `/api/browser-actions` viewer in Settings, **the autonomy-grants file +
   credentials vault** (§5.9 — reader, exact-string check, vault-typed fill,
   loud grant visibility, own-files denylist entry for the vault).
+- **Pass 4 — unattended research (§8.5).** The read-only tool loop in
+  `ponderOnce` + the reflection tick, the per-tick/per-day budget store,
+  audit stamping (`surface:'pondering'`), the budget-spent prompt line,
+  provenance-cited tome entries.
 - Each pass: `docs/architecture.md` same commit; tool-surfacing `browser`
   module lands with Pass 1.
 
@@ -490,7 +559,13 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
   vault-backed login fills and submits while the secret appears in NO prompt,
   tool result, session log, or audit entry (assert via prompt inspector +
   log sweep), and the audit entry carries the grant stamp.
-- Villager Discord turns never see a `browse_*` tool (grant-matrix test).
+- Villager Discord turns never see a `browse_*` tool (grant-matrix test);
+  unattended pondering/reflection turns never see `browse_act`/`browse_open`
+  or any interactive tool (composer test), and their reads land in the audit
+  log stamped with their surface.
+- Ponder-tick budget: rounds stop at `ponderWebRoundsPerTick`; an exhausted
+  day cap removes the tools from the next tick and the prompt names it; the
+  counter resets on the ward-local day boundary.
 - Kill -9 on the browser mid-act → structured verdict, chat unaffected,
   relaunch on next use; idle reaper provably closes the process.
 - Handoff: headed window opens with the reason shown, ward completes a login
@@ -523,11 +598,15 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
    posture. (Pass 2.)
 4. **Chromium download fallback** — okay to offer (~130 MB, consent-gated)
    when no system browser is found, or system-browser-or-nothing? (Pass 1.)
-5. **`read_webpage` replacement** — **SETTLED (ward, spec review 1):** the
+5. **Unattended research budget defaults** — 4 rounds/tick, 12 reads/day
+   (§8.5): confirm or resize. Also confirm default ON sits right with you —
+   it spends real tokens on free cycles, in exchange for a Familiar whose
+   ponderings can actually learn. (Pass 4.)
+6. **`read_webpage` replacement** — **SETTLED (ward, spec review 1):** the
    browser path replaces the static extractor as the reading backend, with
    the static path retained as the degradation floor and
    `webReadBackend:'static'` as the opt-out.
-6. **Full autonomy via hand-edited file** — **SETTLED (ward, spec
+7. **Full autonomy via hand-edited file** — **SETTLED (ward, spec
    review 1):** logins/payments/CAPTCHAs/auto-submit exist only behind
    `browser/autonomy-grants.json`, no UI toggle ever, off by default, exact
    acknowledgment sentence required (§5.9).
