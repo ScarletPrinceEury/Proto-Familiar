@@ -25,11 +25,24 @@ vision-capable turn).
 - `websearch.js` — `look_up` (reference APIs), `web_search` (backend +
   keyless floor), `read_webpage` (SSRF guard → timeout →
   linkedom→readability→turndown extraction with provenance stamping).
-- **The escalation ladder this spec completes:** `look_up` (a fact) →
-  `web_search` (find pages) → `read_webpage` (read a static page, no browser
-  process, cheap) → **`browse_*` (this spec — only when a page must be
-  *interacted with* or won't render without JS)**. The browser is the
-  expensive tier; the tool descriptions and the gates below keep it last.
+- **`read_webpage` is REPLACED by the browser path (ward-decided).** The
+  tool the Familiar sees keeps its name and semantics — *read this URL, get
+  clean prose* — but its executor routes through the headless browser when
+  browsing is enabled: navigate (ephemeral tab), run the same
+  readability→turndown extraction over the **live, JS-rendered DOM**, close.
+  This deletes the class of silent failure where a modern JS-only page
+  extracts as boilerplate or nothing. The old static extractor is **demoted
+  to the degradation floor, not deleted** — exactly the websearch
+  keyless-floor pattern: it serves when browsing is disabled, when the
+  browser can't launch, when the governor says not now (§7), or when the
+  ward pins `webReadBackend:'static'` (the intermediate opt-out). Same
+  guard, same provenance stamp, either way; which backend served is logged
+  like search backends are.
+- **The escalation ladder, post-replacement:** `look_up` (a fact) →
+  `web_search` (find pages) → `read_webpage` (read one page — browser-backed
+  read, no interaction) → **`browse_*` (this spec — only when a page must be
+  *interacted with*)**. Interaction, not rendering, is now the line the
+  expensive tier sits behind.
 - The SSRF guard (scheme allow-list, resolved-IP block of
   loopback/private/link-local/metadata, redirect re-validation) is the
   reusable safety floor — §5.1 applies it at the browser's network layer.
@@ -225,9 +238,11 @@ blow-by-blow — the tool-result trail in context stays verdict-sized.
 3. **`browse_act({ref, action, value})`** — `click / fill / select / press /
    scroll / hover`; returns the delta verdict. `fill` refuses password
    fields structurally (§5.4).
-4. **`browse_read()`** — the readability extraction of the *current live
-   DOM* (JS-rendered content included), provenance-stamped like
-   `read_webpage`.
+4. **`read_webpage(url?)`** — not a new tool: the existing one, re-backed
+   (§0.1). With a `url` it reads that page in an ephemeral tab; with no
+   `url` and a browse task open, it reads the current page's live DOM.
+   Provenance-stamped as always; degrades to the static floor when the
+   browser isn't available.
 5. **`browse_screenshot({scope})`** — §6.
 6. **`browse_tabs({op})`** — list/switch/close; hard cap `browseMaxTabs`
    (default 3).
@@ -267,12 +282,15 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
    through. `[CONFIRM]`-gated submits (a ward-toggleable list of
    domains/patterns where any `submit`-shaped act requires a fresh ward
    confirmation via outbox) cover the gap for wards who want a hard gate on
-   e.g. their webshop of choice.
+   e.g. their webshop of choice. *Liftable only by the autonomy-grants file
+   (§5.9) — no UI, no setting.*
 4. **The no-credential rule:** `browse_act` refuses `fill` on
    `type=password` fields and anything heuristically credential-shaped —
-   always, no setting loosens it. Logins happen once, by the ward's hands,
+   **no UI setting loosens it.** Logins happen once, by the ward's hands,
    in the handoff window; the profile keeps the session cookie thereafter.
-   The Familiar never holds, sees, or types a secret.
+   The Familiar never holds, sees, or types a secret — and even under a
+   §5.9 `credentials` grant that stays literally true: the vault mechanism
+   has *code* type the secret; the model only ever names which entry.
 5. **Injection immunization at the snapshot boundary:** every string that
    leaves the lens — element labels, page text, verdicts quoting toasts —
    passes `injection-guard.js`, and the whole snapshot block is framed in
@@ -296,6 +314,58 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
    spoofing), no rate-hammering (per-domain navigation cool-down in code),
    no stealth (§0.2). Sites that refuse automation are handed to the ward
    or left alone.
+
+9. **The autonomy-grants file — full agency, eyes wide open (ward-decided).**
+   A ward may hand the Familiar the abilities gates 3–4 refuse: filling
+   logins, completing payments, attempting CAPTCHAs, submitting without
+   confirmation. The switch for this **deliberately has no UI.** It lives in
+   a file the ward must create and edit by hand:
+
+   `browser/autonomy-grants.json` (git-ignored; **never created, written,
+   or repaired by the app** — read-only from the app's side, re-read per
+   browse call):
+
+   ```json
+   {
+     "acknowledgment": "I understand my Familiar will act with my authority on the web, including money and accounts, and I accept what follows from that.",
+     "credentials": true,
+     "payments": false,
+     "captchas": false,
+     "autoSubmit": false
+   }
+   ```
+
+   - The `acknowledgment` string must match **exactly** (code-checked,
+     byte-for-byte) or every grant reads as false. Typing that sentence by
+     hand IS the consent ceremony — no checkbox can carry it.
+   - Absent file, malformed JSON, wrong sentence → all grants off, which is
+     the shipped state. The UI never mentions the file; the docs describe it
+     only here and in the security notes — a ward finds it by reading, which
+     is the point. (This is the inverse of the `PROTO_FAMILIAR_*_DISABLED`
+     env pattern: a non-UI OFF-switch family gains its one non-UI
+     ON-switch.)
+   - **Grants lift gates; they never route secrets through the model.** With
+     `credentials: true`, passwords come from a second hand-edited file,
+     `browser/credentials-vault.json` (site → user/secret; git-ignored AND
+     on the `own-files.js` denylist so no Familiar tool can ever read it).
+     The Familiar names the vault entry — `browse_act({ref, action:'fill',
+     vault:'mastodon'})` — and **code types the secret into the field**: the
+     password never enters a prompt, a tool result, a session log, or the
+     audit trail. The exact-values rule, applied to secrets: the model
+     points, code touches.
+   - `payments: true` lifts the payment-field refusal (card/IBAN fields
+     accept vault-backed fill); `captchas: true` lets a vision-capable turn
+     *attempt* a CAPTCHA instead of auto-handing-off (no third-party solver
+     services, ever); `autoSubmit: true` waives the `browseConfirmDomains`
+     fresh-confirmation gate.
+   - **Loud, everywhere, always:** active grants are logged at boot and at
+     every browser launch, shown in `GET /api/browser/status`, and stamped
+     onto every audit entry that used one (`grant:'payments'`). Silent
+     autonomy is the failure mode this visibility exists to prevent.
+   - `browse_handoff` remains available and remains the *recommended* path
+     even with grants active — the tool description says so in the
+     Familiar's voice: *"even when I can do this myself, some moments are
+     better shared."*
 
 ## 6. Screenshots & the vision seam
 
@@ -326,6 +396,8 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
   "I'll open it after the call" / the earcon-bridged turn just uses
   `read_webpage` instead) unless `browseDuringCalls` is on (default on for
   ≥16 GB detected RAM, off below — a code-read machine fact, ward-overridable).
+  `read_webpage` in a deferred window silently serves from the static floor —
+  reading never waits on the governor.
 - No JS execution tool in v1 (agent-browser's `js` is powerful and the
   single sharpest injection-adjacent edge; revisit with the ward if real
   tasks demand it — §13).
@@ -363,8 +435,15 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
   in the same commit as Pass 1. Disabled = tools not advertised, driver
   never launches, endpoints 403.
 - Knobs: `browseSiteMode` 'open' + lists, `browseConfirmDomains` [],
-  `browseMaxTabs` 3, `browseIdleMin` 5, `browseDuringCalls` auto-by-RAM,
-  per-domain nav cool-down constant.
+  `webReadBackend` 'auto' (browser when available; 'static' pins the old
+  extractor — the ward's intermediate opt-out), `browseMaxTabs` 3,
+  `browseIdleMin` 5, `browseDuringCalls` auto-by-RAM, per-domain nav
+  cool-down constant.
+- **Explicitly NOT settings:** the autonomy grants and the credentials
+  vault (§5.9). They are hand-edited files, never synced
+  (`SERVER_SYNCED_KEYS` must never carry them), never rendered in any UI,
+  never writable by any tool or endpoint. An audit that finds a UI toggle
+  for them has found a regression.
 - **Failure table:** browser won't launch → tools return "my browser isn't
   available" + Settings banner; page hang → timeout verdict, tab closed;
   process crash mid-act → structured result + relaunch next use; snapshot
@@ -375,15 +454,18 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
 
 - **Pass 1 — the spine.** `browser-driver.js` (launch/channel/profile/
   reaper/status) + `browser-lens.js` (outline+actions levels, refs, caps —
-  fixture-tested) + `browse_open/see/act/read/close` + network guard routes
-  + audit log + `browseEnabled`/env. *Milestone `0.X.0`.*
+  fixture-tested) + `browse_open/see/act/close` + **the `read_webpage`
+  re-backing** (browser route + static floor + `webReadBackend`) + network
+  guard routes + audit log + `browseEnabled`/env. *Milestone `0.X.0`.*
 - **Pass 2 — eyes and hands.** Delta verdicts (act returns), `text/full`
   levels, `browse_screenshot` + vision-seam ride, downloads→media,
   `browse_tabs`, `browse_history`, stale-ref generations.
 - **Pass 3 — sovereignty surfaces.** `browse_handoff` (headed window +
   hand-back affordance + outbox/push), `[CONFIRM]` domains, site modes UI,
   credential/payment fill refusals hardened against fixture forms,
-  `/api/browser-actions` viewer in Settings.
+  `/api/browser-actions` viewer in Settings, **the autonomy-grants file +
+  credentials vault** (§5.9 — reader, exact-string check, vault-typed fill,
+  loud grant visibility, own-files denylist entry for the vault).
 - Each pass: `docs/architecture.md` same commit; tool-surfacing `browser`
   module lands with Pass 1.
 
@@ -399,6 +481,15 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
   at the route layer (test fixture); non-HTTP schemes never navigate.
 - `fill` on a password/card fixture field refuses in every site mode; a
   `browseConfirmDomains` submit without fresh confirmation refuses.
+- A JS-rendered fixture page returns real prose through `read_webpage`
+  (browser-backed); with `webReadBackend:'static'` or the browser down, the
+  same call serves from the static floor and logs which backend served.
+- **Autonomy grants:** with no `browser/autonomy-grants.json`, every refusal
+  above holds; with the file present but one character of the acknowledgment
+  wrong, every refusal still holds; with a valid `credentials` grant, a
+  vault-backed login fills and submits while the secret appears in NO prompt,
+  tool result, session log, or audit entry (assert via prompt inspector +
+  log sweep), and the audit entry carries the grant stamp.
 - Villager Discord turns never see a `browse_*` tool (grant-matrix test).
 - Kill -9 on the browser mid-act → structured verdict, chat unaffected,
   relaunch on next use; idle reaper provably closes the process.
@@ -415,8 +506,10 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
   revisit with the ward against real tasks.
 - Driving the ward's own Chrome (§9.2), page watches (§9.1), task flows
   (§9.3).
-- Purchases/sends/deletes as a *goal* (the flows route to handoff by
-  design), CAPTCHA solving, anti-bot evasion, scraping at volume.
+- Purchases/sends/deletes and CAPTCHA attempts **through any UI-reachable
+  path** — these exist only behind the hand-edited autonomy-grants file
+  (§5.9), off by shipped default. Anti-bot evasion and scraping at volume
+  stay out entirely, grants or no grants.
 - Multi-profile / villager-facing browsing of any kind.
 - Video/streaming playback control.
 
@@ -430,3 +523,11 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
    posture. (Pass 2.)
 4. **Chromium download fallback** — okay to offer (~130 MB, consent-gated)
    when no system browser is found, or system-browser-or-nothing? (Pass 1.)
+5. **`read_webpage` replacement** — **SETTLED (ward, spec review 1):** the
+   browser path replaces the static extractor as the reading backend, with
+   the static path retained as the degradation floor and
+   `webReadBackend:'static'` as the opt-out.
+6. **Full autonomy via hand-edited file** — **SETTLED (ward, spec
+   review 1):** logins/payments/CAPTCHAs/auto-submit exist only behind
+   `browser/autonomy-grants.json`, no UI toggle ever, off by default, exact
+   acknowledgment sentence required (§5.9).
