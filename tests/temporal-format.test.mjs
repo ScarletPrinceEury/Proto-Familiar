@@ -215,6 +215,31 @@ test('renders a Consequence links section with the consequence tag', () => {
   assert.match(out, /prep → requires → interview/);   // bare structural edge, no tag
 });
 
+test('edges resolve endpoints from schedule.linked (the visibility regression)', () => {
+  // The rot case: the consequence state is NOT a window node (undated, or
+  // scrolled out) and the src is a recurring anchor stamped months ago —
+  // both arrive via `linked`. The edge must still render, and the linked
+  // endpoints must appear in the [schedule ids] legend so I can act on them.
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'tk-9', type: 'task', label: 'today thing', when: '2026-07-07T15:00:00Z' },
+      ],
+      edges: [
+        { id: 'e1', src: 'dinner-x7', dst: 'crash-q2', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse' } },
+      ],
+      linked: [
+        { id: 'dinner-x7', type: 'event', label: 'dinner', when: '2026-01-02T18:00:00Z' },
+        { id: 'crash-q2',  type: 'state', label: 'crash' },
+      ],
+    },
+  });
+  assert.match(out, /Consequence links/);
+  assert.match(out, /dinner → causes → crash/);
+  assert.match(out, /crash \[state\] = crash-q2/);   // linked nodes reach the id legend
+});
+
 test('co_occurs_with renders undirected with [noticed] when untagged', () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [

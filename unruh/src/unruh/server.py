@@ -191,7 +191,10 @@ def schedule_get_window(
         include_open_tasks: include tasks with no when_ts and no
             resolution (general 'to do' items). Default True.
 
-    Returns: {ok: True, nodes: [...], edges: [...], from, to}.
+    Returns: {ok: True, nodes: [...], edges: [...], linked: [...], from, to}.
+    `edges` is the whole schedule-layer consequence graph (bounded by limit),
+    and `linked` carries any edge endpoints that aren't window nodes — undated
+    states, out-of-window anchors — so I can always resolve both ends of a link.
     """
     with get_conn() as conn:
         result = sched.get_window(
@@ -349,7 +352,12 @@ def schedule_upsert_state(label: str) -> dict[str, Any]:
             existing = sched.find_state_by_label(conn, label=label)
             if existing:
                 return {"ok": True, "id": existing, "created": False}
-            nid = sched.add_node(conn, type="state", label=label, when=_now_iso())
+            # Undated by design: a consequence state is a timeless graph
+            # citizen. It reaches consumers via get_window's `linked` set,
+            # so it must NOT carry a when_ts that would scroll it out of
+            # the time window (the old `when=now` stamp is what made every
+            # consequence edge go invisible ~12h after authoring).
+            nid = sched.add_node(conn, type="state", label=label)
         return {"ok": True, "id": nid, "created": True}
     except ValueError as e:
         return _err(str(e))
@@ -892,12 +900,14 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         gcal_projection = gcal_ingest_mod.projection_candidates(conn, now=now)
     # Edges ride along so the Familiar sees the consequence graph, not just
     # a flat list (temporal-format renders a "Consequence links" block from
-    # these; edges whose endpoints aren't in the visible window are dropped
-    # by the renderer). Without this the graph it authors stays invisible.
+    # these). `linked` carries the edge endpoints that aren't window nodes —
+    # undated states, out-of-window recurring anchors — so the renderer can
+    # resolve every edge's labels instead of silently dropping the edge.
     schedule_block: dict[str, Any] = {
         "phase": phase,
         "window": window["nodes"],
         "edges": window["edges"],
+        "linked": window.get("linked", []),
     }
     return {
         "ts": now or _now_iso(),

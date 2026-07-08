@@ -1920,8 +1920,13 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             now: nowMs,
             // Consequence awareness: the graph edges + the full window so a
             // candidate's dependents/blocked-items resolve to read imminence.
+            // `linked` rides along so edge endpoints outside the window
+            // (undated states, old anchors) still resolve to labels.
             edges: Array.isArray(temporalPayload?.schedule?.edges) ? temporalPayload.schedule.edges : [],
-            scheduleNodes: windowItems,
+            scheduleNodes: [
+              ...windowItems,
+              ...(Array.isArray(temporalPayload?.schedule?.linked) ? temporalPayload.schedule.linked : []),
+            ],
           });
 
           if (candidates.length > 0) {

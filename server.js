@@ -3230,7 +3230,13 @@ function startAutonomousPondering() {
       let cooccurrences = [];
       try {
         const win = await getScheduleWindow({});
-        const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+        // Window nodes + linked endpoints (undated states, out-of-window
+        // anchors) — without `linked` the grader saw unresolvable endpoint
+        // ids and the calibration loop starved on its own projections.
+        const nodes = [
+          ...(Array.isArray(win?.nodes) ? win.nodes : []),
+          ...(Array.isArray(win?.linked) ? win.linked : []),
+        ];
         const labelById = new Map(nodes.map(n => [n.id, n.label]));
         const allEdges = Array.isArray(win?.edges) ? win.edges : [];
         consequenceEdges = allEdges

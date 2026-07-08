@@ -8127,7 +8127,11 @@ async function teLoadScheduleMap() {
     const data = await r.json();
     if (gen !== _teSchedMapGen) return;
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
-    const nodes = (data.nodes || []).map(n => ({ ...n, type: n.type || 'task' }));
+    // Window nodes + linked endpoints (undated consequence states, anchors
+    // outside the window) — without linked, edges to them dangled and the
+    // map engine dropped them, so the consequence graph looked empty.
+    const nodes = [...(data.nodes || []), ...(data.linked || [])]
+      .map(n => ({ ...n, type: n.type || 'task' }));
     // Engine edges want { id, fromId, toId, type }. Schedule edges carry
     // src / dst / kind — map them across (kind becomes the edge's type,
     // which the engine hues and the legend lists).

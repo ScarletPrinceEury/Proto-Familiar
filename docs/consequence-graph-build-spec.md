@@ -9,6 +9,21 @@
 > graph is now a working model of consequence the Familiar can *see, author, learn from, and
 > reason ahead with*.
 >
+> **Defect found & fixed (0.8.47-alpha):** as shipped, the whole system was silently
+> invisible in practice. `schedule_upsert_state` stamped state nodes `when=now`, every
+> consumer resolved edge endpoints only against the rolling time window, and renderers
+> dropped edges with unresolvable endpoints — so every consequence edge went dark ~12h
+> after authoring, and edges on recurring anchors (stamped months back) were never even
+> fetched. Projection rendered nothing; the calibration/promotion loop starved on its own
+> projections. Fix: `get_window` returns the whole schedule-layer edge set plus a `linked`
+> endpoint set; states are created undated; all consumers (temporal-format, surfacing,
+> reflection input, the Map) resolve from window ∪ linked. Regression tests pin the rot
+> cases. Lesson recorded: **graceful degradation without observability hid a total
+> feature failure for weeks — absence must be distinguishable from emptiness.** The
+> follow-up spec (`docs/temporal-bridges-build-spec.md`) addresses the deeper gap this
+> surfaced: the emotional states that form the causal middle of real chains had no
+> authorship path into the graph at all.
+>
 > One design refinement landed during Pass 2 (maintainer sign-off): marking a need-window
 > `missed` makes only the **lapse** factual — it never auto-confirms the projected `on_lapse`
 > consequence. Whether the predicted cost actually followed stays the Familiar's observation,
