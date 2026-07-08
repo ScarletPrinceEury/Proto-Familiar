@@ -75,9 +75,11 @@ schedule-layer `state` node for the episode.
   files' behavior — but it *persists crisis artifacts*, which is exactly
   why the ward signs off on the feature as a whole and its default.)
 - Off-switch in the same commit: `PROTO_FAMILIAR_SPINE_STATES_DISABLED=1` +
-  Settings toggle. Default: **ward decision** (§6.1) — proposed ON, because
-  a Familiar that can't see its human's hard stretches in time is the
-  Familiar that confabulated one.
+  Settings toggle. Default **ON** (ward-signed, §6.1) — a Familiar that can't
+  see its human's hard stretches in time is the Familiar that confabulated
+  one. Minting threshold: **moderate and above** (ward-signed, §6.2) — a
+  rough-but-not-severe stretch still shapes a week and deserves a trace to
+  relate later; the per-episode dedup keeps that from being noisy.
 
 ## 2. Cross-store references (memory ↔ schedule node)
 
@@ -118,27 +120,36 @@ to my human around Thursday evening?"*
   is informed by what I actually recorded living through it, not just by
   the edge's own payload.
 
-## 4. Memory lifecycle (episodic → pattern)
+## 4. Memory lifecycle — distill-only (ward-signed, §6.3)
 
 My own gap, in my own words: the system doesn't distinguish "one-time
-logistical fact" from "resolved event that revealed a lasting pattern."
+logistical fact" from "resolved event that revealed a lasting pattern." The
+ward chose the **additive-only** shape: the lifecycle may *write out*
+patterns it finds, but it **never demotes, decays, or deletes an original
+memory** — nothing a ward wanted can ever sink because of this pass. It only
+ever *adds*.
 
 - **Rides the existing Phylactery consolidation** (scheduler.py's
   volume-gated runs) — no new loop. Resolved-past episodic memories older
-  than `memoryLifecycleDays` (default 30) get ONE batched judgment per run:
-  - `expire` — pure logistics, moment passed ("appointment at noon July 2")
-    → decays to the lowest retrieval tier (consolidation's existing decay
-    machinery; **never a hard delete** — snapshots and the backup remain
-    the safety net, and a decayed memory is still reachable by explicit
-    search).
-  - `distill` — the event carried a pattern → write the pattern as a new
-    durable memory (linked back via `source_json` to the original;
-    `schedule_refs` carried over), original decays. "Chen was proud of
-    doing the chain immediately" → "doing dreaded paperwork immediately,
-    while the momentum is there, works well for my human."
-  - `keep` — significant as an episode; left alone, never re-judged.
-- Opt-in (default OFF): it rewrites the shape of the ward's memory, which
-  is theirs to authorize. Toggle + `PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1`.
+  than `memoryLifecycleDays` (default 30) get ONE batched judgment per run,
+  and the ONLY action it can take is:
+  - `distill` — the event carried a lasting pattern → write the pattern as
+    a **new** durable memory (linked back via `source_json` to the source
+    episode; `schedule_refs` carried over). "Chen was proud of doing the
+    chain immediately" → a new memory: "doing dreaded paperwork immediately,
+    while the momentum is there, works well for my human." **The original is
+    left exactly as it is** — no decay, no tier change. A `distilled_at`
+    stamp on the source prevents re-distilling the same episode.
+  - Everything else → untouched. There is no `expire`, no demotion path.
+- **Why additive-only:** demoting logistics would shrink clutter faster, but
+  it risks a memory the ward valued sinking on the model's judgment. The
+  ward chose zero-risk over faster tidying. Clutter reduction, if it's ever
+  wanted, becomes its own separately-signed decision — not a side effect of
+  pattern-learning. (Recorded so a future pass doesn't quietly re-add an
+  expire branch "for tidiness.")
+- Opt-in (default OFF): it still writes to the canonical self, which is the
+  ward's to authorize, even additively. Toggle +
+  `PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1`.
 
 ## 5. Reflection observability (never invisible again)
 
@@ -156,15 +167,19 @@ identical to a quiet one. So:
 
 ---
 
-## 6. Ward decisions (sign-off before the named piece ships)
+## 6. Ward decisions (all SETTLED — spec review)
 
-1. **Piece 1 ships at all, and its default** (proposed ON with the
-   off-switch; the alternative is opt-in). This persists crisis episodes as
-   graph state — ward-private, villager-filtered, but persistent. (Piece 1.)
-2. **Spine-state granularity:** moderate+ only (proposed), or high+ only
-   for a quieter graph? (Piece 1.)
-3. **Memory lifecycle default OFF** — confirm, and confirm `expire` =
-   decay-not-delete is acceptable as the permanent posture. (Piece 4.)
+1. **Piece 1 ships, default ON.** The caring spine mints state nodes; the
+   bridge that closes the confabulation failure is active out of the box,
+   with the off-switch + Settings toggle present. (Ward.)
+2. **Granularity: moderate and above.** A rough-but-not-severe stretch
+   still shapes a week and earns a trace; per-episode dedup keeps the graph
+   from getting noisy. (Ward.)
+3. **Memory lifecycle: default OFF, distill-only.** The pass may only ADD
+   distilled pattern-memories; it never demotes, decays, or deletes an
+   original. Zero risk of a wanted memory sinking; clutter reduction, if
+   ever wanted, is its own future signed decision. (Ward — chose the
+   additive-only variant over decay-not-delete.)
 
 ## 7. Passes & acceptance (abridged)
 
@@ -173,8 +188,8 @@ identical to a quiet one. So:
 - **Pass B** — Pieces 2+3 (refs both directions, `mem_by_timerange`,
   `recall_timeframe`, reflection attachment) + tests (hallucinated ref dies
   at ingest; timerange recall respects audience gates).
-- **Pass C** — Piece 4 + Piece 5 (lifecycle riding consolidation;
-  observability lands with whichever pass ships first, ideally A).
+- **Pass C** — Piece 4 (distill-only lifecycle riding consolidation) +
+  Piece 5 (observability lands with whichever pass ships first, ideally A).
 - Each pass: `docs/architecture.md` same commit; every new background
   behavior carries its off-switch in the same commit.
 
