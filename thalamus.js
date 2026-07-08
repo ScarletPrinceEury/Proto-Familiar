@@ -2234,7 +2234,7 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
  * Accepts audience, subjects, category, consent_pending, confidence.
  * Returns { ok, id?, error? }.
  */
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2243,6 +2243,9 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     if (slug) args.slug = slug;
     if (category) args.category = category;
     if (standalone) args.standalone = true;
+    // Cross-store provenance (temporal-bridges Piece 2): schedule_refs riding
+    // in source_meta ties a memorized fact to the schedule node(s) it's about.
+    if (sourceMeta && typeof sourceMeta === 'object') args.source_meta = sourceMeta;
     const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
     // Parse the returned string for the id and whether it merged into an
     // existing memory ("Memory saved id=<id>." vs "Memory merged into existing
