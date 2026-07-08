@@ -29,9 +29,14 @@ each other — temporal, operational, per-embodiment. Relating happens through
 **ids that cross the border**, exactly like `graphNodeId` on villagers and
 `value_ref` on standing values. Co-location doesn't relate things; links do.
 
-Status: **spec — not yet built.** Pieces are independently shippable;
-each is a patch bump on the current milestone. Piece 1 requires ward
-sign-off before it ships (care-adjacent).
+Status: **Pass A (Piece 1) SHIPPED (0.8.51-alpha)** — `spine-states.js`:
+the caring spine mints ward-private `state` nodes on moderate+ threat
+transitions, closes them at the code-derived decay-crossing, derives
+`co_occurs_with` edges to overlapping schedule items, and is filtered
+fail-closed out of every villager surface. Default ON (ward-signed),
+off-switch `PROTO_FAMILIAR_SPINE_STATES_DISABLED=1`. Pieces 2–5 remain
+spec-only; each is independently shippable as a patch bump. All §6 ward
+sign-offs are settled.
 
 ---
 

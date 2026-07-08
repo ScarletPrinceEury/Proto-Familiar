@@ -263,6 +263,10 @@ const state = {
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
   stewardshipEnabled:      true,
+  // Spine states (docs/temporal-bridges-build-spec.md, Pass A). Default ON —
+  // records a ward-private `state` node for each hard stretch (threat
+  // moderate+) so the Familiar can relate crises to schedule events in time.
+  spineStatesEnabled:      true,
   dayStartAnchor:          '09:00',
   dayStartGapHours:        3,        // inactivity gap before a message counts as "first contact today"
   briefLookaheadDays:      3,        // how far ahead the opening brief looks
@@ -352,7 +356,7 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
-  'stewardshipEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
+  'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
@@ -2777,6 +2781,7 @@ function readSettingsFromUI() {
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
   }
   if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
+  if ($('spine-states-toggle')) state.spineStatesEnabled = $('spine-states-toggle').checked;
   if ($('day-start-anchor')) {
     const t = String($('day-start-anchor').value ?? '').trim();
     if (/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
@@ -2870,6 +2875,7 @@ function writeSettingsToUI() {
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
+  if ($('spine-states-toggle')) setIfNotFocused($('spine-states-toggle'), 'checked', state.spineStatesEnabled !== false);
   if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
   if ($('day-start-gap-hours')) setIfNotFocused($('day-start-gap-hours'), 'value', state.dayStartGapHours ?? 3);
   if ($('brief-lookahead-days')) setIfNotFocused($('brief-lookahead-days'), 'value', state.briefLookaheadDays ?? 3);

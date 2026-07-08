@@ -1284,6 +1284,7 @@ import {
   tagOutcomes,
 } from './surface-events.js';
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
+import { syncSpineState, stripSensitiveScheduleNodes } from './spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -1704,6 +1705,12 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           console.error('[thalamus] recurrence expansion failed:', err?.message ?? err);
         }
       }
+      // Fail-closed villager privacy: on any GATED (non-ward) turn, strip
+      // caring-spine crisis states (and anything else payload.sensitive) plus
+      // every edge touching one, BEFORE the block is rendered. A villager with
+      // a schedule grant sees the ward's commitments, never their hard
+      // stretches. Structural, not model discretion.
+      if (gated && temporalPayload) stripSensitiveScheduleNodes(temporalPayload);
       temporalLines = formatTemporalContext(temporalPayload);
     } catch (err) {
       console.error('[thalamus] temporal assembly failed (defaulting to empty):', err?.message ?? err);
@@ -1839,6 +1846,37 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           return { weight: 0, tier: 'calm', disabled: false };
         });
     const careBlock = buildCareCheckBlock(threat);
+
+    // ── Spine states (temporal-bridges Pass A) ────────────────────────
+    //    Fire-and-forget: reconcile the open crisis episode against this
+    //    reading. When threat crosses into moderate+, code mints a `state`
+    //    node so the hard stretch becomes a graph citizen the Familiar's
+    //    reasoning can relate to schedule events (the missing causal middle);
+    //    when it falls back below, code closes it and derives co-occurrence
+    //    edges. Same liveTurn-side-effect posture as tagOutcomes / the
+    //    standing-value bridge. Ward turns only (a villager's words never move
+    //    the tier, so never an episode); never throws; own off-switch inside.
+    if (liveTurn && !staticOnly && !gated) {
+      let spineSettings = {};
+      try { spineSettings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); } catch { /* fresh install */ }
+      syncSpineState({
+        threat,
+        nowMs: Date.now(),
+        wardTimeZone: wardTimeZoneSetting(),
+        settings: spineSettings,
+        deps: {
+          addNode:    addScheduleNode,
+          updateNode: updateScheduleNode,
+          getWindow:  getScheduleWindow,
+          addEdge:    addScheduleEdge,
+          log:        (m) => console.log(m),
+        },
+      }).then(r => {
+        if (r?.action && r.action !== 'none' && r.action !== 'skipped') {
+          console.log(`[spine] ${r.action}${r.id ? ` ${r.id}` : ''}`);
+        }
+      }).catch(err => console.error('[spine] sync threw:', err?.message ?? err));
+    }
 
     // ── Stewardship (docs/stewardship-build-spec.md, Pass 1) ──────────
     //    The executive layer over the temporal world model: cheap code

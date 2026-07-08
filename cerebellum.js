@@ -40,6 +40,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { listOwnFiles, readOwnFile } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
+import { isSensitiveNode } from './spine-states.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -2673,7 +2674,7 @@ export const TOOL_EXECUTORS = {
     return `ok — ${known.join(', ')} tools are in my hands from my next step onward${unknown.length ? ` (no such module: ${unknown.join(', ')})` : ''}.`;
   },
 
-  schedule_find: async ({ query, include_resolved, limit } = {}) => {
+  schedule_find: async ({ query, include_resolved, limit } = {}, ctx = {}) => {
     const q = String(query ?? '').trim();
     if (!q) return 'I need part of the item\'s name to search for.';
     try {
@@ -2683,7 +2684,13 @@ export const TOOL_EXECUTORS = {
         limit: Number.isFinite(Number(limit)) ? Number(limit) : 20,
       });
       if (!data?.ok) return `I couldn't search the schedule: ${data?.error ?? 'Unruh unavailable'}.`;
-      const matches = Array.isArray(data.matches) ? data.matches : [];
+      let matches = Array.isArray(data.matches) ? data.matches : [];
+      // Fail-closed crisis-history privacy: caring-spine states (and anything
+      // payload.sensitive) surface ONLY on an explicitly ward-private turn.
+      // A villager with a schedule grant can reach this tool — they must never
+      // find the ward's hard stretches through it. Structural, not model
+      // discretion; mirrors the enrich() gated-context strip.
+      if (ctx?.wardPrivate !== true) matches = matches.filter(m => !isSensitiveNode(m));
       if (!matches.length) return `Nothing on the schedule matches "${q}"${include_resolved ? '' : ' (unresolved items only — pass include_resolved to search finished ones too)'}.`;
       const lines = matches.map(m => {
         const when = m.when ? (relativeTime(m.when, Date.now()) || m.when) : 'no time set';

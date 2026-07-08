@@ -34,7 +34,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR  = path.join(__dirname, 'tomes');
 const STATE_FILENAME     = '.threat-state.json';
 
-const DEFAULT_TAU_DAYS   = 3.0;
+// Exported so spine-states.js can compute the exact instant a decaying
+// threat crosses back below a tier (episode end) with the SAME half-life —
+// the two can never drift. Purely a visibility export; no behavior changes.
+export const DEFAULT_TAU_DAYS = 3.0;
 const DAY_MS             = 24 * 60 * 60 * 1000;
 
 export const MAX_RAW_WEIGHT = 10.0;
