@@ -40,6 +40,7 @@ import {
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
+  memByTimerange,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
@@ -3290,9 +3291,23 @@ function startAutonomousPondering() {
       const review = _pendingRoutineReview;
       _pendingRoutineReview = null;
       const routineReviewSection = review ? buildRoutineReviewSection(review.ledger) : '';
+      // Temporal-bridges Piece 3: attach what the Familiar actually KEPT from
+      // the recent days, so grading "did the projected cost follow?" is
+      // grounded in recorded memory, not just the edge's own payload. Rides
+      // this existing reflection assembly (a data read, no new LLM call);
+      // best-effort — a miss just means the grader works from edges alone.
+      let windowMemories = [];
+      try {
+        const to = new Date();
+        const from = new Date(to.getTime() - 10 * 24 * 3600 * 1000);
+        const iso = (d) => d.toISOString().slice(0, 10);
+        const mem = await memByTimerange({ fromDate: iso(from), toDate: iso(to), limit: 15 });
+        windowMemories = (Array.isArray(mem?.results) ? mem.results : [])
+          .map(r => ({ date: r.date, excerpt: r.excerpt, schedule_refs: r.schedule_refs }));
+      } catch { /* Phylactery down → grade from edges alone */ }
       return {
         mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds,
-        routineReviewSection, isRoutineReview: !!review,
+        windowMemories, routineReviewSection, isRoutineReview: !!review,
       };
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {

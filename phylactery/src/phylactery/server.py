@@ -342,6 +342,24 @@ def memory_search(
 
 
 @mcp.tool()
+def memory_by_timerange(
+    fromDate: str,
+    toDate: str,
+    limit: Optional[int] = None,
+    instanceId: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """I use this to remember what was happening in my human's life around a span
+    of days — not by topic, but by WHEN. I reach for it to relate a moment in time
+    to what I actually kept from those days (e.g. what surrounded a hard stretch or
+    an appointment). `fromDate`/`toDate` are inclusive YYYY-MM-DD bounds; results
+    come newest day first. `audiences` is the room's allowed set (omit for a
+    ward-private room). Returns thin projections with ids I can then read in full.
+    """
+    return mem.by_timerange(fromDate, toDate, limit=int(limit or 12), audiences=audiences, conn=_c())
+
+
+@mcp.tool()
 def memory_search_restricted(
     query: str,
     roomAudience: str,

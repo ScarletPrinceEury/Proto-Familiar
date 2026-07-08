@@ -58,7 +58,7 @@ import {
   bumpInterest, setStandingInterest,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
-  searchMemoryRestricted, searchMemory,
+  searchMemoryRestricted, searchMemory, memByTimerange,
   withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
@@ -1182,6 +1182,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'recall_timeframe',
+      description: "I remember what was happening in {{user}}'s life around a span of days — not by topic, but by WHEN. I reach for this to relate a moment in time to what I actually kept from those days: what surrounded a hard stretch, an appointment, or a decision, so I can tell how things led into each other instead of guessing. I pass the day (or a start and end day) and get back what I hold from that span, newest first — with ids I can then read_memory_by_id in full. This is the temporal counterpart to recall: recall searches by meaning, this searches by time.",
+      parameters: {
+        type: 'object',
+        properties: {
+          from:  { type: 'string', description: 'The day (or start of the span) to look back around, as YYYY-MM-DD. I read the exact day from my [Now] block or a schedule item, never guess it.' },
+          to:    { type: 'string', description: 'Optional end of the span, YYYY-MM-DD. Omit to look at just the one day.' },
+          limit: { type: 'integer', description: 'How many memories to return (default 12, max 50).' },
+        },
+        required: ['from'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'rewrite_identity_section',
       description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
@@ -2277,11 +2293,40 @@ export const TOOL_EXECUTORS = {
         // Provenance rides in when a memory wasn't mine to author (a villager put
         // it here) — so I can see the source and weigh how much to trust it.
         const srcTag = r.source ? ` [source: ${r.source}]` : '';
-        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}`;
+        // Cross-store breadcrumb: the schedule items this fact was tied to at
+        // extraction (temporal-bridges Piece 2) — so I can walk from a memory
+        // to the moment on the schedule it belongs to.
+        const refTag = Array.isArray(r.schedule_refs) && r.schedule_refs.length ? ` (re: ${r.schedule_refs.join(', ')})` : '';
+        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}`;
       });
       return `What I already hold close to "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
     } catch (err) {
       return `I couldn't reach my memory to recall just now (${err.message}).`;
+    }
+  },
+
+  recall_timeframe: async ({ from, to, limit } = {}, ctx = {}) => {
+    const f = String(from ?? '').trim().slice(0, 10);
+    const t = String(to ?? from ?? '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return 'I need a start day as YYYY-MM-DD (and optionally an end day) — the span I want to remember around.';
+    const to2 = /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : f;
+    const n = Math.min(50, Math.max(1, parseInt(limit, 10) || 12));
+    const audiences = discordReadAudiences(ctx);
+    try {
+      const res   = await memByTimerange({ fromDate: f, toDate: to2, limit: n, audiences });
+      const items = Array.isArray(res?.results) ? res.results : [];
+      const span  = f === to2 ? f : `${f} – ${to2}`;
+      if (items.length === 0) return `I looked back over ${span} and I'm not holding anything from those days — either it was quiet, or nothing got kept.`;
+      const lines = items.map((r, i) => {
+        const addr  = [r.granularity, r.date].filter(Boolean).join('/');
+        const idTag = r.id != null ? `, id ${r.id}` : '';
+        const srcTag = r.source ? ` [source: ${r.source}]` : '';
+        const refTag = Array.isArray(r.schedule_refs) && r.schedule_refs.length ? ` (re: ${r.schedule_refs.join(', ')})` : '';
+        return `${i + 1}. (${addr || 'memory'}${idTag})${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}`;
+      });
+      return `What I kept from around ${span} (newest first):\n${lines.join('\n')}`;
+    } catch (err) {
+      return `I couldn't reach my memory to look back over those days just now (${err.message}).`;
     }
   },
 

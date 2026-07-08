@@ -178,6 +178,9 @@ def search(
                 lbl = _source_label(r["source_json"])
                 if lbl:
                     item["source"] = lbl
+                refs = _schedule_refs(r["source_json"])
+                if refs:
+                    item["schedule_refs"] = refs
                 scored.append(item)
             scored.sort(key=lambda x: x["score"], reverse=True)
             results = scored[:max_results]
@@ -203,6 +206,73 @@ def search(
             print(f"[phylactery] recall tracking failed (ignored): {e}", file=sys.stderr)
 
         return {"results": results}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _schedule_refs(source_json: str | None) -> list[str] | None:
+    """The schedule-node slugs a memory was cross-referenced to at extraction
+    time (temporal-bridges Piece 2). Surfaced on recall so I can walk from a
+    remembered fact to the scheduled moment it belongs to. None when absent."""
+    if not source_json:
+        return None
+    try:
+        s = json.loads(source_json)
+    except Exception:
+        return None
+    refs = s.get("schedule_refs")
+    if isinstance(refs, list) and refs:
+        return [str(r) for r in refs if r]
+    return None
+
+
+def by_timerange(
+    from_date: str,
+    to_date: str,
+    limit: int = 12,
+    audiences=None,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Recall memories anchored to a span of DAYS — 'what was happening around
+    then' — the temporal counterpart to semantic search (temporal-bridges
+    Piece 3). Compares on the calendar-date prefix so date_slug keys
+    ('2026-07-02_foo') fall in range by their day. Audience-gated exactly like
+    search (Pillar E). Newest day first. No embedding call — an indexed read.
+    `from_date`/`to_date` are inclusive YYYY-MM-DD bounds."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        lo = str(from_date)[:10]
+        hi = str(to_date)[:10]
+        if lo > hi:
+            lo, hi = hi, lo
+        aud_clause, aud_params = audience_in_sql(audiences)
+        k = max(1, min(50, int(limit or 12)))
+        rows = conn.execute(f"""
+            SELECT id, granularity, register, date_key, content, source_json
+              FROM memories
+             WHERE kind='narrative'
+               AND substr(date_key,1,10) BETWEEN ? AND ?
+               AND {aud_clause}
+             ORDER BY date_key DESC, updated_at DESC
+             LIMIT ?
+        """, [lo, hi] + aud_params + [k]).fetchall()
+        results = []
+        for r in rows:
+            item = {
+                "id": r["id"], "granularity": r["granularity"], "register": r["register"],
+                "date": r["date_key"], "excerpt": (r["content"] or "")[:300],
+            }
+            lbl = _source_label(r["source_json"])
+            if lbl:
+                item["source"] = lbl
+            refs = _schedule_refs(r["source_json"])
+            if refs:
+                item["schedule_refs"] = refs
+            results.append(item)
+        return {"results": results, "from": lo, "to": hi}
     finally:
         if own_conn:
             conn.close()

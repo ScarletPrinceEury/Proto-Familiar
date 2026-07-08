@@ -2305,6 +2305,13 @@ export async function searchMemory({ query, maxResults = 5, audiences } = {}) {
   });
 }
 
+export async function memByTimerange({ fromDate, toDate, limit = 12, audiences } = {}) {
+  return callTool('memory_by_timerange', {
+    fromDate, toDate, limit, instanceId: 'proto-familiar',
+    ...(audiences !== undefined ? { audiences } : {}),
+  });
+}
+
 export async function searchMemoryRestricted({ query, roomAudience, threshold = 0.70 }) {
   try {
     return await callTool('memory_search_restricted', {
