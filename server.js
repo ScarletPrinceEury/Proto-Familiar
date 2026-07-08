@@ -81,6 +81,7 @@ import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduati
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
+import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
@@ -1223,6 +1224,18 @@ app.get('/api/triage-events', async (_req, res) => {
 app.get('/api/reachout-events', async (_req, res) => {
   try {
     res.json(await readReachoutEvents());
+  } catch {
+    res.json([]);
+  }
+});
+
+// Reflection heartbeat log (temporal-bridges Piece 5): every reflection tick
+// that ran, with its grade counts (incl. all-zero) — so "the learning loop
+// never fires" is visible instead of silently indistinguishable from calm.
+app.get('/api/reflection-events', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 50));
+    res.json(await readReflectionEvents({ limit }));
   } catch {
     res.json([]);
   }
@@ -3376,6 +3389,16 @@ function startAutonomousPondering() {
             .then(() => console.log(`[pondering] routine review → ${result?.routine_review ? 'finding stored' : 'no finding this week'}`))
             .catch(err => console.error('[pondering] routine review record failed:', err?.message ?? err));
         }
+        // Piece 5 heartbeat: record that reflection RAN this tick, with its
+        // counts — even an all-zero grade. A dead learning loop then reads as
+        // stale/absent entries, not as silence indistinguishable from calm.
+        appendReflectionEvent({
+          title:         result.title ?? null,
+          edgesGraded:   Array.isArray(result.edge_calibrations) ? result.edge_calibrations.length : 0,
+          promotions:    Array.isArray(result.promotions) ? result.promotions.length : 0,
+          wroteIdentity: !!(result.what_lapses_cost_update?.heading && result.what_lapses_cost_update?.content),
+          routineReview: !!topic?.isRoutineReview,
+        }).catch(() => {});
       }
       return result;
     },

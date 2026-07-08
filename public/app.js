@@ -7545,7 +7545,45 @@ function teSwitchTab(name) {
   else if (name === 'schedule')   teReloadScheduleView();
   else if (name === 'routine')    teLoadRoutine();
   else if (name === 'handoff')    teLoadHandoff();
+  else if (name === 'automation') teLoadReflectionStatus();
   else if (name === 'calendar')   loadGcalTab();
+}
+
+// Reflection heartbeat readout (temporal-bridges Piece 5). Proves the
+// learning loop is alive: last-ran time + what it graded. A stale/empty
+// readout is itself the signal that reflection hasn't been running.
+async function teLoadReflectionStatus() {
+  const el = $('te-reflection-status');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/reflection-events?limit=1');
+    const events = await r.json();
+    if (!Array.isArray(events) || !events.length) {
+      el.textContent = 'Reflection: no runs recorded yet. It runs when enough surface outcomes have accrued since the last one — this stays empty until then.';
+      return;
+    }
+    const e = events[0];
+    const when = e.loggedAt ? relTimeShort(e.loggedAt) : 'unknown';
+    const bits = [];
+    bits.push(`graded ${e.edgesGraded ?? 0} forecast${(e.edgesGraded ?? 0) === 1 ? '' : 's'}`);
+    if (e.promotions) bits.push(`promoted ${e.promotions} noticing${e.promotions === 1 ? '' : 's'}`);
+    if (e.wroteIdentity) bits.push('wrote to what-lapses-cost');
+    if (e.routineReview) bits.push('carried the weekly routine review');
+    el.textContent = `Reflection: last ran ${when} — ${bits.join(', ')}.`;
+  } catch {
+    el.textContent = 'Reflection: status unavailable right now.';
+  }
+}
+
+// Compact relative time for the readout ("3h ago", "2d ago").
+function relTimeShort(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 'recently';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
 }
 
 function teEscapeHtml(s) {
