@@ -123,7 +123,11 @@ def add_node(
         raise ValueError(f"unknown schedule node type {type!r}; expected one of {sorted(SCHEDULE_NODE_TYPES)}")
     if not label or not label.strip():
         raise ValueError("label is required and must be non-empty")
-    if type in {"event", "phase", "state", "reminder", "hold"} and not when:
+    # States are deliberately NOT in the requires-when set: a consequence
+    # state ("crash", "good streak") is a timeless graph citizen that rides
+    # get_window's `linked` set, not the time window. A *dated* state (a
+    # specific low stretch with when/end) is still allowed — just not forced.
+    if type in {"event", "phase", "reminder", "hold"} and not when:
         raise ValueError(f"node type {type!r} requires a 'when' timestamp")
     if type == "phase" and not end:
         raise ValueError("phase nodes require an 'end' timestamp")
@@ -628,7 +632,9 @@ def get_window(
     include_open_tasks: bool = True,
 ) -> dict[str, Any]:
     """Return the slice of schedule-layer nodes within [from_ts, to_ts]
-    plus the edges that touch them.
+    plus the WHOLE schedule-layer edge set and, in `linked`, every edge
+    endpoint that isn't itself a window node (undated states, out-of-window
+    anchors) — so consumers can always resolve both ends of every edge.
 
     Defaults to a 24-hour window centred on now if either bound is
     omitted. Open tasks (no when_ts, resolution NULL) are included
@@ -677,20 +683,37 @@ def get_window(
     node_rows = conn.execute(node_sql, params).fetchall()
     nodes = [_node_row_to_dict(r) for r in node_rows]
 
-    if not nodes:
-        return {"nodes": [], "edges": [], "from": from_ts, "to": to_ts}
-
-    ids = [n["id"] for n in nodes]
-    placeholders = ",".join("?" * len(ids))
+    # Edges: fetch the WHOLE schedule-layer graph, not just edges touching
+    # window nodes. The consequence layer is deliberately small (the limit
+    # bounds it), and its endpoints are routinely OUTSIDE any time window —
+    # an undated state ("crash"), a recurring anchor stamped months ago.
+    # Window-scoped edge fetch is the bug that made the consequence graph
+    # invisible to every consumer (authored edges stored fine but never
+    # reached a prompt, the reflection grader, or surfacing). Endpoints not
+    # among the window nodes ride along in `linked` so every renderer can
+    # resolve both labels of every edge, always.
     edge_rows = conn.execute(
-        f"""SELECT * FROM edges
-             WHERE src_id IN ({placeholders}) OR dst_id IN ({placeholders})
-             LIMIT ?""",
-        (*ids, *ids, limit),
+        """SELECT e.* FROM edges e
+             JOIN nodes s ON s.id = e.src_id
+            WHERE s.layer = 'schedule'
+            LIMIT ?""",
+        (limit,),
     ).fetchall()
     edges = [_edge_row_to_dict(r) for r in edge_rows]
 
-    return {"nodes": nodes, "edges": edges, "from": from_ts, "to": to_ts}
+    node_ids = {n["id"] for n in nodes}
+    linked_ids = sorted({eid for e in edges for eid in (e["src"], e["dst"])
+                         if eid not in node_ids})
+    linked: list[dict[str, Any]] = []
+    if linked_ids:
+        placeholders = ",".join("?" * len(linked_ids))
+        linked_rows = conn.execute(
+            f"SELECT * FROM nodes WHERE layer = 'schedule' AND id IN ({placeholders}) LIMIT ?",
+            (*linked_ids, limit),
+        ).fetchall()
+        linked = [_node_row_to_dict(r) for r in linked_rows]
+
+    return {"nodes": nodes, "edges": edges, "linked": linked, "from": from_ts, "to": to_ts}
 
 
 def list_phases(

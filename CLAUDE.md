@@ -369,6 +369,40 @@ Chat history is injected with `[HH:MM]` prefixes (Discord) or `⫸HH:MM⫷` pref
 
 **If you add a new path that delivers LLM output to a human or a platform:** apply `stripLlmTimestamps` (server) or `stripDisplayTimestamps` (browser) before the message leaves the system. This includes new outbox kinds, new relay functions, new channel adapters, and any future LLM response forwarded to a UI. Do not only apply it at render time — the stored content must also be clean.
 
+## ⚠️ Model-facing ids are readable slugs — mandatory for every new id
+
+Any identifier the Familiar can ever read — in a tool result, a stand-in, a
+prompt block, an outbox item, a session log it opens via `read_file`, a UI
+surface it's told about — is a **short readable slug**, never a UUID or raw
+hash. The shared helpers are `slug-ids.js` (Node) and `db.slug_id` in Unruh /
+Phylactery (Python). Rationale: a 36-char UUID costs ~16 tokens and carries
+zero meaning; a slug is cheap, self-describing, and **greppable** — the
+Familiar can search for it by remembering what the thing *is*.
+
+**The preferred form is meaning-bearing:** `slugify(label)-xx` — content
+words derived from the thing's label/content plus a tiny random suffix
+(2 chars, grown on collision: the `insert_with_slug_retry` pattern). A graph
+node "Tea ritual" is `tea-ritual-x7`, not `node-p4n8w2`. Mint from the best
+label available at creation time (a node label, a transcript's key words, a
+meaningful filename). Only when NO label exists at mint time does the
+fallback apply: `<kind>-xxxxxx` (outbox items — the kind IS the meaning) or
+a date prefix (`s-YYYYMMDD-xxxx` sessions). Don't reach for the random form
+out of convenience when a label is sitting right there.
+
+Rules:
+
+- **New id-bearing surface → slug id, in the same commit.** No "UUID now,
+  slug later." And label-derived before random — encode the meaning that
+  exists.
+- **Internal machine keys may stay hashes** (e.g. a content-addressed sha256
+  filename for dedup) — but then the model-facing alias is a slug and every
+  accessor resolves both forms.
+- **Ids are opaque strings to consumers.** Nothing parses shape; validators
+  accept legacy UUIDs/hex forever (`isLegacyId` exists for converters, not
+  for gatekeeping).
+- This is the exact-values principle applied to naming: code mints the id,
+  the model only ever repeats it.
+
 ## Other repo conventions worth knowing
 
 - **`docs/architecture.md` is part of the working code, not optional reference material.** When component responsibilities, the data flow, the prompt-assembly order, the set of autonomous loops, or the public HTTP surface changes — update `docs/architecture.md` in the **same commit** as the code change. Drift between code and this doc is one of the top drivers of "future-me has no idea why X is wired the way it is" bugs. Read it before any architectural change so the change fits the current shape (or so the rewrite is deliberate). The robust-over-cheap principle applies: don't add a component without recording where it fits, and don't move things without updating the diagram.

@@ -546,6 +546,55 @@ class TestGetWindow:
         result = sched.get_window(conn)
         assert any(e["id"] == eid for e in result["edges"])
 
+    # ── The consequence-graph visibility regression (the "causal system
+    #    doesn't work" defect). Edges must be fetched even when their
+    #    endpoints are outside the time window, and those endpoints must
+    #    ride along in `linked` so renderers can resolve their labels. ──
+
+    def test_state_node_needs_no_when(self, conn):
+        nid = sched.add_node(conn, type="state", label="crash")
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id = ?", (nid,)).fetchone()
+        assert row["when_ts"] is None
+
+    def test_edge_to_undated_state_is_returned_with_linked_endpoint(self, conn):
+        now = datetime.now(timezone.utc)
+        task = sched.add_node(conn, type="task", label="skip dinner",
+                              when=_iso(now + timedelta(hours=1)))
+        state = sched.add_node(conn, type="state", label="crash")
+        eid = sched.add_edge(conn, src=task, dst=state, kind="causes",
+                             payload={"valence": "harm", "condition": "on_lapse"})
+        result = sched.get_window(conn)
+        assert any(e["id"] == eid for e in result["edges"])
+        # The undated state is not a window node — it must arrive as linked.
+        assert not any(n["id"] == state for n in result["nodes"])
+        assert any(n["id"] == state for n in result["linked"])
+
+    def test_edge_between_two_out_of_window_nodes_is_still_returned(self, conn):
+        # The flagship rot case: a recurring anchor stamped months ago,
+        # pointing at a state authored days ago. Neither endpoint is a
+        # window node; the edge and BOTH endpoints must still be visible.
+        now = datetime.now(timezone.utc)
+        anchor = sched.add_node(conn, type="event", label="dinner",
+                                when=_iso(now - timedelta(days=90)),
+                                payload={"recurrence": {"freq": "daily"}})
+        state = sched.add_node(conn, type="state", label="crash")
+        eid = sched.add_edge(conn, src=anchor, dst=state, kind="causes",
+                             payload={"valence": "harm", "condition": "on_lapse"})
+        result = sched.get_window(conn)
+        assert any(e["id"] == eid for e in result["edges"])
+        linked_ids = {n["id"] for n in result["linked"]}
+        assert anchor in linked_ids and state in linked_ids
+
+    def test_linked_excludes_nodes_already_in_window(self, conn):
+        now = datetime.now(timezone.utc)
+        a = sched.add_node(conn, type="task", label="prep",
+                           when=_iso(now + timedelta(hours=1)))
+        b = sched.add_node(conn, type="event", label="interview",
+                           when=_iso(now + timedelta(hours=2)))
+        sched.add_edge(conn, src=a, dst=b, kind="requires")
+        result = sched.get_window(conn)
+        assert result["linked"] == []
+
     def test_limit_respected(self, conn):
         now = datetime.now(timezone.utc)
         for i in range(10):

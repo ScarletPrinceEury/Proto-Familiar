@@ -23,7 +23,7 @@ export const TOOL_MODULES = {
   // core — always advertised (time, memory in/out, id discovery, filing,
   // interests (human's call: they're character, not task), safety, the lid)
   get_datetime: 'core', get_session_info: 'core',
-  recall: 'core', save_memory: 'core', save_to_tome: 'core',
+  recall: 'core', recall_timeframe: 'core', save_memory: 'core', save_to_tome: 'core',
   update_identity: 'core', schedule_find: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
   contact_trusted_person: 'core', show_crisis_resources: 'core',

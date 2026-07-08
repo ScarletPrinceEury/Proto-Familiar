@@ -296,13 +296,18 @@ export function formatTemporalContext(payload) {
   const scheduleNodes = [
     ...(Array.isArray(payload.routine) ? payload.routine : []),
     ...(Array.isArray(schedule.window) ? schedule.window : []),
+    // Linked endpoints — nodes that are NOT in the time window but are an
+    // endpoint of some edge (undated consequence states, out-of-window
+    // recurring anchors). Unruh sends them precisely so no edge ever has a
+    // dangling end here; without them every consequence edge went invisible
+    // once its state endpoint scrolled out of the window (~12h after
+    // authoring — the "causal system doesn't work" defect).
+    ...(Array.isArray(schedule.linked) ? schedule.linked : []),
   ];
-  // Consequence links — the edges of the schedule graph, finally rendered
-  // (they were stored but invisible). Only edges whose BOTH endpoints are
-  // in the visible window are shown; one whose endpoint scrolled out (or is
-  // a recurring anchor expanded under a different id) is dropped rather than
-  // rendered with a dangling end. This is what lets the Familiar reason over
-  // consequence instead of a flat list.
+  // Consequence links — the edges of the schedule graph. The both-endpoints
+  // guard below stays as a last-resort safety net (a truly missing node
+  // must not render as a dangling arrow), but with `linked` in the label
+  // map it should never fire in practice.
   const nodeLabel = new Map();
   for (const n of scheduleNodes) { if (n?.id) nodeLabel.set(n.id, n.label ?? n.id); }
   const edges = Array.isArray(schedule.edges) ? schedule.edges : [];

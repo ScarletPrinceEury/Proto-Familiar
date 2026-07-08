@@ -105,8 +105,10 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, routineReviewSection = '' }) {
+export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
+  const memories = Array.isArray(windowMemories) ? windowMemories : [];
+  const memoriesJson = JSON.stringify(memories, null, 2);
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
     : '(no notes yet — this file may not exist or is empty)';
@@ -148,6 +150,10 @@ Reflection is where I grade these forecasts. For any I can now judge from how th
 Some need-windows went unmet recently — each is a real lapse in the fulfilment ledger:
 ${missedNeedsJson}
 A missed need is a fact. But whether the COST I projected for that lapse actually followed — the on_lapse consequence I drew from it, up in the projected list — is NOT a fact until I've actually seen it. So for each, I ask: did the thing I predicted (the crash, the rough next day, the low stretch) actually show up around then? If I genuinely saw it, I can mark that consequence observed; if it didn't come, I lower its certainty or note it didn't land this time. I confirm or correct from what I actually noticed — I never assume the cost followed just because the need was missed.
+
+To ground that "did it actually follow?" in more than the forecast itself, here is what I actually KEPT from the last few days — the memories from around when these lapses and forecasts sit (newest first; some carry the schedule items they were tied to):
+${memoriesJson}
+This is my real record of those days. When I grade a forecast or a missed-need cost, I check it against what I genuinely noticed here — a rough stretch I recorded, a good day, a thing that went fine — rather than assuming. If these memories show the predicted cost landed, that's real evidence to mark it observed; if they show the opposite, that's real evidence to lower it. If they're silent on it, I stay honest that I haven't seen it yet.
 
 And here are pairs I've only NOTICED together so far (co_occurs_with) — observations, not conclusions, with how many times each pairing has come up:
 ${coocsJson}

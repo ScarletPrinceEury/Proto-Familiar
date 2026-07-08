@@ -626,6 +626,7 @@
         <button class="ke-tab"               data-tab="coverage"  role="tab">Coverage</button>
         <button class="ke-tab"               data-tab="graph"     role="tab">Graph</button>
         <button class="ke-tab"               data-tab="identity"  role="tab">Identity</button>
+        <button class="ke-tab"               data-tab="remember"  role="tab">Remember</button>
         <button class="ke-tab"               data-tab="snapshots" role="tab">Snapshots</button>
         <button class="ke-tab"               data-tab="sessions"  role="tab">Sessions</button>
         <button class="ke-tab"               data-tab="prompts"   role="tab">Prompts</button>
@@ -747,6 +748,12 @@
             <div class="ke-detail" id="ke-id-detail">
               <p class="logs-empty">Pick an identity file to edit a section.</p>
             </div>
+          </div>
+        </div>
+
+        <div class="ke-pane" id="ke-pane-remember">
+          <div class="ke-detail" id="ke-remember-detail">
+            <p class="logs-loading">Loading remember settings…</p>
           </div>
         </div>
 
@@ -1368,6 +1375,7 @@
 
         <!-- AUTOMATION PANE — Unruh's autonomous behaviours -->
         <div class="ke-pane" id="te-pane-automation" style="overflow:auto">
+          <div id="te-reflection-status" class="field-hint" style="margin:0 0 12px;padding:8px 10px;border:1px solid var(--border-light);border-radius:6px">Reflection: loading…</div>
           <div class="field-row" style="margin-top:0">
             <label for="needs-tracking-toggle">Track unmet needs</label>
             <input type="checkbox" id="needs-tracking-toggle">
@@ -1375,10 +1383,22 @@
           <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
 
           <div class="field-row" style="margin-top:12px">
+            <label for="memory-lifecycle-toggle">Distill lasting patterns</label>
+            <input type="checkbox" id="memory-lifecycle-toggle">
+          </div>
+          <div class="field-hint">Off by default. When on, your Familiar occasionally looks back over its older, settled memories and — where a one-off moment actually revealed a <em>lasting pattern</em> about you ("doing dreaded paperwork right away works well for me") — writes that pattern out as its own standing memory it'll recall when it matters. It only ever <strong>adds</strong>: nothing you wanted is ever demoted, faded, or deleted by this, and the original memory stays exactly as it was. Takes effect after the app restarts. (Requires a memory connection.)</div>
+
+          <div class="field-row" style="margin-top:12px">
             <label for="stewardship-toggle">Stewardship</label>
             <input type="checkbox" id="stewardship-toggle" checked>
           </div>
           <div class="field-hint">On by default. Instead of your whole schedule sitting in your Familiar's context every turn (where it turns into wallpaper it stops noticing), this hands it a short, changing agenda: opening your day with what's coming, and nudging vague "I ought to…" tasks that have been floating without a time toward a real spot. It picks <em>what</em> matters in plain code; <em>how</em> it raises it stays your Familiar's own voice. It stands down whenever you're in distress. The settings below tune it.</div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="spine-states-toggle">Remember hard stretches</label>
+            <input type="checkbox" id="spine-states-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. When your distress rises to a real level, your Familiar quietly marks a private note in time — a "rough stretch" — and, when it passes, links it to whatever was happening around then (an appointment, a task, an event). This is how it learns to relate the hard moments in your life to each other instead of seeing only logistics, so when it looks back it can tell what actually led where. These notes are yours alone: they're never shown to anyone your Familiar talks to on your behalf. It changes nothing about when or how your Familiar reaches out — it only helps it remember. Turn off to keep no such record.</div>
           <div class="field-row">
             <label for="day-start-anchor">Day starts at</label>
             <input type="time" id="day-start-anchor" value="09:00" style="width:8em">

@@ -252,6 +252,7 @@ const state = {
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
+  memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
@@ -263,6 +264,10 @@ const state = {
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
   stewardshipEnabled:      true,
+  // Spine states (docs/temporal-bridges-build-spec.md, Pass A). Default ON —
+  // records a ward-private `state` node for each hard stretch (threat
+  // moderate+) so the Familiar can relate crises to schedule events in time.
+  spineStatesEnabled:      true,
   dayStartAnchor:          '09:00',
   dayStartGapHours:        3,        // inactivity gap before a message counts as "first contact today"
   briefLookaheadDays:      3,        // how far ahead the opening brief looks
@@ -352,7 +357,7 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
-  'stewardshipEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
+  'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
@@ -364,7 +369,7 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'memorySweepEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes',
@@ -2728,6 +2733,7 @@ function readSettingsFromUI() {
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
+  if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
   if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
@@ -2777,6 +2783,7 @@ function readSettingsFromUI() {
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
   }
   if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
+  if ($('spine-states-toggle')) state.spineStatesEnabled = $('spine-states-toggle').checked;
   if ($('day-start-anchor')) {
     const t = String($('day-start-anchor').value ?? '').trim();
     if (/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
@@ -2866,10 +2873,12 @@ function writeSettingsToUI() {
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
+  if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
+  if ($('spine-states-toggle')) setIfNotFocused($('spine-states-toggle'), 'checked', state.spineStatesEnabled !== false);
   if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
   if ($('day-start-gap-hours')) setIfNotFocused($('day-start-gap-hours'), 'value', state.dayStartGapHours ?? 3);
   if ($('brief-lookahead-days')) setIfNotFocused($('brief-lookahead-days'), 'value', state.briefLookaheadDays ?? 3);
@@ -6017,7 +6026,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots', 'sessions', 'prompts', 'behaviour'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'remember', 'snapshots', 'sessions', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -6086,6 +6095,7 @@ function keSwitchTab(tab) {
     else                        { keSetGraphView('list'); keLoadGraphNodes(); }
   }
   if (tab === 'identity')   keLoadIdentity();
+  if (tab === 'remember')   keOpenRememberMap();
   if (tab === 'snapshots')  keLoadSnapshots();
   if (tab === 'sessions')   refreshLogsList();
 }
@@ -7022,14 +7032,15 @@ async function keLoadIdentity() {
         list.appendChild(row);
       }
       if (isWard) {
-        // Always expose Remember settings even when there are no ward files yet.
+        // Remember settings live in their own tab now; this row is a cross-link
+        // kept for discoverability from the ward's identity section.
         any = true;
         const rmRow = document.createElement('div');
         rmRow.className = 'ke-row ke-row-settings';
         rmRow.innerHTML = `
           <div class="ke-row-title">Remember settings</div>
-          <div class="ke-row-sub">Memory storage policy per category</div>`;
-        rmRow.addEventListener('click', keOpenRememberMap);
+          <div class="ke-row-sub">Memory storage policy per category → Remember tab</div>`;
+        rmRow.addEventListener('click', () => keSwitchTab('remember'));
         list.appendChild(rmRow);
       }
     }
@@ -7078,7 +7089,7 @@ function keOpenIdentity(category, file) {
 
 // ── Remember-consent map ─────────────────────────────────────────────────────
 async function keOpenRememberMap() {
-  const det = $('ke-id-detail');
+  const det = $('ke-remember-detail');
   det.innerHTML = '<p class="logs-loading">Loading remember settings…</p>';
   try {
     const res = await fetch('/api/entity/ward/remember');
@@ -7537,7 +7548,45 @@ function teSwitchTab(name) {
   else if (name === 'schedule')   teReloadScheduleView();
   else if (name === 'routine')    teLoadRoutine();
   else if (name === 'handoff')    teLoadHandoff();
+  else if (name === 'automation') teLoadReflectionStatus();
   else if (name === 'calendar')   loadGcalTab();
+}
+
+// Reflection heartbeat readout (temporal-bridges Piece 5). Proves the
+// learning loop is alive: last-ran time + what it graded. A stale/empty
+// readout is itself the signal that reflection hasn't been running.
+async function teLoadReflectionStatus() {
+  const el = $('te-reflection-status');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/reflection-events?limit=1');
+    const events = await r.json();
+    if (!Array.isArray(events) || !events.length) {
+      el.textContent = 'Reflection: no runs recorded yet. It runs when enough surface outcomes have accrued since the last one — this stays empty until then.';
+      return;
+    }
+    const e = events[0];
+    const when = e.loggedAt ? relTimeShort(e.loggedAt) : 'unknown';
+    const bits = [];
+    bits.push(`graded ${e.edgesGraded ?? 0} forecast${(e.edgesGraded ?? 0) === 1 ? '' : 's'}`);
+    if (e.promotions) bits.push(`promoted ${e.promotions} noticing${e.promotions === 1 ? '' : 's'}`);
+    if (e.wroteIdentity) bits.push('wrote to what-lapses-cost');
+    if (e.routineReview) bits.push('carried the weekly routine review');
+    el.textContent = `Reflection: last ran ${when} — ${bits.join(', ')}.`;
+  } catch {
+    el.textContent = 'Reflection: status unavailable right now.';
+  }
+}
+
+// Compact relative time for the readout ("3h ago", "2d ago").
+function relTimeShort(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 'recently';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
 }
 
 function teEscapeHtml(s) {
@@ -8125,7 +8174,11 @@ async function teLoadScheduleMap() {
     const data = await r.json();
     if (gen !== _teSchedMapGen) return;
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
-    const nodes = (data.nodes || []).map(n => ({ ...n, type: n.type || 'task' }));
+    // Window nodes + linked endpoints (undated consequence states, anchors
+    // outside the window) — without linked, edges to them dangled and the
+    // map engine dropped them, so the consequence graph looked empty.
+    const nodes = [...(data.nodes || []), ...(data.linked || [])]
+      .map(n => ({ ...n, type: n.type || 'task' }));
     // Engine edges want { id, fromId, toId, type }. Schedule edges carry
     // src / dst / kind — map them across (kind becomes the edge's type,
     // which the engine hues and the legend lists).
@@ -9369,7 +9422,7 @@ function vlRenderPersonDetail(villager) {
       <textarea id="vl-p-private-notes" placeholder="Sensitive context, for you and the Familiar only…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.privateNotes ?? '')}</textarea>
     </div>
     <div>
-      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Remember tab)</span></div>
       <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
     </div>
     <div>
