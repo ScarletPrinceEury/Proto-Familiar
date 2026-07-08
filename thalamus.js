@@ -282,6 +282,13 @@ function loadPhylacteryEnv() {
     ENTITY_CORE_LLM_BASE_URL: baseUrl,
     ENTITY_CORE_LLM_MODEL:    model,
   };
+  // Memory lifecycle (temporal-bridges Piece 4) is opt-in / default-OFF, so
+  // Python needs an explicit enable signal. Only the ward turning it on sets
+  // this; the hard off-switch PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1 (read
+  // in Python) overrides. Takes effect on the next Phylactery (re)spawn.
+  if (settings.memoryLifecycleEnabled === true) {
+    env.PROTO_FAMILIAR_MEMORY_LIFECYCLE_ENABLED = '1';
+  }
   if (provider === 'zai' || provider === 'zai-coding') {
     env.ZAI_API_KEY  = apiKey;
     env.ZAI_BASE_URL = baseUrl;

@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from phylactery.db import get_conn
+from phylactery.db import get_conn, now_iso
 from phylactery.memory import create as memory_create
 
 
@@ -296,3 +296,131 @@ def run_hygiene(conn: sqlite3.Connection | None = None) -> dict[str, Any]:
     finally:
         if own_conn:
             conn.close()
+
+
+# ── Memory lifecycle: distill-only (temporal-bridges Piece 4) ──────────────────
+# Ward-signed shape: this pass may ONLY ADD a distilled pattern-memory. It never
+# demotes, decays, or deletes an original — nothing a ward wanted can sink on the
+# model's judgment. Opt-in / default-OFF; rides the consolidation pass (no new
+# loop). See docs/temporal-bridges-build-spec.md §4.
+
+_DISTILL_MAX_PER_RUN = 20
+
+
+def _distill_enabled() -> bool:
+    if os.environ.get("PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED", "") == "1":
+        return False
+    return os.environ.get("PROTO_FAMILIAR_MEMORY_LIFECYCLE_ENABLED", "") == "1"
+
+
+def _distill_prompt(items: list[dict]) -> str:
+    listing = "\n\n".join(f"[{i}] {it['content']}" for i, it in enumerate(items))
+    return f"""I am the Familiar. Some of my older episodic memories are one-off logistics ("an appointment at noon on the 2nd") that have served their purpose — but a few of them quietly revealed a LASTING PATTERN about my human that I'll want next time a similar moment comes ("doing dreaded paperwork immediately, while the momentum is there, works well for them").
+
+For each numbered memory below, I decide: does it carry a lasting, reusable pattern about my human or our life — something worth keeping as a standing truth beyond the one event? Most do NOT; they were just logistics, and I leave those alone. Only where a real pattern is there do I distil it.
+
+I do NOT change or remove any original — I only WRITE OUT the pattern where one exists. I distil sparingly and only when I'm genuinely confident the pattern is real, not a one-off.
+
+I return ONLY valid JSON (no fences, no commentary), an array of the ones worth distilling:
+[
+  {{ "index": 0, "pattern": "The standing truth I want to keep, first-person, one or two sentences." }}
+]
+An empty array [] is the honest answer when none carry a lasting pattern.
+
+Memories:
+
+{listing}"""
+
+
+def _parse_distillations(raw: str, n: int) -> list[dict]:
+    import re
+    m = re.search(r"\[.*\]", raw, re.S)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+    out = []
+    for e in arr if isinstance(arr, list) else []:
+        if not isinstance(e, dict):
+            continue
+        idx = e.get("index")
+        pattern = (e.get("pattern") or "").strip()
+        if isinstance(idx, int) and 0 <= idx < n and pattern:
+            out.append({"index": idx, "pattern": pattern})
+    return out
+
+
+def run_distillation(
+    conn: sqlite3.Connection,
+    cfg: dict,
+    call_llm,
+    now: date | None = None,
+    older_than_days: int = 30,
+) -> dict[str, Any]:
+    """Distill lasting patterns out of aged episodic facts into NEW standing
+    memories. Additive only — originals are never touched except a `distilled_at`
+    breadcrumb (so the same fact isn't re-judged). Opt-in; no-op when disabled."""
+    if not _distill_enabled():
+        return {"ok": True, "skipped": True, "reason": "disabled (opt-in)"}
+    ref = now or date.today()
+    cutoff = (ref - timedelta(days=max(1, older_than_days))).isoformat()
+
+    # Aged, consent-cleared, standalone episodic facts not yet distilled.
+    rows = conn.execute(
+        """SELECT id, date_key, content, source_json FROM memories
+            WHERE kind='narrative' AND register='episodic' AND slug IS NOT NULL
+              AND consent_pending=0 AND substr(date_key,1,10) <= ?
+            ORDER BY date_key ASC""",
+        (cutoff,),
+    ).fetchall()
+
+    candidates = []
+    for r in rows:
+        try:
+            sj = json.loads(r["source_json"] or "{}")
+        except Exception:
+            sj = {}
+        if sj.get("distilled_at"):
+            continue  # already judged — never re-distill the same fact
+        candidates.append({"id": r["id"], "content": r["content"] or "",
+                           "schedule_refs": sj.get("schedule_refs")})
+        if len(candidates) >= _DISTILL_MAX_PER_RUN:
+            break
+    if not candidates:
+        return {"ok": True, "skipped": True, "reason": "no aged facts to consider"}
+
+    raw = call_llm(cfg, _distill_prompt(candidates))
+    picks = _parse_distillations(raw, len(candidates))
+
+    distilled = 0
+    for p in picks:
+        src = candidates[p["index"]]
+        meta = {"via": "distillation", "distilled_from": src["id"]}
+        if src.get("schedule_refs"):
+            meta["schedule_refs"] = src["schedule_refs"]
+        # The pattern is a standing truth about my human → the `ward` register,
+        # the recalled-when-relevant home for identity-grade facts. Derived from
+        # already-consented facts, so no re-consent (same as tier consolidation).
+        res = memory_create(
+            p["pattern"], "significant", register="ward",
+            source_meta=meta, conn=conn,
+        )
+        if not res.get("ok"):
+            continue
+        # Breadcrumb the ORIGINAL so it's never re-judged. source_json only —
+        # content, tier, audience, everything else stays exactly as it was.
+        row = conn.execute("SELECT source_json FROM memories WHERE id=?", (src["id"],)).fetchone()
+        try:
+            sj = json.loads(row["source_json"] or "{}") if row else {}
+        except Exception:
+            sj = {}
+        sj["distilled_at"] = now_iso()
+        sj["distilled_into"] = res.get("id")
+        with conn:
+            conn.execute("UPDATE memories SET source_json=? WHERE id=?",
+                         (json.dumps(sj), src["id"]))
+        distilled += 1
+
+    return {"ok": True, "considered": len(candidates), "distilled": distilled}

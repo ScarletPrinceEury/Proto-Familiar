@@ -159,7 +159,7 @@ ponderings injection, care-check framing) and as background loops
 │   ├── src/phylactery/server.py  FastMCP server (identity / memory / graph / snapshots / lifecycle / backup)
 │   ├── src/phylactery/identity.py + memory.py + graph.py + consolidate.py
 │   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit
-│   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED)
+│   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED). Pass 4 = distill-only memory lifecycle (temporal-bridges Piece 4): rides the pass, ADDS standing pattern-memories out of aged episodic facts, never demotes/deletes an original (distilled_at breadcrumb). Opt-in via memoryLifecycleEnabled → PROTO_FAMILIAR_MEMORY_LIFECYCLE_ENABLED env; hard off PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1
 │   ├── src/phylactery/backup.py      Pillar H — passphrase-encrypted single-file export/restore
 │   ├── src/phylactery/remember.py    Pillar I — ward remember-consent map (true/false/ask) + time-boxed standing consent
 │   ├── src/phylactery/snapshot.py + audience.py + embed.py + db.py

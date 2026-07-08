@@ -29,14 +29,23 @@ each other — temporal, operational, per-embodiment. Relating happens through
 **ids that cross the border**, exactly like `graphNodeId` on villagers and
 `value_ref` on standing values. Co-location doesn't relate things; links do.
 
-Status: **Pass A (Piece 1) SHIPPED (0.8.51-alpha)** — `spine-states.js`:
-the caring spine mints ward-private `state` nodes on moderate+ threat
-transitions, closes them at the code-derived decay-crossing, derives
-`co_occurs_with` edges to overlapping schedule items, and is filtered
-fail-closed out of every villager surface. Default ON (ward-signed),
-off-switch `PROTO_FAMILIAR_SPINE_STATES_DISABLED=1`. Pieces 2–5 remain
-spec-only; each is independently shippable as a patch bump. All §6 ward
-sign-offs are settled.
+Status: **ALL PIECES SHIPPED (0.8.51 → 0.8.55).**
+- **Piece 1 (0.8.51)** — `spine-states.js`: ward-private `state` nodes on
+  moderate+ threat, closed at the decay-crossing, `co_occurs_with` edges to
+  overlapping schedule items, fail-closed villager filtering. Default ON.
+- **Piece 3 (0.8.52)** — `recall_timeframe` / `memory_by_timerange`: recall
+  by day-span, audience-gated; attached to reflection grading.
+- **Piece 5 (0.8.53)** — reflection heartbeat (`reflection-events.jsonl` +
+  `/api/reflection-events` + Automation-tab readout), all-zero entries too.
+- **Piece 2 (0.8.54)** — memorization stamps code-validated `schedule_refs`;
+  surfaced on recall as `(re: slug)`. (Reverse `memory_refs`-on-nodes
+  deferred as low-value.)
+- **Piece 4 (0.8.55)** — distill-only memory lifecycle riding Phylactery
+  consolidation: adds standing pattern-memories, never demotes/deletes an
+  original (`distilled_at` breadcrumb prevents re-judging). Opt-in
+  (`memoryLifecycleEnabled`, default OFF) + `PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1`.
+
+All §6 ward sign-offs settled.
 
 ---
 

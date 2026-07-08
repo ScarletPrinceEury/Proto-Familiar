@@ -252,6 +252,7 @@ const state = {
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
+  memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
@@ -368,7 +369,7 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'memorySweepEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes',
@@ -2732,6 +2733,7 @@ function readSettingsFromUI() {
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
+  if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
   if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
@@ -2871,6 +2873,7 @@ function writeSettingsToUI() {
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
+  if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
