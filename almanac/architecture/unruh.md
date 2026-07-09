@@ -17,6 +17,14 @@ sources:
   - id: phylactery-design
     type: file
     path: docs/phylactery-design.md
+  - id: naming-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/6ad1c817-Naming_a_new_entitycore_module.txt
+    note: "Founding conversation that named Thalamus and, in its second half, designed 'temporal-core' — the direct design precursor to Unruh — including the reasoning against a cronjob/heartbeat checklist model."
+  - id: temporal-core-design
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/524975aa-temporalcoredesign_1.md
+    note: "Standalone temporal-core design document produced from the same conversation, predating Unruh's in-tree implementation."
 ---
 
 # Unruh
@@ -63,6 +71,35 @@ Unruh's design separates two layers that update at different rhythms [@unruh-des
   exception: they do not decay, are anchored in Phylactery as identity-level facts, and are
   expressed in Unruh as always-active orientations, so the Familiar's priorities cannot
   drift just because a value has been quiet for a while [@unruh-design].
+
+## Origin: a schedule, not a cronjob checklist
+
+Before it existed in-tree, Unruh's design was worked out under the working name
+**temporal-core**, in the same founding conversation that named
+[Thalamus](../decisions/thalamus-naming) — the design document that resulted is the direct
+precursor to what shipped [@naming-conversation] [@temporal-core-design]. The document frames
+temporal-core's job exactly the way Unruh's schedule layer now works: nodes for events, tasks,
+phases, and states, connected by edges (causes, requires, depends on, blocks, carries forward)
+that hold meaning a flat table cannot [@temporal-core-design].
+
+The reasoning for why this is a graph the Familiar orients within, rather than a fixed-cadence
+checklist, traces to a specific complaint about OpenClaw's cronjob/heartbeat model: "I feel like
+OpenClaw's cronjobs regularly super overwhelm Eurylochus" [@naming-conversation]. The diagnosis was
+that the problem was never the *format* of a cronjob's output — it was the timing and volume of
+the injection. A cronjob firing mid-conversation demands several things at once (review goals,
+update memory, assess emotional state, log context) with no human turn to anchor them, which was
+described as "cognitively similar to being interrupted mid-sentence by someone handing you a
+checklist" [@naming-conversation]. Marinara-Engine's Conversation mode was named as the contrasting
+model worth stealing from: characters there carry a generative schedule tied to their own local
+timezone, so the difference is "it is now 3pm, run these tasks" versus "it is 3pm on a Tuesday, [the
+character] has been awake since morning, [they]'d probably be doing X right now" [@naming-conversation].
+This is the origin reasoning behind why [Autonomous loops](autonomous-loops)' pondering loop ticks
+on a tiered interest-weight-and-threat cadence rather than a fixed interval, and why Unruh's
+schedule layer holds named routine phases instead of a task list to clear.
+
+The document also names the language choice made for temporal-core before Unruh existed — Python,
+for its richer graph and time-aware tooling ecosystem — which is the same choice Unruh, in fact,
+shipped with as an in-tree Python/uv service [@temporal-core-design].
 
 ## Time model: local-naive, not UTC
 
@@ -116,3 +153,8 @@ reading full context; threat level only shapes how urgently that judgment is sou
   together downstream of Unruh's data.
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general principle
   the local-naive time model is one instance of.
+- [Naming Thalamus: mediator, not generator](../decisions/thalamus-naming) — the founding
+  conversation Unruh's design (under the working name temporal-core) grew out of alongside
+  Thalamus.
+- [Autonomous loops](autonomous-loops) — the pondering loop's tiered cadence, the shipped
+  alternative to a fixed-interval checklist.

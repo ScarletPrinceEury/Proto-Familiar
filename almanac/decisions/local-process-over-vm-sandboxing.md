@@ -19,6 +19,13 @@ sources:
   - id: index-html
     type: file
     path: public/index.html
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
+  - id: temporal-core-design
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/524975aa-temporalcoredesign_1.md
+    note: "Temporal-core design document that named Tailscale plus a password gate as the intended two-layer remote-access security model, ahead of either shipping."
 ---
 
 # Local Process Over VM/Docker Sandboxing
@@ -124,6 +131,19 @@ Because isolation is never self-provisioned, Proto-Familiar's own trust model is
 memorization queue's on-disk API key: local files are protected by the OS's own user-account
 boundary, not by anything Proto-Familiar builds itself, and that posture is explicitly
 understood to need revisiting if the server is ever exposed beyond localhost.
+
+That revisit is distinct from the isolation question this decision covers — it is about
+authenticating *remote* access, not about containing the local process — and a later design
+conversation named the intended shape as two layers: Tailscale (a private encrypted overlay
+network, no open ports) plus a password gate on Familiar's own server as a second layer
+[@temporal-core-design]. Only the first layer shipped: `server.js` always binds to `0.0.0.0`, but
+a middleware rejects any non-loopback request with `403` until an in-UI toggle (or a
+`TAILSCALE=1` env var at first start) turns it on, with the toggle state persisted to
+`.proto-familiar-config.json` [@claude-md]. No separate password or basic-auth layer exists in
+the shipped server — once the Tailscale toggle is on, any device that can reach the machine over
+the tailnet can use the API key, read Phylactery/Unruh context, and write to the Tome editor with
+no further credential [@claude-md]. The second layer named in the original design remains an open
+item, not something already covered by a different mechanism.
 
 ## Related
 

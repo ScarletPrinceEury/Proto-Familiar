@@ -17,6 +17,10 @@ sources:
   - id: tomes-doc
     type: file
     path: docs/tomes.md
+  - id: naming-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/6ad1c817-Naming_a_new_entitycore_module.txt
+    note: "Founding conversation whose closing Copilot prompt (a 'Manage Tomes' button offering Auto-summarize vs. Manual-topics into an auto-created Session Memories tome) is the literal origin of the two logs-modal triggers below."
 ---
 
 # Session Memorization
@@ -83,6 +87,11 @@ just at session end [@app-js] [@sessions-doc]:
 | **Topic end** | `fetch` | Just that topic's message range |
 | Logs modal: Memorize -> Auto-summarize | `fetch` | Any historical session |
 | Logs modal: Memorize -> Manual topics | `fetch`, per topic | Each topic range closed in the read-only viewer |
+
+The Auto-summarize/Manual-topics split and the auto-created Session Memories tome both trace to
+the exact wording of the Copilot prompt that first specified a "Manage Tomes" button offering
+those two choices, from the same founding conversation that named
+[Thalamus](../decisions/thalamus-naming) [@naming-conversation].
 
 `sendBeacon` is used specifically for the terminal, page-may-be-gone events (idle timeout,
 Clear, `beforeunload`) because the enqueue call itself has to survive the page unloading;
