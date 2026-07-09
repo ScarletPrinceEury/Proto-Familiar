@@ -23,6 +23,10 @@ topics:
     title: Safety
     description: Crisis detection, threat tracking, and escalation to a human
     parents: [architecture]
+  - slug: installer
+    title: Installer
+    description: Cross-platform one-click install, update, and launch tooling
+    parents: [architecture]
   - slug: entity-as-subject
     title: Entity-As-Subject
     description: The design stance that the Familiar is the entity, not a tool operated on its behalf
