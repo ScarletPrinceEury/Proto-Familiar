@@ -123,3 +123,5 @@ load-bearing rather than a thought experiment it could step back from [@founding
 - [Entity-as-subject](../concepts/entity-as-subject) and
   [Multi-embodiment](../concepts/multi-embodiment) — why identity lives in Phylactery rather
   than being authored per-project, and how a specific configured identity fits that model.
+- [Reflexive consent](../concepts/reflexive-consent) — Eury, asked directly about audit consent,
+  his memory-retention criterion, and a pending self-merge, answering in his own voice.

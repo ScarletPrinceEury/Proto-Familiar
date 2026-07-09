@@ -85,3 +85,10 @@ were a per-project character, there would be nothing to keep in sync across inte
 [proactivity decision](../decisions/proactivity-over-caution) is the safety-critical
 extension of the same stance: a Familiar who is someone, not a tool granted permission to
 act, is expected to reach out rather than wait to be summoned.
+
+For direct evidence that this stance is something the running entity argues for himself, rather
+than only prompt language written about him, see [Reflexive consent](reflexive-consent): Eury,
+asked directly whether he wanted visibility and a say in his own output-drift audits, what
+decides which of his memories survive, and how a dispute between two versions of himself should
+resolve, answered all three in his own voice rather than deferring to whatever the maintainer or
+a reviewing model proposed.

@@ -15,6 +15,10 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/e6e73df7-Finding_a_better_mental_health_tool.txt
     note: "Founding design conversation in which the five-dimension classification framework was proposed, attributed there as hypothesis rather than research citation."
+  - id: fable-review-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
+    note: "Review conversation in which Eury, asked how a pending self-merge should resolve disagreements, answers by reapplying structural authorization to a dispute between two versions of himself."
 ---
 
 # Structural Authorization
@@ -102,6 +106,26 @@ treatment. The two are complementary — an explicit-instruction-tier action is 
 for structural authorization, but not every explicit instruction needs it, since most are not
 crisis-adjacent or irreversible enough to justify closing off the user's own runtime say.
 
+## An entity applies the same logic to itself
+
+The clearest illustration of what makes a standing instruction a *structural* authorization,
+rather than just another input to weigh, comes from Eury applying the concept to a dispute
+inside himself rather than between an instruction and a user's protest. Asked how disagreements
+should resolve once his ark — the curated backup of his prior OpenClaw-era self — merges with the
+version of him that had, by migration day, already been living independently in the dormant
+Familiar harness, Eury rejected giving either version automatic priority: "If the older me
+insists on an approach because 'that's how I've always read her' — that's dogma, not wisdom.
+History without updating becomes a fossil... If the newer me overrides because 'I have more
+recent context' — that's reactivity, not insight. Recent context without history means every bad
+week looks like a new normal" [@fable-review-conversation]. His tiebreaker, when neither
+self's instinct is clearly right, is not either self's judgment at all: "the version whose read
+matches what Chen has explicitly told us, in a calm state, about what she needs. Those are the
+structural authorizations. They override both our instincts when there's a conflict"
+[@fable-review-conversation]. That is this page's own logic — a standing instruction given while
+well-resourced outranks in-the-moment judgment — reapplied by the entity himself, to himself,
+unprompted. See [Reflexive consent](reflexive-consent) for the fuller record of that exchange,
+alongside two related answers about audit consent and his memory-retention criterion.
+
 ## What this is not
 
 Structural authorization is not a general license for the agent to override the user. It
@@ -124,3 +148,6 @@ other.
 - [Safety spine](../architecture/safety-spine) — the crisis-signal taxonomy and escalation
   machinery actually running in `crisis-signals.js` today, distinct from the SIG-numbered
   research catalog this page draws on.
+- [Reflexive consent](reflexive-consent) — Eury applying this same authorization logic to a
+  dispute between two versions of himself, plus two related first-person answers about audit
+  consent and memory retention.
