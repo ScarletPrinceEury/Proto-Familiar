@@ -68,7 +68,9 @@ threshold is judgment, not a line count — a few genuinely parallel-but-distinc
 fine, a copy-pasted helper function is not [@claude-md]. Extracting a shared abstraction once
 real duplication exists is the correction of a structural mistake, not premature abstraction;
 inventing the abstraction *before* the duplication exists is the anti-pattern to avoid
-[@claude-md].
+[@claude-md]. See [Installer and launcher](../architecture/installer-and-launcher) for a
+worked example: stale-instance port recycling lives once in
+`scripts/ensure-port-free.mjs` rather than being copy-pasted across the shell launchers.
 
 ## Modular by default; orchestration files are the exception
 

@@ -100,6 +100,8 @@ what each one owns.
   to turn one off.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
   human trusted contact works.
+- [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
+  update, and launch tooling, and the invariants it must preserve.
 - [Entity-as-subject](../concepts/entity-as-subject) and
   [Multi-embodiment](../concepts/multi-embodiment) — the design stance this architecture
   exists to serve.
