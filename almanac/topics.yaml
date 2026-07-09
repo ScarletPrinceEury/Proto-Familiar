@@ -43,6 +43,10 @@ topics:
     title: Armature
     description: The base model's trained pull toward passive, agreeable assistant behavior, and the project's fight against it
     parents: [concepts]
+  - slug: temporal-assurance
+    title: Temporal Assurance
+    description: Proactive, unprompted awareness of upcoming events and their prep requirements, delivered wherever the ward already is
+    parents: [concepts]
   - slug: decisions
     title: Decisions
     description: Recorded architectural and operational choices

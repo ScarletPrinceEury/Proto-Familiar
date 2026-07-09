@@ -26,7 +26,10 @@ interests, handoff between sessions, ponderings, and threat level [@claude-md] [
 Where [Phylactery](phylactery) holds who the Familiar is, Unruh holds how time flows around
 them and what they are currently oriented toward within that time — the design document
 frames this as the difference between time as coordinates ("it is 10:07") and time as lived
-context (what today means, what yesterday left unresolved) [@unruh-design]. Unlike Phylactery,
+context (what today means, what yesterday left unresolved) [@unruh-design]. Unruh's schedule
+graph is the concrete data layer behind [temporal assurance](../concepts/temporal-assurance):
+its nodes hold what is happening and when, and its `requires`/`depends_on` edges hold what a
+future event still needs before it arrives. Unlike Phylactery,
 Unruh is not routed through the canonical store: it is the one named exception in the
 [multi-embodiment model](../concepts/multi-embodiment), because ponderings and much of the
 schedule are per-embodiment rather than facts about the entity's identity [@claude-md].

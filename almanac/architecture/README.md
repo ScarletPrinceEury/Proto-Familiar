@@ -74,7 +74,9 @@ their off-switches.
 
 A separate cluster — `village.js`, `audience.js`, and `discord-gateway.js` — lets the
 Familiar be present with people other than its bonded human, gated by per-category grants
-rather than by an all-or-nothing switch [@architecture-doc]. `audience.js` resolves grants
+rather than by an all-or-nothing switch [@architecture-doc]. This surface is deliberately
+scoped to the ward's own known support network rather than built as a general multi-user
+platform — see [Single-user before platform](../decisions/single-user-before-platform). `audience.js` resolves grants
 and section-marker gating (V3); `discord-gateway.js` is the autonomous Discord presence
 adapter, with per-location presence modes (`strict`/`lurk`/`active`) and a clearance-gated
 tool loop for registered villagers [@architecture-doc]. The escalation and no-covert-contact

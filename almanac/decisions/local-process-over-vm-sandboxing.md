@@ -12,6 +12,13 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/e6e73df7-Finding_a_better_mental_health_tool.txt
     note: "Founding design conversation that scoped v0.1 and worked through VM/Docker/OS-sandbox tradeoffs before any of Proto-Familiar existed."
+  - id: mvp-scoping-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/ec43aed6-Visualizing_a_vague_yet_specific_vi.txt
+    note: "Second founding design conversation in which the maintainer described the barebones prompt-testing frontend she was already running."
+  - id: index-html
+    type: file
+    path: public/index.html
 ---
 
 # Local Process Over VM/Docker Sandboxing
@@ -85,6 +92,18 @@ founding conversation reached for — nothing here provisions its own VM, Docker
 kernel-level sandbox — while the server-plus-browser split gives room for the Node process to
 own persistent state (`tomes/`, `logs/`, `phylactery/data/`) that a pure browser app's storage
 model would have made awkward.
+
+The repository's first commit already carries this shape forward literally. In the second
+founding conversation — the one that scoped [temporal assurance](../concepts/temporal-assurance)
+into an MVP — the maintainer described a running prototype: "Very simple. Main Prompt, Char, User,
+Post-History. So far it's only a local front end with no memory past context, yet. Messages are
+already getting dated and timestamped though and chatlogs get saved"
+[@mvp-scoping-conversation]. The repository's `ff15714` ("Skeleton") commit is titled
+Proto-Familiar from its first line and ships exactly that four-field layout — System Prompt,
+Character Profile, User Profile, and Post-History Prompt — still present in `public/index.html`
+today under the same field ids [@index-html]. This places the barebones-prompt-testing session
+described in that conversation at the project's actual starting point, not a discarded separate
+prototype.
 
 ## Consequences
 
