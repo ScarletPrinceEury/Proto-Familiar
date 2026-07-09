@@ -5,6 +5,9 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: app-js
+    type: file
+    path: public/app.js
 ---
 
 # Engineering Conventions
@@ -141,8 +144,8 @@ bump [@claude-md].
 ## Macro substitution boundaries
 
 `{{user}}` and `{{char}}` are authored as literal tokens in prompts and tool descriptions and
-resolved to configured names by `macros.js`'s `substituteMacros` at exactly three boundaries,
-enumerated so a fourth is never added ad hoc [@claude-md]:
+resolved to configured names by `macros.js`'s `substituteMacros` at exactly three
+server-side boundaries, enumerated so a fourth is never added ad hoc [@claude-md]:
 
 1. LLM prompts, at each call site of a standalone prompt (triage, warm reach-out, pondering,
    tome-graduation, guide-chat).
@@ -156,6 +159,16 @@ literal string "my human" instead of a macro token, because those blocks are ass
 injected directly by `server.js`/`thalamus.js`/`temporal-format.js` rather than passed
 through a macro-substitution call site [@claude-md]. Reintroducing a macro token into one of
 those blocks is a regression CLAUDE.md records having already fixed once (the 0.7.83 audit).
+
+The browser's own prompt assembly is a separate implementation of the same boundary-1
+principle: `public/app.js`'s `applyNameVars` resolves `{{user}}` and `{{char}}`, plus two
+time macros, `{{elapsedTime}}` and `{{timeSinceLastSession}}`, at every segment
+`buildApiMessages` feeds into the main chat request (system prompt, character profile, user
+profile, post-history prompt, and injected history entries) [@app-js]. It is a distinct
+function from `macros.js`'s `substituteMacros`, not a client mirror of it, and it is the only
+place either time macro is resolved. See
+[Elapsed-time macros read stored history, not Date.now()](../decisions/time-macros) for why
+`{{elapsedTime}}` and `{{timeSinceLastSession}}` each anchor their gap differently.
 
 ## Safety-critical sign-off
 
