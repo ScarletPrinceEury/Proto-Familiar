@@ -51,3 +51,7 @@ topics:
     title: Decisions
     description: Recorded architectural and operational choices
     parents: []
+  - slug: development-rhythm
+    title: Development Rhythm
+    description: How the sole maintainer actually paces and triages feature and bug work
+    parents: [concepts]
