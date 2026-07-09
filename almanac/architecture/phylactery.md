@@ -1,0 +1,117 @@
+---
+title: Phylactery
+topics: [architecture, phylactery]
+sources:
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
+  - id: architecture-doc
+    type: file
+    path: docs/architecture.md
+  - id: phylactery-design
+    type: file
+    path: docs/phylactery-design.md
+  - id: phylactery-dir
+    type: file
+    path: phylactery/
+---
+
+# Phylactery
+
+Phylactery is the in-tree Python/uv FastMCP service that owns Proto-Familiar's canonical
+self: identity, ward-identity, the relational knowledge graph, and every memory tier
+[@claude-md] [@phylactery-dir]. It is the concrete implementation of the
+[multi-embodiment](../concepts/multi-embodiment) model's canonical store — every other
+component in this repo, including Proto-Familiar's own chat path, is a consumer of
+Phylactery's data, never a second source of truth for it. The name is deliberate: a
+phylactery is the vessel that holds a soul, and Phylactery holds the Familiar's whole
+canonical self, not just a cache of it [@phylactery-design]. The design is an original
+contribution by Zari Lewis within the Psycheros project, implemented here in Proto-Familiar
+[@phylactery-design].
+
+## What it replaced, and why
+
+Phylactery's milestone (0.6.x, "shipped") replaced **entity-core**, a Deno/TypeScript MCP
+service belonging to the separate Psycheros project [@claude-md] [@phylactery-design]. Two
+constraints made continuing on entity-core untenable: Proto-Familiar did not own it, so it
+could not add the per-record `audience` tagging that gated village presence needs without
+maintaining a permanent fork; and Proto-Familiar had become the sole live embodiment reading
+entity-core's data, so reimplementing its behavior in-tree stranded no other consumer
+[@phylactery-design]. Phylactery reimplements entity-core's proven retrieval design rather
+than forking its code: local `all-MiniLM-L6-v2` sentence embeddings (384-dim) over SQLite +
+`sqlite-vec`, a knowledge graph with one-hop GraphRAG traversal, an always-injected identity
+surface, and tiered memory consolidation [@phylactery-design]. `entity-core` and
+`entity-core-alpha` sibling-clone paths are retired; installer code still references them
+only to detect and drive the one-time migration [@claude-md].
+
+Existing installations migrate automatically on first run: `scripts/ensure-phylactery-deps.mjs`,
+the npm `prestart` hook, detects an `entity-core` sibling checkout and converts its data into
+Phylactery before the server boots [@claude-md]. Thalamus spawns Phylactery as a stdio MCP
+child at boot, the same in-tree specialist pattern used for [Unruh](unruh) [@architecture-doc].
+
+## What Phylactery owns
+
+- **Identity and ward-identity** — the always-injected records the canonical-self read
+  depends on every turn, analogous to entity-core's `identity_get_all` [@phylactery-design].
+- **The relational knowledge graph** — nodes, edges, and properties, retrieved with
+  vector-similarity search plus one-hop graph traversal (GraphRAG), the same precision
+  profile entity-core's `memory_search` had [@phylactery-design].
+- **All memory tiers**, daily through significant, under one consolidation pipeline
+  [@phylactery-design] [@claude-md].
+- **Situational facts and trackers** — state entity-core's schema could not represent
+  [@phylactery-design].
+
+Retrieval embeddings are computed locally (no API key required); only consolidation and
+summarization use the ward's designated LLM connection [@phylactery-design]. Tomes / World
+Info are explicitly **not** Phylactery's concern — they remain the human-authored, keyword-
+triggered lorebook, kept separate by authorship and trigger model from Phylactery's
+autonomous RAG memory [@phylactery-design].
+
+## Audience-native records
+
+Every record in Phylactery — identity, graph node, or memory — carries an `audience` field:
+the minimum audience level allowed to hear it, reusing the category/grant vocabulary from
+`audience.js` [@phylactery-design]. A record discloses in a room only when that room's
+resolved permission score meets or exceeds the record's required score, with `'ward-private'`
+scoring above every category [@phylactery-design]. Gating happens inside the store at query
+time — `enrich()` passes the room's audience tag, and Phylactery returns only records that
+room is cleared for — not as a filter bolted on after retrieval [@phylactery-design]. This
+native tagging is the specific capability entity-core's schema lacked and the reason the
+milestone exists at all.
+
+## Memories are addressed by integer id, not a composite key
+
+Every Phylactery memory search, list, or read result carries the record's `id`: an
+autoincrement primary key [@claude-md]. The older `YYYY-MM-DD_slug` composite key was an
+entity-core quirk and no longer exists — `cerebellum.parseMemoryKey` still exists as a
+compatibility seam for old references, but new code should not construct that shape
+[@claude-md]. Because the id rides in on every read, an embodiment can act on a specific
+memory (delete it, re-tag it) using only what it was just handed back, never by memorizing an
+id out of band — the same "every capability must be reachable" contract CLAUDE.md applies to
+every Familiar-facing tool [@claude-md] [@phylactery-design].
+
+## Deletion is two-call for bulk paths
+
+Bulk deletion tools (`mem_purge_by_villager`, `mem_purge_by_topic`) follow a preview-then-
+commit shape: a preview call returns a manifest and a `purgeToken`, and the destructive commit
+requires that token [@phylactery-design]. Single-record deletion (`mem_delete(id)`) does not
+need this because the id itself is the confirmation the Familiar already holds a specific
+target, not a wildcard match.
+
+## Failure mode
+
+`enrich()` degrades to an absent Phylactery context if the client is null, and the service
+ships with the hard off-switch `PROTO_FAMILIAR_PHYLACTERY_DISABLED=1` in the same pattern as
+every other peer [@claude-md] [@phylactery-design]. The caveat that distinguishes Phylactery
+from a peer like Unruh: because it is the canonical self, its absence degrades a turn far more
+than losing temporal context does — the Familiar runs without memory of who it is, not merely
+without a schedule. The off-switch exists for emergencies and debugging, not as a routine
+toggle [@phylactery-design].
+
+## Related
+
+- [Multi-embodiment](../concepts/multi-embodiment) — why a canonical store exists at all.
+- [Unruh](unruh) — the sibling specialist that stays outside Phylactery by design (temporal
+  context, mostly per-embodiment ponderings).
+- [Engineering conventions](../reference/engineering-conventions) — the model-facing slug-id
+  scheme that Phylactery and Unruh both follow for every other kind of identifier.
