@@ -84,8 +84,9 @@ always mirrors into the ward's own outbox [@architecture-doc].
 ## Storage shape
 
 Proto-Familiar keeps almost no state of its own. `logs/` holds session JSON files and
-`tomes/` holds per-Tome JSON files plus small state caches (the memorization queue, the
-outbox, threat state, last-activity) — all git-ignored [@architecture-doc]. The two things
+`tomes/` holds per-Tome JSON files plus small state caches (the
+[memorization queue](session-memorization), the outbox, threat state, last-activity) — all
+git-ignored [@architecture-doc]. The two things
 that look like databases, `phylactery/data/` and `unruh/data/`, belong to their respective
 Python services, not to the Node process; see [Phylactery](phylactery) and [Unruh](unruh) for
 what each one owns.
@@ -94,6 +95,8 @@ what each one owns.
 
 - [Phylactery](phylactery) — the canonical self-store: identity, memory, and the knowledge
   graph.
+- [Session memorization](session-memorization) — the durable job queue that turns a session or
+  topic into Tome entries, and the dedicated Session Memories tome it writes to.
 - [Unruh](unruh) — the temporal-context specialist: the schedule graph, the interest weight
   system, and the local-naive time model.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how

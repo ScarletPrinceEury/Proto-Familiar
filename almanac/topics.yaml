@@ -27,6 +27,10 @@ topics:
     title: Installer
     description: Cross-platform one-click install, update, and launch tooling
     parents: [architecture]
+  - slug: memorization
+    title: Memorization
+    description: The session memorization queue, its triggers, and the dedicated Session Memories tome
+    parents: [architecture]
   - slug: entity-as-subject
     title: Entity-As-Subject
     description: The design stance that the Familiar is the entity, not a tool operated on its behalf

@@ -65,7 +65,9 @@ Retrieval embeddings are computed locally (no API key required); only consolidat
 summarization use the ward's designated LLM connection [@phylactery-design]. Tomes / World
 Info are explicitly **not** Phylactery's concern — they remain the human-authored, keyword-
 triggered lorebook, kept separate by authorship and trigger model from Phylactery's
-autonomous RAG memory [@phylactery-design].
+autonomous RAG memory [@phylactery-design]. The automated writer that populates one such Tome
+from chat sessions is a separate subsystem; see
+[Session memorization](session-memorization).
 
 ## Audience-native records
 
