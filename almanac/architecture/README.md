@@ -1,0 +1,107 @@
+---
+title: Architecture
+topics: [architecture]
+sources:
+  - id: architecture-doc
+    type: file
+    path: docs/architecture.md
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
+---
+
+# Architecture
+
+Proto-Familiar is a Node.js application — a thin Express server plus a vanilla-JS
+single-page frontend — that surfaces a persistent AI companion (the Familiar) bonded to one
+human [@architecture-doc]. It is not a standalone chatbot: it is one
+[embodiment](../concepts/multi-embodiment) of an entity whose identity and memory live in
+[Phylactery](phylactery), consistent with the [entity-as-subject](../concepts/entity-as-subject)
+stance the whole codebase is built around. The source of truth for this page is
+`docs/architecture.md`, which CLAUDE.md requires to be updated in the same commit as any
+change to component responsibilities, data flow, or the autonomous-loop set [@claude-md] — if
+this wiki page and that file disagree, trust `docs/architecture.md` and the code over this
+page.
+
+The server has four responsibilities: proxy LLM requests so the human's API key never leaves
+localhost, enrich every request with context pulled from Phylactery and Unruh, run the
+autonomous loops that act without a request, and persist session logs, Tomes, ponderings, the
+outbox, and threat state [@architecture-doc].
+
+## The inward/outward split: thalamus and cerebellum
+
+Two modules divide the traffic between the Familiar's mind and the outside world, and the
+boundary between them is strict.
+
+**`thalamus.js`** is the cognitive-module mediator. It spawns and supervises
+[Phylactery](phylactery) and [Unruh](unruh) as stdio MCP child processes, and its central
+export, `enrich(userMessage, opts)`, fans out to both peers with `Promise.allSettled` on
+every chat turn and returns the assembled `{ static, dynamic }` prompt context
+[@architecture-doc]. Thalamus assembles context; it never executes actions. Each peer is
+treated as a plural, independently-failing collaborator — a downed Phylactery does not take
+Unruh's temporal context out with it, and an empty sub-block simply renders as nothing in the
+prompt rather than as an error [@architecture-doc].
+
+**`cerebellum.js`** is the motor module — the outbound counterpart to thalamus. It owns the
+tool registry (`BUILTIN_TOOLS` + `TOOL_EXECUTORS`), the tool-call loop, the silence-triage
+deliberation, trusted-contact delivery, and escalation deadlines [@architecture-doc].
+Cerebellum executes actions and never assembles prompt context, and — the single enforcement
+point for "writes go through Phylactery's MCP" named in the
+[multi-embodiment concept](../concepts/multi-embodiment) — it never opens its own MCP
+connection; every write to identity, memory, or temporal state rides one of thalamus's
+exported wrapper functions [@architecture-doc]. `executeToolCall()` never throws: a failing
+tool becomes a structured string result inside the loop, never an exception into the chat
+path [@architecture-doc].
+
+This split is why a behavioral change to `cerebellum.js` (the triage deliberation prompt,
+trusted-contact delivery, escalation deadlines) or `thalamus.js`'s `[CARE CHECK]` assembly is
+named explicitly in CLAUDE.md as one of the paths that requires a human's sign-off before
+shipping — see [Proactivity over caution](../decisions/proactivity-over-caution)
+[@claude-md].
+
+## The caring spine
+
+Alongside the inward/outward split, a set of modules form what CLAUDE.md calls the caring
+spine: crisis detection, threat tracking, and the proactive-outreach machinery. These are not
+MCP children — they are Node-side modules that read from and write to Unruh and local state
+files, and they run both on the chat path (detection, care-check framing) and as background
+loops (pondering, reminders, triage) [@architecture-doc]. See
+[Safety spine](safety-spine) for how crisis detection, threat tracking, and escalation fit
+together, and [Autonomous loops](autonomous-loops) for the full set of background workers and
+their off-switches.
+
+## Village: audience-gated presence beyond the ward
+
+A separate cluster — `village.js`, `audience.js`, and `discord-gateway.js` — lets the
+Familiar be present with people other than its bonded human, gated by per-category grants
+rather than by an all-or-nothing switch [@architecture-doc]. `audience.js` resolves grants
+and section-marker gating (V3); `discord-gateway.js` is the autonomous Discord presence
+adapter, with per-location presence modes (`strict`/`lurk`/`active`) and a clearance-gated
+tool loop for registered villagers [@architecture-doc]. The escalation and no-covert-contact
+invariants that apply to the ward also constrain this surface: a relay to a third party
+always mirrors into the ward's own outbox [@architecture-doc].
+
+## Storage shape
+
+Proto-Familiar keeps almost no state of its own. `logs/` holds session JSON files and
+`tomes/` holds per-Tome JSON files plus small state caches (the memorization queue, the
+outbox, threat state, last-activity) — all git-ignored [@architecture-doc]. The two things
+that look like databases, `phylactery/data/` and `unruh/data/`, belong to their respective
+Python services, not to the Node process; see [Phylactery](phylactery) and [Unruh](unruh) for
+what each one owns.
+
+## Where to go next
+
+- [Phylactery](phylactery) — the canonical self-store: identity, memory, and the knowledge
+  graph.
+- [Unruh](unruh) — the temporal-context specialist: the schedule graph, the interest weight
+  system, and the local-naive time model.
+- [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
+  to turn one off.
+- [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
+  human trusted contact works.
+- [Entity-as-subject](../concepts/entity-as-subject) and
+  [Multi-embodiment](../concepts/multi-embodiment) — the design stance this architecture
+  exists to serve.
+- [Engineering conventions](../reference/engineering-conventions) — the repo-wide operating
+  rules (versioning, degradation, id schemes) that apply across every component above.
