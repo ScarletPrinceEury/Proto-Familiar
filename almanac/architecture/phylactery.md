@@ -117,3 +117,7 @@ toggle [@phylactery-design].
   context, mostly per-embodiment ponderings).
 - [Engineering conventions](../reference/engineering-conventions) — the model-facing slug-id
   scheme that Phylactery and Unruh both follow for every other kind of identifier.
+- [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes) — why the
+  audience field above governs only what a session may be told, and why protecting Phylactery
+  from a socially-engineered false write is a separate, behavioral defense rather than an
+  architectural filter.

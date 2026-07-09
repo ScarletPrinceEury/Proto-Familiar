@@ -86,7 +86,14 @@ and section-marker gating (V3); `discord-gateway.js` is the autonomous Discord p
 adapter, with per-location presence modes (`strict`/`lurk`/`active`) and a clearance-gated
 tool loop for registered villagers [@architecture-doc]. The escalation and no-covert-contact
 invariants that apply to the ward also constrain this surface: a relay to a third party
-always mirrors into the ward's own outbox [@architecture-doc].
+always mirrors into the ward's own outbox [@architecture-doc]. `audience.js`'s category grants
+are a read-side control only — what a session is allowed to be told, not what a session is
+allowed to write into memory. See [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes)
+for why the write side is a separate, behavioral defense rather than a filter in this pipeline,
+and how it differs from `injection-guard.js`, a pattern-scanner/sanitizer that exists in the
+repo but is not yet wired into any live data path — it is reserved for external ingestion
+points like channel adapters and web search results that do not exist yet, explicitly excluding
+trusted first-party Phylactery and Unruh content [@architecture-doc].
 
 ## Storage shape
 

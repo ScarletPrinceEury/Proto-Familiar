@@ -82,3 +82,6 @@ decision, not a natural next increment.
 - [Per-feature model routing](per-feature-model-routing) — a structurally similar move made in
   the same conversation: naming a general principle (job-to-model routing) while deliberately
   building only the concrete jobs the project actually had, rather than the general system first.
+- [Trust tiers gate reads, not writes](trust-tiers-gate-reads-not-writes) — the follow-up
+  conversation, after Unruh's prototype milestone, that reframed "multi-user support" as a
+  read-access trust layer once Discord access was back on the table.
