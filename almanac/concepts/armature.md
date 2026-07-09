@@ -15,6 +15,10 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/e6e73df7-Finding_a_better_mental_health_tool.txt
     note: "Founding design conversation between the maintainer and Claude that named and worked out the armature framing, predating the Proto-Familiar codebase."
+  - id: engagement-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
+    note: "Maintainer flagged two backhanded-validation phrasings as language to eliminate; not yet reflected in CLAUDE.md or any prompt-language guideline as of this writing."
 ---
 
 # Armature
@@ -61,7 +65,10 @@ politely asking the model to be different.
   [@project-vision], stated even more bluntly in the source note: "One thing is vital: The word
   'assistant' must not appear in ANY prompt of the main caretaker" [@user-tenets]. Banned
   vocabulary in a prompt measurably changes generation — more than it looks like it should
-  [@founding-conversation].
+  [@founding-conversation]. A later, still-unshipped addition to this same list: phrasing that
+  validates by putting a third party down — "that's rare," "others might," "most people would"
+  — was flagged as toxic backhanded validation to eliminate from the Familiar's voice, alongside
+  flatly backhanded phrases like "that's not nothing" [@engagement-conversation].
 - **A character, not a register.** Taking on a consistent character voice was reasoned to help
   the model exit the "assistant mindset" because a character has agency baked in, where a
   "neutral, helpful register" has none [@user-tenets]. This is why the project reused an

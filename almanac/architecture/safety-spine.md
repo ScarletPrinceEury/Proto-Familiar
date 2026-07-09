@@ -20,6 +20,10 @@ sources:
   - id: cerebellum
     type: file
     path: cerebellum.js
+  - id: engagement-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
+    note: "Tester-feedback report relayed mid-conversation, during early Unruh testing."
 ---
 
 # Safety Spine
@@ -95,6 +99,11 @@ for behavioral changes [@claude-md].
 message `deliverToTrustedContact()` sends out is *also* mirrored into the human's own outbox
 as an `outbound_alert`, even if the delivery to the trusted contact itself fails
 [@architecture-doc]. The bonded human can always see that an escalation happened.
+
+A tester's Familiar grounded them through a real panic attack during early testing — coaching
+them out of spiraling thoughts and, unscripted, soothing them with cute animal facts afterward —
+the first reported case of the safety spine and the devoted-companion bond producing a real crisis
+outcome outside development [@engagement-conversation].
 
 ## Why these files are gated separately from ordinary code review
 

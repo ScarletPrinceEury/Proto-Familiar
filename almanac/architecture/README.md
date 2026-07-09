@@ -37,7 +37,12 @@ boundary between them is strict.
 [Phylactery](phylactery) and [Unruh](unruh) as stdio MCP child processes, and its central
 export, `enrich(userMessage, opts)`, fans out to both peers with `Promise.allSettled` on
 every chat turn and returns the assembled `{ static, dynamic }` prompt context
-[@architecture-doc]. Thalamus assembles context; it never executes actions. Each peer is
+[@architecture-doc]. The static/dynamic split exists so the upstream LLM provider's prefix
+cache can hit on the stable identity portion of the prompt instead of re-ingesting it on every
+turn — see
+[Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) for the
+usage-exhaustion incident that motivated it and the exact placement contract. Thalamus assembles
+context; it never executes actions. Each peer is
 treated as a plural, independently-failing collaborator — a downed Phylactery does not take
 Unruh's temporal context out with it, and an empty sub-block simply renders as nothing in the
 prompt rather than as an error [@architecture-doc].
@@ -112,3 +117,5 @@ what each one owns.
   exists to serve.
 - [Engineering conventions](../reference/engineering-conventions) — the repo-wide operating
   rules (versioning, degradation, id schemes) that apply across every component above.
+- [Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) — why
+  Thalamus's context is split into a static prefix and a depth-injected dynamic block.
