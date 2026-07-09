@@ -1,5 +1,19 @@
 # Notes for AI agents working on this repo
 
+## CodeAlmanac — keep the wiki current every session
+
+This repo runs [CodeAlmanac](https://github.com/AlmanacCode/codealmanac) (`codealmanac`, installed via `uv tool install codealmanac@latest`) as a living wiki of *why*, not just *what* — architecture decisions, invariants, gotchas, the development history of the Familiar — stored as markdown under `almanac/`. It is configured to run on **dedicated Claude agents (Sonnet or Haiku)**, never Codex — `harness.default` is set to `claude` in `~/.codealmanac/config.toml`.
+
+**Every Claude Code session working in this repo should:**
+
+1. **Read before assuming.** `codealmanac search "<topic>"` or `codealmanac show <page>` before re-deriving context that's already documented — cheaper than re-reading the whole codebase or CLAUDE.md every time.
+2. **Write after meaningful work.** After a change worth remembering (a new architectural decision, a design tradeoff, a recorded mistake, a milestone landing), run `codealmanac ingest <file-or-note> --using claude` or `codealmanac garden --using claude` to fold it into the wiki. Bias toward capturing — the wiki is cheap to correct later, but an undocumented decision is lost the moment the session ends.
+3. **Prefer Haiku for routine gardening** (`--using claude` with `harness.model` set to a Haiku model) and reserve Sonnet for substantive ingestion of new architecture or design rationale — set per-invocation via `codealmanac config set harness.model <model>` if the default needs overriding for a specific call.
+4. **No OS-level automation here.** This environment doesn't support `launchd`/cron-based scheduling (ephemeral containers, no persistent scheduler) — `codealmanac setup` was run with `--sync-off --garden-off --no-auto-update`, so wiki maintenance is manual/session-driven, not a background job. That means it's on **every session**, not a scheduler, to keep it current.
+5. **Check `codealmanac health`** if wiki pages seem stale or contradictory — it flags orphans, dead refs, and broken links.
+
+Don't skip this because "the change was small" — the whole value of the wiki is that it compounds across sessions instead of each one re-discovering the same context.
+
 ## Versioning
 
 The current version lives in `package.json` (`version` field) and is the **single source of truth**. The server reads it once at boot and exposes it via `/api/health`, `/api/version`, the startup banner, and the UI badge in the sidebar footer. Don't hard-code the version anywhere else.
