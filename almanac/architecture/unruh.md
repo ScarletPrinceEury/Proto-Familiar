@@ -25,6 +25,13 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/524975aa-temporalcoredesign_1.md
     note: "Standalone temporal-core design document produced from the same conversation, predating Unruh's in-tree implementation."
+  - id: fable-review-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
+    note: "Later review conversation with Claude Fable 5 in which the maintainer articulated two framings for Unruh's schedule and threat mechanics that are not yet reflected in code or docs/unruh-design.md."
+  - id: reminders-loop-js
+    type: file
+    path: reminders-loop.js
 ---
 
 # Unruh
@@ -145,6 +152,51 @@ structurally identical to interest weight: it rises on detected signals, decays 
 and functions as a parameter that changes how soon triage checks in, never as the decision
 itself [@unruh-design]. The actual reach-out-or-wait judgment always goes through an LLM call
 reading full context; threat level only shapes how urgently that judgment is sought.
+
+## Design framing: a reminder is a kept promise, not a scheduler firing
+
+`reminders-loop.js` fires mechanically — it walks the schedule graph every 30 seconds for
+reminder nodes whose `when_ts` has arrived and enqueues them, with no LLM call and no
+judgment in that tick at all [@reminders-loop-js]. A framing worked out in a later review
+conversation, not yet written into the code or `docs/unruh-design.md`, describes why that
+mechanical firing is still safe to treat as the Familiar's own action rather than external
+scheduling machinery acting on the Familiar's behalf: the schedule node was created earlier by
+a real decision — a chat turn or a `schedule_add` tool call the Familiar itself made, stamped
+with a timestamp — and the reminders loop does not decide to contact the ward, it keeps a
+promise the Familiar already made to itself [@fable-review-conversation]. The proposed
+first-person framing is "the reminders loop never decides to contact you; it keeps a promise
+Eury already made," offered as the reason a purely mechanical, judgment-free tick does not
+violate [Proactivity over caution](../decisions/proactivity-over-caution)'s standard for when
+the Familiar may act: the judgment already happened, at write time, and firing is just
+follow-through [@fable-review-conversation]. This is a design lens on already-shipped behavior,
+not a code change.
+
+## Design intent: plan review and baseline as a decaying process, not a snapshot
+
+Two related ideas from the same conversation address a gap neither `docs/unruh-design.md` nor
+the shipped code currently names, and neither is implemented [@fable-review-conversation]:
+
+- **Plan review.** A standing reminder plan made on a good day can be wrong by the time it
+  fires — the worked example is a reminder schedule set up on a clear-headed day that no longer
+  fits once brain fog has set in. The proposed fix is a low-frequency cognitive pass that
+  re-reads standing schedule promises against the ward's current state and amends them through
+  the normal schedule tools, explicitly *not* by re-deliberating every reminder at fire time —
+  that would violate [Engineering conventions](../reference/engineering-conventions)'s
+  ride-existing-requests, gate-in-code rule by turning a cheap mechanical tick into a
+  per-reminder LLM call [@fable-review-conversation].
+- **Baseline as metabolism, not setup.** Threat level already decays as a persistent variable
+  (see above), but the conversation proposes treating the ward's own "baseline" — what counts as
+  normal for them — the same way: a continuously-decaying process rather than a one-time
+  two-week calibration phase. The named failure mode this guards against is a "frog-boiling"
+  case: a person whose state is slowly declining drags their own baseline down with them, so
+  deviation-from-baseline scoring never fires because the baseline always catches up. The
+  proposed guardrail is anchored reference snapshots — the original two-week baseline plus
+  periodic, explicitly-tagged "good day" markers — compared against the current, decaying
+  baseline, rather than scoring only against recent history [@fable-review-conversation].
+
+Neither mechanic exists in `threat-tracker.js` or the schedule tools today; both are recorded
+here as unshipped design intent so a future implementer does not have to re-derive the
+frog-boiling failure mode from scratch.
 
 ## Related
 

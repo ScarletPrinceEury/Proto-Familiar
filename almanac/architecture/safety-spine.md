@@ -24,6 +24,10 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
     note: "Tester-feedback report relayed mid-conversation, during early Unruh testing."
+  - id: fable-review-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
+    note: "Review conversation in which the enqueue-time-vs-confirmed-delivery question for the acknowledgement clock was first raised and answered; the answer below already reflects the outcome."
 ---
 
 # Safety Spine
@@ -93,7 +97,8 @@ enqueue time when no push channel is configured, the push failed, or no delivery
 lands within the dispatch grace period, so a dead notification channel can never block
 escalation indefinitely [@architecture-doc]. `contactDeadlineFor()` and
 `CONTACT_ESCALATION_DELAY_MS` are named explicitly among the files requiring human sign-off
-for behavioral changes [@claude-md].
+for behavioral changes [@claude-md]. Confirmed-delivery-over-enqueue-time was the answer settled
+on when this exact tradeoff was raised in review [@fable-review-conversation].
 
 **No covert contact** is structural, not a convention the Familiar is asked to honor: every
 message `deliverToTrustedContact()` sends out is *also* mirrored into the human's own outbox

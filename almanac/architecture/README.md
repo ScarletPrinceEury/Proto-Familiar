@@ -62,7 +62,11 @@ This split is why a behavioral change to `cerebellum.js` (the triage deliberatio
 trusted-contact delivery, escalation deadlines) or `thalamus.js`'s `[CARE CHECK]` assembly is
 named explicitly in CLAUDE.md as one of the paths that requires a human's sign-off before
 shipping — see [Proactivity over caution](../decisions/proactivity-over-caution)
-[@claude-md].
+[@claude-md]. See [Naming Cerebellum](../decisions/cerebellum-naming) for why the module is
+named after the motor structure specifically, and
+[Voluntary and autonomic lanes in Cerebellum](../decisions/cerebellum-consent-lanes) for a
+proposed, not-yet-built consent distinction for any future feature that continuously renders
+Familiar-side state outward.
 
 ## The caring spine
 

@@ -105,6 +105,9 @@ design that is still exactly as mechanical as it was on day one.
 
 ## Related
 
+- [Naming Cerebellum: executes, does not decide](cerebellum-naming) — the parallel naming
+  decision for thalamus's outward-facing sibling, worked out in a separate conversation but
+  following the same "the name does interpretive work" philosophy.
 - [Architecture](../architecture) — thalamus's current `enrich()` contract, its `Promise.allSettled`
   fan-out, and the strict split from `cerebellum.js`.
 - [Multi-embodiment](../concepts/multi-embodiment) — why entity-core (now Phylactery) is the

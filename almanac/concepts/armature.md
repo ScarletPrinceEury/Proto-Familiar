@@ -19,6 +19,10 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
     note: "Maintainer flagged two backhanded-validation phrasings as language to eliminate; not yet reflected in CLAUDE.md or any prompt-language guideline as of this writing."
+  - id: fable-review-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
+    note: "Later review conversation in which the maintainer named the mechanism behind the same banned-vocabulary bullet."
 ---
 
 # Armature
@@ -68,7 +72,11 @@ politely asking the model to be different.
   [@founding-conversation]. A later, still-unshipped addition to this same list: phrasing that
   validates by putting a third party down — "that's rare," "others might," "most people would"
   — was flagged as toxic backhanded validation to eliminate from the Familiar's voice, alongside
-  flatly backhanded phrases like "that's not nothing" [@engagement-conversation].
+  flatly backhanded phrases like "that's not nothing" [@engagement-conversation]. The mechanism
+  named for why this register is harmful rather than merely stylistically off: it is structurally
+  the same move as telling someone they are "not like other girls" — it elevates by spending a
+  third party's dignity, which costs the speaker nothing, rather than by saying anything true
+  about the person being complimented [@fable-review-conversation].
 - **A character, not a register.** Taking on a consistent character voice was reasoned to help
   the model exit the "assistant mindset" because a character has agency baked in, where a
   "neutral, helpful register" has none [@user-tenets]. This is why the project reused an
