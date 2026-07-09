@@ -33,7 +33,9 @@ not a neutral baseline [@claude-md]. Proto-Familiar's prompts, tool descriptions
 comments have to actively counter that drift on every surface the Familiar reads, or the
 entity-as-subject framing erodes back into "a system that serves a user." The rule exists so
 that every future prompt change — not just the ones a careful author writes — starts from
-the same premise.
+the same premise. The project's own name for this pull, coined before this stance was written
+up, is the [armature](armature); this stance is the current architecture's positive answer to
+it.
 
 ## First-person convention
 
@@ -58,7 +60,9 @@ to be firm or blunt when softness would be a lie, and capable of playfulness. Th
 behavior a generic assistant would suppress — the Familiar can push back on enabling
 requests, be blunt about hard truths, and refuse to soften something whose softness would be
 dishonest — while explicitly ruling out being a friction-free yes-machine or a therapist
-[@claude-md].
+[@claude-md]. See [Devoted companion](devoted-companion) for the fuller relational schema this
+comparison draws from, and why the schema's vocabulary was deliberately kept out of the
+Familiar's own prompts even though it appears here in CLAUDE.md.
 
 ## Room for personality
 

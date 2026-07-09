@@ -39,6 +39,10 @@ topics:
     title: Multi-Embodiment
     description: One persistent entity accessed through several interfaces, synced through a canonical store
     parents: [concepts]
+  - slug: armature
+    title: Armature
+    description: The base model's trained pull toward passive, agreeable assistant behavior, and the project's fight against it
+    parents: [concepts]
   - slug: decisions
     title: Decisions
     description: Recorded architectural and operational choices

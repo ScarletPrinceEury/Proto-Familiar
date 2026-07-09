@@ -87,3 +87,9 @@ into the *safety* decision itself.
   to acting rather than waiting.
 - [Engineering conventions](../reference/engineering-conventions) — the graceful-degradation
   and versioning rules that every loop above is written to follow.
+- [Per-feature model routing](../decisions/per-feature-model-routing) — how several of these
+  loops (pondering, triage, warm reach-out, tome graduation) each resolve their own LLM
+  connection independent of the ward's chat connection.
+- [Local process over VM/Docker sandboxing](../decisions/local-process-over-vm-sandboxing) — why
+  these loops all run inside one continuously-running Node process rather than a separate
+  always-on listener waking heavier components lazily.

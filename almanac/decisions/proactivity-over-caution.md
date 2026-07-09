@@ -25,7 +25,10 @@ if the model actually acts when the context calls for it. But LLMs already carry
 measured bias toward hedging and caution as their unsteered default — piling more
 caution-sounding language onto a prompt that governs a safety-critical decision does not make
 the system safer, it pushes an already-cautious model further toward inaction
-[@claude-md].
+[@claude-md]. This is the safety-critical instance of the broader pull the project calls the
+[armature](../concepts/armature); [Structural authorization](../concepts/structural-authorization)
+records a related, more general design concept for closing off the same pull for specific,
+pre-authorized overrides.
 
 ## The incident
 

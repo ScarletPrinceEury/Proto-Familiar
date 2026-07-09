@@ -122,3 +122,10 @@ queue and retry mechanics described above rather than replacing them.
   deliberately kept separate from.
 - [Engineering conventions](../reference/engineering-conventions) — the repo-wide "robust over
   cheap" and graceful-degradation rules this subsystem's shape follows.
+- [Per-feature model routing](../decisions/per-feature-model-routing) — how the memorization
+  worker resolves which connection to call, independent of whichever connection the ward
+  chats on.
+- [Tome multi-writer merge policy](../decisions/tome-multi-writer-merge-policy) — a broader,
+  not-yet-implemented design for reconciling writes when more than one process can write to the
+  same Tome entry; this subsystem's single-writer, mutex-serialized model is the simpler thing
+  that shipped instead.
