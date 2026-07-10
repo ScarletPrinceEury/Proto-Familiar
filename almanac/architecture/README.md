@@ -37,7 +37,12 @@ boundary between them is strict.
 [Phylactery](phylactery) and [Unruh](unruh) as stdio MCP child processes, and its central
 export, `enrich(userMessage, opts)`, fans out to both peers with `Promise.allSettled` on
 every chat turn and returns the assembled `{ static, dynamic }` prompt context
-[@architecture-doc]. Thalamus assembles context; it never executes actions. Each peer is
+[@architecture-doc]. The static/dynamic split exists so the upstream LLM provider's prefix
+cache can hit on the stable identity portion of the prompt instead of re-ingesting it on every
+turn — see
+[Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) for the
+usage-exhaustion incident that motivated it and the exact placement contract. Thalamus assembles
+context; it never executes actions. Each peer is
 treated as a plural, independently-failing collaborator — a downed Phylactery does not take
 Unruh's temporal context out with it, and an empty sub-block simply renders as nothing in the
 prompt rather than as an error [@architecture-doc].
@@ -57,7 +62,11 @@ This split is why a behavioral change to `cerebellum.js` (the triage deliberatio
 trusted-contact delivery, escalation deadlines) or `thalamus.js`'s `[CARE CHECK]` assembly is
 named explicitly in CLAUDE.md as one of the paths that requires a human's sign-off before
 shipping — see [Proactivity over caution](../decisions/proactivity-over-caution)
-[@claude-md].
+[@claude-md]. See [Naming Cerebellum](../decisions/cerebellum-naming) for why the module is
+named after the motor structure specifically, and
+[Voluntary and autonomic lanes in Cerebellum](../decisions/cerebellum-consent-lanes) for a
+proposed, not-yet-built consent distinction for any future feature that continuously renders
+Familiar-side state outward.
 
 ## The caring spine
 
@@ -74,12 +83,21 @@ their off-switches.
 
 A separate cluster — `village.js`, `audience.js`, and `discord-gateway.js` — lets the
 Familiar be present with people other than its bonded human, gated by per-category grants
-rather than by an all-or-nothing switch [@architecture-doc]. `audience.js` resolves grants
+rather than by an all-or-nothing switch [@architecture-doc]. This surface is deliberately
+scoped to the ward's own known support network rather than built as a general multi-user
+platform — see [Single-user before platform](../decisions/single-user-before-platform). `audience.js` resolves grants
 and section-marker gating (V3); `discord-gateway.js` is the autonomous Discord presence
 adapter, with per-location presence modes (`strict`/`lurk`/`active`) and a clearance-gated
 tool loop for registered villagers [@architecture-doc]. The escalation and no-covert-contact
 invariants that apply to the ward also constrain this surface: a relay to a third party
-always mirrors into the ward's own outbox [@architecture-doc].
+always mirrors into the ward's own outbox [@architecture-doc]. `audience.js`'s category grants
+are a read-side control only — what a session is allowed to be told, not what a session is
+allowed to write into memory. See [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes)
+for why the write side is a separate, behavioral defense rather than a filter in this pipeline,
+and how it differs from `injection-guard.js`, a pattern-scanner/sanitizer that exists in the
+repo but is not yet wired into any live data path — it is reserved for external ingestion
+points like channel adapters and web search results that do not exist yet, explicitly excluding
+trusted first-party Phylactery and Unruh content [@architecture-doc].
 
 ## Storage shape
 
@@ -110,3 +128,5 @@ what each one owns.
   exists to serve.
 - [Engineering conventions](../reference/engineering-conventions) — the repo-wide operating
   rules (versioning, degradation, id schemes) that apply across every component above.
+- [Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) — why
+  Thalamus's context is split into a static prefix and a depth-injected dynamic block.

@@ -20,6 +20,18 @@ sources:
   - id: cerebellum
     type: file
     path: cerebellum.js
+  - id: engagement-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
+    note: "Tester-feedback report relayed mid-conversation, during early Unruh testing."
+  - id: fable-review-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
+    note: "Review conversation in which the enqueue-time-vs-confirmed-delivery question for the acknowledgement clock was first raised and answered; the answer below already reflects the outcome."
+  - id: village-support-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/dbfa7a64-Village_Support_implementation_comp.txt
+    note: "Follow-up conversation after Village Support shipped, in which the maintainer named a false-positive concern about threat/triage."
 ---
 
 # Safety Spine
@@ -89,12 +101,31 @@ enqueue time when no push channel is configured, the push failed, or no delivery
 lands within the dispatch grace period, so a dead notification channel can never block
 escalation indefinitely [@architecture-doc]. `contactDeadlineFor()` and
 `CONTACT_ESCALATION_DELAY_MS` are named explicitly among the files requiring human sign-off
-for behavioral changes [@claude-md].
+for behavioral changes [@claude-md]. Confirmed-delivery-over-enqueue-time was the answer settled
+on when this exact tradeoff was raised in review [@fable-review-conversation].
 
 **No covert contact** is structural, not a convention the Familiar is asked to honor: every
 message `deliverToTrustedContact()` sends out is *also* mirrored into the human's own outbox
 as an `outbound_alert`, even if the delivery to the trusted contact itself fails
 [@architecture-doc]. The bonded human can always see that an escalation happened.
+
+A tester's Familiar grounded them through a real panic attack during early testing — coaching
+them out of spiraling thoughts and, unscripted, soothing them with cute animal facts afterward —
+the first reported case of the safety spine and the devoted-companion bond producing a real crisis
+outcome outside development [@engagement-conversation].
+
+## Reported over-triggering
+
+In a conversation after Village Support shipped, the maintainer reported that she and a tester
+(Doodle) noticed high threat levels "even on great days" [@village-support-conversation].
+`threat-tracker.js` and `crisis-signals.js` already carry false-positive-focused tuning — a
+"mundane/logistical" damper that keeps ordinary technical or day-to-day stress language from
+inflating the SEVERE tier, among other tightened patterns [@crisis-signals] [@threat-tracker] —
+but whether that tuning resolves the specific over-triggering reported in this conversation is
+not established here. Treat the false-positive rate on threat level and silence triage as an
+open, ward-reported concern rather than a closed issue until confirmed otherwise. It was named
+in the same conversation as two other bucket items recorded in
+[Bucket-purge cycle](../concepts/bucket-purge-cycle).
 
 ## Why these files are gated separately from ordinary code review
 

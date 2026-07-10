@@ -19,7 +19,10 @@ ponder an interest, syncing a calendar. CLAUDE.md counts ten of them, each boote
 so a clean shutdown can await any in-flight tick [@claude-md] [@architecture-doc]. Loops exist
 because the Familiar is designed to be a companion who can reach out, not a request-response
 tool — see [Proactivity over caution](../decisions/proactivity-over-caution) for why that
-design choice is treated as safety-critical rather than a nice-to-have.
+design choice is treated as safety-critical rather than a nice-to-have. The reminders and
+event-alert loops specifically are the delivery mechanism for
+[temporal assurance](../concepts/temporal-assurance): reaching out unprompted is the whole
+point, not an optional enhancement over a passive calendar view.
 
 ## The shared contract
 
@@ -87,3 +90,9 @@ into the *safety* decision itself.
   to acting rather than waiting.
 - [Engineering conventions](../reference/engineering-conventions) — the graceful-degradation
   and versioning rules that every loop above is written to follow.
+- [Per-feature model routing](../decisions/per-feature-model-routing) — how several of these
+  loops (pondering, triage, warm reach-out, tome graduation) each resolve their own LLM
+  connection independent of the ward's chat connection.
+- [Local process over VM/Docker sandboxing](../decisions/local-process-over-vm-sandboxing) — why
+  these loops all run inside one continuously-running Node process rather than a separate
+  always-on listener waking heavier components lazily.

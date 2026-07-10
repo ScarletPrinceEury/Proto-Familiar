@@ -170,6 +170,33 @@ place either time macro is resolved. See
 [Elapsed-time macros read stored history, not Date.now()](../decisions/time-macros) for why
 `{{elapsedTime}}` and `{{timeSinceLastSession}}` each anchor their gap differently.
 
+## A throw partway through `init()` silently disables every later listener
+
+`public/app.js`'s `init()` wires up every UI control in one long top-to-bottom function: settings
+fields, chat buttons, the prompt inspector, the logs modal, the topic system, the tomes modal, and
+more, each via `$('some-btn').addEventListener('click', someHandler)` [@app-js]. `addEventListener`
+resolves its handler argument at the moment that line executes, not when the enclosing function was
+defined. If a handler name referenced on an earlier line does not exist yet, the browser throws an
+uncaught `ReferenceError` right there, and `init()` — like any uncaught top-level throw in
+JavaScript — stops executing immediately. Every `addEventListener` call still lower in the function
+body never runs, so every button wired below the throw looks identical to a working button (it
+renders, it takes hover/click states) but does nothing, with no error tied to the button the user
+actually clicked.
+
+This exact shape broke the Tomes modal in one incident: `init()` referenced `openPromptInspector`
+and `closePromptInspector` on the prompt-inspector wiring lines, before either function was defined
+anywhere in the file, well above the `tomes-btn` listener later in the same function [@app-js]. The
+console showed `Uncaught ReferenceError: openPromptInspector is not defined` at the prompt-inspector
+line; every listener registered after it, including Tomes, Logs, the topic system, import buttons,
+the theme toggle, and the reveal buttons, was never attached. Both functions are now defined
+earlier in the file, so this specific occurrence is fixed [@app-js], but the failure shape recurs
+any time a new wiring block is added to `init()` referencing a handler that does not exist yet.
+
+The diagnostic move that finds this class of bug fastest: when any button in the app does nothing,
+open the browser console before touching the reported button, even when the console error looks
+unrelated to what the user described. A single early throw in `init()` is a more common cause of
+"several unrelated buttons stopped working" than a defect in each button individually.
+
 ## Safety-critical sign-off
 
 Behavioral changes (not relocations, comments, or renames) to `crisis-signals.js`,

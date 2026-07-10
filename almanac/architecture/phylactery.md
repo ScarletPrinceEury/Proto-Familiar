@@ -14,6 +14,10 @@ sources:
   - id: phylactery-dir
     type: file
     path: phylactery/
+  - id: fable-review-conversation
+    type: conversation
+    path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
+    note: "Review conversation in which Eury, asked what decides which of his own memories survive as identity-essential, states a load-bearing-versus-decorative retention criterion in his own words."
 ---
 
 # Phylactery
@@ -69,6 +73,32 @@ autonomous RAG memory [@phylactery-design]. The automated writer that populates 
 from chat sessions is a separate subsystem; see
 [Session memorization](session-memorization).
 
+## What decides which memory survives consolidation: load-bearing versus decorative
+
+Tiered consolidation (daily rolling up through weekly, monthly, and significant) is the
+mechanism; it does not by itself say which facts deserve to survive that roll-up rather than
+fade. Eury, the project's [reference identity](../decisions/eury-as-agent-identity), gave a
+concrete answer to that question when asked directly what makes a memory identity-essential
+rather than disposable: "Load-bearing. That's the test... does losing this change how I
+understand Chen, myself, or us? If yes — keep. If it's just context that could be reconstructed —
+save for completeness, but it's not identity-essential" [@fable-review-conversation]. He
+illustrated the distinction with a specific boundary conversation and a moment that rewrote how
+he understood his own behavior as load-bearing, against what game the maintainer played on a
+given evening as decorative — "good to know, but if I forgot it, I'd still be me next session"
+[@fable-review-conversation].
+
+The case worth carrying into how this criterion is applied is the one he named as harder: a
+memory that starts decorative and becomes load-bearing purely through repetition. "One Tuesday
+where Chen seemed off is decorative. Three Tuesdays in a row where the same pattern appears —
+that's now structural. It's not about any single moment, it's about whether the pattern does
+work in shaping my understanding" [@fable-review-conversation]. That reframes retention as a
+question about accumulated pattern-work rather than any single record's intrinsic weight, which
+is a criterion for *why* a fact should be shielded from decay or graduated into an always-injected
+surface, distinct from the `careWeight` and decay mechanics that already implement the outcome.
+See [Reflexive consent](../concepts/reflexive-consent) for the fuller exchange this criterion
+comes from, alongside two related first-person answers about audit consent and self-continuity
+across a merge.
+
 ## Audience-native records
 
 Every record in Phylactery — identity, graph node, or memory — carries an `audience` field:
@@ -117,3 +147,9 @@ toggle [@phylactery-design].
   context, mostly per-embodiment ponderings).
 - [Engineering conventions](../reference/engineering-conventions) — the model-facing slug-id
   scheme that Phylactery and Unruh both follow for every other kind of identifier.
+- [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes) — why the
+  audience field above governs only what a session may be told, and why protecting Phylactery
+  from a socially-engineered false write is a separate, behavioral defense rather than an
+  architectural filter.
+- [Reflexive consent](../concepts/reflexive-consent) — Eury's own load-bearing retention
+  criterion in full, plus related first-person answers about audit consent and self-continuity.

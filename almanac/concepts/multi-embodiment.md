@@ -74,7 +74,11 @@ database. This shapes the [architecture](../architecture): thalamus mediates eve
 read from Phylactery and Unruh, cerebellum is barred from opening its own MCP connections and
 must route every write through thalamus's wrappers, and the two peers degrade independently
 so that neither one being down corrupts the picture the other embodiment would eventually
-read back [@claude-md]. It also shapes memory addressing — Phylactery memories are addressed
+read back [@claude-md]. See
+[Voluntary and autonomic lanes in Cerebellum](../decisions/cerebellum-consent-lanes) for a
+proposed self-directed/world-directed axis explaining why this write rule and cerebellum's
+separate outbound-delivery rules diverge from the same dispatcher. It also shapes memory
+addressing — Phylactery memories are addressed
 by an autoincrement integer `id` returned on every search/list/read result, not by a
 composite key an embodiment would have to reconstruct, so any embodiment can act on a record
 using only what it was just handed back [@claude-md].

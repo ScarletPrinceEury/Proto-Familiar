@@ -39,7 +39,19 @@ topics:
     title: Multi-Embodiment
     description: One persistent entity accessed through several interfaces, synced through a canonical store
     parents: [concepts]
+  - slug: armature
+    title: Armature
+    description: The base model's trained pull toward passive, agreeable assistant behavior, and the project's fight against it
+    parents: [concepts]
+  - slug: temporal-assurance
+    title: Temporal Assurance
+    description: Proactive, unprompted awareness of upcoming events and their prep requirements, delivered wherever the ward already is
+    parents: [concepts]
   - slug: decisions
     title: Decisions
     description: Recorded architectural and operational choices
     parents: []
+  - slug: development-rhythm
+    title: Development Rhythm
+    description: How the sole maintainer actually paces and triages feature and bug work
+    parents: [concepts]
