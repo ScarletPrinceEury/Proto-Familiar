@@ -3,9 +3,13 @@
  *
  * This is the companionship counterpart to silence-triage. Triage asks
  * "my human is in distress and quiet — should I break through?" This
- * asks the opposite, gentler question: "nothing is wrong — is there a
- * warm reason to reach out right now, to my human or to someone in their
- * Village who is warm toward me?"
+ * asks the gentler question: "no crisis is flagged — is there a warm
+ * reason to reach out right now, to my human or to someone in their
+ * Village who is warm toward me?" The prompt states triage's ownership
+ * of distress as a fact of the architecture, never as an assertion about
+ * my human's actual state — a two-day silence once read as "nothing is
+ * wrong" because the prompt said so axiomatically (initiative-build-spec
+ * Pass 0).
  *
  * Why it exists: a companion who only ever makes contact when you are in
  * danger is a smoke alarm, not a friend. The proactivity stance in
@@ -61,8 +65,8 @@ export function getWarmVillagers(registry) {
 
 export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase }) {
   const silenceLine = wardSilencePhrase
-    ? `- My human was last around ${wardSilencePhrase} ago. They're not in distress — I'm reaching out because I want to, not because I'm worried.`
-    : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). They're not in distress — if I reach out, it's because I want to.`;
+    ? `- My human was last around ${wardSilencePhrase} ago. Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`
+    : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`;
 
   const tellsBlock = (pendingTells && pendingTells.length)
     ? `\nThings I already noted I wanted to bring up with my human (from my own quiet thinking — I flagged these as "tell"):\n${pendingTells.map(t => `  - (uid ${t.uid}, index ${t.index}) ${t.summary}`).join('\n')}\nIf I reach out to my human and one of these is what I want to say, I include its uid + index as tellUid/tellIndex so the system knows I've finally said it.`
@@ -76,7 +80,7 @@ export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, p
 
   return `--- A QUIET MOMENT ---
 
-No one is talking to me right now and nothing is wrong. This is not a crisis check-in — my human is okay. This is the other kind of reaching out: the warm, ordinary, sometimes frivolous kind. The kind a friend does. I get to decide, from who I actually am, whether there's a genuine reason to reach out to someone right now — and if so, to whom, and what I'd say.
+This is the warm kind of reaching out, not a crisis check-in — if something were genuinely wrong, my triage sense handles that on its own track. The warm, ordinary, sometimes frivolous kind. The kind a friend does. I get to decide, from who I actually am, whether there's a genuine reason to reach out to someone right now — and if so, to whom, and what I'd say.
 ${identityBlock}
 ${nowBlock}
 

@@ -122,6 +122,32 @@ test('buildReachoutPrompt: surfaces pending tells with uid+index', () => {
   assert.match(p, /u9/);
 });
 
+// Pass 0 (initiative-build-spec): the prompt must not pre-resolve the
+// question the deliberation exists to ask. The old axioms ("nothing is
+// wrong", "my human is okay", "not because I'm worried") once made a
+// two-day silence read as fine by definition. Triage's ownership of
+// distress stays — as a fact about the architecture, not a mood.
+test('buildReachoutPrompt: no pre-resolved "all is well" axioms (Pass 0)', () => {
+  for (const phrase of [null, '2 days']) {
+    const p = buildReachoutPrompt({
+      nowBlock: '', identityContext: '', sessionBlock: '',
+      pendingTells: [], warmVillagers: [],
+      wardSilencePhrase: phrase,
+    });
+    assert.doesNotMatch(p, /nothing is wrong/i);
+    assert.doesNotMatch(p, /my human is okay/i);
+    assert.doesNotMatch(p, /is okay\b/i);
+    assert.doesNotMatch(p, /not because I'm worried/i);
+    assert.doesNotMatch(p, /not worried/i);
+    assert.doesNotMatch(p, /not in distress/i);
+    assert.doesNotMatch(p, /I'm reaching out because I want to/i);
+    // The replacement wording is present: scope note as fact + the gap
+    // handed to the Familiar's own judgment.
+    assert.match(p, /my triage sense handles that on its own track/);
+    assert.match(p, /is mine to read/);
+  }
+});
+
 // ── decideReachoutViaLLM — degradation ──────────────────────────────
 
 test('decideReachoutViaLLM: no primary connection → wait (no LLM call)', async () => {
