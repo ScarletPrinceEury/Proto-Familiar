@@ -14,7 +14,7 @@ sources:
   - id: debug-session
     type: conversation
     path: scratchpad/session-memorization-debug.md
-    note: "Development session that diagnosed the pre-fix memorizeSessionToTome() bug and recorded the user's rationale at each design decision."
+    note: "Development session that diagnosed the pre-fix memorizeSessionToTome() bug and recorded the user's rationale at each design decision. NOTE (0.8.55 audit): this scratchpad file is not in the repository — citation preserved for provenance, but the source itself is no longer retrievable."
 ---
 
 # Session Memorization: Durable Server-Side Queue

@@ -136,7 +136,7 @@ ponderings injection, care-check framing) and as background loops
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4+V5+V6) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); V6: relayToDiscord() REST send (DM-open or channel post) backing the relay_message tool; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
-├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
+├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer (span-surgical, conservative false-positive budget; escape-tolerant bracket markers). WIRED (0.8.57) at the two genuinely-external inbound boundaries: web text (websearch.js — search titles/snippets, look_up reference text, read_webpage extraction; URLs deliberately untouched) and Village communications (discord-gateway.js inboundContent() — villager/stranger text only). The ward's OWN words are never sanitized on any path (threat scoring must read them raw; a redacted distress line could read as a jailbreak to triage), and no OUTBOUND path (replies, relay_message, relay_to_ward, trusted-contact delivery) passes through it — the guard is inbound-third-party-only, which is what keeps relay and triage structurally unblockable by it. NOT applied to Phylactery/Unruh recall (first-party stores; villager-written memories carry provenance labels instead) or gcal event titles (the ward's own calendar)
 ├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
@@ -1333,12 +1333,14 @@ thalamus.enrich(userMessage, { liveTurn: true })
    ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
    └── getThreat()           ──► local file read          ┘  - [Temporal Context]
        │
-       │  injection-guard.js is available but NOT applied to Phylactery /
-       │  Unruh content — those are trusted first-party systems. The guard
-       │  is reserved for genuinely external ingestion points (web search
-       │  results, Discord / channel-adapter messages) that do not yet exist.
-       │  When those are built, sanitizeExternal() goes on the inbound
-       │  boundary of each adapter, not on the recall path of own memory.
+       │  injection-guard.js is NOT applied to Phylactery / Unruh content —
+       │  those are trusted first-party systems. The guard runs at the
+       │  genuinely external ingestion points (wired 0.8.57, after the audit
+       │  found this paragraph's "when those are built" step had been skipped
+       │  when they WERE built): web text in websearch.js and non-ward
+       │  Discord text in discord-gateway.js inboundContent(). It sits on the
+       │  inbound boundary of each adapter, never on the recall path of own
+       │  memory, never on the ward's own words, never on outbound delivery.
        │
        ▼
 Prompt assembly (see "Prompt assembly" below)

@@ -24,6 +24,23 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 | [Troubleshooting](troubleshooting.md) | Common failure modes (Phylactery down, modal storage, edge hit-test, snapshot recovery) and what to do about each |
 | [Project Vision](project-vision.md) | Design principles, goals, and the road to the full Familiar |
 | [Future Features](future-features.md) | Scratch pad for ideas pending design or implementation |
+| [Known Issues](known-issues.md) | Current known defects and limitations |
+| [Developer Reference](developer-reference.md) | Internals reference for contributors |
+| [Threat Detection](threat-detection.md) | The crisis-signal detector and threat tiers |
+
+### Design documents & build specs
+
+Deeper design rationale and the implementation specs features were built from
+(roughly newest first): [Temporal Bridges](temporal-bridges-build-spec.md) ·
+[Browser](browser-build-spec.md) · [Voice](voice-build-spec.md) ·
+[Vision](vision-build-spec.md) · [Stewardship](stewardship-build-spec.md) ·
+[Consequence Graph](consequence-graph-build-spec.md) (+ [priors](consequence-priors.md)) ·
+[Google Calendar](google-integration-build-spec.md) · [Tome Graduation](tome-graduation-build-spec.md) ·
+[Tool Surfacing](tool-surfacing-build-spec.md) · [Discord Tools](discord-tools-build-spec.md) ·
+[Day Anchoring](day-anchoring-build-spec.md) · [Audience Gating](audience-gating-build-spec.md) ·
+[Phylactery design](phylactery-design.md) / [build spec](phylactery-build-spec.md) ·
+[Web Search](websearch-build-spec.md) ([modular](websearch-modular-build-spec.md), [setup](websearch-setup.md)) ·
+[Caring Spine](caring-spine-build-plan.md) · [Proactive Care](proactive-care-design.md)
 
 ---
 
