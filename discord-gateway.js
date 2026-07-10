@@ -51,6 +51,7 @@ import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { sanitizeExternal } from './injection-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -647,6 +648,32 @@ export function resolveMentions(content, { mentions = [], botUserId = null, char
   return text.replace(/<@!?(\d+)>/g, (_m, id) => `@${nameFor(id)}`);
 }
 
+/**
+ * Inbound Discord text made prompt-safe in ONE place: mention tokens
+ * resolved to names, capped, and — for anyone who is NOT my human — passed
+ * through the injection guard so a villager or stranger can't smuggle
+ * fake role markers / override phrases into my context.
+ *
+ * The guard is surgical (span-level redaction of near-unambiguous
+ * adversarial patterns; everything else byte-identical), so a villager
+ * genuinely relaying distress ("Chen needs help right now") passes
+ * untouched — sanitization can never swallow a crisis signal, only the
+ * adversarial span itself. And it is DELIBERATELY skipped for my human:
+ * their words are never altered (threat scoring must read exactly what
+ * they said, and rewriting their distress as "[removed:…]" could make
+ * triage misread genuine crisis as a jailbreak). Outbound text — my own
+ * replies, relays either direction — never goes through this: the guard
+ * is for third-party INBOUND text only, which is what keeps the relay
+ * system and trusted-contact delivery structurally unblockable by it.
+ */
+export function inboundContent(msg, { botUserId, charName, villagers, isWard, speakerName } = {}) {
+  const resolved = resolveMentions(String(msg?.content ?? ''), {
+    mentions: msg?.mentions, botUserId, charName, villagers,
+  }).slice(0, INPUT_CHAR_CAP);
+  if (isWard) return resolved;
+  return sanitizeExternal(resolved, { source: 'discord', context: `discord/${speakerName ?? 'unknown speaker'}` });
+}
+
 /** Names this message is explicitly aimed at, other than me — @-mentions
  *  of other users (people OR other Familiars) plus a reply to someone
  *  else's message. Lets an active-mode Familiar tell "this is between
@@ -1182,11 +1209,13 @@ async function observeMessage(gw, msg, decision) {
     });
   }
   const audienceTag = audienceTagFor(audienceInputFor(decision, session.participants), registry);
-  // Resolve mention tokens here too so what I read back later is legible.
-  const content = resolveMentions(String(msg.content), {
-    mentions: msg.mentions, botUserId: gw.botUserId,
+  // Resolve mention tokens here too so what I read back later is legible;
+  // non-ward text passes the injection guard (see inboundContent).
+  const content = inboundContent(msg, {
+    botUserId: gw.botUserId,
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
-  }).slice(0, INPUT_CHAR_CAP);
+    isWard: decision.isWard, speakerName: decision.speakerName,
+  });
   const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
@@ -1244,10 +1273,13 @@ async function handleTurn(gw, msg, decision) {
   // Resolve <@id> mention tokens to @Name BEFORE truncation so the room
   // stays legible to me — I can tell who each message is aimed at instead
   // of seeing raw snowflakes. (registry resolved at the top of handleTurn.)
-  const content  = resolveMentions(String(msg.content), {
-    mentions: msg.mentions, botUserId: gw.botUserId,
+  // Non-ward text passes the injection guard; my human's words stay raw —
+  // threat scoring below must read exactly what they said (inboundContent).
+  const content  = inboundContent(msg, {
+    botUserId: gw.botUserId,
     charName: settings?.charName, villagers: registry.villagers,
-  }).slice(0, INPUT_CHAR_CAP);
+    isWard: decision.isWard, speakerName: decision.speakerName,
+  });
   const nowIso   = new Date().toISOString();
 
   // Ward speech counts as ward activity wherever it happens — the

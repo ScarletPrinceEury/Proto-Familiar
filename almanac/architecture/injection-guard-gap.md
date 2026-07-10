@@ -18,8 +18,28 @@ sources:
 
 # Injection Guard: Documented but Never Wired
 
-**Status: open defect, found in the 0.8.55 codebase audit. Flagged to the maintainer; wiring
-it is a design decision that has not been made yet.**
+**Status: RESOLVED (0.8.57).** After reviewing this finding, the maintainer directed wiring at
+two boundaries — web reading (the guard's original intent) and Village communications — with
+two hard constraints: it must never block the relay system, and it must never block threat
+triage in a group setting. What shipped:
+
+- **Web:** `websearch.js` sanitizes search titles/snippets, `look_up` reference text, and
+  `read_webpage` extractions at the module's return boundaries (URLs deliberately untouched so
+  the read_webpage follow-up keeps working). The guard also became escape-tolerant for bracket
+  markers, because turndown renders `[SYSTEM]` as `\[SYSTEM\]` at exactly this boundary.
+- **Village:** `discord-gateway.js`'s new `inboundContent()` helper (both ingestion sites —
+  spoken turns and observed messages) sanitizes villager/stranger text only. The constraints
+  are structural, not behavioral: the ward's own words never pass through the guard on any
+  path (threat scoring reads them raw; a redacted distress line could read as a jailbreak to
+  triage), no outbound path (replies, `relay_message`, `relay_to_ward`, trusted-contact
+  delivery) passes through it, and the guard's span-surgical redaction means a villager
+  genuinely relaying distress passes byte-identical. Each constraint is pinned by a test.
+
+Still deliberately unwired: Phylactery/Unruh recall (first-party stores; villager-written
+memories carry provenance labels instead) and gcal event titles (the ward's own calendar).
+The history below is preserved as the record of how the gap happened.
+
+## The original finding (0.8.55 audit)
 
 `injection-guard.js` exports a real, tested pattern scanner and sanitizer
 (`scanForInjection`, `sanitizeExternal`) with a full unit-test file covering instruction-
