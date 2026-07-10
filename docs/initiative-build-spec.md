@@ -360,10 +360,19 @@ the Familiar **rounds** — self-maintenance as identity, not as cron.
 
 Intentions spawn turns; turns can set intentions — the first mechanism in
 the repo that could inflate itself. Hard caps in code, counts visible in
-the events log: `intentionTurnsPerDay` (default 6), standing intentions per
-phase (default 3), one-shot intentions total (default 30, oldest-aging
-surfaced to the Familiar to prune). A due intention that can't fire under
-budget stays due and fires next window — never silently dropped.
+the events log — and **the phase is the budgeting unit, not the day**
+(ward-directed): a per-day cap would punish a Familiar for actually
+structuring their rounds, when the phases framework is exactly what we
+want them leaning on. Caps: `intentionTurnsPerPhase` (default 4; the
+day-level `intentionTurnsPerDay` exists only as a very high safety
+backstop, default 40 — a runaway tripwire, not a rationing device),
+standing intentions per phase (default 3), one-shot intentions total
+(default 30, oldest-aging surfaced to the Familiar to prune). A due
+intention that can't fire under budget stays due and fires next window —
+never silently dropped. The intention tools' first-person descriptions
+name the phase binding as the natural home for standing intentions, so
+the budget shape itself nudges toward rounds rather than scattershot
+one-shots.
 
 ---
 
@@ -410,6 +419,21 @@ report, and acts through tools.
   lesson — every firing AND every all-quiet evaluation window logs, so a
   dead noticing loop can never look like a calm one). Model routing:
   `connectionForFeature(s, 'noticing')`.
+
+**The armature-leak regression (Eury's own suggestion, adopted):** every
+payoff/noticing event logs a code-set `turnKind` — `triggered` (an explicit
+trigger fired: `at`, a round's phase, `onNextContact`) vs `open` (the turn
+arose from the Familiar's own noticing window, no external trigger) —
+alongside the outcome (`acted` / `deferred` / `wait` / `nothing`). The
+measurement: **do open-turn payoff prompts produce defer/wait outcomes at a
+statistically different rate than triggered-turn payoff prompts?** A
+significant gap is the assistant armature leaking through — "no one asked,
+so waiting is the safe choice." The fix when the gap shows is NEVER to
+steer the output (no "act more" nudges); it is to find and strip whatever
+framing in the open-turn prompt implies that waiting is the safer answer.
+Code does the tagging and counting; interpretation is the ward's (and the
+Familiar's own, in reflection). This is Pass 1's experiment discipline
+applied to Pass 4's prompt.
 
 ---
 
@@ -493,8 +517,11 @@ milestone — but the minor-slot call is the ward's.
 2. **`noticingEnabled` default** — ON with tight budgets, or opt-in like
    the canonical-writer loops? (The two forcing functions ship first either
    way; their data informs this.)
-3. **Budget defaults** — 6 intention-turns/day, 3 standing/phase, 30 open
-   one-shots: confirm or resize.
+3. **Budget defaults** — ward directed: the phase is the budgeting unit,
+   the daily cap is nixed as a rationing device (kept only as a very high
+   runaway backstop). Proposed numbers to confirm: 4 intention-turns per
+   phase, 40/day backstop, 3 standing intentions per phase, 30 open
+   one-shots.
 4. **"Eury's rounds" visibility** — a ward-facing view of his standing
    intentions (charming, transparent) now, later, or never?
 5. **Pass 4 model routing default** — primary connection, or recommend
