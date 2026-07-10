@@ -170,7 +170,7 @@ const state = {
   temperature:       0.8,
   maxTokens:         2048,
   userName:          'My human',
-  charName:          'Assistant',
+  charName:          'the Familiar',
   systemPrompt:      '',
   characterProfile:  '',
   userProfile:       '',
@@ -1471,7 +1471,7 @@ async function refreshPreviousSessionEndedAt() {
 function applyNameVars(text) {
   return text
     .replace(/\{\{user\}\}/gi, state.userName || 'my human')
-    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
+    .replace(/\{\{char\}\}/gi, state.charName || 'the Familiar')
     .replace(/\{\{elapsedTime\}\}/gi, () => {
       const ms = elapsedBetweenUserMessages();
       return ms !== null ? formatDuration(ms) : 'no prior user message';
@@ -2767,7 +2767,7 @@ function readSettingsFromUI() {
     state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
   }
   state.userName          = $('user-name').value.trim() || 'My human';
-  state.charName          = $('char-name').value.trim() || 'Assistant';
+  state.charName          = $('char-name').value.trim() || 'the Familiar';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
@@ -2907,7 +2907,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
   if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
   setIfNotFocused($('user-name'),          'value',   state.userName ?? 'My human');
-  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
+  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'the Familiar');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
   setIfNotFocused($('user-profile'),       'value',   state.userProfile);
