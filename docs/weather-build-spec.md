@@ -56,10 +56,12 @@ margin, and better than OpenWeatherMap for this use:
 - A separate **keyless geocoding API** (`geocoding-api.open-meteo.com`) for
   the once-at-entry city/ZIP → lat/lon step.
 
-**Also behind the seam (optional alternates, `weather-providers.js` mirroring
+**Also behind the seam (`weather-providers.js` mirroring
 `websearch-providers.js`):**
 - **MET Norway (api.met.no / Yr)** — also keyless (requires only an honest
-  `User-Agent`), excellent quality, a good second keyless option.
+  `User-Agent`), excellent quality. **WARD-DECIDED: ships in v1 as the
+  automatic fallback** — an Open-Meteo failure falls through to MET Norway
+  before giving up on the line.
 - **OpenWeatherMap** — needs a key + signup even for the free tier (1k
   calls/day). Supported as an adapter for wards who already have a key, never
   required.
@@ -137,11 +139,24 @@ exact-machine-values rule; the model never computes a temperature or a time).
 No location name, ever. Missing/stale cache → no line (absence as absence).
 
 **5.2 The day at will — `weather_today` tool (CORE-adjacent read).**
-Returns the whole day's code-formatted arc for the current location (or
-another *label*): morning/afternoon/evening summary + notable hours (rain
-windows, wind, temperature swing). First-person description: *"I check the
-sky over my human's day — the full forecast where they are, or at another of
-their places, when we're deciding whether and when to go out."*
+Returns the code-formatted arc for **today AND tomorrow** (WARD-DECIDED —
+evening planning looks ahead) for the current location (or another *label*):
+morning/afternoon/evening summary + notable hours (rain windows, wind,
+temperature swing). First-person description: *"I check the sky over my
+human's day — today and tomorrow, where they are or at another of their
+places — when we're deciding whether and when to go out."*
+
+**5.2b Per-item weather — the outside join (WARD-DECIDED).**
+The "Outside marker" already exists: `obstacle_tags: ["outside"]`, which the
+Familiar already sets on events/tasks. Weather joins onto it: an
+outside-tagged schedule item gets **its occurrence-time forecast** attached
+wherever the item is deliberated about (the readiness note in 5.4, the
+briefing legend line, `weather_today` when asked about that day). For an item
+beyond the cached ~48h, the fetch half pulls that item's date **on demand**
+(Open-Meteo serves 16 days out; one extra request, gated to items that are
+actually outside-tagged and actually asked about/entering readiness). No new
+marker, no new model judgment — the tag the Familiar already applies is the
+signal, and code does the join.
 
 **5.3 Tool surfacing.** A `weather` module in tool-surfacing:
 - text triggers: leaving-the-house / outdoor language (`outside|go out|
@@ -162,24 +177,50 @@ their places, when we're deciding whether and when to go out."*
   "across town in the rain → more lead", riding Pass 5's `schedule_set_lead`).
 - **Noticing:** `weather_today` joins the noticing toolset (read-only, cheap);
   a due outside-tagged intention deliberates with the sky in reach.
+- **Severe-weather alert (WARD-DECIDED: proactive, in v1).** When the cached
+  forecast turns adverse (pure code thresholds: storm/heavy-rain WMO codes,
+  temperature extremes) within lead range of an `outside`-tagged item, the
+  event-alert pass emits a code-built "weather heads-up" outbox ping alongside
+  the existing coming-up alert machinery (same dedup discipline — one ping per
+  occurrence, `payload`-stamped like `alerts`). Weather alone (no outside item
+  affected) stays passive context.
 - Deliberately **not** a threat/triage input, not a new wake condition in v1
-  (weather alone never wakes the noticing turn — it flavours turns that were
-  already happening; a "storm warning before an outside event" *alert* is a
-  ward decision below).
+  (weather never wakes the noticing turn — it flavours turns that were
+  already happening).
 
-## 6. Ward decisions (open)
+**5.5 Qualitative translation — code speaks the numbers (ward-directed).**
+Temperatures and precipitation are like times: the model needs the *meaning*
+alongside the value, and code must supply it (the exact-machine-values rule —
+`plainInterval` is the precedent). Every rendered value carries a code-derived
+qualitative band: `34°C (very hot)`, `2mm/h (light rain)`, `55km/h gusts
+(strong wind)`. Fixed sensible bands in code (`weather-format.js`), not model
+judgment; the model reads the interpretation, never computes it.
 
-1. **Severe-weather alert ping?** Should a storm/heat warning within N hours
-   of an `outside` event produce a proactive outbox alert (riding the event-
-   alert pass), or stay passive context until v2?
-2. **Forecast horizon for `weather_today`** — today only (spec default), or
-   include tomorrow when evening planning looks ahead?
-3. **Second keyless provider** — ship the MET Norway adapter in v1 as an
-   automatic fallback, or Open-Meteo only until it ever actually fails?
-4. **Location labels in group rooms** — the current-location *label* is
-   ward-private by default (a villager-visible "my human is at work" is a
-   disclosure). Confirm: weather line + labels render on ward-private
-   surfaces only, gated turns get nothing.
+**5.6 The vague tier — gated audiences (WARD-DECIDED).**
+On non-ward-private surfaces the weather renders **dumbed down**: qualitative
+only, past/ongoing phrasing, no numbers, no units, no times, no labels —
+*"it rained recently"*, *"today was hot"* — because precise values + units are
+a soft geolocation ("x°C, so metric, so…"). One pure formatter
+(`formatWeatherVague`) is the gate, applied structurally on every gated turn
+(fail-closed: if the audience is unclear, vague or nothing). The ward-private
+surfaces keep the full code-formatted detail.
+
+## 6. Ward decisions (ALL RESOLVED)
+
+1. **Severe-weather alert ping** → **proactive, v1** (§5.4): adverse forecast
+   within lead of an `outside`-tagged item rides the event-alert pass.
+2. **`weather_today` horizon** → **today + tomorrow** (§5.2); plus the
+   outside join (§5.2b): outside-tagged items carry their occurrence-time
+   forecast, fetched on demand for dates beyond the cache.
+3. **Second provider** → **MET Norway ships in v1** as the automatic
+   keyless fallback (§2).
+4. **Gated audiences** → **the vague tier** (§5.6): qualitative-only weather
+   ("it rained recently", "today was hot"), no numbers/units/times/labels —
+   fail-closed to vague-or-nothing. Ward-private keeps full detail.
+
+Plus the ward-directed translation principle (§5.5): every value renders with
+a code-derived qualitative band — `34°C (very hot)` — the plainInterval
+precedent applied to weather.
 
 ## 7. Build order & sizing
 
