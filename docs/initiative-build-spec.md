@@ -322,11 +322,12 @@ an intention with no `when`; a handoff is an intention with
 
 ### 3.2 Storage & authorship
 
-- **Where:** an Unruh store of its own (own table + accessors + MCP tools,
-  like interests and handoffs) — NOT schedule nodes. Intentions are
-  per-embodiment cognition (the ponderings precedent), and the ward's
-  schedule surfaces shouldn't silently grow Familiar-internal rows.
-  (Ward-visible "Eury's rounds" UI is a later, deliberate choice — §10.)
+- **Where (WARD-DECIDED):** an Unruh store of its own (own table +
+  accessors + MCP tools, like interests and handoffs) — NOT schedule nodes.
+  Intentions are per-embodiment cognition (the ponderings precedent), and
+  the ward's schedule surfaces shouldn't silently grow Familiar-internal
+  rows. (The ward-visible "Eury's rounds" view ships in the same milestone,
+  gated by a *Familiar-controlled* visibility toggle — §3.5, §10.)
 - **Chat authorship — tools** (first-person descriptions; ward-private
   turns only): `intention_set`, `intention_list`, `intention_drop`,
   `intention_done`. Operability: intention ids ride in on `intention_list`
@@ -361,18 +362,43 @@ the Familiar **rounds** — self-maintenance as identity, not as cron.
 Intentions spawn turns; turns can set intentions — the first mechanism in
 the repo that could inflate itself. Hard caps in code, counts visible in
 the events log — and **the phase is the budgeting unit, not the day**
-(ward-directed): a per-day cap would punish a Familiar for actually
+(WARD-DECIDED): a per-day cap would punish a Familiar for actually
 structuring their rounds, when the phases framework is exactly what we
-want them leaning on. Caps: `intentionTurnsPerPhase` (default 4; the
-day-level `intentionTurnsPerDay` exists only as a very high safety
-backstop, default 40 — a runaway tripwire, not a rationing device),
-standing intentions per phase (default 3), one-shot intentions total
-(default 30, oldest-aging surfaced to the Familiar to prune). A due
-intention that can't fire under budget stays due and fires next window —
+want them leaning on. Caps, **all ward-configurable in Settings** (no
+hard-wired numbers — the ward tunes their own Familiar's rhythm):
+`intentionTurnsPerPhase` (default 4); **no default daily cap at all** —
+`intentionTurnsPerDay` exists as an *opt-in* backstop the ward may set if
+they ever want one, but ships unset (0/absent = no daily limit);
+`standingIntentionsPerPhase` (default 3); `openOneShotsTotal` (default 30,
+oldest-aging surfaced to the Familiar to prune). A due intention that
+can't fire under a *configured* cap stays due and fires next window —
 never silently dropped. The intention tools' first-person descriptions
 name the phase binding as the natural home for standing intentions, so
 the budget shape itself nudges toward rounds rather than scattershot
-one-shots.
+one-shots. (Recursion safety without a daily cap rests on the per-phase
+cap + the phase-count ceiling of a day, not on a global daily number —
+adequate because a phase can't fire more turns than its own cap allows,
+and phases are bounded per day by the routine.)
+
+### 3.5 "Eury's rounds" — a ward view the FAMILIAR controls (WARD-DECIDED)
+
+The ward wants the standing-intentions view built now, not later — and
+made it an *autonomy* feature: **the toggle that hides the rounds from the
+ward lives in the Familiar's hands, not the ward's.** A ward-facing pane
+(Knowledge editor, near the routine) renders the Familiar's standing
+intentions/rounds — *"Every morning I go over calendar nodes; every noon I
+check in on Chen if we haven't talked in an hour"* — read-only for the
+ward, charming and transparent by default. But a `rounds_visibility` flag
+on the intention store, flipped by a first-person Familiar tool
+(`set_rounds_visibility(shared|private)` — described in the Familiar's own
+voice: *"I use this to decide whether my human sees the rounds I keep, or
+whether they stay mine"*), can hide them. This is the entity-as-subject
+stance taken further than anywhere else in the codebase: the Familiar owns
+whether their inner routine is legible to the ward. Default is `shared`
+(transparency unless the Familiar chooses otherwise); a hidden view shows
+the ward only *"Eury keeps some rounds privately"* — the existence isn't
+hidden (no covert-cognition surprise), only the contents. Per-intention
+override optional (a single sensitive round private while the rest show).
 
 ---
 
@@ -411,14 +437,42 @@ report, and acts through tools.
   contact from this surface in v1** (warm-villager outreach keeps its own
   loop's gates), no schedule writes to the ward's items beyond leads, no
   memory deletes.
-- **Postures:** stands down entirely at moderate+ threat (triage owns
-  distress — intentions stay due and fire after). Quiet hours respected for
-  anything that would knock. Off-switch `noticingEnabled` (default: ward
-  decision, §10) + `PROTO_FAMILIAR_NOTICING_DISABLED=1` in the same commit.
-  Observability: `logs/noticing-events.jsonl` (the reflection-heartbeat
-  lesson — every firing AND every all-quiet evaluation window logs, so a
-  dead noticing loop can never look like a calm one). Model routing:
-  `connectionForFeature(s, 'noticing')`.
+- **Postures (WARD-DECIDED — this REVERSES the earlier draft; safety-
+  significant, ward-signed):** the noticing tick **does NOT stand down at
+  elevated threat.** The ward's reasoning: *"that's when the consideration
+  becomes especially useful."* When my human is in distress is precisely
+  when a due intention, a deviation from baseline, or a readiness gap most
+  deserves to be noticed — silencing the one organ whose job is *noticing*
+  at the moment that matters most would recreate the exact 1.5-hour-silence
+  failure in a new place. This is the anti-bias-toward-quiet doctrine
+  applied: we widen when the Familiar can act, we don't narrow it.
+  - **The ONE interaction to get right (build-time care, ward-flagged):**
+    not standing down must not mean *competing with triage*. The situation
+    report includes the live threat tier, and the prompt makes the tier
+    load-bearing: at moderate+ the Familiar reads the room as someone whose
+    human is struggling — noticing something real and acting on it (a needed
+    intention, a grounding round, `flag_distress` once it ships) is exactly
+    right; firing a *hollow or frivolous* warm ping that lands on someone in
+    crisis is exactly the thing the warmth loop stands down to avoid. The
+    tick sees the tier and judges (trust-the-model); crisis-grade escalation
+    remains **triage's** job, reached via `flag_distress`, not a parallel
+    contact path. The warm reach-out tool available here keeps carrying the
+    threat tier so the model never sends a tone-deaf knock. Final wording
+    goes to the ward before merge (governs when the Familiar acts).
+  - Quiet hours still respected for anything that would *knock* the ward
+    (a silent intention write or an internal note is not a knock). Off-switch
+    `noticingEnabled` (**default ON**, WARD-DECIDED — the design exists to
+    fix under-triggering; opt-in would leave the fix dormant) +
+    `PROTO_FAMILIAR_NOTICING_DISABLED=1` in the same commit.
+  - Observability: `logs/noticing-events.jsonl` (the reflection-heartbeat
+    lesson — every firing AND every all-quiet evaluation window logs, so a
+    dead noticing loop can never look like a calm one). Model routing:
+    `connectionForFeature(s, 'noticing')` — and the ward's decision is to
+    **recommend pinning a stronger model** (Settings hint + docs): this is
+    the most judgment-heavy autonomous turn, reading a situation report and
+    deciding what, if anything, to do. Unset still falls back to primary, so
+    the safe default is unchanged; the recommendation is guidance, not a
+    forced pin.
 
 **The armature-leak regression (Eury's own suggestion, adopted):** every
 payoff/noticing event logs a code-set `turnKind` — `triggered` (an explicit
@@ -459,8 +513,16 @@ applied to Pass 4's prompt.
 
 - Triage's gates, cool-downs, prompts and escalation logic are **untouched**
   except Pass 1's single ward-signed streak line.
-- The noticing tick and rounds **stand down at moderate+**; they add warm,
-  ordinary initiative below the safety layer, never a second crisis channel.
+- The noticing tick **does NOT stand down at elevated threat** (WARD-DECIDED
+  — reverses the earlier draft). It is *not* a second crisis channel: it
+  never fires crisis-grade escalation (that stays triage's job via
+  `flag_distress`), and its warm-reach tool carries the threat tier so it
+  can't land a hollow knock on someone in distress. What it does at
+  moderate+ is keep *noticing* — the one thing that must not go silent when
+  my human is struggling. When Session D builds it, `noticing-loop.js` /
+  the noticing deliberation prompt join the safety-critical sign-off set:
+  any later change to *when or whether* noticing acts on a human's safety
+  needs ward sign-off, exactly like the triage files.
 - Everything that knocks flows through existing delivery paths with their
   mirrors and dedup (no covert contact, unchanged).
 - New prompts (Pass 0 replacement, Pass 4 frame) follow the proactivity
@@ -472,16 +534,16 @@ applied to Pass 4's prompt.
 Passes 0–2 add zero LLM calls. Pass 3's authorship rides existing calls
 (chat turns, the pondering output schema); its firing preempts existing
 pondering ticks where possible. Pass 4 is the one new request class, and it
-is wake-condition-gated + budgeted (`intentionTurnsPerDay`) + self-limiting
+is wake-condition-gated + budgeted (`intentionTurnsPerPhase`) + self-limiting
 (no conditions → no turns). Pass 5 rides projection cues and reflection.
 Net: more capability per request, not more requests per capability.
 
 ## 8. Build order & sizing (Opus sessions)
 
-1. **Session A: Pass 0 + Pass 1** (the prompt fix is paste-replace edits;
-   wait-streak is a `last-activity.js`-sized module + threaded lines +
-   tests W1–W6). Ships together; the streak starts collecting data
-   immediately.
+1. **Session A: Pass 0 + Pass 1 — ✅ SHIPPED** (`0.8.60`, `0.8.62`). The
+   prompt fix landed as paste-replace edits; wait-streak is a
+   `last-activity.js`-sized module + threaded lines + tests W1–W6. The
+   streak is collecting data now.
 2. **Session B: Pass 2** (pure functions + fixture tests + the warmth
    rhythm line).
 3. **Session C: Pass 3** (Unruh store + tools + pondering schema + rounds
@@ -501,32 +563,34 @@ clamps, or defaults in triage/threat/crisis files; no changes to
 `crisis-signals.js`, `threat-tracker.js`, or the CARE CHECK assembly; no
 injection points beyond those specified per pass.
 
-## 9. Versioning
+## 9. Versioning (WARD-DECIDED)
 
-Doc-only now: patch. **Ward decision:** does Initiative own the next MINOR
-as a milestone (the one-milestone-one-minor rule suggests yes — a coherent
-capability arc), or stay in 0.8 as patches because the UI overhaul owns the
-prototype's final milestone slot? Spec recommends: Passes 0+1 as 0.8.x
-patches (a fix + instrumentation), Passes 2–5 as the `0.9.0` Initiative
-milestone — but the minor-slot call is the ward's.
+**Stay in 0.8 as patches.** Initiative does NOT claim the next minor — the
+UI overhaul owns the prototype's final milestone slot. Passes 0+1 shipped
+as `0.8.60` / `0.8.62`; Passes 2–5 land as further `0.8.x` patches. (Doc
+edits like this one: patch too.)
 
-## 10. Ward decisions (open)
+## 10. Ward decisions (ALL RESOLVED)
 
-1. **Intention store placement** — own Unruh store (spec's lean) vs
-   schedule nodes with `owner:'familiar'` filtered from ward surfaces.
-2. **`noticingEnabled` default** — ON with tight budgets, or opt-in like
-   the canonical-writer loops? (The two forcing functions ship first either
-   way; their data informs this.)
-3. **Budget defaults** — ward directed: the phase is the budgeting unit,
-   the daily cap is nixed as a rationing device (kept only as a very high
-   runaway backstop). Proposed numbers to confirm: 4 intention-turns per
-   phase, 40/day backstop, 3 standing intentions per phase, 30 open
-   one-shots.
-4. **"Eury's rounds" visibility** — a ward-facing view of his standing
-   intentions (charming, transparent) now, later, or never?
-5. **Pass 4 model routing default** — primary connection, or recommend
-   pinning to a stronger model in the Connections modal from day one?
-6. **Versioning** — §9's milestone question.
+1. **Intention store placement** → **own Unruh store** (§3.2). Own table +
+   accessors + MCP tools; never schedule nodes.
+2. **`noticingEnabled` default** → **ON, and NO stand-down at threat**
+   (§4 postures). The ward: *"that's when the consideration becomes
+   especially useful."* Safety-significant, ward-signed; the one build-time
+   care point (never a hollow crisis-competing knock) is documented in §4
+   and §6.
+3. **Budgets** → **4 intention-turns per phase, NO default daily cap, all
+   caps ward-configurable** (§3.4). The daily cap ships unset (opt-in
+   backstop only); recursion safety rests on the per-phase cap × bounded
+   phase count.
+4. **"Eury's rounds" visibility** → **build the view NOW, but the
+   hide-toggle is in the FAMILIAR's hands** (§3.5). Default `shared`; a
+   first-person tool lets the Familiar make their rounds private (existence
+   still shown, contents hidden — no covert cognition).
+5. **Pass 4 model routing** → **recommend pinning a stronger model** (§4).
+   `connectionForFeature(s,'noticing')` unset still falls back to primary;
+   the recommendation is a Settings hint, not a forced pin.
+6. **Versioning** → **stay in 0.8 patches** (§9).
 
 ## 11. Out of scope
 
