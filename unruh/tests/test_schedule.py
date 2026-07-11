@@ -860,3 +860,26 @@ def test_mark_alerted_one_time_and_occurrence(conn):
 
 def test_mark_alerted_missing_node(conn):
     assert sched.mark_alerted(conn, id="nope") is False
+
+
+def test_set_lead_sets_clears_and_preserves_payload(conn):
+    # Per-event lead (Initiative Pass 5): a read-merge-write that leaves the
+    # rest of the payload intact.
+    nid = sched.add_node(
+        conn, type="event", label="Therapy", when="2026-07-04T17:00:00",
+        payload={"obstacle_tags": ["outside"]},
+    )
+    assert sched.set_lead(conn, id=nid, lead_minutes=90) is True
+    node = sched.get_node(conn, id=nid)
+    assert node["payload"]["lead_minutes"] == 90
+    assert node["payload"]["obstacle_tags"] == ["outside"], "other payload fields preserved"
+
+    # Clearing (None) removes the override without touching the rest.
+    assert sched.set_lead(conn, id=nid, lead_minutes=None) is True
+    node = sched.get_node(conn, id=nid)
+    assert "lead_minutes" not in node["payload"]
+    assert node["payload"]["obstacle_tags"] == ["outside"]
+
+
+def test_set_lead_missing_node(conn):
+    assert sched.set_lead(conn, id="nope", lead_minutes=30) is False

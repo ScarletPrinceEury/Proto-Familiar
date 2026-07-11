@@ -633,6 +633,32 @@ def schedule_mark_alerted(id: str, occurrence_date: str | None = None) -> dict[s
 
 
 @mcp.tool()
+def schedule_set_lead(id: str, lead_minutes: int | None = None) -> dict[str, Any]:
+    """I use this to give ONE event its own lead time — how far ahead I want my
+    human warned that it's coming up — instead of the single global default that
+    fits no one. A therapy session might want 90 minutes to get ready; a quick
+    call, 10. I set the lead that actually fits THIS event and THIS person.
+    Passing no minutes (or null) clears the override, so the event falls back to
+    the global lead again.
+
+    Args:
+        id: the event's schedule node id.
+        lead_minutes: minutes before the event to alert (roughly 5–1440), or
+            null/omitted to clear the per-event lead.
+
+    Returns: {ok: True} or the standard not-found error shape.
+    """
+    try:
+        with get_conn() as conn:
+            found = sched.set_lead(conn, id=id, lead_minutes=lead_minutes)
+        if not found:
+            return _err(f"no schedule node with id {id!r}", code="not_found")
+        return {"ok": True}
+    except Exception as e:
+        return _err(f"schedule_set_lead failed: {e}", code="bad_request")
+
+
+@mcp.tool()
 def reminders_health() -> dict[str, Any]:
     """I use this to check the health of my reminder scheduler. I reach for it when I
     want to verify reminders are firing correctly or diagnose silent failures. If

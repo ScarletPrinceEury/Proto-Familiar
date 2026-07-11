@@ -62,7 +62,7 @@ import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedInte
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
-  clampLeadMinutes, ALERT_GRACE_MS,
+  clampLeadMinutes, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
@@ -3492,16 +3492,21 @@ function startRemindersScheduler() {
       if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
       const s = readSettingsSync();
       if (s?.eventAlertsEnabled === false) return [];  // default-ON
-      const leadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const defaultLeadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
       const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
-      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs });
+      // Fetch across the WIDEST possible lead (Pass 5): an event may carry a
+      // per-event lead longer than the global default, and it must appear in
+      // the window early enough for its own lead to fire. selectDueEventAlerts
+      // then applies each node's effective lead. Events are sparse, so the
+      // wider fetch is cheap; the per-node gate keeps the alerts precise.
+      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs: MAX_LEAD_MS });
       const [win, rec] = await Promise.all([
         getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
         listRecurring().catch(() => ({ nodes: [] })),
       ]);
       const windowNodes = Array.isArray(win) ? win : (win?.nodes ?? []);
       const recurringNodes = Array.isArray(rec) ? rec : (rec?.nodes ?? []);
-      return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadMs, graceMs: ALERT_GRACE_MS })
+      return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
         .map(a => ({ ...a, ...formatEventAlert(a, { nowMs }) }));
     },
     markEventAlerted: async ({ id, occurrenceDate }) => {

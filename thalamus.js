@@ -1001,6 +1001,19 @@ export async function markEventAlerted({ id, occurrence_date = null }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/** Set (or clear) an event's per-event lead time (Initiative Pass 5). */
+export async function setScheduleLead({ id, lead_minutes = null }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_set_lead',
+      arguments: lead_minutes == null ? { id } : { id, lead_minutes },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 /**
  * Build the export artifacts (.ics text + "add to Google" URL) for a
  * schedule node, in Unruh's code — the Familiar passes an id and never

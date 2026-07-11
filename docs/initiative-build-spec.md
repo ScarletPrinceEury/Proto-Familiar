@@ -529,6 +529,19 @@ applied to Pass 4's prompt.
 
 ## Pass 5 — adaptive lead times (one-size-fits-none → per-event)
 
+> **✅ SHIPPED (`0.8.67`).** `event-alerts.js` `effectiveLeadMs` reads a node's
+> `payload.lead_minutes` (clamped [5min,24h]), global default as fallback; the
+> alert scan fetches across the widest possible lead so a long custom lead
+> isn't clipped, and applies each node's own lead per-occurrence. Unruh
+> `schedule.set_lead` (atomic read-merge-write, preserves other payload) +
+> `schedule_set_lead` MCP tool + thalamus `setScheduleLead` + the first-person
+> `schedule_set_lead` chat tool (schedule-write module, code-clamped) — also
+> added to the noticing toolset (the "lead set" Pass 4 was waiting on).
+> "Set at the projection cue" rides the existing schedule-write surfacing on
+> the `[New on my human's calendar]` block; "calibrated in reflection" rides
+> Pass 3's reflection intentions. 8 new tests (Node + Python). **This
+> completes the Initiative arc (Passes 0–5).**
+
 - `payload.lead_minutes` on event nodes, read by the existing
   `event-alerts.js` pass (the global lead setting becomes the fallback;
   nothing else about the alert pass changes).
@@ -591,8 +604,9 @@ Net: more capability per request, not more requests per capability.
    conditions, toolset composition, events log; ward-signed prompt +
    no-stand-down-at-threat. Built as a dedicated self-paced loop (not a
    pondering-loop mode — see the Pass 4 shipped note).
-5. **Session E: Pass 5** (payload lead + tool + alert-pass fallback read +
-   projection-cue line + reflection calibration input).
+5. **Session E: Pass 5 — ✅ SHIPPED** (`0.8.67`). Per-event `payload.lead_minutes`
+   + `schedule_set_lead` (Unruh + chat + noticing) + the widest-lead fetch.
+   **Initiative complete.**
 
 Each session: `docs/architecture.md` in the same commit; tests per pass;
 version bumps per §9.

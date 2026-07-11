@@ -52,7 +52,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes,
+  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
   templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds,
   bumpInterest, setStandingInterest,
@@ -1452,6 +1452,21 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_set_lead',
+      description: 'I set how far ahead of ONE event my human gets the "coming up" alert — its own lead time, instead of the single global default that fits no one. A therapy session might want 90 minutes to get ready; a quick call, 10. I reach for this when I know an event needs more (or less) warning than usual for {{user}}, and I calibrate it over time as I learn what actually helps. Passing no minutes clears the override so the event falls back to the global lead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:           { type: 'string', description: 'The event\'s schedule node id (from a legend or schedule_find).' },
+          lead_minutes: { type: 'number', description: 'Minutes before the event to alert my human (clamped to roughly 5–1440). Omit to clear the per-event lead and fall back to the global default.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
   // ── Intentions (Initiative Pass 3) — my own forward commitments ──────
   {
     type: 'function',
@@ -2691,6 +2706,21 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to add hold: ${err.message}`; }
   },
 
+  schedule_set_lead: async ({ id, lead_minutes } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to set lead: id (string) is required.';
+    const clearing = lead_minutes === undefined || lead_minutes === null;
+    // Clamp in code (the model never sets the exact machine value): [5, 1440].
+    const mins = clearing ? null : Math.max(5, Math.min(1440, Math.round(Number(lead_minutes))));
+    if (!clearing && !Number.isFinite(mins)) return 'Failed to set lead: lead_minutes must be a number of minutes, or omit it to clear.';
+    try {
+      const data = await setScheduleLead({ id: id.trim(), lead_minutes: mins });
+      if (data?.ok === false) return `Failed to set lead: ${data.error ?? 'unknown error'}`;
+      return quietOk(clearing
+        ? `Cleared the custom lead — that event falls back to the global default alert time.`
+        : `Set that event's lead to ${mins} minutes — its "coming up" alert lands ${mins} min before it starts.`);
+    } catch (err) { return `Failed to set lead: ${err.message}`; }
+  },
+
   // ── Intentions (Initiative Pass 3) ──────────────────────────────────
   // My own forward commitments. Distinct from {{user}}'s schedule — these
   // ride Unruh's intentions store via thalamus. Budget caps (ward-
@@ -3616,7 +3646,7 @@ export const SET_NEXT_CHECK_TOOL = {
 // resolved, so their first-person descriptions stay consistent.
 export const NOTICING_REGISTRY_TOOL_NAMES = [
   'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
-  'schedule_find', 'schedule_availability', 'schedule_export', 'get_datetime',
+  'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
 ];
 
 /**
