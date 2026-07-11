@@ -869,6 +869,86 @@ export async function listRecurring({ includeResolved = false, limit = 200 } = {
   }
 }
 
+// ── Intention wrappers (Initiative Pass 3) ───────────────────────
+// Thin bridges to Unruh's intentions store. Each degrades to a
+// structured {ok:false} when Unruh is down — never throws into the
+// chat path (graceful degradation: an intention I can't file is a
+// message I can't keep, not an error my human sees).
+
+export async function setIntention({ what, why, refs, trigger, condition, source, visibility } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { what };
+  if (why        !== undefined) args.why        = why;
+  if (refs       !== undefined) args.refs       = refs;
+  if (trigger    !== undefined) args.trigger    = trigger;
+  if (condition  !== undefined) args.condition  = condition;
+  if (source     !== undefined) args.source     = source;
+  if (visibility !== undefined) args.visibility = visibility;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_set', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function listIntentions({ include_done = false, include_dropped = false, phase, limit = 100 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', intentions: [] };
+  const args = { include_done, include_dropped, limit };
+  if (phase !== undefined) args.phase = phase;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_list', arguments: args });
+    return parseToolText(r, { ok: false, intentions: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), intentions: [] }; }
+}
+
+export async function dropIntention({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_drop', arguments: { id } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function completeIntention({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_done', arguments: { id } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function markIntentionFired({ id, now } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { id };
+  if (now !== undefined) args.now = now;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_mark_fired', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function setRoundsVisibility({ value }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_set_rounds_visibility', arguments: { value } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function roundsForWard() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', rounds: [], hidden_count: 0, visibility: 'shared' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_rounds_for_ward', arguments: {} });
+    return parseToolText(r, { ok: false, rounds: [], hidden_count: 0, visibility: 'shared' });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), rounds: [], hidden_count: 0, visibility: 'shared' }; }
+}
+
 // ── Reminders wrappers (M11) ─────────────────────────────────────
 
 export async function getDueReminders({ now, limit = 50 } = {}) {
@@ -1718,6 +1798,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       // a schedule grant sees the ward's commitments, never their hard
       // stretches. Structural, not model discretion.
       if (gated && temporalPayload) stripSensitiveScheduleNodes(temporalPayload);
+      // Intentions are my own private cognition (Initiative Pass 3) — never
+      // surfaced on a gated (villager) turn. The ward-facing rounds view is
+      // separately visibility-controlled; a villager sees nothing of them.
+      if (gated && temporalPayload) temporalPayload.intentions_due = [];
       temporalLines = formatTemporalContext(temporalPayload);
     } catch (err) {
       console.error('[thalamus] temporal assembly failed (defaulting to empty):', err?.message ?? err);

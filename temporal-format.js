@@ -50,6 +50,22 @@ function gcalMarkerFor(node) {
   return ' 📅';
 }
 
+// Render an intention's condition (the tiny tripwire vocab) as a readable
+// clause the Familiar weighs before acting. '' when there's no condition.
+// Pure. Mirrors the vocab in unruh/intention.py.
+function formatIntentionCondition(condition) {
+  if (!condition || typeof condition !== 'object') return '';
+  const parts = [];
+  if (Number.isFinite(condition.minContactGapMs)) {
+    const h = condition.minContactGapMs / 3_600_000;
+    const gap = h >= 1 ? `${h % 1 === 0 ? h : h.toFixed(1)}h` : `${Math.round(condition.minContactGapMs / 60_000)}min`;
+    parts.push(`we haven't talked in at least ${gap}`);
+  }
+  if (condition.needsStatus) parts.push(`a referenced need is "${condition.needsStatus}"`);
+  if (condition.unresolvedRefs) parts.push('a referenced item is still open');
+  return parts.join(' and ');
+}
+
 function formatLocalTime(iso, opts = {}) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -365,6 +381,25 @@ export function formatTemporalContext(payload) {
       }
     }
     blocks.push(interestLines.join('\n'));
+  }
+
+  // ── Intentions coming due (Initiative Pass 3) ────────────────────
+  // The intentions whose trigger timing has come around — a payoff turn.
+  // The marker string travels with the intentions tool module (tool-
+  // surfacing), so the tools to act (mark fired / complete / adjust) are
+  // in hand this turn. Each carries its `why` (what I was reaching for) and
+  // any condition as a readable clause I weigh before acting — I don't act
+  // on a round whose condition plainly doesn't hold. Empty → nothing.
+  const due = Array.isArray(payload.intentions_due) ? payload.intentions_due : [];
+  if (due.length) {
+    const dueLines = ['[Intentions coming due] — commitments I set my future self; the tools to see to them are in hand:'];
+    for (const it of due) {
+      const cond = formatIntentionCondition(it.condition);
+      const why  = it.why ? ` — because ${it.why}` : '';
+      dueLines.push(`  (${it.id}) ${it.what}${why}${cond ? ` [only if ${cond}]` : ''}`);
+    }
+    dueLines.push('  When I\'ve seen to one this occurrence, I mark it (intention_mark_fired); when it\'s genuinely done for good, intention_done. Marking without doing is erasing, not acting.');
+    blocks.push(dueLines.join('\n'));
   }
 
   return blocks.join('\n\n');

@@ -46,6 +46,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { recordKnock, recordLocationKnock } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
@@ -281,6 +282,7 @@ async function fireRevisit(item) {
     participants: session.participants, settings,
     ambient: true, ambientStrategy: regLoc.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
     directedAt, revisitNote: true,
+    waitStreakLine: buildWaitStreakLine({ settings }),
   });
 
   const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
@@ -315,6 +317,8 @@ async function fireRevisit(item) {
     const list = await readRevisits();
     await writeRevisits([...list.filter(r => r.locationKey !== item.locationKey), newEntry]);
     armRevisitTimer().catch(() => {});
+    // Wait-streak (Pass 1): a re-defer is another taken wait choice.
+    Promise.resolve(recordWait('discord-defer')).catch(() => {});
     console.log(`[discord] revisit: re-deferred (${item.deferCount + 1}/${REVISIT_MAX_DEFER}) in ${item.locationKey} — next in ${Math.round(ms/60_000)}min`);
     return;
   }
@@ -331,6 +335,9 @@ async function fireRevisit(item) {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId, session, locationKey: item.locationKey, regLoc, priorMessages: [],
   });
+  // Wait-streak (Pass 1): a revisit where I actually spoke is a proactive
+  // payoff — the streak resets.
+  Promise.resolve(recordProactive('revisit')).catch(() => {});
   console.log(`[discord] revisit: spoke in ${item.locationKey}`);
 }
 
@@ -765,7 +772,7 @@ async function availabilityBlockFor(decision, audienceGrants) {
 
 // ── Presence preamble (my own orientation, first person) ─────────
 
-function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false }) {
+function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false, waitStreakLine = '' }) {
   const lines = ['[Discord Presence]'];
   if (kind === 'ward-dm') {
     lines.push(
@@ -857,6 +864,12 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
         );
       }
     }
+    // Wait-streak awareness (initiative-build-spec Pass 1): the [later:…]
+    // defer is an offered wait choice, so the deliberation carries the one
+    // neutral fact line. '' when the experiment is off (W3). Rendered
+    // after the option lines, before macro substitution — the line is
+    // code-built and contains no macros.
+    if (waitStreakLine) lines.push(waitStreakLine);
   }
   return substituteMacros(lines.join('\n'), settings);
 }
@@ -1368,6 +1381,9 @@ async function handleTurn(gw, msg, decision) {
     ambient: !!decision.ambient,
     ambientStrategy: decision.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
     directedAt,
+    // Pass 1: ambient turns offer the [later:…] defer, so they carry the
+    // wait-streak fact line ('' when the experiment is off).
+    waitStreakLine: decision.ambient ? buildWaitStreakLine({ settings }) : '',
   });
 
   const availability = await availabilityBlockFor(decision, audienceGrants);
@@ -1497,6 +1513,9 @@ async function handleTurn(gw, msg, decision) {
       { id: randomUUID(), locationKey: decision.locationKey, dueAt: Date.now() + ms, deferCount: 0, queuedAt: nowIso },
     ]);
     armRevisitTimer().catch(() => {});
+    // Wait-streak (Pass 1): an offered defer, taken. ([pass] deliberately
+    // does NOT count — room pacing, not outreach deferral.)
+    Promise.resolve(recordWait('discord-defer')).catch(() => {});
     session.messages = [
       ...(session.messages ?? []),
       { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },

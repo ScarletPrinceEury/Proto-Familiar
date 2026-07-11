@@ -41,6 +41,7 @@ import {
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
   memByTimerange,
+  setIntention, roundsForWard,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
@@ -1226,6 +1227,18 @@ app.get('/api/reachout-events', async (_req, res) => {
     res.json(await readReachoutEvents());
   } catch {
     res.json([]);
+  }
+});
+
+// "Eury's rounds" (Initiative Pass 3): the ward-facing view of the Familiar's
+// standing rounds, honouring the Familiar's own visibility choice. A private
+// round is COUNTED (hidden_count) but its contents withheld — existence is
+// never hidden (no covert cognition), only what a private round is.
+app.get('/api/rounds', async (_req, res) => {
+  try {
+    res.json(await roundsForWard());
+  } catch {
+    res.json({ ok: false, rounds: [], hidden_count: 0, visibility: 'shared' });
   }
 });
 
@@ -3380,6 +3393,14 @@ function startAutonomousPondering() {
             .then(r => console.log(`[pondering] reflection → ${r?.ok ? `promoted noticing to tentative cause (${co.from} → ${co.to})` : 'failed to promote'} `))
             .catch(err => console.error('[pondering] promotion failed:', err?.message ?? err));
         }
+        // Intentions (Initiative Pass 3): reflection can end in commitments.
+        // Route each to the intentions store, source='reflection', fire-and-
+        // forget — one failing never blocks the others or the chat path.
+        for (const it of (result.intentions ?? [])) {
+          setIntention({ ...it, source: 'reflection' })
+            .then(r => console.log(`[pondering] reflection → ${r?.ok !== false ? 'kept intention' : 'failed to keep intention'}: "${String(it.what).slice(0, 60)}"`))
+            .catch(err => console.error('[pondering] intention set failed:', err?.message ?? err));
+        }
         // Routine review (stewardship Pass 3): when this reflection carried the
         // weekly review, stamp the cadence clock (always, so it doesn't re-fire
         // every tick) and stash the finding for the stewardship block to
@@ -3396,6 +3417,7 @@ function startAutonomousPondering() {
           title:         result.title ?? null,
           edgesGraded:   Array.isArray(result.edge_calibrations) ? result.edge_calibrations.length : 0,
           promotions:    Array.isArray(result.promotions) ? result.promotions.length : 0,
+          intentions:    Array.isArray(result.intentions) ? result.intentions.length : 0,
           wroteIdentity: !!(result.what_lapses_cost_update?.heading && result.what_lapses_cost_update?.content),
           routineReview: !!topic?.isRoutineReview,
         }).catch(() => {});
@@ -3748,6 +3770,9 @@ function startSilenceTriage() {
         reason:    r.reason,
         decision:  r.decision ?? null,
         acted:     r.acted ?? false,
+        // Wait-streak experiment (Pass 1): the count the prompt showed at
+        // this deliberation, so streak values correlate with decisions.
+        streakAtDecision: r.streakAtDecision ?? null,
         at:        r.at,
       }).catch(() => {}); // non-critical
 
@@ -3868,6 +3893,8 @@ function startReachout() {
           villager:       r.villager?.name ?? null,
           messagePreview: r.decision?.message?.slice(0, 120) ?? null,
           nextCheckInMs:  r.nextCheckInMs ?? null,
+          // Wait-streak experiment (Pass 1): the count the prompt showed.
+          streakAtDecision: r.streakAtDecision ?? null,
           error:          r.error ?? null,
         }).catch(() => {});
       }

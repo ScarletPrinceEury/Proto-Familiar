@@ -31,7 +31,17 @@
  *     template "are you okay?" or similar therapist-speak. Bad
  *     LLM output is preferable to fake care.
  *   - If the LLM returns 'wait', we wait. We never override its no.
+ *
+ * Wait-streak (initiative-build-spec Pass 1, ward-signed): each
+ * deliberation outcome is recorded — 'wait' increments the streak,
+ * 'reach_out' resets it — and the count the prompt showed rides the tick
+ * result as streakAtDecision for the event log. Recording is
+ * fire-and-forget and can never change a triage outcome (invariant W5);
+ * gate-skipped ticks never reach it (invariant W1). No gates, cool-downs,
+ * or decision semantics change here.
  */
+
+import { getWaitStreak, recordWait, recordProactive, isWaitStreakEnabled } from './wait-streak.js';
 
 const DEFAULT_TICK_MS = 5 * 60_000;          // 5 min
 
@@ -92,6 +102,11 @@ export async function runOneTriageTick({
   enqueueOutboxFn,          // async ({ kind, originId, title, body }) => { id, deduped }
   thresholds = TRIAGE_SILENCE_THRESHOLD_MS,
   now        = Date.now,
+  // Wait-streak recording (injectable so tests can spy / no-op; defaults
+  // are the real module, whose exports never throw).
+  getWaitStreakFn   = () => (isWaitStreakEnabled() ? getWaitStreak() : null),
+  recordWaitFn      = recordWait,
+  recordProactiveFn = recordProactive,
 }) {
   if (typeof getThreat       !== 'function') throw new Error('getThreat is required');
   if (typeof getLastActivity !== 'function') throw new Error('getLastActivity is required');
@@ -132,6 +147,12 @@ export async function runOneTriageTick({
 
   const signals = typeof getRecentSignals === 'function' ? (await getRecentSignals()) : [];
 
+  // Streak value at deliberation time — the same state the prompt line is
+  // rendered from (recording happens only after the decision returns), so
+  // this is the number the model actually saw. null when the feature is off.
+  let streakAtDecision = null;
+  try { streakAtDecision = getWaitStreakFn()?.count ?? null; } catch { /* never gates triage */ }
+
   const decision = await decideTriage({ threat, silenceMs, signals });
 
   // Set the cool-down regardless of action — wait OR reach_out both
@@ -145,16 +166,24 @@ export async function runOneTriageTick({
   _lastDecisionTier  = threat.tier;
 
   if (!decision || decision.action !== 'reach_out' || !decision.message) {
+    // An offered choice, answered "wait" — the one thing that increments
+    // the streak. Fire-and-forget: recording can never change the outcome.
+    Promise.resolve(recordWaitFn('triage')).catch(() => {});
     return {
       acted:        false,
       reason:       'llm_said_wait',
       threat,
       silenceMs,
       decision,
+      streakAtDecision,
       nextCheckInMs: cooldownMs,
       at:           nowMs,
     };
   }
+
+  // A proactive decision resets the streak at decision time — delivery
+  // state (dedup, push failures) is the outbox's concern, not the streak's.
+  Promise.resolve(recordProactiveFn('triage')).catch(() => {});
 
   // Dedup bucket: tier + a 4-hour bucket, so my human can't see two
   // triage banners of the same tier in the same window unless they
@@ -182,6 +211,7 @@ export async function runOneTriageTick({
     outbox:       enq,
     threat,
     silenceMs,
+    streakAtDecision,
     nextCheckInMs: cooldownMs,
     at:           nowMs,
   };

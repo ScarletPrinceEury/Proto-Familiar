@@ -1334,6 +1334,24 @@
               </div>
               <div class="field-hint">The Familiar won't send warm reach-outs during this window. Set both to the same number to disable quiet hours. Crisis check-ins are never silenced by this.</div>
             </div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="baselines-toggle">Contact-rhythm sense</label>
+              <input type="checkbox" id="baselines-toggle" checked>
+            </div>
+            <div class="field-hint">When on, your Familiar learns your ordinary rhythm of contact — from your own message history — so it can tell whether a quiet stretch is normal for you or unusual, instead of guessing. It only forms a sense once it has a couple of weeks to go on, and it's used only to shape warm reach-outs, never crisis judgement. Off means it reasons from the raw gap alone.</div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="wait-streak-toggle">Show my Familiar its wait streak</label>
+              <input type="checkbox" id="wait-streak-toggle" checked>
+            </div>
+            <div class="field-hint">An experiment: whenever your Familiar is deciding whether to reach out or hold off, it's shown one plain fact — how many times it has chosen to wait since it last reached out on its own. Just the number, no nudge either way. Off hides it entirely.</div>
+          </div>
+          <div class="routine-rounds" id="te-rounds" style="padding:10px 12px; border-bottom:1px solid var(--border-subtle, #2a2a2a)">
+            <div class="field-row" style="margin-top:0; align-items:center">
+              <label style="font-weight:600">The rounds my Familiar keeps</label>
+              <button id="te-rounds-refresh" class="btn-ghost" style="margin-left:auto">Refresh</button>
+            </div>
+            <div class="field-hint">Standing intentions your Familiar has set for itself — its own self-maintenance, tied to your daily phases (e.g. "every morning I go over the calendar"). These are theirs, shown here because they've chosen to share them. Your Familiar decides what stays visible.</div>
+            <div id="te-rounds-list" style="margin-top:8px"></div>
           </div>
           <div class="ke-toolbar">
             <button id="te-routine-refresh" class="btn-ghost">Refresh</button>

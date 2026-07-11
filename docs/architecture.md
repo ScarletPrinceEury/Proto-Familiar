@@ -36,7 +36,7 @@ server.js  (Express, Node 22+, ESM)
     │
     │  ── cognitive bridge (per-request enrichment, INWARD) ────────
     ├── thalamus.js       ──►  Phylactery  (Python via uv, stdio MCP) — identity / memory / graph / snapshots
-    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / routine
+    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / intentions / routine
     │
     │  ── motor module (action + delivery, OUTWARD) ───────────────
     ├── cerebellum.js       ── tool registry + executors + tool-call loop,
@@ -56,6 +56,8 @@ server.js  (Express, Node 22+, ESM)
     ├── reachout.js         ── warm-outreach decision (ward + warm villagers)
     ├── outbox.js           ── persistent delivery queue (reminders, triage, alerts)
     ├── last-activity.js    ── timestamps user activity for the silence loop
+    ├── wait-streak.js      ── wait-streak experiment: counts deliberated waits since last proactive act
+    ├── contact-baselines.js ─ derives normal contact rhythm (median/p90 gaps) from session logs
     │
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
@@ -119,6 +121,8 @@ ponderings injection, care-check framing) and as background loops
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
+├── wait-streak.js           Wait-streak experiment (Pass 1): deliberated-wait counter + the neutral prompt fact line
+├── contact-baselines.js     Contact-rhythm baselines (Pass 2): median/p90 gaps per weekday-class; the warmth rhythm line
 ├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
 ├── relative-time.js         Natural-English relative phrasing for every timestamped surface (memories, ponderings, schedule, handoff, "Now")
@@ -593,6 +597,75 @@ for the triage loop's pending-contact deferral.
 stamped from the chat path; consumed by the silence-triage loop.
 Discord ward messages stamp it too — the Familiar's sense of "my human
 was just here" follows the human, not a particular window.
+
+**Intentions (Initiative Pass 3)** — a first-class "my intention" object the
+Familiar writes for its future self: the substrate for planning, follow-through,
+and *rounds* (phase-bound standing intentions — self-maintenance as identity).
+Stored in Unruh's own `intentions` table (`unruh/intention.py`, migration
+`0005`), NOT the schedule layer — intentions are per-embodiment cognition and
+the ward's schedule surfaces must never grow Familiar-internal rows. Each has a
+`what`, a `why` (read back as the payoff-turn reasoning), `refs` (slug ids kept,
+never snapshotted — dereferenced fresh when it surfaces), a `trigger`
+(`at`|`phase`|`on_next_contact`|`none`; `recurring` for rounds), an optional
+`condition` (a tiny tripwire vocab — `minContactGapMs`/`needsStatus`/
+`unresolvedRefs` — the Node side applies the live-signal gate), and a
+`visibility` the Familiar itself controls. Unruh owns storage + trigger TIMING
+(`intentions_due`); the Node side owns the condition gate and budgets.
+Chat-path tools (`cerebellum.js`, first-person, ward-only, `intentions`
+surfacing module): `intention_set/list/drop/done/mark_fired/
+set_rounds_visibility`. Budget caps enforced at set time, ward-configurable:
+`intentionStandingPerPhase` (default 3), `intentionOpenOneShots` (default 30) —
+a cap hit tells the Familiar to prune, never a silent drop. Due intentions
+surface in `[Temporal Context]` via `temporal_context` (a payoff turn riding the
+existing per-turn call; stripped on gated villager turns — private cognition).
+Reflection can also END in commitments: the pondering output schema gains
+`intentions[]` (≤3/tick, `source:'reflection'`, routed via `setIntention`).
+**"Eury's rounds"** is a ward-facing read-only view (`GET /api/rounds`, routine
+tab) honouring the Familiar's own visibility choice — a private round is counted
+(`hidden_count`) but its contents withheld: existence is never hidden, only what
+a private round *is*. The autonomous noticing turn that consumes due intentions
+with the full condition code-gate is Initiative Pass 4 (not yet built).
+
+**`contact-baselines.js`** — a model of "normal contact rhythm," in code
+(initiative-build-spec Pass 2). Turns the contact history the system already
+records (ward user-message timestamps in session logs) into per-weekday-class
+arithmetic: median gap, p90 gap, longest-observed gap, over a rolling 4-week
+window. Ward-contact signal is conservative — only web-chat sessions (no
+`audienceTag`) and Discord ward-DMs (`audienceTag === 'ward-private'`) count,
+so a villager in a group room is never mistaken for the ward (it under-counts
+rather than over-counts, the safe direction for a "should I worry about their
+silence" input). Timestamps within 3h coalesce into one contact *episode*; the
+gaps that matter are the quiet stretches between episodes, classified by the
+ward-local weekday-class of when the quiet began. **Honesty rule:** below ~2
+weeks of span or too few samples for a class, `hasBaseline` is false and
+consumers render nothing — a fabricated rhythm is worse than none. No loop, no
+LLM call: recomputed lazily on read (cached in `tomes/.contact-baselines.json`,
+refreshed at most every ~3h). Consumed by exactly two surfaces: the warm
+reach-out prompt's rhythm line (`buildRhythmLine`, riding below Pass 0's
+silence line) and — once built — the Pass 4 noticing situation report. Triage
+and surface-candidates stay untouched (triage has the threat tier; baselines
+are companionship territory). Off: `contactBaselinesEnabled:false` or
+`PROTO_FAMILIAR_BASELINES_DISABLED=1`.
+
+**`wait-streak.js`** — the ward's wait-streak experiment
+(initiative-build-spec Pass 1): a persistent counter in
+`tomes/.wait-streak.json` of how many times the Familiar has chosen to
+wait/defer since its last proactive act. Increments ONLY on deliberated
+wait choices (triage `wait`, warmth `wait`, a Discord `[later:…]` defer,
+snoozing a deferred tell); resets ONLY on proactive decisions (triage /
+warmth `reach_out` at decision time, a revisit that actually speaks,
+acknowledging a deferred intent after acting). Gate-skipped ticks never
+count (the Familiar was never asked), and the ward speaking never resets.
+Read side: `buildWaitStreakLine` renders ONE neutral verbatim fact line
+into the three deliberations that offer the choice — `buildReachoutPrompt`,
+`decideTriageViaLLM`, and the ambient Discord presence block — no advice,
+no thresholds, no gate changes (the experiment contract: only the
+information varies). `streakAtDecision` is stamped into
+`triage-events.jsonl` / `reachout-events.jsonl` so the ward can correlate
+streak values with decisions. Off: `waitStreakEnabled:false` or
+`PROTO_FAMILIAR_WAIT_STREAK_DISABLED=1` — disabled means no recording AND
+no line, and the affected prompts are byte-identical to their pre-feature
+output.
 
 **`discord-gateway.js`** — autonomous singleton (Village V4). A
 supervisor tick (30s) compares Settings (`discordEnabled`,

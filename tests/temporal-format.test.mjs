@@ -59,6 +59,28 @@ test('renders open threads as strings or objects', () => {
   assert.match(out, /fallback-id/);
 });
 
+test('renders intentions coming due with why, condition, and the marker (Pass 3)', () => {
+  const out = formatTemporalContext({
+    intentions_due: [
+      { id: 'check-in-on-chen-x7', what: 'I check in on Chen', why: 'we haven\'t spoken in a while',
+        condition: { minContactGapMs: 3600000 } },
+      { id: 'review-calendar-k3', what: 'I review the calendar', condition: {} },
+    ],
+  });
+  // The marker string is what surfaces the intentions tool module.
+  assert.match(out, /\[Intentions coming due\]/);
+  assert.match(out, /check-in-on-chen-x7/);
+  assert.match(out, /I check in on Chen/);
+  assert.match(out, /because we haven't spoken in a while/);
+  assert.match(out, /only if we haven't talked in at least 1h/);
+  assert.match(out, /intention_mark_fired/);
+});
+
+test('no intentions-due block when the list is empty or absent', () => {
+  assert.doesNotMatch(formatTemporalContext({ intentions_due: [] }), /Intentions coming due/);
+  assert.doesNotMatch(formatTemporalContext({ handoff: { intent: 'x' } }), /Intentions coming due/);
+});
+
 test('renders current phase and schedule window', () => {
   const out = formatTemporalContext({
     schedule: {
