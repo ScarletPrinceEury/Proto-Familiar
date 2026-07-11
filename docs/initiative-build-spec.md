@@ -286,6 +286,17 @@ only against a baseline.
 
 ## Pass 3 — intentions: a future the Familiar writes for itself
 
+> **✅ SHIPPED (`0.8.65`).** Unruh `intentions` table + `intention.py`
+> (migration 0005) + 8 MCP tools; Node bridge + 6 first-person chat tools
+> with ward-configurable budget caps (per-phase standing + open one-shots);
+> the `intentions` surfacing module; due intentions folded into
+> `temporal_context` (a payoff turn, stripped on villager turns); reflection
+> authorship (`intentions[]`, ≤3/tick); and the ward-facing "Eury's rounds"
+> view (`GET /api/rounds`, routine tab) with the Familiar-controlled
+> visibility from §3.5. 23 Python + ~20 Node tests. The autonomous noticing
+> turn that consumes due intentions with the full condition code-gate is
+> Pass 4.
+
 **A first-class "my intention" object with a when, a why, and refs** — the
 substrate for planning, follow-through, and rounds. The existing deferred
 `tell` intents and session handoffs turn out to be special cases (a tell is
@@ -553,8 +564,11 @@ Net: more capability per request, not more requests per capability.
    streak is collecting data now.
 2. **Session B: Pass 2 — ✅ SHIPPED** (`0.8.64`). Pure functions + fixture
    tests + the warmth rhythm line + ward toggles.
-3. **Session C: Pass 3** (Unruh store + tools + pondering schema + rounds
-   firing on the reminders tick + budgets).
+3. **Session C: Pass 3 — ✅ SHIPPED** (`0.8.65`). Unruh store + tools +
+   Node bridge + pondering-schema authorship + budgets + the
+   Familiar-controlled rounds view. (Rounds "firing" is surfacing due
+   intentions into `[Temporal Context]` — a payoff turn riding the existing
+   per-turn call; the dedicated autonomous turn is Pass 4.)
 4. **Session D: Pass 4** (situation report, wake conditions, the mode in
    pondering-loop, toolset composition, events log; prompt wording to the
    ward before merge).

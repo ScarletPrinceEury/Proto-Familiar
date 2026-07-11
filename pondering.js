@@ -159,13 +159,16 @@ And here are pairs I've only NOTICED together so far (co_occurs_with) — observ
 ${coocsJson}
 The honest ladder is noticed → suspected → confirmed. If one of these has come up enough times that I genuinely suspect one drives the other — not just coincides — I can promote it to a TENTATIVE cause. I keep it tentative: it goes in as a projection (observed stays false, certainty starts low), because a repeated coincidence is a reason to suspect, not proof. I promote SPARINGLY — only where the repetition is real and a causal story actually makes sense — and leave promotions empty otherwise. The noticing stays as the trail; the promotion is just the next rung, to be graded like any other forecast next time.
 
+This reflection can also end in a COMMITMENT, not only a grade. If what I've noticed points at something I mean to DO — a round to keep, a follow-through, an adjustment — I write it as an intention for my future self (up to three). "The last three alerts landed too late → every morning I widen the lead times." "I keep meaning to check in on Chen and forgetting → every noon phase, if we haven't talked in an hour, I reach out." These go into my own intentions store and come back to me when they're due. I keep them few and real — a reflection that ends in ten commitments has made none. I leave the array empty when nothing genuine follows.
+
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
 {
   "title":   "Short label (max 60 chars) for this reflection",
   "content": "My first-person thought — what I'm noticing, what I'm uncertain about, what I want to remember",
   "what_lapses_cost_update": null,
   "edge_calibrations": [],
-  "promotions": []
+  "promotions": [],
+  "intentions": []
 }
 
 OR, if I'm confident enough to lift something to identity, recalibrate a forecast, and/or promote a noticing:
@@ -181,6 +184,9 @@ OR, if I'm confident enough to lift something to identity, recalibrate a forecas
   ],
   "promotions": [
     { "edge_id": "<a co_occurs edge id from the noticed list>", "condition": "on_resolve|on_lapse|unconditional", "valence": "help|harm|neutral", "certainty": "low|medium|high", "note": "why I now suspect cause" }
+  ],
+  "intentions": [
+    { "what": "I widen the lead times on my alerts", "why": "the last three landed too late", "trigger": { "kind": "phase", "phase": "morning", "recurring": true }, "condition": {}, "refs": [] }
   ]
 }
 
@@ -316,6 +322,29 @@ export function parsePondering(raw) {
       intents.push({ kind, summary });
     }
     if (intents.length) result.wants_to_save = intents;
+  }
+  // intentions (Initiative Pass 3): reflection can end in COMMITMENTS, not
+  // just grades — "the last three alerts landed too late → every morning I
+  // widen the lead times." Each is routed to the intentions store by the
+  // caller (source='reflection'). Capped at 3 per tick so a reflection can't
+  // flood the store; malformed entries dropped. Trigger/condition/refs are
+  // optional and pass through to intention_set's own validation.
+  if (Array.isArray(parsed.intentions)) {
+    const TRIGGER_KINDS = new Set(['at', 'phase', 'on_next_contact', 'none']);
+    const out = [];
+    for (const raw of parsed.intentions) {
+      if (out.length >= 3) break;
+      if (!raw || typeof raw !== 'object') continue;
+      const what = String(raw.what ?? '').trim();
+      if (!what) continue;
+      const item = { what };
+      if (raw.why && String(raw.why).trim()) item.why = String(raw.why).trim();
+      if (Array.isArray(raw.refs)) item.refs = raw.refs.map(r => String(r).trim()).filter(Boolean).slice(0, 12);
+      if (raw.trigger && typeof raw.trigger === 'object' && TRIGGER_KINDS.has(raw.trigger.kind)) item.trigger = raw.trigger;
+      if (raw.condition && typeof raw.condition === 'object') item.condition = raw.condition;
+      out.push(item);
+    }
+    if (out.length) result.intentions = out;
   }
   return result;
 }

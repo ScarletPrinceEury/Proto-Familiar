@@ -60,6 +60,32 @@ test('parsePondering rejects non-JSON', () => {
   assert.throws(() => parsePondering('{not really json}'), /not valid JSON/i);
 });
 
+// Initiative Pass 3: reflection can end in commitments (intentions).
+test('parsePondering: parses reflection intentions, caps at 3, drops malformed', () => {
+  const raw = JSON.stringify({
+    title: 't', content: 'c',
+    intentions: [
+      { what: 'I widen the lead times', why: 'they landed late', trigger: { kind: 'phase', phase: 'morning', recurring: true } },
+      { what: '   ' },                                   // empty what → dropped
+      { nope: 1 },                                       // no what → dropped
+      { what: 'second', trigger: { kind: 'whoops' } },   // bad trigger kind → trigger dropped, item kept
+      { what: 'third' },
+      { what: 'fourth — over the cap' },                 // 4th valid → capped out
+    ],
+  });
+  const r = parsePondering(raw);
+  assert.equal(r.intentions.length, 3, 'capped at 3 valid entries');
+  assert.equal(r.intentions[0].what, 'I widen the lead times');
+  assert.deepEqual(r.intentions[0].trigger, { kind: 'phase', phase: 'morning', recurring: true });
+  assert.equal(r.intentions[1].what, 'second');
+  assert.equal(r.intentions[1].trigger, undefined, 'invalid trigger kind dropped, item kept');
+});
+
+test('parsePondering: no intentions key → no intentions field', () => {
+  const r = parsePondering('{"title":"t","content":"c"}');
+  assert.equal(r.intentions, undefined);
+});
+
 test('findOrCreatePonderingsTome creates the tome on first call, reuses on second', async () => {
   const { dir, cleanup } = tempTomesDir();
   try {

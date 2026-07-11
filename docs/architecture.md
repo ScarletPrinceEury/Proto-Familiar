@@ -36,7 +36,7 @@ server.js  (Express, Node 22+, ESM)
     │
     │  ── cognitive bridge (per-request enrichment, INWARD) ────────
     ├── thalamus.js       ──►  Phylactery  (Python via uv, stdio MCP) — identity / memory / graph / snapshots
-    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / routine
+    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / intentions / routine
     │
     │  ── motor module (action + delivery, OUTWARD) ───────────────
     ├── cerebellum.js       ── tool registry + executors + tool-call loop,
@@ -597,6 +597,34 @@ for the triage loop's pending-contact deferral.
 stamped from the chat path; consumed by the silence-triage loop.
 Discord ward messages stamp it too — the Familiar's sense of "my human
 was just here" follows the human, not a particular window.
+
+**Intentions (Initiative Pass 3)** — a first-class "my intention" object the
+Familiar writes for its future self: the substrate for planning, follow-through,
+and *rounds* (phase-bound standing intentions — self-maintenance as identity).
+Stored in Unruh's own `intentions` table (`unruh/intention.py`, migration
+`0005`), NOT the schedule layer — intentions are per-embodiment cognition and
+the ward's schedule surfaces must never grow Familiar-internal rows. Each has a
+`what`, a `why` (read back as the payoff-turn reasoning), `refs` (slug ids kept,
+never snapshotted — dereferenced fresh when it surfaces), a `trigger`
+(`at`|`phase`|`on_next_contact`|`none`; `recurring` for rounds), an optional
+`condition` (a tiny tripwire vocab — `minContactGapMs`/`needsStatus`/
+`unresolvedRefs` — the Node side applies the live-signal gate), and a
+`visibility` the Familiar itself controls. Unruh owns storage + trigger TIMING
+(`intentions_due`); the Node side owns the condition gate and budgets.
+Chat-path tools (`cerebellum.js`, first-person, ward-only, `intentions`
+surfacing module): `intention_set/list/drop/done/mark_fired/
+set_rounds_visibility`. Budget caps enforced at set time, ward-configurable:
+`intentionStandingPerPhase` (default 3), `intentionOpenOneShots` (default 30) —
+a cap hit tells the Familiar to prune, never a silent drop. Due intentions
+surface in `[Temporal Context]` via `temporal_context` (a payoff turn riding the
+existing per-turn call; stripped on gated villager turns — private cognition).
+Reflection can also END in commitments: the pondering output schema gains
+`intentions[]` (≤3/tick, `source:'reflection'`, routed via `setIntention`).
+**"Eury's rounds"** is a ward-facing read-only view (`GET /api/rounds`, routine
+tab) honouring the Familiar's own visibility choice — a private round is counted
+(`hidden_count`) but its contents withheld: existence is never hidden, only what
+a private round *is*. The autonomous noticing turn that consumes due intentions
+with the full condition code-gate is Initiative Pass 4 (not yet built).
 
 **`contact-baselines.js`** — a model of "normal contact rhythm," in code
 (initiative-build-spec Pass 2). Turns the contact history the system already

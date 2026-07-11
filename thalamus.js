@@ -1798,6 +1798,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       // a schedule grant sees the ward's commitments, never their hard
       // stretches. Structural, not model discretion.
       if (gated && temporalPayload) stripSensitiveScheduleNodes(temporalPayload);
+      // Intentions are my own private cognition (Initiative Pass 3) — never
+      // surfaced on a gated (villager) turn. The ward-facing rounds view is
+      // separately visibility-controlled; a villager sees nothing of them.
+      if (gated && temporalPayload) temporalPayload.intentions_due = [];
       temporalLines = formatTemporalContext(temporalPayload);
     } catch (err) {
       console.error('[thalamus] temporal assembly failed (defaulting to empty):', err?.message ?? err);

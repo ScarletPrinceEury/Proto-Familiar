@@ -378,6 +378,7 @@ const SERVER_SYNCED_KEYS = [
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled',
+  'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
@@ -4101,6 +4102,7 @@ function init() {
     $('te-cal-next').addEventListener('click',  () => teShiftCalendarMonth(+1));
     $('te-cal-today').addEventListener('click', () => teGotoCalendarToday());
     $('te-routine-refresh').addEventListener('click',     teLoadRoutine);
+    $('te-rounds-refresh')?.addEventListener('click',     teLoadRounds);
     $('te-routine-add').addEventListener('click',         () => teToggleRoutineForm(true));
     $('te-routine-form-cancel').addEventListener('click', () => teToggleRoutineForm(false));
     $('te-routine-form-save').addEventListener('click',   teSavePhase);
@@ -8675,6 +8677,45 @@ async function teLoadRoutine() {
     });
   } catch (err) {
     list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+  // The Familiar's own rounds ride the same refresh (read-only view).
+  teLoadRounds();
+}
+
+// "Eury's rounds" (Initiative Pass 3): a read-only view of the standing
+// rounds the Familiar keeps, honouring its own visibility choice. Private
+// rounds are counted but their contents withheld — the Familiar decides
+// what's legible here; we never expose a hidden round's text.
+async function teLoadRounds() {
+  const el = $('te-rounds-list');
+  if (!el) return;
+  el.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/rounds');
+    const data = await r.json();
+    const rounds = Array.isArray(data.rounds) ? data.rounds : [];
+    const hidden = Number(data.hidden_count) || 0;
+    if (!rounds.length && !hidden) {
+      el.innerHTML = '<p class="logs-empty">No standing rounds yet — your Familiar hasn\'t set any self-maintenance routines for itself.</p>';
+      return;
+    }
+    const byPhase = new Map();
+    for (const rd of rounds) {
+      const p = rd.phase || 'anytime';
+      if (!byPhase.has(p)) byPhase.set(p, []);
+      byPhase.get(p).push(rd);
+    }
+    const groups = [...byPhase.entries()].map(([phase, items]) => `
+      <div style="margin-bottom:8px">
+        <div style="font-size:0.82em; text-transform:uppercase; letter-spacing:0.04em; opacity:0.6">${teEscapeHtml(phase)}</div>
+        ${items.map(it => `<div style="padding:3px 0">• ${teEscapeHtml(it.what)}</div>`).join('')}
+      </div>`).join('');
+    const hiddenNote = hidden
+      ? `<div class="field-hint" style="margin-top:6px; font-style:italic">Your Familiar keeps ${hidden} round${hidden === 1 ? '' : 's'} privately — you know ${hidden === 1 ? 'it exists' : 'they exist'}, but ${hidden === 1 ? 'its' : 'their'} contents are theirs.</div>`
+      : '';
+    el.innerHTML = (groups || '') + hiddenNote;
+  } catch (err) {
+    el.innerHTML = `<p class="logs-empty">Failed to load rounds: ${teEscapeHtml(err.message)}</p>`;
   }
 }
 
