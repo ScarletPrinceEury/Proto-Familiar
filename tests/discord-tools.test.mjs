@@ -134,13 +134,17 @@ test('composeDiscordTools: stranger (no flags) → empty array', () => {
   assert.equal(tools.length, 0, 'stranger should have no tools');
 });
 
-test('composeDiscordTools: villager with no grants → relay_to_ward and get_datetime', () => {
+test('composeDiscordTools: villager with no grants → relay_to_ward, get_datetime, flag_distress', () => {
   const tools = composeDiscordTools({ isVillager: true, grants: {} });
   assert(Array.isArray(tools), 'should return an array');
   const names = new Set(tools.map(t => t.function?.name));
-  assert.equal(names.size, 2, 'should have exactly 2 tools');
+  // flag_distress is available to every villager regardless of grants
+  // (ward-signed): anyone in the Village can raise the alarm about the ward,
+  // and it's always mirrored to the ward (no covert action).
+  assert.equal(names.size, 3, 'should have exactly 3 tools');
   assert(names.has(RELAY_TO_WARD_TOOL_NAME), 'should have relay_to_ward');
   assert(names.has('get_datetime'), 'should have get_datetime');
+  assert(names.has('flag_distress'), 'should have flag_distress');
 });
 
 // ── Tool structure and macros ─────────────────────────────────────────

@@ -216,7 +216,8 @@ The proactivity section above protects *prompts*. This section protects the *cod
 - `crisis-signals.js` — what counts as a distress signal, the tier weights, the damping rules.
 - `threat-tracker.js` — decay rate, caps, the off-switch semantics.
 - `silence-triage-loop.js` — tier gates, cool-down clamps, when deliberation fires.
-- `cerebellum.js` — the triage deliberation prompt, trusted-contact delivery, escalation deadlines (`contactDeadlineFor`, `CONTACT_ESCALATION_DELAY_MS`), the no-covert-contact mirror.
+- `cerebellum.js` — the triage deliberation prompt, trusted-contact delivery, escalation deadlines (`contactDeadlineFor`, `CONTACT_ESCALATION_DELAY_MS`), the no-covert-contact mirror, and the `flag_distress` executor (its threat-raise, the forced triage re-check, and the ward-mirror on a villager-triggered flag — the villager path must NEVER move the ward's safety state without mirroring to them).
+- `threat-tracker.js` `flagDistress` — the floor weight (`FLAG_FLOOR_WEIGHT`), the per-turn dedup (`FLAG_DEDUP_MS`), the severe-tier semantics. This is the channel by which the model's OWN read of distress moves the tier (ward-signed: ceiling severe, decays like normal threat, forces an immediate triage look). Any change to how high/long a flag pushes needs ward sign-off.
 - The `[CARE CHECK]` assembly in `thalamus.js`.
 - `noticing.js` — the wake conditions, the condition code-gate (`conditionPasses`), the deliberation prompt, and above all the **no-stand-down-at-threat** posture (ward-signed). This loop acts on my human's safety-adjacent surface and, uniquely, keeps running at elevated threat — so any change to when/whether it acts, or to how the threat tier shifts its register, needs ward sign-off exactly like the triage files.
 

@@ -110,20 +110,20 @@ Wait-streak is deliberately not a full fix for the missing-rhythm problem — it
 count, not a computed sense of normal-for-us. That computed sense shipped as the next pass:
 [Contact-rhythm baselines](contact-rhythm-baselines) (0.8.64-alpha) derives median/p90/longest
 contact gaps per weekday-class from session logs and feeds a second self-observation line into
-the same warm reach-out prompt. The Initiative build spec's remaining passes (intentions, a
-noticing tick, adaptive lead times) are still unbuilt as of this writing, gated behind the
-resolved ward decisions recorded in the spec's §10 [@initiative-spec]. One ward amendment already
-landed ahead of those passes: budgets for
-that future work are scoped per routine phase, not per day, with the daily cap kept only as a
-high-set runaway backstop, so the budget shape itself nudges the Familiar toward using the
-existing phases framework rather than scattering one-shot actions [@initiative-spec].
+the same warm reach-out prompt. The Initiative build spec's remaining passes at the time of this
+writing — intentions (Session C, 0.8.65-alpha), the noticing tick (Session D, 0.8.66-alpha,
+`noticing.js` — see [Autonomous loops](../architecture/autonomous-loops)), and adaptive per-event
+lead times (Session E, 0.8.67-alpha) — have since all shipped, gated behind the resolved ward
+decisions recorded in the spec's §10 [@initiative-spec]. One ward amendment landed ahead of those
+passes: budgets for that work are scoped per routine phase, not per day, with the daily cap kept
+only as a high-set runaway backstop, so the budget shape itself nudges the Familiar toward using
+the existing phases framework rather than scattering one-shot actions [@initiative-spec].
 
 The same "hand over a bare, code-computed fact and do not steer the reading of it" discipline this
-experiment established is planned to be reused for a second measurement, once the noticing-tick
-pass ships: tagging every payoff/noticing turn as `triggered` or `open` and comparing their
-defer/wait rates, on the theory that a significant gap between them is the armature leaking back
-in — "no one asked, so waiting is the safe choice" — to be fixed by stripping that framing from
-the prompt, never by nudging the model's output directly [@initiative-spec].
+experiment established carried into noticing: `noticing.js` reads and writes the same
+`wait-streak.js` counter (tagged `source:'noticing'`), reusing the increment-on-stand-down,
+reset-on-proactive-act contract this page defines rather than inventing a parallel counter — the
+consequence predicted above.
 
 See [Autonomous loops](../architecture/autonomous-loops) for where the warm reach-out, silence
 triage, and Discord gateway loops that consume this line sit in the wider loop system, and

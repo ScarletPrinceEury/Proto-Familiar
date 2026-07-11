@@ -27,6 +27,7 @@ export const TOOL_MODULES = {
   update_identity: 'core', schedule_find: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
   contact_trusted_person: 'core', show_crisis_resources: 'core',
+  flag_distress: 'core',   // safety: the Familiar's own read of distress → threat (ward-signed)
   get_trusted_contacts: 'core',   // pairs with contact_trusted_person
   request_tools: 'core',
 

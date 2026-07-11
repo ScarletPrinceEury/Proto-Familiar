@@ -512,6 +512,15 @@ positives are the regression cases the test suite watches).
 `tomes/.threat-state.json` with 3-day half-life. Cap MAX=10, floor 0,
 FIFO audit history (50). Off-switches: `PROTO_FAMILIAR_THREAT_DISABLED=1`
 silences recording; `resetThreat()` always works regardless.
+**`flagDistress`** (ward-signed, safety-critical) is the channel by which the
+model's OWN read of distress moves the tier: it floors the weight to
+`FLAG_FLOOR_WEIGHT` (8.0 — solidly severe with a real window, then decays like
+any threat), dedups repeat flags within `FLAG_DEDUP_MS` (per-turn), and never
+lowers an already-higher state. The `flag_distress` executor (cerebellum, CORE
+tool + noticing toolset + every villager) raises it, forces an immediate triage
+re-check (`resetTriageCooldown`), and — on a villager-triggered flag — always
+mirrors to the ward (`enqueueAndDispatch`, no covert safety action). It sends
+nothing itself; triage owns what care actually lands.
 
 **`pondering.js`** — pure `ponderOnce({topic, provider, apiKey, model})`
 that calls the LLM as the Familiar and writes a real first-person tome

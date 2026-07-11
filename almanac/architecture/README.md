@@ -94,10 +94,11 @@ always mirrors into the ward's own outbox [@architecture-doc]. `audience.js`'s c
 are a read-side control only — what a session is allowed to be told, not what a session is
 allowed to write into memory. See [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes)
 for why the write side is a separate, behavioral defense rather than a filter in this pipeline,
-and how it differs from `injection-guard.js`, a pattern-scanner/sanitizer that exists in the
-repo but is not yet wired into any live data path — it is reserved for external ingestion
-points like channel adapters and web search results that do not exist yet, explicitly excluding
-trusted first-party Phylactery and Unruh content [@architecture-doc].
+and how it differs from `injection-guard.js`, a pattern-scanner/sanitizer wired (0.8.57) at the
+web-read and Village inbound boundaries — see
+[Injection guard: documented but never wired](injection-guard-gap) for the wiring history and
+what is still deliberately excluded (Phylactery/Unruh recall, the ward's own words, and gcal
+event titles) [@architecture-doc].
 
 ## Storage shape
 
@@ -121,6 +122,8 @@ what each one owns.
   to turn one off.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
   human trusted contact works.
+- [Injection guard: documented but never wired](injection-guard-gap) — the pattern-scanner's
+  wiring history and current boundaries, and the incident that produced it.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
 - [Entity-as-subject](../concepts/entity-as-subject) and
