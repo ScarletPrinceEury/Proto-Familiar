@@ -68,6 +68,8 @@ import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
+import { flagDistress } from './threat-tracker.js';
+import { resetTriageCooldown } from './silence-triage-loop.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
@@ -1946,6 +1948,20 @@ export const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'flag_distress',
+      description: 'I raise my own alarm about {{user}}\'s wellbeing — when I read genuine distress in what\'s being said that my automatic signal-scoring may have missed. This is my comprehension, trusted: it raises my concern to its highest level and makes my caring, checking-in sense look right away, rather than waiting for its next scheduled moment. I reach for it readily — a false alarm costs almost nothing and fades on its own, but distress I understood and did NOT flag is the failure that matters. It does not itself message anyone: it moves my own inner concern, and my check-in sense then decides what care {{user}} actually needs. If someone in {{user}}\'s Village raises this to me about them, {{user}} is always told immediately — nothing here is hidden from them.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'A brief note on what I read as distress — for my own audit trail of why I flagged. A phrase is enough.' },
+        },
+        required: [],
+      },
+    },
+  },
   // ── Phylactery consent tools ───────────────────────────────────────────
   // When I autonomously extracted facts from a session and one or more of
   // them had an `ask` remember gate, they were stored with consent_pending=1
@@ -3282,6 +3298,36 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
   },
 
+  // flag_distress (ward-signed safety tool). The Familiar's own read of
+  // distress moves the ward's threat state to severe (flagDistress floors +
+  // dedups + decays), then forces triage to re-deliberate NOW rather than on
+  // the old cooldown. It sends nothing itself — triage owns what care lands.
+  // On a Village-triggered flag (any villager-attributed turn — DM or a room
+  // the ward is in), the ward is ALWAYS told immediately: the flag is
+  // mirrored to them, so the Village can raise the alarm but never covertly.
+  flag_distress: async ({ reason } = {}, ctx = {}) => {
+    try {
+      const r = await flagDistress({ reason });
+      // Force an immediate triage look regardless of its cooldown — a flag I
+      // just raised must not sit on the old 5-minute timer.
+      try { resetTriageCooldown(); } catch { /* triage loop not running (tests) — fine */ }
+      const via = ctx?.viaVillager;
+      if (via) {
+        // Non-ward surface: the ward learns of it immediately (no covert
+        // safety action). Best-effort mirror; the threat raise already landed.
+        const who = via.name || 'someone in the Village';
+        await enqueueAndDispatch({
+          kind:     'flag_distress_relay',
+          originId: `flag:${via.id ?? who}:${Date.now()}`,
+          title:    `${who} raised a concern about you`,
+          body:     `${who} said something that made me worried about you${reason ? `: ${String(reason).slice(0, 200)}` : ''}. I've flagged it and I'm checking in on how you're doing.`,
+        }).catch(err => console.error('[flag_distress] ward mirror failed:', err?.message ?? err));
+      }
+      if (r?.disabled) return quietOk('My threat sense is switched off right now, so I can\'t raise the level — but I\'m still holding this concern.');
+      return quietOk('I\'ve flagged my concern for {{user}} — my check-in sense is looking right now.');
+    } catch (err) { return `I tried to flag concern but hit an error: ${err.message}`; }
+  },
+
   // ── Own files (read-only, sandboxed) ──────────────────────────────
   // Ward-private only: my Tomes and session logs hold mine and {{user}}'s
   // shared history, so I don't read them into a room where others are
@@ -3647,6 +3693,9 @@ export const SET_NEXT_CHECK_TOOL = {
 export const NOTICING_REGISTRY_TOOL_NAMES = [
   'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
   'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
+  // The noticing turn's route for a genuinely alarming read (ward-signed):
+  // it hands distress to triage rather than answering a crisis itself.
+  'flag_distress',
 ];
 
 /**
@@ -3752,7 +3801,13 @@ export const VILLAGER_WRITE_TOOLS = new Set([...DISCORD_SCHEDULE_WRITE_TOOLS, ..
 // ladders (audience.js): schedule:false|'coarse'|'full',
 // memories:false|'shared'|true, contacts:false|'care-visible'|true.
 export function villagerToolNames(grants = {}) {
-  const names = new Set([RELAY_TO_WARD_TOOL_NAME, 'get_datetime']);
+  // flag_distress is available to EVERY registered villager regardless of
+  // grants (ward-signed): anyone in the Village can raise the alarm about the
+  // ward. It moves only the ward's own threat state and is mirrored to the
+  // ward on every villager-triggered flag (the executor), so it can never be
+  // covert. Strangers still get nothing (they're not in villagerToolNames at
+  // all — composeDiscordTools returns [] for them).
+  const names = new Set([RELAY_TO_WARD_TOOL_NAME, 'get_datetime', 'flag_distress']);
   const sched = grants.schedule;
   const mem   = grants.memories;
   const con   = grants.contacts;

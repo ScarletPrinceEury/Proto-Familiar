@@ -4008,7 +4008,9 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
     now: Date.now(), lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
   });
   const prompt = substituteMacros(buildNoticingPrompt({
-    nowBlock, situationReport, threatTier, hasFlagDistress: false,
+    // flag_distress is in the noticing toolset now, so the prompt's
+    // hand-to-triage clause names a lever the Familiar can actually pull.
+    nowBlock, situationReport, threatTier, hasFlagDistress: true,
   }), s);
   const messages = [
     ...(identity ? [{ role: 'system', content: identity }] : []),

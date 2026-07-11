@@ -11,8 +11,11 @@ import {
   getThreatHistory,
   effectiveWeight,
   tierForThreat,
+  flagDistress,
+  FLAG_DEDUP_MS,
   MAX_RAW_WEIGHT,
   HISTORY_CAP,
+  THREAT_TIERS,
 } from '../threat-tracker.js';
 
 function tempDir() {
@@ -228,4 +231,74 @@ test('concurrent recordThreat calls don\'t clobber each other (serialized via lo
     const hist = await getThreatHistory({ tomesDir: dir });
     assert.equal(hist.length, N);
   } finally { cleanup(); }
+});
+
+// ── flag_distress (ward-signed) ──────────────────────────────────
+
+test('flagDistress: floors a calm state straight to severe', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const r = await flagDistress({ reason: 'said they want to disappear', tomesDir: dir });
+    assert.equal(r.flagged, true);
+    assert.equal(r.tier, 'severe');
+    assert.ok(r.raw_weight >= THREAT_TIERS.severe);
+    const now = await getThreat({ tomesDir: dir });
+    assert.equal(now.tier, 'severe');
+    const hist = await getThreatHistory({ tomesDir: dir });
+    assert.equal(hist[0].source, 'flag_distress');
+    assert.match(hist[0].signals[0].reason, /disappear/);
+  } finally { cleanup(); }
+});
+
+test('flagDistress: never LOWERS an already-higher state, never exceeds the cap', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    // Push above severe first, then flag — the flag must not pull it down.
+    await recordThreat({ delta: 9.5, tomesDir: dir });
+    const r = await flagDistress({ tomesDir: dir });
+    assert.ok(r.raw_weight >= 9.5 - 0.01, 'flag did not lower a higher state');
+    assert.ok(r.raw_weight <= MAX_RAW_WEIGHT);
+    assert.equal(r.tier, 'severe');
+  } finally { cleanup(); }
+});
+
+test('flagDistress: per-turn dedup — repeat flags in the window are one bump', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const base = 1_000_000;
+    await flagDistress({ tomesDir: dir, now: base });
+    const dup = await flagDistress({ tomesDir: dir, now: base + 1000 });   // within window
+    assert.equal(dup.deduped, true, 'a second flag in the window is a no-op bump');
+    const hist = await getThreatHistory({ tomesDir: dir });
+    assert.equal(hist.filter(h => h.source === 'flag_distress').length, 1, 'only one flag event recorded');
+    // A flag AFTER the window records again.
+    const later = await flagDistress({ tomesDir: dir, now: base + FLAG_DEDUP_MS + 1000 });
+    assert.equal(later.flagged, true);
+  } finally { cleanup(); }
+});
+
+test('flagDistress: decays like normal threat and clears with resetThreat', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const base = 1_000_000;
+    await flagDistress({ tomesDir: dir, now: base });
+    // ~6 days later (2 half-lives at tau=3d): severe(7) → ~1.75 → below severe.
+    const decayed = await getThreat({ tomesDir: dir, now: base + 6 * 24 * 3600_000 });
+    assert.ok(decayed.weight < THREAT_TIERS.severe, 'a flag decays like any threat');
+    await resetThreat({ tomesDir: dir });
+    assert.equal((await getThreat({ tomesDir: dir })).tier, 'calm');
+  } finally { cleanup(); }
+});
+
+test('flagDistress: no-op when the detector is disabled', async () => {
+  const { dir, cleanup } = tempDir();
+  process.env.PROTO_FAMILIAR_THREAT_DISABLED = '1';
+  try {
+    const r = await flagDistress({ tomesDir: dir });
+    assert.equal(r.disabled, true);
+    assert.equal(r.tier, 'calm');
+  } finally {
+    delete process.env.PROTO_FAMILIAR_THREAT_DISABLED;
+    cleanup();
+  }
 });

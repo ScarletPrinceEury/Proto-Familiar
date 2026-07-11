@@ -648,8 +648,15 @@ edits like this one: patch too.)
 
 ## 11. Out of scope
 
-- `flag_distress` and detection-pattern additions (the threat-diagnosis
-  follow-up; its own sign-off).
+- ~~`flag_distress`~~ — **SHIPPED (`0.8.68`)** under its own ward sign-off:
+  the Familiar's (or a villager's) read of distress floors the ward's threat
+  to severe (`FLAG_FLOOR_WEIGHT`, decays like normal, per-turn dedup), forces
+  an immediate triage re-check (`resetTriageCooldown`), and — on a
+  villager-triggered flag — always mirrors to the ward (no covert safety
+  action). CORE tool + in the noticing toolset (completing Pass 4's deferred
+  clause) + reachable by every registered villager. The remaining
+  detection-pattern additions (lexical crisis-signal tuning) stay a separate
+  follow-up with their own sign-off.
 - Interpreting the wait streak in prompts beyond the bare fact (the *next*
   experiment, after the ward reads this one's data).
 - Villager-directed initiative from the noticing tick (the warmth loop
