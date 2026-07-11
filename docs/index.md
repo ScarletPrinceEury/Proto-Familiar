@@ -31,7 +31,8 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 ### Design documents & build specs
 
 Deeper design rationale and the implementation specs features were built from
-(roughly newest first): [Initiative](initiative-build-spec.md) ·
+(roughly newest first): [Weather](weather-build-spec.md) ·
+[Initiative](initiative-build-spec.md) ·
 [Temporal Bridges](temporal-bridges-build-spec.md) ·
 [Browser](browser-build-spec.md) · [Voice](voice-build-spec.md) ·
 [Vision](vision-build-spec.md) · [Stewardship](stewardship-build-spec.md) ·
