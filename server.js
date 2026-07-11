@@ -3748,6 +3748,9 @@ function startSilenceTriage() {
         reason:    r.reason,
         decision:  r.decision ?? null,
         acted:     r.acted ?? false,
+        // Wait-streak experiment (Pass 1): the count the prompt showed at
+        // this deliberation, so streak values correlate with decisions.
+        streakAtDecision: r.streakAtDecision ?? null,
         at:        r.at,
       }).catch(() => {}); // non-critical
 
@@ -3868,6 +3871,8 @@ function startReachout() {
           villager:       r.villager?.name ?? null,
           messagePreview: r.decision?.message?.slice(0, 120) ?? null,
           nextCheckInMs:  r.nextCheckInMs ?? null,
+          // Wait-streak experiment (Pass 1): the count the prompt showed.
+          streakAtDecision: r.streakAtDecision ?? null,
           error:          r.error ?? null,
         }).catch(() => {});
       }

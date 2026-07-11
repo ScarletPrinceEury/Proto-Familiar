@@ -56,6 +56,7 @@ server.js  (Express, Node 22+, ESM)
     ├── reachout.js         ── warm-outreach decision (ward + warm villagers)
     ├── outbox.js           ── persistent delivery queue (reminders, triage, alerts)
     ├── last-activity.js    ── timestamps user activity for the silence loop
+    ├── wait-streak.js      ── wait-streak experiment: counts deliberated waits since last proactive act
     │
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
@@ -119,6 +120,7 @@ ponderings injection, care-check framing) and as background loops
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
+├── wait-streak.js           Wait-streak experiment (Pass 1): deliberated-wait counter + the neutral prompt fact line
 ├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
 ├── relative-time.js         Natural-English relative phrasing for every timestamped surface (memories, ponderings, schedule, handoff, "Now")
@@ -593,6 +595,26 @@ for the triage loop's pending-contact deferral.
 stamped from the chat path; consumed by the silence-triage loop.
 Discord ward messages stamp it too — the Familiar's sense of "my human
 was just here" follows the human, not a particular window.
+
+**`wait-streak.js`** — the ward's wait-streak experiment
+(initiative-build-spec Pass 1): a persistent counter in
+`tomes/.wait-streak.json` of how many times the Familiar has chosen to
+wait/defer since its last proactive act. Increments ONLY on deliberated
+wait choices (triage `wait`, warmth `wait`, a Discord `[later:…]` defer,
+snoozing a deferred tell); resets ONLY on proactive decisions (triage /
+warmth `reach_out` at decision time, a revisit that actually speaks,
+acknowledging a deferred intent after acting). Gate-skipped ticks never
+count (the Familiar was never asked), and the ward speaking never resets.
+Read side: `buildWaitStreakLine` renders ONE neutral verbatim fact line
+into the three deliberations that offer the choice — `buildReachoutPrompt`,
+`decideTriageViaLLM`, and the ambient Discord presence block — no advice,
+no thresholds, no gate changes (the experiment contract: only the
+information varies). `streakAtDecision` is stamped into
+`triage-events.jsonl` / `reachout-events.jsonl` so the ward can correlate
+streak values with decisions. Off: `waitStreakEnabled:false` or
+`PROTO_FAMILIAR_WAIT_STREAK_DISABLED=1` — disabled means no recording AND
+no line, and the affected prompts are byte-identical to their pre-feature
+output.
 
 **`discord-gateway.js`** — autonomous singleton (Village V4). A
 supervisor tick (30s) compares Settings (`discordEnabled`,

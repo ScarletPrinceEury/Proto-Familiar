@@ -32,6 +32,7 @@ import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecen
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { buildWaitStreakLine } from './wait-streak.js';
 
 // ── Warm-villager selection ──────────────────────────────────────
 //
@@ -63,7 +64,7 @@ export function getWarmVillagers(registry) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase }) {
+export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase, waitStreakLine = '' }) {
   const silenceLine = wardSilencePhrase
     ? `- My human was last around ${wardSilencePhrase} ago. Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`
     : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`;
@@ -85,7 +86,7 @@ ${identityBlock}
 ${nowBlock}
 
 What I have to work with:
-${silenceLine}
+${silenceLine}${waitStreakLine ? `\n${waitStreakLine}` : ''}
 ${sessionBlock}${tellsBlock}
 ${villagersBlock}
 
@@ -192,6 +193,9 @@ export async function decideReachoutViaLLM({
     pendingTells,
     warmVillagers,
     wardSilencePhrase,
+    // Wait-streak awareness (Pass 1): one neutral, code-built fact; ''
+    // when the experiment is off, so the prompt is byte-identical (W3).
+    waitStreakLine: buildWaitStreakLine({ now: nowMs, settings: s }),
   }), s);
 
   let raw;

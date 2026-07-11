@@ -66,6 +66,7 @@ import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
@@ -562,6 +563,12 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const silencePhrase = plainInterval(nowMs - silenceMs, nowMs);
   const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
 
+  // Wait-streak awareness (initiative-build-spec Pass 1, ward-signed):
+  // exactly ONE neutral, code-built fact line appended to the deliberation
+  // facts — no advice, no framing, no change to any gate or default. ''
+  // when the experiment is off (prompt byte-identical, invariant W3).
+  const waitStreakLine = buildWaitStreakLine({ now: nowMs, settings: s });
+
   // Pull identity context (who the Familiar is, who the user is) and the
   // recent conversation log in parallel. Both degrade gracefully to empty.
   const [{ static: identityContext }, recentMessages] = await Promise.all([
@@ -687,7 +694,7 @@ ${nowBlock}
 
 What I know:
 - Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight}) - this number increases when my human says concerning phrases in our conversation
-- my human has been silent for ${silencePhrase} (this has passed the threshold for this tier, but the threshold is 0 at moderate+ — so a "silence" of less than a minute is still flagged for my judgement, not because it's actually long). I check the conversation below for context: did they say what they're doing (cooking, in the shower, heading out), or did they just go quiet mid-thread? Asking "is X done yet?" 30 seconds after they said they were starting it would be obviously off — the relative-time markers on each message let me see that.
+- my human has been silent for ${silencePhrase} (this has passed the threshold for this tier, but the threshold is 0 at moderate+ — so a "silence" of less than a minute is still flagged for my judgement, not because it's actually long). I check the conversation below for context: did they say what they're doing (cooking, in the shower, heading out), or did they just go quiet mid-thread? Asking "is X done yet?" 30 seconds after they said they were starting it would be obviously off — the relative-time markers on each message let me see that.${waitStreakLine ? `\n${waitStreakLine}` : ''}
 ${signalsBlock}
 ${sessionBlock}
 ${contactsBlock}
@@ -2129,6 +2136,9 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await snoozeIntent({ uid, index: idx, minutes: Number(minutes) || 60 });
       if (data.alreadyDone) return 'Intent was already filed — nothing to snooze.';
+      // Wait-streak (Pass 1): snoozing a deferred tell is choosing to
+      // defer when offered the moment — it increments. Fire-and-forget.
+      if (data.ok) Promise.resolve(recordWait('tell-snooze')).catch(() => {});
       return data.ok
         ? quietOk(`Intent snoozed until ${data.snooze_until} — it will resurface after that.`)
         : `Snooze failed: ${data.error ?? 'unknown error'}`;
@@ -2144,6 +2154,9 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await markIntentActedOn({ uid, index: idx });
       if (data.alreadyDone) return 'Intent was already marked as filed.';
+      // Wait-streak (Pass 1): acknowledging after genuinely acting on a
+      // told intent is a proactive payoff — it resets. Fire-and-forget.
+      if (data.ok) Promise.resolve(recordProactive('tell-payoff')).catch(() => {});
       return data.ok ? quietOk('Deferred intent marked as filed.') : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
