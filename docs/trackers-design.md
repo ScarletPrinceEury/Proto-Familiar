@@ -95,6 +95,44 @@ report when genuinely stale. The Familiar then asks *one* natural question if
 the moment fits — or doesn't. There is no questionnaire anywhere in the
 design; there is a Familiar who knows what it doesn't know.
 
+**2.4 Mood-tagged send — the calibration affordance (ward idea).**
+A small mood control by the message input: the ward picks a mood *as* they
+send, and the message goes out tagged with it. Each tagged message writes a
+mood-series entry (`source:'send-button'`, linked to the message id) AND
+stamps the message metadata in the session log — so reflection can study
+**mood ↔ how they actually write**. This is the design's quiet keystone:
+tagged messages are *labeled examples* for the passive-inference path (§2.2).
+A calibration period for new wards (a stretch where the mood-send is the
+primary way to send) builds the corpus that lets reflection distill "what
+low sounds like in my human's words" into Phylactery — after which passive
+inference has ground truth to lean on and the button can relax to optional.
+Web UI affordance first (Discord has no compose surface we control; a
+Discord equivalent is a later question). Tags are mood-tracker data:
+sensitive, ward-private, fail-closed everywhere (§6).
+
+**WARD-DECIDED (all four):**
+- **Vocabulary: a small named palette (~7)** — plain named moods (proposal:
+  good · calm · tired · stressed · low · irritable · numb; final wording at
+  build time). Crisp code labels, one tap, unambiguous series keys. No
+  numeric flattening.
+- **Lock shape: soft lock.** For a new ward's first two weeks the mood-send
+  is the *primary* send button, with a plain send always reachable as a
+  small secondary control; skips are allowed and are themselves data. After
+  day 14 it relaxes to a normal Settings toggle (existing wards: same
+  toggle, opt-in).
+- **Visibility: learning-only.** The tag NEVER enters the live turn — only
+  memorization/reflection see it (the ward's read: more organic; the
+  Familiar shouldn't be reacting to the label but to the human). This also
+  keeps calibration pure: reflection learns what "low" *sounds like*
+  without the model ever having read the answer in-turn.
+- **Safety link: yes, gently.** Bottom-tier tags (low/numb) contribute a
+  small, dampened, deduped delta to the shared threat scalar — a weak
+  crisis-signal, never a flag_distress-style severe floor, never a forced
+  triage look. Ward-signed; the exact delta/damping lands in the
+  crisis-signals sign-off set at build time. Note the deliberate pairing
+  with learning-only visibility: the Familiar doesn't *mention* the tag,
+  but a dark run of tags still reaches the caring machinery.
+
 ## 3. Surfacing & derivation: ride the temporal graph
 
 Trackers must be *reachable by the Familiar* (the capability rule) and must
@@ -185,7 +223,15 @@ one line in the relevant injected surfaces (e.g. the stewardship agenda) when
 a recurring untracked pattern shows (code-detected: the same lapse class
 missed N times with no tracker attached → a cue, once, with a long cooldown).
 
-## 8. Ward decisions (open)
+## 8. Ward decisions
+
+**Resolved (mood-tagged send, §2.4):** named palette (~7) · soft lock
+(two weeks, plain send reachable, then a toggle) · learning-only visibility
+(the tag never enters the live turn) · gentle safety link (dampened weak
+delta on low/numb, never a severe floor). Defaults set without further
+ceremony: web-only v1; existing wards opt in via the same toggle.
+
+**Still open:**
 
 1. **Template set for v1** — pantry, laundry, menses, mood, meds, sleep is
    the proposed six; trim or extend?
