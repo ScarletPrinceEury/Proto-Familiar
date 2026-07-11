@@ -91,6 +91,11 @@ in isolation and both shipped before being caught [@claude-md]:
   to state the positive instruction plainly, and keep a contrast only when it is load-bearing
   (as in the acknowledge-versus-acting case above).
 
+A related but distinct incident on the non-crisis warmth path is recorded in
+[Wait-streak experiment](wait-streak-experiment): the warm reach-out prompt once asserted
+"nothing is wrong" as an axiom on every tick, which let a real two-day silence read as fine by
+definition even without any caution language being involved.
+
 CLAUDE.md ties these rules to a broader, evidence-scored set of prompting guidelines —
 positive framing over negation, pairing any prohibition with a positive alternative,
 reserving hard "NEVER" for true invariants, and anchoring tone to a concrete identity rather

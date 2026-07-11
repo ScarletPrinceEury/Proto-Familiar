@@ -82,12 +82,26 @@ companionship signal in favor of the crisis loop is adding caution in a place th
 nothing, not the "bias toward staying quiet" pattern that caused real harm when it leaked
 into the *safety* decision itself.
 
+## Shared self-observation: the wait-streak line
+
+Warm reach-out, silence triage, and the Discord gateway's ambient presence block all consume the
+same small module, `wait-streak.js`, rather than each tracking their own sense of "how long has
+it been since I acted." It is not itself a loop — it has no `setInterval` of its own — but a
+persistent counter that each of those three loops' deliberation ticks reads from and writes to,
+recording only waits and resets that were an explicit, offered choice
+[Wait-streak experiment](../decisions/wait-streak-experiment). It exists because an earlier
+version of the warm reach-out prompt asserted "nothing is wrong" as an axiom on every tick, which
+let a real two-day silence read as fine by definition; the decision page covers both that prompt
+fix and the counter it motivated.
+
 ## Related
 
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
   silence-triage sits on top of.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — why these loops default
   to acting rather than waiting.
+- [Wait-streak experiment](../decisions/wait-streak-experiment) — the warm reach-out prompt fix
+  and the shared self-observation counter described above.
 - [Engineering conventions](../reference/engineering-conventions) — the graceful-degradation
   and versioning rules that every loop above is written to follow.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how several of these

@@ -93,6 +93,13 @@ politely asking the model to be different.
   caution language added to a safety prompt reproduced the armature's passivity pull at the
   worst possible moment, and it is why every prompt governing when the Familiar acts is banned
   from "bias toward staying quiet" language today.
+- **Removing pre-resolved axioms outside the safety path, too.** [Wait-streak
+  experiment](../decisions/wait-streak-experiment) records a non-crisis instance of the same
+  pull: the warm reach-out prompt once asserted "nothing is wrong" as an axiom on every tick,
+  which let a real two-day silence read as fine by definition even though no crisis language was
+  involved. The fix and the self-observation counter that followed it apply this same discipline
+  — hand the model a bare, code-computed fact and let it decide what the fact means, rather than
+  pre-deciding the answer or supplying advice.
 
 ## What this is not
 
