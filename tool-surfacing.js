@@ -43,6 +43,7 @@ export const TOOL_MODULES = {
   template_apply: 'schedule-write', template_list: 'schedule-read',
   gcal_list_calendars: 'schedule-read', gcal_attribute_calendar: 'schedule-write',
   schedule_add_hold: 'schedule-write', schedule_availability: 'schedule-read',
+  schedule_set_lead: 'schedule-write',   // per-event alert lead (Initiative Pass 5)
 
   'memory-edit': undefined, // (namespace note only — real entries below)
   read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',

@@ -974,7 +974,9 @@ async function touchLocation(locationKey, sessionId) {
 // .tool_calls / finish_reason), and accepts an optional `tools` array. This is
 // the shape runToolCallLoop's callUpstream needs. callChat below is the plain
 // string wrapper for the no-tools path.
-async function callChatRaw({ conn, messages, settings, tools }) {
+// Exported so the noticing loop (Initiative Pass 4) can run its bounded
+// tool-call loop through the same provider call rather than duplicating it.
+export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const resp = await fetch(url, {

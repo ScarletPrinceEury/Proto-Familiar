@@ -58,6 +58,8 @@ server.js  (Express, Node 22+, ESM)
     ├── last-activity.js    ── timestamps user activity for the silence loop
     ├── wait-streak.js      ── wait-streak experiment: counts deliberated waits since last proactive act
     ├── contact-baselines.js ─ derives normal contact rhythm (median/p90 gaps) from session logs
+    ├── noticing.js         ── the Familiar's own turn: wake conditions + situation report + prompt + tick
+    ├── noticing-loop.js    ── autonomous: drives the noticing tick, self-paced (Initiative Pass 4)
     │
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
@@ -625,6 +627,28 @@ tab) honouring the Familiar's own visibility choice — a private round is count
 (`hidden_count`) but its contents withheld: existence is never hidden, only what
 a private round *is*. The autonomous noticing turn that consumes due intentions
 with the full condition code-gate is Initiative Pass 4 (not yet built).
+
+**`noticing.js`** + **`noticing-loop.js`** — the Familiar's own turn (Initiative
+Pass 4): the organ that lets it *notice* and act without my human spelling it
+out. `noticing.js` holds the pure logic — wake conditions (a due intention whose
+condition passes, a contact gap past the baseline p90, a readiness gap, an aging
+untriggered intention; **no wake condition → no turn**), the condition
+code-gate (`conditionPasses` — evaluated here, not left to the model, since no
+human reads this turn), the code-built ≤5-item situation report, the ward-signed
+prompt (`buildNoticingPrompt` — threat-tier line only at moderate+, flag_distress
+clause only when that tool is in hand), and the injectable `runOneNoticingTick`.
+`noticing-loop.js` is the singleton that drives it, self-paced (`set_next_check`,
+clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
+in `server.js`'s `noticingDeliberate` (`composeNoticingTools`: intention CRUD + a
+few schedule reads + the noticing-scoped `reach_out_to_ward` warm-knock and
+`set_next_check`; a reach-out refused during quiet hours is not counted as
+acting). **Does NOT stand down at elevated threat** (ward-signed,
+safety-significant — the tier shifts the register, never skips the turn; joins
+the safety-critical sign-off set). A proactive act resets the wait streak; a
+stand-down increments it (`source:'noticing'`). Every decision-reaching tick —
+including quiet-window evaluations — lands in `logs/noticing-events.jsonl` (GET
+`/api/noticing-events`). Model via `connectionForFeature(s,'noticing')`. Off:
+`noticingEnabled` / `PROTO_FAMILIAR_NOTICING_DISABLED=1`.
 
 **`contact-baselines.js`** — a model of "normal contact rhythm," in code
 (initiative-build-spec Pass 2). Turns the contact history the system already

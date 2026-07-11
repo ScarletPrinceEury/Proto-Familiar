@@ -464,6 +464,43 @@ def mark_alerted(
     return True
 
 
+def set_lead(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    lead_minutes: int | None,
+) -> bool:
+    """Set (or clear) an event's per-event lead time (Initiative Pass 5).
+
+    Writes payload.lead_minutes so the Node-side alert scan gives THIS event
+    its own "coming up" lead instead of the global default. Passing None
+    clears the override (the event falls back to the global lead). An atomic
+    read-merge-write — like mark_alerted — so a concurrent sync update to
+    the same node's payload can't be clobbered. Clamping to a sane range is
+    the Node side's job (clampLeadMinutes); here we only store the value the
+    caller settled on.
+
+    Returns True if the node existed, False otherwise.
+    """
+    row = conn.execute(
+        "SELECT payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    ).fetchone()
+    if row is None:
+        return False
+    payload = json.loads(row["payload_json"] or "{}")
+    if lead_minutes is None:
+        payload.pop("lead_minutes", None)
+    else:
+        payload["lead_minutes"] = int(lead_minutes)
+    ts = now_iso()
+    conn.execute(
+        "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(payload), ts, id),
+    )
+    return True
+
+
 def reminders_health(conn: sqlite3.Connection) -> dict[str, Any]:
     """Quick observability surface for the reminders scheduler.
 
