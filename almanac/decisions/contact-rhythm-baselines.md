@@ -66,7 +66,10 @@ fewer than `MIN_SAMPLES = 4` observed gaps for a weekday-class, that class's `ha
 states the reasoning: a fabricated rhythm is worse than no rhythm, because it would let the
 Familiar assert "this is unusual for us" off two data points [@contact-baselines]. Each
 weekday-class carries its own `hasBaseline` independently, so a thin class (say, few weekend
-samples) stays silent while a richer class still reports [@contact-baselines].
+samples) stays silent while a richer class still reports [@contact-baselines]. The pure helpers
+(`weekdayClass`, `coalesceEpisodes`, `episodeGaps`, `percentile`, `computeBaseline`) are covered
+by 18 fixture tests over synthetic timestamp sets, including cases that pin the under-two-weeks
+and too-few-samples honesty behavior [@contact-baselines-test].
 
 **Ride existing data, no new request.** `getContactBaseline` adds no loop and no LLM call. It
 recomputes lazily on read from session logs the system already writes, over a rolling 4-week
