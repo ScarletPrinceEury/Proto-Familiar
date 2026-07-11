@@ -71,6 +71,14 @@ export const TOOL_MODULES = {
   convert_ids_to_slugs: 'maintenance',
 
   set_day_start_anchor: 'stewardship',
+
+  // intentions — my own forward commitments and rounds (Initiative Pass 3).
+  // Surfaced by intent-setting/round language OR by the due-intentions block
+  // travelling with its tools (a payoff turn brings the tools to act).
+  intention_set: 'intentions', intention_list: 'intentions',
+  intention_drop: 'intentions', intention_done: 'intentions',
+  intention_mark_fired: 'intentions',
+  intention_set_rounds_visibility: 'intentions',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 
@@ -89,7 +97,8 @@ export const MODULE_INDEX =
   'acks (file deferred intents, confirm/drop memory consent, graduation notices), ' +
   'files (list/read my own folder), ' +
   'maintenance (id tidy-up), ' +
-  'stewardship (set the day-start time I open my human\'s day on)';
+  'stewardship (set the day-start time I open my human\'s day on), ' +
+  'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +
@@ -140,6 +149,15 @@ const TRIGGERS = {
   maintenance: {
     text: /\b(convert|tidy|migrate|old ids?|hex ids?)\b/i,
     blocks: [],
+  },
+  intentions: {
+    // Intent-setting / round language, plus follow-through phrasing. Generous
+    // by design (the "somewhat generous" rule) — a missed surface costs one
+    // request_tools round; over-surfacing a few hundred tokens once.
+    text: /\b(intention|inten(d|ding)|from now on|every (morning|noon|afternoon|evening|day|night)|each (morning|day|phase)|my round|rounds\b|remind myself|note to self|follow[ -]?up|check in on|keep an eye on|next time (I|we)|when I (next|get)|going forward|make a habit|going to start)\b/i,
+    // The due-intentions block travels with the tools so a payoff turn can act
+    // on what's come due (mark fired / complete / adjust).
+    blocks: ['[Intentions coming due]'],
   },
 };
 

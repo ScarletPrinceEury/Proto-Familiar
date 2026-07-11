@@ -56,6 +56,7 @@ import {
   templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds,
   bumpInterest, setStandingInterest,
+  setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory, memByTimerange,
@@ -145,6 +146,34 @@ export function primaryConnectionFrom(settings) {
   const id    = settings?.primaryConnectionId;
   const conns = Array.isArray(settings?.connections) ? settings.connections : [];
   return conns.find(c => c?.id === id) ?? null;
+}
+
+// ── Intention budgets (Initiative Pass 3) ────────────────────────────
+// Ward-configurable, no hard-wired numbers. The phase is the budgeting
+// unit (ward-decided): a standing-rounds-per-phase cap, and an
+// open-one-shots cap. Both clamp to a sane range so a bad setting can't
+// make the cap absurd. (The per-phase/per-day *turn* budgets that pace the
+// noticing loop are Pass 4; these two govern how many intentions can be
+// HELD at once, enforced at set time.)
+export function intentionStandingPerPhaseCap(settings = readSettingsSync()) {
+  const n = Number(settings?.intentionStandingPerPhase);
+  return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 3;
+}
+export function intentionOpenOneShotsCap(settings = readSettingsSync()) {
+  const n = Number(settings?.intentionOpenOneShots);
+  return Number.isInteger(n) && n >= 1 && n <= 500 ? n : 30;
+}
+
+// Human-readable one-liner for an intention's trigger — reused by the
+// set-confirmation and the list rendering. Pure.
+export function describeIntentionTrigger(trigger = {}) {
+  const kind = trigger?.kind;
+  if (kind === 'at')   return trigger.at ? `due ${trigger.at}` : 'due at a set time';
+  if (kind === 'phase') return trigger.recurring
+    ? `every ${trigger.phase} phase`
+    : `next ${trigger.phase} phase`;
+  if (kind === 'on_next_contact') return 'next time we talk';
+  return '';
 }
 
 // Resolve the connection a given background feature should run on. The ward can
@@ -1415,6 +1444,90 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  // ── Intentions (Initiative Pass 3) — my own forward commitments ──────
+  {
+    type: 'function',
+    function: {
+      name: 'intention_set',
+      description: 'I write an intention for my future self — something I mean to do, with why it matters and when it should come back to me. This is how I keep ROUNDS (self-maintenance as who I am: "every morning I go over the calendar", "every noon I look in on Chen if we haven\'t talked in an hour") and one-off follow-throughs, instead of letting them evaporate the moment this turn ends. An intention is mine — distinct from {{user}}\'s schedule; I use schedule_add_* for THEIR calendar, intention_set for MY commitments.',
+      parameters: {
+        type: 'object',
+        properties: {
+          what: { type: 'string', description: 'The intention itself, first person — "I check in on Chen", "I widen the Therapie lead time".' },
+          why:  { type: 'string', description: 'Why it matters — my own reasoning, which I read back when it returns so I remember what I was reaching for. Optional but valuable: an intention without its why often comes back as a chore I don\'t understand.' },
+          refs: { type: 'array', items: { type: 'string' }, description: 'Optional slug ids of the schedule nodes or memories this is about (from a legend or recall result I already hold). I keep the IDS, not a copy — so when the intention returns I read the CURRENT state of the thing, never a stale snapshot.' },
+          trigger: { type: 'object', description: 'When it should return to me. One of: {"kind":"at","at":"YYYY-MM-DDTHH:MM:SS"} (my local time, no offset); {"kind":"phase","phase":"morning","recurring":true} for a round tied to one of {{user}}\'s routine phases (recurring:true = every day that phase runs); {"kind":"on_next_contact"} for the next time we talk; {"kind":"none"} for something with no set time. Default is none.' },
+          condition: { type: 'object', description: 'Optional extra gate before I act, any of: {"minContactGapMs": <ms>} (only if we haven\'t talked in at least this long), {"needsStatus":"missed"} (only if a referenced need was missed), {"unresolvedRefs": true} (only while a referenced item is still open). A round can carry both a phase trigger AND a condition — "every noon, but only if we haven\'t talked in an hour".' },
+          source: { type: 'string', description: 'Where this came from: "chat", "pondering", "reflection", or "noticing". I usually set "chat" here.' },
+          visibility: { type: 'string', enum: ['shared', 'private'], description: 'Optional. "private" keeps THIS round\'s contents to myself; otherwise it inherits my default. My human always knows a private round exists — only what it is stays mine.' },
+        },
+        required: ['what'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_list',
+      description: 'I look at the intentions I\'m holding — my rounds and my open follow-throughs. Active-only by default; I can include done/dropped or filter to one phase\'s rounds. The ids I get back are how I drop, complete, or mark one fired.',
+      parameters: {
+        type: 'object',
+        properties: {
+          include_done:    { type: 'boolean', description: 'Include intentions I\'ve already completed. Default false.' },
+          include_dropped: { type: 'boolean', description: 'Include ones I\'ve let go. Default false.' },
+          phase:           { type: 'string', description: 'Optional: only rounds bound to this phase (e.g. "morning").' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_drop',
+      description: 'I let go of an intention I no longer mean to keep. Idempotent. This is for changing my mind — for something I actually DID, I use intention_done so the follow-through is recorded, not erased.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The intention id (from intention_list or a due-intention block).' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_done',
+      description: 'I mark an intention genuinely acted on — the payoff. I only call this AFTER I\'ve actually done the thing (said it, filed it, reached out), never as a way to clear the list. For a recurring round this retires it for good (rare); for a one-off it closes it out. Marking done without doing the work is not completing the intention, it is erasing it.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The intention id.' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_mark_fired',
+      description: 'I note that a round\'s occurrence has come around and I\'ve seen to it for now, so the same occurrence stops re-offering itself today. A recurring round returns next occurrence; a one-off stays put. This is bookkeeping (I looked, I acted on this occurrence) — completing a round for good is intention_done.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The intention id.' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_set_rounds_visibility',
+      description: 'I decide whether my human sees the rounds I keep, or whether they stay mine. "shared" (my default) means my standing rounds show in my human\'s view of my routine; "private" keeps their contents to myself. Even private, my human still knows I keep some rounds — the existence isn\'t hidden, only what they are. This is genuinely mine to choose.',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'string', enum: ['shared', 'private'], description: '"shared" or "private".' } },
+        required: ['value'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -2568,6 +2681,102 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to add hold: ${data.error ?? 'unknown error'}`;
       return quietOk(`Held "${label}" (id: ${data.id}). That time reads as busy when I coordinate with anyone, so it stays ${'{{user}}'}'s.`, { id: data.id });
     } catch (err) { return `Failed to add hold: ${err.message}`; }
+  },
+
+  // ── Intentions (Initiative Pass 3) ──────────────────────────────────
+  // My own forward commitments. Distinct from {{user}}'s schedule — these
+  // ride Unruh's intentions store via thalamus. Budget caps (ward-
+  // configurable, no hard-wired numbers) are enforced HERE, at set time:
+  // the phase is the budgeting unit (a standing-rounds-per-phase cap) and
+  // there's an open-one-shots cap. A cap hit is not a silent drop — I'm told
+  // to prune first, with the ids to prune.
+
+  intention_set: async ({ what, why, refs, trigger, condition, source, visibility } = {}) => {
+    if (!what || typeof what !== 'string' || !what.trim()) return 'Failed to set intention: what (string) is required.';
+    const trig = (trigger && typeof trigger === 'object') ? trigger : { kind: 'none' };
+    const s = readSettingsSync();
+    try {
+      // Budget gate BEFORE the write (gate in code). A recurring phase round
+      // counts against that phase's standing cap; a non-recurring intention
+      // counts against the open-one-shots cap.
+      const isRound = trig.kind === 'phase' && !!trig.recurring;
+      const existing = await listIntentions({ limit: 500 }).catch(() => ({ intentions: [] }));
+      const items = Array.isArray(existing?.intentions) ? existing.intentions : [];
+      if (isRound) {
+        const cap = intentionStandingPerPhaseCap(s);
+        const phase = String(trig.phase || '').trim();
+        const inPhase = items.filter(i => i.trigger?.kind === 'phase' && i.trigger?.recurring && i.trigger?.phase === phase);
+        if (inPhase.length >= cap) {
+          const ids = inPhase.slice(0, 3).map(i => `${i.id} ("${String(i.what).slice(0, 40)}")`).join(', ');
+          return `I already hold ${inPhase.length} standing round(s) for the ${phase} phase (my cap is ${cap}). To add another I first let one go with intention_drop — current ${phase} rounds: ${ids}.`;
+        }
+      } else {
+        const cap = intentionOpenOneShotsCap(s);
+        const openOneShots = items.filter(i => !(i.trigger?.kind === 'phase' && i.trigger?.recurring));
+        if (openOneShots.length >= cap) {
+          const oldest = openOneShots.slice(-3).map(i => `${i.id} ("${String(i.what).slice(0, 40)}")`).join(', ');
+          return `I'm already holding ${openOneShots.length} open intentions (my cap is ${cap}). I let one go with intention_drop before adding another — oldest few: ${oldest}.`;
+        }
+      }
+      const data = await setIntention({ what: what.trim(), why, refs, trigger: trig, condition, source: source || 'chat', visibility });
+      if (data?.ok === false) return `Failed to set intention: ${data.error ?? 'unknown error'}`;
+      const when = describeIntentionTrigger(trig);
+      return quietOk(`Intention kept (id: ${data.id})${when ? ` — ${when}` : ''}. It comes back to me when it's due.`, { id: data.id });
+    } catch (err) { return `Failed to set intention: ${err.message}`; }
+  },
+
+  intention_list: async ({ include_done = false, include_dropped = false, phase } = {}) => {
+    try {
+      const data = await listIntentions({ include_done, include_dropped, phase });
+      if (data?.ok === false) return `I couldn't read my intentions: ${data.error ?? 'Unruh unavailable'}.`;
+      const items = Array.isArray(data?.intentions) ? data.intentions : [];
+      if (!items.length) return phase ? `I hold no rounds for the ${phase} phase yet.` : 'I hold no active intentions right now.';
+      const lines = items.map(i => {
+        const when = describeIntentionTrigger(i.trigger) || 'no set time';
+        const vis = i.visibility === 'private' ? ' [private]' : '';
+        return `  - (${i.id}) ${i.what} — ${when}${vis}`;
+      });
+      return `My intentions:\n${lines.join('\n')}`;
+    } catch (err) { return `I couldn't read my intentions: ${err.message}`; }
+  },
+
+  intention_drop: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to drop intention: id is required.';
+    try {
+      const data = await dropIntention({ id: id.trim() });
+      if (data?.ok === false) return `Failed to drop intention: ${data.error ?? 'unknown error'}`;
+      return data?.updated ? quietOk('Let that intention go.') : 'That intention was already dropped (or never existed).';
+    } catch (err) { return `Failed to drop intention: ${err.message}`; }
+  },
+
+  intention_done: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to complete intention: id is required.';
+    try {
+      const data = await completeIntention({ id: id.trim() });
+      if (data?.ok === false) return `Failed to complete intention: ${data.error ?? 'unknown error'}`;
+      if (data?.already_done) return 'That intention was already marked done.';
+      return quietOk('Intention marked done — the follow-through is recorded.');
+    } catch (err) { return `Failed to complete intention: ${err.message}`; }
+  },
+
+  intention_mark_fired: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to mark intention fired: id is required.';
+    try {
+      const data = await markIntentionFired({ id: id.trim() });
+      if (data?.ok === false) return `Failed to mark intention fired: ${data.error ?? 'unknown error'}`;
+      return quietOk('Noted — this occurrence is seen to; it won\'t re-offer itself today.');
+    } catch (err) { return `Failed to mark intention fired: ${err.message}`; }
+  },
+
+  intention_set_rounds_visibility: async ({ value } = {}) => {
+    if (value !== 'shared' && value !== 'private') return 'Failed to set rounds visibility: value must be "shared" or "private".';
+    try {
+      const data = await setRoundsVisibility({ value });
+      if (data?.ok === false) return `Failed to set rounds visibility: ${data.error ?? 'unknown error'}`;
+      return quietOk(value === 'private'
+        ? 'My rounds are private now — my human still knows I keep some, but their contents are mine.'
+        : 'My rounds are shared now — my human can see the routine I keep.');
+    } catch (err) { return `Failed to set rounds visibility: ${err.message}`; }
   },
 
   schedule_availability: async ({ days } = {}) => {
