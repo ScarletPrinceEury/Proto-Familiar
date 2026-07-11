@@ -255,6 +255,10 @@ const state = {
   // how many times it has waited since last reaching out, as a bare fact. Off
   // via this toggle or PROTO_FAMILIAR_WAIT_STREAK_DISABLED=1 on the server.
   waitStreakEnabled:       true,
+  // Noticing loop (Initiative Pass 4). Default-ON: the Familiar takes its own
+  // wake-condition-gated turns to notice and act. Off via this toggle or
+  // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
+  noticingEnabled:         true,
   // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
@@ -377,7 +381,7 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
-  'contactBaselinesEnabled', 'waitStreakEnabled',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
@@ -872,6 +876,7 @@ function loadPersisted() {
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
   if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
   if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
+  if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
@@ -2745,6 +2750,7 @@ function readSettingsFromUI() {
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
+  if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
@@ -2887,6 +2893,7 @@ function writeSettingsToUI() {
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
+  if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
@@ -3792,7 +3799,7 @@ function init() {
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
-    'baselines-toggle', 'wait-streak-toggle',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',

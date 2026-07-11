@@ -422,6 +422,24 @@ override optional (a single sensitive round private while the rest show).
 
 ## Pass 4 — the noticing tick: Eury's own turn (and the shared runner)
 
+> **✅ SHIPPED (`0.8.66`).** `noticing.js` (pure: wake conditions, the
+> `conditionPasses` code-gate, situation report, ward-signed prompt,
+> `runOneNoticingTick`) + `noticing-loop.js` (self-paced singleton) +
+> `server.js` wiring (`gatherNoticingWakeInputs`, `noticingDeliberate` with
+> the bounded `composeNoticingTools` toolset + the noticing-scoped
+> `reach_out_to_ward` / `set_next_check`), `logs/noticing-events.jsonl` (+ GET
+> route), the ward toggle, and CLAUDE.md updates (loop list + safety-critical
+> sign-off set). 22 module tests. **Two deliberate deviations from the draft:**
+> (1) built as a **dedicated loop**, not a mode of the pondering loop — it's a
+> new request class that self-paces, needs its own cadence/off-switch/threat
+> posture, and needs tool access the pondering loop doesn't have; the
+> wake-condition gate provides the "only when there's something to look at"
+> the mode-approach was for. (2) v1 wires the **`minContactGapMs`** condition
+> signal (contact gap); `needsStatus`/`unresolvedRefs` signals are best-effort
+> empty and so fail closed until wired — safe direction. `flag_distress`,
+> `ponder_topic`, and Pass-5 lead-setting are absent from the toolset until
+> they ship (the prompt gates its flag_distress clause on the tool's presence).
+
 **One mechanism, several alarm clocks.** The payoff-turn runner and the
 noticing tick are the same thing: an autonomous turn that fires when
 code-gated wake conditions accumulate, receives a short computed situation
@@ -569,9 +587,10 @@ Net: more capability per request, not more requests per capability.
    Familiar-controlled rounds view. (Rounds "firing" is surfacing due
    intentions into `[Temporal Context]` — a payoff turn riding the existing
    per-turn call; the dedicated autonomous turn is Pass 4.)
-4. **Session D: Pass 4** (situation report, wake conditions, the mode in
-   pondering-loop, toolset composition, events log; prompt wording to the
-   ward before merge).
+4. **Session D: Pass 4 — ✅ SHIPPED** (`0.8.66`). Situation report, wake
+   conditions, toolset composition, events log; ward-signed prompt +
+   no-stand-down-at-threat. Built as a dedicated self-paced loop (not a
+   pondering-loop mode — see the Pass 4 shipped note).
 5. **Session E: Pass 5** (payload lead + tool + alert-pass fallback read +
    projection-cue line + reflection calibration input).
 

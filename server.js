@@ -41,12 +41,17 @@ import {
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
   memByTimerange,
-  setIntention, roundsForWard,
+  setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
+import { startNoticingLoop } from './noticing-loop.js';
+import { buildNoticingPrompt, AGING_INTENT_MS } from './noticing.js';
+import { getContactBaseline, weekdayClass } from './contact-baselines.js';
+import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
+import { selectReadiness } from './stewardship.js';
 import {
   shouldReflectNow,
   getNewOutcomesSinceLastReflection,
@@ -84,7 +89,7 @@ import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
-import { buildTimeAnchorBlock, wardLocalNowISO } from './relative-time.js';
+import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -93,6 +98,7 @@ import {
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
+  appendNoticingEventLog, readNoticingEvents, composeNoticingTools,
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
@@ -131,7 +137,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
@@ -1228,6 +1234,14 @@ app.get('/api/reachout-events', async (_req, res) => {
   } catch {
     res.json([]);
   }
+});
+
+// Noticing decision log (Initiative Pass 4): every tick that reached a
+// decision — including quiet-window evaluations that spent no LLM call — so a
+// dead noticing loop reads as stale entries, never as calm silence.
+app.get('/api/noticing-events', async (_req, res) => {
+  try { res.json(await readNoticingEvents()); }
+  catch { res.json([]); }
 });
 
 // "Eury's rounds" (Initiative Pass 3): the ward-facing view of the Familiar's
@@ -3123,6 +3137,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startGcalSync();
   startSilenceTriage();
   startReachout();
+  startNoticing();
   startMemorySweep();
   startVillageSync();
   // Discord gateway (Village V4). Supervisor idles until the ward sets
@@ -3914,6 +3929,174 @@ function startReachout() {
   // building the needs-fulfilment ledger. Stands down at moderate+ threat;
   // hard off-switch: PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1.
   startNeedsTrackingLoop();
+}
+
+// ── Noticing loop (Initiative Pass 4) — the Familiar's own turn ──────
+// The organ that lets the Familiar notice and act without my human spelling
+// it out. Code-gated wake conditions → a bounded, tool-using deliberation.
+// Does NOT stand down at threat (ward-signed); the tier shifts the register,
+// never skips the turn. Default-ON; toggle noticingEnabled or hard-disable
+// with PROTO_FAMILIAR_NOTICING_DISABLED=1.
+
+// Gather the code-built wake inputs: due intentions, contact baseline + gap,
+// readiness gaps, aging intentions. Best-effort — any piece failing degrades
+// to empty (that condition just doesn't wake the turn), never throws.
+async function gatherNoticingWakeInputs() {
+  const s = readSettingsSync();
+  const tz = s?.wardTimeZone || null;
+  const nowMs = Date.now();
+  const leadHours = Number.isFinite(Number(s?.readinessLeadHours)) ? Number(s.readinessLeadHours) : 48;
+  const winFrom = new Date(nowMs - 12 * 3600_000).toISOString();
+  const winTo   = new Date(nowMs + leadHours * 3600_000).toISOString();
+
+  const [dueRes, baseline, lastAct, win, allIntents, tells] = await Promise.all([
+    getDueIntentions({ now: wardLocalNowISO(tz) }).catch(() => ({ due: [] })),
+    getContactBaseline({ now: nowMs, settings: s }).catch(() => ({ hasBaseline: false })),
+    getLastUserActivity().catch(() => null),
+    getScheduleWindow({ from_ts: winFrom, to_ts: winTo, limit: 200 }).catch(() => ({ nodes: [], edges: [] })),
+    listIntentions({ limit: 200 }).catch(() => ({ intentions: [] })),
+    getUnactedIntents({ limit: 10 }).catch(() => []),
+  ]);
+
+  const contactGapMs = lastAct?.ms ? Math.max(0, nowMs - lastAct.ms) : null;
+  const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+  const edges = Array.isArray(win?.edges) ? win.edges : [];
+  // Read-only readiness detection — fresh flaggedAt so we NEVER consume the
+  // stewardship loop's own cooldown state; noticing only *notices* the gap.
+  const readiness = selectReadiness({ items: nodes, edges, nowMs, wardTimeZone: tz, leadHours, flaggedAt: {}, max: 2 });
+
+  // Aging: my own intentions with no firing trigger, older than the threshold,
+  // plus any still-unsaid tells. Capped so the report stays legible.
+  const untriggered = (allIntents?.intentions ?? []).filter(i =>
+    (i.trigger?.kind === 'none' || i.trigger?.kind === 'on_next_contact')
+    && i.created_at && (nowMs - Date.parse(i.created_at) > AGING_INTENT_MS));
+  const agingTells = (Array.isArray(tells) ? tells : []).filter(t => t.kind === 'tell');
+  const agingIntents = [...untriggered, ...agingTells].slice(0, 3);
+
+  return {
+    dueIntentions: Array.isArray(dueRes?.due) ? dueRes.due : [],
+    // Live signals for the condition code-gate. contactGapMs is wired;
+    // missed-need / unresolved-ref signals are best-effort empty for now
+    // (those conditions fail closed, which is the safe direction).
+    signals: { contactGapMs },
+    baseline,
+    contactGapMs,
+    readiness,
+    agingIntents,
+    weekdayClass: weekdayClass(nowMs, tz),
+  };
+}
+
+// The bounded, tool-using deliberation. Composes the noticing toolset, runs
+// the tool-call loop, and reports which tools were EFFECTIVELY called (a
+// reach-out refused during quiet hours is not counted as acting).
+async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
+  const s = readSettingsSync();
+  const conn = connectionForFeature(s, 'noticing');
+  if (!conn?.apiKey || !conn?.model) return { toolNamesCalled: [] };
+
+  const [{ static: identity }, lastAct] = await Promise.all([
+    enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
+    getLastUserActivity().catch(() => null),
+  ]);
+  const nowBlock = buildTimeAnchorBlock({
+    now: Date.now(), lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
+  });
+  const prompt = substituteMacros(buildNoticingPrompt({
+    nowBlock, situationReport, threatTier, hasFlagDistress: false,
+  }), s);
+  const messages = [
+    ...(identity ? [{ role: 'system', content: identity }] : []),
+    { role: 'user', content: prompt },
+  ];
+  const tools = composeNoticingTools(s);
+
+  let nextCheckInMs = null;
+  const effectiveNames = [];
+  const executeTool = async (name, argsJson, ctx) => {
+    if (name === 'set_next_check') {
+      let a = {}; try { a = argsJson ? JSON.parse(argsJson) : {}; } catch { /* ignore */ }
+      const min = Number(a.minutes);
+      if (Number.isFinite(min)) nextCheckInMs = min * 60_000;
+      effectiveNames.push(name);
+      return 'ok — I\'ll look again then.';
+    }
+    if (name === 'reach_out_to_ward') {
+      let a = {}; try { a = argsJson ? JSON.parse(argsJson) : {}; } catch { /* ignore */ }
+      const msg = stripLlmTimestamps(String(a.message ?? '').trim());
+      if (!msg) return 'I need something to say before I can reach out.';
+      // Quiet hours gate knocking (not the whole turn). Suppressed → NOT
+      // counted as acting; I'm nudged to keep it as an intention instead.
+      if (quietHours) return 'It\'s my human\'s quiet hours — I don\'t knock now. If this matters, I keep it as an intention (intention_set) to reach out later.';
+      const enq = await enqueueAndDispatch({
+        kind: 'reachout', originId: `noticing-${Date.now()}`,
+        title: 'a thought from me', body: msg, ts: new Date().toISOString(),
+      }).catch(() => null);
+      if (enq?.id && !enq?.deduped) { effectiveNames.push(name); return 'Sent — my human will see it.'; }
+      return enq?.deduped ? 'I just reached out very recently, so I hold this rather than double-knock.' : 'I couldn\'t send that right now.';
+    }
+    // Registry tools: count the effective name, then dispatch normally.
+    effectiveNames.push(name);
+    return executeToolCall(name, argsJson, ctx);
+  };
+
+  try {
+    await runToolCallLoop({
+      callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings: s, tools: roundTools ?? tools }),
+      baseMessages: messages,
+      getTools:     () => tools,
+      executeTool,
+      toolCtx: { noticing: true, wardPrivate: true, apiKey: conn.apiKey },
+    });
+  } catch (err) {
+    // A whole-loop failure surfaces as deliberation_failed upstream.
+    throw err;
+  }
+  return { toolNamesCalled: effectiveNames, nextCheckInMs };
+}
+
+function startNoticing() {
+  if (process.env.PROTO_FAMILIAR_NOTICING_DISABLED === '1') {
+    console.log('[noticing] PROTO_FAMILIAR_NOTICING_DISABLED=1 — noticing loop is OFF');
+    return;
+  }
+  startNoticingLoop({
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s.noticingEnabled === false) return false;         // default-ON (undefined = on)
+      const conn = connectionForFeature(s, 'noticing');
+      return !!(conn?.apiKey && conn?.provider && conn?.model);
+    },
+    getThreat,
+    getWakeInputs: gatherNoticingWakeInputs,
+    // Quiet hours gate only KNOCKING (reach_out), passed through to the
+    // deliberation — the turn itself still runs so intentions/reads work.
+    isQuietHours: async () => isWarmthQuietHours(),
+    deliberate:   noticingDeliberate,
+    relInterval:  (ms) => plainInterval(Date.now() - ms, Date.now()),
+    getWaitStreakFn:   () => { try { return getWaitStreak(); } catch { return null; } },
+    recordWaitFn:      recordWait,
+    recordProactiveFn: recordProactive,
+    onTick: (r) => {
+      if (r.reason === 'disabled' || r.reason === 'in_cooldown') return;
+      // Every decision-reaching tick logs — including quiet windows — so a
+      // dead loop reads as stale entries, not calm silence.
+      appendNoticingEventLog({
+        reason:           r.reason,
+        acted:            r.acted ?? false,
+        wakeConditions:   Array.isArray(r.conditions) ? r.conditions.map(c => c.kind) : [],
+        toolsCalled:      r.toolNamesCalled ?? [],
+        threatTier:       r.threat?.tier ?? null,
+        streakAtDecision: r.streakAtDecision ?? null,
+        nextCheckInMs:    r.nextCheckInMs ?? null,
+        error:            r.error ?? null,
+      }).catch(() => {});
+      if (r.reason === 'acted')      console.log(`[noticing] acted (${(r.toolNamesCalled || []).join(', ')})`);
+      else if (r.reason === 'stood_down') console.log(`[noticing] looked (${(r.conditions || []).map(c => c.kind).join(', ')}), stood down`);
+    },
+    onError: (err) => console.error('[noticing]', err?.message ?? err),
+  });
+  console.log('[noticing] Noticing ENABLED (default-ON). Runs at ALL threat tiers (ward-signed no-stand-down); wake-condition gated; self-paced. Hard-disable with PROTO_FAMILIAR_NOTICING_DISABLED=1.');
 }
 
 // Memory coverage sweep (day-anchoring Phase 2). Memorizes past days that never

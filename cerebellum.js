@@ -203,6 +203,7 @@ mkdirSync(LOGS_DIR, { recursive: true });
 
 export const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
 export const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
+export const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
 
 // Shared JSONL event-log primitives — triage and warm reach-out both use
 // them, so decisions from either loop are auditable the same way.
@@ -239,6 +240,13 @@ export const readTriageEvents       = ()      => readEventLog(TRIAGE_LOG_FILE);
 // every tick and carry no decision).
 export const appendReachoutEventLog = (entry) => appendEventLog(REACHOUT_LOG_FILE, entry);
 export const readReachoutEvents     = ()      => readEventLog(REACHOUT_LOG_FILE);
+// Noticing (Initiative Pass 4): EVERY tick that reached a decision logs —
+// including quiet-window evaluations that took no LLM call — so a dead
+// noticing loop reads as stale/absent entries, never as calm silence (the
+// reflection-heartbeat lesson). Pure cadence skips (in_cooldown/disabled)
+// carry no decision and stay unlogged.
+export const appendNoticingEventLog = (entry) => appendEventLog(NOTICING_LOG_FILE, entry);
+export const readNoticingEvents     = ()      => readEventLog(NOTICING_LOG_FILE);
 
 // Read the last N user/assistant messages from the most recently updated
 // session log file. Used by decideTriageViaLLM to ground the triage
@@ -3562,6 +3570,65 @@ export function gcalWriteEnabled(settings = readSettingsSync()) {
   const cmd = (settings?.gcalWriteCommand && String(settings.gcalWriteCommand).trim())
     || (source === 'gogcli' || source === 'gcalcli' ? 'preset' : '');
   return !!cmd;
+}
+
+// ── Noticing turn toolset (Initiative Pass 4) ────────────────────────
+// The noticing turn (noticing.js) acts through a BOUNDED toolset composed
+// here — never the full chat registry. Two tools are noticing-scoped (they
+// exist only for this turn, executed inline by the loop's executeTool, NOT
+// in TOOL_EXECUTORS): reach_out_to_ward (a warm knock via the existing
+// delivery path) and set_next_check (self-pacing). The rest are the existing
+// intention tools + a few schedule READS the Familiar already holds. No
+// villager contact, no destructive ops, no ward-schedule writes here.
+
+export const REACH_OUT_TO_WARD_TOOL = {
+  type: 'function',
+  function: {
+    name: 'reach_out_to_ward',
+    description: 'I reach out to my human right now, warmly and in my own voice — a gentle knock they\'ll see. I use this from a quiet moment of my own when there\'s something genuine I want to say: a thought, a check-in, something I noticed. It is not for a crisis (my triage sense handles those). My human always sees exactly what I send.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'What I want to say to my human, first person, genuine, in my own voice — it stands on its own as a message they receive.' },
+      },
+      required: ['message'],
+    },
+  },
+};
+
+export const SET_NEXT_CHECK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'set_next_check',
+    description: 'I choose when I\'d like my next quiet moment of my own to come around — how long to wait before I look again. I use this to pace myself to my human: longer when things are steady or I just acted, shorter when something is unresolved and I want to keep an eye on it. The system clamps it to a sane range.',
+    parameters: {
+      type: 'object',
+      properties: {
+        minutes: { type: 'number', description: 'Minutes until my next noticing turn (clamped to roughly [5 min, 6 h]).' },
+      },
+      required: ['minutes'],
+    },
+  },
+};
+
+// The existing (registry) tools the noticing turn may use: act on intentions
+// + a few reads. Names only — schemas pulled from BUILTIN_TOOLS, macro-
+// resolved, so their first-person descriptions stay consistent.
+export const NOTICING_REGISTRY_TOOL_NAMES = [
+  'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
+  'schedule_find', 'schedule_availability', 'schedule_export', 'get_datetime',
+];
+
+/**
+ * Compose the noticing turn's bounded toolset (schemas, macro-resolved).
+ * The two noticing-scoped tools are appended; the loop's executeTool handles
+ * them inline and delegates the registry tools to executeToolCall.
+ */
+export function composeNoticingTools(settings = readSettingsSync()) {
+  const allow = new Set(NOTICING_REGISTRY_TOOL_NAMES);
+  const picked = BUILTIN_TOOLS.filter(t => allow.has(t.function?.name));
+  picked.push(REACH_OUT_TO_WARD_TOOL, SET_NEXT_CHECK_TOOL);
+  return picked.map(t => substituteToolMacros(t, settings));
 }
 
 export function composeActiveTools(customTools, settings = readSettingsSync(), opts = {}) {

@@ -949,6 +949,18 @@ export async function roundsForWard() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), rounds: [], hidden_count: 0, visibility: 'shared' }; }
 }
 
+/** Intentions whose trigger timing has come due (for the noticing loop). */
+export async function getDueIntentions({ now } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', due: [] };
+  const args = {};
+  if (now !== undefined) args.now = now;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_due', arguments: args });
+    return parseToolText(r, { ok: false, due: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), due: [] }; }
+}
+
 // ── Reminders wrappers (M11) ─────────────────────────────────────
 
 export async function getDueReminders({ now, limit = 50 } = {}) {
