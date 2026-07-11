@@ -107,10 +107,13 @@ an explicit wait/act choice is expected to wire into the same `recordWait`/`reco
 contract rather than inventing a parallel counter [@wait-streak].
 
 Wait-streak is deliberately not a full fix for the missing-rhythm problem — it hands over a raw
-count, not a computed sense of normal-for-us. The Initiative build spec's remaining passes
-(contact baselines, intentions, a noticing tick, adaptive lead times) are the planned follow-on
-work, gated behind open ward decisions recorded in the spec's §10 and not yet built as of this
-writing [@initiative-spec]. One ward amendment already landed ahead of those passes: budgets for
+count, not a computed sense of normal-for-us. That computed sense shipped as the next pass:
+[Contact-rhythm baselines](contact-rhythm-baselines) (0.8.64-alpha) derives median/p90/longest
+contact gaps per weekday-class from session logs and feeds a second self-observation line into
+the same warm reach-out prompt. The Initiative build spec's remaining passes (intentions, a
+noticing tick, adaptive lead times) are still unbuilt as of this writing, gated behind the
+resolved ward decisions recorded in the spec's §10 [@initiative-spec]. One ward amendment already
+landed ahead of those passes: budgets for
 that future work are scoped per routine phase, not per day, with the daily cap kept only as a
 high-set runaway backstop, so the budget shape itself nudges the Familiar toward using the
 existing phases framework rather than scattering one-shot actions [@initiative-spec].

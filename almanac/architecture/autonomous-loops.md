@@ -94,6 +94,12 @@ version of the warm reach-out prompt asserted "nothing is wrong" as an axiom on 
 let a real two-day silence read as fine by definition; the decision page covers both that prompt
 fix and the counter it motivated.
 
+A second, similarly loop-less module rides below the same silence line in the warm reach-out
+prompt: `contact-baselines.js` derives median/p90/longest contact gaps per ward-local
+weekday-class from session logs and reports nothing until roughly two weeks of history exist —
+see [Contact-rhythm baselines](../decisions/contact-rhythm-baselines) for the conservative
+ward-contact signal and the honesty rule that gates it.
+
 ## Related
 
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
@@ -102,6 +108,8 @@ fix and the counter it motivated.
   to acting rather than waiting.
 - [Wait-streak experiment](../decisions/wait-streak-experiment) — the warm reach-out prompt fix
   and the shared self-observation counter described above.
+- [Contact-rhythm baselines](../decisions/contact-rhythm-baselines) — the computed sense of
+  normal contact rhythm that rides below the wait-streak line in the same prompt.
 - [Engineering conventions](../reference/engineering-conventions) — the graceful-degradation
   and versioning rules that every loop above is written to follow.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how several of these
