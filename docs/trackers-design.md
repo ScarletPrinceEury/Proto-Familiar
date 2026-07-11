@@ -231,10 +231,28 @@ missed N times with no tracker attached → a cue, once, with a long cooldown).
 delta on low/numb, never a severe floor). Defaults set without further
 ceremony: web-only v1; existing wards opt in via the same toggle.
 
+**Evidence pass done:** see
+[`trackers-research.md`](trackers-research.md) — condition-specific
+self-monitoring practice (bipolar Life Chart, BA diaries, ERP logs, the
+Mobility Inventory, ADHD function-tracking, EMA burden findings) and its
+§6 cross-cutting conclusions. Design consequences already absorbed: the mood
+scale is **bidirectional** (low ↔ elevated, not a happiness scale); sleep is
+its own v1 tracker and the mood↔sleep join is the flagship code-detected
+deviation (24–72h prodrome lag); the meds template carries an
+**effect-window** field; the outings template is MIA-shaped
+(**alone/accompanied** + **anticipated-vs-actual**, a field pair that
+generalizes); **no breakable streaks anywhere** (cumulative counts, neutral
+gaps — the ADHD shame finding); and **entry-rate watchdogs** guard against
+monitoring-as-compulsion (the OCD finding): per-tracker caps + a private
+"this tracker is being fed unusually often" reflection signal.
+
 **Still open:**
 
-1. **Template set for v1** — pantry, laundry, menses, mood, meds, sleep is
-   the proposed six; trim or extend?
+1. **Template set for v1** — evidence-informed proposal: **mood ·
+   sleep · meds · outings · pantry · laundry**, with **erp** and **menses**
+   shipped-but-not-suggested (present for wards who want them; the Familiar
+   doesn't proactively offer clinical-adjacent trackers uninvited). Confirm
+   or reshape?
 2. **Sensitive-by-default set** — menses/mood/meds proposed; sleep too?
 3. **Prediction projections** — comfortable with code-projected cycle
    windows on the schedule surface (ward-private), or opt-in per tracker?
