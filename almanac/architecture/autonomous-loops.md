@@ -14,7 +14,7 @@ sources:
 
 Autonomous loops are background workers that run alongside Proto-Familiar's HTTP server and
 act without a human request — checking in during silence, firing a reminder, drifting off to
-ponder an interest, syncing a calendar. CLAUDE.md counts ten of them, each booted in
+ponder an interest, syncing a calendar. CLAUDE.md counts eleven of them, each booted in
 `server.js`'s `app.listen()` callback and each stopped from the SIGTERM/SIGINT/SIGHUP handler
 so a clean shutdown can await any in-flight tick [@claude-md] [@architecture-doc]. Loops exist
 because the Familiar is designed to be a companion who can reach out, not a request-response
@@ -48,6 +48,7 @@ Every loop follows the same shape, stated in CLAUDE.md as a rule rather than a h
 | Reminders + event alerts | `reminders-loop.js` + `event-alerts.js` | 30s poll | on | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` / `PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1` |
 | Silence triage | `silence-triage-loop.js` | 5min, LLM-set cool-down | on | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` |
 | Warm reach-out | `reachout-loop.js` + `reachout.js` | 10min, ~2h cool-down | on | `PROTO_FAMILIAR_WARMTH_DISABLED=1` |
+| Noticing | `noticing-loop.js` + `noticing.js` | self-paced via `set_next_check`, clamped 5min–6h | on | `PROTO_FAMILIAR_NOTICING_DISABLED=1` |
 | Discord gateway | `discord-gateway.js` | 30s supervisor | on (idles without a bot token) | `PROTO_FAMILIAR_DISCORD_DISABLED=1` |
 | Memorization | `memorization.js` | 5s queue drain | on | `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` |
 | Memory sweep | `memory-sweep-loop.js` | 10min | on | `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` |
@@ -82,14 +83,26 @@ companionship signal in favor of the crisis loop is adding caution in a place th
 nothing, not the "bias toward staying quiet" pattern that caused real harm when it leaked
 into the *safety* decision itself.
 
+Noticing is the deliberate exception: it is ward-signed to **not** stand down at elevated
+threat, on the reasoning that an aging intention or a widening contact gap is "especially
+useful" to surface exactly when things are hard, not something to suppress [@claude-md]. Threat
+still shifts its *register* — moderate-or-higher renders a tier line in the deliberation prompt,
+and a genuinely alarming read is handed to triage rather than answered with a casual reach-out —
+but the turn itself is never skipped. Because it acts on the ward's safety-adjacent surface, any
+change to when or whether noticing acts requires the same sign-off as the triage files
+[@claude-md].
+
 ## Shared self-observation: the wait-streak line
 
-Warm reach-out, silence triage, and the Discord gateway's ambient presence block all consume the
-same small module, `wait-streak.js`, rather than each tracking their own sense of "how long has
-it been since I acted." It is not itself a loop — it has no `setInterval` of its own — but a
-persistent counter that each of those three loops' deliberation ticks reads from and writes to,
-recording only waits and resets that were an explicit, offered choice
-[Wait-streak experiment](../decisions/wait-streak-experiment). It exists because an earlier
+Warm reach-out, silence triage, the Discord gateway's ambient presence block, and — since
+Initiative Pass 4 — noticing all consume the same small module, `wait-streak.js`, rather than
+each tracking their own sense of "how long has it been since I acted." It is not itself a loop —
+it has no `setInterval` of its own — but a persistent counter that each of those loops'
+deliberation ticks reads from and writes to, recording only waits and resets that were an
+explicit, offered choice [Wait-streak experiment](../decisions/wait-streak-experiment). Noticing
+tags its entries `source:'noticing'`: a proactive act resets the streak, a stand-down increments
+it, the same contract the wait-streak decision page defines for the original three consumers. It
+exists because an earlier
 version of the warm reach-out prompt asserted "nothing is wrong" as an axiom on every tick, which
 let a real two-day silence read as fine by definition; the decision page covers both that prompt
 fix and the counter it motivated.

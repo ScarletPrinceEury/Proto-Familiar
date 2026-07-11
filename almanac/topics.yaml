@@ -51,6 +51,10 @@ topics:
     title: Decisions
     description: Recorded architectural and operational choices
     parents: []
+  - slug: reference
+    title: Reference
+    description: Exact lookup material for repo-wide operating rules and contracts
+    parents: []
   - slug: development-rhythm
     title: Development Rhythm
     description: How the sole maintainer actually paces and triages feature and bug work

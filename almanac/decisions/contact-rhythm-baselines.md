@@ -87,8 +87,11 @@ weekday-class used is the one the silence itself *began* in, not the current mom
 is the moment the "is this gap unusual?" question is actually about [@contact-baselines].
 Silence-triage and surface-candidates are deliberately untouched — triage already has the threat
 tier for its own risk read; contact-rhythm is a companionship signal, not a safety one
-[@contact-baselines] [@architecture-doc]. The Pass 4 noticing situation report (not yet built) is
-planned as the second consumer [@initiative-spec].
+[@contact-baselines] [@architecture-doc]. `noticing.js` (Session D, 0.8.66-alpha) shipped as the
+planned second consumer: one of its wake conditions is the ward's contact gap crossing the
+baseline's p90 for the current weekday-class, read straight from `getContactBaseline` rather than
+recomputed — see [Autonomous loops](../architecture/autonomous-loops) for noticing's place in the
+wider loop system [@initiative-spec].
 
 **Off-switch parity.** `contactBaselinesEnabled` in settings (default on) or
 `PROTO_FAMILIAR_BASELINES_DISABLED=1` disables the feature; when disabled,
@@ -114,10 +117,11 @@ are the ward's own — any future audience-tagging change to web or Discord sess
 `isWardSession`'s two-case check (no tag, or `ward-private`) accurate or the rhythm will silently
 drift [@contact-baselines].
 
-The remaining Initiative build spec passes — Session C (an Unruh-backed intention store and
-Familiar-controlled rounds view), Session D (the noticing tick, on by default with no stand-down
-at threat), and Session E (adaptive lead times) — are still unbuilt as of this writing, gated
-behind the resolved §10 ward decisions the spec records [@initiative-spec].
+The remaining Initiative build spec passes at the time of this writing — Session C (an
+Unruh-backed intention store and Familiar-controlled rounds view, 0.8.65-alpha), Session D (the
+noticing tick, on by default with no stand-down at threat, 0.8.66-alpha), and Session E (adaptive
+per-event lead times, 0.8.67-alpha) — have since all shipped, gated behind the resolved §10 ward
+decisions the spec records [@initiative-spec].
 
 See [Wait-streak experiment](wait-streak-experiment) for Pass 0 and Pass 1, the prompt-fix and
 counter this baseline rides below, and [Autonomous loops](../architecture/autonomous-loops) for

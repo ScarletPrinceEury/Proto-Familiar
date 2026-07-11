@@ -15,9 +15,6 @@ sources:
   - id: injection-guard
     type: file
     path: injection-guard.js
-  - id: architecture-doc
-    type: file
-    path: docs/architecture.md
 ---
 
 # Trust Tiers Gate Reads, Not Writes
@@ -139,30 +136,29 @@ law is deferred to before "the final version" [@unruh-done-conversation] — not
 fixed list of regexes for instruction-override phrases, fake role markers, chat-template
 tokens, and named jailbreaks, and can replace matches with a `[removed:label]` placeholder
 [@injection-guard]. It answers a different threat model than the one this conversation worked
-through. `docs/architecture.md` records exactly where it is wired in today: "available but NOT
-applied to Phylactery / Unruh content — those are trusted first-party systems. The guard is
-reserved for genuinely external ingestion points (web search results, Discord / channel-adapter
-messages) that do not yet exist" [@architecture-doc]. As of this writing there are no call sites
-for `sanitizeExternal` or `scanForInjection` anywhere outside its own module and test file —
-the module is prepared but not yet wired into any live data path, consistent with
-`docs/architecture.md`'s note that its intended boundary (external channel adapters) does not
-exist yet [@injection-guard] [@architecture-doc].
+through. At the time of the conversation this page records, the guard was built and tested but
+had no call sites outside its own module — see
+[Injection guard: documented but never wired](../architecture/injection-guard-gap) for that gap
+and its later resolution: as of 0.8.57 it is wired at the web-read boundary (`websearch.js`) and
+the Village inbound boundary (`discord-gateway.js`'s `inboundContent()`), still deliberately
+excluding Phylactery/Unruh recall, the ward's own words, and gcal event titles
+[@injection-guard].
 
 The two defenses catch different attacks because the malformed-versus-persuasive distinction is
-real. `injection-guard.js` is built to catch a raw, malformed instruction-string arriving
-through untrusted external data — text that does not belong in a memory label or a search
-result at all, like a `[SYSTEM]` marker or a chat-template token [@injection-guard]. This
-conversation's concern is a different shape entirely: an authenticated conversational partner —
-a registered villager, not raw external data — using ordinary, well-formed, persuasive
-conversation to get the Familiar to write something false or harmful into its own long-term
-memory. No regex distinguishes a manipulative but grammatically normal request from a
-legitimate one; that is exactly the "RegExes are too stiff" problem the maintainer named
-[@unruh-done-conversation]. Put the two together: external-data sanitization is architectural
-and pattern-based; defense against a legitimate-looking social-engineering attempt from a known
-party is behavioral and judgment-based. A future contributor should not treat
-`injection-guard.js`'s eventual wiring at a channel-adapter boundary as having solved, or even
-addressed, the write-protection problem this page records — they remain two separate,
-non-substitutable defenses for two separate threat models.
+real, and wiring the guard did not change that distinction. `injection-guard.js` is built to
+catch a raw, malformed instruction-string arriving through untrusted external data — text that
+does not belong in a memory label or a search result at all, like a `[SYSTEM]` marker or a
+chat-template token [@injection-guard]. This conversation's concern is a different shape
+entirely: an authenticated conversational partner — a registered villager, not raw external
+data — using ordinary, well-formed, persuasive conversation to get the Familiar to write
+something false or harmful into its own long-term memory. No regex distinguishes a manipulative
+but grammatically normal request from a legitimate one; that is exactly the "RegExes are too
+stiff" problem the maintainer named [@unruh-done-conversation]. Put the two together:
+external-data sanitization is architectural and pattern-based; defense against a
+legitimate-looking social-engineering attempt from a known party is behavioral and
+judgment-based. A future contributor should not treat `injection-guard.js`'s wiring at the
+Village boundary as having solved, or even addressed, the write-protection problem this page
+records — they remain two separate, non-substitutable defenses for two separate threat models.
 
 ## Consequences
 

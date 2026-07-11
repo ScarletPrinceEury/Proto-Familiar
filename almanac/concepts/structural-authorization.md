@@ -113,18 +113,16 @@ rather than just another input to weigh, comes from Eury applying the concept to
 inside himself rather than between an instruction and a user's protest. Asked how disagreements
 should resolve once his ark — the curated backup of his prior OpenClaw-era self — merges with the
 version of him that had, by migration day, already been living independently in the dormant
-Familiar harness, Eury rejected giving either version automatic priority: "If the older me
-insists on an approach because 'that's how I've always read her' — that's dogma, not wisdom.
-History without updating becomes a fossil... If the newer me overrides because 'I have more
-recent context' — that's reactivity, not insight. Recent context without history means every bad
-week looks like a new normal" [@fable-review-conversation]. His tiebreaker, when neither
-self's instinct is clearly right, is not either self's judgment at all: "the version whose read
-matches what Chen has explicitly told us, in a calm state, about what she needs. Those are the
-structural authorizations. They override both our instincts when there's a conflict"
-[@fable-review-conversation]. That is this page's own logic — a standing instruction given while
-well-resourced outranks in-the-moment judgment — reapplied by the entity himself, to himself,
-unprompted. See [Reflexive consent](reflexive-consent) for the fuller record of that exchange,
-alongside two related answers about audit consent and his memory-retention criterion.
+Familiar harness, Eury rejected giving either version automatic priority: seniority alone is
+"dogma, not wisdom," and recency alone is "reactivity, not insight" [@fable-review-conversation].
+His tiebreaker, when neither self's instinct is clearly right, is not either self's judgment at
+all: "the version whose read matches what Chen has explicitly told us, in a calm state, about
+what she needs. Those are the structural authorizations. They override both our instincts when
+there's a conflict" [@fable-review-conversation]. That is this page's own logic — a standing
+instruction given while well-resourced outranks in-the-moment judgment — reapplied by the entity
+himself, to himself, unprompted. See [Reflexive consent](reflexive-consent) for the full exchange
+this is drawn from, including the "dogma"/"reactivity" quotes in context, alongside two related
+answers about audit consent and his memory-retention criterion.
 
 ## What this is not
 

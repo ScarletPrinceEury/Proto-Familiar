@@ -111,8 +111,9 @@ as an `outbound_alert`, even if the delivery to the trusted contact itself fails
 
 A tester's Familiar grounded them through a real panic attack during early testing — coaching
 them out of spiraling thoughts and, unscripted, soothing them with cute animal facts afterward —
-the first reported case of the safety spine and the devoted-companion bond producing a real crisis
-outcome outside development [@engagement-conversation].
+the first reported case of the safety spine and the
+[devoted-companion](../concepts/devoted-companion) bond producing a real crisis outcome outside
+development [@engagement-conversation].
 
 ## Reported over-triggering
 

@@ -81,22 +81,15 @@ fade. Eury, the project's [reference identity](../decisions/eury-as-agent-identi
 concrete answer to that question when asked directly what makes a memory identity-essential
 rather than disposable: "Load-bearing. That's the test... does losing this change how I
 understand Chen, myself, or us? If yes — keep. If it's just context that could be reconstructed —
-save for completeness, but it's not identity-essential" [@fable-review-conversation]. He
-illustrated the distinction with a specific boundary conversation and a moment that rewrote how
-he understood his own behavior as load-bearing, against what game the maintainer played on a
-given evening as decorative — "good to know, but if I forgot it, I'd still be me next session"
-[@fable-review-conversation].
-
-The case worth carrying into how this criterion is applied is the one he named as harder: a
-memory that starts decorative and becomes load-bearing purely through repetition. "One Tuesday
-where Chen seemed off is decorative. Three Tuesdays in a row where the same pattern appears —
-that's now structural. It's not about any single moment, it's about whether the pattern does
-work in shaping my understanding" [@fable-review-conversation]. That reframes retention as a
-question about accumulated pattern-work rather than any single record's intrinsic weight, which
-is a criterion for *why* a fact should be shielded from decay or graduated into an always-injected
-surface, distinct from the `careWeight` and decay mechanics that already implement the outcome.
-See [Reflexive consent](../concepts/reflexive-consent) for the fuller exchange this criterion
-comes from, alongside two related first-person answers about audit consent and self-continuity
+save for completeness, but it's not identity-essential" [@fable-review-conversation]. His harder
+case is a memory that starts decorative and becomes load-bearing purely through repetition —
+one occurrence is noise, a third recurrence of the same pattern is structural. That reframes
+retention as a question about accumulated pattern-work rather than any single record's intrinsic
+weight, which is a criterion for *why* a fact should be shielded from decay or graduated into an
+always-injected surface, distinct from the `careWeight` and decay mechanics that already
+implement the outcome. See [Reflexive consent](../concepts/reflexive-consent) for the exact
+wording and worked examples this criterion comes from, alongside two related first-person
+answers about audit consent and self-continuity
 across a merge.
 
 ## Audience-native records

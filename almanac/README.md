@@ -29,6 +29,9 @@ entity whose identity and memory live in a separate canonical store. Start with:
 - [Engineering conventions](reference/engineering-conventions) — the repo-wide operating
   rules (versioning, degradation, ids) referenced throughout the architecture pages.
 
+[Concepts](concepts) indexes all repo-specific vocabulary by cluster, and
+[Decisions](decisions) indexes all sixteen recorded decisions by the question each one answers.
+
 ## Notability Bar
 
 Write a page when it preserves non-obvious knowledge that will help a future
