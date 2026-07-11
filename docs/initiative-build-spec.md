@@ -253,6 +253,13 @@ correlate streak values against wait/act decisions via the existing
 
 ## Pass 2 — baselines (`contact-baselines.js`): a model of normal, in code
 
+> **✅ SHIPPED (`0.8.64`).** `contact-baselines.js` (pure helpers +
+> cache-aware `getContactBaseline` + `buildRhythmLine`), wired into the warm
+> reach-out prompt below its silence line, honesty rule enforced, ward
+> toggles for both baselines and the wait streak added to the routine/warmth
+> settings pane. 18 fixture tests. Off: `contactBaselinesEnabled` /
+> `PROTO_FAMILIAR_BASELINES_DISABLED=1`.
+
 The ward's partner worries after a day of absence because he holds her
 rhythm. Code can hold rhythm as arithmetic. Absence is invisible in a
 snapshot — every deliberation today sees snapshots — and becomes visible
@@ -544,8 +551,8 @@ Net: more capability per request, not more requests per capability.
    prompt fix landed as paste-replace edits; wait-streak is a
    `last-activity.js`-sized module + threaded lines + tests W1–W6. The
    streak is collecting data now.
-2. **Session B: Pass 2** (pure functions + fixture tests + the warmth
-   rhythm line).
+2. **Session B: Pass 2 — ✅ SHIPPED** (`0.8.64`). Pure functions + fixture
+   tests + the warmth rhythm line + ward toggles.
 3. **Session C: Pass 3** (Unruh store + tools + pondering schema + rounds
    firing on the reminders tick + budgets).
 4. **Session D: Pass 4** (situation report, wake conditions, the mode in

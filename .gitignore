@@ -12,6 +12,9 @@ tomes/.threat-state.json.tmp
 # Wait-streak experiment state (initiative-build-spec Pass 1) — local counter.
 tomes/.wait-streak.json
 tomes/.wait-streak.json.tmp
+# Contact-baselines cache (initiative-build-spec Pass 2) — derived, local.
+tomes/.contact-baselines.json
+tomes/.contact-baselines.json.tmp
 # Generated SearXNG config (random secret, per-boot port) — never committed.
 tomes/.searxng/
 # Outbox delivery queue (M11) — local pending notifications.

@@ -148,6 +148,23 @@ test('buildReachoutPrompt: no pre-resolved "all is well" axioms (Pass 0)', () =>
   }
 });
 
+// Pass 2 (initiative-build-spec): the rhythm line rides below the silence
+// line when a baseline exists, and is absent otherwise (prompt unchanged).
+test('buildReachoutPrompt: rhythm line appears under the silence line when present', () => {
+  const rhythmLine = '- Our usual rhythm: on a weekday we\'re typically back in contact within about a day.';
+  const withRhythm = buildReachoutPrompt({
+    nowBlock: '', identityContext: '', sessionBlock: '',
+    pendingTells: [], warmVillagers: [], wardSilencePhrase: '2 hours', rhythmLine,
+  });
+  assert.match(withRhythm, /Our usual rhythm: on a weekday/);
+  // Byte-identical to the no-rhythm shape once the rhythm line is stripped.
+  const withoutRhythm = buildReachoutPrompt({
+    nowBlock: '', identityContext: '', sessionBlock: '',
+    pendingTells: [], warmVillagers: [], wardSilencePhrase: '2 hours',
+  });
+  assert.equal(withRhythm.replace('\n' + rhythmLine, ''), withoutRhythm);
+});
+
 // ── decideReachoutViaLLM — degradation ──────────────────────────────
 
 test('decideReachoutViaLLM: no primary connection → wait (no LLM call)', async () => {

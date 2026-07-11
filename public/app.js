@@ -246,6 +246,15 @@ const state = {
   // a local-time window (start==end disables it). Off via this toggle or
   // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
   warmthEnabled:           true,
+  // Contact-rhythm baselines (Initiative Pass 2). Default-ON: derives the
+  // ward's normal contact rhythm from their own message history so the warm
+  // reach-out can tell ordinary silence from unusual. Off via this toggle or
+  // PROTO_FAMILIAR_BASELINES_DISABLED=1 on the server.
+  contactBaselinesEnabled: true,
+  // Wait-streak experiment (Initiative Pass 1). Default-ON: shows the Familiar
+  // how many times it has waited since last reaching out, as a bare fact. Off
+  // via this toggle or PROTO_FAMILIAR_WAIT_STREAK_DISABLED=1 on the server.
+  waitStreakEnabled:       true,
   // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
@@ -368,6 +377,7 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
+  'contactBaselinesEnabled', 'waitStreakEnabled',
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
@@ -859,6 +869,8 @@ function loadPersisted() {
     state.ponderingIntervalScale = 1;
   }
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
+  if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
@@ -2730,6 +2742,8 @@ function readSettingsFromUI() {
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
+  if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
@@ -2870,6 +2884,8 @@ function writeSettingsToUI() {
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
+  if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
@@ -3775,6 +3791,7 @@ function init() {
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'baselines-toggle', 'wait-streak-toggle',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',

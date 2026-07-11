@@ -33,6 +33,7 @@ import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { buildWaitStreakLine } from './wait-streak.js';
+import { getContactBaseline, buildRhythmLine } from './contact-baselines.js';
 
 // ── Warm-villager selection ──────────────────────────────────────
 //
@@ -64,10 +65,14 @@ export function getWarmVillagers(registry) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase, waitStreakLine = '' }) {
-  const silenceLine = wardSilencePhrase
+export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase, waitStreakLine = '', rhythmLine = '' }) {
+  const silenceBase = wardSilencePhrase
     ? `- My human was last around ${wardSilencePhrase} ago. Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`
     : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`;
+  // Pass 2 upgrade: when a real contact baseline exists, the silence line
+  // gains the rhythm below it so "ordinary or unusual" isn't a guess. ''
+  // (no honest baseline / feature off) leaves the line byte-identical.
+  const silenceLine = rhythmLine ? `${silenceBase}\n${rhythmLine}` : silenceBase;
 
   const tellsBlock = (pendingTells && pendingTells.length)
     ? `\nThings I already noted I wanted to bring up with my human (from my own quiet thinking — I flagged these as "tell"):\n${pendingTells.map(t => `  - (uid ${t.uid}, index ${t.index}) ${t.summary}`).join('\n')}\nIf I reach out to my human and one of these is what I want to say, I include its uid + index as tellUid/tellIndex so the system knows I've finally said it.`
@@ -157,6 +162,7 @@ export async function decideReachoutViaLLM({
   callLLM = defaultCallLLM,
   enrichFn = (opts) => enrich('', opts),
   getRecentMessagesFn = getRecentSessionMessages,
+  getBaselineFn = getContactBaseline,   // Pass 2 — injectable for tests
 } = {}) {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'reachout');
@@ -166,14 +172,20 @@ export async function decideReachoutViaLLM({
 
   const nowMs = now();
 
-  const [{ static: identityContext }, recentMessages] = await Promise.all([
+  const [{ static: identityContext }, recentMessages, baseline] = await Promise.all([
     enrichFn({ staticOnly: true }).catch(() => ({ static: '' })),
     getRecentMessagesFn({ limit: 6 }).catch(() => []),
+    Promise.resolve().then(() => getBaselineFn({ now: nowMs, settings: s })).catch(() => ({ hasBaseline: false })),
   ]);
 
   const lastUserAt = Number.isFinite(wardSilenceMs) ? new Date(nowMs - wardSilenceMs).toISOString() : null;
   const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
   const wardSilencePhrase = lastUserAt ? (relativeTime(lastUserAt, nowMs) || 'a little while') : null;
+
+  // Pass 2: the rhythm line (or '' when no honest baseline exists / the
+  // ward went quiet at an unknown time / the feature is off).
+  const lastContactMs = Number.isFinite(wardSilenceMs) ? (nowMs - wardSilenceMs) : NaN;
+  const rhythmLine = buildRhythmLine(baseline, { lastContactMs, timeZone: s?.wardTimeZone || null });
 
   const sessionBlock = (recentMessages && recentMessages.length)
     ? `\nThe last things my human and I talked about (so anything I reach out about connects to our actual life, not nothing):\n${recentMessages.map(m => {
@@ -196,6 +208,9 @@ export async function decideReachoutViaLLM({
     // Wait-streak awareness (Pass 1): one neutral, code-built fact; ''
     // when the experiment is off, so the prompt is byte-identical (W3).
     waitStreakLine: buildWaitStreakLine({ now: nowMs, settings: s }),
+    // Rhythm line (Pass 2): '' unless a real baseline exists for this
+    // weekday-class, keeping the pre-baseline prompt byte-identical.
+    rhythmLine,
   }), s);
 
   let raw;

@@ -57,6 +57,7 @@ server.js  (Express, Node 22+, ESM)
     ├── outbox.js           ── persistent delivery queue (reminders, triage, alerts)
     ├── last-activity.js    ── timestamps user activity for the silence loop
     ├── wait-streak.js      ── wait-streak experiment: counts deliberated waits since last proactive act
+    ├── contact-baselines.js ─ derives normal contact rhythm (median/p90 gaps) from session logs
     │
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
@@ -121,6 +122,7 @@ ponderings injection, care-check framing) and as background loops
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
 ├── wait-streak.js           Wait-streak experiment (Pass 1): deliberated-wait counter + the neutral prompt fact line
+├── contact-baselines.js     Contact-rhythm baselines (Pass 2): median/p90 gaps per weekday-class; the warmth rhythm line
 ├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
 ├── relative-time.js         Natural-English relative phrasing for every timestamped surface (memories, ponderings, schedule, handoff, "Now")
@@ -595,6 +597,27 @@ for the triage loop's pending-contact deferral.
 stamped from the chat path; consumed by the silence-triage loop.
 Discord ward messages stamp it too — the Familiar's sense of "my human
 was just here" follows the human, not a particular window.
+
+**`contact-baselines.js`** — a model of "normal contact rhythm," in code
+(initiative-build-spec Pass 2). Turns the contact history the system already
+records (ward user-message timestamps in session logs) into per-weekday-class
+arithmetic: median gap, p90 gap, longest-observed gap, over a rolling 4-week
+window. Ward-contact signal is conservative — only web-chat sessions (no
+`audienceTag`) and Discord ward-DMs (`audienceTag === 'ward-private'`) count,
+so a villager in a group room is never mistaken for the ward (it under-counts
+rather than over-counts, the safe direction for a "should I worry about their
+silence" input). Timestamps within 3h coalesce into one contact *episode*; the
+gaps that matter are the quiet stretches between episodes, classified by the
+ward-local weekday-class of when the quiet began. **Honesty rule:** below ~2
+weeks of span or too few samples for a class, `hasBaseline` is false and
+consumers render nothing — a fabricated rhythm is worse than none. No loop, no
+LLM call: recomputed lazily on read (cached in `tomes/.contact-baselines.json`,
+refreshed at most every ~3h). Consumed by exactly two surfaces: the warm
+reach-out prompt's rhythm line (`buildRhythmLine`, riding below Pass 0's
+silence line) and — once built — the Pass 4 noticing situation report. Triage
+and surface-candidates stay untouched (triage has the threat tier; baselines
+are companionship territory). Off: `contactBaselinesEnabled:false` or
+`PROTO_FAMILIAR_BASELINES_DISABLED=1`.
 
 **`wait-streak.js`** — the ward's wait-streak experiment
 (initiative-build-spec Pass 1): a persistent counter in
