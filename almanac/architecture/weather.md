@@ -19,13 +19,10 @@ sources:
     path: weather-mirror.js
   - id: unruh-location
     type: file
-    path: unruh/location.py
+    path: unruh/src/unruh/location.py
   - id: unruh-migration
     type: file
-    path: unruh/migrations/0006_locations.sql
-  - id: pr-190
-    type: file
-    path: (PR #190)
+    path: unruh/src/unruh/migrations/0006_locations.sql
 ---
 
 # Weather
@@ -63,4 +60,4 @@ Weather appears only on four **ward-facing** `[Now]` call sites: triage, warmth,
 
 ## Off-switch and testing
 
-Off-switch: `weatherEnabled` (default ON) + `PROTO_FAMILIAR_WEATHER_DISABLED=1` [@weather-build-spec]. Tests: 25 Node + 12 Python; full suites green (1368 Node, 290 Python) [@weather-build-spec]. Merged as PR #190 [@pr-190].
+Off-switch: `weatherEnabled` (default ON) + `PROTO_FAMILIAR_WEATHER_DISABLED=1` [@weather-build-spec]. Tests: 25 Node + 12 Python; full suites green (1368 Node, 290 Python) [@weather-build-spec]. Shipped via PR #190.

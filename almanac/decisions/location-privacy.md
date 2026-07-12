@@ -7,10 +7,7 @@ sources:
     path: docs/weather-build-spec.md
   - id: unruh-location
     type: file
-    path: unruh/location.py
-  - id: pr-190
-    type: file
-    path: (PR #190)
+    path: unruh/src/unruh/location.py
 ---
 
 # Location Privacy
@@ -25,7 +22,7 @@ The decision was motivated by the principle that unnecessary data should not be 
 
 ## Decision
 
-Locations are never bound as model tools. The model sees only `location_public`, which returns `{id, label, is_current}` — the id to refer back to a place, the label the ward chose, and whether it is the current location [@weather-build-spec]. The coordinate-bearing shapes — `location_private` and `weather_locations_private` — are called by Node code only, in [Unruh's location.py](../architecture/unruh) [@weather-build-spec].
+Locations are never bound as model tools. The model sees only `location_public`, which returns `{id, label, is_current}` — the id to refer back to a place, the label the ward chose, and whether it is the current location [@weather-build-spec]. The coordinate-bearing shapes — `location_private` and `weather_locations_private` — are called by Node code only, in [Unruh's location.py](../architecture/unruh) [@weather-build-spec] [@unruh-location].
 
 This boundary is structural, not procedural. Unruh's MCP surface cannot be extended to include coordinates without explicit work to wire them as model tools. A future maintainer cannot accidentally leak a coordinate to the model by passing it in a prompt block.
 
