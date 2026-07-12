@@ -1,8 +1,9 @@
 # Trackers — design document
 
-**Status: DESIGN (ward-directed). Implementation queued after the existing
-build specs (weather → vision → voice → browser).** This is the *why and
-shape* document; a build spec follows once the design settles.
+**Status: DESIGN (ward-directed) — fully resolved; the implementation
+contract is [`trackers-build-spec.md`](trackers-build-spec.md).** This
+document remains the *why and shape*; the build spec carries the exact
+schemas, templates, invariants, and session plan. Queued after weather.
 
 ## 0. What this is (and is not)
 

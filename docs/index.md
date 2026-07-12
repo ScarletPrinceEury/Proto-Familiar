@@ -31,7 +31,7 @@ Proto-Familiar is the current working prototype of **Familiar** — a lightweigh
 ### Design documents & build specs
 
 Deeper design rationale and the implementation specs features were built from
-(roughly newest first): [Trackers (design)](trackers-design.md) (+ [research](trackers-research.md)) ·
+(roughly newest first): [Trackers](trackers-build-spec.md) ([design](trackers-design.md), [research](trackers-research.md)) ·
 [Weather](weather-build-spec.md) ·
 [Initiative](initiative-build-spec.md) ·
 [Temporal Bridges](temporal-bridges-build-spec.md) ·
