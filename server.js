@@ -28,6 +28,7 @@ import {
   exportBackup, restoreBackup, runLifecyclePass,
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
+  getMemoryHealth,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
@@ -1747,6 +1748,14 @@ app.get('/api/memory-coverage', async (_req, res) => {
   catch { res.json({ tz: 'local', days: {} }); }
 });
 
+// GET /api/memory-health — is semantic dedup live, or degraded to the lexical
+// fallback (embedder / sqlite-vec unavailable)? Lets the ward SEE why the
+// consent queue might be piling up instead of it failing silently.
+app.get('/api/memory-health', async (_req, res) => {
+  try { res.json(await getMemoryHealth()); }
+  catch (err) { res.json({ ok: false, healthy: null, dedup_mode: 'unknown', error: err?.message ?? String(err) }); }
+});
+
 // POST /api/memorize-day — (re)feed every session's slice for one calendar date.
 // Skips slices already memorized unless `force`. Client supplies the creds, same
 // as POST /api/memorize.
@@ -3209,6 +3218,20 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // fresh before the first 30s reminders tick. Self-gated + fire-and-forget;
   // inert until the ward has added a location.
   refreshWeatherIfDue().catch(err => console.error('[weather] boot refresh:', err?.message ?? err));
+  // Memory dedup health: probe the vector stack once at boot and warn LOUDLY
+  // if semantic dedup is degraded to the lexical fallback — a silently-dead
+  // embedder/sqlite-vec is what floods the consent queue with duplicate facts,
+  // so this must be visible, not buried in Phylactery's stderr.
+  getMemoryHealth().then(h => {
+    if (h && h.healthy === false) {
+      console.warn(`[memory] ⚠ semantic dedup UNAVAILABLE — running in ${h.dedup_mode} mode. ` +
+        `Duplicate facts may pile up in the consent queue. ` +
+        `embed_ok=${h.embed_ok} (${h.embed_error ?? 'ok'}); vec_ok=${h.vec_ok} (${h.vec_error ?? 'ok'}). ` +
+        `Fix: ensure fastembed's model downloaded and the sqlite-vec extension loads.`);
+    } else if (h && h.healthy) {
+      console.log(`[memory] dedup healthy (semantic; ${h.vec_rows}/${h.memory_rows} rows embedded)`);
+    }
+  }).catch(() => {});
   // Discord gateway (Village V4). Supervisor idles until the ward sets
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.

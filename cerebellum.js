@@ -54,7 +54,7 @@ import {
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
   addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
   templateUpsert, templateList, templateDelete,
-  convertUnruhIds, convertGraphIds,
+  convertUnruhIds, convertGraphIds, convertMemoryIds,
   bumpInterest, setStandingInterest,
   setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
   confirmConsentMemories, dropPendingMemories,
@@ -1845,7 +1845,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'convert_ids_to_slugs',
-      description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my ponderings, and the outbox, with every internal cross-reference updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
+      description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my memories, my ponderings, and the outbox, with every internal cross-reference (and embeddings) updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -3200,6 +3200,11 @@ export const TOOL_EXECUTORS = {
       report.push(graph?.ok
         ? `knowledge graph: ${graph.nodes ?? 0} node(s) + ${graph.edges ?? 0} edge(s) renamed`
         : `knowledge graph: skipped (${graph?.error ?? 'unavailable'})`);
+      // 2b. Memories (legacy hex → readable slug; embeddings + references follow).
+      const memids = await convertMemoryIds();
+      report.push(memids?.ok
+        ? `memories: ${memids.remapped ?? 0} id(s) renamed`
+        : `memories: skipped (${memids?.error ?? 'unavailable'})`);
       // 3. Ponderings + outbox item ids (local stores).
       const pond = await rekeyPonderingUids().catch(err => ({ error: err?.message }));
       report.push(pond?.error ? `ponderings: skipped (${pond.error})` : `ponderings: ${pond?.moved ?? 0} entry uid(s) shortened`);

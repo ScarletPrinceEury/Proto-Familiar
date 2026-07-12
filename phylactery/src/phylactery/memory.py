@@ -16,7 +16,7 @@ import sqlite3
 from datetime import datetime, date
 from typing import Any
 
-from phylactery.db import get_conn, insert_with_slug_retry, now_iso
+from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now_iso
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
 
@@ -349,6 +349,96 @@ def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str,
         return None
 
 
+def vector_health(conn: sqlite3.Connection | None = None) -> dict:
+    """Probe the vector stack that semantic dedup depends on, so a silent
+    degradation is observable (CLAUDE.md: failures that matter must be visible).
+    Reports whether the embedder loads and whether memory_vecs is queryable,
+    and which dedup mode is therefore in effect. Never raises."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        embed_ok, embed_err = False, None
+        try:
+            from phylactery.embed import embed_text
+            embed_text("health probe")
+            embed_ok = True
+        except Exception as e:
+            embed_err = f"{type(e).__name__}: {e}"
+        vec_ok, vec_err, vec_rows, mem_rows = False, None, None, None
+        try:
+            vec_rows = conn.execute("SELECT COUNT(*) AS c FROM memory_vecs").fetchone()["c"]
+            mem_rows = conn.execute(
+                "SELECT COUNT(*) AS c FROM memories WHERE kind='narrative'"
+            ).fetchone()["c"]
+            vec_ok = True
+        except Exception as e:
+            vec_err = f"{type(e).__name__}: {e}"
+        healthy = embed_ok and vec_ok
+        return {
+            "ok": True,
+            "healthy": healthy,
+            "dedup_mode": "semantic" if healthy else "lexical-fallback",
+            "embed_ok": embed_ok, "embed_error": embed_err,
+            "vec_ok": vec_ok, "vec_error": vec_err,
+            "vec_rows": vec_rows, "memory_rows": mem_rows,
+        }
+    finally:
+        if own:
+            conn.close()
+
+
+def _find_lexical_duplicate(conn: sqlite3.Connection, content: str, audience: str,
+                            standalone_only: bool = False, *,
+                            ignore_audience: bool = False, limit: int = 300):
+    """Embedding-FREE duplicate finder — the graceful-degradation net for when
+    the vector stack is unavailable (fastembed model not downloaded, or the
+    sqlite-vec extension can't load). Without this, a dead vector stack silently
+    disables ALL dedup and the consent queue floods with the same facts every
+    session — a silent failure with only an stderr line as signal.
+
+    Conservative on purpose: matches only when the new fact's normalized text is
+    CONTAINED in an existing entry (equality included), i.e. the new fact adds
+    nothing lexically. That can't conflate two genuinely different facts (the
+    risk the vector threshold guards against), so it's safe to run even when
+    vectors are healthy — it just catches verbatim / near-verbatim restatements
+    the vector search might rank a hair below threshold, or rows that never got
+    embedded. Returns (id, content, consent_pending, 1.0) or None.
+    """
+    n_new = _norm_text(content)
+    if not n_new:
+        return None
+    if ignore_audience:
+        aud_clause, aud_params = "1=1", []
+    else:
+        aud_clause, aud_params = audience_filter_sql(audience)
+    slug_clause = " AND slug IS NOT NULL" if standalone_only else ""
+    rows = conn.execute(f"""
+        SELECT id, content, consent_pending FROM memories
+        WHERE kind='narrative'{slug_clause} AND {aud_clause}
+        ORDER BY updated_at DESC
+        LIMIT ?
+    """, aud_params + [limit]).fetchall()
+    for r in rows:
+        if n_new in _norm_text(r["content"] or ""):
+            return (r["id"], r["content"], r["consent_pending"], 1.0)
+    return None
+
+
+def _find_duplicate(conn, content, audience, standalone_only, *,
+                    threshold, ignore_audience):
+    """Vector-first duplicate finder with a lexical fallback. The vector path
+    catches paraphrase; the lexical path is the net when vectors are down or a
+    row was never embedded. Returns the vector hit if there is one, else the
+    lexical hit, else None."""
+    dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only,
+                               threshold=threshold, ignore_audience=ignore_audience)
+    if dup is not None:
+        return dup
+    return _find_lexical_duplicate(conn, content, audience,
+                                   standalone_only=standalone_only, ignore_audience=ignore_audience)
+
+
 def _dedup_merge_pending(conn, content, audience, now, standalone_only: bool):
     """Dedup for a not-yet-reviewed (consent_pending) incoming fact.
 
@@ -361,8 +451,8 @@ def _dedup_merge_pending(conn, content, audience, now, standalone_only: bool):
         confirmed row is left UNTOUCHED — new unreviewed wording never folds into
         a memory that already passed consent (that would slip text past review).
     Returns a create-style result on a hit, or None (caller inserts normally)."""
-    dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only,
-                               threshold=_DEDUP_PENDING_MERGE_MIN, ignore_audience=True)
+    dup = _find_duplicate(conn, content, audience, standalone_only,
+                          threshold=_DEDUP_PENDING_MERGE_MIN, ignore_audience=True)
     if dup is None:
         return None
     dup_id, dup_content, dup_pending, sim = dup
@@ -399,7 +489,8 @@ def _dedup_merge(conn, content, audience, consent_pending, now, source,
     if consent_pending:
         return _dedup_merge_pending(conn, content, audience, now, standalone_only)
 
-    dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only)
+    dup = _find_duplicate(conn, content, audience, standalone_only,
+                          threshold=_DEDUP_MERGE_MIN, ignore_audience=False)
     if dup is None:
         return None
     dup_id, dup_content, dup_pending, sim = dup
@@ -861,6 +952,89 @@ def _delete_embedding(conn: sqlite3.Connection, record_id: str) -> None:
         conn.execute("DELETE FROM memory_vecs WHERE memory_id=?", (record_id,))
     except Exception:
         pass
+
+
+# Legacy hex/uuid id shape — memories created before the readable-id fix.
+_LEGACY_ID_RE = re.compile(
+    r"^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def ids_to_slugs(conn: sqlite3.Connection | None = None) -> dict:
+    """One-shot mechanical re-key of legacy hex/uuid memory ids to readable
+    content-derived slugs — mirrors graph.ids_to_slugs. Updates every reference
+    (the memory_vecs embedding row, graduation_log.memory_id, and the dormant
+    tracker_entries.tracker_id FK if present) and preserves each embedding by
+    COPYING its bytes to the new key — so it works even when the embedder is
+    unavailable (no re-embedding). Idempotent (only touches legacy-shaped ids);
+    one transaction with foreign_keys off. Returns {ok, remapped, mapping}."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        taken = {r["id"] for r in conn.execute("SELECT id FROM memories")}
+        mapping: dict[str, str] = {}
+
+        def fresh(content: str) -> str:
+            for suffix_len in (2, 3, 5):
+                cand = slug_id((content or "")[:80], kind="mem", suffix_len=suffix_len)
+                if cand not in taken:
+                    taken.add(cand)
+                    return cand
+            cand = new_id()
+            taken.add(cand)
+            return cand
+
+        has_grad = _table_exists(conn, "graduation_log")
+        has_tracker = _table_exists(conn, "tracker_entries")
+        has_vecs = _table_exists(conn, "memory_vecs")
+
+        # PRAGMA foreign_keys is a no-op inside a transaction — commit any
+        # in-flight implicit one first so the toggle applies.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with conn:
+                remapped = 0
+                rows = conn.execute("SELECT id, content FROM memories").fetchall()
+                for r in rows:
+                    if not _LEGACY_ID_RE.match(r["id"]):
+                        continue
+                    old = r["id"]
+                    new = fresh(r["content"])
+                    mapping[old] = new
+                    conn.execute("UPDATE memories SET id=? WHERE id=?", (new, old))
+                    if has_grad:
+                        conn.execute("UPDATE graduation_log SET memory_id=? WHERE memory_id=?", (new, old))
+                    if has_tracker:
+                        conn.execute("UPDATE tracker_entries SET tracker_id=? WHERE tracker_id=?", (new, old))
+                    # Re-key the embedding row by COPYING its bytes (vec0 can't
+                    # UPDATE its PK; and copying avoids needing the embedder).
+                    if has_vecs:
+                        try:
+                            vrow = conn.execute(
+                                "SELECT embedding FROM memory_vecs WHERE memory_id=?", (old,)
+                            ).fetchone()
+                            conn.execute("DELETE FROM memory_vecs WHERE memory_id=?", (old,))
+                            if vrow is not None:
+                                conn.execute(
+                                    "INSERT INTO memory_vecs(memory_id, embedding) VALUES(?,?)",
+                                    (new, vrow["embedding"]),
+                                )
+                        except Exception:
+                            pass  # vec stack unavailable → skip (dedup already degraded)
+                    remapped += 1
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+        return {"ok": True, "remapped": remapped, "mapping": mapping}
+    finally:
+        if own:
+            conn.close()
 
 
 # ── Consent flow (Pillar C) ───────────────────────────────────────────────────

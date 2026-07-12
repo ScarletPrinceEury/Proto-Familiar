@@ -436,6 +436,17 @@ def memory_list_consent_pending() -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_health() -> dict[str, Any]:
+    """I use this to check whether my memory's DEDUP is working — the semantic
+    matcher that stops the same fact piling up in my human's consent queue. It
+    depends on the vector stack (the embedder + sqlite-vec); if either is
+    unavailable I fall back to a cruder lexical dedup, so this tells me which
+    mode I'm in and why. Returns {healthy, dedup_mode, embed_ok, vec_ok,
+    vec_rows, memory_rows, ...}."""
+    return mem.vector_health(conn=_c())
+
+
+@mcp.tool()
 def memory_confirm_consent(ids: list[str]) -> str:
     """I use this to confirm that my human consents to keeping memory records
     I flagged as consent_pending. Clears the pending flag; records become
@@ -655,6 +666,16 @@ def graph_ids_to_slugs() -> dict[str, Any]:
     mapping.
     """
     return graph.ids_to_slugs(conn=_c())
+
+
+@mcp.tool()
+def memory_ids_to_slugs() -> dict[str, Any]:
+    """I convert my memories' old-style hex ids into readable content-derived
+    slugs, updating every reference (embeddings, graduation log) in one
+    transaction. Mechanical and idempotent — legacy ids created before the fix
+    become legible like new ones. Returns {remapped, mapping}.
+    """
+    return mem.ids_to_slugs(conn=_c())
 
 
 @mcp.tool()

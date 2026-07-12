@@ -247,6 +247,12 @@ lifecycle of the autonomous loops:
 **Coverage (day-anchoring Phase 3):** `GET /api/memory-coverage` (per-date
 status for the calendar) + `POST /api/memorize-day {date,force}` ((re)feed a
 day's slices) — see `memory-coverage.js`.
+**Dedup health:** `GET /api/memory-health` — is semantic dedup live or degraded
+to the lexical fallback (`{healthy, dedup_mode, embed_ok, vec_ok, vec_rows,
+memory_rows}`, from Phylactery's `memory_health`). A dead vector stack
+(fastembed/sqlite-vec) silently disabled dedup and flooded the consent queue;
+the fallback keeps dedup working and this surface + a loud boot log make the
+degradation visible instead of silent.
 **Import (day-anchoring Phase 4):** `POST /api/import-logs` — without `commit`
 PREVIEWS (parse + segment, no writes); with `commit` places foreign logs by date
 (one imported session per date) and enqueues them for immediate ingestion. Parsers
