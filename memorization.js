@@ -19,6 +19,7 @@ import { fileURLToPath } from 'url';
 import { mkdirSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { PROVIDER_URLS } from './providers.js';
+import { extractContent } from './llm-call.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR  = path.join(__dirname, 'tomes');
@@ -380,8 +381,13 @@ async function callProvider({ provider, apiKey, model, prompt }) {
   try { data = JSON.parse(text); } catch { throw new Error('Provider returned non-JSON response.'); }
   if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'Provider error'));
   const choice  = data.choices?.[0];
-  const content = choice?.message?.content ?? '';
-  if (!content) throw new Error('Provider returned empty content.');
+  // Tolerate thinking models that put the answer in reasoning_content (shared rule).
+  const content = extractContent(choice?.message ?? {});
+  if (!content) {
+    const fr = choice?.finish_reason;
+    throw new Error(`Provider returned empty content (finish_reason=${fr ?? 'unknown'})` +
+      (fr === 'length' ? ' — hit the token cap mid-response; raise max_tokens.' : '.'));
+  }
   return { content, finishReason: choice?.finish_reason ?? null };
 }
 

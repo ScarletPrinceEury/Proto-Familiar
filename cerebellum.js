@@ -37,6 +37,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
 import { PROVIDER_URLS } from './providers.js';
+import { callProviderChat } from './llm-call.js';
 import { listOwnFiles, readOwnFile } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
@@ -779,20 +780,24 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
   llmMessages.push({ role: 'user', content: substituteMacros(prompt, s) });
 
   try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${conn.apiKey.trim()}` },
-      body: JSON.stringify({
-        model:       conn.model.trim(),
-        messages:    llmMessages,
-        stream:      false,
-        temperature: 0.7,
-        max_tokens:  600,
-      }),
-    });
-    if (!resp.ok) return { action: 'wait' };
-    const data = await resp.json();
-    const text = data.choices?.[0]?.message?.content ?? '';
+    // Ward-signed fix (thinking-model empty-content): route through the shared
+    // call so a reasoning model has room past its chain-of-thought (cap raised
+    // 600→4000) and content is recovered from reasoning_content when a proxy
+    // misplaces it. WITHOUT this, a thinking model returned empty content →
+    // no JSON match → action:'wait' EVERY tick — silence-triage silently doing
+    // nothing on a distressed ward. The decision logic below is UNCHANGED: a
+    // genuine transient failure still degrades to the safe action:'wait', never
+    // a false reach-out and never a fabricated decision.
+    let text;
+    try {
+      text = await callProviderChat({
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        messages: llmMessages, temperature: 0.7, maxTokens: 4000,
+      });
+    } catch (err) {
+      console.warn('[triage] deliberation call failed (safe default: wait):', err?.message ?? err);
+      return { action: 'wait' };
+    }
     const m = text.match(/\{[\s\S]+\}/);
     if (!m) return { action: 'wait' };
     const parsed = JSON.parse(m[0]);
