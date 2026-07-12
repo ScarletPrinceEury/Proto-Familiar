@@ -16,7 +16,7 @@ import sqlite3
 from datetime import datetime, date
 from typing import Any
 
-from phylactery.db import get_conn, new_id, now_iso
+from phylactery.db import get_conn, insert_with_slug_retry, now_iso
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
 
@@ -459,7 +459,6 @@ def create(
         conn = get_conn()
     try:
         now = now_iso()
-        rec_id = new_id()
         subj_json = json.dumps(subjects or [])
 
         # Three storage shapes:
@@ -481,7 +480,7 @@ def create(
         elif standalone:
             dk = date_key or _today()
             if not slug:
-                slug = _derive_slug(None, content) or f"fact-{rec_id[:8]}"
+                slug = _derive_slug(None, content)
         else:
             dk = date_key or _today()
             slug = None
@@ -525,15 +524,25 @@ def create(
                     _upsert_embedding(conn, existing["id"], new_content)
                     return {"ok": True, "id": existing["id"], "dateKey": dk, "appended": True}
 
-            conn.execute("""
+            # Model-facing id is a content-derived slug ("low-on-tea-k3"), not a
+            # uuid4 hex — the mandatory readable-id convention (db.slug_id). The
+            # id rides out in recall / the consent block / graduation, so the
+            # Familiar repeats a legible, greppable id instead of ~16 tokens of
+            # meaningless hex. Legacy hex ids stay valid (ids are opaque TEXT).
+            insert_sql = """
                 INSERT INTO memories(id,kind,register,granularity,date_key,slug,content,
                     audience,subjects_json,care_weight,category,consent_pending,
                     confidence,source_json,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (rec_id, "narrative", register, granularity, dk, slug,
-                  content, audience, subj_json, care_weight, category,
-                  1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
-                  source, now, now))
+            """
+            rec_id = insert_with_slug_retry(
+                conn, insert_sql,
+                lambda cid: (cid, "narrative", register, granularity, dk, slug,
+                             content, audience, subj_json, care_weight, category,
+                             1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
+                             source, now, now),
+                label=content, kind="mem",
+            )
 
         _upsert_embedding(conn, rec_id, content)
         return {"ok": True, "id": rec_id, "dateKey": dk}
