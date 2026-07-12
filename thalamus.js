@@ -1138,6 +1138,16 @@ export async function convertGraphIds() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/** Re-key legacy hex memory ids to readable content-derived slugs. */
+export async function convertMemoryIds() {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  try {
+    const result = await callTool('memory_ids_to_slugs', {});
+    return (result && typeof result === 'object') ? result : { ok: true, result };
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 /** Search the whole schedule layer by label substring — any horizon. The
  *  id-discovery grep behind the Familiar's schedule_find tool. */
 export async function findScheduleNodes({ query, includeResolved = false, limit = 20 }) {
@@ -2611,6 +2621,16 @@ export async function restoreBackup({ filePath, passphrase }) {
       console.warn('[thalamus] reconnect after restore failed:', err?.message ?? err));
   }
   return res;
+}
+
+// Memory dedup/vector health — reports whether semantic dedup is live or in
+// the lexical-fallback mode (embedder/sqlite-vec unavailable). Degrades to an
+// "unknown" shape so a probe failure never throws into a boot or a request.
+export async function getMemoryHealth() {
+  return callTool('memory_health', {}).catch(err => {
+    console.warn('[thalamus] getMemoryHealth failed:', err?.message ?? err);
+    return { ok: false, healthy: null, dedup_mode: 'unknown', error: err?.message ?? String(err) };
+  });
 }
 
 // ── Ward remember-consent map (Pillar I) ─────────────────────────────────────
