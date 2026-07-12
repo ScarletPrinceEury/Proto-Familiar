@@ -949,6 +949,92 @@ export async function roundsForWard() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), rounds: [], hidden_count: 0, visibility: 'shared' }; }
 }
 
+// ── Location & weather wrappers (Weather sense, W-A) ─────────────
+// Thin bridges to Unruh's locations/weather storage. The fetch half
+// (weather-source.js) does the network; these just store/serve. Each
+// degrades to a structured {ok:false} when Unruh is down — never throws.
+
+export async function addLocation({ label, lat, lon, place_name, timezone } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { label };
+  if (lat        !== undefined) args.lat        = lat;
+  if (lon        !== undefined) args.lon        = lon;
+  if (place_name !== undefined) args.place_name = place_name;
+  if (timezone   !== undefined) args.timezone   = timezone;
+  try {
+    const r = await unruhClient.callTool({ name: 'location_add', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function listLocations() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', locations: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_list', arguments: {} });
+    return parseToolText(r, { ok: false, locations: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), locations: [] }; }
+}
+
+export async function getCurrentLocation() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', location: null };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_get_current', arguments: {} });
+    return parseToolText(r, { ok: false, location: null });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), location: null }; }
+}
+
+export async function setCurrentLocation({ ident }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_set_current', arguments: { ident } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function deleteLocation({ ident }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_delete', arguments: { ident } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/** Private (coords + cache age) — for the refresh loop ONLY. */
+export async function weatherLocationsPrivate() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', locations: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'weather_locations_private', arguments: {} });
+    return parseToolText(r, { ok: false, locations: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), locations: [] }; }
+}
+
+export async function ingestWeather({ location_id, provider, fetched_at, current, hourly } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'weather_ingest',
+      arguments: { location_id, provider, fetched_at, current, hourly },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function readWeather({ location_id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', weather: null };
+  try {
+    const r = await unruhClient.callTool({ name: 'weather_read', arguments: { location_id } });
+    return parseToolText(r, { ok: false, weather: null });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), weather: null }; }
+}
+
 /** Intentions whose trigger timing has come due (for the noticing loop). */
 export async function getDueIntentions({ now } = {}) {
   await startThalamus();
@@ -986,17 +1072,18 @@ export async function getRemindersHealth() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
-/** Record that an event's lead-time alert was delivered (one-time:
- *  payload.alerted_at; recurring: payload.alerts[occurrence_date]) so the
- *  alert scan never re-pings the same moment. Best-effort. */
-export async function markEventAlerted({ id, occurrence_date = null }) {
+/** Record that an event's lead-time alert was delivered so the alert scan
+ *  never re-pings the same moment. `kind` selects the dedup channel:
+ *  'event' (payload.alerted_at / alerts[date]) or 'weather' (the W-B severe
+ *  heads-up: weather_alerted_at / weather_alerts[date]). Best-effort. */
+export async function markEventAlerted({ id, occurrence_date = null, kind = 'event' }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
-    const r = await unruhClient.callTool({
-      name: 'schedule_mark_alerted',
-      arguments: occurrence_date ? { id, occurrence_date } : { id },
-    });
+    const args = { id };
+    if (occurrence_date) args.occurrence_date = occurrence_date;
+    if (kind && kind !== 'event') args.kind = kind;
+    const r = await unruhClient.callTool({ name: 'schedule_mark_alerted', arguments: args });
     return parseToolText(r, { ok: false });
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
@@ -1375,6 +1462,7 @@ function wrapFile(filename, content, promptLabel) {
 import { formatTemporalContext } from './temporal-format.js';
 import { buildStewardshipBlock } from './stewardship.js';
 import { nextProjectionCue } from './gcal-projection.js';
+import { weatherEnabled } from './weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
 import { summarizeNeedsForDay, isNeedWindow } from './needs-tracking.js';
@@ -1939,7 +2027,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (liveTurn && !staticOnly && !gated) {
       try {
         const candidates = Array.isArray(temporalPayload?.gcal_projection) ? temporalPayload.gcal_projection : [];
-        gcalCueBlock = await nextProjectionCue({ candidates, advance: true });
+        let weatherOn = false;
+        try { weatherOn = weatherEnabled(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))); } catch { /* default off */ }
+        gcalCueBlock = await nextProjectionCue({ candidates, advance: true, weatherOn });
         if (gcalCueBlock) console.log('[thalamus] gcal projection cue: surfacing new calendar item(s)');
       } catch (err) {
         console.error('[thalamus] gcal projection cue failed:', err?.message ?? err);

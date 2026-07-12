@@ -1185,6 +1185,7 @@
         <button class="ke-tab"               data-temporal-tab="handoff"    role="tab">Handoff</button>
         <button class="ke-tab"               data-temporal-tab="automation" role="tab">Automation</button>
         <button class="ke-tab"               data-temporal-tab="calendar"   role="tab">Calendar</button>
+        <button class="ke-tab"               data-temporal-tab="weather"    role="tab">Weather</button>
       </div>
       <div class="modal-body ke-body">
 
@@ -1590,6 +1591,39 @@
             <div class="field-hint" id="gcal-sync-status">No sync has run yet.</div>
             <button type="button" id="gcal-sync-now" class="btn-secondary" style="margin-top:6px">↻ Sync now</button>
           </div>
+        </div>
+
+        <!-- WEATHER PANE (W-B) — the sky over your day + your saved places -->
+        <div class="ke-pane" id="te-pane-weather" style="overflow:auto; padding:12px">
+          <div class="field-row" style="margin-top:0">
+            <label for="weather-toggle">Weather</label>
+            <input type="checkbox" id="weather-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. When on, your Familiar can feel the weather where you are and check the day ahead before nudging you about anything outdoors. <strong>Your places stay on this device's server and are never told to the AI</strong> — it only ever sees the label you give a place ("home", "work") and the weather in plain words, never coordinates. Off, and it says nothing about the weather. Hard off-switch: <code>PROTO_FAMILIAR_WEATHER_DISABLED=1</code>.</div>
+
+          <h4 style="margin:14px 0 4px">Your places</h4>
+          <div class="field-hint" style="margin-bottom:6px">Add the places whose weather matters — the first becomes your current place (the one the "right now" weather follows). The AI only ever learns the label.</div>
+          <div id="weather-places-list" style="margin:8px 0"><div class="field-hint">No places yet.</div></div>
+
+          <div class="field" style="margin-top:10px">
+            <label for="weather-place-query">Add a place</label>
+            <div style="display:flex; gap:6px; flex-wrap:wrap">
+              <input type="text" id="weather-place-query" placeholder="City, ZIP, or address" style="flex:1; min-width:12em">
+              <button type="button" id="weather-geocode-btn" class="btn-secondary">Find</button>
+            </div>
+          </div>
+          <div id="weather-geocode-result" class="hidden" style="margin-top:8px; padding:8px; border:1px solid var(--border, #ccc); border-radius:6px">
+            <div class="field-hint" style="margin-bottom:6px">Found: <strong id="weather-found-name">—</strong></div>
+            <div class="field" style="margin:0">
+              <label for="weather-place-label">Label it</label>
+              <div style="display:flex; gap:6px; flex-wrap:wrap">
+                <input type="text" id="weather-place-label" placeholder="home" style="flex:1; min-width:8em">
+                <button type="button" id="weather-save-place" class="btn-primary">Save place</button>
+                <button type="button" id="weather-cancel-place" class="btn-secondary">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <div id="weather-places-status" class="field-hint" style="margin-top:8px"></div>
         </div>
 
       </div>

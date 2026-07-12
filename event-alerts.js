@@ -24,6 +24,7 @@
 
 import { expandOccurrences, localDateKey } from './recurrence.js';
 import { relativeTime } from './relative-time.js';
+import { forecastAtHour, isAdverseHour, formatItemWeather } from './weather-format.js';
 
 // How long past its start an event may still alert (covers a server that
 // was asleep when the lead window opened). Past this, the moment is gone
@@ -156,5 +157,72 @@ export function formatEventAlert(alert, { nowMs = Date.now() } = {}) {
   return {
     title: `Coming up: ${alert.label ?? '(untitled)'}`,
     body: when ? `Starts ${when}.` : '',
+  };
+}
+
+/**
+ * The severe-weather heads-up (W-B, §5.4). Same shape and dedup discipline as
+ * the coming-up alert, but keyed on the outside-tagged item's OCCURRENCE-hour
+ * forecast turning adverse. Selection is pure: the forecast comes from the
+ * read-mirror's hourly array (the CURRENT location's cache — "within lead
+ * range" of an item means it's inside the ~48h the mirror covers, no fetch).
+ * Weather alone (no outside item affected) never pings — this is deliberately
+ * a preparation surface, not a weather report.
+ */
+export function selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, nowMs, leadMs, defaultLeadMs, maxLeadMs = MAX_LEAD_MS, graceMs = ALERT_GRACE_MS }) {
+  if (!mirror || !Array.isArray(mirror.hourly) || !mirror.hourly.length) return [];
+  const dflt = Number.isFinite(defaultLeadMs) ? defaultLeadMs : leadMs;
+  const out = [];
+  const seen = new Set();
+
+  const outsideEvent = (n) =>
+    n && n.type === 'event' && !n.resolution && !(n.payload?.all_day)
+    && Array.isArray(n.payload?.obstacle_tags)
+    && n.payload.obstacle_tags.some(t => String(t).toLowerCase() === 'outside');
+
+  for (const n of (Array.isArray(windowNodes) ? windowNodes : [])) {
+    if (!outsideEvent(n) || n.payload?.recurrence) continue;
+    if (n.payload?.weather_alerted_at) continue;
+    const whenMs = whenMsOf(n);
+    const nodeLeadMs = effectiveLeadMs(n, dflt);
+    if (whenMs == null || !inAlertWindow(whenMs, nowMs, nodeLeadMs, graceMs)) continue;
+    const hour = forecastAtHour(mirror.hourly, whenMs);
+    if (!hour || !isAdverseHour(hour)) continue;
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    out.push({ id: n.id, label: n.label, whenMs, whenIso: n.when, occurrenceDate: null, hour });
+  }
+
+  for (const n of (Array.isArray(recurringNodes) ? recurringNodes : [])) {
+    if (!outsideEvent(n) || !n.payload?.recurrence) continue;
+    const nodeLeadMs = effectiveLeadMs(n, dflt);
+    const occs = expandOccurrences(n, nowMs - graceMs, nowMs + maxLeadMs);
+    const wAlerts = n.payload?.weather_alerts || {};
+    for (const occMs of occs) {
+      if (!inAlertWindow(occMs, nowMs, nodeLeadMs, graceMs)) continue;
+      const dateKey = localDateKey(occMs);
+      if (Object.prototype.hasOwnProperty.call(wAlerts, dateKey)) continue;
+      const hour = forecastAtHour(mirror.hourly, occMs);
+      if (!hour || !isAdverseHour(hour)) continue;
+      const key = `${n.id}:${dateKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ id: n.id, label: n.label, whenMs: occMs, whenIso: localNaiveIso(occMs), occurrenceDate: dateKey, hour });
+    }
+  }
+
+  out.sort((a, b) => a.whenMs - b.whenMs);
+  return out;
+}
+
+/** The banner/push text for one weather heads-up. Code-built words. */
+export function formatWeatherAlert(alert, { nowMs = Date.now() } = {}) {
+  const rel = relativeTime(alert.whenMs, nowMs) || '';
+  const clock = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(alert.whenIso || '') ? alert.whenIso.slice(11, 16) : '';
+  const when = [rel, clock ? `at ${clock}` : ''].filter(Boolean).join(' — ');
+  const wx = formatItemWeather(alert.hour) || 'rough weather then';
+  return {
+    title: `Weather heads-up: ${alert.label ?? '(untitled)'}`,
+    body: `Outside ${when ? `${when}` : 'soon'} — ${wx}. Worth planning around while there's time.`,
   };
 }

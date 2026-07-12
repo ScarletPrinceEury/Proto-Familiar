@@ -59,3 +59,7 @@ topics:
     title: Development Rhythm
     description: How the sole maintainer actually paces and triages feature and bug work
     parents: [concepts]
+  - slug: weather
+    title: Weather
+    description: Ward-local weather sense, provider chain, and location privacy
+    parents: [architecture]

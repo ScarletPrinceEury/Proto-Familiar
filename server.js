@@ -51,6 +51,13 @@ import { startNoticingLoop } from './noticing-loop.js';
 import { buildNoticingPrompt, AGING_INTENT_MS } from './noticing.js';
 import { getContactBaseline, weekdayClass } from './contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
+import {
+  addLocation, listLocations, getCurrentLocation, setCurrentLocation, deleteLocation,
+  weatherLocationsPrivate, ingestWeather, readWeather,
+} from './thalamus.js';
+import { geocode, fetchForecast } from './weather-source.js';
+import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './weather-mirror.js';
+import { WEATHER_STALE_MS } from './weather-format.js';
 import { selectReadiness } from './stewardship.js';
 import {
   shouldReflectNow,
@@ -62,6 +69,7 @@ import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedInte
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
+  selectDueWeatherAlerts, formatWeatherAlert,
   clampLeadMinutes, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
@@ -443,6 +451,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // The ward's zone, not the server's — so the [Now] the Familiar reads is
       // the ward's clock even when the server runs in a different timezone.
       timeZone: readSettingsSync()?.wardTimeZone || null,
+      // Full weather detail is ward-private only. On any gated (non-ward)
+      // turn the vague tier renders instead — qualitative, no numbers/units/
+      // times/labels, so precise values can't leak a location (§5.6).
+      // Fail-closed: unclear audience → vague, and vague itself → '' if stale.
+      weatherLine: audienceTag === 'ward-private' ? readWeatherNowLine() : readWeatherVagueLine(),
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
@@ -1256,6 +1269,56 @@ app.get('/api/rounds', async (_req, res) => {
   }
 });
 
+// ── Locations (Weather sense, W-A) ───────────────────────────────
+// The ward's places, LABEL-ONLY over these endpoints (coordinates never
+// leave the geocode preview + the add call). Adding or switching the current
+// place forces a weather refresh so the [Now] line updates promptly.
+
+app.get('/api/locations', async (_req, res) => {
+  try { res.json(await listLocations()); }
+  catch { res.json({ ok: false, locations: [] }); }
+});
+
+// Preview a city/ZIP → resolved place name + coords, for the ward to confirm
+// before it's stored. The coords are returned so the confirm POST can carry
+// them back without a second geocode.
+app.post('/api/locations/geocode', async (req, res) => {
+  const query = String(req.body?.query ?? '').trim();
+  if (!query) return res.status(400).json({ ok: false, error: 'query required' });
+  try { res.json(await geocode(query)); }
+  catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'geocode failed' }); }
+});
+
+app.post('/api/locations', async (req, res) => {
+  const { label, lat, lon, place_name, timezone } = req.body ?? {};
+  if (!label || typeof label !== 'string' || !label.trim()) {
+    return res.status(400).json({ ok: false, error: 'label required' });
+  }
+  try {
+    const r = await addLocation({ label: label.trim(), lat, lon, place_name, timezone });
+    refreshWeatherIfDue({ force: true }).catch(() => {});
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'add failed' }); }
+});
+
+app.post('/api/locations/current', async (req, res) => {
+  const ident = String(req.body?.ident ?? '').trim();
+  if (!ident) return res.status(400).json({ ok: false, error: 'ident required' });
+  try {
+    const r = await setCurrentLocation({ ident });
+    refreshWeatherIfDue({ force: true }).catch(() => {});
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'set-current failed' }); }
+});
+
+app.delete('/api/locations/:id', async (req, res) => {
+  try {
+    const r = await deleteLocation({ ident: req.params.id });
+    refreshWeatherIfDue({ force: true }).catch(() => {});
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'delete failed' }); }
+});
+
 // Reflection heartbeat log (temporal-bridges Piece 5): every reflection tick
 // that ran, with its grade counts (incl. all-zero) — so "the learning loop
 // never fires" is visible instead of silently indistinguishable from calm.
@@ -1595,6 +1658,8 @@ initCerebellumTools({
   upsertVillager,
   relayToDiscord,
   memorizeSessionNow,
+  // set_current_location warms the new place's sky right away (fire-and-forget).
+  refreshWeatherNow: () => { refreshWeatherIfDue({ force: true }).catch(() => {}); },
 });
 
 // Backs the Familiar's `memorize_now` tool: commit THIS conversation to memory
@@ -3140,6 +3205,10 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startNoticing();
   startMemorySweep();
   startVillageSync();
+  // Weather sense (W-A): prime the read-mirror at boot so the [Now] line is
+  // fresh before the first 30s reminders tick. Self-gated + fire-and-forget;
+  // inert until the ward has added a location.
+  refreshWeatherIfDue().catch(err => console.error('[weather] boot refresh:', err?.message ?? err));
   // Discord gateway (Village V4). Supervisor idles until the ward sets
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
@@ -3494,34 +3563,124 @@ function startRemindersScheduler() {
       if (s?.eventAlertsEnabled === false) return [];  // default-ON
       const defaultLeadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
       const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
-      // Fetch across the WIDEST possible lead (Pass 5): an event may carry a
-      // per-event lead longer than the global default, and it must appear in
-      // the window early enough for its own lead to fire. selectDueEventAlerts
-      // then applies each node's effective lead. Events are sparse, so the
-      // wider fetch is cheap; the per-node gate keeps the alerts precise.
-      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs: MAX_LEAD_MS });
-      const [win, rec] = await Promise.all([
-        getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
-        listRecurring().catch(() => ({ nodes: [] })),
-      ]);
-      const windowNodes = Array.isArray(win) ? win : (win?.nodes ?? []);
-      const recurringNodes = Array.isArray(rec) ? rec : (rec?.nodes ?? []);
+      const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
       return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
         .map(a => ({ ...a, ...formatEventAlert(a, { nowMs }) }));
     },
-    markEventAlerted: async ({ id, occurrenceDate }) => {
-      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null });
+    // Severe-weather heads-up (W-B, §5.4): an outside-tagged item whose
+    // occurrence-hour forecast turns adverse in the CACHED forecast (the
+    // read-mirror) gets a code-built ping, riding the same tick + window scan
+    // as the coming-up alert. Gated by BOTH weather AND event-alerts being on.
+    getDueWeatherAlerts: async () => {
+      if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
+      const s = readSettingsSync();
+      if (!weatherEnabled() || s?.eventAlertsEnabled === false) return [];
+      const mirror = readWeatherMirrorSync();
+      if (!mirror) return [];   // no current-location forecast → nothing to warn from
+      const defaultLeadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
+      const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
+      return selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
+        .map(a => ({ ...a, ...formatWeatherAlert(a, { nowMs }) }));
+    },
+    markEventAlerted: async ({ id, occurrenceDate, kind }) => {
+      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null, kind: kind || 'event' });
       if (!r.ok) throw new Error(r.error || 'mark_alerted failed');
     },
     getHealth: getRemindersHealth,
     onTick: (r) => {
       for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
       for (const a of r.alerted || []) console.log(`[reminders] event alert "${a.label}" (${a.whenIso ?? ''})`);
+      for (const a of r.weatherAlerted || []) console.log(`[reminders] weather alert "${a.label}" (${a.whenIso ?? ''})`);
       for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label ?? s.id}": ${s.error}`);
+      // Weather refresh rides this same 30s tick, self-gated to a 6h cadence
+      // (ride existing requests, gate in code). Fire-and-forget — never
+      // blocks the reminders path.
+      refreshWeatherIfDue().catch(err => console.error('[weather]', err?.message ?? err));
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
   console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Weather refresh (Weather sense, W-A) ─────────────────────────
+// Rides the reminders tick. Only the CURRENT location refreshes here, and only
+// when its cache is older than the 6h cadence (non-current places refresh
+// lazily when asked about — W-B). Fetch failure keeps the stale cache and the
+// [Now] line drops on its own past 12h; disabled / no current location clears
+// the mirror so the line disappears immediately.
+// Per-tick memo of the alert-window scan so the coming-up and severe-weather
+// passes share ONE schedule fetch instead of two MCP round-trips every 30s
+// (ride existing requests). Short TTL: both passes run inside the same tick.
+let _alertScan = { at: 0, data: { windowNodes: [], recurringNodes: [] } };
+async function fetchAlertScanData(nowMs) {
+  if (Date.now() - _alertScan.at < 10_000) return _alertScan.data;
+  const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs: MAX_LEAD_MS });
+  const [win, rec] = await Promise.all([
+    getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
+    listRecurring().catch(() => ({ nodes: [] })),
+  ]);
+  _alertScan = {
+    at: Date.now(),
+    data: {
+      windowNodes: Array.isArray(win) ? win : (win?.nodes ?? []),
+      recurringNodes: Array.isArray(rec) ? rec : (rec?.nodes ?? []),
+    },
+  };
+  return _alertScan.data;
+}
+
+const WEATHER_REFRESH_MS = 6 * 60 * 60_000;
+let _weatherRefreshing = false;
+
+function weatherEnabled() {
+  if (process.env.PROTO_FAMILIAR_WEATHER_DISABLED === '1') return false;
+  return readSettingsSync()?.weatherEnabled !== false;   // default-ON
+}
+
+async function refreshWeatherIfDue({ now = Date.now(), force = false } = {}) {
+  if (_weatherRefreshing) return;
+  if (!weatherEnabled()) { await clearWeatherMirror(); return; }
+  _weatherRefreshing = true;
+  try {
+    const res = await weatherLocationsPrivate();
+    const locs = Array.isArray(res?.locations) ? res.locations : [];
+    const current = locs.find(l => l.is_current);
+    if (!current) { await clearWeatherMirror(); return; }   // no place set → no line
+    if (!Number.isFinite(current.lat) || !Number.isFinite(current.lon)) return;
+
+    const ageMs = current.fetched_at ? (now - Date.parse(current.fetched_at)) : Infinity;
+    const stale = !(Number.isFinite(ageMs)) || ageMs > WEATHER_REFRESH_MS;
+    if (!force && !stale) {
+      // Cache still fresh: make sure the mirror reflects it (e.g. after a
+      // restart, or the ward just switched current location).
+      await syncWeatherMirror(current.id);
+      return;
+    }
+    const fc = await fetchForecast(current.lat, current.lon, { timezone: current.timezone });
+    if (!fc.ok) { console.warn(`[weather] fetch failed for ${current.label}: ${fc.error}`); return; }
+    await ingestWeather({
+      location_id: current.id, provider: fc.provider,
+      fetched_at: fc.fetched_at, current: fc.current, hourly: fc.hourly,
+    });
+    await writeWeatherMirror({ provider: fc.provider, fetched_at: fc.fetched_at, current: fc.current, hourly: fc.hourly });
+    console.log(`[weather] refreshed ${current.label} via ${fc.provider}`);
+  } finally {
+    _weatherRefreshing = false;
+  }
+}
+
+// Re-point the read-mirror at a location's cached forecast without a fetch
+// (used when the cache is fresh but the mirror may lag it — e.g. after a
+// restart, or the ward just switched their current location).
+async function syncWeatherMirror(locationId) {
+  try {
+    const r = await readWeather({ location_id: locationId });
+    const w = r?.weather;
+    if (w?.fetched_at && (Date.now() - Date.parse(w.fetched_at)) <= WEATHER_STALE_MS) {
+      await writeWeatherMirror({ provider: w.provider, fetched_at: w.fetched_at, current: w.current, hourly: w.hourly });
+    }
+  } catch { /* best-effort */ }
 }
 
 // ── Google Calendar sync loop (0.8) ─────────────────────────────
@@ -4006,6 +4165,8 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
   ]);
   const nowBlock = buildTimeAnchorBlock({
     now: Date.now(), lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
+    // Noticing is a ward-private deliberation → full weather line.
+    weatherLine: readWeatherNowLine(),
   });
   const prompt = substituteMacros(buildNoticingPrompt({
     // flag_distress is in the noticing toolset now, so the prompt's

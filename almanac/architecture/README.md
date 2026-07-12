@@ -118,6 +118,8 @@ what each one owns.
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
 - [Unruh](unruh) — the temporal-context specialist: the schedule graph, the interest weight
   system, and the local-naive time model.
+- [Weather](weather) — ward-local weather sensing, the provider chain, and the
+  [location-privacy](../decisions/location-privacy) invariant.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
   to turn one off.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a

@@ -429,14 +429,18 @@ def mark_alerted(
     *,
     id: str,
     occurrence_date: str | None = None,
+    kind: str = "event",
 ) -> bool:
     """Record that a lead-time alert for this event has been delivered, so
     the Node-side scan never re-pings the same moment (survives restarts —
     the outbox dedup alone forgets once an item is acknowledged).
 
-    One-time events stamp payload.alerted_at; a recurring occurrence stamps
-    payload.alerts[YYYY-MM-DD] (mirroring payload.resolutions' keying). An
-    atomic read-merge-write here, rather than payload replacement from the
+    `kind` selects the dedup namespace so distinct alert channels for the SAME
+    occurrence don't suppress one another: "event" (the coming-up ping) stamps
+    payload.alerted_at / payload.alerts[YYYY-MM-DD]; "weather" (the W-B severe-
+    weather heads-up) stamps payload.weather_alerted_at /
+    payload.weather_alerts[YYYY-MM-DD] (mirroring payload.resolutions' keying).
+    An atomic read-merge-write here, rather than payload replacement from the
     caller, so a concurrent sync update can't be clobbered.
 
     Returns True if the node existed, False otherwise.
@@ -449,14 +453,16 @@ def mark_alerted(
         return False
     payload = json.loads(row["payload_json"] or "{}")
     ts = now_iso()
+    once_key = "weather_alerted_at" if kind == "weather" else "alerted_at"
+    dict_key = "weather_alerts" if kind == "weather" else "alerts"
     if occurrence_date:
-        alerts = payload.get("alerts")
+        alerts = payload.get(dict_key)
         if not isinstance(alerts, dict):
             alerts = {}
         alerts[occurrence_date] = ts
-        payload["alerts"] = alerts
+        payload[dict_key] = alerts
     else:
-        payload["alerted_at"] = ts
+        payload[once_key] = ts
     conn.execute(
         "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
         (json.dumps(payload), ts, id),

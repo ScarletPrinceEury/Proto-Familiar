@@ -259,6 +259,9 @@ const state = {
   // wake-condition-gated turns to notice and act. Off via this toggle or
   // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
   noticingEnabled:         true,
+  // Weather sense (W-A). Default-ON but inert until the ward adds a location.
+  // Off via this toggle or PROTO_FAMILIAR_WEATHER_DISABLED=1 on the server.
+  weatherEnabled:          true,
   // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
@@ -381,7 +384,7 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
-  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
@@ -2767,6 +2770,7 @@ function readSettingsFromUI() {
     state.gcalLookaheadDays = Number.isInteger(n) && n >= 30 && n <= 1825 ? n : 365;
   }
   if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
+  if ($('weather-toggle')) state.weatherEnabled = $('weather-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -2914,6 +2918,7 @@ function writeSettingsToUI() {
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
@@ -3788,6 +3793,11 @@ function init() {
   $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
   $('gcal-google-savetoken')?.addEventListener('click', gcalGoogleSaveToken);
   $('gcal-google-disconnect')?.addEventListener('click', gcalGoogleDisconnect);
+  // Weather places (W-B) — the "Weather" tab in the Unruh modal.
+  $('weather-geocode-btn')?.addEventListener('click', weatherGeocode);
+  $('weather-save-place')?.addEventListener('click', weatherSavePlace);
+  $('weather-cancel-place')?.addEventListener('click', weatherCancelPlace);
+  $('weather-place-query')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); weatherGeocode(); } });
   $('guide-chat-send')?.addEventListener('click', sendGuideChat);
   $('guide-chat-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }
@@ -3809,6 +3819,7 @@ function init() {
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead',
+    'weather-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -7549,7 +7560,7 @@ async function saveLoreEditorEntry() {
 // only with the Familiar (the `interest_set_standing` tool); don't add a
 // ward control for it.
 
-const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation', 'calendar'];
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation', 'calendar', 'weather'];
 
 function openTemporalModal() {
   $('temporal-modal').classList.remove('hidden');
@@ -7576,6 +7587,133 @@ function teSwitchTab(name) {
   else if (name === 'handoff')    teLoadHandoff();
   else if (name === 'automation') teLoadReflectionStatus();
   else if (name === 'calendar')   loadGcalTab();
+  else if (name === 'weather')    teLoadWeather();
+}
+
+// ── Weather places (W-B) ──────────────────────────────────────────────
+// The ward's places live server-side and are NEVER told to the AI. The
+// browser handles coords only to confirm-and-save; the list it shows back
+// is the public shape (label + which is current), no coordinates.
+let _weatherPending = null;   // { lat, lon, place_name, timezone } awaiting a label
+
+async function teLoadWeather() {
+  const t = $('weather-toggle');
+  if (t) t.checked = state.weatherEnabled !== false;
+  weatherCancelPlace();
+  await renderWeatherPlaces();
+}
+
+async function renderWeatherPlaces() {
+  const list = $('weather-places-list');
+  if (!list) return;
+  try {
+    const data = await (await fetch('/api/locations')).json();
+    const locs = Array.isArray(data?.locations) ? data.locations : [];
+    if (!locs.length) { list.innerHTML = '<div class="field-hint">No places yet.</div>'; return; }
+    list.innerHTML = '';
+    for (const l of locs) {
+      const row = document.createElement('div');
+      row.className = 'field-row';
+      row.style.cssText = 'align-items:center; gap:8px';
+      const name = document.createElement('span');
+      name.style.flex = '1';
+      name.textContent = l.label;
+      if (l.is_current) {
+        const tag = document.createElement('span');
+        tag.style.opacity = '.7';
+        tag.textContent = ' · current';
+        name.appendChild(tag);
+      }
+      row.appendChild(name);
+      if (!l.is_current) {
+        const setBtn = document.createElement('button');
+        setBtn.className = 'btn-secondary';
+        setBtn.textContent = 'Make current';
+        setBtn.onclick = () => weatherSetCurrent(l.id);
+        row.appendChild(setBtn);
+      }
+      const del = document.createElement('button');
+      del.className = 'btn-secondary';
+      del.textContent = '✕';
+      del.title = 'Remove place';
+      del.onclick = () => weatherDeletePlace(l.id, l.label);
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+  } catch {
+    list.innerHTML = '<div class="field-hint">Couldn\'t load places.</div>';
+  }
+}
+
+async function weatherGeocode() {
+  const q = ($('weather-place-query')?.value ?? '').trim();
+  const status = $('weather-places-status');
+  if (!q) { if (status) status.textContent = 'Type a city, ZIP, or address first.'; return; }
+  if (status) status.textContent = 'Looking it up…';
+  try {
+    const r = await (await fetch('/api/locations/geocode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q }),
+    })).json();
+    if (!r?.ok) { if (status) status.textContent = 'No match for that — try a nearby city or a postal code.'; return; }
+    _weatherPending = { lat: r.lat, lon: r.lon, place_name: r.place_name, timezone: r.timezone };
+    if (status) status.textContent = '';
+    if ($('weather-found-name')) $('weather-found-name').textContent = r.place_name || q;
+    // Suggest a label from the resolved place's first word.
+    const lbl = $('weather-place-label');
+    if (lbl && !lbl.value) lbl.value = String(r.place_name || q).split(',')[0].trim();
+    $('weather-geocode-result')?.classList.remove('hidden');
+  } catch {
+    if (status) status.textContent = 'Lookup failed — check your connection and try again.';
+  }
+}
+
+async function weatherSavePlace() {
+  const label = ($('weather-place-label')?.value ?? '').trim();
+  const status = $('weather-places-status');
+  if (!_weatherPending) { if (status) status.textContent = 'Find a place first.'; return; }
+  if (!label) { if (status) status.textContent = 'Give the place a short label (e.g. "home").'; return; }
+  try {
+    const r = await (await fetch('/api/locations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, ..._weatherPending }),
+    })).json();
+    if (!r?.ok) { if (status) status.textContent = r?.error || 'Could not save the place.'; return; }
+    weatherCancelPlace();
+    if ($('weather-place-query')) $('weather-place-query').value = '';
+    if (status) status.textContent = `Saved "${label}".`;
+    await renderWeatherPlaces();
+  } catch {
+    if (status) status.textContent = 'Could not save the place.';
+  }
+}
+
+function weatherCancelPlace() {
+  _weatherPending = null;
+  $('weather-geocode-result')?.classList.add('hidden');
+  if ($('weather-place-label')) $('weather-place-label').value = '';
+}
+
+async function weatherSetCurrent(id) {
+  const status = $('weather-places-status');
+  try {
+    const r = await (await fetch('/api/locations/current', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ident: id }),
+    })).json();
+    if (!r?.ok && status) status.textContent = r?.error || 'Could not switch the current place.';
+    await renderWeatherPlaces();
+  } catch { if (status) status.textContent = 'Could not switch the current place.'; }
+}
+
+async function weatherDeletePlace(id, label) {
+  if (!confirm(`Remove "${label}" from your places?`)) return;
+  const status = $('weather-places-status');
+  try {
+    const r = await (await fetch(`/api/locations/${encodeURIComponent(id)}`, { method: 'DELETE' })).json();
+    if (!r?.ok && status) status.textContent = r?.error || 'Could not remove the place.';
+    await renderWeatherPlaces();
+  } catch { if (status) status.textContent = 'Could not remove the place.'; }
 }
 
 // Reflection heartbeat readout (temporal-bridges Piece 5). Proves the
@@ -8993,8 +9131,8 @@ function formatOutboxAsMessageContent(item) {
     if (body) return body;
     return title ? `*(reminder)* ${title}` : '';
   }
-  if (item.kind === 'event_alert') {
-    // Title carries the event name, body the code-built countdown — show both.
+  if (item.kind === 'event_alert' || item.kind === 'weather_alert') {
+    // Title carries the event/heads-up name, body the code-built detail — both.
     const head = title ? `**${title}**` : '';
     if (head && body) return `${head}\n${body}`;
     return head || body;

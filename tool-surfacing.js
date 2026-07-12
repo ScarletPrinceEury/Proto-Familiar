@@ -64,6 +64,11 @@ export const TOOL_MODULES = {
 
   web_search: 'web', read_webpage: 'web', look_up: 'web',
 
+  // weather — the sky over my human's day (W-B). Surfaced by leaving-the-house
+  // language and by the readiness/stewardship agenda + a new outside event
+  // landing on the calendar (exactly when the weather matters).
+  weather_today: 'weather', set_current_location: 'weather',
+
   acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
   graduation_acknowledge: 'acks',
@@ -96,6 +101,7 @@ export const MODULE_INDEX =
   'graph (my knowledge web: nodes + relationships), ' +
   'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
   'web (search, read pages, look up facts), ' +
+  'weather (the sky over my human\'s day today/tomorrow, and moving between their saved places), ' +
   'acks (file deferred intents, confirm/drop memory consent, graduation notices), ' +
   'files (list/read my own folder), ' +
   'maintenance (id tidy-up), ' +
@@ -139,6 +145,15 @@ const TRIGGERS = {
   web: {
     text: /\b(search|look (it|this|that|him|her|them)? ?up|google|online|internet|web(site|page)?|news|weather|price of|what does .{1,40} mean|definition)\b/i,
     blocks: [],
+  },
+  weather: {
+    // Leaving-the-house / outdoor language (generous, per the miss-log rule):
+    // a false surface costs a few hundred tokens; a missed one, a request_tools
+    // round while my human is deciding whether to go out.
+    text: /\b(weather|forecast|rain(ing|y)?|snow(ing)?|umbrella|sunny|cloud(y|s)?|storm|windy?|heat\b|hot out|cold out|freezing|outside|go(ing)? out|head(ing)? (to|out)|errand|walk\b|hike|cycl(e|ing)|drive over|leave the house|leaving the house|hang (the )?laundry|dress warm|coat\b|jacket)\b/i,
+    // A new outside event on the calendar, and the readiness/stewardship agenda,
+    // are exactly when the sky matters — the tools travel with them.
+    blocks: ["[New on my human's calendar", '[My stewardship'],
   },
   acks: {
     text: null,  // block-driven only: the notice and its tools travel together

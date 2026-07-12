@@ -72,6 +72,8 @@ and of what is normal for its bond with the ward:
   produced by it.
 - [Elapsed-time macros read stored history, not `Date.now()`](time-macros) — the concrete
   instance of that rule for `{{elapsedTime}}` and `{{timeSinceLastSession}}`.
+- [Location privacy](location-privacy) — why geographic locations stay local and never reach
+  the model, even through qualitative weather sense.
 - [Prompt-cache-aware context ordering](prompt-cache-aware-context-ordering) — the static-prefix
   / dynamic-depth-injection split in `thalamus.enrich()`, and the usage-exhaustion incident that
   motivated it.

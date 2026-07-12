@@ -60,6 +60,7 @@ import {
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory, memByTimerange,
+  setCurrentLocation, listLocations,
   withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
@@ -68,6 +69,9 @@ import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
+import { readWeatherNowLine, weatherEnabled } from './weather-mirror.js';
+import { resolveLocation, getForecast, dayDatesFor } from './weather-service.js';
+import { weatherArc, formatWeatherVague } from './weather-format.js';
 import { flagDistress } from './threat-tracker.js';
 import { resetTriageCooldown } from './silence-triage-loop.js';
 import { pruneConsentPending } from './memorization.js';
@@ -621,7 +625,8 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // lastUserMessageAt comes from silenceMs; the loop calls us with that
   // already computed.
   const lastUserAt = new Date(nowMs - silenceMs).toISOString();
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
+  // Triage is a ward-private deliberation → full weather line.
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs }) });
 
   const signalsBlock = signals?.length
     ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
@@ -951,8 +956,10 @@ const _toolDeps = {
   searchRestricted: searchMemoryRestricted,
   // The ward-mirror enqueue defaults to the real outbox dispatch.
   mirrorToWard: enqueueAndDispatch,
+  // Warm the current place's forecast after a location switch (set by server).
+  refreshWeatherNow: null,
 };
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
@@ -960,6 +967,7 @@ export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, u
   if (typeof memorizeSessionNow === 'function')  _toolDeps.memorizeSessionNow  = memorizeSessionNow;
   if (typeof searchRestricted === 'function')    _toolDeps.searchRestricted    = searchRestricted;
   if (typeof mirrorToWard === 'function')        _toolDeps.mirrorToWard        = mirrorToWard;
+  if (typeof refreshWeatherNow === 'function')   _toolDeps.refreshWeatherNow   = refreshWeatherNow;
 }
 
 /**
@@ -2143,6 +2151,33 @@ export const BUILTIN_TOOLS = [
           url: { type: 'string', description: 'The exact link to open — usually one a web_search just gave me.' },
         },
         required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'weather_today',
+      description: "I check the sky over {{user}}'s day — today and tomorrow, where they are or at another of their places — when we're deciding whether and when to go out. It hands me back the morning/afternoon/evening arc and the notable turns (when rain sets in or eases, strong wind), already put into plain words. I reach for it before nudging about an outdoors plan, or when {{user}} asks what it's like out.",
+      parameters: {
+        type: 'object',
+        properties: {
+          place: { type: 'string', description: "One of {{user}}'s saved place labels (e.g. \"home\", \"work\"). I leave this out for their current place." },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_current_location',
+      description: "I move {{user}}'s current place to another one they've saved — when they tell me they've travelled, or we're planning around a different place for a while. The weather I feel then follows them there. I name the place by its label; I only ever move between places {{user}} has already given me.",
+      parameters: {
+        type: 'object',
+        properties: {
+          place: { type: 'string', description: "The saved place label to make current (e.g. \"work\")." },
+        },
+        required: ['place'],
       },
     },
   },
@@ -3605,6 +3640,52 @@ export const TOOL_EXECUTORS = {
   // search-backend settings entirely.
   look_up: async ({ query } = {}) => lookUp(query, readSettingsSync()),
   read_webpage: async ({ url } = {}) => readWebpage(url, readSettingsSync()),
+
+  // Weather (W-B). The forecast arc for a place's day. Coordinates never enter
+  // here — resolveLocation/getForecast keep them Node-side; I read words back.
+  // On a gated (non-ward-private) turn this falls closed to the vague tier so
+  // precise values + units (a soft geolocation) never reach a shared audience.
+  weather_today: async ({ place } = {}, ctx = {}) => {
+    const s = readSettingsSync();
+    const tz = s?.wardTimeZone || undefined;
+    const now = Date.now();
+    const wardPrivate = !ctx?.audienceTag || ctx.audienceTag === 'ward-private';
+    let loc;
+    try { loc = await resolveLocation({ label: place || null }); } catch { loc = null; }
+    if (!loc) {
+      return place
+        ? `I don't have a place saved as "${place}" — I can only check somewhere ${readSettingsSync()?.userName || 'my human'} has given me.`
+        : "I don't have a place to check the sky over yet — once one's saved, I can.";
+    }
+    const got = await getForecast(loc, { now });
+    if (!got.ok || !got.forecast) return "I can't reach the weather just now — I'll try again when it's back.";
+    if (!wardPrivate) {
+      const vague = formatWeatherVague(got.forecast, { now });
+      return vague || "I'll keep the weather to myself here.";
+    }
+    const { todayDate, tomorrowDate } = dayDatesFor(loc.timezone, now);
+    const arc = weatherArc(got.forecast, { todayDate, tomorrowDate, locationLabel: loc.label });
+    if (!arc) return "The forecast I have doesn't reach today and tomorrow yet — I'll refresh it and look again.";
+    return got.stale ? `${arc}\n(This is the last reading I have — the live fetch didn't come back just now.)` : arc;
+  },
+
+  set_current_location: async ({ place } = {}) => {
+    const label = String(place ?? '').trim();
+    if (!label) return 'I need the label of the place to make current.';
+    let locs;
+    try { locs = (await listLocations())?.locations ?? []; } catch { locs = []; }
+    const match = locs.find(l => String(l.label ?? '').toLowerCase() === label.toLowerCase());
+    if (!match) {
+      const names = locs.map(l => l.label).filter(Boolean);
+      return names.length
+        ? `I don't have a place saved as "${label}". The ones I do have: ${names.join(', ')}.`
+        : `I don't have any places saved yet, so there's nothing to switch to.`;
+    }
+    const res = await setCurrentLocation({ ident: match.id });
+    if (!res?.ok) return "I couldn't move the current place just now — I'll try again.";
+    if (_toolDeps.refreshWeatherNow) _toolDeps.refreshWeatherNow();   // warm the new place's sky
+    return quietOk(`Current place is now ${match.label}.`, { id: match.id });
+  },
 };
 
 /**
@@ -3625,6 +3706,11 @@ export const TOOL_EXECUTORS = {
 // toggle still gates them because egress itself is the opt-in. A tool the
 // Familiar can't actually use should never appear in its tool list.
 export const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
+
+// The weather tools only appear when weather is enabled (default-ON settings
+// toggle + the env off-switch) — a Familiar with no places saved still sees
+// them, and weather_today tells it kindly there's nowhere to check yet.
+export const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
 
 export function webSearchEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;
@@ -3693,6 +3779,9 @@ export const SET_NEXT_CHECK_TOOL = {
 export const NOTICING_REGISTRY_TOOL_NAMES = [
   'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
   'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
+  // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;
+  // NOT a wake condition — weather only flavours a turn already happening).
+  'weather_today',
   // The noticing turn's route for a genuinely alarming read (ward-signed):
   // it hands distress to triage rather than answering a crisis itself.
   'flag_distress',
@@ -3705,7 +3794,10 @@ export const NOTICING_REGISTRY_TOOL_NAMES = [
  */
 export function composeNoticingTools(settings = readSettingsSync()) {
   const allow = new Set(NOTICING_REGISTRY_TOOL_NAMES);
-  const picked = BUILTIN_TOOLS.filter(t => allow.has(t.function?.name));
+  const weatherOn = weatherEnabled(settings);
+  const picked = BUILTIN_TOOLS.filter(t =>
+    allow.has(t.function?.name) &&
+    (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)));
   picked.push(REACH_OUT_TO_WARD_TOOL, SET_NEXT_CHECK_TOOL);
   return picked.map(t => substituteToolMacros(t, settings));
 }
@@ -3713,6 +3805,7 @@ export function composeNoticingTools(settings = readSettingsSync()) {
 export function composeActiveTools(customTools, settings = readSettingsSync(), opts = {}) {
   const webOn = webSearchEnabled(settings);
   const gcalWriteOn = gcalWriteEnabled(settings);
+  const weatherOn = weatherEnabled(settings);
   // Context-sensitive surfacing (tool-surfacing-build-spec): when a module
   // Set is provided, only core + selected modules are advertised. Surfacing
   // narrows on TOP of the existing gates (web opt-in, gcal write opt-in) —
@@ -3722,6 +3815,7 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
   const tools = BUILTIN_TOOLS.filter(t =>
     inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
+    (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)) &&
     (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
