@@ -252,7 +252,11 @@ to the lexical fallback (`{healthy, dedup_mode, embed_ok, vec_ok, vec_rows,
 memory_rows}`, from Phylactery's `memory_health`). A dead vector stack
 (fastembed/sqlite-vec) silently disabled dedup and flooded the consent queue;
 the fallback keeps dedup working and this surface + a loud boot log make the
-degradation visible instead of silent.
+degradation visible instead of silent. `POST /api/memory-backfill` embeds
+memories that never got a vector — the entity-core migration imported rows
+without embeddings, leaving them invisible to semantic dedup (a "healthy" stack
+can still show `vec_rows < memory_rows`); the backfill also auto-runs in the
+background at boot when that gap is detected. Idempotent.
 **Import (day-anchoring Phase 4):** `POST /api/import-logs` — without `commit`
 PREVIEWS (parse + segment, no writes); with `commit` places foreign logs by date
 (one imported session per date) and enqueues them for immediate ingestion. Parsers
