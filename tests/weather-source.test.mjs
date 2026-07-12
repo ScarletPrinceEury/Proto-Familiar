@@ -52,6 +52,19 @@ test('fetchOpenMeteo: maps wire → internal shape (local times, km/h)', async (
   assert.equal(r.hourly[0].time, '2026-07-11T15:00:00');
 });
 
+test('fetchOpenMeteo: days param widens forecast_days + hourly horizon (outside-join)', async () => {
+  let seenUrl = '';
+  const captureFetch = (url) => { seenUrl = url; return Promise.resolve({ ok: true, status: 200, json: async () => ({
+    current: { temperature_2m: 6, weather_code: 0, precipitation: 0, wind_speed_10m: 5 },
+    hourly: { time: Array.from({ length: 200 }, (_, i) => `2026-07-${String(11 + Math.floor(i / 24)).padStart(2, '0')}T${String(i % 24).padStart(2, '0')}:00:00`),
+      temperature_2m: Array(200).fill(6), weather_code: Array(200).fill(0),
+      precipitation: Array(200).fill(0), precipitation_probability: Array(200).fill(10), wind_speed_10m: Array(200).fill(5) },
+  }) }); };
+  const r = await fetchOpenMeteo(52.5, 13.4, { fetchFn: captureFetch, days: 7 });
+  assert.match(seenUrl, /forecast_days=7/);
+  assert.equal(r.hourly.length, 7 * 24);   // keep = days*24
+});
+
 // ── MET Norway normalisation + tz conversion ─────────────────────────
 
 test('utcToLocalNaive: converts with a zone, strips Z without one', () => {

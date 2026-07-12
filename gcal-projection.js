@@ -81,17 +81,22 @@ export function selectCueItems({ candidates, state = {}, now = Date.now() }) {
  * and ends with "for now" so the Familiar doesn't treat a Google item as
  * off-limits afterward. Returns '' for an empty set.
  */
-export function buildCueBlock(items, { now = Date.now() } = {}) {
+export function buildCueBlock(items, { now = Date.now(), weatherOn = false } = {}) {
   if (!Array.isArray(items) || !items.length) return '';
   const lines = items.map(it => {
     const when = it.when ? (relativeTime(it.when, now) || it.when) : '';
     const whenText = when ? `, ${when}` : '';
     return `  — ${it.label ?? it.id}${whenText}  [id: ${it.id}]`;
   });
+  // When weather's on, remind myself the sky bears on lead time for anything
+  // outdoors — a wet crosstown trip wants more runway (schedule_set_lead).
+  const weatherHint = weatherOn
+    ? " If one takes my human outside, I can check weather_today while I think it through — rain or heat across town means more lead, which I set with schedule_set_lead."
+    : '';
   return [
     "[New on my human's calendar — not yet thought through]",
     ...lines,
-    "These are freshly synced from my human's Google Calendar. For each, I think two moves ahead: what does it lead to if it resolves, and what does skipping it cost — I record both with schedule_link (leading with what doing it earns). A blank forecast helps no one; an honest one now is what lets me learn later. Then I'm done with each for now — these are appointments, not tasks to chase, and I don't keep re-raising them once I've thought them through (I'm still free to revisit, project further, or export one later).",
+    `These are freshly synced from my human's Google Calendar. For each, I think two moves ahead: what does it lead to if it resolves, and what does skipping it cost — I record both with schedule_link (leading with what doing it earns). A blank forecast helps no one; an honest one now is what lets me learn later.${weatherHint} Then I'm done with each for now — these are appointments, not tasks to chase, and I don't keep re-raising them once I've thought them through (I'm still free to revisit, project further, or export one later).`,
   ].join('\n');
 }
 
@@ -125,12 +130,12 @@ export async function writeCueState(state, { tomesDir = DEFAULT_TOMES_DIR } = {}
  * items, persist the advanced state, return the rendered block. `advance`
  * false (e.g. a preview/static turn) selects without mutating state.
  */
-export async function nextProjectionCue({ candidates, now = Date.now(), advance = true, tomesDir = DEFAULT_TOMES_DIR } = {}) {
+export async function nextProjectionCue({ candidates, now = Date.now(), advance = true, weatherOn = false, tomesDir = DEFAULT_TOMES_DIR } = {}) {
   if (!Array.isArray(candidates) || !candidates.length) return '';
   const state = await readCueState({ tomesDir });
   const { items, nextState } = selectCueItems({ candidates, state, now });
   if (advance) await writeCueState(nextState, { tomesDir });
-  return buildCueBlock(items, { now });
+  return buildCueBlock(items, { now, weatherOn });
 }
 
 

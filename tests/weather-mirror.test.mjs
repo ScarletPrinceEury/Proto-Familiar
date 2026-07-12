@@ -7,6 +7,7 @@ import path from 'path';
 
 import {
   writeWeatherMirror, clearWeatherMirror, readWeatherMirrorSync, readWeatherNowLine,
+  readWeatherVagueLine, weatherEnabled,
 } from '../weather-mirror.js';
 import { buildTimeAnchorBlock } from '../relative-time.js';
 
@@ -49,6 +50,26 @@ test('readWeatherNowLine: absent mirror / stale forecast → empty', async () =>
   await writeWeatherMirror(freshMirror(), { tomesDir: dir });
   // 2 days later: past staleness → empty even though the file exists.
   assert.equal(readWeatherNowLine({ tomesDir: dir, now: Date.parse('2026-07-13T14:00:00') }), '');
+});
+
+test('readWeatherVagueLine: qualitative only for gated surfaces; fails closed', async () => {
+  await writeWeatherMirror(freshMirror(), { tomesDir: dir });
+  const v = readWeatherVagueLine({ tomesDir: dir, now: NOW });
+  assert.match(v, /cold and rainy/);
+  assert.doesNotMatch(v, /\d|°C|:/);       // no numbers/units/times
+  // env off-switch and staleness both fail closed to ''.
+  process.env.PROTO_FAMILIAR_WEATHER_DISABLED = '1';
+  assert.equal(readWeatherVagueLine({ tomesDir: dir, now: NOW }), '');
+  delete process.env.PROTO_FAMILIAR_WEATHER_DISABLED;
+  assert.equal(readWeatherVagueLine({ tomesDir: dir, now: Date.parse('2026-07-13T14:00:00') }), '');
+});
+
+test('weatherEnabled: env off-switch + default-ON settings toggle', () => {
+  assert.equal(weatherEnabled({}), true);                       // default ON
+  assert.equal(weatherEnabled({ weatherEnabled: false }), false);
+  process.env.PROTO_FAMILIAR_WEATHER_DISABLED = '1';
+  assert.equal(weatherEnabled({ weatherEnabled: true }), false); // env wins
+  delete process.env.PROTO_FAMILIAR_WEATHER_DISABLED;
 });
 
 // ── buildTimeAnchorBlock weather-line integration ────────────────────

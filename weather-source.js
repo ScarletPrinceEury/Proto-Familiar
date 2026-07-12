@@ -82,13 +82,14 @@ export async function fetchForecast(lat, lon, {
   fetchFn = globalThis.fetch,
   timezone = null,
   now = Date.now,
+  days = undefined,
   chain = PROVIDER_CHAIN,
 } = {}) {
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false, error: 'bad coordinates' };
   const errors = [];
   for (const provider of chain) {
     try {
-      const res = await provider.fetch(lat, lon, { fetchFn, timezone });
+      const res = await provider.fetch(lat, lon, { fetchFn, timezone, days });
       if (res && res.current && Array.isArray(res.hourly) && res.hourly.length) {
         return {
           ok: true,

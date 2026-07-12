@@ -122,8 +122,9 @@ ponderings injection, care-check framing) and as background loops
 ├── gcal-projection.js       The §4 projection cue: pure selectCueItems (per-turn cap + turn/time aging) + buildCueBlock (first-person, literal "my human") over Unruh's `gcal_projection` feed; persisted aging state in tomes/.gcal-projection-cue.json. Rides chat turns (no standalone request); auto-clears when a node gains a consequence edge (Unruh drops it). Injected as a dynamic block in thalamus enrich()
 ├── weather-source.js        Weather FETCH half (W-A; Node owns the network, the gcal precedent): geocode(query) resolves a city/ZIP ONCE at location-entry → {lat, lon, place_name, timezone} (Open-Meteo keyless geocoding); fetchForecast(lat, lon) is the 6-hourly refresh, walking the provider chain until one returns, stamping a location-local-naive `fetched_at`. fetchFn/now injectable for tests; total failure → {ok:false} (caller keeps the stale cache, the [Now] line simply drops). Coordinates go to the API only — the model never sees them
 ├── weather-providers.js     Provider adapters (W-A, mirrors websearch-providers.js): fetchOpenMeteo (primary, keyless, timezone=auto→local times) + fetchMetNorway (fallback, keyless, symbol_code→WMO, m/s→km/h, UTC→local via utcToLocalNaive using the location's stored zone). Both normalise to one internal shape {provider, current, hourly[]}; PROVIDER_CHAIN orders them
-├── weather-format.js        Weather PURE formatters (W-A; the exact-machine-values rule — code speaks the words, never the model): WMO code→words, qualitative bands (tempBand/precipBand/windBand), precipTransition (reads the hourly array for when rain eases/starts, 12h lookahead), buildNowWeatherLine → "Weather where my human is: 6°C (cold), light rain, easing off around 17:00." The HONESTY rule lives here: a forecast older than WEATHER_STALE_MS (12h) yields '' (the line drops rather than lie), as does any missing/garbage field
-├── weather-mirror.js        Weather READ-mirror (W-A; the last-activity.js precedent): writeWeatherMirror/clearWeatherMirror keep tomes/.weather-now.json in sync with the cache so the hot [Now]-block path reads synchronously. readWeatherNowLine({tomesDir, now}) is the ONE call buildTimeAnchorBlock makes — sync, never throws, honours the env off-switch (PROTO_FAMILIAR_WEATHER_DISABLED=1 → '') and the staleness rule. Weather reaches only ward-facing surfaces (the four [Now] call sites are triage/warmth/noticing/ward-private web chat); the vague/gated tier is W-B
+├── weather-format.js        Weather PURE formatters (W-A + W-B; the exact-machine-values rule — code speaks the words, never the model): WMO code→words, qualitative bands (tempBand/precipBand/windBand), precipTransition (12h lookahead), buildNowWeatherLine → "Weather where my human is: 6°C (cold), light rain, easing off around 17:00." **W-B additions:** weatherArc (today+tomorrow morning/afternoon/evening + notable turns, from the hourly array's own local-naive date/hour prefixes — no tz math), forecastAtHour + isAdverseHour (adverse code / likely-and-wet / temp extreme / strong wind — the outside-join + severe-alert gate), formatItemWeather (a compact per-item clause), formatWeatherVague (§5.6: qualitative-only, no numbers/units/times/labels). The HONESTY rule lives here: a forecast older than WEATHER_STALE_MS (12h) yields '' (the line drops rather than lie), as does any missing/garbage field
+├── weather-service.js       Weather GET-OR-FETCH seam (W-B; coordinates stay Node-side): resolveLocation (by ward label or current, from the Node-only private shape), getForecast (cache-first; fetches on demand when absent/stale/a needed date is beyond the ~48h cache — Open-Meteo reaches 16 days — then ingests to warm the cache; degrades to the stale cache on a fetch failure), dayDatesFor (location-local today/tomorrow via wardLocalNowISO). Backs weather_today + the outside-join
+├── weather-mirror.js        Weather READ-mirror (W-A; the last-activity.js precedent): writeWeatherMirror/clearWeatherMirror keep tomes/.weather-now.json in sync so the hot [Now]-block path reads synchronously. readWeatherNowLine (the ONE call buildTimeAnchorBlock makes on a ward-private turn) + readWeatherVagueLine (W-B; the gated-turn line, qualitative only) — both sync, never throw, honour the env off-switch + staleness. weatherEnabled(settings) is the one shared gate (env off-switch + default-ON toggle), imported by cerebellum/thalamus/server so every surface reads it identically
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
@@ -578,6 +579,20 @@ mark-second like reminders). All-day events never ping (their
 when_ts is midnight). All comparisons run in the ward-local frame
 (nowMs derived from `wardLocalNowISO`).
 
+The same pass also carries the **severe-weather heads-up** (W-B §5.4,
+`selectDueWeatherAlerts`): an `obstacle_tags:["outside"]` item whose
+occurrence-hour forecast turns adverse in the CACHED forecast (the
+read-mirror — "within lead range" means inside the ~48h it covers, so
+no fetch) gets a code-built `weather_alert` outbox ping. It rides the
+SAME window scan (a per-tick memo, `fetchAlertScanData`, shares one
+schedule fetch between the two passes) through the SAME enqueue-then-mark
+helper (`runAlertStream`), but into a SEPARATE dedup channel
+(`weather_alerted_at` / `weather_alerts[YYYY-MM-DD]`, `kind:'weather'`)
+so a coming-up ping and a weather ping for one occurrence never suppress
+each other. Weather alone (no outside item affected) never pings — this
+is a preparation surface, not a weather report. Gated by BOTH weather
+and event-alerts being on.
+
 The same 30s tick also carries the **weather refresh seam** (W-A,
 "ride existing requests, gate in code"): `refreshWeatherIfDue()` is a
 self-gated fire-and-forget — it no-ops unless weather is enabled
@@ -591,6 +606,25 @@ overlap. When due it geocodes-nothing (coords already stored),
 boot and is forced on a location add / set-current / delete. No new
 LLM call and no new loop — weather is pure code end to end; the
 model only ever reads the code-built [Now] line.
+
+**W-B surfaces (the day at will + preparation).** Two ward-only tools
+(gated by `weatherEnabled`, surfaced by the `weather` tool-surfacing
+module on leaving-the-house language + the readiness/projection blocks):
+`weather_today` (the code-built arc for today+tomorrow, current place or
+another saved label — on-demand fetch via `weather-service.js` for a
+non-current place; falls closed to the vague tier on a gated turn) and
+`set_current_location` (moves the current place; warms the new sky).
+`weather_today` also joins the **noticing** toolset (read-only — NOT a
+wake condition; weather only flavours a turn already happening) and the
+**projection cue** prose (a reminder it can check the sky while thinking
+a new appointment's lead time through). The **readiness** note
+(`stewardship.js`) reads the mirror synchronously and, for an outside-
+tagged item whose hour looks adverse, appends a code-built weather clause
+so the prep nudge is weather-aware. The ward manages places in the
+Temporal editor's **Weather** tab (add-via-geocode-confirm / set-current
+/ delete over `/api/locations`), which only ever shows the public
+`{label, is_current}` shape — coordinates never reach the browser list
+nor the model.
 
 **`silence-triage-loop.js`** — autonomous singleton. Every 5min, gates
 on tier (calm/mild = no-op) and cool-down (LLM-controlled

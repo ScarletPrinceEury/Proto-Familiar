@@ -17,7 +17,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
-import { buildNowWeatherLine, WEATHER_STALE_MS } from './weather-format.js';
+import { buildNowWeatherLine, formatWeatherVague, WEATHER_STALE_MS } from './weather-format.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -27,6 +27,16 @@ function file(tomesDir) { return path.join(tomesDir, FILENAME); }
 
 function envDisabled() {
   return process.env.PROTO_FAMILIAR_WEATHER_DISABLED === '1';
+}
+
+/**
+ * The one weather gate (env off-switch + the default-ON settings toggle),
+ * shared so every surface reads it the same way. Weather is on unless the env
+ * kill-switch is set or the ward turned `weatherEnabled` off.
+ */
+export function weatherEnabled(settings = {}) {
+  if (envDisabled()) return false;
+  return settings?.weatherEnabled !== false;   // default-ON
 }
 
 /** Write the current-location mirror atomically. `payload` is
@@ -70,6 +80,22 @@ export function readWeatherNowLine({ tomesDir = DEFAULT_TOMES_DIR, now = Date.no
     const mirror = readWeatherMirrorSync({ tomesDir });
     if (!mirror) return '';
     return buildNowWeatherLine(mirror, { now });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The VAGUE [Now] weather line for a gated (non-ward-private) surface, or ''
+ * (§5.6). Qualitative only — no numbers/units/times/labels, so precise values
+ * can't leak a location to a shared audience. This is what a gated turn passes
+ * to buildTimeAnchorBlock instead of readWeatherNowLine; it fails closed to ''.
+ */
+export function readWeatherVagueLine({ tomesDir = DEFAULT_TOMES_DIR, now = Date.now() } = {}) {
+  try {
+    const mirror = readWeatherMirrorSync({ tomesDir });
+    if (!mirror) return '';
+    return formatWeatherVague(mirror, { now });
   } catch {
     return '';
   }

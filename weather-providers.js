@@ -17,7 +17,14 @@
  */
 
 const FETCH_TIMEOUT_MS = 8000;
-const HOURLY_KEEP = 48;   // next ~48h is enough for [Now] + today/tomorrow
+const DEFAULT_DAYS = 3;   // next ~72h covers [Now] + today/tomorrow
+const MAX_DAYS = 16;      // Open-Meteo's ceiling; the outside-join reaches here on demand
+// How many hourly rows to keep for a given horizon (24/day).
+function keepFor(days) { return clampDays(days) * 24; }
+function clampDays(days) {
+  const n = Math.round(Number(days));
+  return Number.isFinite(n) ? Math.min(Math.max(n, 1), MAX_DAYS) : DEFAULT_DAYS;
+}
 
 async function getJson(url, { fetchFn = globalThis.fetch, timeoutMs = FETCH_TIMEOUT_MS, headers = {} } = {}) {
   const ac = new AbortController();
@@ -34,17 +41,17 @@ async function getJson(url, { fetchFn = globalThis.fetch, timeoutMs = FETCH_TIME
 // ── Open-Meteo (primary; keyless) ────────────────────────────────────
 // timezone=auto → the API returns LOCAL-naive times for the coordinates, so
 // no conversion is needed on this path.
-export async function fetchOpenMeteo(lat, lon, { fetchFn } = {}) {
+export async function fetchOpenMeteo(lat, lon, { fetchFn, days = DEFAULT_DAYS } = {}) {
   const url = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`
     + '&current=temperature_2m,weather_code,precipitation,wind_speed_10m'
     + '&hourly=temperature_2m,weather_code,precipitation,precipitation_probability,wind_speed_10m'
-    + '&forecast_days=3&timezone=auto&wind_speed_unit=kmh';
+    + `&forecast_days=${clampDays(days)}&timezone=auto&wind_speed_unit=kmh`;
   const d = await getJson(url, { fetchFn });
   const c = d?.current ?? {};
   const h = d?.hourly ?? {};
   const times = Array.isArray(h.time) ? h.time : [];
-  const hourly = times.slice(0, HOURLY_KEEP).map((t, i) => ({
+  const hourly = times.slice(0, keepFor(days)).map((t, i) => ({
     time: t,
     temp_c:      num(h.temperature_2m?.[i]),
     weather_code: num(h.weather_code?.[i]),
@@ -79,7 +86,7 @@ function symbolToWmo(symbol) {
   return NaN;
 }
 
-export async function fetchMetNorway(lat, lon, { fetchFn, timezone = null } = {}) {
+export async function fetchMetNorway(lat, lon, { fetchFn, timezone = null, days = DEFAULT_DAYS } = {}) {
   const url = 'https://api.met.no/weatherapi/locationforecast/2.0/compact'
     + `?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
   const d = await getJson(url, { fetchFn, headers: { 'User-Agent': MET_UA } });
@@ -98,7 +105,7 @@ export async function fetchMetNorway(lat, lon, { fetchFn, timezone = null } = {}
       wind_kmh:    Number.isFinite(num(inst.wind_speed)) ? Math.round(num(inst.wind_speed) * 3.6) : NaN, // m/s → km/h
     };
   };
-  const hourly = series.slice(0, HOURLY_KEEP).map(point);
+  const hourly = series.slice(0, keepFor(days)).map(point);
   const first = hourly[0] ?? {};
   return {
     provider: 'met-norway',

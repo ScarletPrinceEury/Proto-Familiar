@@ -609,23 +609,33 @@ def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
 
 
 @mcp.tool()
-def schedule_mark_alerted(id: str, occurrence_date: str | None = None) -> dict[str, Any]:
+def schedule_mark_alerted(
+    id: str, occurrence_date: str | None = None, kind: str = "event"
+) -> dict[str, Any]:
     """I use this to remember that my human has already been pinged about an
     upcoming event, so I never nag them twice about the same moment. The
-    Node-side alert scan calls it right after a "coming up" notice is
-    delivered. One-time events record `alerted_at`; a recurring occurrence
-    records under `alerts[YYYY-MM-DD]`.
+    Node-side alert scan calls it right after a notice is delivered. One-time
+    events record `alerted_at`; a recurring occurrence records under
+    `alerts[YYYY-MM-DD]`.
+
+    `kind` keeps distinct channels separate so a coming-up ping and a weather
+    heads-up for the same occurrence don't cancel each other: "event" (default)
+    is the coming-up notice; "weather" is the severe-weather heads-up, which
+    records under `weather_alerted_at` / `weather_alerts[YYYY-MM-DD]`.
 
     Args:
         id: the schedule node id.
         occurrence_date: YYYY-MM-DD of the specific occurrence, for
             recurring events; omit for a one-time event.
+        kind: "event" (coming-up) or "weather" (severe-weather heads-up).
 
     Returns: {ok: True} or the standard not-found error shape.
     """
     try:
         with get_conn() as conn:
-            found = sched.mark_alerted(conn, id=id, occurrence_date=occurrence_date)
+            found = sched.mark_alerted(
+                conn, id=id, occurrence_date=occurrence_date, kind=kind
+            )
         if not found:
             return _err(f"no schedule node with id {id!r}", code="not_found")
         return {"ok": True}

@@ -495,6 +495,36 @@ class TestDeleteNode:
         assert row is not None
 
 
+class TestMarkAlerted:
+    def test_event_channel_stamps_alerted_at(self, conn):
+        e = sched.add_node(conn, type="event", label="appt", when="2099-07-09T14:00:00")
+        assert sched.mark_alerted(conn, id=e)
+        row = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (e,)).fetchone()
+        import json
+        p = json.loads(row["payload_json"])
+        assert "alerted_at" in p and "weather_alerted_at" not in p
+
+    def test_weather_channel_is_separate(self, conn):
+        e = sched.add_node(conn, type="event", label="market", when="2099-07-09T14:00:00")
+        # Both channels for the same one-time event coexist without collision.
+        assert sched.mark_alerted(conn, id=e, kind="event")
+        assert sched.mark_alerted(conn, id=e, kind="weather")
+        import json
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (e,)).fetchone()["payload_json"])
+        assert "alerted_at" in p and "weather_alerted_at" in p
+
+    def test_weather_channel_per_occurrence(self, conn):
+        e = sched.add_node(conn, type="event", label="walk", when="2099-07-09T14:00:00")
+        assert sched.mark_alerted(conn, id=e, occurrence_date="2099-07-09", kind="weather")
+        import json
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (e,)).fetchone()["payload_json"])
+        assert p["weather_alerts"]["2099-07-09"]
+        assert "alerts" not in p   # coming-up channel untouched
+
+    def test_unknown_id_returns_false(self, conn):
+        assert sched.mark_alerted(conn, id="nope", kind="weather") is False
+
+
 # ── Reads ─────────────────────────────────────────────────────────────
 
 

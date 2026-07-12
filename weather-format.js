@@ -139,3 +139,202 @@ export function buildNowWeatherLine(mirror, { now = Date.now() } = {}) {
 
   return `Weather where my human is: ${parts.join(', ')}${tail}.`;
 }
+
+// ── The vague tier — gated audiences (W-B, §5.6) ─────────────────────
+/**
+ * On a non-ward-private surface, precise values + units are a soft
+ * geolocation ("x°C, so metric, so…"). This renders the SAME cached forecast
+ * qualitatively only — bands and verbs, no numbers, no units, no times, no
+ * location phrasing. "It's cold and rainy out." Returns '' on missing/stale
+ * data (the honesty rule still applies) so the gate fails closed to nothing.
+ */
+export function formatWeatherVague(mirror, { now = Date.now() } = {}) {
+  if (!mirror || typeof mirror !== 'object') return '';
+  const fetchedMs = Date.parse(mirror.fetched_at);
+  if (!Number.isFinite(fetchedMs) || (now - fetchedMs) > WEATHER_STALE_MS) return '';
+  const cur = mirror.current;
+  if (!cur || !Number.isFinite(Number(cur.temp_c))) return '';
+
+  const t = tempBand(Number(cur.temp_c));           // freezing|cold|mild|warm|hot|very hot
+  const wetNow = (Number(cur.precip_mm) > 0) || isPrecipCode(cur.weather_code);
+  const snow = cur.weather_code >= 71 && cur.weather_code <= 86 && cur.weather_code !== 80
+    && cur.weather_code !== 81 && cur.weather_code !== 82;
+  const windy = ['strong wind', 'gale'].includes(windBand(Number(cur.wind_kmh)));
+
+  const feel = t === 'very hot' ? 'sweltering'
+    : t === 'hot' ? 'hot'
+    : t === 'warm' ? 'warm'
+    : t === 'mild' ? 'mild'
+    : t === 'cold' ? 'cold'
+    : t === 'freezing' ? 'freezing'
+    : '';
+
+  const bits = [];
+  if (feel) bits.push(feel);
+  if (wetNow) bits.push(snow ? 'snowy' : 'rainy');
+  else if (windy) bits.push('windy');
+
+  if (!bits.length) return '';
+  const phrase = bits.length === 1 ? bits[0] : `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}`;
+  return `It's ${phrase} out where my human is.`;
+}
+
+// ── Per-hour lookup + the outside-join (W-B, §5.2b / §5.4) ────────────
+/**
+ * The forecast hour nearest a target instant, within tolerance. Returns the
+ * hourly entry ({ time, temp_c, weather_code, precip_mm, precip_prob,
+ * wind_kmh }) or null when nothing in the array lands close enough. Pure —
+ * both `hourly` times and `targetMs` are compared in the same (local-naive)
+ * frame the caller supplies.
+ */
+export function forecastAtHour(hourly, targetMs, { toleranceMs = 90 * 60_000 } = {}) {
+  const arr = Array.isArray(hourly) ? hourly : [];
+  if (!Number.isFinite(targetMs)) return null;
+  let best = null, bestGap = Infinity;
+  for (const h of arr) {
+    const ms = Date.parse(h?.time);
+    if (!Number.isFinite(ms)) continue;
+    const gap = Math.abs(ms - targetMs);
+    if (gap < bestGap) { best = h; bestGap = gap; }
+  }
+  return best && bestGap <= toleranceMs ? best : null;
+}
+
+// Thresholds for "genuinely worth flagging" at a specific hour (pure code —
+// §5.4). Adverse code, a likely-and-wet hour, a temperature extreme, or
+// strong+ wind. Used to gate the readiness weather note and the severe-alert.
+const HEAT_EXTREME_C = 33;
+const COLD_EXTREME_C = -5;
+const LIKELY_PRECIP_PROB = 60;
+export function isAdverseHour(hour) {
+  if (!hour || typeof hour !== 'object') return false;
+  const code = Number(hour.weather_code);
+  if (isAdverseCode(code)) return true;
+  const prob = Number(hour.precip_prob);
+  const wet = (Number(hour.precip_mm) > 0) || isPrecipCode(code);
+  if (wet && Number.isFinite(prob) && prob >= LIKELY_PRECIP_PROB) return true;
+  const t = Number(hour.temp_c);
+  if (Number.isFinite(t) && (t >= HEAT_EXTREME_C || t <= COLD_EXTREME_C)) return true;
+  const wb = windBand(Number(hour.wind_kmh));
+  return wb === 'strong wind' || wb === 'gale';
+}
+
+/**
+ * A compact code-built weather clause for a single schedule item's hour —
+ * the outside-join. Always returns a usable clause (the model reads it, never
+ * computes it): the adverse factor when there is one ("heavy rain likely then,
+ * ~6°C"), otherwise a benign brief ("clear then, ~14°C (mild)"). Returns ''
+ * only when the hour has no usable temperature.
+ */
+export function formatItemWeather(hour) {
+  if (!hour || typeof hour !== 'object') return '';
+  const t = Number(hour.temp_c);
+  if (!Number.isFinite(t)) return '';
+  const tempStr = formatTemp(t);
+  const code = Number(hour.weather_code);
+  const wet = (Number(hour.precip_mm) > 0) || isPrecipCode(code);
+  const wb = windBand(Number(hour.wind_kmh));
+
+  let lead;
+  if (isAdverseCode(code)) lead = `${wmoToWords(code)} likely then`;
+  else if (wet) lead = `${wmoToWords(code) || 'rain'} likely then`;
+  else if (t >= HEAT_EXTREME_C) lead = 'very hot then';
+  else if (t <= COLD_EXTREME_C) lead = 'bitterly cold then';
+  else if (wb === 'strong wind' || wb === 'gale') lead = `${wb} then`;
+  else lead = `${wmoToWords(code) || 'settled'} then`;
+
+  return `${lead}, ${tempStr}`;
+}
+
+// ── The day arc — weather_today (W-B, §5.2) ──────────────────────────
+// Part-of-day windows (local hour, from the local-naive time strings — no tz
+// math; the strings already carry the location's wall clock).
+const PARTS = [
+  { key: 'morning',   from: 6,  to: 11 },
+  { key: 'afternoon', from: 12, to: 17 },
+  { key: 'evening',   from: 18, to: 22 },
+];
+function hourOf(iso)  { const m = /T(\d{2}):/.exec(String(iso) || ''); return m ? Number(m[1]) : NaN; }
+function dateOf(iso)  { const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(iso) || ''); return m ? m[1] : ''; }
+function modeCode(hours) {
+  const counts = new Map();
+  for (const h of hours) {
+    const c = Number(h.weather_code);
+    if (Number.isFinite(c)) counts.set(c, (counts.get(c) || 0) + 1);
+  }
+  let best = null, n = -1;
+  for (const [c, k] of counts) if (k > n) { best = c; n = k; }
+  return best;
+}
+// One part's phrase: "light rain, 7–9°C (mild)" / "overcast, 4–6°C (cold)".
+function describePart(hours) {
+  const hs = hours.filter(h => h && typeof h === 'object');
+  if (!hs.length) return '';
+  const temps = hs.map(h => Number(h.temp_c)).filter(Number.isFinite);
+  let tempStr = '';
+  if (temps.length) {
+    const lo = Math.round(Math.min(...temps)), hi = Math.round(Math.max(...temps));
+    tempStr = lo === hi ? `${hi}°C (${tempBand(hi)})` : `${lo}–${hi}°C (${tempBand(hi)})`;
+  }
+  const precipHours = hs.filter(h => (Number(h.precip_mm) > 0) || isPrecipCode(h.weather_code));
+  let condition;
+  if (precipHours.length) {
+    const worst = precipHours.reduce((a, b) => (Number(b.precip_mm) || 0) > (Number(a.precip_mm) || 0) ? b : a);
+    condition = wmoToWords(worst.weather_code) || 'rain';
+  } else {
+    condition = wmoToWords(modeCode(hs)) || '';
+  }
+  return [condition, tempStr].filter(Boolean).join(', ');
+}
+// Up to a couple of notable turns for the day (rain start/stop, strong wind).
+function notableForDay(dayHours) {
+  const hs = dayHours.slice().sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+  const notes = [];
+  let wasWet = null;
+  for (const h of hs) {
+    const wet = (Number(h.precip_mm) > 0) || isPrecipCode(h.weather_code);
+    if (wasWet === false && wet) notes.push(`rain from ~${hhmm(h.time)}`);
+    if (wasWet === true && !wet) notes.push(`easing ~${hhmm(h.time)}`);
+    wasWet = wet;
+  }
+  const firstStrong = hs.find(h => ['strong wind', 'gale'].includes(windBand(Number(h.wind_kmh))));
+  if (firstStrong) notes.push(`strong wind around ~${hhmm(firstStrong.time)}`);
+  return notes.slice(0, 3);
+}
+function describeDay(label, dayHours) {
+  if (!dayHours.length) return '';
+  const partStrs = [];
+  for (const p of PARTS) {
+    const hrs = dayHours.filter(h => { const hr = hourOf(h.time); return hr >= p.from && hr <= p.to; });
+    const d = describePart(hrs);
+    if (d) partStrs.push(`${p.key}: ${d}`);
+  }
+  if (!partStrs.length) return '';
+  const notes = notableForDay(dayHours);
+  const tail = notes.length ? ` Notable: ${notes.join('; ')}.` : '';
+  return `${label} — ${partStrs.join('; ')}.${tail}`;
+}
+/**
+ * The day arc for the model: today + tomorrow, morning/afternoon/evening each,
+ * with notable turns — all code-built from the forecast's own hourly array
+ * (§5.2). `todayDate`/`tomorrowDate` are local (YYYY-MM-DD) the caller derives
+ * from ward-local now; the hourly times are already local-naive, so grouping
+ * needs no timezone math. Returns '' when the forecast can't cover the days
+ * (absence renders as absence). `locationLabel` is the ward's own label (never
+ * a place name/coords) and is included only on ward-private surfaces.
+ */
+export function weatherArc(forecast, { todayDate, tomorrowDate, locationLabel = '' } = {}) {
+  if (!forecast || typeof forecast !== 'object') return '';
+  const hourly = Array.isArray(forecast.hourly) ? forecast.hourly : [];
+  if (!hourly.length) return '';
+  const today = hourly.filter(h => dateOf(h.time) === todayDate);
+  const tomorrow = hourly.filter(h => dateOf(h.time) === tomorrowDate);
+  const lines = [];
+  const t1 = describeDay('Today', today);
+  const t2 = describeDay('Tomorrow', tomorrow);
+  if (t1) lines.push(t1);
+  if (t2) lines.push(t2);
+  if (!lines.length) return '';
+  const where = locationLabel ? ` (${locationLabel})` : ' (where my human is)';
+  return `The sky over my human's day${where}:\n${lines.join('\n')}`;
+}

@@ -45,11 +45,43 @@ let _consecutiveOverdueGrowth = 0;
  * Returns { fired: [...], skipped: [...], alerted: [...] } for
  * observability.
  */
+/**
+ * One alert stream — enqueue first, mark second, exactly like reminders: a
+ * failed mark re-alerts next tick and the outbox dedup (originId = prefix +
+ * node id + occurrence) absorbs the retry. Shared by the coming-up and the
+ * severe-weather passes so the two never drift apart. `mark` gets `kind` so the
+ * durable stamp lands in the right dedup channel. Returns the delivered alerts.
+ */
+async function runAlertStream({ getDue, mark, outboxKind, originPrefix, markKind, enqueueOutboxFn, now, skipped }) {
+  const delivered = [];
+  if (typeof getDue !== 'function' || typeof mark !== 'function') return delivered;
+  let dueAlerts = [];
+  try { dueAlerts = (await getDue()) || []; }
+  catch (err) { skipped.push({ id: `(${originPrefix}-scan)`, error: err?.message ?? String(err) }); return delivered; }
+  for (const a of dueAlerts) {
+    try {
+      await enqueueOutboxFn({
+        kind:     outboxKind,
+        originId: `${originPrefix}:${a.id}:${a.occurrenceDate ?? 'once'}`,
+        title:    a.title,
+        body:     a.body,
+        ts:       new Date(now()).toISOString(),
+      });
+      await mark({ id: a.id, occurrenceDate: a.occurrenceDate ?? null, kind: markKind });
+      delivered.push(a);
+    } catch (err) {
+      skipped.push({ id: a.id, label: a.label, error: err?.message ?? String(err) });
+    }
+  }
+  return delivered;
+}
+
 export async function runOneReminderTick({
   getDueReminders,
   fireReminder,           // async ({id, label}) => marks resolved=fired
   getDueEventAlerts,      // optional: async () => [{id,label,occurrenceDate,title,body}]
-  markEventAlerted,       // optional: async ({id, occurrenceDate}) => durable "already pinged"
+  markEventAlerted,       // optional: async ({id, occurrenceDate, kind}) => durable "already pinged"
+  getDueWeatherAlerts,    // optional (W-B): severe-weather heads-up for outside-tagged items
   enqueueOutboxFn = enqueueOutbox,
   now             = Date.now,
 }) {
@@ -79,31 +111,19 @@ export async function runOneReminderTick({
     }
   }
 
-  // Event lead-time alerts — enqueue first, mark second, exactly like
-  // reminders: a failed mark re-alerts next tick and the outbox dedup
-  // (originId = node id + occurrence) absorbs the retry.
-  const alerted = [];
-  if (typeof getDueEventAlerts === 'function' && typeof markEventAlerted === 'function') {
-    let dueAlerts = [];
-    try { dueAlerts = (await getDueEventAlerts()) || []; }
-    catch (err) { skipped.push({ id: '(event-alert-scan)', error: err?.message ?? String(err) }); }
-    for (const a of dueAlerts) {
-      try {
-        await enqueueOutboxFn({
-          kind:     'event_alert',
-          originId: `event-alert:${a.id}:${a.occurrenceDate ?? 'once'}`,
-          title:    a.title,
-          body:     a.body,
-          ts:       new Date(now()).toISOString(),
-        });
-        await markEventAlerted({ id: a.id, occurrenceDate: a.occurrenceDate ?? null });
-        alerted.push(a);
-      } catch (err) {
-        skipped.push({ id: a.id, label: a.label, error: err?.message ?? String(err) });
-      }
-    }
-  }
-  return { fired, skipped, alerted };
+  // Coming-up alerts and the severe-weather heads-up — both ride this tick
+  // through the same enqueue-then-mark helper, into separate dedup channels.
+  const alerted = await runAlertStream({
+    getDue: getDueEventAlerts, mark: markEventAlerted,
+    outboxKind: 'event_alert', originPrefix: 'event-alert', markKind: 'event',
+    enqueueOutboxFn, now, skipped,
+  });
+  const weatherAlerted = await runAlertStream({
+    getDue: getDueWeatherAlerts, mark: markEventAlerted,
+    outboxKind: 'weather_alert', originPrefix: 'weather-alert', markKind: 'weather',
+    enqueueOutboxFn, now, skipped,
+  });
+  return { fired, skipped, alerted, weatherAlerted };
 }
 
 /**
@@ -124,6 +144,7 @@ export function startRemindersLoop({
   fireReminder,
   getDueEventAlerts,
   markEventAlerted,
+  getDueWeatherAlerts,
   getHealth,
   enqueueOutboxFn = enqueueOutbox,
   tickMs    = DEFAULT_TICK_MS,
@@ -141,7 +162,7 @@ export function startRemindersLoop({
     _activeTick = (async () => {
       try {
         if (!(await isEnabled())) { onTick({ skipped: true, reason: 'disabled' }); return; }
-        const result = await runOneReminderTick({ getDueReminders, fireReminder, getDueEventAlerts, markEventAlerted, enqueueOutboxFn });
+        const result = await runOneReminderTick({ getDueReminders, fireReminder, getDueEventAlerts, markEventAlerted, getDueWeatherAlerts, enqueueOutboxFn });
         // Health check (best-effort; never blocks delivery).
         if (typeof getHealth === 'function') {
           try {

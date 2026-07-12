@@ -56,7 +56,7 @@ import {
   weatherLocationsPrivate, ingestWeather, readWeather,
 } from './thalamus.js';
 import { geocode, fetchForecast } from './weather-source.js';
-import { readWeatherNowLine, writeWeatherMirror, clearWeatherMirror } from './weather-mirror.js';
+import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './weather-mirror.js';
 import { WEATHER_STALE_MS } from './weather-format.js';
 import { selectReadiness } from './stewardship.js';
 import {
@@ -69,6 +69,7 @@ import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedInte
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
+  selectDueWeatherAlerts, formatWeatherAlert,
   clampLeadMinutes, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
@@ -451,9 +452,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // the ward's clock even when the server runs in a different timezone.
       timeZone: readSettingsSync()?.wardTimeZone || null,
       // Full weather detail is ward-private only. On any gated (non-ward)
-      // turn the line is withheld — the vague tier (W-B) will render the
-      // dumbed-down version there; W-A simply says nothing. Fail-closed.
-      weatherLine: audienceTag === 'ward-private' ? readWeatherNowLine() : '',
+      // turn the vague tier renders instead — qualitative, no numbers/units/
+      // times/labels, so precise values can't leak a location (§5.6).
+      // Fail-closed: unclear audience → vague, and vague itself → '' if stale.
+      weatherLine: audienceTag === 'ward-private' ? readWeatherNowLine() : readWeatherVagueLine(),
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
@@ -1656,6 +1658,8 @@ initCerebellumTools({
   upsertVillager,
   relayToDiscord,
   memorizeSessionNow,
+  // set_current_location warms the new place's sky right away (fire-and-forget).
+  refreshWeatherNow: () => { refreshWeatherIfDue({ force: true }).catch(() => {}); },
 });
 
 // Backs the Familiar's `memorize_now` tool: commit THIS conversation to memory
@@ -3559,29 +3563,35 @@ function startRemindersScheduler() {
       if (s?.eventAlertsEnabled === false) return [];  // default-ON
       const defaultLeadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
       const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
-      // Fetch across the WIDEST possible lead (Pass 5): an event may carry a
-      // per-event lead longer than the global default, and it must appear in
-      // the window early enough for its own lead to fire. selectDueEventAlerts
-      // then applies each node's effective lead. Events are sparse, so the
-      // wider fetch is cheap; the per-node gate keeps the alerts precise.
-      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs: MAX_LEAD_MS });
-      const [win, rec] = await Promise.all([
-        getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
-        listRecurring().catch(() => ({ nodes: [] })),
-      ]);
-      const windowNodes = Array.isArray(win) ? win : (win?.nodes ?? []);
-      const recurringNodes = Array.isArray(rec) ? rec : (rec?.nodes ?? []);
+      const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
       return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
         .map(a => ({ ...a, ...formatEventAlert(a, { nowMs }) }));
     },
-    markEventAlerted: async ({ id, occurrenceDate }) => {
-      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null });
+    // Severe-weather heads-up (W-B, §5.4): an outside-tagged item whose
+    // occurrence-hour forecast turns adverse in the CACHED forecast (the
+    // read-mirror) gets a code-built ping, riding the same tick + window scan
+    // as the coming-up alert. Gated by BOTH weather AND event-alerts being on.
+    getDueWeatherAlerts: async () => {
+      if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
+      const s = readSettingsSync();
+      if (!weatherEnabled() || s?.eventAlertsEnabled === false) return [];
+      const mirror = readWeatherMirrorSync();
+      if (!mirror) return [];   // no current-location forecast → nothing to warn from
+      const defaultLeadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
+      const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
+      return selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
+        .map(a => ({ ...a, ...formatWeatherAlert(a, { nowMs }) }));
+    },
+    markEventAlerted: async ({ id, occurrenceDate, kind }) => {
+      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null, kind: kind || 'event' });
       if (!r.ok) throw new Error(r.error || 'mark_alerted failed');
     },
     getHealth: getRemindersHealth,
     onTick: (r) => {
       for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
       for (const a of r.alerted || []) console.log(`[reminders] event alert "${a.label}" (${a.whenIso ?? ''})`);
+      for (const a of r.weatherAlerted || []) console.log(`[reminders] weather alert "${a.label}" (${a.whenIso ?? ''})`);
       for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label ?? s.id}": ${s.error}`);
       // Weather refresh rides this same 30s tick, self-gated to a 6h cadence
       // (ride existing requests, gate in code). Fire-and-forget — never
@@ -3599,6 +3609,27 @@ function startRemindersScheduler() {
 // lazily when asked about — W-B). Fetch failure keeps the stale cache and the
 // [Now] line drops on its own past 12h; disabled / no current location clears
 // the mirror so the line disappears immediately.
+// Per-tick memo of the alert-window scan so the coming-up and severe-weather
+// passes share ONE schedule fetch instead of two MCP round-trips every 30s
+// (ride existing requests). Short TTL: both passes run inside the same tick.
+let _alertScan = { at: 0, data: { windowNodes: [], recurringNodes: [] } };
+async function fetchAlertScanData(nowMs) {
+  if (Date.now() - _alertScan.at < 10_000) return _alertScan.data;
+  const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs: MAX_LEAD_MS });
+  const [win, rec] = await Promise.all([
+    getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
+    listRecurring().catch(() => ({ nodes: [] })),
+  ]);
+  _alertScan = {
+    at: Date.now(),
+    data: {
+      windowNodes: Array.isArray(win) ? win : (win?.nodes ?? []),
+      recurringNodes: Array.isArray(rec) ? rec : (rec?.nodes ?? []),
+    },
+  };
+  return _alertScan.data;
+}
+
 const WEATHER_REFRESH_MS = 6 * 60 * 60_000;
 let _weatherRefreshing = false;
 
