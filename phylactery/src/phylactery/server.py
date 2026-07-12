@@ -447,6 +447,16 @@ def memory_health() -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_backfill_embeddings(limit: int | None = None) -> dict[str, Any]:
+    """I use this to embed any of my memories that never got a vector — usually
+    the ones carried over from before Phylactery (the migration imported them
+    without embeddings), which left them invisible to my dedup so the same fact
+    could pile up in my human's consent queue. Mechanical, idempotent, and safe
+    to re-run. Returns {embedded, remaining, total_gap}."""
+    return mem.backfill_embeddings(conn=_c(), limit=limit)
+
+
+@mcp.tool()
 def memory_confirm_consent(ids: list[str]) -> str:
     """I use this to confirm that my human consents to keeping memory records
     I flagged as consent_pending. Clears the pending flag; records become

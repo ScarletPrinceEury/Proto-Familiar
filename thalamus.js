@@ -2633,6 +2633,15 @@ export async function getMemoryHealth() {
   });
 }
 
+// Embed memories that never got a vector (the migration gap) so semantic dedup
+// can see them. Idempotent; degrades to a no-op result on any failure.
+export async function backfillMemoryEmbeddings({ limit = null } = {}) {
+  return callTool('memory_backfill_embeddings', limit != null ? { limit } : {}).catch(err => {
+    console.warn('[thalamus] backfillMemoryEmbeddings failed:', err?.message ?? err);
+    return { ok: false, embedded: 0, error: err?.message ?? String(err) };
+  });
+}
+
 // ── Ward remember-consent map (Pillar I) ─────────────────────────────────────
 
 export async function getRememberMap() {

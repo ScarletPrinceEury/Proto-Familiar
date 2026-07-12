@@ -954,6 +954,59 @@ def _delete_embedding(conn: sqlite3.Connection, record_id: str) -> None:
         pass
 
 
+def _unembedded_narrative(conn: sqlite3.Connection) -> list:
+    """Narrative memories with content but NO vector row. Raises if the vec
+    table is unavailable (caller decides how to degrade)."""
+    return conn.execute("""
+        SELECT m.id, m.content FROM memories m
+        LEFT JOIN memory_vecs v ON v.memory_id = m.id
+        WHERE m.kind='narrative' AND v.memory_id IS NULL
+          AND m.content IS NOT NULL AND TRIM(m.content) != ''
+        ORDER BY m.updated_at DESC
+    """).fetchall()
+
+
+def backfill_embeddings(conn: sqlite3.Connection | None = None, *, limit: int | None = None) -> dict:
+    """Embed narrative memories that have content but no vector row — heals the
+    gap left by bulk inserts that skipped embedding (notably the entity-core
+    migration, which INSERT-ORs rows without a vector). Those rows are invisible
+    to semantic dedup, so a new fact paraphrasing a migrated memory can't match
+    it and re-queues — a real contributor to the consent-queue pile-up. Runs the
+    embedder in-process; idempotent (a fully-embedded store is a no-op). Never
+    raises. Returns {ok, embedded, remaining, total_gap}."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        try:
+            rows = _unembedded_narrative(conn)
+        except Exception as e:
+            return {"ok": False, "error": f"vec table unavailable: {e}", "embedded": 0}
+        total_gap = len(rows)
+        if not rows:
+            return {"ok": True, "embedded": 0, "remaining": 0, "total_gap": 0}
+        # Confirm the embedder loads before churning through the batch.
+        try:
+            from phylactery.embed import embed_text
+            embed_text("health probe")
+        except Exception as e:
+            return {"ok": False, "error": f"embedder unavailable: {e}",
+                    "embedded": 0, "remaining": total_gap, "total_gap": total_gap}
+        todo = rows[:limit] if limit else rows
+        embedded = 0
+        for r in todo:
+            before = conn.total_changes
+            _upsert_embedding(conn, r["id"], r["content"])
+            # _upsert_embedding swallows its own errors; count only real inserts.
+            if conn.total_changes > before:
+                embedded += 1
+        remaining = len(_unembedded_narrative(conn))
+        return {"ok": True, "embedded": embedded, "remaining": remaining, "total_gap": total_gap}
+    finally:
+        if own:
+            conn.close()
+
+
 # Legacy hex/uuid id shape — memories created before the readable-id fix.
 _LEGACY_ID_RE = re.compile(
     r"^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")

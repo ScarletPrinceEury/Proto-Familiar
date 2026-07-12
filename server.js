@@ -28,7 +28,7 @@ import {
   exportBackup, restoreBackup, runLifecyclePass,
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
-  getMemoryHealth,
+  getMemoryHealth, backfillMemoryEmbeddings,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
@@ -1756,6 +1756,14 @@ app.get('/api/memory-health', async (_req, res) => {
   catch (err) { res.json({ ok: false, healthy: null, dedup_mode: 'unknown', error: err?.message ?? String(err) }); }
 });
 
+// POST /api/memory-backfill — embed any memories missing a vector (the
+// migration gap), so semantic dedup can see them. Idempotent; also runs
+// automatically at boot when a gap is detected.
+app.post('/api/memory-backfill', async (_req, res) => {
+  try { res.json(await backfillMemoryEmbeddings()); }
+  catch (err) { res.json({ ok: false, embedded: 0, error: err?.message ?? String(err) }); }
+});
+
 // POST /api/memorize-day — (re)feed every session's slice for one calendar date.
 // Skips slices already memorized unless `force`. Client supplies the creds, same
 // as POST /api/memorize.
@@ -3230,6 +3238,16 @@ const httpServer = app.listen(PORT, HOST, async () => {
         `Fix: ensure fastembed's model downloaded and the sqlite-vec extension loads.`);
     } else if (h && h.healthy) {
       console.log(`[memory] dedup healthy (semantic; ${h.vec_rows}/${h.memory_rows} rows embedded)`);
+      // Heal the migration gap: memories imported from entity-core were inserted
+      // without vectors, so semantic dedup can't see them and their restatements
+      // re-queue. Backfill in the background (idempotent; no-op once caught up).
+      if (Number.isFinite(h.vec_rows) && Number.isFinite(h.memory_rows) && h.memory_rows > h.vec_rows) {
+        console.log(`[memory] ${h.memory_rows - h.vec_rows} memor(ies) missing embeddings — backfilling in the background…`);
+        backfillMemoryEmbeddings().then(r => {
+          if (r?.ok && r.embedded) console.log(`[memory] embedding backfill: embedded ${r.embedded}, ${r.remaining ?? 0} remaining`);
+          else if (r && !r.ok) console.warn(`[memory] embedding backfill skipped: ${r.error ?? 'unknown'}`);
+        }).catch(() => {});
+      }
     }
   }).catch(() => {});
   // Discord gateway (Village V4). Supervisor idles until the ward sets
