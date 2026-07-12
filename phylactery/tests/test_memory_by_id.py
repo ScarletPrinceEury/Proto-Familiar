@@ -62,6 +62,19 @@ def _two_facts_same_day(c):
     return a["id"], b["id"]
 
 
+def test_new_memory_id_is_a_readable_slug_not_hex():
+    """The model-facing memory id is a content-derived slug (recall / the consent
+    block / graduation all echo it), never a uuid4 hex — the readable-id rule."""
+    import re
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _fake_embed):
+        r = memory.create("Alice started a new job", "daily", standalone=True, conn=c)
+    mid = r["id"]
+    assert mid.startswith("alice-started"), mid          # content-derived
+    assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", mid)  # readable slug shape
+    assert not re.fullmatch(r"[0-9a-f]{32}", mid)        # not a uuid4 hex
+
+
 def test_read_by_id_distinguishes_rows_that_share_a_date():
     c = _conn()
     a_id, b_id = _two_facts_same_day(c)

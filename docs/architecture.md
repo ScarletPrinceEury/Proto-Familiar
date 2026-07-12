@@ -1849,8 +1849,14 @@ model; a slug costs ~3 and self-documents in tool calls.
   `VALID_GRAPH_ID_RE` / the export-endpoint check are `alnum+dash, bounded
   length` — traversal-proof without assuming UUID. Session ids, tome ids, and
   job ids remain strict UUIDs (`isValidUUID`).
-- **Memories stay integer ids** (Phylactery autoincrement) — already cheap,
-  already surfaced by recall/list/read; not part of this scheme.
+- **Memories get slug ids too** (`content`-derived, `memory.create` →
+  `db.insert_with_slug_retry`, `kind="mem"`). They're surfaced by
+  recall/list/read, the consent block, graduation, and intention `refs`, so
+  they follow the same readable-id rule as graph nodes. (An earlier note here
+  claimed memories "stay integer ids — already cheap"; that was wrong — the id
+  was `uuid.uuid4().hex`, not an integer, so it was exactly the expensive-hex
+  case the scheme exists to fix. Legacy hex ids remain valid — ids are opaque
+  TEXT.)
 - **Discovery is a capability, not a legend.** The `[schedule ids]` /
   `[graph ids]` legends cover what's in view; `schedule_find` (label search,
   any horizon) is how the Familiar reaches everything else — see below.
