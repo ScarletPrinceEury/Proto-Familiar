@@ -259,6 +259,9 @@ const state = {
   // wake-condition-gated turns to notice and act. Off via this toggle or
   // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
   noticingEnabled:         true,
+  // Weather sense (W-A). Default-ON but inert until the ward adds a location.
+  // Off via this toggle or PROTO_FAMILIAR_WEATHER_DISABLED=1 on the server.
+  weatherEnabled:          true,
   // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
@@ -381,7 +384,7 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
-  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',

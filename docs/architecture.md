@@ -120,6 +120,10 @@ ponderings injection, care-check framing) and as background loops
 ├── gcal-source.js           Inbound FETCH half (Node owns network + the iCal URL): normalizeIcalUrl (webcal→https) + fetchIcal (timeout, ok:false on any failure, rejects non-iCal bodies so an auth wall can't read as "empty calendar"). Advanced tier (§1.5): fetchViaCli runs a ward-configured authenticated command (gogcli/gcalcli presets, overridable) that emits `.ics` (reuses Unruh's parser) or JSON (normalizeCliEvents) — a windowed read, always reconcileDeletes:false; detectCli probes installed/authed. Write-back (§7-5, the ONLY path that mutates the real calendar): pushIcsViaCli imports a generated `.ics` (reuses icalwrite — code builds it, never the model) through the ward's import command (ADD only) — gated behind the `schedule_push_to_google` tool's opt-in. Unruh stays parse-only/network-free
 ├── gcal-google.js           Native Google Calendar (0.8.1; multi-calendar 0.8.22): OAuth (parseCredentials, buildAuthUrl, exchangeCode, refreshAccessToken, getFreshAccessToken) + Calendar API (listCalendars enumerates the account's own AND shared-in calendars; listEvents(calendarId) windowed/showDeleted/paginated, insertEvent ADD-only write-back) + gitignored token store. SCOPE widened to calendar.events + calendar.readonly so shared calendars can be enumerated/read (existing users reconnect once; hasCalendarListScope tells the UI). normalizeGoogleEvents(items, calendarId) stamps each event's source calendar. buildEventResource sends local time + IANA zone. publicStatus redacted; status reports sharedScope Every network call takes an injectable fetchFn. normalizeGoogleEvents reuses the shared normalizer; buildEventResource sends local time + IANA zone and lets Google do local→instant. publicStatus is redacted (never leaks tokens). Replaces the CLI for the authenticated path — no terminal
 ├── gcal-projection.js       The §4 projection cue: pure selectCueItems (per-turn cap + turn/time aging) + buildCueBlock (first-person, literal "my human") over Unruh's `gcal_projection` feed; persisted aging state in tomes/.gcal-projection-cue.json. Rides chat turns (no standalone request); auto-clears when a node gains a consequence edge (Unruh drops it). Injected as a dynamic block in thalamus enrich()
+├── weather-source.js        Weather FETCH half (W-A; Node owns the network, the gcal precedent): geocode(query) resolves a city/ZIP ONCE at location-entry → {lat, lon, place_name, timezone} (Open-Meteo keyless geocoding); fetchForecast(lat, lon) is the 6-hourly refresh, walking the provider chain until one returns, stamping a location-local-naive `fetched_at`. fetchFn/now injectable for tests; total failure → {ok:false} (caller keeps the stale cache, the [Now] line simply drops). Coordinates go to the API only — the model never sees them
+├── weather-providers.js     Provider adapters (W-A, mirrors websearch-providers.js): fetchOpenMeteo (primary, keyless, timezone=auto→local times) + fetchMetNorway (fallback, keyless, symbol_code→WMO, m/s→km/h, UTC→local via utcToLocalNaive using the location's stored zone). Both normalise to one internal shape {provider, current, hourly[]}; PROVIDER_CHAIN orders them
+├── weather-format.js        Weather PURE formatters (W-A; the exact-machine-values rule — code speaks the words, never the model): WMO code→words, qualitative bands (tempBand/precipBand/windBand), precipTransition (reads the hourly array for when rain eases/starts, 12h lookahead), buildNowWeatherLine → "Weather where my human is: 6°C (cold), light rain, easing off around 17:00." The HONESTY rule lives here: a forecast older than WEATHER_STALE_MS (12h) yields '' (the line drops rather than lie), as does any missing/garbage field
+├── weather-mirror.js        Weather READ-mirror (W-A; the last-activity.js precedent): writeWeatherMirror/clearWeatherMirror keep tomes/.weather-now.json in sync with the cache so the hot [Now]-block path reads synchronously. readWeatherNowLine({tomesDir, now}) is the ONE call buildTimeAnchorBlock makes — sync, never throws, honours the env off-switch (PROTO_FAMILIAR_WEATHER_DISABLED=1 → '') and the staleness rule. Weather reaches only ward-facing surfaces (the four [Now] call sites are triage/warmth/noticing/ward-private web chat); the vague/gated tier is W-B
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
@@ -179,6 +183,7 @@ ponderings injection, care-check framing) and as background loops
 │   ├── src/unruh/ical.py      iCal (.ics) parse → normalized-event contract (0.8 inbound; RRULE subset-map + 90-day fallback expansion)
 │   ├── src/unruh/gcal.py      normalized events → schedule nodes; change-classifying upsert/reconcile keyed by gcal_uid
 │   ├── src/unruh/icalwrite.py schedule node → .ics + Google-render URL (0.8 outbound; local→UTC at this one boundary)
+│   ├── src/unruh/location.py  Weather-location store (W-A) — pure fns over a `locations` table (migration 0006) + a `weather_cache` table. PRIVACY SPINE: coords never leave the store toward the model. location_public returns {id, label, is_current} ONLY; location_private / weather_locations_private carry lat/lon and are called by NODE CODE ONLY (never bound as a model tool). First location auto-current; delete reassigns current; ingest validates + replaces the per-location cache (JSON times are local-naive, same frame as the forecast). Unruh never fetches — Node owns the network (the gcal precedent)
 │   ├── data/                SQLite + state (auto-created, git-ignored)
 │   └── tests/               pytest contract tests
 │
@@ -274,6 +279,13 @@ multi-calendar panel.
 - `GET /api/temporal/reminders/health` — observability on the loop
 - `GET /api/temporal/ponderings[?limit&sinceDays]` + DELETE
 - `POST /api/ponderings/intents/acted-on` — mark a deferred intent as filed (body: `{ uid, index }`); called by the `acknowledge_deferred_intent` LLM tool
+
+**Weather locations (W-A — ward-facing, coords never modelled):**
+- `GET /api/locations` — the ward's saved weather locations, PUBLIC shape only (`{id, label, is_current}` — never coordinates)
+- `POST /api/locations/geocode` — resolve a city/ZIP to `{place_name}` for the ward to confirm before saving (the geocode runs server-side; coords stay in the response envelope the UI posts back, never surfaced to the model)
+- `POST /api/locations` — save a location (label + resolved coords + timezone); first one becomes current; forces a weather refresh
+- `POST /api/locations/current` — switch the current location; forces a refresh
+- `DELETE /api/locations/:id` — remove a location (current is reassigned); forces a refresh
 
 **Village surface (V1 — registry only; gating lands in V3):**
 - `GET /api/village` — full registry (categories + villagers + locations, normalized)
@@ -565,6 +577,20 @@ Unruh's `schedule_mark_alerted` — atomic merge, enqueue-first
 mark-second like reminders). All-day events never ping (their
 when_ts is midnight). All comparisons run in the ward-local frame
 (nowMs derived from `wardLocalNowISO`).
+
+The same 30s tick also carries the **weather refresh seam** (W-A,
+"ride existing requests, gate in code"): `refreshWeatherIfDue()` is a
+self-gated fire-and-forget — it no-ops unless weather is enabled
+(`weatherEnabled` default-ON + `PROTO_FAMILIAR_WEATHER_DISABLED=1`
+off-switch) and the current location's cache is older than
+`WEATHER_REFRESH_MS` (6h); a `_weatherRefreshing` guard prevents
+overlap. When due it geocodes-nothing (coords already stored),
+`fetchForecast`s the current location, writes the Unruh
+`weather_cache` (via `ingestWeather`) and syncs the read-mirror
+(`syncWeatherMirror` → tomes/.weather-now.json). It also runs once at
+boot and is forced on a location add / set-current / delete. No new
+LLM call and no new loop — weather is pure code end to end; the
+model only ever reads the code-built [Now] line.
 
 **`silence-triage-loop.js`** — autonomous singleton. Every 5min, gates
 on tier (calm/mild = no-op) and cool-down (LLM-controlled

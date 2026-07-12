@@ -34,6 +34,7 @@ import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { buildWaitStreakLine } from './wait-streak.js';
 import { getContactBaseline, buildRhythmLine } from './contact-baselines.js';
+import { readWeatherNowLine } from './weather-mirror.js';
 
 // ── Warm-villager selection ──────────────────────────────────────
 //
@@ -179,7 +180,8 @@ export async function decideReachoutViaLLM({
   ]);
 
   const lastUserAt = Number.isFinite(wardSilenceMs) ? new Date(nowMs - wardSilenceMs).toISOString() : null;
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
+  // Warm reach-out is a ward-private deliberation → full weather line.
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs }) });
   const wardSilencePhrase = lastUserAt ? (relativeTime(lastUserAt, nowMs) || 'a little while') : null;
 
   // Pass 2: the rhythm line (or '' when no honest baseline exists / the

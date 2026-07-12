@@ -68,6 +68,7 @@ import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
+import { readWeatherNowLine } from './weather-mirror.js';
 import { flagDistress } from './threat-tracker.js';
 import { resetTriageCooldown } from './silence-triage-loop.js';
 import { pruneConsentPending } from './memorization.js';
@@ -621,7 +622,8 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // lastUserMessageAt comes from silenceMs; the loop calls us with that
   // already computed.
   const lastUserAt = new Date(nowMs - silenceMs).toISOString();
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
+  // Triage is a ward-private deliberation → full weather line.
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs }) });
 
   const signalsBlock = signals?.length
     ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {

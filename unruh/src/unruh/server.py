@@ -45,6 +45,7 @@ from unruh import templates as tmpl
 from unruh import interest as interests
 from unruh import handoff as handoffs
 from unruh import intention as intentions_mod
+from unruh import location as location_mod
 from unruh import gcal as gcal_ingest_mod
 from unruh import icalwrite
 
@@ -1013,6 +1014,128 @@ def intention_rounds_for_ward() -> dict[str, Any]:
     """
     with get_conn() as conn:
         return {"ok": True, **intentions_mod.rounds_for_ward(conn)}
+
+
+# ── Locations & weather (Weather sense, Session W-A) ──────────────────
+#
+# The Node fetch half (weather-source.js) owns all network I/O: it geocodes a
+# city/ZIP to coords once, and refreshes forecasts on the reminders tick, then
+# hands the results here. These tools store and serve; Unruh never fetches.
+# location_add/list/set_current/delete + weather_ingest/read are the storage
+# surface; weather_locations_private is the refresh loop's one-call planner
+# (coords + each location's cache age). The `*_private` shapes carry
+# coordinates and are called by NODE CODE only — never bound as model tools.
+
+
+@mcp.tool()
+def location_add(
+    label: str,
+    lat: float | None = None,
+    lon: float | None = None,
+    place_name: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    """I store one of my human's places (its coordinates already resolved from
+    the city/ZIP by the fetch half). The label is the only part I ever read
+    back into a conversation; the coordinates stay local. The first place added
+    becomes the current one.
+
+    Returns: {ok, id, is_current}.
+    """
+    with get_conn() as conn:
+        return location_mod.add_location(
+            conn, label=label, lat=lat, lon=lon, place_name=place_name, timezone=timezone,
+        )
+
+
+@mcp.tool()
+def location_list() -> dict[str, Any]:
+    """My human's places — LABELS ONLY (no coordinates ever leave here). I use
+    this to know which places exist and which one they're at.
+
+    Returns: {ok, locations: [{id, label, is_current}]}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "locations": location_mod.list_locations(conn)}
+
+
+@mcp.tool()
+def location_get_current() -> dict[str, Any]:
+    """Where my human is right now — label only.
+
+    Returns: {ok, location: {id, label, is_current} | None}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "location": location_mod.get_current(conn)}
+
+
+@mcp.tool()
+def location_set_current(ident: str) -> dict[str, Any]:
+    """I mark where my human is now (by label or id). Exactly one place is
+    current at a time.
+
+    Returns: {ok, id} or a not-found error.
+    """
+    with get_conn() as conn:
+        return location_mod.set_current(conn, ident=ident)
+
+
+@mcp.tool()
+def location_delete(ident: str) -> dict[str, Any]:
+    """Remove one of my human's places (and its cached forecast).
+
+    Returns: {ok, deleted}.
+    """
+    with get_conn() as conn:
+        return location_mod.delete_location(conn, ident=ident)
+
+
+@mcp.tool()
+def weather_locations_private() -> dict[str, Any]:
+    """NODE-INTERNAL (the refresh loop): every location WITH coordinates plus
+    its cache age, so the fetch half can decide what to refresh. Carries
+    coordinates — never bound as a model tool.
+
+    Returns: {ok, locations: [{id, label, lat, lon, timezone, is_current, fetched_at|None}]}.
+    """
+    with get_conn() as conn:
+        locs = location_mod.list_locations(conn, private=True)
+        out = []
+        for loc in locs:
+            cache = location_mod.read_weather(conn, location_id=loc["id"])
+            out.append({**loc, "fetched_at": cache["fetched_at"] if cache else None})
+        return {"ok": True, "locations": out}
+
+
+@mcp.tool()
+def weather_ingest(
+    location_id: str,
+    provider: str,
+    fetched_at: str,
+    current: dict | None = None,
+    hourly: list | None = None,
+) -> dict[str, Any]:
+    """NODE-INTERNAL: the fetch half hands me a normalised forecast (local-naive
+    times, already converted) to cache for a location.
+
+    Returns: {ok} or an error.
+    """
+    with get_conn() as conn:
+        return location_mod.ingest_weather(
+            conn, location_id=location_id, provider=provider,
+            fetched_at=fetched_at, current=current, hourly=hourly,
+        )
+
+
+@mcp.tool()
+def weather_read(location_id: str) -> dict[str, Any]:
+    """The cached forecast for a place (by id), or null. Carries fetched_at so
+    the caller applies the staleness rule.
+
+    Returns: {ok, weather: {...} | None}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "weather": location_mod.read_weather(conn, location_id=location_id)}
 
 
 # ── Per-message briefing ──────────────────────────────────────────────
