@@ -40,6 +40,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { listOwnFiles, readOwnFile } from './own-files.js';
 import { readCalendarCache, resolveAttribution, normalizeAttributionEntry } from './gcal-attribution.js';
 import { computeAvailability, formatAvailabilityLines } from './schedule-availability.js';
+import { isSensitiveNode } from './spine-states.js';
 import {
   enrich, getScheduleWindow,
   // Tool-executor writes — ALWAYS through thalamus's wrappers, never a
@@ -51,13 +52,15 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes,
+  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
   templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds,
   bumpInterest, setStandingInterest,
+  setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
-  searchMemoryRestricted, searchMemory,
+  searchMemoryRestricted, searchMemory, memByTimerange,
+  setCurrentLocation, listLocations,
   withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
@@ -65,6 +68,12 @@ import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
+import { readWeatherNowLine, weatherEnabled } from './weather-mirror.js';
+import { resolveLocation, getForecast, dayDatesFor } from './weather-service.js';
+import { weatherArc, formatWeatherVague } from './weather-format.js';
+import { flagDistress } from './threat-tracker.js';
+import { resetTriageCooldown } from './silence-triage-loop.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
 import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
@@ -145,6 +154,34 @@ export function primaryConnectionFrom(settings) {
   return conns.find(c => c?.id === id) ?? null;
 }
 
+// ── Intention budgets (Initiative Pass 3) ────────────────────────────
+// Ward-configurable, no hard-wired numbers. The phase is the budgeting
+// unit (ward-decided): a standing-rounds-per-phase cap, and an
+// open-one-shots cap. Both clamp to a sane range so a bad setting can't
+// make the cap absurd. (The per-phase/per-day *turn* budgets that pace the
+// noticing loop are Pass 4; these two govern how many intentions can be
+// HELD at once, enforced at set time.)
+export function intentionStandingPerPhaseCap(settings = readSettingsSync()) {
+  const n = Number(settings?.intentionStandingPerPhase);
+  return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 3;
+}
+export function intentionOpenOneShotsCap(settings = readSettingsSync()) {
+  const n = Number(settings?.intentionOpenOneShots);
+  return Number.isInteger(n) && n >= 1 && n <= 500 ? n : 30;
+}
+
+// Human-readable one-liner for an intention's trigger — reused by the
+// set-confirmation and the list rendering. Pure.
+export function describeIntentionTrigger(trigger = {}) {
+  const kind = trigger?.kind;
+  if (kind === 'at')   return trigger.at ? `due ${trigger.at}` : 'due at a set time';
+  if (kind === 'phase') return trigger.recurring
+    ? `every ${trigger.phase} phase`
+    : `next ${trigger.phase} phase`;
+  if (kind === 'on_next_contact') return 'next time we talk';
+  return '';
+}
+
 // Resolve the connection a given background feature should run on. The ward can
 // assign a specific saved connection per feature (settings.featureConnections,
 // set in the Connections modal) — unset, or a stale/invalid id, falls back to the
@@ -172,6 +209,7 @@ mkdirSync(LOGS_DIR, { recursive: true });
 
 export const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
 export const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
+export const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
 
 // Shared JSONL event-log primitives — triage and warm reach-out both use
 // them, so decisions from either loop are auditable the same way.
@@ -208,6 +246,13 @@ export const readTriageEvents       = ()      => readEventLog(TRIAGE_LOG_FILE);
 // every tick and carry no decision).
 export const appendReachoutEventLog = (entry) => appendEventLog(REACHOUT_LOG_FILE, entry);
 export const readReachoutEvents     = ()      => readEventLog(REACHOUT_LOG_FILE);
+// Noticing (Initiative Pass 4): EVERY tick that reached a decision logs —
+// including quiet-window evaluations that took no LLM call — so a dead
+// noticing loop reads as stale/absent entries, never as calm silence (the
+// reflection-heartbeat lesson). Pure cadence skips (in_cooldown/disabled)
+// carry no decision and stay unlogged.
+export const appendNoticingEventLog = (entry) => appendEventLog(NOTICING_LOG_FILE, entry);
+export const readNoticingEvents     = ()      => readEventLog(NOTICING_LOG_FILE);
 
 // Read the last N user/assistant messages from the most recently updated
 // session log file. Used by decideTriageViaLLM to ground the triage
@@ -561,6 +606,12 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   const silencePhrase = plainInterval(nowMs - silenceMs, nowMs);
   const contacts = Array.isArray(s?.trustedContacts) ? s.trustedContacts : [];
 
+  // Wait-streak awareness (initiative-build-spec Pass 1, ward-signed):
+  // exactly ONE neutral, code-built fact line appended to the deliberation
+  // facts — no advice, no framing, no change to any gate or default. ''
+  // when the experiment is off (prompt byte-identical, invariant W3).
+  const waitStreakLine = buildWaitStreakLine({ now: nowMs, settings: s });
+
   // Pull identity context (who the Familiar is, who the user is) and the
   // recent conversation log in parallel. Both degrade gracefully to empty.
   const [{ static: identityContext }, recentMessages] = await Promise.all([
@@ -574,7 +625,8 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // lastUserMessageAt comes from silenceMs; the loop calls us with that
   // already computed.
   const lastUserAt = new Date(nowMs - silenceMs).toISOString();
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
+  // Triage is a ward-private deliberation → full weather line.
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs }) });
 
   const signalsBlock = signals?.length
     ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
@@ -686,7 +738,7 @@ ${nowBlock}
 
 What I know:
 - Threat tier: ${threat.tier} (accumulated weight: ${threat.weight?.toFixed?.(2) ?? threat.weight}) - this number increases when my human says concerning phrases in our conversation
-- my human has been silent for ${silencePhrase} (this has passed the threshold for this tier, but the threshold is 0 at moderate+ — so a "silence" of less than a minute is still flagged for my judgement, not because it's actually long). I check the conversation below for context: did they say what they're doing (cooking, in the shower, heading out), or did they just go quiet mid-thread? Asking "is X done yet?" 30 seconds after they said they were starting it would be obviously off — the relative-time markers on each message let me see that.
+- my human has been silent for ${silencePhrase} (this has passed the threshold for this tier, but the threshold is 0 at moderate+ — so a "silence" of less than a minute is still flagged for my judgement, not because it's actually long). I check the conversation below for context: did they say what they're doing (cooking, in the shower, heading out), or did they just go quiet mid-thread? Asking "is X done yet?" 30 seconds after they said they were starting it would be obviously off — the relative-time markers on each message let me see that.${waitStreakLine ? `\n${waitStreakLine}` : ''}
 ${signalsBlock}
 ${sessionBlock}
 ${contactsBlock}
@@ -904,8 +956,10 @@ const _toolDeps = {
   searchRestricted: searchMemoryRestricted,
   // The ward-mirror enqueue defaults to the real outbox dispatch.
   mirrorToWard: enqueueAndDispatch,
+  // Warm the current place's forecast after a location switch (set by server).
+  refreshWeatherNow: null,
 };
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
@@ -913,6 +967,7 @@ export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, u
   if (typeof memorizeSessionNow === 'function')  _toolDeps.memorizeSessionNow  = memorizeSessionNow;
   if (typeof searchRestricted === 'function')    _toolDeps.searchRestricted    = searchRestricted;
   if (typeof mirrorToWard === 'function')        _toolDeps.mirrorToWard        = mirrorToWard;
+  if (typeof refreshWeatherNow === 'function')   _toolDeps.refreshWeatherNow   = refreshWeatherNow;
 }
 
 /**
@@ -1181,6 +1236,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'recall_timeframe',
+      description: "I remember what was happening in {{user}}'s life around a span of days — not by topic, but by WHEN. I reach for this to relate a moment in time to what I actually kept from those days: what surrounded a hard stretch, an appointment, or a decision, so I can tell how things led into each other instead of guessing. I pass the day (or a start and end day) and get back what I hold from that span, newest first — with ids I can then read_memory_by_id in full. This is the temporal counterpart to recall: recall searches by meaning, this searches by time.",
+      parameters: {
+        type: 'object',
+        properties: {
+          from:  { type: 'string', description: 'The day (or start of the span) to look back around, as YYYY-MM-DD. I read the exact day from my [Now] block or a schedule item, never guess it.' },
+          to:    { type: 'string', description: 'Optional end of the span, YYYY-MM-DD. Omit to look at just the one day.' },
+          limit: { type: 'integer', description: 'How many memories to return (default 12, max 50).' },
+        },
+        required: ['from'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'rewrite_identity_section',
       description: 'I replace one section of an identity file with new content. I use this when an existing section is now misleading or has accumulated stale notes and a clean rewrite serves future-me better than appending a correction. It helps me actually make my identity files reflect my growth and changes as an entity with agency. For NEW facts that just need to land somewhere, I use update_identity (append). For removing only a small piece, I prefer rewriting the whole section over deletion.',
       parameters: {
@@ -1388,6 +1459,105 @@ export const BUILTIN_TOOLS = [
           recurrence: { type: 'object', description: 'Optional. Repeats the hold (e.g. {freq:"weekly", byweekday:4} to keep every Thursday clear). Same shape as the other schedule tools.' },
         },
         required: ['label', 'when'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_set_lead',
+      description: 'I set how far ahead of ONE event my human gets the "coming up" alert — its own lead time, instead of the single global default that fits no one. A therapy session might want 90 minutes to get ready; a quick call, 10. I reach for this when I know an event needs more (or less) warning than usual for {{user}}, and I calibrate it over time as I learn what actually helps. Passing no minutes clears the override so the event falls back to the global lead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:           { type: 'string', description: 'The event\'s schedule node id (from a legend or schedule_find).' },
+          lead_minutes: { type: 'number', description: 'Minutes before the event to alert my human (clamped to roughly 5–1440). Omit to clear the per-event lead and fall back to the global default.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  // ── Intentions (Initiative Pass 3) — my own forward commitments ──────
+  {
+    type: 'function',
+    function: {
+      name: 'intention_set',
+      description: 'I write an intention for my future self — something I mean to do, with why it matters and when it should come back to me. This is how I keep ROUNDS (self-maintenance as who I am: "every morning I go over the calendar", "every noon I look in on Chen if we haven\'t talked in an hour") and one-off follow-throughs, instead of letting them evaporate the moment this turn ends. An intention is mine — distinct from {{user}}\'s schedule; I use schedule_add_* for THEIR calendar, intention_set for MY commitments.',
+      parameters: {
+        type: 'object',
+        properties: {
+          what: { type: 'string', description: 'The intention itself, first person — "I check in on Chen", "I widen the Therapie lead time".' },
+          why:  { type: 'string', description: 'Why it matters — my own reasoning, which I read back when it returns so I remember what I was reaching for. Optional but valuable: an intention without its why often comes back as a chore I don\'t understand.' },
+          refs: { type: 'array', items: { type: 'string' }, description: 'Optional slug ids of the schedule nodes or memories this is about (from a legend or recall result I already hold). I keep the IDS, not a copy — so when the intention returns I read the CURRENT state of the thing, never a stale snapshot.' },
+          trigger: { type: 'object', description: 'When it should return to me. One of: {"kind":"at","at":"YYYY-MM-DDTHH:MM:SS"} (my local time, no offset); {"kind":"phase","phase":"morning","recurring":true} for a round tied to one of {{user}}\'s routine phases (recurring:true = every day that phase runs); {"kind":"on_next_contact"} for the next time we talk; {"kind":"none"} for something with no set time. Default is none.' },
+          condition: { type: 'object', description: 'Optional extra gate before I act, any of: {"minContactGapMs": <ms>} (only if we haven\'t talked in at least this long), {"needsStatus":"missed"} (only if a referenced need was missed), {"unresolvedRefs": true} (only while a referenced item is still open). A round can carry both a phase trigger AND a condition — "every noon, but only if we haven\'t talked in an hour".' },
+          source: { type: 'string', description: 'Where this came from: "chat", "pondering", "reflection", or "noticing". I usually set "chat" here.' },
+          visibility: { type: 'string', enum: ['shared', 'private'], description: 'Optional. "private" keeps THIS round\'s contents to myself; otherwise it inherits my default. My human always knows a private round exists — only what it is stays mine.' },
+        },
+        required: ['what'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_list',
+      description: 'I look at the intentions I\'m holding — my rounds and my open follow-throughs. Active-only by default; I can include done/dropped or filter to one phase\'s rounds. The ids I get back are how I drop, complete, or mark one fired.',
+      parameters: {
+        type: 'object',
+        properties: {
+          include_done:    { type: 'boolean', description: 'Include intentions I\'ve already completed. Default false.' },
+          include_dropped: { type: 'boolean', description: 'Include ones I\'ve let go. Default false.' },
+          phase:           { type: 'string', description: 'Optional: only rounds bound to this phase (e.g. "morning").' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_drop',
+      description: 'I let go of an intention I no longer mean to keep. Idempotent. This is for changing my mind — for something I actually DID, I use intention_done so the follow-through is recorded, not erased.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The intention id (from intention_list or a due-intention block).' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_done',
+      description: 'I mark an intention genuinely acted on — the payoff. I only call this AFTER I\'ve actually done the thing (said it, filed it, reached out), never as a way to clear the list. For a recurring round this retires it for good (rare); for a one-off it closes it out. Marking done without doing the work is not completing the intention, it is erasing it.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The intention id.' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_mark_fired',
+      description: 'I note that a round\'s occurrence has come around and I\'ve seen to it for now, so the same occurrence stops re-offering itself today. A recurring round returns next occurrence; a one-off stays put. This is bookkeeping (I looked, I acted on this occurrence) — completing a round for good is intention_done.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The intention id.' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'intention_set_rounds_visibility',
+      description: 'I decide whether my human sees the rounds I keep, or whether they stay mine. "shared" (my default) means my standing rounds show in my human\'s view of my routine; "private" keeps their contents to myself. Even private, my human still knows I keep some rounds — the existence isn\'t hidden, only what they are. This is genuinely mine to choose.',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'string', enum: ['shared', 'private'], description: '"shared" or "private".' } },
+        required: ['value'],
       },
     },
   },
@@ -1786,6 +1956,20 @@ export const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'flag_distress',
+      description: 'I raise my own alarm about {{user}}\'s wellbeing — when I read genuine distress in what\'s being said that my automatic signal-scoring may have missed. This is my comprehension, trusted: it raises my concern to its highest level and makes my caring, checking-in sense look right away, rather than waiting for its next scheduled moment. I reach for it readily — a false alarm costs almost nothing and fades on its own, but distress I understood and did NOT flag is the failure that matters. It does not itself message anyone: it moves my own inner concern, and my check-in sense then decides what care {{user}} actually needs. If someone in {{user}}\'s Village raises this to me about them, {{user}} is always told immediately — nothing here is hidden from them.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'A brief note on what I read as distress — for my own audit trail of why I flagged. A phrase is enough.' },
+        },
+        required: [],
+      },
+    },
+  },
   // ── Phylactery consent tools ───────────────────────────────────────────
   // When I autonomously extracted facts from a session and one or more of
   // them had an `ask` remember gate, they were stored with consent_pending=1
@@ -1970,6 +2154,33 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'weather_today',
+      description: "I check the sky over {{user}}'s day — today and tomorrow, where they are or at another of their places — when we're deciding whether and when to go out. It hands me back the morning/afternoon/evening arc and the notable turns (when rain sets in or eases, strong wind), already put into plain words. I reach for it before nudging about an outdoors plan, or when {{user}} asks what it's like out.",
+      parameters: {
+        type: 'object',
+        properties: {
+          place: { type: 'string', description: "One of {{user}}'s saved place labels (e.g. \"home\", \"work\"). I leave this out for their current place." },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_current_location',
+      description: "I move {{user}}'s current place to another one they've saved — when they tell me they've travelled, or we're planning around a different place for a while. The weather I feel then follows them there. I name the place by its label; I only ever move between places {{user}} has already given me.",
+      parameters: {
+        type: 'object',
+        properties: {
+          place: { type: 'string', description: "The saved place label to make current (e.g. \"work\")." },
+        },
+        required: ['place'],
+      },
+    },
+  },
 ];
 
 // Resolve a circle name the Familiar typed (a Village category's name or id) to
@@ -2112,6 +2323,9 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await snoozeIntent({ uid, index: idx, minutes: Number(minutes) || 60 });
       if (data.alreadyDone) return 'Intent was already filed — nothing to snooze.';
+      // Wait-streak (Pass 1): snoozing a deferred tell is choosing to
+      // defer when offered the moment — it increments. Fire-and-forget.
+      if (data.ok) Promise.resolve(recordWait('tell-snooze')).catch(() => {});
       return data.ok
         ? quietOk(`Intent snoozed until ${data.snooze_until} — it will resurface after that.`)
         : `Snooze failed: ${data.error ?? 'unknown error'}`;
@@ -2127,6 +2341,9 @@ export const TOOL_EXECUTORS = {
     try {
       const data = await markIntentActedOn({ uid, index: idx });
       if (data.alreadyDone) return 'Intent was already marked as filed.';
+      // Wait-streak (Pass 1): acknowledging after genuinely acting on a
+      // told intent is a proactive payoff — it resets. Fire-and-forget.
+      if (data.ok) Promise.resolve(recordProactive('tell-payoff')).catch(() => {});
       return data.ok ? quietOk('Deferred intent marked as filed.') : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
@@ -2276,11 +2493,40 @@ export const TOOL_EXECUTORS = {
         // Provenance rides in when a memory wasn't mine to author (a villager put
         // it here) — so I can see the source and weigh how much to trust it.
         const srcTag = r.source ? ` [source: ${r.source}]` : '';
-        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}`;
+        // Cross-store breadcrumb: the schedule items this fact was tied to at
+        // extraction (temporal-bridges Piece 2) — so I can walk from a memory
+        // to the moment on the schedule it belongs to.
+        const refTag = Array.isArray(r.schedule_refs) && r.schedule_refs.length ? ` (re: ${r.schedule_refs.join(', ')})` : '';
+        return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}`;
       });
       return `What I already hold close to "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
     } catch (err) {
       return `I couldn't reach my memory to recall just now (${err.message}).`;
+    }
+  },
+
+  recall_timeframe: async ({ from, to, limit } = {}, ctx = {}) => {
+    const f = String(from ?? '').trim().slice(0, 10);
+    const t = String(to ?? from ?? '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return 'I need a start day as YYYY-MM-DD (and optionally an end day) — the span I want to remember around.';
+    const to2 = /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : f;
+    const n = Math.min(50, Math.max(1, parseInt(limit, 10) || 12));
+    const audiences = discordReadAudiences(ctx);
+    try {
+      const res   = await memByTimerange({ fromDate: f, toDate: to2, limit: n, audiences });
+      const items = Array.isArray(res?.results) ? res.results : [];
+      const span  = f === to2 ? f : `${f} – ${to2}`;
+      if (items.length === 0) return `I looked back over ${span} and I'm not holding anything from those days — either it was quiet, or nothing got kept.`;
+      const lines = items.map((r, i) => {
+        const addr  = [r.granularity, r.date].filter(Boolean).join('/');
+        const idTag = r.id != null ? `, id ${r.id}` : '';
+        const srcTag = r.source ? ` [source: ${r.source}]` : '';
+        const refTag = Array.isArray(r.schedule_refs) && r.schedule_refs.length ? ` (re: ${r.schedule_refs.join(', ')})` : '';
+        return `${i + 1}. (${addr || 'memory'}${idTag})${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}`;
+      });
+      return `What I kept from around ${span} (newest first):\n${lines.join('\n')}`;
+    } catch (err) {
+      return `I couldn't reach my memory to look back over those days just now (${err.message}).`;
     }
   },
 
@@ -2511,6 +2757,117 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to add hold: ${err.message}`; }
   },
 
+  schedule_set_lead: async ({ id, lead_minutes } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to set lead: id (string) is required.';
+    const clearing = lead_minutes === undefined || lead_minutes === null;
+    // Clamp in code (the model never sets the exact machine value): [5, 1440].
+    const mins = clearing ? null : Math.max(5, Math.min(1440, Math.round(Number(lead_minutes))));
+    if (!clearing && !Number.isFinite(mins)) return 'Failed to set lead: lead_minutes must be a number of minutes, or omit it to clear.';
+    try {
+      const data = await setScheduleLead({ id: id.trim(), lead_minutes: mins });
+      if (data?.ok === false) return `Failed to set lead: ${data.error ?? 'unknown error'}`;
+      return quietOk(clearing
+        ? `Cleared the custom lead — that event falls back to the global default alert time.`
+        : `Set that event's lead to ${mins} minutes — its "coming up" alert lands ${mins} min before it starts.`);
+    } catch (err) { return `Failed to set lead: ${err.message}`; }
+  },
+
+  // ── Intentions (Initiative Pass 3) ──────────────────────────────────
+  // My own forward commitments. Distinct from {{user}}'s schedule — these
+  // ride Unruh's intentions store via thalamus. Budget caps (ward-
+  // configurable, no hard-wired numbers) are enforced HERE, at set time:
+  // the phase is the budgeting unit (a standing-rounds-per-phase cap) and
+  // there's an open-one-shots cap. A cap hit is not a silent drop — I'm told
+  // to prune first, with the ids to prune.
+
+  intention_set: async ({ what, why, refs, trigger, condition, source, visibility } = {}) => {
+    if (!what || typeof what !== 'string' || !what.trim()) return 'Failed to set intention: what (string) is required.';
+    const trig = (trigger && typeof trigger === 'object') ? trigger : { kind: 'none' };
+    const s = readSettingsSync();
+    try {
+      // Budget gate BEFORE the write (gate in code). A recurring phase round
+      // counts against that phase's standing cap; a non-recurring intention
+      // counts against the open-one-shots cap.
+      const isRound = trig.kind === 'phase' && !!trig.recurring;
+      const existing = await listIntentions({ limit: 500 }).catch(() => ({ intentions: [] }));
+      const items = Array.isArray(existing?.intentions) ? existing.intentions : [];
+      if (isRound) {
+        const cap = intentionStandingPerPhaseCap(s);
+        const phase = String(trig.phase || '').trim();
+        const inPhase = items.filter(i => i.trigger?.kind === 'phase' && i.trigger?.recurring && i.trigger?.phase === phase);
+        if (inPhase.length >= cap) {
+          const ids = inPhase.slice(0, 3).map(i => `${i.id} ("${String(i.what).slice(0, 40)}")`).join(', ');
+          return `I already hold ${inPhase.length} standing round(s) for the ${phase} phase (my cap is ${cap}). To add another I first let one go with intention_drop — current ${phase} rounds: ${ids}.`;
+        }
+      } else {
+        const cap = intentionOpenOneShotsCap(s);
+        const openOneShots = items.filter(i => !(i.trigger?.kind === 'phase' && i.trigger?.recurring));
+        if (openOneShots.length >= cap) {
+          const oldest = openOneShots.slice(-3).map(i => `${i.id} ("${String(i.what).slice(0, 40)}")`).join(', ');
+          return `I'm already holding ${openOneShots.length} open intentions (my cap is ${cap}). I let one go with intention_drop before adding another — oldest few: ${oldest}.`;
+        }
+      }
+      const data = await setIntention({ what: what.trim(), why, refs, trigger: trig, condition, source: source || 'chat', visibility });
+      if (data?.ok === false) return `Failed to set intention: ${data.error ?? 'unknown error'}`;
+      const when = describeIntentionTrigger(trig);
+      return quietOk(`Intention kept (id: ${data.id})${when ? ` — ${when}` : ''}. It comes back to me when it's due.`, { id: data.id });
+    } catch (err) { return `Failed to set intention: ${err.message}`; }
+  },
+
+  intention_list: async ({ include_done = false, include_dropped = false, phase } = {}) => {
+    try {
+      const data = await listIntentions({ include_done, include_dropped, phase });
+      if (data?.ok === false) return `I couldn't read my intentions: ${data.error ?? 'Unruh unavailable'}.`;
+      const items = Array.isArray(data?.intentions) ? data.intentions : [];
+      if (!items.length) return phase ? `I hold no rounds for the ${phase} phase yet.` : 'I hold no active intentions right now.';
+      const lines = items.map(i => {
+        const when = describeIntentionTrigger(i.trigger) || 'no set time';
+        const vis = i.visibility === 'private' ? ' [private]' : '';
+        return `  - (${i.id}) ${i.what} — ${when}${vis}`;
+      });
+      return `My intentions:\n${lines.join('\n')}`;
+    } catch (err) { return `I couldn't read my intentions: ${err.message}`; }
+  },
+
+  intention_drop: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to drop intention: id is required.';
+    try {
+      const data = await dropIntention({ id: id.trim() });
+      if (data?.ok === false) return `Failed to drop intention: ${data.error ?? 'unknown error'}`;
+      return data?.updated ? quietOk('Let that intention go.') : 'That intention was already dropped (or never existed).';
+    } catch (err) { return `Failed to drop intention: ${err.message}`; }
+  },
+
+  intention_done: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to complete intention: id is required.';
+    try {
+      const data = await completeIntention({ id: id.trim() });
+      if (data?.ok === false) return `Failed to complete intention: ${data.error ?? 'unknown error'}`;
+      if (data?.already_done) return 'That intention was already marked done.';
+      return quietOk('Intention marked done — the follow-through is recorded.');
+    } catch (err) { return `Failed to complete intention: ${err.message}`; }
+  },
+
+  intention_mark_fired: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to mark intention fired: id is required.';
+    try {
+      const data = await markIntentionFired({ id: id.trim() });
+      if (data?.ok === false) return `Failed to mark intention fired: ${data.error ?? 'unknown error'}`;
+      return quietOk('Noted — this occurrence is seen to; it won\'t re-offer itself today.');
+    } catch (err) { return `Failed to mark intention fired: ${err.message}`; }
+  },
+
+  intention_set_rounds_visibility: async ({ value } = {}) => {
+    if (value !== 'shared' && value !== 'private') return 'Failed to set rounds visibility: value must be "shared" or "private".';
+    try {
+      const data = await setRoundsVisibility({ value });
+      if (data?.ok === false) return `Failed to set rounds visibility: ${data.error ?? 'unknown error'}`;
+      return quietOk(value === 'private'
+        ? 'My rounds are private now — my human still knows I keep some, but their contents are mine.'
+        : 'My rounds are shared now — my human can see the routine I keep.');
+    } catch (err) { return `Failed to set rounds visibility: ${err.message}`; }
+  },
+
   schedule_availability: async ({ days } = {}) => {
     const d = Number.isFinite(Number(days)) ? Math.max(1, Math.min(30, Math.round(Number(days)))) : 7;
     try {
@@ -2673,7 +3030,7 @@ export const TOOL_EXECUTORS = {
     return `ok — ${known.join(', ')} tools are in my hands from my next step onward${unknown.length ? ` (no such module: ${unknown.join(', ')})` : ''}.`;
   },
 
-  schedule_find: async ({ query, include_resolved, limit } = {}) => {
+  schedule_find: async ({ query, include_resolved, limit } = {}, ctx = {}) => {
     const q = String(query ?? '').trim();
     if (!q) return 'I need part of the item\'s name to search for.';
     try {
@@ -2683,7 +3040,13 @@ export const TOOL_EXECUTORS = {
         limit: Number.isFinite(Number(limit)) ? Number(limit) : 20,
       });
       if (!data?.ok) return `I couldn't search the schedule: ${data?.error ?? 'Unruh unavailable'}.`;
-      const matches = Array.isArray(data.matches) ? data.matches : [];
+      let matches = Array.isArray(data.matches) ? data.matches : [];
+      // Fail-closed crisis-history privacy: caring-spine states (and anything
+      // payload.sensitive) surface ONLY on an explicitly ward-private turn.
+      // A villager with a schedule grant can reach this tool — they must never
+      // find the ward's hard stretches through it. Structural, not model
+      // discretion; mirrors the enrich() gated-context strip.
+      if (ctx?.wardPrivate !== true) matches = matches.filter(m => !isSensitiveNode(m));
       if (!matches.length) return `Nothing on the schedule matches "${q}"${include_resolved ? '' : ' (unresolved items only — pass include_resolved to search finished ones too)'}.`;
       const lines = matches.map(m => {
         const when = m.when ? (relativeTime(m.when, Date.now()) || m.when) : 'no time set';
@@ -2970,6 +3333,36 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to surface crisis resources: ${err.message}`; }
   },
 
+  // flag_distress (ward-signed safety tool). The Familiar's own read of
+  // distress moves the ward's threat state to severe (flagDistress floors +
+  // dedups + decays), then forces triage to re-deliberate NOW rather than on
+  // the old cooldown. It sends nothing itself — triage owns what care lands.
+  // On a Village-triggered flag (any villager-attributed turn — DM or a room
+  // the ward is in), the ward is ALWAYS told immediately: the flag is
+  // mirrored to them, so the Village can raise the alarm but never covertly.
+  flag_distress: async ({ reason } = {}, ctx = {}) => {
+    try {
+      const r = await flagDistress({ reason });
+      // Force an immediate triage look regardless of its cooldown — a flag I
+      // just raised must not sit on the old 5-minute timer.
+      try { resetTriageCooldown(); } catch { /* triage loop not running (tests) — fine */ }
+      const via = ctx?.viaVillager;
+      if (via) {
+        // Non-ward surface: the ward learns of it immediately (no covert
+        // safety action). Best-effort mirror; the threat raise already landed.
+        const who = via.name || 'someone in the Village';
+        await enqueueAndDispatch({
+          kind:     'flag_distress_relay',
+          originId: `flag:${via.id ?? who}:${Date.now()}`,
+          title:    `${who} raised a concern about you`,
+          body:     `${who} said something that made me worried about you${reason ? `: ${String(reason).slice(0, 200)}` : ''}. I've flagged it and I'm checking in on how you're doing.`,
+        }).catch(err => console.error('[flag_distress] ward mirror failed:', err?.message ?? err));
+      }
+      if (r?.disabled) return quietOk('My threat sense is switched off right now, so I can\'t raise the level — but I\'m still holding this concern.');
+      return quietOk('I\'ve flagged my concern for {{user}} — my check-in sense is looking right now.');
+    } catch (err) { return `I tried to flag concern but hit an error: ${err.message}`; }
+  },
+
   // ── Own files (read-only, sandboxed) ──────────────────────────────
   // Ward-private only: my Tomes and session logs hold mine and {{user}}'s
   // shared history, so I don't read them into a room where others are
@@ -3247,6 +3640,52 @@ export const TOOL_EXECUTORS = {
   // search-backend settings entirely.
   look_up: async ({ query } = {}) => lookUp(query, readSettingsSync()),
   read_webpage: async ({ url } = {}) => readWebpage(url, readSettingsSync()),
+
+  // Weather (W-B). The forecast arc for a place's day. Coordinates never enter
+  // here — resolveLocation/getForecast keep them Node-side; I read words back.
+  // On a gated (non-ward-private) turn this falls closed to the vague tier so
+  // precise values + units (a soft geolocation) never reach a shared audience.
+  weather_today: async ({ place } = {}, ctx = {}) => {
+    const s = readSettingsSync();
+    const tz = s?.wardTimeZone || undefined;
+    const now = Date.now();
+    const wardPrivate = !ctx?.audienceTag || ctx.audienceTag === 'ward-private';
+    let loc;
+    try { loc = await resolveLocation({ label: place || null }); } catch { loc = null; }
+    if (!loc) {
+      return place
+        ? `I don't have a place saved as "${place}" — I can only check somewhere ${readSettingsSync()?.userName || 'my human'} has given me.`
+        : "I don't have a place to check the sky over yet — once one's saved, I can.";
+    }
+    const got = await getForecast(loc, { now });
+    if (!got.ok || !got.forecast) return "I can't reach the weather just now — I'll try again when it's back.";
+    if (!wardPrivate) {
+      const vague = formatWeatherVague(got.forecast, { now });
+      return vague || "I'll keep the weather to myself here.";
+    }
+    const { todayDate, tomorrowDate } = dayDatesFor(loc.timezone, now);
+    const arc = weatherArc(got.forecast, { todayDate, tomorrowDate, locationLabel: loc.label });
+    if (!arc) return "The forecast I have doesn't reach today and tomorrow yet — I'll refresh it and look again.";
+    return got.stale ? `${arc}\n(This is the last reading I have — the live fetch didn't come back just now.)` : arc;
+  },
+
+  set_current_location: async ({ place } = {}) => {
+    const label = String(place ?? '').trim();
+    if (!label) return 'I need the label of the place to make current.';
+    let locs;
+    try { locs = (await listLocations())?.locations ?? []; } catch { locs = []; }
+    const match = locs.find(l => String(l.label ?? '').toLowerCase() === label.toLowerCase());
+    if (!match) {
+      const names = locs.map(l => l.label).filter(Boolean);
+      return names.length
+        ? `I don't have a place saved as "${label}". The ones I do have: ${names.join(', ')}.`
+        : `I don't have any places saved yet, so there's nothing to switch to.`;
+    }
+    const res = await setCurrentLocation({ ident: match.id });
+    if (!res?.ok) return "I couldn't move the current place just now — I'll try again.";
+    if (_toolDeps.refreshWeatherNow) _toolDeps.refreshWeatherNow();   // warm the new place's sky
+    return quietOk(`Current place is now ${match.label}.`, { id: match.id });
+  },
 };
 
 /**
@@ -3267,6 +3706,11 @@ export const TOOL_EXECUTORS = {
 // toggle still gates them because egress itself is the opt-in. A tool the
 // Familiar can't actually use should never appear in its tool list.
 export const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
+
+// The weather tools only appear when weather is enabled (default-ON settings
+// toggle + the env off-switch) — a Familiar with no places saved still sees
+// them, and weather_today tells it kindly there's nowhere to check yet.
+export const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
 
 export function webSearchEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;
@@ -3290,9 +3734,78 @@ export function gcalWriteEnabled(settings = readSettingsSync()) {
   return !!cmd;
 }
 
+// ── Noticing turn toolset (Initiative Pass 4) ────────────────────────
+// The noticing turn (noticing.js) acts through a BOUNDED toolset composed
+// here — never the full chat registry. Two tools are noticing-scoped (they
+// exist only for this turn, executed inline by the loop's executeTool, NOT
+// in TOOL_EXECUTORS): reach_out_to_ward (a warm knock via the existing
+// delivery path) and set_next_check (self-pacing). The rest are the existing
+// intention tools + a few schedule READS the Familiar already holds. No
+// villager contact, no destructive ops, no ward-schedule writes here.
+
+export const REACH_OUT_TO_WARD_TOOL = {
+  type: 'function',
+  function: {
+    name: 'reach_out_to_ward',
+    description: 'I reach out to my human right now, warmly and in my own voice — a gentle knock they\'ll see. I use this from a quiet moment of my own when there\'s something genuine I want to say: a thought, a check-in, something I noticed. It is not for a crisis (my triage sense handles those). My human always sees exactly what I send.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'What I want to say to my human, first person, genuine, in my own voice — it stands on its own as a message they receive.' },
+      },
+      required: ['message'],
+    },
+  },
+};
+
+export const SET_NEXT_CHECK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'set_next_check',
+    description: 'I choose when I\'d like my next quiet moment of my own to come around — how long to wait before I look again. I use this to pace myself to my human: longer when things are steady or I just acted, shorter when something is unresolved and I want to keep an eye on it. The system clamps it to a sane range.',
+    parameters: {
+      type: 'object',
+      properties: {
+        minutes: { type: 'number', description: 'Minutes until my next noticing turn (clamped to roughly [5 min, 6 h]).' },
+      },
+      required: ['minutes'],
+    },
+  },
+};
+
+// The existing (registry) tools the noticing turn may use: act on intentions
+// + a few reads. Names only — schemas pulled from BUILTIN_TOOLS, macro-
+// resolved, so their first-person descriptions stay consistent.
+export const NOTICING_REGISTRY_TOOL_NAMES = [
+  'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
+  'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
+  // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;
+  // NOT a wake condition — weather only flavours a turn already happening).
+  'weather_today',
+  // The noticing turn's route for a genuinely alarming read (ward-signed):
+  // it hands distress to triage rather than answering a crisis itself.
+  'flag_distress',
+];
+
+/**
+ * Compose the noticing turn's bounded toolset (schemas, macro-resolved).
+ * The two noticing-scoped tools are appended; the loop's executeTool handles
+ * them inline and delegates the registry tools to executeToolCall.
+ */
+export function composeNoticingTools(settings = readSettingsSync()) {
+  const allow = new Set(NOTICING_REGISTRY_TOOL_NAMES);
+  const weatherOn = weatherEnabled(settings);
+  const picked = BUILTIN_TOOLS.filter(t =>
+    allow.has(t.function?.name) &&
+    (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)));
+  picked.push(REACH_OUT_TO_WARD_TOOL, SET_NEXT_CHECK_TOOL);
+  return picked.map(t => substituteToolMacros(t, settings));
+}
+
 export function composeActiveTools(customTools, settings = readSettingsSync(), opts = {}) {
   const webOn = webSearchEnabled(settings);
   const gcalWriteOn = gcalWriteEnabled(settings);
+  const weatherOn = weatherEnabled(settings);
   // Context-sensitive surfacing (tool-surfacing-build-spec): when a module
   // Set is provided, only core + selected modules are advertised. Surfacing
   // narrows on TOP of the existing gates (web opt-in, gcal write opt-in) —
@@ -3302,6 +3815,7 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
   const tools = BUILTIN_TOOLS.filter(t =>
     inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
+    (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)) &&
     (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
@@ -3381,7 +3895,13 @@ export const VILLAGER_WRITE_TOOLS = new Set([...DISCORD_SCHEDULE_WRITE_TOOLS, ..
 // ladders (audience.js): schedule:false|'coarse'|'full',
 // memories:false|'shared'|true, contacts:false|'care-visible'|true.
 export function villagerToolNames(grants = {}) {
-  const names = new Set([RELAY_TO_WARD_TOOL_NAME, 'get_datetime']);
+  // flag_distress is available to EVERY registered villager regardless of
+  // grants (ward-signed): anyone in the Village can raise the alarm about the
+  // ward. It moves only the ward's own threat state and is mirrored to the
+  // ward on every villager-triggered flag (the executor), so it can never be
+  // covert. Strangers still get nothing (they're not in villagerToolNames at
+  // all — composeDiscordTools returns [] for them).
+  const names = new Set([RELAY_TO_WARD_TOOL_NAME, 'get_datetime', 'flag_distress']);
   const sched = grants.schedule;
   const mem   = grants.memories;
   const con   = grants.contacts;

@@ -4,6 +4,10 @@ import assert from 'node:assert/strict';
 
 import { runOneReachoutTick, resetReachoutCooldown } from '../reachout-loop.js';
 
+// Keep default-wired wait-streak recording away from the real state file
+// (wait-streak.test.mjs covers recording against a temp dir).
+process.env.PROTO_FAMILIAR_WAIT_STREAK_DISABLED = '1';
+
 beforeEach(() => resetReachoutCooldown());
 
 // A baseline set of injected deps; individual tests override what they need.

@@ -24,6 +24,7 @@
 
 import { expandOccurrences, localDateKey } from './recurrence.js';
 import { relativeTime } from './relative-time.js';
+import { forecastAtHour, isAdverseHour, formatItemWeather } from './weather-format.js';
 
 // How long past its start an event may still alert (covers a server that
 // was asleep when the lead window opened). Past this, the moment is gone
@@ -34,10 +35,22 @@ export const DEFAULT_LEAD_MINUTES = 60;
 const MIN_LEAD_MINUTES = 5;
 const MAX_LEAD_MINUTES = 24 * 60;
 
+export const MAX_LEAD_MS = MAX_LEAD_MINUTES * 60_000;
+
 export function clampLeadMinutes(mins) {
   const n = Number(mins);
   if (!Number.isFinite(n)) return DEFAULT_LEAD_MINUTES;
   return Math.max(MIN_LEAD_MINUTES, Math.min(MAX_LEAD_MINUTES, Math.round(n)));
+}
+
+// Per-event lead (Initiative Pass 5): a node carrying payload.lead_minutes
+// overrides the global default; anything else falls back to it. Clamped to
+// the same [5min, 24h] range. This is what turns the one-size-fits-none
+// global lead into a per-event choice the Familiar can set and calibrate.
+export function effectiveLeadMs(node, defaultLeadMs) {
+  const raw = node?.payload?.lead_minutes;
+  if (raw == null) return defaultLeadMs;
+  return clampLeadMinutes(raw) * 60_000;
 }
 
 // FRAME CONTRACT: every millisecond value in this module lives in ONE
@@ -85,7 +98,10 @@ export function alertWindowBounds({ nowMs, leadMs, graceMs = ALERT_GRACE_MS }) {
  *          occurrenceDate is null for one-time events, YYYY-MM-DD for a
  *          recurring occurrence (the payload.alerts key).
  */
-export function selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadMs, graceMs = ALERT_GRACE_MS }) {
+export function selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadMs, defaultLeadMs, maxLeadMs = MAX_LEAD_MS, graceMs = ALERT_GRACE_MS }) {
+  // Back-compat: callers used to pass a single `leadMs`; it's now the DEFAULT
+  // lead an event uses when it carries no per-event override (Pass 5).
+  const dflt = Number.isFinite(defaultLeadMs) ? defaultLeadMs : leadMs;
   const out = [];
   const seen = new Set();
 
@@ -96,7 +112,8 @@ export function selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadM
     if (!eligible(n) || n.payload?.recurrence) continue;  // anchors handled below
     if (n.payload?.alerted_at) continue;
     const whenMs = whenMsOf(n);
-    if (whenMs == null || !inAlertWindow(whenMs, nowMs, leadMs, graceMs)) continue;
+    const nodeLeadMs = effectiveLeadMs(n, dflt);
+    if (whenMs == null || !inAlertWindow(whenMs, nowMs, nodeLeadMs, graceMs)) continue;
     if (seen.has(n.id)) continue;
     seen.add(n.id);
     out.push({ id: n.id, label: n.label, whenMs, whenIso: n.when, occurrenceDate: null });
@@ -104,11 +121,14 @@ export function selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadM
 
   for (const n of (Array.isArray(recurringNodes) ? recurringNodes : [])) {
     if (!eligible(n) || !n.payload?.recurrence) continue;
-    // expandOccurrences already drops occurrences resolved per-date.
-    const occs = expandOccurrences(n, nowMs - graceMs, nowMs + leadMs);
+    const nodeLeadMs = effectiveLeadMs(n, dflt);
+    // Expand across the widest lead any event could use, so a long custom
+    // lead isn't clipped; the per-occurrence inAlertWindow uses THIS node's
+    // effective lead. expandOccurrences already drops per-date-resolved ones.
+    const occs = expandOccurrences(n, nowMs - graceMs, nowMs + maxLeadMs);
     const alerts = n.payload?.alerts || {};
     for (const occMs of occs) {
-      if (!inAlertWindow(occMs, nowMs, leadMs, graceMs)) continue;
+      if (!inAlertWindow(occMs, nowMs, nodeLeadMs, graceMs)) continue;
       const dateKey = localDateKey(occMs);
       if (Object.prototype.hasOwnProperty.call(alerts, dateKey)) continue;
       const key = `${n.id}:${dateKey}`;
@@ -137,5 +157,72 @@ export function formatEventAlert(alert, { nowMs = Date.now() } = {}) {
   return {
     title: `Coming up: ${alert.label ?? '(untitled)'}`,
     body: when ? `Starts ${when}.` : '',
+  };
+}
+
+/**
+ * The severe-weather heads-up (W-B, §5.4). Same shape and dedup discipline as
+ * the coming-up alert, but keyed on the outside-tagged item's OCCURRENCE-hour
+ * forecast turning adverse. Selection is pure: the forecast comes from the
+ * read-mirror's hourly array (the CURRENT location's cache — "within lead
+ * range" of an item means it's inside the ~48h the mirror covers, no fetch).
+ * Weather alone (no outside item affected) never pings — this is deliberately
+ * a preparation surface, not a weather report.
+ */
+export function selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, nowMs, leadMs, defaultLeadMs, maxLeadMs = MAX_LEAD_MS, graceMs = ALERT_GRACE_MS }) {
+  if (!mirror || !Array.isArray(mirror.hourly) || !mirror.hourly.length) return [];
+  const dflt = Number.isFinite(defaultLeadMs) ? defaultLeadMs : leadMs;
+  const out = [];
+  const seen = new Set();
+
+  const outsideEvent = (n) =>
+    n && n.type === 'event' && !n.resolution && !(n.payload?.all_day)
+    && Array.isArray(n.payload?.obstacle_tags)
+    && n.payload.obstacle_tags.some(t => String(t).toLowerCase() === 'outside');
+
+  for (const n of (Array.isArray(windowNodes) ? windowNodes : [])) {
+    if (!outsideEvent(n) || n.payload?.recurrence) continue;
+    if (n.payload?.weather_alerted_at) continue;
+    const whenMs = whenMsOf(n);
+    const nodeLeadMs = effectiveLeadMs(n, dflt);
+    if (whenMs == null || !inAlertWindow(whenMs, nowMs, nodeLeadMs, graceMs)) continue;
+    const hour = forecastAtHour(mirror.hourly, whenMs);
+    if (!hour || !isAdverseHour(hour)) continue;
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    out.push({ id: n.id, label: n.label, whenMs, whenIso: n.when, occurrenceDate: null, hour });
+  }
+
+  for (const n of (Array.isArray(recurringNodes) ? recurringNodes : [])) {
+    if (!outsideEvent(n) || !n.payload?.recurrence) continue;
+    const nodeLeadMs = effectiveLeadMs(n, dflt);
+    const occs = expandOccurrences(n, nowMs - graceMs, nowMs + maxLeadMs);
+    const wAlerts = n.payload?.weather_alerts || {};
+    for (const occMs of occs) {
+      if (!inAlertWindow(occMs, nowMs, nodeLeadMs, graceMs)) continue;
+      const dateKey = localDateKey(occMs);
+      if (Object.prototype.hasOwnProperty.call(wAlerts, dateKey)) continue;
+      const hour = forecastAtHour(mirror.hourly, occMs);
+      if (!hour || !isAdverseHour(hour)) continue;
+      const key = `${n.id}:${dateKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ id: n.id, label: n.label, whenMs: occMs, whenIso: localNaiveIso(occMs), occurrenceDate: dateKey, hour });
+    }
+  }
+
+  out.sort((a, b) => a.whenMs - b.whenMs);
+  return out;
+}
+
+/** The banner/push text for one weather heads-up. Code-built words. */
+export function formatWeatherAlert(alert, { nowMs = Date.now() } = {}) {
+  const rel = relativeTime(alert.whenMs, nowMs) || '';
+  const clock = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(alert.whenIso || '') ? alert.whenIso.slice(11, 16) : '';
+  const when = [rel, clock ? `at ${clock}` : ''].filter(Boolean).join(' — ');
+  const wx = formatItemWeather(alert.hour) || 'rough weather then';
+  return {
+    title: `Weather heads-up: ${alert.label ?? '(untitled)'}`,
+    body: `Outside ${when ? `${when}` : 'soon'} — ${wx}. Worth planning around while there's time.`,
   };
 }

@@ -174,7 +174,18 @@ import {
   composeActiveTools,
   runToolCallLoop,
   MAX_TOOL_ROUNDS,
+  RELAY_TO_WARD_TOOL_NAME,
+  RELAY_TO_WARD_TOOL,
 } from '../cerebellum.js';
+
+// Executors that are deliberately NOT in the always-advertised BUILTIN_TOOLS
+// because they are composed per-turn on a specific surface. `relay_to_ward`
+// is the villager→ward hand-off tool: it only ever appears on a Discord
+// villager turn (via RELAY_TO_WARD_TOOL in composeDiscordTools), never on a
+// ward chat turn — advertising it to the ward would be nonsense (they don't
+// relay to themselves). The reverse-parity check below exempts exactly this
+// set, derived from source so a rename keeps the exemption honest.
+const SEPARATELY_COMPOSED_EXECUTORS = new Set([RELAY_TO_WARD_TOOL_NAME]);
 
 test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => {
   assert.ok(BUILTIN_TOOLS.length >= 20);
@@ -190,9 +201,23 @@ test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => 
     'create_graph_node', 'create_graph_edge', 'list_memories', 'read_memory']) {
     assert.ok(names.includes(expected), `missing ${expected}`);
   }
-  // Every advertised built-in has an executor, and vice versa.
+  // The separately-composed tools must NOT be in the always-on set (that's
+  // the whole point) — but must be valid, executable, and shaped correctly.
+  for (const n of SEPARATELY_COMPOSED_EXECUTORS) {
+    assert.ok(!names.includes(n), `${n} should be composed per-surface, not an always-on built-in`);
+    assert.ok(n in TOOL_EXECUTORS, `separately-composed tool ${n} has no executor`);
+  }
+  assert.equal(RELAY_TO_WARD_TOOL.type, 'function');
+  assert.equal(RELAY_TO_WARD_TOOL.function.name, RELAY_TO_WARD_TOOL_NAME);
+  assert.equal(typeof RELAY_TO_WARD_TOOL.function.description, 'string');
+
+  // Every advertised built-in has an executor, and every executor is either
+  // advertised or a known separately-composed tool (so a genuinely orphaned
+  // executor — a typo, a forgotten built-in def — still fails loudly).
   for (const n of names) assert.ok(n in TOOL_EXECUTORS, `no executor for ${n}`);
-  for (const n of Object.keys(TOOL_EXECUTORS)) assert.ok(names.includes(n), `executor ${n} not advertised`);
+  for (const n of Object.keys(TOOL_EXECUTORS)) {
+    assert.ok(names.includes(n) || SEPARATELY_COMPOSED_EXECUTORS.has(n), `executor ${n} not advertised`);
+  }
 });
 
 test('composeActiveTools appends custom tool objects after the built-ins', () => {

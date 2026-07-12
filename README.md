@@ -25,6 +25,8 @@ A few things worth knowing:
 - **The UI is currently quite dense.** There's a lot going on in the sidebar and settings panels. This is a known limitation of the prototype stage and will improve as the full Familiar design takes shape.
 - **The coding is primarily done by AI.** The human behind this project designs, directs, and tests. The actual code is written mostly by Claude Opus and Claude Fable. This is disclosed openly because a project built on trust should be honest about how it's made.
 - **It is under active development.** Things change frequently. Since so much is still missing, big updates drop frequently. The [Discord server](https://discord.gg/ajKBCWGaE) is the best place to follow along or ask for help.
+- **It is not made by experts.** The plan is to hire expert counsel as soon as possible. But currently that's not in the budget yet. Just be aware that this means you can't count on corporate-grade security or polish.
+- **The software is free, but AI might not be.** Familiar is open source and free to use. No paywalled features from developer side. However, basic use is only possible with an LLM, and using those tends to cost money. The arcitecture of Familiar keeps costs low, and you can reduce your Familiar's functions that need the connection. But the dev does not have the means to provide connections for everyone. Some features, like understanding images, can't work without special AI models that not every provider offers.
 
 ---
 
@@ -36,6 +38,27 @@ The bond only works when you can choose to enter it with open eyes. If that choi
 
 ---
 
+## Getting started
+
+You'll need an API key from an AI provider — think of it as a password that lets you use their service:
+
+- **[Google AI Studio](https://aistudio.google.com/apikey)** — Gemini models, has a free tier. Complex to set up, and if you input a payment method, it *will* start charging after your free budget is up. You will pay by amount of tokens used.
+- **[NanoGPT](https://nano-gpt.com)** — supports many different models, easy to set up. You can either pay for as many tokens as you use, or buy the 12 USD monthly subscription to access a lot of models until you use up a certain amount - basically a flatrate. For reference: during tests, Familiar tended to stay below 25% of the maximum amount you can use per week on the subscription.
+- **[Z.ai](https://api.z.ai)** — GLM models, also fairly easy to set up. Currently costs around 18 USD for the cheapest subscription and only offers pure LLMs on that one, nothing that can "see" images or anything. Has a dedicated model for software like Familiar, called GLM 5 Turbo.
+
+**Windows** — double-click **`Proto-Familiar.vbs`**. It handles installation automatically and opens your browser when ready.
+> Put the folder at `C:\Users\<you>\AppData\Local\Proto-Familiar` — not in Documents or Desktop. [Here's why.](docs/getting-started.md#windows)
+
+**macOS** — double-click **`Proto-Familiar.command`** in Finder. Automatic on first run.
+> If macOS warns about an unidentified developer, right-click → **Open**.
+
+**Linux** — run `./install.sh` once, then launch from your app menu or with `./start.sh`.
+
+Open the **☰ Settings panel**, paste your API key, and start chatting.
+
+If anything goes wrong, the [full setup guide](docs/getting-started.md) and [troubleshooting page](docs/troubleshooting.md) cover the common cases.
+
+---
 ## Questions you might have
 
 ### What about my privacy?
@@ -66,6 +89,8 @@ In early testing, two Familiar instances running simultaneously used roughly **2
 
 And to be blunt about it: this isn't a hardware miracle. The big, well-funded agent frameworks — built by companies with enormous budgets and rooms full of experts — could trivially do the same. They largely don't, because constant generation is cheaper to ship than careful generation, and because they have the money to literally just *buy* more of the resources they're wasting. Familiar is cobbled together by one middle-aged, unemployed woman on a rickety laptop, and it still manages to do a lot with so little. I do kind of hope that it will make a statement about care — all I needed to do was approach this project with a mindset that wasn't wasteful or dismissive of collaboration.
 
+So while data centers are awful for the environment, we can sharply decrease the negative impact through reducing how much we put on those data centers. My dream would be to evenntually not need external AI at all anymore and handle everything with a local model that doesn't dirty communal water or torture people with infrasound.
+
 ### Isn't AI bad for Mental Health?
 
 Again, yes and no!
@@ -80,27 +105,11 @@ AI has some advantages humans simply don't have. It doesn't get hungry, thirsty,
 
 Still, again, skepticism is wise. Don't let the Familiar become your main social contact, let alone your only one. Reach out for people together instead.
 
----
+### What about Plagiarism?
 
-## Getting started
+Since LLMs are typically trained on lots of writing without the original author's consent, there's a sensible concern about plagiarism. But Familiar isn't a tool to write essays or books with. It's a companion intended to speak to you and your friends and coach you through hard situations. The AI is not intended to produce content that people can be academically dishonest or earn money with. And the Familiar will not tell you every story it has ever ingested - they literally can't, just like you probably can't repeat a book word for word just because you've read it.
 
-You'll need an API key from an AI provider — think of it as a password that lets you use their service:
-
-- **[Google AI Studio](https://aistudio.google.com/apikey)** — Gemini models, has a free tier. Complex to set up, and if you input a payment method, it *will* start charging after your free budget is up. You will pay by amount of tokens used.
-- **[NanoGPT](https://nano-gpt.com)** — supports many different models, easy to set up. You can either pay for as many tokens as you use, or buy the 12 USD monthly subscription to access a lot of models until you use up a certain amount - basically a flatrate. For reference: during tests, Familiar tended to stay below 25% of the maximum amount you can use per week on the subscription.
-- **[Z.ai](https://api.z.ai)** — GLM models, also fairly easy to set up. Currently costs around 18 USD for the cheapest subscription and only offers pure LLMs on that one, nothing that can "see" images or anything. Has a dedicated model for software like Familiar, called GLM 5 Turbo.
-
-**Windows** — double-click **`Proto-Familiar.vbs`**. It handles installation automatically and opens your browser when ready.
-> Put the folder at `C:\Users\<you>\AppData\Local\Proto-Familiar` — not in Documents or Desktop. [Here's why.](docs/getting-started.md#windows)
-
-**macOS** — double-click **`Proto-Familiar.command`** in Finder. Automatic on first run.
-> If macOS warns about an unidentified developer, right-click → **Open**.
-
-**Linux** — run `./install.sh` once, then launch from your app menu or with `./start.sh`.
-
-Open the **☰ Settings panel**, paste your API key, and start chatting.
-
-If anything goes wrong, the [full setup guide](docs/getting-started.md) and [troubleshooting page](docs/troubleshooting.md) cover the common cases.
+There are currently no plans to incorporate functionalities that generate images or videos (both are extreme token waste and much more directly ripped from artists). Graphic elements are on the roadmap, but the idea is for Broeckchen or a commissioned, volunteering or hired human artist to create these images and animations.
 
 ---
 

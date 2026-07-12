@@ -170,7 +170,7 @@ const state = {
   temperature:       0.8,
   maxTokens:         2048,
   userName:          'My human',
-  charName:          'Assistant',
+  charName:          'the Familiar',
   systemPrompt:      '',
   characterProfile:  '',
   userProfile:       '',
@@ -246,12 +246,29 @@ const state = {
   // a local-time window (start==end disables it). Off via this toggle or
   // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
   warmthEnabled:           true,
+  // Contact-rhythm baselines (Initiative Pass 2). Default-ON: derives the
+  // ward's normal contact rhythm from their own message history so the warm
+  // reach-out can tell ordinary silence from unusual. Off via this toggle or
+  // PROTO_FAMILIAR_BASELINES_DISABLED=1 on the server.
+  contactBaselinesEnabled: true,
+  // Wait-streak experiment (Initiative Pass 1). Default-ON: shows the Familiar
+  // how many times it has waited since last reaching out, as a bare fact. Off
+  // via this toggle or PROTO_FAMILIAR_WAIT_STREAK_DISABLED=1 on the server.
+  waitStreakEnabled:       true,
+  // Noticing loop (Initiative Pass 4). Default-ON: the Familiar takes its own
+  // wake-condition-gated turns to notice and act. Off via this toggle or
+  // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
+  noticingEnabled:         true,
+  // Weather sense (W-A). Default-ON but inert until the ward adds a location.
+  // Off via this toggle or PROTO_FAMILIAR_WEATHER_DISABLED=1 on the server.
+  weatherEnabled:          true,
   // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
+  memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
@@ -263,6 +280,10 @@ const state = {
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
   stewardshipEnabled:      true,
+  // Spine states (docs/temporal-bridges-build-spec.md, Pass A). Default ON —
+  // records a ward-private `state` node for each hard stretch (threat
+  // moderate+) so the Familiar can relate crises to schedule events in time.
+  spineStatesEnabled:      true,
   dayStartAnchor:          '09:00',
   dayStartGapHours:        3,        // inactivity gap before a message counts as "first contact today"
   briefLookaheadDays:      3,        // how far ahead the opening brief looks
@@ -352,7 +373,7 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
-  'stewardshipEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
+  'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
@@ -363,8 +384,10 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
+  'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes',
@@ -854,6 +877,9 @@ function loadPersisted() {
     state.ponderingIntervalScale = 1;
   }
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
+  if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
+  if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
@@ -1466,7 +1492,7 @@ async function refreshPreviousSessionEndedAt() {
 function applyNameVars(text) {
   return text
     .replace(/\{\{user\}\}/gi, state.userName || 'my human')
-    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
+    .replace(/\{\{char\}\}/gi, state.charName || 'the Familiar')
     .replace(/\{\{elapsedTime\}\}/gi, () => {
       const ms = elapsedBetweenUserMessages();
       return ms !== null ? formatDuration(ms) : 'no prior user message';
@@ -2725,9 +2751,13 @@ function readSettingsFromUI() {
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
+  if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
+  if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
+  if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
   if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
@@ -2740,6 +2770,7 @@ function readSettingsFromUI() {
     state.gcalLookaheadDays = Number.isInteger(n) && n >= 30 && n <= 1825 ? n : 365;
   }
   if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
+  if ($('weather-toggle')) state.weatherEnabled = $('weather-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -2761,7 +2792,7 @@ function readSettingsFromUI() {
     state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
   }
   state.userName          = $('user-name').value.trim() || 'My human';
-  state.charName          = $('char-name').value.trim() || 'Assistant';
+  state.charName          = $('char-name').value.trim() || 'the Familiar';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
@@ -2777,6 +2808,7 @@ function readSettingsFromUI() {
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
   }
   if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
+  if ($('spine-states-toggle')) state.spineStatesEnabled = $('spine-states-toggle').checked;
   if ($('day-start-anchor')) {
     const t = String($('day-start-anchor').value ?? '').trim();
     if (/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
@@ -2863,13 +2895,18 @@ function writeSettingsToUI() {
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
+  if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
+  if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
+  if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
+  if ($('spine-states-toggle')) setIfNotFocused($('spine-states-toggle'), 'checked', state.spineStatesEnabled !== false);
   if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
   if ($('day-start-gap-hours')) setIfNotFocused($('day-start-gap-hours'), 'value', state.dayStartGapHours ?? 3);
   if ($('brief-lookahead-days')) setIfNotFocused($('brief-lookahead-days'), 'value', state.briefLookaheadDays ?? 3);
@@ -2881,6 +2918,7 @@ function writeSettingsToUI() {
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
@@ -2898,7 +2936,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
   if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
   setIfNotFocused($('user-name'),          'value',   state.userName ?? 'My human');
-  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
+  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'the Familiar');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
   setIfNotFocused($('user-profile'),       'value',   state.userProfile);
@@ -3755,6 +3793,11 @@ function init() {
   $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
   $('gcal-google-savetoken')?.addEventListener('click', gcalGoogleSaveToken);
   $('gcal-google-disconnect')?.addEventListener('click', gcalGoogleDisconnect);
+  // Weather places (W-B) — the "Weather" tab in the Unruh modal.
+  $('weather-geocode-btn')?.addEventListener('click', weatherGeocode);
+  $('weather-save-place')?.addEventListener('click', weatherSavePlace);
+  $('weather-cancel-place')?.addEventListener('click', weatherCancelPlace);
+  $('weather-place-query')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); weatherGeocode(); } });
   $('guide-chat-send')?.addEventListener('click', sendGuideChat);
   $('guide-chat-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }
@@ -3766,6 +3809,7 @@ function init() {
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
@@ -3775,6 +3819,7 @@ function init() {
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead',
+    'weather-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -4075,6 +4120,7 @@ function init() {
     $('te-cal-next').addEventListener('click',  () => teShiftCalendarMonth(+1));
     $('te-cal-today').addEventListener('click', () => teGotoCalendarToday());
     $('te-routine-refresh').addEventListener('click',     teLoadRoutine);
+    $('te-rounds-refresh')?.addEventListener('click',     teLoadRounds);
     $('te-routine-add').addEventListener('click',         () => teToggleRoutineForm(true));
     $('te-routine-form-cancel').addEventListener('click', () => teToggleRoutineForm(false));
     $('te-routine-form-save').addEventListener('click',   teSavePhase);
@@ -6017,7 +6063,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots', 'sessions', 'prompts', 'behaviour'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'remember', 'snapshots', 'sessions', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -6086,6 +6132,7 @@ function keSwitchTab(tab) {
     else                        { keSetGraphView('list'); keLoadGraphNodes(); }
   }
   if (tab === 'identity')   keLoadIdentity();
+  if (tab === 'remember')   keOpenRememberMap();
   if (tab === 'snapshots')  keLoadSnapshots();
   if (tab === 'sessions')   refreshLogsList();
 }
@@ -7022,14 +7069,15 @@ async function keLoadIdentity() {
         list.appendChild(row);
       }
       if (isWard) {
-        // Always expose Remember settings even when there are no ward files yet.
+        // Remember settings live in their own tab now; this row is a cross-link
+        // kept for discoverability from the ward's identity section.
         any = true;
         const rmRow = document.createElement('div');
         rmRow.className = 'ke-row ke-row-settings';
         rmRow.innerHTML = `
           <div class="ke-row-title">Remember settings</div>
-          <div class="ke-row-sub">Memory storage policy per category</div>`;
-        rmRow.addEventListener('click', keOpenRememberMap);
+          <div class="ke-row-sub">Memory storage policy per category → Remember tab</div>`;
+        rmRow.addEventListener('click', () => keSwitchTab('remember'));
         list.appendChild(rmRow);
       }
     }
@@ -7078,7 +7126,7 @@ function keOpenIdentity(category, file) {
 
 // ── Remember-consent map ─────────────────────────────────────────────────────
 async function keOpenRememberMap() {
-  const det = $('ke-id-detail');
+  const det = $('ke-remember-detail');
   det.innerHTML = '<p class="logs-loading">Loading remember settings…</p>';
   try {
     const res = await fetch('/api/entity/ward/remember');
@@ -7512,7 +7560,7 @@ async function saveLoreEditorEntry() {
 // only with the Familiar (the `interest_set_standing` tool); don't add a
 // ward control for it.
 
-const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation', 'calendar'];
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation', 'calendar', 'weather'];
 
 function openTemporalModal() {
   $('temporal-modal').classList.remove('hidden');
@@ -7537,7 +7585,172 @@ function teSwitchTab(name) {
   else if (name === 'schedule')   teReloadScheduleView();
   else if (name === 'routine')    teLoadRoutine();
   else if (name === 'handoff')    teLoadHandoff();
+  else if (name === 'automation') teLoadReflectionStatus();
   else if (name === 'calendar')   loadGcalTab();
+  else if (name === 'weather')    teLoadWeather();
+}
+
+// ── Weather places (W-B) ──────────────────────────────────────────────
+// The ward's places live server-side and are NEVER told to the AI. The
+// browser handles coords only to confirm-and-save; the list it shows back
+// is the public shape (label + which is current), no coordinates.
+let _weatherPending = null;   // { lat, lon, place_name, timezone } awaiting a label
+
+async function teLoadWeather() {
+  const t = $('weather-toggle');
+  if (t) t.checked = state.weatherEnabled !== false;
+  weatherCancelPlace();
+  await renderWeatherPlaces();
+}
+
+async function renderWeatherPlaces() {
+  const list = $('weather-places-list');
+  if (!list) return;
+  try {
+    const data = await (await fetch('/api/locations')).json();
+    const locs = Array.isArray(data?.locations) ? data.locations : [];
+    if (!locs.length) { list.innerHTML = '<div class="field-hint">No places yet.</div>'; return; }
+    list.innerHTML = '';
+    for (const l of locs) {
+      const row = document.createElement('div');
+      row.className = 'field-row';
+      row.style.cssText = 'align-items:center; gap:8px';
+      const name = document.createElement('span');
+      name.style.flex = '1';
+      name.textContent = l.label;
+      if (l.is_current) {
+        const tag = document.createElement('span');
+        tag.style.opacity = '.7';
+        tag.textContent = ' · current';
+        name.appendChild(tag);
+      }
+      row.appendChild(name);
+      if (!l.is_current) {
+        const setBtn = document.createElement('button');
+        setBtn.className = 'btn-secondary';
+        setBtn.textContent = 'Make current';
+        setBtn.onclick = () => weatherSetCurrent(l.id);
+        row.appendChild(setBtn);
+      }
+      const del = document.createElement('button');
+      del.className = 'btn-secondary';
+      del.textContent = '✕';
+      del.title = 'Remove place';
+      del.onclick = () => weatherDeletePlace(l.id, l.label);
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+  } catch {
+    list.innerHTML = '<div class="field-hint">Couldn\'t load places.</div>';
+  }
+}
+
+async function weatherGeocode() {
+  const q = ($('weather-place-query')?.value ?? '').trim();
+  const status = $('weather-places-status');
+  if (!q) { if (status) status.textContent = 'Type a city, ZIP, or address first.'; return; }
+  if (status) status.textContent = 'Looking it up…';
+  try {
+    const r = await (await fetch('/api/locations/geocode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q }),
+    })).json();
+    if (!r?.ok) { if (status) status.textContent = 'No match for that — try a nearby city or a postal code.'; return; }
+    _weatherPending = { lat: r.lat, lon: r.lon, place_name: r.place_name, timezone: r.timezone };
+    if (status) status.textContent = '';
+    if ($('weather-found-name')) $('weather-found-name').textContent = r.place_name || q;
+    // Suggest a label from the resolved place's first word.
+    const lbl = $('weather-place-label');
+    if (lbl && !lbl.value) lbl.value = String(r.place_name || q).split(',')[0].trim();
+    $('weather-geocode-result')?.classList.remove('hidden');
+  } catch {
+    if (status) status.textContent = 'Lookup failed — check your connection and try again.';
+  }
+}
+
+async function weatherSavePlace() {
+  const label = ($('weather-place-label')?.value ?? '').trim();
+  const status = $('weather-places-status');
+  if (!_weatherPending) { if (status) status.textContent = 'Find a place first.'; return; }
+  if (!label) { if (status) status.textContent = 'Give the place a short label (e.g. "home").'; return; }
+  try {
+    const r = await (await fetch('/api/locations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, ..._weatherPending }),
+    })).json();
+    if (!r?.ok) { if (status) status.textContent = r?.error || 'Could not save the place.'; return; }
+    weatherCancelPlace();
+    if ($('weather-place-query')) $('weather-place-query').value = '';
+    if (status) status.textContent = `Saved "${label}".`;
+    await renderWeatherPlaces();
+  } catch {
+    if (status) status.textContent = 'Could not save the place.';
+  }
+}
+
+function weatherCancelPlace() {
+  _weatherPending = null;
+  $('weather-geocode-result')?.classList.add('hidden');
+  if ($('weather-place-label')) $('weather-place-label').value = '';
+}
+
+async function weatherSetCurrent(id) {
+  const status = $('weather-places-status');
+  try {
+    const r = await (await fetch('/api/locations/current', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ident: id }),
+    })).json();
+    if (!r?.ok && status) status.textContent = r?.error || 'Could not switch the current place.';
+    await renderWeatherPlaces();
+  } catch { if (status) status.textContent = 'Could not switch the current place.'; }
+}
+
+async function weatherDeletePlace(id, label) {
+  if (!confirm(`Remove "${label}" from your places?`)) return;
+  const status = $('weather-places-status');
+  try {
+    const r = await (await fetch(`/api/locations/${encodeURIComponent(id)}`, { method: 'DELETE' })).json();
+    if (!r?.ok && status) status.textContent = r?.error || 'Could not remove the place.';
+    await renderWeatherPlaces();
+  } catch { if (status) status.textContent = 'Could not remove the place.'; }
+}
+
+// Reflection heartbeat readout (temporal-bridges Piece 5). Proves the
+// learning loop is alive: last-ran time + what it graded. A stale/empty
+// readout is itself the signal that reflection hasn't been running.
+async function teLoadReflectionStatus() {
+  const el = $('te-reflection-status');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/reflection-events?limit=1');
+    const events = await r.json();
+    if (!Array.isArray(events) || !events.length) {
+      el.textContent = 'Reflection: no runs recorded yet. It runs when enough surface outcomes have accrued since the last one — this stays empty until then.';
+      return;
+    }
+    const e = events[0];
+    const when = e.loggedAt ? relTimeShort(e.loggedAt) : 'unknown';
+    const bits = [];
+    bits.push(`graded ${e.edgesGraded ?? 0} forecast${(e.edgesGraded ?? 0) === 1 ? '' : 's'}`);
+    if (e.promotions) bits.push(`promoted ${e.promotions} noticing${e.promotions === 1 ? '' : 's'}`);
+    if (e.wroteIdentity) bits.push('wrote to what-lapses-cost');
+    if (e.routineReview) bits.push('carried the weekly routine review');
+    el.textContent = `Reflection: last ran ${when} — ${bits.join(', ')}.`;
+  } catch {
+    el.textContent = 'Reflection: status unavailable right now.';
+  }
+}
+
+// Compact relative time for the readout ("3h ago", "2d ago").
+function relTimeShort(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 'recently';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
 }
 
 function teEscapeHtml(s) {
@@ -8125,7 +8338,11 @@ async function teLoadScheduleMap() {
     const data = await r.json();
     if (gen !== _teSchedMapGen) return;
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
-    const nodes = (data.nodes || []).map(n => ({ ...n, type: n.type || 'task' }));
+    // Window nodes + linked endpoints (undated consequence states, anchors
+    // outside the window) — without linked, edges to them dangled and the
+    // map engine dropped them, so the consequence graph looked empty.
+    const nodes = [...(data.nodes || []), ...(data.linked || [])]
+      .map(n => ({ ...n, type: n.type || 'task' }));
     // Engine edges want { id, fromId, toId, type }. Schedule edges carry
     // src / dst / kind — map them across (kind becomes the edge's type,
     // which the engine hues and the legend lists).
@@ -8606,6 +8823,45 @@ async function teLoadRoutine() {
   } catch (err) {
     list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
   }
+  // The Familiar's own rounds ride the same refresh (read-only view).
+  teLoadRounds();
+}
+
+// "Eury's rounds" (Initiative Pass 3): a read-only view of the standing
+// rounds the Familiar keeps, honouring its own visibility choice. Private
+// rounds are counted but their contents withheld — the Familiar decides
+// what's legible here; we never expose a hidden round's text.
+async function teLoadRounds() {
+  const el = $('te-rounds-list');
+  if (!el) return;
+  el.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/rounds');
+    const data = await r.json();
+    const rounds = Array.isArray(data.rounds) ? data.rounds : [];
+    const hidden = Number(data.hidden_count) || 0;
+    if (!rounds.length && !hidden) {
+      el.innerHTML = '<p class="logs-empty">No standing rounds yet — your Familiar hasn\'t set any self-maintenance routines for itself.</p>';
+      return;
+    }
+    const byPhase = new Map();
+    for (const rd of rounds) {
+      const p = rd.phase || 'anytime';
+      if (!byPhase.has(p)) byPhase.set(p, []);
+      byPhase.get(p).push(rd);
+    }
+    const groups = [...byPhase.entries()].map(([phase, items]) => `
+      <div style="margin-bottom:8px">
+        <div style="font-size:0.82em; text-transform:uppercase; letter-spacing:0.04em; opacity:0.6">${teEscapeHtml(phase)}</div>
+        ${items.map(it => `<div style="padding:3px 0">• ${teEscapeHtml(it.what)}</div>`).join('')}
+      </div>`).join('');
+    const hiddenNote = hidden
+      ? `<div class="field-hint" style="margin-top:6px; font-style:italic">Your Familiar keeps ${hidden} round${hidden === 1 ? '' : 's'} privately — you know ${hidden === 1 ? 'it exists' : 'they exist'}, but ${hidden === 1 ? 'its' : 'their'} contents are theirs.</div>`
+      : '';
+    el.innerHTML = (groups || '') + hiddenNote;
+  } catch (err) {
+    el.innerHTML = `<p class="logs-empty">Failed to load rounds: ${teEscapeHtml(err.message)}</p>`;
+  }
 }
 
 async function teEditPhase(id, phase) {
@@ -8875,8 +9131,8 @@ function formatOutboxAsMessageContent(item) {
     if (body) return body;
     return title ? `*(reminder)* ${title}` : '';
   }
-  if (item.kind === 'event_alert') {
-    // Title carries the event name, body the code-built countdown — show both.
+  if (item.kind === 'event_alert' || item.kind === 'weather_alert') {
+    // Title carries the event/heads-up name, body the code-built detail — both.
     const head = title ? `**${title}**` : '';
     if (head && body) return `${head}\n${body}`;
     return head || body;
@@ -9369,7 +9625,7 @@ function vlRenderPersonDetail(villager) {
       <textarea id="vl-p-private-notes" placeholder="Sensitive context, for you and the Familiar only…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.privateNotes ?? '')}</textarea>
     </div>
     <div>
-      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Remember tab)</span></div>
       <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
     </div>
     <div>

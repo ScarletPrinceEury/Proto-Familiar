@@ -40,11 +40,25 @@ import {
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
+  memByTimerange,
+  setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
+import { startNoticingLoop } from './noticing-loop.js';
+import { buildNoticingPrompt, AGING_INTENT_MS } from './noticing.js';
+import { getContactBaseline, weekdayClass } from './contact-baselines.js';
+import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
+import {
+  addLocation, listLocations, getCurrentLocation, setCurrentLocation, deleteLocation,
+  weatherLocationsPrivate, ingestWeather, readWeather,
+} from './thalamus.js';
+import { geocode, fetchForecast } from './weather-source.js';
+import { readWeatherNowLine, readWeatherVagueLine, readWeatherMirrorSync, writeWeatherMirror, clearWeatherMirror } from './weather-mirror.js';
+import { WEATHER_STALE_MS } from './weather-format.js';
+import { selectReadiness } from './stewardship.js';
 import {
   shouldReflectNow,
   getNewOutcomesSinceLastReflection,
@@ -55,7 +69,8 @@ import { getRecentPonderings, deletePondering, markIntentActedOn, getUnactedInte
 import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
-  clampLeadMinutes, ALERT_GRACE_MS,
+  selectDueWeatherAlerts, formatWeatherAlert,
+  clampLeadMinutes, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
@@ -80,8 +95,9 @@ import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduati
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
+import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
-import { buildTimeAnchorBlock, wardLocalNowISO } from './relative-time.js';
+import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
@@ -90,6 +106,7 @@ import {
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
+  appendNoticingEventLog, readNoticingEvents, composeNoticingTools,
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
@@ -128,7 +145,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings } from './discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
@@ -434,6 +451,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // The ward's zone, not the server's — so the [Now] the Familiar reads is
       // the ward's clock even when the server runs in a different timezone.
       timeZone: readSettingsSync()?.wardTimeZone || null,
+      // Full weather detail is ward-private only. On any gated (non-ward)
+      // turn the vague tier renders instead — qualitative, no numbers/units/
+      // times/labels, so precise values can't leak a location (§5.6).
+      // Fail-closed: unclear audience → vague, and vague itself → '' if stale.
+      weatherLine: audienceTag === 'ward-private' ? readWeatherNowLine() : readWeatherVagueLine(),
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
@@ -1227,6 +1249,88 @@ app.get('/api/reachout-events', async (_req, res) => {
   }
 });
 
+// Noticing decision log (Initiative Pass 4): every tick that reached a
+// decision — including quiet-window evaluations that spent no LLM call — so a
+// dead noticing loop reads as stale entries, never as calm silence.
+app.get('/api/noticing-events', async (_req, res) => {
+  try { res.json(await readNoticingEvents()); }
+  catch { res.json([]); }
+});
+
+// "Eury's rounds" (Initiative Pass 3): the ward-facing view of the Familiar's
+// standing rounds, honouring the Familiar's own visibility choice. A private
+// round is COUNTED (hidden_count) but its contents withheld — existence is
+// never hidden (no covert cognition), only what a private round is.
+app.get('/api/rounds', async (_req, res) => {
+  try {
+    res.json(await roundsForWard());
+  } catch {
+    res.json({ ok: false, rounds: [], hidden_count: 0, visibility: 'shared' });
+  }
+});
+
+// ── Locations (Weather sense, W-A) ───────────────────────────────
+// The ward's places, LABEL-ONLY over these endpoints (coordinates never
+// leave the geocode preview + the add call). Adding or switching the current
+// place forces a weather refresh so the [Now] line updates promptly.
+
+app.get('/api/locations', async (_req, res) => {
+  try { res.json(await listLocations()); }
+  catch { res.json({ ok: false, locations: [] }); }
+});
+
+// Preview a city/ZIP → resolved place name + coords, for the ward to confirm
+// before it's stored. The coords are returned so the confirm POST can carry
+// them back without a second geocode.
+app.post('/api/locations/geocode', async (req, res) => {
+  const query = String(req.body?.query ?? '').trim();
+  if (!query) return res.status(400).json({ ok: false, error: 'query required' });
+  try { res.json(await geocode(query)); }
+  catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'geocode failed' }); }
+});
+
+app.post('/api/locations', async (req, res) => {
+  const { label, lat, lon, place_name, timezone } = req.body ?? {};
+  if (!label || typeof label !== 'string' || !label.trim()) {
+    return res.status(400).json({ ok: false, error: 'label required' });
+  }
+  try {
+    const r = await addLocation({ label: label.trim(), lat, lon, place_name, timezone });
+    refreshWeatherIfDue({ force: true }).catch(() => {});
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'add failed' }); }
+});
+
+app.post('/api/locations/current', async (req, res) => {
+  const ident = String(req.body?.ident ?? '').trim();
+  if (!ident) return res.status(400).json({ ok: false, error: 'ident required' });
+  try {
+    const r = await setCurrentLocation({ ident });
+    refreshWeatherIfDue({ force: true }).catch(() => {});
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'set-current failed' }); }
+});
+
+app.delete('/api/locations/:id', async (req, res) => {
+  try {
+    const r = await deleteLocation({ ident: req.params.id });
+    refreshWeatherIfDue({ force: true }).catch(() => {});
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'delete failed' }); }
+});
+
+// Reflection heartbeat log (temporal-bridges Piece 5): every reflection tick
+// that ran, with its grade counts (incl. all-zero) — so "the learning loop
+// never fires" is visible instead of silently indistinguishable from calm.
+app.get('/api/reflection-events', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 50));
+    res.json(await readReflectionEvents({ limit }));
+  } catch {
+    res.json([]);
+  }
+});
+
 // Villager-write audit trail (Discord tools). Every state-mutating tool a
 // villager triggered through the Familiar, with who caused it — so a
 // villager-driven write is auditable, not silent.
@@ -1554,6 +1658,8 @@ initCerebellumTools({
   upsertVillager,
   relayToDiscord,
   memorizeSessionNow,
+  // set_current_location warms the new place's sky right away (fire-and-forget).
+  refreshWeatherNow: () => { refreshWeatherIfDue({ force: true }).catch(() => {}); },
 });
 
 // Backs the Familiar's `memorize_now` tool: commit THIS conversation to memory
@@ -3096,8 +3202,13 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startGcalSync();
   startSilenceTriage();
   startReachout();
+  startNoticing();
   startMemorySweep();
   startVillageSync();
+  // Weather sense (W-A): prime the read-mirror at boot so the [Now] line is
+  // fresh before the first 30s reminders tick. Self-gated + fire-and-forget;
+  // inert until the ward has added a location.
+  refreshWeatherIfDue().catch(err => console.error('[weather] boot refresh:', err?.message ?? err));
   // Discord gateway (Village V4). Supervisor idles until the ward sets
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
@@ -3230,7 +3341,13 @@ function startAutonomousPondering() {
       let cooccurrences = [];
       try {
         const win = await getScheduleWindow({});
-        const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+        // Window nodes + linked endpoints (undated states, out-of-window
+        // anchors) — without `linked` the grader saw unresolvable endpoint
+        // ids and the calibration loop starved on its own projections.
+        const nodes = [
+          ...(Array.isArray(win?.nodes) ? win.nodes : []),
+          ...(Array.isArray(win?.linked) ? win.linked : []),
+        ];
         const labelById = new Map(nodes.map(n => [n.id, n.label]));
         const allEdges = Array.isArray(win?.edges) ? win.edges : [];
         consequenceEdges = allEdges
@@ -3284,9 +3401,23 @@ function startAutonomousPondering() {
       const review = _pendingRoutineReview;
       _pendingRoutineReview = null;
       const routineReviewSection = review ? buildRoutineReviewSection(review.ledger) : '';
+      // Temporal-bridges Piece 3: attach what the Familiar actually KEPT from
+      // the recent days, so grading "did the projected cost follow?" is
+      // grounded in recorded memory, not just the edge's own payload. Rides
+      // this existing reflection assembly (a data read, no new LLM call);
+      // best-effort — a miss just means the grader works from edges alone.
+      let windowMemories = [];
+      try {
+        const to = new Date();
+        const from = new Date(to.getTime() - 10 * 24 * 3600 * 1000);
+        const iso = (d) => d.toISOString().slice(0, 10);
+        const mem = await memByTimerange({ fromDate: iso(from), toDate: iso(to), limit: 15 });
+        windowMemories = (Array.isArray(mem?.results) ? mem.results : [])
+          .map(r => ({ date: r.date, excerpt: r.excerpt, schedule_refs: r.schedule_refs }));
+      } catch { /* Phylactery down → grade from edges alone */ }
       return {
         mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds,
-        routineReviewSection, isRoutineReview: !!review,
+        windowMemories, routineReviewSection, isRoutineReview: !!review,
       };
     },
     runPonder: async (topic /* string OR { mode:'reflection', ... } */) => {
@@ -3346,6 +3477,14 @@ function startAutonomousPondering() {
             .then(r => console.log(`[pondering] reflection → ${r?.ok ? `promoted noticing to tentative cause (${co.from} → ${co.to})` : 'failed to promote'} `))
             .catch(err => console.error('[pondering] promotion failed:', err?.message ?? err));
         }
+        // Intentions (Initiative Pass 3): reflection can end in commitments.
+        // Route each to the intentions store, source='reflection', fire-and-
+        // forget — one failing never blocks the others or the chat path.
+        for (const it of (result.intentions ?? [])) {
+          setIntention({ ...it, source: 'reflection' })
+            .then(r => console.log(`[pondering] reflection → ${r?.ok !== false ? 'kept intention' : 'failed to keep intention'}: "${String(it.what).slice(0, 60)}"`))
+            .catch(err => console.error('[pondering] intention set failed:', err?.message ?? err));
+        }
         // Routine review (stewardship Pass 3): when this reflection carried the
         // weekly review, stamp the cadence clock (always, so it doesn't re-fire
         // every tick) and stash the finding for the stewardship block to
@@ -3355,6 +3494,17 @@ function startAutonomousPondering() {
             .then(() => console.log(`[pondering] routine review → ${result?.routine_review ? 'finding stored' : 'no finding this week'}`))
             .catch(err => console.error('[pondering] routine review record failed:', err?.message ?? err));
         }
+        // Piece 5 heartbeat: record that reflection RAN this tick, with its
+        // counts — even an all-zero grade. A dead learning loop then reads as
+        // stale/absent entries, not as silence indistinguishable from calm.
+        appendReflectionEvent({
+          title:         result.title ?? null,
+          edgesGraded:   Array.isArray(result.edge_calibrations) ? result.edge_calibrations.length : 0,
+          promotions:    Array.isArray(result.promotions) ? result.promotions.length : 0,
+          intentions:    Array.isArray(result.intentions) ? result.intentions.length : 0,
+          wroteIdentity: !!(result.what_lapses_cost_update?.heading && result.what_lapses_cost_update?.content),
+          routineReview: !!topic?.isRoutineReview,
+        }).catch(() => {});
       }
       return result;
     },
@@ -3411,31 +3561,126 @@ function startRemindersScheduler() {
       if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
       const s = readSettingsSync();
       if (s?.eventAlertsEnabled === false) return [];  // default-ON
-      const leadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const defaultLeadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
       const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
-      const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs });
-      const [win, rec] = await Promise.all([
-        getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
-        listRecurring().catch(() => ({ nodes: [] })),
-      ]);
-      const windowNodes = Array.isArray(win) ? win : (win?.nodes ?? []);
-      const recurringNodes = Array.isArray(rec) ? rec : (rec?.nodes ?? []);
-      return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, leadMs, graceMs: ALERT_GRACE_MS })
+      const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
+      return selectDueEventAlerts({ windowNodes, recurringNodes, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
         .map(a => ({ ...a, ...formatEventAlert(a, { nowMs }) }));
     },
-    markEventAlerted: async ({ id, occurrenceDate }) => {
-      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null });
+    // Severe-weather heads-up (W-B, §5.4): an outside-tagged item whose
+    // occurrence-hour forecast turns adverse in the CACHED forecast (the
+    // read-mirror) gets a code-built ping, riding the same tick + window scan
+    // as the coming-up alert. Gated by BOTH weather AND event-alerts being on.
+    getDueWeatherAlerts: async () => {
+      if (process.env.PROTO_FAMILIAR_EVENT_ALERTS_DISABLED === '1') return [];
+      const s = readSettingsSync();
+      if (!weatherEnabled() || s?.eventAlertsEnabled === false) return [];
+      const mirror = readWeatherMirrorSync();
+      if (!mirror) return [];   // no current-location forecast → nothing to warn from
+      const defaultLeadMs = clampLeadMinutes(s?.eventAlertLeadMinutes) * 60_000;
+      const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
+      const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
+      return selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
+        .map(a => ({ ...a, ...formatWeatherAlert(a, { nowMs }) }));
+    },
+    markEventAlerted: async ({ id, occurrenceDate, kind }) => {
+      const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null, kind: kind || 'event' });
       if (!r.ok) throw new Error(r.error || 'mark_alerted failed');
     },
     getHealth: getRemindersHealth,
     onTick: (r) => {
       for (const f of r.fired || []) console.log(`[reminders] fired "${f.label}" (id ${f.id.slice(0, 8)})`);
       for (const a of r.alerted || []) console.log(`[reminders] event alert "${a.label}" (${a.whenIso ?? ''})`);
+      for (const a of r.weatherAlerted || []) console.log(`[reminders] weather alert "${a.label}" (${a.whenIso ?? ''})`);
       for (const s of r.skipped || []) console.warn(`[reminders] skipped "${s.label ?? s.id}": ${s.error}`);
+      // Weather refresh rides this same 30s tick, self-gated to a 6h cadence
+      // (ride existing requests, gate in code). Fire-and-forget — never
+      // blocks the reminders path.
+      refreshWeatherIfDue().catch(err => console.error('[weather]', err?.message ?? err));
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
   console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Weather refresh (Weather sense, W-A) ─────────────────────────
+// Rides the reminders tick. Only the CURRENT location refreshes here, and only
+// when its cache is older than the 6h cadence (non-current places refresh
+// lazily when asked about — W-B). Fetch failure keeps the stale cache and the
+// [Now] line drops on its own past 12h; disabled / no current location clears
+// the mirror so the line disappears immediately.
+// Per-tick memo of the alert-window scan so the coming-up and severe-weather
+// passes share ONE schedule fetch instead of two MCP round-trips every 30s
+// (ride existing requests). Short TTL: both passes run inside the same tick.
+let _alertScan = { at: 0, data: { windowNodes: [], recurringNodes: [] } };
+async function fetchAlertScanData(nowMs) {
+  if (Date.now() - _alertScan.at < 10_000) return _alertScan.data;
+  const { fromIso, toIso } = alertWindowBounds({ nowMs, leadMs: MAX_LEAD_MS });
+  const [win, rec] = await Promise.all([
+    getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] })),
+    listRecurring().catch(() => ({ nodes: [] })),
+  ]);
+  _alertScan = {
+    at: Date.now(),
+    data: {
+      windowNodes: Array.isArray(win) ? win : (win?.nodes ?? []),
+      recurringNodes: Array.isArray(rec) ? rec : (rec?.nodes ?? []),
+    },
+  };
+  return _alertScan.data;
+}
+
+const WEATHER_REFRESH_MS = 6 * 60 * 60_000;
+let _weatherRefreshing = false;
+
+function weatherEnabled() {
+  if (process.env.PROTO_FAMILIAR_WEATHER_DISABLED === '1') return false;
+  return readSettingsSync()?.weatherEnabled !== false;   // default-ON
+}
+
+async function refreshWeatherIfDue({ now = Date.now(), force = false } = {}) {
+  if (_weatherRefreshing) return;
+  if (!weatherEnabled()) { await clearWeatherMirror(); return; }
+  _weatherRefreshing = true;
+  try {
+    const res = await weatherLocationsPrivate();
+    const locs = Array.isArray(res?.locations) ? res.locations : [];
+    const current = locs.find(l => l.is_current);
+    if (!current) { await clearWeatherMirror(); return; }   // no place set → no line
+    if (!Number.isFinite(current.lat) || !Number.isFinite(current.lon)) return;
+
+    const ageMs = current.fetched_at ? (now - Date.parse(current.fetched_at)) : Infinity;
+    const stale = !(Number.isFinite(ageMs)) || ageMs > WEATHER_REFRESH_MS;
+    if (!force && !stale) {
+      // Cache still fresh: make sure the mirror reflects it (e.g. after a
+      // restart, or the ward just switched current location).
+      await syncWeatherMirror(current.id);
+      return;
+    }
+    const fc = await fetchForecast(current.lat, current.lon, { timezone: current.timezone });
+    if (!fc.ok) { console.warn(`[weather] fetch failed for ${current.label}: ${fc.error}`); return; }
+    await ingestWeather({
+      location_id: current.id, provider: fc.provider,
+      fetched_at: fc.fetched_at, current: fc.current, hourly: fc.hourly,
+    });
+    await writeWeatherMirror({ provider: fc.provider, fetched_at: fc.fetched_at, current: fc.current, hourly: fc.hourly });
+    console.log(`[weather] refreshed ${current.label} via ${fc.provider}`);
+  } finally {
+    _weatherRefreshing = false;
+  }
+}
+
+// Re-point the read-mirror at a location's cached forecast without a fetch
+// (used when the cache is fresh but the mirror may lag it — e.g. after a
+// restart, or the ward just switched their current location).
+async function syncWeatherMirror(locationId) {
+  try {
+    const r = await readWeather({ location_id: locationId });
+    const w = r?.weather;
+    if (w?.fetched_at && (Date.now() - Date.parse(w.fetched_at)) <= WEATHER_STALE_MS) {
+      await writeWeatherMirror({ provider: w.provider, fetched_at: w.fetched_at, current: w.current, hourly: w.hourly });
+    }
+  } catch { /* best-effort */ }
 }
 
 // ── Google Calendar sync loop (0.8) ─────────────────────────────
@@ -3704,6 +3949,9 @@ function startSilenceTriage() {
         reason:    r.reason,
         decision:  r.decision ?? null,
         acted:     r.acted ?? false,
+        // Wait-streak experiment (Pass 1): the count the prompt showed at
+        // this deliberation, so streak values correlate with decisions.
+        streakAtDecision: r.streakAtDecision ?? null,
         at:        r.at,
       }).catch(() => {}); // non-critical
 
@@ -3824,6 +4072,8 @@ function startReachout() {
           villager:       r.villager?.name ?? null,
           messagePreview: r.decision?.message?.slice(0, 120) ?? null,
           nextCheckInMs:  r.nextCheckInMs ?? null,
+          // Wait-streak experiment (Pass 1): the count the prompt showed.
+          streakAtDecision: r.streakAtDecision ?? null,
           error:          r.error ?? null,
         }).catch(() => {});
       }
@@ -3843,6 +4093,178 @@ function startReachout() {
   // building the needs-fulfilment ledger. Stands down at moderate+ threat;
   // hard off-switch: PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1.
   startNeedsTrackingLoop();
+}
+
+// ── Noticing loop (Initiative Pass 4) — the Familiar's own turn ──────
+// The organ that lets the Familiar notice and act without my human spelling
+// it out. Code-gated wake conditions → a bounded, tool-using deliberation.
+// Does NOT stand down at threat (ward-signed); the tier shifts the register,
+// never skips the turn. Default-ON; toggle noticingEnabled or hard-disable
+// with PROTO_FAMILIAR_NOTICING_DISABLED=1.
+
+// Gather the code-built wake inputs: due intentions, contact baseline + gap,
+// readiness gaps, aging intentions. Best-effort — any piece failing degrades
+// to empty (that condition just doesn't wake the turn), never throws.
+async function gatherNoticingWakeInputs() {
+  const s = readSettingsSync();
+  const tz = s?.wardTimeZone || null;
+  const nowMs = Date.now();
+  const leadHours = Number.isFinite(Number(s?.readinessLeadHours)) ? Number(s.readinessLeadHours) : 48;
+  const winFrom = new Date(nowMs - 12 * 3600_000).toISOString();
+  const winTo   = new Date(nowMs + leadHours * 3600_000).toISOString();
+
+  const [dueRes, baseline, lastAct, win, allIntents, tells] = await Promise.all([
+    getDueIntentions({ now: wardLocalNowISO(tz) }).catch(() => ({ due: [] })),
+    getContactBaseline({ now: nowMs, settings: s }).catch(() => ({ hasBaseline: false })),
+    getLastUserActivity().catch(() => null),
+    getScheduleWindow({ from_ts: winFrom, to_ts: winTo, limit: 200 }).catch(() => ({ nodes: [], edges: [] })),
+    listIntentions({ limit: 200 }).catch(() => ({ intentions: [] })),
+    getUnactedIntents({ limit: 10 }).catch(() => []),
+  ]);
+
+  const contactGapMs = lastAct?.ms ? Math.max(0, nowMs - lastAct.ms) : null;
+  const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
+  const edges = Array.isArray(win?.edges) ? win.edges : [];
+  // Read-only readiness detection — fresh flaggedAt so we NEVER consume the
+  // stewardship loop's own cooldown state; noticing only *notices* the gap.
+  const readiness = selectReadiness({ items: nodes, edges, nowMs, wardTimeZone: tz, leadHours, flaggedAt: {}, max: 2 });
+
+  // Aging: my own intentions with no firing trigger, older than the threshold,
+  // plus any still-unsaid tells. Capped so the report stays legible.
+  const untriggered = (allIntents?.intentions ?? []).filter(i =>
+    (i.trigger?.kind === 'none' || i.trigger?.kind === 'on_next_contact')
+    && i.created_at && (nowMs - Date.parse(i.created_at) > AGING_INTENT_MS));
+  const agingTells = (Array.isArray(tells) ? tells : []).filter(t => t.kind === 'tell');
+  const agingIntents = [...untriggered, ...agingTells].slice(0, 3);
+
+  return {
+    dueIntentions: Array.isArray(dueRes?.due) ? dueRes.due : [],
+    // Live signals for the condition code-gate. contactGapMs is wired;
+    // missed-need / unresolved-ref signals are best-effort empty for now
+    // (those conditions fail closed, which is the safe direction).
+    signals: { contactGapMs },
+    baseline,
+    contactGapMs,
+    readiness,
+    agingIntents,
+    weekdayClass: weekdayClass(nowMs, tz),
+  };
+}
+
+// The bounded, tool-using deliberation. Composes the noticing toolset, runs
+// the tool-call loop, and reports which tools were EFFECTIVELY called (a
+// reach-out refused during quiet hours is not counted as acting).
+async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
+  const s = readSettingsSync();
+  const conn = connectionForFeature(s, 'noticing');
+  if (!conn?.apiKey || !conn?.model) return { toolNamesCalled: [] };
+
+  const [{ static: identity }, lastAct] = await Promise.all([
+    enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
+    getLastUserActivity().catch(() => null),
+  ]);
+  const nowBlock = buildTimeAnchorBlock({
+    now: Date.now(), lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
+    // Noticing is a ward-private deliberation → full weather line.
+    weatherLine: readWeatherNowLine(),
+  });
+  const prompt = substituteMacros(buildNoticingPrompt({
+    // flag_distress is in the noticing toolset now, so the prompt's
+    // hand-to-triage clause names a lever the Familiar can actually pull.
+    nowBlock, situationReport, threatTier, hasFlagDistress: true,
+  }), s);
+  const messages = [
+    ...(identity ? [{ role: 'system', content: identity }] : []),
+    { role: 'user', content: prompt },
+  ];
+  const tools = composeNoticingTools(s);
+
+  let nextCheckInMs = null;
+  const effectiveNames = [];
+  const executeTool = async (name, argsJson, ctx) => {
+    if (name === 'set_next_check') {
+      let a = {}; try { a = argsJson ? JSON.parse(argsJson) : {}; } catch { /* ignore */ }
+      const min = Number(a.minutes);
+      if (Number.isFinite(min)) nextCheckInMs = min * 60_000;
+      effectiveNames.push(name);
+      return 'ok — I\'ll look again then.';
+    }
+    if (name === 'reach_out_to_ward') {
+      let a = {}; try { a = argsJson ? JSON.parse(argsJson) : {}; } catch { /* ignore */ }
+      const msg = stripLlmTimestamps(String(a.message ?? '').trim());
+      if (!msg) return 'I need something to say before I can reach out.';
+      // Quiet hours gate knocking (not the whole turn). Suppressed → NOT
+      // counted as acting; I'm nudged to keep it as an intention instead.
+      if (quietHours) return 'It\'s my human\'s quiet hours — I don\'t knock now. If this matters, I keep it as an intention (intention_set) to reach out later.';
+      const enq = await enqueueAndDispatch({
+        kind: 'reachout', originId: `noticing-${Date.now()}`,
+        title: 'a thought from me', body: msg, ts: new Date().toISOString(),
+      }).catch(() => null);
+      if (enq?.id && !enq?.deduped) { effectiveNames.push(name); return 'Sent — my human will see it.'; }
+      return enq?.deduped ? 'I just reached out very recently, so I hold this rather than double-knock.' : 'I couldn\'t send that right now.';
+    }
+    // Registry tools: count the effective name, then dispatch normally.
+    effectiveNames.push(name);
+    return executeToolCall(name, argsJson, ctx);
+  };
+
+  try {
+    await runToolCallLoop({
+      callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings: s, tools: roundTools ?? tools }),
+      baseMessages: messages,
+      getTools:     () => tools,
+      executeTool,
+      toolCtx: { noticing: true, wardPrivate: true, apiKey: conn.apiKey },
+    });
+  } catch (err) {
+    // A whole-loop failure surfaces as deliberation_failed upstream.
+    throw err;
+  }
+  return { toolNamesCalled: effectiveNames, nextCheckInMs };
+}
+
+function startNoticing() {
+  if (process.env.PROTO_FAMILIAR_NOTICING_DISABLED === '1') {
+    console.log('[noticing] PROTO_FAMILIAR_NOTICING_DISABLED=1 — noticing loop is OFF');
+    return;
+  }
+  startNoticingLoop({
+    isEnabled: async () => {
+      const s = readSettingsSync();
+      if (s.noticingEnabled === false) return false;         // default-ON (undefined = on)
+      const conn = connectionForFeature(s, 'noticing');
+      return !!(conn?.apiKey && conn?.provider && conn?.model);
+    },
+    getThreat,
+    getWakeInputs: gatherNoticingWakeInputs,
+    // Quiet hours gate only KNOCKING (reach_out), passed through to the
+    // deliberation — the turn itself still runs so intentions/reads work.
+    isQuietHours: async () => isWarmthQuietHours(),
+    deliberate:   noticingDeliberate,
+    relInterval:  (ms) => plainInterval(Date.now() - ms, Date.now()),
+    getWaitStreakFn:   () => { try { return getWaitStreak(); } catch { return null; } },
+    recordWaitFn:      recordWait,
+    recordProactiveFn: recordProactive,
+    onTick: (r) => {
+      if (r.reason === 'disabled' || r.reason === 'in_cooldown') return;
+      // Every decision-reaching tick logs — including quiet windows — so a
+      // dead loop reads as stale entries, not calm silence.
+      appendNoticingEventLog({
+        reason:           r.reason,
+        acted:            r.acted ?? false,
+        wakeConditions:   Array.isArray(r.conditions) ? r.conditions.map(c => c.kind) : [],
+        toolsCalled:      r.toolNamesCalled ?? [],
+        threatTier:       r.threat?.tier ?? null,
+        streakAtDecision: r.streakAtDecision ?? null,
+        nextCheckInMs:    r.nextCheckInMs ?? null,
+        error:            r.error ?? null,
+      }).catch(() => {});
+      if (r.reason === 'acted')      console.log(`[noticing] acted (${(r.toolNamesCalled || []).join(', ')})`);
+      else if (r.reason === 'stood_down') console.log(`[noticing] looked (${(r.conditions || []).map(c => c.kind).join(', ')}), stood down`);
+    },
+    onError: (err) => console.error('[noticing]', err?.message ?? err),
+  });
+  console.log('[noticing] Noticing ENABLED (default-ON). Runs at ALL threat tiers (ward-signed no-stand-down); wake-condition gated; self-paced. Hard-disable with PROTO_FAMILIAR_NOTICING_DISABLED=1.');
 }
 
 // Memory coverage sweep (day-anchoring Phase 2). Memorizes past days that never

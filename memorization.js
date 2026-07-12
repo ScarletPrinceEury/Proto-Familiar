@@ -139,7 +139,7 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate } from './thalamus.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow } from './thalamus.js';
 import { getRegistry, standingConsentActive } from './village.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
@@ -179,7 +179,7 @@ function formatTranscript(readable, wardLabel, { sharedRoom = false } = {}) {
     .join('\n\n');
 }
 
-export function buildPrompt(messages, topicLabel = null, wardName = 'My human') {
+export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = []) {
   const readable = messages.filter(m => {
     if (m.role === 'tool') return false;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
@@ -193,6 +193,23 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human') 
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic; I skip tangential threads unless they reveal something genuinely important.`
     : '';
 
+  // Cross-store refs (temporal-bridges Piece 2). When the ward's schedule
+  // around these days is available, I offer a compact legend so a fact ABOUT a
+  // scheduled item can carry that item's id — the breadcrumb that later lets me
+  // walk from a remembered fact to the moment on the schedule it belongs to. I
+  // only ever cite ids from this list; code drops any I make up. Absent legend
+  // → this whole apparatus vanishes and the prompt is exactly as before.
+  const legend = Array.isArray(scheduleLegend) ? scheduleLegend.filter(n => n?.id && n?.label) : [];
+  const scheduleFieldLine = legend.length
+    ? `,\n      "schedule_refs": ["dinner-x7"]`
+    : '';
+  const scheduleRules = legend.length
+    ? `\nschedule_refs — OPTIONAL. If this fact is specifically about one of the scheduled items in the legend below, I include that item's id here. I use ONLY ids that appear in the legend — never one I invent. Most facts have no schedule item; for those I omit this field entirely.\n`
+    : '';
+  const scheduleLegendBlock = legend.length
+    ? `\n### Schedule legend (the ward's items around these days — for schedule_refs only)\n${legend.slice(0, 30).map(n => `  ${n.label} [${n.type ?? 'item'}] = ${n.id}`).join('\n')}\n`
+    : '';
+
   return `I am the Familiar. I'm extracting claimable facts from a conversation I just had so I can store them in my memory. I pull out one discrete, verifiable fact per output element — things I would want to recall later about myself, my human, or the people in their life. I also map the concrete relationships between the people, places and things named, because my graph is my mental index — it's how I find the right memory later.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
@@ -202,7 +219,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "content":    "A first-person note stating one fact clearly (1–2 sentences max).",
       "category":   "emotional_content",
       "subjects":   ["Alice"],
-      "confidence": 0.85
+      "confidence": 0.85${scheduleFieldLine}
     }
   ],
   "relations": [
@@ -234,7 +251,7 @@ subjects — list the NAMES of the people the fact is about (first name or how I
 
 confidence — 0.0 to 1.0. How certain am I that this fact is accurate and not misread?
   I omit facts with confidence below 0.4.
-
+${scheduleRules}${scheduleLegendBlock}
 ### Field rules — relations
 
 Each relation is one concrete edge in my graph: two real, nameable entities and the relationship between them. This is the index I navigate by, so I only record edges I'm sure of.
@@ -557,7 +574,31 @@ async function processJob(job) {
     : buildPrompt;
   // My human's configured name, never "User". Falls back to "My human".
   const wardName = (readSettingsSync()?.userName || '').trim() || 'My human';
-  const prompt = promptFn(job.messages, job.topicLabel ?? null, wardName);
+
+  // Cross-store refs (Piece 2): on a ward-private slice, offer the model a
+  // compact schedule legend so a fact about a scheduled item can carry its id.
+  // Ward-private only — a shared-room slice never sees the ward's schedule.
+  // Best-effort: Unruh down → empty legend → the prompt is exactly as before.
+  // `validScheduleIds` is the code gate: only these ids may survive on a fact.
+  let scheduleLegend = [];
+  let validScheduleIds = new Set();
+  if (!job.audienceTag || job.audienceTag === 'ward-private') {
+    try {
+      const win = await getScheduleWindow({});
+      const nodes = [
+        ...(Array.isArray(win?.nodes) ? win.nodes : []),
+        ...(Array.isArray(win?.linked) ? win.linked : []),
+      ];
+      scheduleLegend = nodes
+        .filter(n => n?.id && n?.label && !(n.payload?.spine || n.payload?.sensitive)) // never legend a crisis state
+        .map(n => ({ id: n.id, label: n.label, type: n.type }));
+      validScheduleIds = new Set(scheduleLegend.map(n => n.id));
+    } catch { /* no legend this job */ }
+  }
+
+  const prompt = promptFn === buildPrompt
+    ? buildPrompt(job.messages, job.topicLabel ?? null, wardName, scheduleLegend)
+    : promptFn(job.messages, job.topicLabel ?? null, wardName);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
@@ -634,6 +675,11 @@ async function processJob(job) {
     // root cause of the consent-queue pile-up). `significant` is reserved for
     // genuine milestones the Familiar marks deliberately via save_memory.
     const slug = `fact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    // Validate the model's schedule_refs in CODE against the legend it was
+    // shown — a cited id survives only if it's a real node id. The model
+    // repeats ids, it never mints them; a hallucinated ref dies here.
+    const rawRefs = Array.isArray(fact.schedule_refs) ? fact.schedule_refs : [];
+    const scheduleRefs = [...new Set(rawRefs.map(String).filter(id => validScheduleIds.has(id)))];
     const result = await createMemoryFull({
       content,
       granularity: 'daily',
@@ -645,6 +691,7 @@ async function processJob(job) {
       consent_pending: gate === 'ask',
       confidence,
       slug,
+      ...(scheduleRefs.length ? { sourceMeta: { schedule_refs: scheduleRefs } } : {}),
     });
     if (!result?.ok) throw new Error(`Phylactery memory_create failed: ${result?.error ?? 'unknown'}`);
 

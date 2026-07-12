@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
   clampLeadMinutes, ALERT_GRACE_MS, DEFAULT_LEAD_MINUTES,
+  effectiveLeadMs,
 } from '../event-alerts.js';
 import { runOneReminderTick } from '../reminders-loop.js';
 
@@ -27,6 +28,44 @@ test('a one-time event inside the lead window alerts once', () => {
   assert.equal(out.length, 1);
   assert.equal(out[0].id, 'e1');
   assert.equal(out[0].occurrenceDate, null);
+});
+
+// ── Per-event lead (Initiative Pass 5) ───────────────────────────────
+
+test('effectiveLeadMs: per-event lead_minutes overrides the default, clamped', () => {
+  const dflt = 60 * 60_000;
+  assert.equal(effectiveLeadMs({ payload: {} }, dflt), dflt, 'no override → default');
+  assert.equal(effectiveLeadMs({ payload: { lead_minutes: 90 } }, dflt), 90 * 60_000);
+  assert.equal(effectiveLeadMs({ payload: { lead_minutes: 2 } }, dflt), 5 * 60_000, 'clamped up to floor');
+  assert.equal(effectiveLeadMs({ payload: { lead_minutes: 99999 } }, dflt), 1440 * 60_000, 'clamped to ceiling');
+});
+
+test('per-event lead: a longer custom lead fires earlier than the global default would', () => {
+  // Event 3h out; global default is 60min (would NOT alert yet), but this
+  // event carries a 4h lead → it should alert now.
+  const far = ev({ id: 'therapy', when: '2026-07-04T17:00:00', payload: { lead_minutes: 240 } });
+  const withDefault = selectDueEventAlerts({ windowNodes: [far], recurringNodes: [], nowMs: NOW, defaultLeadMs: LEAD });
+  assert.equal(withDefault.length, 1, 'the 4h custom lead fires 3h out');
+  assert.equal(withDefault[0].id, 'therapy');
+});
+
+test('per-event lead: a shorter custom lead suppresses an alert the default would send', () => {
+  // Event 45min out; global default 60min WOULD alert, but a 10min custom
+  // lead means it's not time yet.
+  const soon = ev({ payload: { lead_minutes: 10 } });  // 45min out
+  const out = selectDueEventAlerts({ windowNodes: [soon], recurringNodes: [], nowMs: NOW, defaultLeadMs: LEAD });
+  assert.equal(out.length, 0, 'the 10min lead holds the alert until 10min before');
+});
+
+test('per-event lead: recurring occurrence honours the anchor lead_minutes', () => {
+  const anchor = ev({
+    id: 'standup', when: '2026-07-04T17:00:00',
+    payload: { recurrence: { freq: 'daily' }, lead_minutes: 240 },
+  });
+  const out = selectDueEventAlerts({ windowNodes: [], recurringNodes: [anchor], nowMs: NOW, defaultLeadMs: LEAD });
+  assert.equal(out.length, 1, 'a 3h-out occurrence fires under the 4h custom lead');
+  assert.equal(out[0].id, 'standup');
+  assert.ok(out[0].occurrenceDate);
 });
 
 test('outside the lead window (too far ahead) stays silent', () => {

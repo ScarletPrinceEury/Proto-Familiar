@@ -123,7 +123,11 @@ def add_node(
         raise ValueError(f"unknown schedule node type {type!r}; expected one of {sorted(SCHEDULE_NODE_TYPES)}")
     if not label or not label.strip():
         raise ValueError("label is required and must be non-empty")
-    if type in {"event", "phase", "state", "reminder", "hold"} and not when:
+    # States are deliberately NOT in the requires-when set: a consequence
+    # state ("crash", "good streak") is a timeless graph citizen that rides
+    # get_window's `linked` set, not the time window. A *dated* state (a
+    # specific low stretch with when/end) is still allowed — just not forced.
+    if type in {"event", "phase", "reminder", "hold"} and not when:
         raise ValueError(f"node type {type!r} requires a 'when' timestamp")
     if type == "phase" and not end:
         raise ValueError("phase nodes require an 'end' timestamp")
@@ -425,14 +429,18 @@ def mark_alerted(
     *,
     id: str,
     occurrence_date: str | None = None,
+    kind: str = "event",
 ) -> bool:
     """Record that a lead-time alert for this event has been delivered, so
     the Node-side scan never re-pings the same moment (survives restarts —
     the outbox dedup alone forgets once an item is acknowledged).
 
-    One-time events stamp payload.alerted_at; a recurring occurrence stamps
-    payload.alerts[YYYY-MM-DD] (mirroring payload.resolutions' keying). An
-    atomic read-merge-write here, rather than payload replacement from the
+    `kind` selects the dedup namespace so distinct alert channels for the SAME
+    occurrence don't suppress one another: "event" (the coming-up ping) stamps
+    payload.alerted_at / payload.alerts[YYYY-MM-DD]; "weather" (the W-B severe-
+    weather heads-up) stamps payload.weather_alerted_at /
+    payload.weather_alerts[YYYY-MM-DD] (mirroring payload.resolutions' keying).
+    An atomic read-merge-write here, rather than payload replacement from the
     caller, so a concurrent sync update can't be clobbered.
 
     Returns True if the node existed, False otherwise.
@@ -445,14 +453,53 @@ def mark_alerted(
         return False
     payload = json.loads(row["payload_json"] or "{}")
     ts = now_iso()
+    once_key = "weather_alerted_at" if kind == "weather" else "alerted_at"
+    dict_key = "weather_alerts" if kind == "weather" else "alerts"
     if occurrence_date:
-        alerts = payload.get("alerts")
+        alerts = payload.get(dict_key)
         if not isinstance(alerts, dict):
             alerts = {}
         alerts[occurrence_date] = ts
-        payload["alerts"] = alerts
+        payload[dict_key] = alerts
     else:
-        payload["alerted_at"] = ts
+        payload[once_key] = ts
+    conn.execute(
+        "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(payload), ts, id),
+    )
+    return True
+
+
+def set_lead(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    lead_minutes: int | None,
+) -> bool:
+    """Set (or clear) an event's per-event lead time (Initiative Pass 5).
+
+    Writes payload.lead_minutes so the Node-side alert scan gives THIS event
+    its own "coming up" lead instead of the global default. Passing None
+    clears the override (the event falls back to the global lead). An atomic
+    read-merge-write — like mark_alerted — so a concurrent sync update to
+    the same node's payload can't be clobbered. Clamping to a sane range is
+    the Node side's job (clampLeadMinutes); here we only store the value the
+    caller settled on.
+
+    Returns True if the node existed, False otherwise.
+    """
+    row = conn.execute(
+        "SELECT payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
+        (id,),
+    ).fetchone()
+    if row is None:
+        return False
+    payload = json.loads(row["payload_json"] or "{}")
+    if lead_minutes is None:
+        payload.pop("lead_minutes", None)
+    else:
+        payload["lead_minutes"] = int(lead_minutes)
+    ts = now_iso()
     conn.execute(
         "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
         (json.dumps(payload), ts, id),
@@ -628,7 +675,9 @@ def get_window(
     include_open_tasks: bool = True,
 ) -> dict[str, Any]:
     """Return the slice of schedule-layer nodes within [from_ts, to_ts]
-    plus the edges that touch them.
+    plus the WHOLE schedule-layer edge set and, in `linked`, every edge
+    endpoint that isn't itself a window node (undated states, out-of-window
+    anchors) — so consumers can always resolve both ends of every edge.
 
     Defaults to a 24-hour window centred on now if either bound is
     omitted. Open tasks (no when_ts, resolution NULL) are included
@@ -677,20 +726,37 @@ def get_window(
     node_rows = conn.execute(node_sql, params).fetchall()
     nodes = [_node_row_to_dict(r) for r in node_rows]
 
-    if not nodes:
-        return {"nodes": [], "edges": [], "from": from_ts, "to": to_ts}
-
-    ids = [n["id"] for n in nodes]
-    placeholders = ",".join("?" * len(ids))
+    # Edges: fetch the WHOLE schedule-layer graph, not just edges touching
+    # window nodes. The consequence layer is deliberately small (the limit
+    # bounds it), and its endpoints are routinely OUTSIDE any time window —
+    # an undated state ("crash"), a recurring anchor stamped months ago.
+    # Window-scoped edge fetch is the bug that made the consequence graph
+    # invisible to every consumer (authored edges stored fine but never
+    # reached a prompt, the reflection grader, or surfacing). Endpoints not
+    # among the window nodes ride along in `linked` so every renderer can
+    # resolve both labels of every edge, always.
     edge_rows = conn.execute(
-        f"""SELECT * FROM edges
-             WHERE src_id IN ({placeholders}) OR dst_id IN ({placeholders})
-             LIMIT ?""",
-        (*ids, *ids, limit),
+        """SELECT e.* FROM edges e
+             JOIN nodes s ON s.id = e.src_id
+            WHERE s.layer = 'schedule'
+            LIMIT ?""",
+        (limit,),
     ).fetchall()
     edges = [_edge_row_to_dict(r) for r in edge_rows]
 
-    return {"nodes": nodes, "edges": edges, "from": from_ts, "to": to_ts}
+    node_ids = {n["id"] for n in nodes}
+    linked_ids = sorted({eid for e in edges for eid in (e["src"], e["dst"])
+                         if eid not in node_ids})
+    linked: list[dict[str, Any]] = []
+    if linked_ids:
+        placeholders = ",".join("?" * len(linked_ids))
+        linked_rows = conn.execute(
+            f"SELECT * FROM nodes WHERE layer = 'schedule' AND id IN ({placeholders}) LIMIT ?",
+            (*linked_ids, limit),
+        ).fetchall()
+        linked = [_node_row_to_dict(r) for r in linked_rows]
+
+    return {"nodes": nodes, "edges": edges, "linked": linked, "from": from_ts, "to": to_ts}
 
 
 def list_phases(

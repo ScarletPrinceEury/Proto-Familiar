@@ -23,10 +23,11 @@ export const TOOL_MODULES = {
   // core — always advertised (time, memory in/out, id discovery, filing,
   // interests (human's call: they're character, not task), safety, the lid)
   get_datetime: 'core', get_session_info: 'core',
-  recall: 'core', save_memory: 'core', save_to_tome: 'core',
+  recall: 'core', recall_timeframe: 'core', save_memory: 'core', save_to_tome: 'core',
   update_identity: 'core', schedule_find: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
   contact_trusted_person: 'core', show_crisis_resources: 'core',
+  flag_distress: 'core',   // safety: the Familiar's own read of distress → threat (ward-signed)
   get_trusted_contacts: 'core',   // pairs with contact_trusted_person
   request_tools: 'core',
 
@@ -43,6 +44,7 @@ export const TOOL_MODULES = {
   template_apply: 'schedule-write', template_list: 'schedule-read',
   gcal_list_calendars: 'schedule-read', gcal_attribute_calendar: 'schedule-write',
   schedule_add_hold: 'schedule-write', schedule_availability: 'schedule-read',
+  schedule_set_lead: 'schedule-write',   // per-event alert lead (Initiative Pass 5)
 
   'memory-edit': undefined, // (namespace note only — real entries below)
   read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',
@@ -62,6 +64,11 @@ export const TOOL_MODULES = {
 
   web_search: 'web', read_webpage: 'web', look_up: 'web',
 
+  // weather — the sky over my human's day (W-B). Surfaced by leaving-the-house
+  // language and by the readiness/stewardship agenda + a new outside event
+  // landing on the calendar (exactly when the weather matters).
+  weather_today: 'weather', set_current_location: 'weather',
+
   acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
   graduation_acknowledge: 'acks',
@@ -71,6 +78,14 @@ export const TOOL_MODULES = {
   convert_ids_to_slugs: 'maintenance',
 
   set_day_start_anchor: 'stewardship',
+
+  // intentions — my own forward commitments and rounds (Initiative Pass 3).
+  // Surfaced by intent-setting/round language OR by the due-intentions block
+  // travelling with its tools (a payoff turn brings the tools to act).
+  intention_set: 'intentions', intention_list: 'intentions',
+  intention_drop: 'intentions', intention_done: 'intentions',
+  intention_mark_fired: 'intentions',
+  intention_set_rounds_visibility: 'intentions',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 
@@ -86,10 +101,12 @@ export const MODULE_INDEX =
   'graph (my knowledge web: nodes + relationships), ' +
   'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
   'web (search, read pages, look up facts), ' +
+  'weather (the sky over my human\'s day today/tomorrow, and moving between their saved places), ' +
   'acks (file deferred intents, confirm/drop memory consent, graduation notices), ' +
   'files (list/read my own folder), ' +
   'maintenance (id tidy-up), ' +
-  'stewardship (set the day-start time I open my human\'s day on)';
+  'stewardship (set the day-start time I open my human\'s day on), ' +
+  'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +
@@ -129,6 +146,15 @@ const TRIGGERS = {
     text: /\b(search|look (it|this|that|him|her|them)? ?up|google|online|internet|web(site|page)?|news|weather|price of|what does .{1,40} mean|definition)\b/i,
     blocks: [],
   },
+  weather: {
+    // Leaving-the-house / outdoor language (generous, per the miss-log rule):
+    // a false surface costs a few hundred tokens; a missed one, a request_tools
+    // round while my human is deciding whether to go out.
+    text: /\b(weather|forecast|rain(ing|y)?|snow(ing)?|umbrella|sunny|cloud(y|s)?|storm|windy?|heat\b|hot out|cold out|freezing|outside|go(ing)? out|head(ing)? (to|out)|errand|walk\b|hike|cycl(e|ing)|drive over|leave the house|leaving the house|hang (the )?laundry|dress warm|coat\b|jacket)\b/i,
+    // A new outside event on the calendar, and the readiness/stewardship agenda,
+    // are exactly when the sky matters — the tools travel with them.
+    blocks: ["[New on my human's calendar", '[My stewardship'],
+  },
   acks: {
     text: null,  // block-driven only: the notice and its tools travel together
     blocks: ['[Deferred intents from my free time]', '[PENDING MEMORY CONSENT', '[GRADUATION NOTICE'],
@@ -140,6 +166,15 @@ const TRIGGERS = {
   maintenance: {
     text: /\b(convert|tidy|migrate|old ids?|hex ids?)\b/i,
     blocks: [],
+  },
+  intentions: {
+    // Intent-setting / round language, plus follow-through phrasing. Generous
+    // by design (the "somewhat generous" rule) — a missed surface costs one
+    // request_tools round; over-surfacing a few hundred tokens once.
+    text: /\b(intention|inten(d|ding)|from now on|every (morning|noon|afternoon|evening|day|night)|each (morning|day|phase)|my round|rounds\b|remind myself|note to self|follow[ -]?up|check in on|keep an eye on|next time (I|we)|when I (next|get)|going forward|make a habit|going to start)\b/i,
+    // The due-intentions block travels with the tools so a payoff turn can act
+    // on what's come due (mark fired / complete / adjust).
+    blocks: ['[Intentions coming due]'],
   },
 };
 

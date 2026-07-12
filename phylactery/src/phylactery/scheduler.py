@@ -104,6 +104,13 @@ def run_pass(force: bool = False) -> dict:
                 result["graduation"] = grad.run_graduation_audit(conn, cfg, consol._call_llm, now)
             except Exception as e:
                 result["graduation"] = {"ok": False, "error": str(e)}
+            # 4. Memory lifecycle — distill-only (opt-in; no-op when disabled).
+            #    Additive: writes standing patterns out of aged episodic facts,
+            #    never demotes an original. Rides the same connection.
+            try:
+                result["distillation"] = consol.run_distillation(conn, cfg, consol._call_llm, now.date())
+            except Exception as e:
+                result["distillation"] = {"ok": False, "error": str(e)}
         else:
             result["consolidation"] = {"ok": False, "error": "no LLM configured"}
             result["graduation"] = {"ok": False, "error": "no LLM configured"}

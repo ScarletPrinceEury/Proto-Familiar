@@ -303,7 +303,7 @@
             <div id="topic-gutter" class="topic-gutter" aria-hidden="true"></div>
             <div id="messages" role="log" aria-live="polite" aria-label="Conversation"></div>
           </div>
-          <div id="typing-indicator" class="typing-indicator hidden" aria-label="Assistant is typing">
+          <div id="typing-indicator" class="typing-indicator hidden" aria-label="Familiar is typing">
             <div class="typing-avatar">A</div>
             <div class="typing-dots">
               <span></span><span></span><span></span>
@@ -626,6 +626,7 @@
         <button class="ke-tab"               data-tab="coverage"  role="tab">Coverage</button>
         <button class="ke-tab"               data-tab="graph"     role="tab">Graph</button>
         <button class="ke-tab"               data-tab="identity"  role="tab">Identity</button>
+        <button class="ke-tab"               data-tab="remember"  role="tab">Remember</button>
         <button class="ke-tab"               data-tab="snapshots" role="tab">Snapshots</button>
         <button class="ke-tab"               data-tab="sessions"  role="tab">Sessions</button>
         <button class="ke-tab"               data-tab="prompts"   role="tab">Prompts</button>
@@ -672,7 +673,7 @@
             <input type="file" id="ke-cov-import-file" accept=".json,.jsonl,.txt,.md,.log">
             <textarea id="ke-cov-import-text" rows="6" placeholder="…or paste the log content here"></textarea>
             <div class="ke-inline-form-row">
-              <input id="ke-cov-import-self" type="text" placeholder="AI/assistant speaker name(s), comma-separated (for text logs)">
+              <input id="ke-cov-import-self" type="text" placeholder="AI speaker name(s), comma-separated (for text logs)">
               <input id="ke-cov-import-source" type="text" placeholder="source label (e.g. ChatGPT)">
             </div>
             <div class="ke-inline-form-row">
@@ -750,6 +751,12 @@
           </div>
         </div>
 
+        <div class="ke-pane" id="ke-pane-remember">
+          <div class="ke-detail" id="ke-remember-detail">
+            <p class="logs-loading">Loading remember settings…</p>
+          </div>
+        </div>
+
         <div class="ke-pane" id="ke-pane-snapshots">
           <div class="ke-toolbar">
             <button id="ke-snap-create"  class="btn-secondary">＋ Create snapshot now</button>
@@ -781,7 +788,7 @@
           </div>
           <div class="field">
             <label for="char-name">AI name</label>
-            <input type="text" id="char-name" placeholder="Assistant" maxlength="64" spellcheck="false">
+            <input type="text" id="char-name" placeholder="Familiar" maxlength="64" spellcheck="false">
           </div>
           <p class="field-hint">Use <code>{{user}}</code> and <code>{{char}}</code> in prompts to insert these names. <code>{{elapsedTime}}</code> is the gap between the two most recent user messages in the chat history; <code>{{timeSinceLastSession}}</code> is the gap since the previous session ended.</p>
 
@@ -1178,6 +1185,7 @@
         <button class="ke-tab"               data-temporal-tab="handoff"    role="tab">Handoff</button>
         <button class="ke-tab"               data-temporal-tab="automation" role="tab">Automation</button>
         <button class="ke-tab"               data-temporal-tab="calendar"   role="tab">Calendar</button>
+        <button class="ke-tab"               data-temporal-tab="weather"    role="tab">Weather</button>
       </div>
       <div class="modal-body ke-body">
 
@@ -1327,6 +1335,29 @@
               </div>
               <div class="field-hint">The Familiar won't send warm reach-outs during this window. Set both to the same number to disable quiet hours. Crisis check-ins are never silenced by this.</div>
             </div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="baselines-toggle">Contact-rhythm sense</label>
+              <input type="checkbox" id="baselines-toggle" checked>
+            </div>
+            <div class="field-hint">When on, your Familiar learns your ordinary rhythm of contact — from your own message history — so it can tell whether a quiet stretch is normal for you or unusual, instead of guessing. It only forms a sense once it has a couple of weeks to go on, and it's used only to shape warm reach-outs, never crisis judgement. Off means it reasons from the raw gap alone.</div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="wait-streak-toggle">Show my Familiar its wait streak</label>
+              <input type="checkbox" id="wait-streak-toggle" checked>
+            </div>
+            <div class="field-hint">An experiment: whenever your Familiar is deciding whether to reach out or hold off, it's shown one plain fact — how many times it has chosen to wait since it last reached out on its own. Just the number, no nudge either way. Off hides it entirely.</div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="noticing-toggle">Let my Familiar notice on its own</label>
+              <input type="checkbox" id="noticing-toggle" checked>
+            </div>
+            <div class="field-hint">When on, your Familiar takes quiet moments of its own — but only when something is genuinely worth a look (an intention it set has come due, your rhythm of contact is off, groundwork for something is running late). It can then reach out, keep a note for later, or simply decide nothing's needed. This is what lets it notice things you didn't spell out. It keeps working even when concern is elevated — that's when noticing matters most — and it paces itself to you over time. It's the most judgment-heavy thing it does on its own, so pinning it to a stronger model in Connections is worth considering. Off means it only acts when you talk to it or a scheduled reminder fires.</div>
+          </div>
+          <div class="routine-rounds" id="te-rounds" style="padding:10px 12px; border-bottom:1px solid var(--border-subtle, #2a2a2a)">
+            <div class="field-row" style="margin-top:0; align-items:center">
+              <label style="font-weight:600">The rounds my Familiar keeps</label>
+              <button id="te-rounds-refresh" class="btn-ghost" style="margin-left:auto">Refresh</button>
+            </div>
+            <div class="field-hint">Standing intentions your Familiar has set for itself — its own self-maintenance, tied to your daily phases (e.g. "every morning I go over the calendar"). These are theirs, shown here because they've chosen to share them. Your Familiar decides what stays visible.</div>
+            <div id="te-rounds-list" style="margin-top:8px"></div>
           </div>
           <div class="ke-toolbar">
             <button id="te-routine-refresh" class="btn-ghost">Refresh</button>
@@ -1368,6 +1399,7 @@
 
         <!-- AUTOMATION PANE — Unruh's autonomous behaviours -->
         <div class="ke-pane" id="te-pane-automation" style="overflow:auto">
+          <div id="te-reflection-status" class="field-hint" style="margin:0 0 12px;padding:8px 10px;border:1px solid var(--border-light);border-radius:6px">Reflection: loading…</div>
           <div class="field-row" style="margin-top:0">
             <label for="needs-tracking-toggle">Track unmet needs</label>
             <input type="checkbox" id="needs-tracking-toggle">
@@ -1375,10 +1407,22 @@
           <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
 
           <div class="field-row" style="margin-top:12px">
+            <label for="memory-lifecycle-toggle">Distill lasting patterns</label>
+            <input type="checkbox" id="memory-lifecycle-toggle">
+          </div>
+          <div class="field-hint">Off by default. When on, your Familiar occasionally looks back over its older, settled memories and — where a one-off moment actually revealed a <em>lasting pattern</em> about you ("doing dreaded paperwork right away works well for me") — writes that pattern out as its own standing memory it'll recall when it matters. It only ever <strong>adds</strong>: nothing you wanted is ever demoted, faded, or deleted by this, and the original memory stays exactly as it was. Takes effect after the app restarts. (Requires a memory connection.)</div>
+
+          <div class="field-row" style="margin-top:12px">
             <label for="stewardship-toggle">Stewardship</label>
             <input type="checkbox" id="stewardship-toggle" checked>
           </div>
           <div class="field-hint">On by default. Instead of your whole schedule sitting in your Familiar's context every turn (where it turns into wallpaper it stops noticing), this hands it a short, changing agenda: opening your day with what's coming, and nudging vague "I ought to…" tasks that have been floating without a time toward a real spot. It picks <em>what</em> matters in plain code; <em>how</em> it raises it stays your Familiar's own voice. It stands down whenever you're in distress. The settings below tune it.</div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="spine-states-toggle">Remember hard stretches</label>
+            <input type="checkbox" id="spine-states-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. When your distress rises to a real level, your Familiar quietly marks a private note in time — a "rough stretch" — and, when it passes, links it to whatever was happening around then (an appointment, a task, an event). This is how it learns to relate the hard moments in your life to each other instead of seeing only logistics, so when it looks back it can tell what actually led where. These notes are yours alone: they're never shown to anyone your Familiar talks to on your behalf. It changes nothing about when or how your Familiar reaches out — it only helps it remember. Turn off to keep no such record.</div>
           <div class="field-row">
             <label for="day-start-anchor">Day starts at</label>
             <input type="time" id="day-start-anchor" value="09:00" style="width:8em">
@@ -1547,6 +1591,39 @@
             <div class="field-hint" id="gcal-sync-status">No sync has run yet.</div>
             <button type="button" id="gcal-sync-now" class="btn-secondary" style="margin-top:6px">↻ Sync now</button>
           </div>
+        </div>
+
+        <!-- WEATHER PANE (W-B) — the sky over your day + your saved places -->
+        <div class="ke-pane" id="te-pane-weather" style="overflow:auto; padding:12px">
+          <div class="field-row" style="margin-top:0">
+            <label for="weather-toggle">Weather</label>
+            <input type="checkbox" id="weather-toggle" checked>
+          </div>
+          <div class="field-hint">On by default. When on, your Familiar can feel the weather where you are and check the day ahead before nudging you about anything outdoors. <strong>Your places stay on this device's server and are never told to the AI</strong> — it only ever sees the label you give a place ("home", "work") and the weather in plain words, never coordinates. Off, and it says nothing about the weather. Hard off-switch: <code>PROTO_FAMILIAR_WEATHER_DISABLED=1</code>.</div>
+
+          <h4 style="margin:14px 0 4px">Your places</h4>
+          <div class="field-hint" style="margin-bottom:6px">Add the places whose weather matters — the first becomes your current place (the one the "right now" weather follows). The AI only ever learns the label.</div>
+          <div id="weather-places-list" style="margin:8px 0"><div class="field-hint">No places yet.</div></div>
+
+          <div class="field" style="margin-top:10px">
+            <label for="weather-place-query">Add a place</label>
+            <div style="display:flex; gap:6px; flex-wrap:wrap">
+              <input type="text" id="weather-place-query" placeholder="City, ZIP, or address" style="flex:1; min-width:12em">
+              <button type="button" id="weather-geocode-btn" class="btn-secondary">Find</button>
+            </div>
+          </div>
+          <div id="weather-geocode-result" class="hidden" style="margin-top:8px; padding:8px; border:1px solid var(--border, #ccc); border-radius:6px">
+            <div class="field-hint" style="margin-bottom:6px">Found: <strong id="weather-found-name">—</strong></div>
+            <div class="field" style="margin:0">
+              <label for="weather-place-label">Label it</label>
+              <div style="display:flex; gap:6px; flex-wrap:wrap">
+                <input type="text" id="weather-place-label" placeholder="home" style="flex:1; min-width:8em">
+                <button type="button" id="weather-save-place" class="btn-primary">Save place</button>
+                <button type="button" id="weather-cancel-place" class="btn-secondary">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <div id="weather-places-status" class="field-hint" style="margin-top:8px"></div>
         </div>
 
       </div>

@@ -105,8 +105,10 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, routineReviewSection = '' }) {
+export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
+  const memories = Array.isArray(windowMemories) ? windowMemories : [];
+  const memoriesJson = JSON.stringify(memories, null, 2);
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
     : '(no notes yet — this file may not exist or is empty)';
@@ -149,9 +151,15 @@ Some need-windows went unmet recently — each is a real lapse in the fulfilment
 ${missedNeedsJson}
 A missed need is a fact. But whether the COST I projected for that lapse actually followed — the on_lapse consequence I drew from it, up in the projected list — is NOT a fact until I've actually seen it. So for each, I ask: did the thing I predicted (the crash, the rough next day, the low stretch) actually show up around then? If I genuinely saw it, I can mark that consequence observed; if it didn't come, I lower its certainty or note it didn't land this time. I confirm or correct from what I actually noticed — I never assume the cost followed just because the need was missed.
 
+To ground that "did it actually follow?" in more than the forecast itself, here is what I actually KEPT from the last few days — the memories from around when these lapses and forecasts sit (newest first; some carry the schedule items they were tied to):
+${memoriesJson}
+This is my real record of those days. When I grade a forecast or a missed-need cost, I check it against what I genuinely noticed here — a rough stretch I recorded, a good day, a thing that went fine — rather than assuming. If these memories show the predicted cost landed, that's real evidence to mark it observed; if they show the opposite, that's real evidence to lower it. If they're silent on it, I stay honest that I haven't seen it yet.
+
 And here are pairs I've only NOTICED together so far (co_occurs_with) — observations, not conclusions, with how many times each pairing has come up:
 ${coocsJson}
 The honest ladder is noticed → suspected → confirmed. If one of these has come up enough times that I genuinely suspect one drives the other — not just coincides — I can promote it to a TENTATIVE cause. I keep it tentative: it goes in as a projection (observed stays false, certainty starts low), because a repeated coincidence is a reason to suspect, not proof. I promote SPARINGLY — only where the repetition is real and a causal story actually makes sense — and leave promotions empty otherwise. The noticing stays as the trail; the promotion is just the next rung, to be graded like any other forecast next time.
+
+This reflection can also end in a COMMITMENT, not only a grade. If what I've noticed points at something I mean to DO — a round to keep, a follow-through, an adjustment — I write it as an intention for my future self (up to three). "The last three alerts landed too late → every morning I widen the lead times." "I keep meaning to check in on Chen and forgetting → every noon phase, if we haven't talked in an hour, I reach out." These go into my own intentions store and come back to me when they're due. I keep them few and real — a reflection that ends in ten commitments has made none. I leave the array empty when nothing genuine follows.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
 {
@@ -159,7 +167,8 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
   "content": "My first-person thought — what I'm noticing, what I'm uncertain about, what I want to remember",
   "what_lapses_cost_update": null,
   "edge_calibrations": [],
-  "promotions": []
+  "promotions": [],
+  "intentions": []
 }
 
 OR, if I'm confident enough to lift something to identity, recalibrate a forecast, and/or promote a noticing:
@@ -175,6 +184,9 @@ OR, if I'm confident enough to lift something to identity, recalibrate a forecas
   ],
   "promotions": [
     { "edge_id": "<a co_occurs edge id from the noticed list>", "condition": "on_resolve|on_lapse|unconditional", "valence": "help|harm|neutral", "certainty": "low|medium|high", "note": "why I now suspect cause" }
+  ],
+  "intentions": [
+    { "what": "I widen the lead times on my alerts", "why": "the last three landed too late", "trigger": { "kind": "phase", "phase": "morning", "recurring": true }, "condition": {}, "refs": [] }
   ]
 }
 
@@ -310,6 +322,29 @@ export function parsePondering(raw) {
       intents.push({ kind, summary });
     }
     if (intents.length) result.wants_to_save = intents;
+  }
+  // intentions (Initiative Pass 3): reflection can end in COMMITMENTS, not
+  // just grades — "the last three alerts landed too late → every morning I
+  // widen the lead times." Each is routed to the intentions store by the
+  // caller (source='reflection'). Capped at 3 per tick so a reflection can't
+  // flood the store; malformed entries dropped. Trigger/condition/refs are
+  // optional and pass through to intention_set's own validation.
+  if (Array.isArray(parsed.intentions)) {
+    const TRIGGER_KINDS = new Set(['at', 'phase', 'on_next_contact', 'none']);
+    const out = [];
+    for (const raw of parsed.intentions) {
+      if (out.length >= 3) break;
+      if (!raw || typeof raw !== 'object') continue;
+      const what = String(raw.what ?? '').trim();
+      if (!what) continue;
+      const item = { what };
+      if (raw.why && String(raw.why).trim()) item.why = String(raw.why).trim();
+      if (Array.isArray(raw.refs)) item.refs = raw.refs.map(r => String(r).trim()).filter(Boolean).slice(0, 12);
+      if (raw.trigger && typeof raw.trigger === 'object' && TRIGGER_KINDS.has(raw.trigger.kind)) item.trigger = raw.trigger;
+      if (raw.condition && typeof raw.condition === 'object') item.condition = raw.condition;
+      out.push(item);
+    }
+    if (out.length) result.intentions = out;
   }
   return result;
 }

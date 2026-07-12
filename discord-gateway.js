@@ -46,11 +46,13 @@ import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { recordKnock, recordLocationKnock } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { sanitizeExternal } from './injection-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -280,6 +282,7 @@ async function fireRevisit(item) {
     participants: session.participants, settings,
     ambient: true, ambientStrategy: regLoc.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
     directedAt, revisitNote: true,
+    waitStreakLine: buildWaitStreakLine({ settings }),
   });
 
   const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
@@ -314,6 +317,8 @@ async function fireRevisit(item) {
     const list = await readRevisits();
     await writeRevisits([...list.filter(r => r.locationKey !== item.locationKey), newEntry]);
     armRevisitTimer().catch(() => {});
+    // Wait-streak (Pass 1): a re-defer is another taken wait choice.
+    Promise.resolve(recordWait('discord-defer')).catch(() => {});
     console.log(`[discord] revisit: re-deferred (${item.deferCount + 1}/${REVISIT_MAX_DEFER}) in ${item.locationKey} — next in ${Math.round(ms/60_000)}min`);
     return;
   }
@@ -330,6 +335,9 @@ async function fireRevisit(item) {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId, session, locationKey: item.locationKey, regLoc, priorMessages: [],
   });
+  // Wait-streak (Pass 1): a revisit where I actually spoke is a proactive
+  // payoff — the streak resets.
+  Promise.resolve(recordProactive('revisit')).catch(() => {});
   console.log(`[discord] revisit: spoke in ${item.locationKey}`);
 }
 
@@ -647,6 +655,32 @@ export function resolveMentions(content, { mentions = [], botUserId = null, char
   return text.replace(/<@!?(\d+)>/g, (_m, id) => `@${nameFor(id)}`);
 }
 
+/**
+ * Inbound Discord text made prompt-safe in ONE place: mention tokens
+ * resolved to names, capped, and — for anyone who is NOT my human — passed
+ * through the injection guard so a villager or stranger can't smuggle
+ * fake role markers / override phrases into my context.
+ *
+ * The guard is surgical (span-level redaction of near-unambiguous
+ * adversarial patterns; everything else byte-identical), so a villager
+ * genuinely relaying distress ("Chen needs help right now") passes
+ * untouched — sanitization can never swallow a crisis signal, only the
+ * adversarial span itself. And it is DELIBERATELY skipped for my human:
+ * their words are never altered (threat scoring must read exactly what
+ * they said, and rewriting their distress as "[removed:…]" could make
+ * triage misread genuine crisis as a jailbreak). Outbound text — my own
+ * replies, relays either direction — never goes through this: the guard
+ * is for third-party INBOUND text only, which is what keeps the relay
+ * system and trusted-contact delivery structurally unblockable by it.
+ */
+export function inboundContent(msg, { botUserId, charName, villagers, isWard, speakerName } = {}) {
+  const resolved = resolveMentions(String(msg?.content ?? ''), {
+    mentions: msg?.mentions, botUserId, charName, villagers,
+  }).slice(0, INPUT_CHAR_CAP);
+  if (isWard) return resolved;
+  return sanitizeExternal(resolved, { source: 'discord', context: `discord/${speakerName ?? 'unknown speaker'}` });
+}
+
 /** Names this message is explicitly aimed at, other than me — @-mentions
  *  of other users (people OR other Familiars) plus a reply to someone
  *  else's message. Lets an active-mode Familiar tell "this is between
@@ -738,7 +772,7 @@ async function availabilityBlockFor(decision, audienceGrants) {
 
 // ── Presence preamble (my own orientation, first person) ─────────
 
-function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false }) {
+function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false, waitStreakLine = '' }) {
   const lines = ['[Discord Presence]'];
   if (kind === 'ward-dm') {
     lines.push(
@@ -830,6 +864,12 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
         );
       }
     }
+    // Wait-streak awareness (initiative-build-spec Pass 1): the [later:…]
+    // defer is an offered wait choice, so the deliberation carries the one
+    // neutral fact line. '' when the experiment is off (W3). Rendered
+    // after the option lines, before macro substitution — the line is
+    // code-built and contains no macros.
+    if (waitStreakLine) lines.push(waitStreakLine);
   }
   return substituteMacros(lines.join('\n'), settings);
 }
@@ -934,7 +974,9 @@ async function touchLocation(locationKey, sessionId) {
 // .tool_calls / finish_reason), and accepts an optional `tools` array. This is
 // the shape runToolCallLoop's callUpstream needs. callChat below is the plain
 // string wrapper for the no-tools path.
-async function callChatRaw({ conn, messages, settings, tools }) {
+// Exported so the noticing loop (Initiative Pass 4) can run its bounded
+// tool-call loop through the same provider call rather than duplicating it.
+export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const resp = await fetch(url, {
@@ -1182,11 +1224,13 @@ async function observeMessage(gw, msg, decision) {
     });
   }
   const audienceTag = audienceTagFor(audienceInputFor(decision, session.participants), registry);
-  // Resolve mention tokens here too so what I read back later is legible.
-  const content = resolveMentions(String(msg.content), {
-    mentions: msg.mentions, botUserId: gw.botUserId,
+  // Resolve mention tokens here too so what I read back later is legible;
+  // non-ward text passes the injection guard (see inboundContent).
+  const content = inboundContent(msg, {
+    botUserId: gw.botUserId,
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
-  }).slice(0, INPUT_CHAR_CAP);
+    isWard: decision.isWard, speakerName: decision.speakerName,
+  });
   const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
@@ -1244,10 +1288,13 @@ async function handleTurn(gw, msg, decision) {
   // Resolve <@id> mention tokens to @Name BEFORE truncation so the room
   // stays legible to me — I can tell who each message is aimed at instead
   // of seeing raw snowflakes. (registry resolved at the top of handleTurn.)
-  const content  = resolveMentions(String(msg.content), {
-    mentions: msg.mentions, botUserId: gw.botUserId,
+  // Non-ward text passes the injection guard; my human's words stay raw —
+  // threat scoring below must read exactly what they said (inboundContent).
+  const content  = inboundContent(msg, {
+    botUserId: gw.botUserId,
     charName: settings?.charName, villagers: registry.villagers,
-  }).slice(0, INPUT_CHAR_CAP);
+    isWard: decision.isWard, speakerName: decision.speakerName,
+  });
   const nowIso   = new Date().toISOString();
 
   // Ward speech counts as ward activity wherever it happens — the
@@ -1336,6 +1383,9 @@ async function handleTurn(gw, msg, decision) {
     ambient: !!decision.ambient,
     ambientStrategy: decision.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
     directedAt,
+    // Pass 1: ambient turns offer the [later:…] defer, so they carry the
+    // wait-streak fact line ('' when the experiment is off).
+    waitStreakLine: decision.ambient ? buildWaitStreakLine({ settings }) : '',
   });
 
   const availability = await availabilityBlockFor(decision, audienceGrants);
@@ -1465,6 +1515,9 @@ async function handleTurn(gw, msg, decision) {
       { id: randomUUID(), locationKey: decision.locationKey, dueAt: Date.now() + ms, deferCount: 0, queuedAt: nowIso },
     ]);
     armRevisitTimer().catch(() => {});
+    // Wait-streak (Pass 1): an offered defer, taken. ([pass] deliberately
+    // does NOT count — room pacing, not outreach deferral.)
+    Promise.resolve(recordWait('discord-defer')).catch(() => {});
     session.messages = [
       ...(session.messages ?? []),
       { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },

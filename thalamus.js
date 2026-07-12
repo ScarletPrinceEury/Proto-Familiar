@@ -282,6 +282,13 @@ function loadPhylacteryEnv() {
     ENTITY_CORE_LLM_BASE_URL: baseUrl,
     ENTITY_CORE_LLM_MODEL:    model,
   };
+  // Memory lifecycle (temporal-bridges Piece 4) is opt-in / default-OFF, so
+  // Python needs an explicit enable signal. Only the ward turning it on sets
+  // this; the hard off-switch PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1 (read
+  // in Python) overrides. Takes effect on the next Phylactery (re)spawn.
+  if (settings.memoryLifecycleEnabled === true) {
+    env.PROTO_FAMILIAR_MEMORY_LIFECYCLE_ENABLED = '1';
+  }
   if (provider === 'zai' || provider === 'zai-coding') {
     env.ZAI_API_KEY  = apiKey;
     env.ZAI_BASE_URL = baseUrl;
@@ -862,6 +869,184 @@ export async function listRecurring({ includeResolved = false, limit = 200 } = {
   }
 }
 
+// ── Intention wrappers (Initiative Pass 3) ───────────────────────
+// Thin bridges to Unruh's intentions store. Each degrades to a
+// structured {ok:false} when Unruh is down — never throws into the
+// chat path (graceful degradation: an intention I can't file is a
+// message I can't keep, not an error my human sees).
+
+export async function setIntention({ what, why, refs, trigger, condition, source, visibility } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { what };
+  if (why        !== undefined) args.why        = why;
+  if (refs       !== undefined) args.refs       = refs;
+  if (trigger    !== undefined) args.trigger    = trigger;
+  if (condition  !== undefined) args.condition  = condition;
+  if (source     !== undefined) args.source     = source;
+  if (visibility !== undefined) args.visibility = visibility;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_set', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function listIntentions({ include_done = false, include_dropped = false, phase, limit = 100 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', intentions: [] };
+  const args = { include_done, include_dropped, limit };
+  if (phase !== undefined) args.phase = phase;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_list', arguments: args });
+    return parseToolText(r, { ok: false, intentions: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), intentions: [] }; }
+}
+
+export async function dropIntention({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_drop', arguments: { id } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function completeIntention({ id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_done', arguments: { id } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function markIntentionFired({ id, now } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { id };
+  if (now !== undefined) args.now = now;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_mark_fired', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function setRoundsVisibility({ value }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_set_rounds_visibility', arguments: { value } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function roundsForWard() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', rounds: [], hidden_count: 0, visibility: 'shared' };
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_rounds_for_ward', arguments: {} });
+    return parseToolText(r, { ok: false, rounds: [], hidden_count: 0, visibility: 'shared' });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), rounds: [], hidden_count: 0, visibility: 'shared' }; }
+}
+
+// ── Location & weather wrappers (Weather sense, W-A) ─────────────
+// Thin bridges to Unruh's locations/weather storage. The fetch half
+// (weather-source.js) does the network; these just store/serve. Each
+// degrades to a structured {ok:false} when Unruh is down — never throws.
+
+export async function addLocation({ label, lat, lon, place_name, timezone } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { label };
+  if (lat        !== undefined) args.lat        = lat;
+  if (lon        !== undefined) args.lon        = lon;
+  if (place_name !== undefined) args.place_name = place_name;
+  if (timezone   !== undefined) args.timezone   = timezone;
+  try {
+    const r = await unruhClient.callTool({ name: 'location_add', arguments: args });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function listLocations() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', locations: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_list', arguments: {} });
+    return parseToolText(r, { ok: false, locations: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), locations: [] }; }
+}
+
+export async function getCurrentLocation() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', location: null };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_get_current', arguments: {} });
+    return parseToolText(r, { ok: false, location: null });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), location: null }; }
+}
+
+export async function setCurrentLocation({ ident }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_set_current', arguments: { ident } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function deleteLocation({ ident }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'location_delete', arguments: { ident } });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/** Private (coords + cache age) — for the refresh loop ONLY. */
+export async function weatherLocationsPrivate() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', locations: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'weather_locations_private', arguments: {} });
+    return parseToolText(r, { ok: false, locations: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), locations: [] }; }
+}
+
+export async function ingestWeather({ location_id, provider, fetched_at, current, hourly } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'weather_ingest',
+      arguments: { location_id, provider, fetched_at, current, hourly },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function readWeather({ location_id }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', weather: null };
+  try {
+    const r = await unruhClient.callTool({ name: 'weather_read', arguments: { location_id } });
+    return parseToolText(r, { ok: false, weather: null });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), weather: null }; }
+}
+
+/** Intentions whose trigger timing has come due (for the noticing loop). */
+export async function getDueIntentions({ now } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', due: [] };
+  const args = {};
+  if (now !== undefined) args.now = now;
+  try {
+    const r = await unruhClient.callTool({ name: 'intention_due', arguments: args });
+    return parseToolText(r, { ok: false, due: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), due: [] }; }
+}
+
 // ── Reminders wrappers (M11) ─────────────────────────────────────
 
 export async function getDueReminders({ now, limit = 50 } = {}) {
@@ -887,18 +1072,32 @@ export async function getRemindersHealth() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
-/** Record that an event's lead-time alert was delivered (one-time:
- *  payload.alerted_at; recurring: payload.alerts[occurrence_date]) so the
- *  alert scan never re-pings the same moment. Best-effort. */
-export async function markEventAlerted({ id, occurrence_date = null }) {
+/** Record that an event's lead-time alert was delivered so the alert scan
+ *  never re-pings the same moment. `kind` selects the dedup channel:
+ *  'event' (payload.alerted_at / alerts[date]) or 'weather' (the W-B severe
+ *  heads-up: weather_alerted_at / weather_alerts[date]). Best-effort. */
+export async function markEventAlerted({ id, occurrence_date = null, kind = 'event' }) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const args = { id };
+    if (occurrence_date) args.occurrence_date = occurrence_date;
+    if (kind && kind !== 'event') args.kind = kind;
+    const r = await unruhClient.callTool({ name: 'schedule_mark_alerted', arguments: args });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/** Set (or clear) an event's per-event lead time (Initiative Pass 5). */
+export async function setScheduleLead({ id, lead_minutes = null }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({
-      name: 'schedule_mark_alerted',
-      arguments: occurrence_date ? { id, occurrence_date } : { id },
+      name: 'schedule_set_lead',
+      arguments: lead_minutes == null ? { id } : { id, lead_minutes },
     });
-    return parseToolText(r, { ok: false });
+    return parseToolText(r, { ok: true });
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1263,6 +1462,7 @@ function wrapFile(filename, content, promptLabel) {
 import { formatTemporalContext } from './temporal-format.js';
 import { buildStewardshipBlock } from './stewardship.js';
 import { nextProjectionCue } from './gcal-projection.js';
+import { weatherEnabled } from './weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
 import { summarizeNeedsForDay, isNeedWindow } from './needs-tracking.js';
@@ -1284,6 +1484,7 @@ import {
   tagOutcomes,
 } from './surface-events.js';
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './audience.js';
+import { syncSpineState, stripSensitiveScheduleNodes } from './spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
 function sortFiles(files, order) {
@@ -1704,6 +1905,16 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           console.error('[thalamus] recurrence expansion failed:', err?.message ?? err);
         }
       }
+      // Fail-closed villager privacy: on any GATED (non-ward) turn, strip
+      // caring-spine crisis states (and anything else payload.sensitive) plus
+      // every edge touching one, BEFORE the block is rendered. A villager with
+      // a schedule grant sees the ward's commitments, never their hard
+      // stretches. Structural, not model discretion.
+      if (gated && temporalPayload) stripSensitiveScheduleNodes(temporalPayload);
+      // Intentions are my own private cognition (Initiative Pass 3) — never
+      // surfaced on a gated (villager) turn. The ward-facing rounds view is
+      // separately visibility-controlled; a villager sees nothing of them.
+      if (gated && temporalPayload) temporalPayload.intentions_due = [];
       temporalLines = formatTemporalContext(temporalPayload);
     } catch (err) {
       console.error('[thalamus] temporal assembly failed (defaulting to empty):', err?.message ?? err);
@@ -1816,7 +2027,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (liveTurn && !staticOnly && !gated) {
       try {
         const candidates = Array.isArray(temporalPayload?.gcal_projection) ? temporalPayload.gcal_projection : [];
-        gcalCueBlock = await nextProjectionCue({ candidates, advance: true });
+        let weatherOn = false;
+        try { weatherOn = weatherEnabled(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))); } catch { /* default off */ }
+        gcalCueBlock = await nextProjectionCue({ candidates, advance: true, weatherOn });
         if (gcalCueBlock) console.log('[thalamus] gcal projection cue: surfacing new calendar item(s)');
       } catch (err) {
         console.error('[thalamus] gcal projection cue failed:', err?.message ?? err);
@@ -1839,6 +2052,37 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           return { weight: 0, tier: 'calm', disabled: false };
         });
     const careBlock = buildCareCheckBlock(threat);
+
+    // ── Spine states (temporal-bridges Pass A) ────────────────────────
+    //    Fire-and-forget: reconcile the open crisis episode against this
+    //    reading. When threat crosses into moderate+, code mints a `state`
+    //    node so the hard stretch becomes a graph citizen the Familiar's
+    //    reasoning can relate to schedule events (the missing causal middle);
+    //    when it falls back below, code closes it and derives co-occurrence
+    //    edges. Same liveTurn-side-effect posture as tagOutcomes / the
+    //    standing-value bridge. Ward turns only (a villager's words never move
+    //    the tier, so never an episode); never throws; own off-switch inside.
+    if (liveTurn && !staticOnly && !gated) {
+      let spineSettings = {};
+      try { spineSettings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')); } catch { /* fresh install */ }
+      syncSpineState({
+        threat,
+        nowMs: Date.now(),
+        wardTimeZone: wardTimeZoneSetting(),
+        settings: spineSettings,
+        deps: {
+          addNode:    addScheduleNode,
+          updateNode: updateScheduleNode,
+          getWindow:  getScheduleWindow,
+          addEdge:    addScheduleEdge,
+          log:        (m) => console.log(m),
+        },
+      }).then(r => {
+        if (r?.action && r.action !== 'none' && r.action !== 'skipped') {
+          console.log(`[spine] ${r.action}${r.id ? ` ${r.id}` : ''}`);
+        }
+      }).catch(err => console.error('[spine] sync threw:', err?.message ?? err));
+    }
 
     // ── Stewardship (docs/stewardship-build-spec.md, Pass 1) ──────────
     //    The executive layer over the temporal world model: cheap code
@@ -1920,8 +2164,13 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
             now: nowMs,
             // Consequence awareness: the graph edges + the full window so a
             // candidate's dependents/blocked-items resolve to read imminence.
+            // `linked` rides along so edge endpoints outside the window
+            // (undated states, old anchors) still resolve to labels.
             edges: Array.isArray(temporalPayload?.schedule?.edges) ? temporalPayload.schedule.edges : [],
-            scheduleNodes: windowItems,
+            scheduleNodes: [
+              ...windowItems,
+              ...(Array.isArray(temporalPayload?.schedule?.linked) ? temporalPayload.schedule.linked : []),
+            ],
           });
 
           if (candidates.length > 0) {
@@ -2191,7 +2440,7 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
  * Accepts audience, subjects, category, consent_pending, confidence.
  * Returns { ok, id?, error? }.
  */
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2200,6 +2449,9 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     if (slug) args.slug = slug;
     if (category) args.category = category;
     if (standalone) args.standalone = true;
+    // Cross-store provenance (temporal-bridges Piece 2): schedule_refs riding
+    // in source_meta ties a memorized fact to the schedule node(s) it's about.
+    if (sourceMeta && typeof sourceMeta === 'object') args.source_meta = sourceMeta;
     const raw = await mcpClient.callTool({ name: 'memory_create', arguments: args });
     // Parse the returned string for the id and whether it merged into an
     // existing memory ("Memory saved id=<id>." vs "Memory merged into existing
@@ -2258,6 +2510,13 @@ export async function dropPendingMemories(ids) {
 export async function searchMemory({ query, maxResults = 5, audiences } = {}) {
   return callTool('memory_search', {
     query, instanceId: 'proto-familiar', maxResults,
+    ...(audiences !== undefined ? { audiences } : {}),
+  });
+}
+
+export async function memByTimerange({ fromDate, toDate, limit = 12, audiences } = {}) {
+  return callTool('memory_by_timerange', {
+    fromDate, toDate, limit, instanceId: 'proto-familiar',
     ...(audiences !== undefined ? { audiences } : {}),
   });
 }

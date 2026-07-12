@@ -7,9 +7,9 @@ pick it up without re-deriving the problem.
 ## In flight
 
 (nothing currently in flight — Unruh shipped in 0.3.0-alpha, see
-[`unruh-design.md`](unruh-design.md) for the original design doc and
-[`unruh-implementation-plan.md`](unruh-implementation-plan.md) for the
-milestone-by-milestone build history)
+[`unruh-design.md`](unruh-design.md) for the original design doc; the
+milestone-by-milestone implementation plan was a working file that no
+longer exists in-tree)
 
 ## Memory entries
 
