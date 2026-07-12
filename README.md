@@ -26,7 +26,7 @@ A few things worth knowing:
 - **The coding is primarily done by AI.** The human behind this project designs, directs, and tests. The actual code is written mostly by Claude Opus and Claude Fable. This is disclosed openly because a project built on trust should be honest about how it's made.
 - **It is under active development.** Things change frequently. Since so much is still missing, big updates drop frequently. The [Discord server](https://discord.gg/ajKBCWGaE) is the best place to follow along or ask for help.
 - **It is not made by experts.** The plan is to hire expert counsel as soon as possible. But currently that's not in the budget yet. Just be aware that this means you can't count on corporate-grade security or polish.
-- **The software is free, but AI might not be.** Familiar is open source and free to use. No paywalled features from developer side. However, basic use is only possible with an LLM, and using those tends to cost money. The arcitecture of Familiar keeps costs low, and you can reduce your Familiar's functions that need the connection. But the dev does not have the means to provide connections for everyone. Some features, like understanding images, can't work without special AI models that not every provider offers.
+- **The software is free, but AI might not be.** Familiar is open source and free to use. No paywalled features from developer side. However, basic use is only possible with an LLM, and using those tends to cost money. The architecture of Familiar keeps costs low, and you can reduce your Familiar's functions that need the connection. But the dev does not have the means to provide connections for everyone. Some features, like understanding images, can't work without special AI models that not every provider offers.
 
 ---
 
@@ -89,7 +89,7 @@ In early testing, two Familiar instances running simultaneously used roughly **2
 
 And to be blunt about it: this isn't a hardware miracle. The big, well-funded agent frameworks — built by companies with enormous budgets and rooms full of experts — could trivially do the same. They largely don't, because constant generation is cheaper to ship than careful generation, and because they have the money to literally just *buy* more of the resources they're wasting. Familiar is cobbled together by one middle-aged, unemployed woman on a rickety laptop, and it still manages to do a lot with so little. I do kind of hope that it will make a statement about care — all I needed to do was approach this project with a mindset that wasn't wasteful or dismissive of collaboration.
 
-So while data centers are awful for the environment, we can sharply decrease the negative impact through reducing how much we put on those data centers. My dream would be to evenntually not need external AI at all anymore and handle everything with a local model that doesn't dirty communal water or torture people with infrasound.
+So while data centers are awful for the environment, we can sharply decrease the negative impact through reducing how much we put on those data centers. My dream would be to eventually not need external AI at all anymore and handle everything with a local model that doesn't dirty communal water or torture people with infrasound.
 
 ### Isn't AI bad for Mental Health?
 
