@@ -27,6 +27,7 @@
  */
 
 import { PROVIDER_URLS } from './providers.js';
+import { callProviderChat } from './llm-call.js';
 import { enrich } from './thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages } from './cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
@@ -225,29 +226,8 @@ export async function decideReachoutViaLLM({
   return parseReachoutDecision(raw);
 }
 
+// temperature 0.8 — warmth wants a little more life than triage's care. Cap is
+// generous so a thinking model has room past its reasoning (see llm-call.js).
 async function defaultCallLLM({ provider, apiKey, model, prompt }) {
-  const url = PROVIDER_URLS[provider];
-  if (!url) throw new Error(`Unknown provider: ${provider}`);
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify({
-      model:       model.trim(),
-      messages:    [{ role: 'user', content: prompt }],
-      stream:      false,
-      temperature: 0.8,    // warmth wants a little more life than triage's care
-      max_tokens:  600,
-    }),
-  });
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`Provider ${provider} returned ${resp.status}: ${text.slice(0, 200)}`);
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error('Provider returned non-JSON response.'); }
-  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'Provider error'));
-  const content = data.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('Provider returned empty content.');
-  return content;
+  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.8, maxTokens: 2000 });
 }

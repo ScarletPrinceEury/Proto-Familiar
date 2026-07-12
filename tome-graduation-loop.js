@@ -22,6 +22,7 @@ import {
 } from './thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, connectionForFeature } from './cerebellum.js';
 import { PROVIDER_URLS } from './providers.js';
+import { callProviderChat } from './llm-call.js';
 import { substituteMacros } from './macros.js';
 import { runOneGraduationTick, EXCLUDED_TOME_NAMES } from './tome-graduation.js';
 
@@ -90,27 +91,10 @@ I reply with ONLY a JSON array — one object per uid, no prose:
 
 // Provider call — mirrors the reachout/triage loops' shape. (If a fourth
 // copy appears, extract a shared callProvider into providers.js.)
+// temperature 0.3 — routing wants steadiness, not flourish. Cap is generous so
+// a thinking model can finish past its reasoning (see llm-call.js).
 async function callLLM({ provider, apiKey, model, prompt }) {
-  const url = PROVIDER_URLS[provider];
-  if (!url) throw new Error(`Unknown provider: ${provider}`);
-  const resp = await fetch(url, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey.trim()}` },
-    body: JSON.stringify({
-      model: model.trim(),
-      messages: [{ role: 'user', content: prompt }],
-      stream: false,
-      temperature: 0.3,    // routing wants steadiness, not flourish
-      max_tokens: 900,
-    }),
-  });
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`Provider ${provider} returned ${resp.status}: ${text.slice(0, 200)}`);
-  const data = JSON.parse(text);
-  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'Provider error'));
-  const content = data.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('Provider returned empty content.');
-  return content;
+  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.3, maxTokens: 3000 });
 }
 
 async function decideGraduation(candidates) {

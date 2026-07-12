@@ -17,7 +17,7 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { PROVIDER_URLS } from './providers.js';
+import { callProviderChat } from './llm-call.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -195,32 +195,12 @@ The heading must be a single markdown heading line starting with "## ". In edge_
 
 // ── LLM call ─────────────────────────────────────────────────────
 
+// The pondering call needs room to think: a JSON-emitting prompt on a reasoning
+// model spends tokens on chain-of-thought first, so the cap is generous (a cap
+// is free for non-thinking models — they stop when done). Shared helper owns
+// the reasoning-model handling + empty-content diagnostics.
 async function defaultCallLLM({ provider, apiKey, model, prompt }) {
-  const url = PROVIDER_URLS[provider];
-  if (!url) throw new Error(`Unknown provider: ${provider}`);
-
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify({
-      model:       model.trim(),
-      messages:    [{ role: 'user', content: prompt }],
-      stream:      false,
-      temperature: 0.7,
-      max_tokens:  1200,
-    }),
-  });
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`Provider ${provider} returned ${resp.status}: ${text.slice(0, 200)}`);
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error('Provider returned non-JSON response.'); }
-  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'Provider error'));
-  const content = data.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('Provider returned empty content.');
-  return content;
+  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.7, maxTokens: 4000 });
 }
 
 // ── Parsing ──────────────────────────────────────────────────────
