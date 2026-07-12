@@ -26,6 +26,8 @@ entity whose identity and memory live in a separate canonical store. Start with:
   repo is built to serve.
 - [Proactivity over caution](decisions/proactivity-over-caution) — the incident that shapes
   every prompt governing when the Familiar acts on its own.
+- [Weather](architecture/weather) and [Location privacy](decisions/location-privacy) — how the
+  Familiar learns the ward's weather without geographic location ever reaching the model.
 - [Engineering conventions](reference/engineering-conventions) — the repo-wide operating
   rules (versioning, degradation, ids) referenced throughout the architecture pages.
 
