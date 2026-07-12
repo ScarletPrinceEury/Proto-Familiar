@@ -94,6 +94,11 @@ auto-clears when the data arrives), plus a line in the noticing situation
 report when genuinely stale. The Familiar then asks *one* natural question if
 the moment fits — or doesn't. There is no questionnaire anywhere in the
 design; there is a Familiar who knows what it doesn't know.
+**The ask-budget is per-tracker (WARD-DECIDED),** set in each template's
+`config_json` to match its natural cadence: pantry/laundry change slowly (a
+question a week is plenty); mood tracks closely (a daily allowance). The erp
+template stays hard-capped regardless — the monitoring-as-compulsion guard
+outranks any budget.
 
 **2.4 Mood-tagged send — the calibration affordance (ward idea).**
 A small mood control by the message input: the ward picks a mood *as* they
@@ -246,21 +251,28 @@ gaps — the ADHD shame finding); and **entry-rate watchdogs** guard against
 monitoring-as-compulsion (the OCD finding): per-tracker caps + a private
 "this tracker is being fed unusually often" reflection signal.
 
-**Still open:**
+**ALL RESOLVED (ward-decided):**
 
-1. **Template set for v1** — evidence-informed proposal: **mood ·
-   sleep · meds · outings · pantry · laundry**, with **erp** and **menses**
-   shipped-but-not-suggested (present for wards who want them; the Familiar
-   doesn't proactively offer clinical-adjacent trackers uninvited). Confirm
-   or reshape?
-2. **Sensitive-by-default set** — menses/mood/meds proposed; sleep too?
-3. **Prediction projections** — comfortable with code-projected cycle
-   windows on the schedule surface (ward-private), or opt-in per tracker?
-4. **Store split confirm** — raw ledgers in Unruh, distilled learnings to
-   Phylactery via existing consent gates (§5): confirm this is the
-   portability shape you want.
-5. **Clarification budget** — how often may the Familiar ask (proposal: the
-   cue machinery's own cap — at most one clarifying question per tracker per
-   day, and only when the moment fits)?
-6. **Offer-a-tracker cue** — the §7 "you keep missing X, want me to track
-   it?" nudge: in v1, or hold until trackers have proven themselves?
+1. **Template set for v1** → **confirmed**: mood · sleep · meds · outings ·
+   pantry · laundry, with erp and menses shipped-but-not-suggested.
+2. **Sensitive-by-default** → **menses · mood · meds · sleep** (all four;
+   sleep included). Fail-closed everywhere per §6.
+3. **Prediction projections** → **always on** (ward-private schedule
+   surface; no per-tracker opt-in ceremony).
+4. **Store split** → **confirmed**: raw ledgers in Unruh, distilled
+   learnings to Phylactery via the existing consent gates.
+5. **Clarification budget** → **per-tracker, not global** — the cap lives
+   in each template's `config_json` and matches the tracker's natural
+   cadence: laundry/pantry barely change (a question a week is plenty);
+   mood tracks closely (a higher daily allowance when the moment fits).
+   The erp template stays hard-capped regardless (the §4-research
+   monitoring-as-compulsion guard outranks any budget).
+6. **Offer-a-tracker cue** → **in v1**, with the framing the ward set: the
+   offer is CARE-FIRST, never deficit-first. Not *"you keep missing X —
+   want me to track it?"* but the shape of *"hey, about X — I've noticed it
+   really stresses you out. Want to try tracking it, to see if that helps?"*
+   The code trigger stays the same (a recurring pattern with no tracker
+   attached, once, long cooldown); the prompt wording anchors to what the
+   Familiar has *noticed about how X weighs on their human*, in its own
+   voice — a friend's observation, not a compliance nudge. (Final wording
+   ward-reviewed at build time, like every when-to-act prompt.)
