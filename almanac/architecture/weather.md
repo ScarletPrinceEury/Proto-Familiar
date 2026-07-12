@@ -23,6 +23,12 @@ sources:
   - id: unruh-migration
     type: file
     path: unruh/src/unruh/migrations/0006_locations.sql
+  - id: weather-service
+    type: file
+    path: weather-service.js
+  - id: event-alerts
+    type: file
+    path: event-alerts.js
 ---
 
 # Weather
@@ -58,6 +64,55 @@ Weather appears only on four **ward-facing** `[Now]` call sites: triage, warmth,
 - `weather-mirror.js` — sync read-mirror (`last-activity.js` precedent) so the hot `[Now]` path reads without an async MCP round-trip; the single `readWeatherNowLine` call `buildTimeAnchorBlock` makes; honours `PROTO_FAMILIAR_WEATHER_DISABLED=1` [@weather-mirror].
 - Unruh `location.py` + migration `0006_locations.sql` — the `locations` + `weather_cache` store; times inside cached JSON are local-naive (same frame as the forecast's hourly times) [@unruh-location] [@unruh-migration].
 
+## W-B — the day at will, preparation, and the vague tier
+
+Session W-B (0.8.77-alpha) built the second tier on W-A's foundation: the
+Familiar can look at the day ahead, weave the sky into how it prepares its
+human for going out, and speak weather safely on shared surfaces. Still pure
+code end to end — the model reads code-built words, never computes a value or
+sees a coordinate [@weather-build-spec].
+
+**Two ward-only tools.** `weather_today` returns the today+tomorrow arc
+(morning/afternoon/evening + notable turns) for the current place or another
+saved label; `set_current_location` moves the current place. Both are gated by
+`weatherEnabled` and surfaced by a new `weather` tool-surfacing module on
+leaving-the-house language and the readiness/projection blocks. On a gated
+(non-ward) turn `weather_today` falls closed to the vague tier.
+
+**The get-or-fetch seam** [@weather-service]. `weather-service.js` resolves a
+location by ward label or current (from the Node-only private shape) and
+returns a forecast cache-first, fetching on demand only when the cache is
+absent, stale, or doesn't reach a needed date (Open-Meteo serves 16 days; the
+outside-join uses this for far dates). Coordinates live here and never leave
+toward the model.
+
+**Preparation hookups.** The readiness note reads the `[Now]` mirror
+synchronously and, for an outside-tagged item whose hour looks adverse,
+appends a code-built weather clause — no fetch. `weather_today` also joins the
+noticing toolset (read-only; deliberately NOT a wake condition — weather only
+flavours a turn already happening) and the projection cue's prose (a reminder
+to weigh the sky against an appointment's lead time).
+
+**The severe-weather heads-up** [@event-alerts]. `selectDueWeatherAlerts`
+gives an outside-tagged item whose occurrence-hour turns adverse in the CACHED
+forecast a `weather_alert` outbox ping. It rides the SAME 30s window scan as
+the coming-up alert (a per-tick memo shares one schedule fetch between the two
+passes) through a SHARED enqueue-then-mark helper, but into a SEPARATE dedup
+channel (`weather_alerts` / `kind="weather"`) so a coming-up ping and a weather
+ping for one occurrence never suppress each other. Weather alone — with no
+outside item affected — never pings: this is a preparation surface, not a
+weather report.
+
+## The vague tier — weather on gated audiences
+
+Precise values and units are a soft geolocation ("x°C, so metric, so…"), so on
+any non-ward-private surface the weather renders qualitatively only — bands and
+verbs, no numbers, no units, no times, no labels ("It's cold and rainy out")
+[@weather-build-spec]. `formatWeatherVague` is the one gate, applied
+fail-closed: an unclear audience gets vague-or-nothing, and vague itself yields
+'' when the forecast is stale. The gated `[Now]` turn renders
+`readWeatherVagueLine`; ward-private keeps the full code-formatted detail.
+
 ## Off-switch and testing
 
-Off-switch: `weatherEnabled` (default ON) + `PROTO_FAMILIAR_WEATHER_DISABLED=1` [@weather-build-spec]. Tests: 25 Node + 12 Python; full suites green (1368 Node, 290 Python) [@weather-build-spec]. Shipped via PR #190.
+Off-switch: `weatherEnabled` (default ON) + `PROTO_FAMILIAR_WEATHER_DISABLED=1` [@weather-build-spec]. The shared gate `weatherEnabled(settings)` lives in `weather-mirror.js` so cerebellum, thalamus, and server all read it identically. Full suites green after W-B: 1385 Node, 294 Python [@weather-build-spec]. Shipped via PR #190 (W-A + W-B on one branch).
