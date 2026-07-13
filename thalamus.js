@@ -2450,6 +2450,23 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
  * Accepts audience, subjects, category, consent_pending, confidence.
  * Returns { ok, id?, error? }.
  */
+/**
+ * Parse memory_create's text reply into { id, merged }. The MCP prints one of
+ * "Memory saved id=<id>.", "Memory saved (significant/<dk>) id=<id>.", or
+ * "Memory merged into existing id=<id>." — always `id=<id>.` with a trailing
+ * period bounding the token. `id` must match the WHOLE token: memory ids are
+ * readable slugs now (`carpal-tunnel-k3`), and the old hex-only `[a-f0-9]+`
+ * stopped at the first non-hex char (returning `ca`), so a new slug memory's
+ * id came back truncated — the consent-pending file then stored a broken id
+ * that memory_confirm_consent / memory_drop_pending could never match, a
+ * silent consent-queue leak. `[\w-]+` covers slugs, legacy 32-char hex, and
+ * dashed uuids alike. Exported for the unit test that pins this contract.
+ */
+export function parseMemoryCreateResult(text) {
+  const s = String(text ?? '');
+  return { id: s.match(/id=([\w-]+)/)?.[1] ?? null, merged: /merged/i.test(s) };
+}
+
 export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
@@ -2467,9 +2484,7 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     // existing memory ("Memory saved id=<id>." vs "Memory merged into existing
     // id=<id>."). `merged` lets the memorization loop skip re-queuing dupes.
     const text = raw?.content?.find(c => c.type === 'text')?.text ?? '';
-    const idMatch = text.match(/id=([a-f0-9]+)/);
-    const id = idMatch?.[1] ?? null;
-    const merged = /merged/i.test(text);
+    const { id, merged } = parseMemoryCreateResult(text);
     console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}${merged ? ' [merged-dedup]' : ''}`);
     return { ok: true, id, merged };
   } catch (err) {
