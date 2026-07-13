@@ -2249,12 +2249,22 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         if (cpRaw) {
           const cpItems = JSON.parse(cpRaw);
           if (Array.isArray(cpItems) && cpItems.length > 0) {
+            // Why each of these needs a check-in rather than being kept on
+            // implied consent — so I can say it plainly instead of asking a
+            // date-less, reasonless question (which my human found confusing).
+            const whyFor = (reason) =>
+              reason === 'shared-room' ? 'from a group conversation'
+              : reason === 'third-party' ? "about someone else's private life"
+              : 'flagged for review';
             const lines = [
-              `[PENDING MEMORY CONSENT — ${cpItems.length} memory record(s) from a recent session are waiting for my human's approval before I keep them permanently.]`,
+              `[PENDING MEMORY CONSENT — ${cpItems.length} memory record(s) are waiting for my human's OK before I keep them. These are only the ones that need a check-in: things I heard in a group room, or about a third person's private life. Anything my human told me directly about themselves I already keep — I don't ask about those.]`,
               'Items:',
-              ...cpItems.map((x, i) =>
-                `  ${i + 1}. About ${x.villagerName || 'someone'} (${x.category ?? 'unknown category'}): ${x.brief ?? ''}  [id: ${x.id}]`
-              ),
+              ...cpItems.map((x, i) => {
+                const when = x.date ? ` (from ${x.date})` : '';
+                const why  = ` — ${whyFor(x.reason)}`;
+                const kind = x.standing ? ', a standing fact' : '';
+                return `  ${i + 1}. About ${x.villagerName || 'someone'}${when} [${x.category ?? 'unknown category'}${kind}]${why}: ${x.brief ?? ''}  [id: ${x.id}]`;
+              }),
               'If my human says to keep them, I call memory_confirm_consent with the id(s); if not, memory_drop_pending.',
             ];
             // If the asking is piling up, I remember there's a gentler option: my
@@ -2450,7 +2460,24 @@ export async function createMemory({ content, granularity = 'daily', date, slug,
  * Accepts audience, subjects, category, consent_pending, confidence.
  * Returns { ok, id?, error? }.
  */
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, sourceMeta }) {
+/**
+ * Parse memory_create's text reply into { id, merged }. The MCP prints one of
+ * "Memory saved id=<id>.", "Memory saved (significant/<dk>) id=<id>.", or
+ * "Memory merged into existing id=<id>." — always `id=<id>.` with a trailing
+ * period bounding the token. `id` must match the WHOLE token: memory ids are
+ * readable slugs now (`carpal-tunnel-k3`), and the old hex-only `[a-f0-9]+`
+ * stopped at the first non-hex char (returning `ca`), so a new slug memory's
+ * id came back truncated — the consent-pending file then stored a broken id
+ * that memory_confirm_consent / memory_drop_pending could never match, a
+ * silent consent-queue leak. `[\w-]+` covers slugs, legacy 32-char hex, and
+ * dashed uuids alike. Exported for the unit test that pins this contract.
+ */
+export function parseMemoryCreateResult(text) {
+  const s = String(text ?? '');
+  return { id: s.match(/id=([\w-]+)/)?.[1] ?? null, merged: /merged/i.test(s) };
+}
+
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2459,6 +2486,10 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     if (slug) args.slug = slug;
     if (category) args.category = category;
     if (standalone) args.standalone = true;
+    // Standing facts (memorization's temporality='standing') land on a non-
+    // episodic register — 'ward' for a standing truth about my human — so they're
+    // recalled when relevant instead of day-bucketed. Omitted → episodic default.
+    if (register && register !== 'episodic') args.register = register;
     // Cross-store provenance (temporal-bridges Piece 2): schedule_refs riding
     // in source_meta ties a memorized fact to the schedule node(s) it's about.
     if (sourceMeta && typeof sourceMeta === 'object') args.source_meta = sourceMeta;
@@ -2467,10 +2498,8 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     // existing memory ("Memory saved id=<id>." vs "Memory merged into existing
     // id=<id>."). `merged` lets the memorization loop skip re-queuing dupes.
     const text = raw?.content?.find(c => c.type === 'text')?.text ?? '';
-    const idMatch = text.match(/id=([a-f0-9]+)/);
-    const id = idMatch?.[1] ?? null;
-    const merged = /merged/i.test(text);
-    console.log(`[thalamus] createMemoryFull() ${granularity}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}${merged ? ' [merged-dedup]' : ''}`);
+    const { id, merged } = parseMemoryCreateResult(text);
+    console.log(`[thalamus] createMemoryFull() ${granularity}${register && register !== 'episodic' ? `/${register}` : ''}${slug ? ` (${slug})` : ''}${consent_pending ? ' [consent_pending]' : ''}${merged ? ' [merged-dedup]' : ''}`);
     return { ok: true, id, merged };
   } catch (err) {
     console.error('[thalamus] createMemoryFull failed:', err.message);

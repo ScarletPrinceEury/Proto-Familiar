@@ -185,3 +185,59 @@ test('resolveRememberGate: ward-self, null standing map → gate unchanged', () 
     'ask'
   );
 });
+
+// ── Source-aware consent: direct channel = implied consent ──────────────────
+
+test('direct ward-self fact, UNSET category → implied consent (auto-true)', () => {
+  // Told directly in a DM/web chat, about my human, category they never
+  // configured → default 'ask' becomes 'true'. This is the flood-killer.
+  assert.equal(resolveRememberGate('emotional_content', [], null, null, { direct: true }), 'true');
+  assert.equal(resolveRememberGate('health_info',       [], null, null, { direct: true }), 'true');
+});
+
+test('direct does NOT override an EXPLICIT ward "ask"', () => {
+  const ward = { health_info: 'ask' }; // deliberately turned on gating
+  assert.equal(resolveRememberGate('health_info', [], ward, null, { direct: true }), 'ask');
+});
+
+test('direct does NOT override an explicit ward "false"', () => {
+  const ward = { emotional_content: false };
+  assert.equal(resolveRememberGate('emotional_content', [], ward, null, { direct: true }), 'false');
+});
+
+test('indirect (group room) ward-self fact still asks', () => {
+  // Same fact heard in a shared room → direct:false → default ask stands.
+  assert.equal(resolveRememberGate('emotional_content', [], null, null, { direct: false }), 'ask');
+  assert.equal(resolveRememberGate('emotional_content', [], null, null), 'ask'); // default opts
+});
+
+test('third party told directly: a stranger\'s private life still asks', () => {
+  // "My coworker Bob is struggling" in a DM — hasNamedSubjects, no villager
+  // match → NOT swept in by implied consent.
+  assert.equal(
+    resolveRememberGate('health_info', [], null, null, { direct: true, hasNamedSubjects: true }),
+    'ask'
+  );
+  assert.equal(
+    resolveRememberGate('emotional_content', [], null, null, { direct: true, hasNamedSubjects: true }),
+    'ask'
+  );
+});
+
+test('third party basics told directly are still kept (not sensitive)', () => {
+  // A named person's basic biographical fact isn't private-life gating.
+  assert.equal(
+    resolveRememberGate('basics', [], null, null, { direct: true, hasNamedSubjects: true }),
+    'true'
+  );
+});
+
+test('direct implied consent never overrides a registered villager gate', () => {
+  // Third person's private life via a registered villager → their map wins,
+  // regardless of the direct channel.
+  const villager = { remember: { health_info: 'ask' } };
+  assert.equal(
+    resolveRememberGate('health_info', [villager], null, null, { direct: true, hasNamedSubjects: true }),
+    'ask'
+  );
+});
