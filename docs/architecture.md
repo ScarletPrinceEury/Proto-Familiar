@@ -260,8 +260,16 @@ can still show `vec_rows < memory_rows`); the backfill also auto-runs in the
 background at boot when that gap is detected. Idempotent.
 **Import (day-anchoring Phase 4):** `POST /api/import-logs` — without `commit`
 PREVIEWS (parse + segment, no writes); with `commit` places foreign logs by date
-(one imported session per date) and enqueues them for immediate ingestion. Parsers
-in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudly).
+(one imported session per date) and enqueues them for immediate ingestion.
+`POST /api/import-logs-batch` does the same for MANY files in one request (each
+resolves its own date from a per-file `fallbackDate` or its filename; preview
+returns a per-file breakdown; commit ingests every file that resolved and SKIPS —
+never fails the whole batch on — any that need a date or didn't parse). Both share
+`resolveImportSegs` (parse→date→segment) + `commitImportSegs` (write+enqueue) so
+the rules can't drift. Parsers in `log-import.js` (Proto-Familiar JSON,
+SillyTavern & OpenClaw `.jsonl`, **ChatGPT copy/share export** — `**You:**` /
+`**ChatGPT:**` markdown with `* * *` separators, standalone-header-only so an
+inline `**Reminder:**` stays content — and timestamped text; rejects unknown loudly).
 
 **Diagnostics (ward-facing, localhost-gated):** `POST /api/diagnostics/session-trace`
 — the regex/trigger tracer (0.8.25); per turn, runs the real tool-surfacing +

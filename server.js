@@ -1793,52 +1793,30 @@ app.post('/api/memorize-day', async (req, res) => {
   }
 });
 
-// POST /api/import-logs — bring past conversation logs in from elsewhere.
-// Two-step: without `commit` it PREVIEWS (parse + segment, no writes) so the UI
-// can show the scale before spending; with `commit` it places the logs by date
-// (one imported session per date) and enqueues them for immediate ingestion.
-app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) => {
-  const { content, selfNames, source, commit, provider, apiKey, model, fallbackDate, filename } = req.body ?? {};
-  const names = Array.isArray(selfNames) ? selfNames
-    : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
-
+// Parse + date-place + segment ONE log's content into per-date slices, no
+// writes. Shared by the single-file and batch import endpoints so the parse /
+// date / segment rules can't drift between them. Returns
+// { ok, format, segs?, dates?, messageCount?, needsDate?, error? }.
+function resolveImportSegs({ content, filename, fallbackDate, names }) {
   const parsed = parseImport(content, { selfNames: names });
-  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
-
-  // Date placement (the "read filename, then ask" path): if the log carries no
-  // timestamps at all, stamp every message with a single date — an explicit
-  // fallbackDate, else one pulled from the filename. If neither is available the
-  // preview asks for a date; a commit refuses without one.
+  if (!parsed.ok) return { ok: false, error: parsed.error };
   let messages = parsed.messages;
+  // Undated log → stamp every message with one date (explicit, else filename).
+  // Neither available → the caller must supply one (needsDate).
   if (!messages.some(m => m.timestamp)) {
     const explicit = (typeof fallbackDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fallbackDate)) ? fallbackDate : null;
     const date = explicit || dateFromFilename(filename);
-    if (!date) {
-      if (!commit) return res.json({ ok: true, preview: true, format: parsed.format, needsDate: true, messages: messages.length });
-      return res.status(400).json({ error: 'This log has no timestamps. Provide a date (YYYY-MM-DD) for it.' });
-    }
+    if (!date) return { ok: true, format: parsed.format, needsDate: true, messageCount: messages.length };
     messages = applyFallbackDate(messages, date);
   }
-
-  // Segment into per-date slices with enough to extract.
   const segs = segmentByDay(messages).filter(s => s.readableCount >= 2);
-  if (segs.length === 0) {
-    return res.status(400).json({ error: 'No date had enough messages to import (need ≥2 each).' });
-  }
-  const dates = segs.map(s => s.date);
+  if (segs.length === 0) return { ok: false, error: 'No date had enough messages to import (need ≥2 each).' };
+  return { ok: true, format: parsed.format, segs, dates: segs.map(s => s.date), messageCount: segs.reduce((n, s) => n + s.count, 0) };
+}
 
-  if (!commit) {
-    return res.json({
-      ok: true, preview: true, format: parsed.format,
-      dates, days: segs.length,
-      messages: segs.reduce((n, s) => n + s.count, 0),
-    });
-  }
-
-  if (!provider || !apiKey || !model) {
-    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
-  }
-
+// Write each date-slice as an imported session log + enqueue it for ingestion.
+// Shared commit half. Returns { created, enqueued }.
+async function commitImportSegs(segs, { source, provider, apiKey, model }) {
   let created = 0, enqueued = 0;
   const tag = (typeof source === 'string' && source.trim()) ? source.trim().slice(0, 40) : 'import';
   for (const seg of segs) {
@@ -1864,7 +1842,78 @@ app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) =
       if (!r.deduped) enqueued++;
     } catch (err) { console.warn('[import] enqueue failed:', err?.message ?? err); }
   }
-  res.status(202).json({ ok: true, committed: true, format: parsed.format, days: created, enqueued, dates });
+  return { created, enqueued };
+}
+
+// POST /api/import-logs — bring past conversation logs in from elsewhere.
+// Two-step: without `commit` it PREVIEWS (parse + segment, no writes) so the UI
+// can show the scale before spending; with `commit` it places the logs by date
+// (one imported session per date) and enqueues them for immediate ingestion.
+app.post('/api/import-logs', express.json({ limit: '32mb' }), async (req, res) => {
+  const { content, selfNames, source, commit, provider, apiKey, model, fallbackDate, filename } = req.body ?? {};
+  const names = Array.isArray(selfNames) ? selfNames
+    : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+  const r = resolveImportSegs({ content, filename, fallbackDate, names });
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  if (r.needsDate) {
+    if (!commit) return res.json({ ok: true, preview: true, format: r.format, needsDate: true, messages: r.messageCount });
+    return res.status(400).json({ error: 'This log has no timestamps. Provide a date (YYYY-MM-DD) for it.' });
+  }
+
+  if (!commit) {
+    return res.json({ ok: true, preview: true, format: r.format, dates: r.dates, days: r.segs.length, messages: r.messageCount });
+  }
+  if (!provider || !apiKey || !model) {
+    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  }
+  const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, model });
+  res.status(202).json({ ok: true, committed: true, format: r.format, days: created, enqueued, dates: r.dates });
+});
+
+// POST /api/import-logs-batch — import many logs at once (one request). Each
+// file resolves its own date (per-file fallbackDate, else its filename), so a
+// folder of dated exports lands on the right days in one pass. Preview returns a
+// per-file breakdown; commit ingests every file that resolved, skipping (never
+// failing the whole batch on) any that need a date or didn't parse.
+app.post('/api/import-logs-batch', express.json({ limit: '64mb' }), async (req, res) => {
+  const { files, selfNames, source, commit, provider, apiKey, model } = req.body ?? {};
+  if (!Array.isArray(files) || files.length === 0) return res.status(400).json({ error: 'No files provided.' });
+  if (files.length > 100) return res.status(400).json({ error: 'Too many files in one batch (max 100).' });
+  const names = Array.isArray(selfNames) ? selfNames
+    : (typeof selfNames === 'string' ? selfNames.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+  const resolved = files.map(f => ({
+    filename: (typeof f?.filename === 'string' && f.filename) ? f.filename : '(pasted)',
+    ...resolveImportSegs({ content: f?.content, filename: f?.filename, fallbackDate: f?.fallbackDate, names }),
+  }));
+
+  if (!commit) {
+    return res.json({
+      ok: true, preview: true,
+      files: resolved.map(r => ({
+        filename: r.filename, ok: r.ok, format: r.format ?? null,
+        needsDate: !!r.needsDate, dates: r.dates ?? [],
+        days: r.segs?.length ?? 0, messages: r.messageCount ?? 0, error: r.error ?? null,
+      })),
+    });
+  }
+  if (!provider || !apiKey || !model) {
+    return res.status(400).json({ error: 'provider, apiKey, and model are required to ingest.' });
+  }
+
+  let totalDays = 0, totalEnqueued = 0;
+  const per = [];
+  for (const r of resolved) {
+    if (!r.ok || r.needsDate || !r.segs) {
+      per.push({ filename: r.filename, skipped: true, reason: r.needsDate ? 'needs a date' : (r.error ?? 'could not parse') });
+      continue;
+    }
+    const { created, enqueued } = await commitImportSegs(r.segs, { source, provider, apiKey, model });
+    totalDays += created; totalEnqueued += enqueued;
+    per.push({ filename: r.filename, days: created, enqueued, dates: r.dates });
+  }
+  res.status(202).json({ ok: true, committed: true, days: totalDays, enqueued: totalEnqueued, files: per });
 });
 
 // POST /api/memorize/:id/ack — mark a terminal job as seen by the UI
