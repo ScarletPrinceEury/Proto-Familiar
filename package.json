@@ -1,10 +1,15 @@
 {
   "name": "proto-familiar",
-  "version": "0.8.90-alpha",
+  "version": "0.8.91-alpha",
   "description": "Lightweight LLM frontend for z.ai, NanoGPT, and Google AI Studio",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "server.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ScarletPrinceEury/Proto-Familiar",
+    "branch": "main"
+  },
   "scripts": {
     "prestart": "node scripts/ensure-phylactery-deps.mjs && node scripts/ensure-unruh-deps.mjs && node scripts/ensure-port-free.mjs",
     "start": "node server.js",
