@@ -2099,6 +2099,16 @@ button { cursor: pointer; font-family: var(--font); }
 }
 .ke-inline-form textarea { resize: vertical; min-height: 40px; }
 
+/* Batch-import per-file breakdown (Coverage → Import logs) */
+.ke-cov-batch { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; font-size: 0.82rem; }
+.ke-cov-batch.hidden { display: none; }
+.ke-batch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 3px 6px; border-radius: 5px; background: var(--surface-2, rgba(127,127,127,0.08)); }
+.ke-batch-name { flex: 1 1 40%; min-width: 10em; font-weight: 600; word-break: break-all; }
+.ke-batch-row input[type="date"] { font-size: 0.8rem; }
+.ke-batch-ok { color: var(--accent-ok, #3a9); }
+.ke-batch-warn { color: var(--accent-warn, #c93); }
+.ke-batch-err { color: var(--accent-bad, #c55); }
+
 .ke-add-edge {
   margin-top: 6px;
   padding-top: 8px;

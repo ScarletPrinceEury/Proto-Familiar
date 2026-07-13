@@ -669,8 +669,8 @@
             </div>
           </div>
           <div class="ke-inline-form hidden" id="ke-cov-import-form">
-            <div class="field-hint">Bring in past conversation logs from elsewhere. Supported: Proto-Familiar JSON, and timestamped text lines like <code>[2026-06-20 14:35] Name: message</code>. Logs are placed by date; you'll see a count before anything is memorized.</div>
-            <input type="file" id="ke-cov-import-file" accept=".json,.jsonl,.txt,.md,.log">
+            <div class="field-hint">Bring in past conversation logs from elsewhere. Supported: Proto-Familiar JSON, SillyTavern &amp; OpenClaw (.jsonl), <strong>ChatGPT copy/share export</strong> (the <code>**You:** / **ChatGPT:**</code> markdown), and timestamped text lines like <code>[2026-06-20 14:35] Name: message</code>. Choose <strong>one file</strong> to paste/preview it, or <strong>several at once</strong> to batch-import — each file lands on its own date. Logs are placed by date; you'll see a count before anything is memorized.</div>
+            <input type="file" id="ke-cov-import-file" accept=".json,.jsonl,.txt,.md,.log" multiple>
             <textarea id="ke-cov-import-text" rows="6" placeholder="…or paste the log content here"></textarea>
             <div class="ke-inline-form-row">
               <input id="ke-cov-import-self" type="text" placeholder="AI speaker name(s), comma-separated (for text logs)">
@@ -685,6 +685,7 @@
               <button id="ke-cov-import-commit" class="btn-send" disabled>Import &amp; memorize</button>
               <button id="ke-cov-import-cancel" class="btn-ghost">Cancel</button>
             </div>
+            <div class="ke-cov-batch hidden" id="ke-cov-import-batch"></div>
             <div class="vl-status" id="ke-cov-import-status"></div>
           </div>
           <div class="ke-split">

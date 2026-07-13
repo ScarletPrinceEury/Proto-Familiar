@@ -4133,7 +4133,7 @@ function init() {
   $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
   $('ke-cov-next')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, 1);  keRenderCalendar(); } });
   $('ke-cov-import')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.toggle('hidden'));
-  $('ke-cov-import-cancel')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.add('hidden'));
+  $('ke-cov-import-cancel')?.addEventListener('click', () => { $('ke-cov-import-form')?.classList.add('hidden'); keCovImportReset(); });
   $('ke-cov-import-file')?.addEventListener('change', keCovImportFileChosen);
   $('ke-cov-import-preview')?.addEventListener('click', keCovImportPreview);
   $('ke-cov-import-commit')?.addEventListener('click', keCovImportCommit);
@@ -6425,20 +6425,50 @@ async function keMemorizeDay(date) {
 }
 
 // ── Coverage: foreign-log import ────────────────────────────────────────
-let _keImportPreviewed = null; // last preview's {dates, days, messages, format}
+let _keImportPreviewed = null; // last single-file preview's {dates, days, messages, format}
 let _keImportFilename = '';    // name of the chosen file (for filename-date extraction)
+let _keBatchFiles = null;      // [{ filename, content }] when >1 file is chosen
+let _keBatchPreview = null;    // last batch preview's per-file results
 
-async function keCovImportFileChosen(e) {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  if (file.size > 30 * 1024 * 1024) { $('ke-cov-import-status').textContent = 'File too large (max 30 MB).'; return; }
-  try {
-    $('ke-cov-import-text').value = await file.text();
-    _keImportFilename = file.name;
-    $('ke-cov-import-status').textContent = `Loaded ${file.name}.`;
-  } catch { $('ke-cov-import-status').textContent = 'Could not read that file.'; }
+function keCovImportReset() {
+  _keImportPreviewed = null; _keImportFilename = '';
+  _keBatchFiles = null; _keBatchPreview = null;
+  $('ke-cov-import-text').value = '';
+  $('ke-cov-import-commit').disabled = true;
+  const b = $('ke-cov-import-batch'); if (b) { b.classList.add('hidden'); b.innerHTML = ''; }
+  const st = $('ke-cov-import-status'); if (st) st.textContent = '';
+  const f = $('ke-cov-import-file'); if (f) f.value = '';
 }
 
+async function keCovImportFileChosen(e) {
+  const files = [...(e.target.files || [])];
+  if (!files.length) return;
+  const status = $('ke-cov-import-status');
+  const tooBig = files.find(f => f.size > 30 * 1024 * 1024);
+  if (tooBig) { status.textContent = `"${tooBig.name}" is too large (max 30 MB each).`; return; }
+
+  // One file → the paste/preview single flow. Several → batch mode.
+  if (files.length === 1) {
+    _keBatchFiles = null; _keBatchPreview = null;
+    const b = $('ke-cov-import-batch'); if (b) { b.classList.add('hidden'); b.innerHTML = ''; }
+    try {
+      $('ke-cov-import-text').value = await files[0].text();
+      _keImportFilename = files[0].name;
+      status.textContent = `Loaded ${files[0].name}.`;
+    } catch { status.textContent = 'Could not read that file.'; }
+    return;
+  }
+  try {
+    _keBatchFiles = await Promise.all(files.map(async f => ({ filename: f.name, content: await f.text() })));
+    _keImportFilename = ''; _keImportPreviewed = null; _keBatchPreview = null;
+    $('ke-cov-import-text').value = '';
+    $('ke-cov-import-commit').disabled = true;
+    const b = $('ke-cov-import-batch'); if (b) { b.classList.add('hidden'); b.innerHTML = ''; }
+    status.textContent = `${_keBatchFiles.length} files loaded — Preview to see the per-file breakdown.`;
+  } catch { status.textContent = 'Could not read one of those files.'; }
+}
+
+// ── Single-file path ──
 function keCovImportBody(commit) {
   return {
     content: $('ke-cov-import-text').value,
@@ -6451,6 +6481,7 @@ function keCovImportBody(commit) {
 }
 
 async function keCovImportPreview() {
+  if (_keBatchFiles) return keCovBatchPreview();
   const status = $('ke-cov-import-status');
   if (!$('ke-cov-import-text').value.trim()) { status.textContent = 'Paste or choose a log first.'; return; }
   status.textContent = 'Reading…';
@@ -6480,6 +6511,7 @@ async function keCovImportPreview() {
 }
 
 async function keCovImportCommit() {
+  if (_keBatchFiles) return keCovBatchCommit();
   const status = $('ke-cov-import-status');
   if (!_keImportPreviewed) { status.textContent = 'Preview first.'; return; }
   if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
@@ -6496,6 +6528,97 @@ async function keCovImportCommit() {
     status.textContent = `Imported ${data.days} day(s), queued ${data.enqueued} for memorizing. Coverage updates as they finish.`;
     _keImportPreviewed = null;
     $('ke-cov-import-text').value = '';
+    setTimeout(keLoadCoverage, 1500);
+  } catch (err) {
+    status.textContent = `Import failed: ${err.message}`;
+    $('ke-cov-import-commit').disabled = false;
+  }
+}
+
+// ── Batch path (several files at once) ──
+// Per-file date the user typed into the batch table for a dateless file (else '').
+function keBatchDateFor(i) {
+  return $('ke-cov-import-batch')?.querySelector(`input[data-batch-idx="${i}"]`)?.value || '';
+}
+function keBatchFilesPayload() {
+  return _keBatchFiles.map((f, i) => {
+    const d = keBatchDateFor(i);
+    return d ? { ...f, fallbackDate: d } : f;
+  });
+}
+
+function keRenderBatch(files) {
+  const el = $('ke-cov-import-batch');
+  if (!el) return;
+  const rows = files.map((f, i) => {
+    let detail;
+    if (!f.ok) detail = `<span class="ke-batch-err">✗ ${esc(f.error || 'could not parse')}</span>`;
+    else if (f.needsDate) detail = `<span class="ke-batch-warn">needs a date</span> <input type="date" data-batch-idx="${i}">`;
+    else {
+      const range = f.dates?.length ? (f.dates.length > 1 ? `${f.dates[0]} → ${f.dates[f.dates.length - 1]}` : f.dates[0]) : '—';
+      detail = `<span class="ke-batch-ok">✓ ${esc(f.format)} · ${f.days} day(s) (${range}) · ${f.messages} msg</span>`;
+    }
+    return `<div class="ke-batch-row"><span class="ke-batch-name">${esc(f.filename)}</span>${detail}</div>`;
+  }).join('');
+  el.innerHTML = rows;
+  el.classList.remove('hidden');
+}
+
+async function keCovBatchPreview() {
+  const status = $('ke-cov-import-status');
+  if (!_keBatchFiles?.length) { status.textContent = 'Choose files first.'; return; }
+  status.textContent = 'Reading…';
+  $('ke-cov-import-commit').disabled = true;
+  try {
+    const res = await fetch('/api/import-logs-batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: keBatchFilesPayload(),
+        selfNames: $('ke-cov-import-self').value,
+        source: $('ke-cov-import-source').value,
+      }),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    _keBatchPreview = data.files || [];
+    keRenderBatch(_keBatchPreview);
+    const ready = _keBatchPreview.filter(f => f.ok && !f.needsDate && f.days);
+    const needDate = _keBatchPreview.filter(f => f.needsDate);
+    const totalDays = ready.reduce((n, f) => n + f.days, 0);
+    status.textContent =
+      `${ready.length}/${_keBatchPreview.length} file(s) ready — ${totalDays} day(s) total.` +
+      (needDate.length ? ` ${needDate.length} need a date (set it above, then Preview again).` : '') +
+      ` "Import & memorize" runs one extraction pass per day.`;
+    $('ke-cov-import-commit').disabled = !_keBatchPreview.some(f => f.ok && !f.needsDate);
+  } catch (err) { status.textContent = `Couldn't read them: ${err.message}`; }
+}
+
+async function keCovBatchCommit() {
+  const status = $('ke-cov-import-status');
+  if (!_keBatchPreview) { status.textContent = 'Preview first.'; return; }
+  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  const ready = _keBatchPreview.filter(f => f.ok && !f.needsDate && f.days);
+  if (!ready.length) { status.textContent = 'No file is ready — set the missing dates and Preview again.'; return; }
+  if (!confirm(`Import ${ready.length} file(s) and memorize them now? This runs one extraction pass per day.`)) return;
+  status.textContent = 'Importing…';
+  $('ke-cov-import-commit').disabled = true;
+  try {
+    const res = await fetch('/api/import-logs-batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: keBatchFilesPayload(),
+        selfNames: $('ke-cov-import-self').value,
+        source: $('ke-cov-import-source').value,
+        commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model,
+      }),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const skipped = (data.files || []).filter(f => f.skipped);
+    status.textContent = `Imported ${data.days} day(s), queued ${data.enqueued} for memorizing.`
+      + (skipped.length ? ` Skipped ${skipped.length}: ${skipped.map(s => `${s.filename} (${s.reason})`).join('; ')}.` : '')
+      + ` Coverage updates as they finish.`;
+    _keBatchFiles = null; _keBatchPreview = null;
     setTimeout(keLoadCoverage, 1500);
   } catch (err) {
     status.textContent = `Import failed: ${err.message}`;
