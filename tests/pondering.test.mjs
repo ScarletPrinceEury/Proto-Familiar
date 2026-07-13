@@ -7,6 +7,7 @@ import { promises as fsp, mkdtempSync, rmSync } from 'fs';
 import {
   ponderOnce,
   buildPonderPrompt,
+  buildGroundingBlock,
   parsePondering,
   findOrCreatePonderingsTome,
   PONDERINGS_TOME_NAME,
@@ -34,6 +35,50 @@ test('buildPonderPrompt embeds the topic verbatim', () => {
   const prompt = buildPonderPrompt('the way the user phrased their request');
   assert.match(prompt, /the way the user phrased their request/);
   assert.match(prompt, /first-person/i);
+});
+
+test('buildGroundingBlock: recalled memories become the grounded truth', () => {
+  const b = buildGroundingBlock({
+    memories: [{ date: '2026-05-01', excerpt: 'My human has read all the Tiffany Aching books and loves the Feegles.' }],
+    recent: [],
+  });
+  assert.match(b, /What I actually know about this/);
+  assert.match(b, /read all the Tiffany Aching books/);
+  assert.match(b, /I honour that instead of guessing from the outside/);
+});
+
+test('buildGroundingBlock: no memories → steers toward honest not-knowing + asking', () => {
+  const b = buildGroundingBlock({ memories: [], recent: [] });
+  assert.match(b, /don't hold anything concrete about this yet/);
+  assert.match(b, /what I'd want to ASK my human/);
+});
+
+test('buildGroundingBlock: recent same-topic ponders → do not re-ask', () => {
+  const b = buildGroundingBlock({
+    memories: [],
+    recent: [{ title: 'What the Feegles feel like', when: '2026-07-12' }, { title: 'The Nac Mac Feegle texture', when: '2026-07-13' }],
+  });
+  assert.match(b, /already turned this exact thing over recently/);
+  assert.match(b, /What the Feegles feel like/);
+  assert.match(b, /do NOT reach out asking my human the same question again/);
+  assert.match(b, /not to ponder it at them a third morning in a row/);
+});
+
+test('buildGroundingBlock: null (reflection / no grounding) → no block; an attempted-but-empty ponder → the honest note', () => {
+  assert.equal(buildGroundingBlock(null), '');            // grounding not attempted → nothing added
+  assert.equal(buildGroundingBlock('nope'), '');          // non-object → nothing
+  // grounding attempted for an interest ponder but nothing recalled → the note renders.
+  assert.match(buildGroundingBlock({ memories: [], recent: [] }), /don't hold anything concrete/);
+});
+
+test('buildPonderPrompt threads grounding after the topic', () => {
+  const prompt = buildPonderPrompt('Tiffany Aching books', {
+    memories: [{ date: '2026-05-01', excerpt: 'They have read them.' }],
+    recent: [{ title: 'Feegles from the outside', when: '2026-07-13' }],
+  });
+  assert.match(prompt, /Tiffany Aching books/);
+  assert.match(prompt, /They have read them\./);
+  assert.match(prompt, /already turned this exact thing over recently/);
 });
 
 test('parsePondering accepts a clean JSON object', () => {

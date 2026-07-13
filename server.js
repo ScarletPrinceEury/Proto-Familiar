@@ -29,6 +29,7 @@ import {
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
   getMemoryHealth, backfillMemoryEmbeddings,
+  searchMemory,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
   bumpInterest, demoteStanding, setStandingInterest,
@@ -3514,12 +3515,44 @@ function startAutonomousPondering() {
       const s    = readSettingsSync();
       const conn = connectionForFeature(s, 'pondering');
       if (!conn?.apiKey) throw new Error('no connection configured for pondering');
+
+      // Grounded pondering: for an interest ponder, recall what the Familiar
+      // actually KNOWS about the topic (so it doesn't muse "from the outside"
+      // about something its human has a real relationship to — the confident-
+      // wrong AURORA case) and what it has ALREADY pondered about it recently
+      // (so it stops reaching out with the same question morning after morning —
+      // the three-times-about-the-Feegles case). Best-effort: one extra cheap
+      // memory search that degrades to an ungrounded ponder if recall is down.
+      // Reflection mode is already grounded (windowMemories), so it's skipped.
+      let grounding = null;
+      if (typeof topic === 'string' && topic.trim()) {
+        const [memR, pondR] = await Promise.allSettled([
+          searchMemory({ query: topic, maxResults: 5 }),
+          getRecentPonderings({ limit: 40, sinceDays: 21 }),
+        ]);
+        const memories = memR.status === 'fulfilled'
+          ? (memR.value?.results ?? []).map(r => ({ date: r.date, excerpt: r.excerpt })).filter(m => (m.excerpt ?? '').trim())
+          : [];
+        const q = topic.trim().toLowerCase();
+        const recent = pondR.status === 'fulfilled'
+          ? (pondR.value ?? [])
+              .filter(p => {
+                const t = String(p.topic ?? '').trim().toLowerCase();
+                return t && (t === q || t.includes(q) || q.includes(t));
+              })
+              .slice(0, 5)
+              .map(p => ({ title: p.title, when: p.created_ms ? new Date(p.created_ms).toISOString().slice(0, 10) : null }))
+          : [];
+        grounding = { memories, recent };
+      }
+
       const result = await ponderOnce({
         topic,
         provider: conn.provider,
         apiKey:   conn.apiKey,
         model:    conn.model,
         settings: s,
+        grounding,
       });
       // Reflection follow-through: if the LLM proposed an
       // identity-layer update, write it. Mark the reflection so

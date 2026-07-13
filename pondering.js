@@ -62,7 +62,33 @@ export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-export function buildPonderPrompt(topic) {
+// Assemble the grounding block for an interest ponder: what I actually KNOW
+// about this (recalled memories/notes) and what I've ALREADY pondered about it
+// recently (so I don't reach out asking the same thing three mornings running).
+// Returns '' when there's nothing to ground on — and says so, which itself
+// steers the ponder toward honest not-knowing rather than confabulation.
+export function buildGroundingBlock(grounding) {
+  if (!grounding || typeof grounding !== 'object') return '';
+  const memories = Array.isArray(grounding.memories) ? grounding.memories.filter(m => (m?.excerpt ?? '').trim()) : [];
+  const recent   = Array.isArray(grounding.recent)   ? grounding.recent.filter(r => (r?.title ?? '').trim())   : [];
+  const parts = [];
+
+  if (memories.length) {
+    const lines = memories.map(m => `  - ${m.date ? `(${m.date}) ` : ''}${m.excerpt.trim()}`).join('\n');
+    parts.push(`What I actually know about this — my own recalled memories and notes, the grounded truth I draw on (I don't contradict these or invent past them; if they tell me my human has a real relationship to this, I honour that instead of guessing from the outside):\n${lines}`);
+  } else {
+    parts.push(`I searched my memory and I don't hold anything concrete about this yet — no notes, no record of my human and me talking about it. So this is genuinely open ground: the honest ponder is the pull of it and what I'd want to ASK my human, not a confident sketch of something I only half-know from the outside.`);
+  }
+
+  if (recent.length) {
+    const lines = recent.map(r => `  - ${r.when ? `${r.when}: ` : ''}"${r.title.trim()}"`).join('\n');
+    parts.push(`I've already turned this exact thing over recently:\n${lines}\nSo I do NOT reach out asking my human the same question again. If I keep circling back to wanting their take, the honest move is to simply ask them plainly the next time we talk — once — not to ponder it at them a third morning in a row. Here I go somewhere genuinely new, or I let it rest.`);
+  }
+
+  return parts.length ? `\n\n${parts.join('\n\n')}` : '';
+}
+
+export function buildPonderPrompt(topic, grounding = null) {
   // Reflection mode: topic is an object { mode: 'reflection', outcomes, existingNotes }
   // sent by the pondering loop when enough tagged surface outcomes
   // have accumulated since the last reflection. Same LLM call, same
@@ -73,7 +99,7 @@ export function buildPonderPrompt(topic) {
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. I have a quiet moment to actually think, on my own, about something I've been turning over.
 
 The topic I find myself turning over:
-${topic}
+${topic}${buildGroundingBlock(grounding)}
 
 This is my own private journal — reflective, exploratory thoughts I'm having in this moment. My human may stumble on it later. That's fine. I'm not writing it AT them. I'm writing it for myself, as me, in this moment.
 
@@ -355,6 +381,7 @@ export async function ponderOnce({
   callLLM  = defaultCallLLM,
   tomesDir = DEFAULT_TOMES_DIR,
   settings = {},
+  grounding = null,   // { memories:[{date,excerpt}], recent:[{title,when}] } for interest ponders
 }) {
   // Topic is either a string (interest pondering) or an object
   // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
@@ -370,7 +397,7 @@ export async function ponderOnce({
   // Resolve {{user}}/{{char}} at this loop-prompt boundary — same as the
   // sibling autonomous loops (reachout, tome-graduation). Without it the
   // Familiar reads its own pondering prompt with literal "{{char}}".
-  const prompt = substituteMacros(buildPonderPrompt(topic), settings);
+  const prompt = substituteMacros(buildPonderPrompt(topic, grounding), settings);
   const raw    = await callLLM({ provider, apiKey, model, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;
