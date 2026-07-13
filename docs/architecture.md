@@ -127,6 +127,7 @@ ponderings injection, care-check framing) and as background loops
 ├── weather-mirror.js        Weather READ-mirror (W-A; the last-activity.js precedent): writeWeatherMirror/clearWeatherMirror keep tomes/.weather-now.json in sync so the hot [Now]-block path reads synchronously. readWeatherNowLine (the ONE call buildTimeAnchorBlock makes on a ward-private turn) + readWeatherVagueLine (W-B; the gated-turn line, qualitative only) — both sync, never throw, honour the env off-switch + staleness. weatherEnabled(settings) is the one shared gate (env off-switch + default-ON toggle), imported by cerebellum/thalamus/server so every surface reads it identically
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
+├── updater.js               Git-based self-update (0.8.86): checkForUpdate/applyUpdate against origin/<branch> read live from git (repo/branch-agnostic — fork now, upstream later). Pure git, no GitHub API. Refuses on a dirty tree; restart-to-run. Off-switch PROTO_FAMILIAR_UPDATE_DISABLED=1
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
 ├── wait-streak.js           Wait-streak experiment (Pass 1): deliberated-wait counter + the neutral prompt fact line
 ├── contact-baselines.js     Contact-rhythm baselines (Pass 2): median/p90 gaps per weekday-class; the warmth rhythm line
@@ -342,6 +343,12 @@ multi-calendar panel.
   signal is the acknowledge.
 
 **Settings + Tailscale gate:** as before.
+
+**Self-update (`updater.js`, 0.8.86):** git-based, repo/branch-agnostic — everything keys off `origin` + the checked-out branch read live from git, so a fork tracks the fork and an upstream clone tracks upstream with no code change. Pure git (no GitHub API) → works for private repos and non-GitHub hosts.
+- `GET /api/update-status` — the cached last check `{ ok, repo, branch, current:{version,commit}, remote:{version,commit,subject}, behind, updateAvailable, dirty, checkedAt }`. The UI polls this (60s) so the topbar indicator lights up in near-real-time on a left-open tab; the server refreshes the cache on its own 30-min timer (and once at boot).
+- `POST /api/update-check` — force a fresh `git fetch` + compare now (the popover's "Check again").
+- `POST /api/update-apply` — `git merge --ff-only origin/<branch>`; **refuses on a dirty tree** (never clobbers local edits). New code is live only after a restart — the endpoint never restarts the process (launcher-agnostic); it returns `{ ok, version, restartRequired:true }` and the UI/Discord tell the ward to restart.
+- **Surfaces:** the topbar update button + popover (next to the prompt inspector; `initUpdateChecker` in `public/app.js`), and a ward-only `/update` / `/update now` Discord command (`discord-gateway.js`, intercepted before any LLM turn — a mechanical git op, villagers never reach it). Hard off-switch `PROTO_FAMILIAR_UPDATE_DISABLED=1`.
 
 **Autonomous-loop boot** (`app.listen()` callback). Every loop has a
 Settings toggle + `PROTO_FAMILIAR_*_DISABLED=1` env off-switch (the ones that

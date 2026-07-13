@@ -53,6 +53,7 @@ import { enqueueOutbox } from './outbox.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { sanitizeExternal } from './injection-guard.js';
+import { checkForUpdate, applyUpdate, updateDisabled } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -1037,6 +1038,67 @@ async function sendChannelMessage(token, channelId, content) {
   }
 }
 
+// Ward-only `/update` control from a Discord conversation — the chat-side
+// twin of the web UI's update button. `/update` reports status against the
+// repo/branch this install tracks (fork now, upstream later — updater.js keys
+// off git origin); `/update now` fast-forwards it (refused on a dirty tree).
+// Never spends an LLM call — it's a mechanical git operation, so it's a plain
+// command intercepted before any turn. Villagers never reach this (gated by
+// isWard at the call site); a villager typing "/update" is just chat.
+function isUpdateCommand(content) {
+  return /^\/update(\s+now)?\s*$/i.test(String(content ?? '').trim());
+}
+
+async function handleUpdateCommand(gw, msg, content) {
+  const channelId = msg.channel_id;
+  const token = gw.config.token;
+  const wantsApply = /\bnow\b/i.test(content);
+  const send = (text) => sendChannelMessage(token, channelId, text).catch(err =>
+    console.error('[discord] /update reply failed:', err?.message ?? err));
+
+  if (updateDisabled()) {
+    await send('Self-update is switched off on this install (`PROTO_FAMILIAR_UPDATE_DISABLED=1`).');
+    return;
+  }
+
+  let st;
+  try { st = await checkForUpdate(); }
+  catch (e) { await send(`I couldn't check for updates: ${e?.message ?? e}`); return; }
+
+  const where = [st.repo, st.branch].filter(Boolean).join(' · ');
+  if (st.ok === false && st.error) {
+    await send(`I couldn't check for updates${where ? ` (${where})` : ''}: ${st.error}`);
+    return;
+  }
+
+  if (!st.updateAvailable) {
+    await send(`I'm up to date — running v${st.current?.version ?? '?'}${where ? ` on ${where}` : ''}.`);
+    return;
+  }
+
+  const rv = st.remote?.version ? `v${st.remote.version}` : 'a new version';
+  const subject = st.remote?.subject ? `\nLatest: “${st.remote.subject}”` : '';
+
+  if (!wantsApply) {
+    if (st.dirty) {
+      await send(`An update is available (${rv}${where ? ` on ${where}` : ''}), but there are uncommitted local changes here — I won't overwrite them. Commit or stash them, then run \`/update now\`.${subject}`);
+    } else {
+      await send(`Update available: ${rv}${where ? ` on ${where}` : ''} — you're on v${st.current?.version ?? '?'}, ${st.behind} commit${st.behind === 1 ? '' : 's'} behind. Run \`/update now\` to apply it.${subject}`);
+    }
+    return;
+  }
+
+  // /update now — apply.
+  let res;
+  try { res = await applyUpdate(); }
+  catch (e) { await send(`Update failed: ${e?.message ?? e}`); return; }
+  if (res?.ok) {
+    await send(`Updated to v${res.version}${where ? ` on ${where}` : ''}. The new code is on disk — restart Proto-Familiar to run it.`);
+  } else {
+    await send(`I couldn't apply the update: ${res?.error ?? 'unknown error'}`);
+  }
+}
+
 /** Build the knowledge-gate input from a classified message + the room's
  *  accumulated participants. Null means the ward's own DM (ward-private, no
  *  gating). One source of truth for this shape so the spoken path and the
@@ -1675,6 +1737,15 @@ function onDispatch(t, d) {
             context: d.guild_id ? 'guild' : 'dm',
             locationKey: discordLocationKey(d),
           }).catch(() => { /* best-effort */ });
+        }
+
+        // Ward-only `/update` control (the chat twin of the web update
+        // button). Intercepted before any turn — it's a mechanical git op,
+        // not an LLM turn, and only my human can drive it. A villager typing
+        // "/update" falls through to normal handling (it's just chat to them).
+        if (decision.isWard && isUpdateCommand(d.content)) {
+          await handleUpdateCommand(gw, d, d.content);
+          return;
         }
 
         // V8 lurk: read the room without replying.

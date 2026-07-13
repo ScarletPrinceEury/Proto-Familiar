@@ -3513,6 +3513,141 @@ function initTailscaleToggle() {
   });
 }
 
+// ── Self-update indicator + popover ──────────────────────────
+// The server checks origin/<branch> on its own timer (30 min) and caches the
+// result; the UI just polls that cache so the dot lights up in near-real-time
+// even on a tab the ward left open — no client-side git knowledge at all. The
+// repo/branch the install tracks is whatever git says (fork now, upstream
+// later), so this surfaces "owner/repo · branch" straight from the server.
+const UPDATE_POLL_MS = 60_000;
+let _updateState = null;
+
+async function fetchUpdateStatus() {
+  const r = await fetch('/api/update-status', { cache: 'no-store' });
+  if (!r.ok) throw new Error(`update-status HTTP ${r.status}`);
+  return r.json();
+}
+
+function renderUpdateState(st) {
+  _updateState = st;
+  const btn      = $('update-btn');
+  const dot      = $('update-dot');
+  const headline = $('update-headline');
+  const detail   = $('update-detail');
+  const repoEl   = $('update-repo');
+  const applyBtn = $('update-apply-btn');
+  if (!btn) return;
+
+  if (st?.disabled) {
+    btn.classList.remove('update-available');
+    dot.classList.add('hidden');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.title = 'Self-update is disabled on this install';
+    headline.textContent = 'Updates disabled';
+    detail.textContent = 'Self-update is switched off (PROTO_FAMILIAR_UPDATE_DISABLED=1).';
+    repoEl.textContent = '';
+    applyBtn.disabled = true;
+    return;
+  }
+
+  const avail = !!st?.updateAvailable;
+  btn.classList.toggle('update-available', avail);
+  dot.classList.toggle('hidden', !avail);
+  btn.setAttribute('aria-pressed', avail ? 'true' : 'false');
+
+  const repoLine = [st?.repo, st?.branch].filter(Boolean).join(' · ');
+  repoEl.textContent = repoLine ? `${repoLine}` : '';
+
+  if (st && st.ok === false && st.error) {
+    // Couldn't check (offline, no origin, detached HEAD…). Say so plainly.
+    btn.title = 'Couldn’t check for updates';
+    headline.textContent = 'Couldn’t check for updates';
+    detail.textContent = st.error;
+    applyBtn.disabled = true;
+    return;
+  }
+
+  if (avail) {
+    const v = st.remote?.version ? `v${st.remote.version}` : 'a new version';
+    btn.title = `Update available: ${v} (click to review)`;
+    headline.textContent = `Update available — ${v}`;
+    const subject = st.remote?.subject ? `Latest: “${st.remote.subject}”. ` : '';
+    const behind  = st.behind ? `${st.behind} commit${st.behind === 1 ? '' : 's'} behind. ` : '';
+    detail.textContent = st.dirty
+      ? `${subject}${behind}You have uncommitted local changes — commit or stash them before updating.`
+      : `${subject}${behind}Currently on v${st.current?.version ?? '?'}.`;
+    applyBtn.disabled = !!st.dirty;
+  } else {
+    const v = st?.current?.version ? `v${st.current.version}` : '';
+    btn.title = `Up to date${v ? ` (${v})` : ''}`;
+    headline.textContent = 'You’re up to date';
+    detail.textContent = v ? `Running ${v} — the latest on this branch.` : 'Running the latest on this branch.';
+    applyBtn.disabled = true;
+  }
+}
+
+function initUpdateChecker() {
+  const btn      = $('update-btn');
+  const popover  = $('update-popover');
+  const applyBtn = $('update-apply-btn');
+  const recheck  = $('update-recheck-btn');
+  const statusEl = $('update-status');
+  if (!btn) return;
+
+  const poll = () => fetchUpdateStatus().then(renderUpdateState).catch(() => {});
+  poll();
+  setInterval(poll, UPDATE_POLL_MS);
+
+  btn.addEventListener('click', () => {
+    const willOpen = popover.classList.contains('hidden');
+    popover.classList.toggle('hidden');
+    if (willOpen) { statusEl.textContent = ''; poll(); }
+  });
+
+  // Click-outside to dismiss
+  document.addEventListener('click', e => {
+    if (popover.classList.contains('hidden')) return;
+    if (e.target === btn || btn.contains(e.target)) return;
+    if (popover.contains(e.target)) return;
+    popover.classList.add('hidden');
+  });
+
+  recheck.addEventListener('click', async () => {
+    statusEl.textContent = 'Checking…';
+    try {
+      const r = await fetch('/api/update-check', { method: 'POST' });
+      const st = await r.json();
+      renderUpdateState(st);
+      statusEl.textContent = st?.updateAvailable ? '' : 'Checked just now.';
+    } catch {
+      statusEl.textContent = 'Check failed — is the server reachable?';
+    }
+  });
+
+  applyBtn.addEventListener('click', async () => {
+    if (applyBtn.disabled) return;
+    applyBtn.disabled = true;
+    statusEl.textContent = 'Updating…';
+    try {
+      const r = await fetch('/api/update-apply', { method: 'POST' });
+      const res = await r.json();
+      if (res?.ok) {
+        statusEl.textContent = `Updated to v${res.version} — restart Proto-Familiar to run the new version.`;
+        $('update-headline').textContent = 'Update applied';
+        $('update-detail').textContent = 'The new code is on disk. Restart the server (or use your launcher) to load it.';
+        $('update-dot').classList.add('hidden');
+        btn.classList.remove('update-available');
+      } else {
+        statusEl.textContent = res?.error || 'Update failed.';
+        applyBtn.disabled = false;
+      }
+    } catch {
+      statusEl.textContent = 'Update failed — is the server reachable?';
+      applyBtn.disabled = false;
+    }
+  });
+}
+
 // ── Logs modal ──────────────────────────────────────────────
 // Saved Sessions now lives as the "Sessions" tab in the Knowledge (Phylactery)
 // modal — refreshed by keSwitchTab('sessions'). Picking a session to load closes
@@ -3978,6 +4113,9 @@ function init() {
 
   // ── Tailscale / external-access toggle ───────────────────────
   initTailscaleToggle();
+
+  // ── Self-update indicator + popover ──────────────────────────
+  initUpdateChecker();
 
   // Saved Sessions is now the "Sessions" tab in the Knowledge modal
   // (refreshed on tab-switch); no standalone Logs modal to wire.

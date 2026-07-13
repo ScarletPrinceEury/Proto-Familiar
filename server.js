@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync, promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { sessionSlugId } from './slug-ids.js';
 import { execFile } from 'child_process';
+import { checkForUpdate, applyUpdate, updateDisabled } from './updater.js';
 import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
@@ -1348,6 +1349,37 @@ app.get('/api/discord-writes', async (_req, res) => {
 // Health check
 app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
 app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
+
+// ── Self-update (updater.js) ────────────────────────────────────────
+// Tracks whatever repo/branch this install came from (origin + checked-out
+// branch), so a fork updates from the fork and an upstream clone from upstream —
+// no code change when the ward moves between them. A background check keeps the
+// UI's indicator live; /api/update-apply fast-forwards (restart to run it).
+let _updateStatus = { ok: false, checkedAt: 0 };   // cached; polled by the UI
+const UPDATE_CHECK_MS = 30 * 60_000;
+
+async function refreshUpdateStatus() {
+  try { _updateStatus = await checkForUpdate(); }
+  catch (e) { _updateStatus = { ok: false, error: e?.message ?? String(e), checkedAt: Date.now() }; }
+  if (_updateStatus.updateAvailable) {
+    console.log(`[update] newer version on ${_updateStatus.repo}@${_updateStatus.branch}: `
+      + `${_updateStatus.remote?.version ?? '?'} (you're on ${_updateStatus.current?.version}).`);
+  }
+  return _updateStatus;
+}
+
+app.get('/api/update-status', (_req, res) => res.json(_updateStatus));
+app.post('/api/update-check', async (_req, res) => {
+  try { res.json(await refreshUpdateStatus()); }
+  catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
+});
+app.post('/api/update-apply', async (_req, res) => {
+  try {
+    const r = await applyUpdate();
+    if (r.ok) _updateStatus = { ..._updateStatus, updateAvailable: false, behind: 0, applied: true, appliedVersion: r.version, checkedAt: Date.now() };
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
+});
 
 // ── Tome endpoints ──────────────────────────────────────────────
 const TOMES_DIR = path.join(__dirname, 'tomes');
@@ -3300,6 +3332,15 @@ const httpServer = app.listen(PORT, HOST, async () => {
       }
     }
   }).catch(() => {});
+  // Self-update check: prime the indicator at boot, then re-check on a slow
+  // background cadence so a ward with the UI open sees a new version appear
+  // without doing anything. Off-switch: PROTO_FAMILIAR_UPDATE_DISABLED=1.
+  if (!updateDisabled()) {
+    refreshUpdateStatus().catch(() => {});
+    setInterval(() => { refreshUpdateStatus().catch(() => {}); }, UPDATE_CHECK_MS).unref?.();
+  } else {
+    console.log('[update] self-update disabled (PROTO_FAMILIAR_UPDATE_DISABLED=1).');
+  }
   // Discord gateway (Village V4). Supervisor idles until the ward sets
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
