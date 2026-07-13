@@ -1358,6 +1358,22 @@ doesn't accumulate. `consent_pending` dailies are held out of both the summary a
 the prune — an unreviewed fact is never folded into a permanent rollup before the
 ward approves it.
 
+**Backlog sweep (0.8.89).** `run_consolidation` sweeps **every** past period that
+still holds un-consolidated entries (oldest-first), not just the single most-recent
+one. Enumerators `_distinct_past_weeks/months/years` find each past week/month/year
+with ≥2 source rows; the current (still-accumulating) period is always excluded.
+This closed a silent gap: consolidation previously targeted only *last* week/month/
+year (`reference_date` default `today − 7d` etc.), so a **bulk import of months-old
+daily notes never fell inside that window and sat at `daily` forever**, surfacing
+stale months-old entries in recall (the reported symptom). Weekly stays idempotent
+via its daily-prune; monthly/yearly don't prune their sources, so their enumerators
+skip a period that already has a higher-tier row (`_existing_date_keys`) to avoid
+re-appending every pass. The weekly range query is date-range based
+(`_get_entries_in_range`), so a week straddling a month boundary (Mon Mar 30 … Sun
+Apr 5) still collects all seven days. Each period is guarded independently — one bad
+period never aborts the sweep. Existing installs catch up automatically on the next
+scheduled pass (≤6 h); `POST /api/entity/lifecycle {force:true}` triggers it now.
+
 **Recall tracking** (`memory.search` → `_touch_recall`) — pure observability:
 bumps `recall_count` + `last_recalled_at` for everything surfaced.
 
