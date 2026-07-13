@@ -516,6 +516,82 @@ button { cursor: pointer; font-family: var(--font); }
   line-height: 1.4;
 }
 
+/* ── Self-update button + popover ────────────────────────────── */
+.update-wrap {
+  position: relative;
+  display: inline-flex;
+}
+/* A new version out: the button carries the accent + a live dot so it reads
+   at a glance without opening the popover. */
+#update-btn.update-available {
+  color: var(--accent, #4ade80);
+}
+.update-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent, #4ade80);
+  box-shadow: 0 0 0 2px var(--surface, #1e1e22);
+  animation: update-pulse 2s ease-in-out infinite;
+}
+.update-dot.hidden { display: none; }
+@keyframes update-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-dot { animation: none; }
+}
+.update-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 300px;
+  max-width: min(300px, calc(100vw - 28px));
+  padding: 14px;
+  background: var(--surface, #1e1e22);
+  border: 1px solid var(--border, #333);
+  border-radius: var(--radius, 8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 45;
+  font-size: 0.85rem;
+  color: var(--text, #eee);
+}
+.update-popover.hidden { display: none; }
+.update-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.update-detail {
+  margin: 0 0 8px 0;
+  color: var(--text-dim, #999);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.update-repo {
+  margin: 0 0 10px 0;
+  color: var(--text-dim, #999);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+.update-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.update-actions .btn-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.update-status {
+  margin: 8px 0 0 0;
+  color: var(--text-dim, #999);
+}
+
 /* Minimal on/off switch */
 .switch {
   position: relative;
