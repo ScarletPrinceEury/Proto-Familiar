@@ -3540,8 +3540,13 @@ function startAutonomousPondering() {
                 const t = String(p.topic ?? '').trim().toLowerCase();
                 return t && (t === q || t.includes(q) || q.includes(t));
               })
-              .slice(0, 5)
-              .map(p => ({ title: p.title, when: p.created_ms ? new Date(p.created_ms).toISOString().slice(0, 10) : null }))
+              .slice(0, 3)
+              // Carry WHERE it got to (the thought itself, trimmed), so the next
+              // ponder builds on it — not just the title, which only said "don't repeat".
+              .map(p => ({
+                when: p.created_ms ? new Date(p.created_ms).toISOString().slice(0, 10) : null,
+                excerpt: String(p.content ?? p.title ?? '').trim().slice(0, 280),
+              }))
           : [];
         grounding = { memories, recent };
       }
