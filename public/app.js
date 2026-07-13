@@ -170,7 +170,7 @@ const state = {
   temperature:       0.8,
   maxTokens:         2048,
   userName:          'My human',
-  charName:          'Assistant',
+  charName:          'the Familiar',
   systemPrompt:      '',
   characterProfile:  '',
   userProfile:       '',
@@ -246,12 +246,29 @@ const state = {
   // a local-time window (start==end disables it). Off via this toggle or
   // the PROTO_FAMILIAR_WARMTH_DISABLED=1 env var on the server.
   warmthEnabled:           true,
+  // Contact-rhythm baselines (Initiative Pass 2). Default-ON: derives the
+  // ward's normal contact rhythm from their own message history so the warm
+  // reach-out can tell ordinary silence from unusual. Off via this toggle or
+  // PROTO_FAMILIAR_BASELINES_DISABLED=1 on the server.
+  contactBaselinesEnabled: true,
+  // Wait-streak experiment (Initiative Pass 1). Default-ON: shows the Familiar
+  // how many times it has waited since last reaching out, as a bare fact. Off
+  // via this toggle or PROTO_FAMILIAR_WAIT_STREAK_DISABLED=1 on the server.
+  waitStreakEnabled:       true,
+  // Noticing loop (Initiative Pass 4). Default-ON: the Familiar takes its own
+  // wake-condition-gated turns to notice and act. Off via this toggle or
+  // PROTO_FAMILIAR_NOTICING_DISABLED=1 on the server.
+  noticingEnabled:         true,
+  // Weather sense (W-A). Default-ON but inert until the ward adds a location.
+  // Off via this toggle or PROTO_FAMILIAR_WEATHER_DISABLED=1 on the server.
+  weatherEnabled:          true,
   // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
+  memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
@@ -263,6 +280,10 @@ const state = {
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
   stewardshipEnabled:      true,
+  // Spine states (docs/temporal-bridges-build-spec.md, Pass A). Default ON —
+  // records a ward-private `state` node for each hard stretch (threat
+  // moderate+) so the Familiar can relate crises to schedule events in time.
+  spineStatesEnabled:      true,
   dayStartAnchor:          '09:00',
   dayStartGapHours:        3,        // inactivity gap before a message counts as "first contact today"
   briefLookaheadDays:      3,        // how far ahead the opening brief looks
@@ -320,8 +341,14 @@ const state = {
   // get gated context, guild replies only when @-mentioned. The token
   // is server-synced so the gateway (which runs server-side) can read it.
   discordEnabled:    false,
+  discordToolsEnabled: true,   // clearance-gated tools on Discord turns; default ON
   discordBotToken:   '',
   discordWardUserId: '',
+
+  // Per-feature connection routing: { <feature>: <connectionId> }. Absent/empty
+  // for a feature → it uses the primary connection. Backend reads via
+  // connectionForFeature(). Synced so the server-side loops can honour it.
+  featureConnections: {},
 
   // Session audience (Village Support V2).
   // Tracks who is physically present during this session so the Familiar
@@ -346,7 +373,7 @@ const SERVER_SYNCED_KEYS = [
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
   'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
-  'stewardshipEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
+  'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
   'webSearchGoogleCseId', 'webSearchMaxResults', 'webSearchMaxChars',
@@ -357,8 +384,10 @@ const SERVER_SYNCED_KEYS = [
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
+  'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes',
@@ -366,7 +395,8 @@ const SERVER_SYNCED_KEYS = [
   'gcalWriteEnabled', 'gcalWriteCommand',
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
-  'discordEnabled', 'discordBotToken', 'discordWardUserId',
+  'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
+  'featureConnections',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -429,15 +459,68 @@ function closeWebSearchModal() {
 // Google Calendar config lives in a modal (the out-of-the-box toggle stays in
 // the sidebar; everything else — source, sign-in, write-back, interval — opens
 // here, mirroring the web-search backend modal).
-function openGcalModal() {
-  writeSettingsToUI();       // reflect current state into the modal fields
+// Google Calendar now lives as the "Calendar" tab in the Unruh (temporal) modal
+// rather than a standalone modal. teSwitchTab('calendar') calls this to populate
+// + refresh the panel; there's no modal to open/close anymore.
+function loadGcalTab() {
+  writeSettingsToUI();       // reflect current state into the fields
   syncGcalSourcePanels();    // show the right panel + refresh the Google status
   refreshGcalSyncStatus();   // "last sync / last error" health line
   renderGcalCalendars();     // the discovered-calendars + attribution panel
-  $('gcal-modal')?.classList.remove('hidden');
 }
-function closeGcalModal() {
-  $('gcal-modal')?.classList.add('hidden');
+
+// ── Connections modal ────────────────────────────────────────────────────────
+// The provider/key/model editor, saved connections + fallbacks, and per-feature
+// connection routing — moved out of the sidebar into one modal.
+function openConnectionsModal() {
+  $('connections-modal')?.classList.remove('hidden');
+  bindResizableModal('connections-modal-inner', 'pf-connections-modal-size');
+  writeSettingsToUI();        // populate provider/key/model/params from state
+  renderConnectionsList();    // saved connections + fallback order
+  renderFeatureConnectionRows(); // per-feature "which connection" dropdowns
+}
+function closeConnectionsModal() {
+  $('connections-modal')?.classList.add('hidden');
+}
+
+// Every background job that calls a model. Key = the feature id the backend
+// resolves via connectionForFeature(); label = what the ward sees. Chat itself
+// always uses the primary + fallbacks and isn't listed.
+const FEATURE_CONNECTIONS = [
+  { key: 'pondering',      label: 'Autonomous pondering' },
+  { key: 'memorization',   label: 'Memorization & coverage sweep' },
+  { key: 'triage',         label: 'Crisis triage (safety check-ins)' },
+  { key: 'reachout',       label: 'Warm reach-outs' },
+  { key: 'tomeGraduation', label: 'Tome graduation' },
+  // Session-handoff summaries are generated client-side on the chat connection,
+  // so they already follow whatever you're chatting on — no separate routing.
+];
+
+// Build the per-feature connection dropdowns. Options are the saved connections
+// (by id) plus "Primary (default)". Selection persists to state.featureConnections
+// and syncs to the server, where the loops read it.
+function renderFeatureConnectionRows() {
+  const host = $('feature-connection-rows');
+  if (!host) return;
+  const conns = Array.isArray(state.connections) ? state.connections : [];
+  const assigned = (state.featureConnections && typeof state.featureConnections === 'object') ? state.featureConnections : {};
+  host.innerHTML = FEATURE_CONNECTIONS.map(f => {
+    const cur = assigned[f.key] || '';
+    const opts = ['<option value="">Primary (default)</option>']
+      .concat(conns.map(c => `<option value="${esc(c.id)}" ${c.id === cur ? 'selected' : ''}>${esc(c.name || c.model || c.id)}</option>`))
+      .join('');
+    return `<div class="field-row"><label for="fc-${f.key}">${esc(f.label)}</label>` +
+           `<select id="fc-${f.key}" class="ke-select" data-feature="${f.key}">${opts}</select></div>`;
+  }).join('');
+  host.querySelectorAll('select[data-feature]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const next = { ...(state.featureConnections || {}) };
+      if (sel.value) next[sel.dataset.feature] = sel.value;
+      else delete next[sel.dataset.feature];
+      state.featureConnections = next;
+      saveSettings();
+    });
+  });
 }
 
 // The sync-health line in the gcal modal: when the last real attempt ran,
@@ -794,6 +877,9 @@ function loadPersisted() {
     state.ponderingIntervalScale = 1;
   }
   if (typeof state.warmthEnabled !== 'boolean') state.warmthEnabled = true;
+  if (typeof state.contactBaselinesEnabled !== 'boolean') state.contactBaselinesEnabled = true;
+  if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
+  if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
@@ -1406,7 +1492,7 @@ async function refreshPreviousSessionEndedAt() {
 function applyNameVars(text) {
   return text
     .replace(/\{\{user\}\}/gi, state.userName || 'my human')
-    .replace(/\{\{char\}\}/gi, state.charName || 'Assistant')
+    .replace(/\{\{char\}\}/gi, state.charName || 'the Familiar')
     .replace(/\{\{elapsedTime\}\}/gi, () => {
       const ms = elapsedBetweenUserMessages();
       return ms !== null ? formatDuration(ms) : 'no prior user message';
@@ -2665,9 +2751,13 @@ function readSettingsFromUI() {
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
+  if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
+  if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
+  if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
+  if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
   if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
@@ -2680,6 +2770,7 @@ function readSettingsFromUI() {
     state.gcalLookaheadDays = Number.isInteger(n) && n >= 30 && n <= 1825 ? n : 365;
   }
   if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
+  if ($('weather-toggle')) state.weatherEnabled = $('weather-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -2701,7 +2792,7 @@ function readSettingsFromUI() {
     state.warmthQuietHoursEnd = Number.isInteger(n) && n >= 0 && n <= 23 ? n : 8;
   }
   state.userName          = $('user-name').value.trim() || 'My human';
-  state.charName          = $('char-name').value.trim() || 'Assistant';
+  state.charName          = $('char-name').value.trim() || 'the Familiar';
   state.systemPrompt      = $('system-prompt').value;
   state.characterProfile  = $('char-profile').value;
   state.userProfile       = $('user-profile').value;
@@ -2717,6 +2808,7 @@ function readSettingsFromUI() {
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
   }
   if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
+  if ($('spine-states-toggle')) state.spineStatesEnabled = $('spine-states-toggle').checked;
   if ($('day-start-anchor')) {
     const t = String($('day-start-anchor').value ?? '').trim();
     if (/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
@@ -2775,6 +2867,8 @@ function readSettingsFromUI() {
   if (udwEl) state.userDiscordWebhook = udwEl.value.trim();
   const denEl = $('discord-enabled');
   if (denEl) state.discordEnabled = denEl.checked;
+  const dteEl = $('discord-tools-enabled');
+  if (dteEl) state.discordToolsEnabled = dteEl.checked;
   const dbtEl = $('discord-bot-token');
   if (dbtEl) state.discordBotToken = dbtEl.value.trim();
   const dwuEl = $('discord-ward-user-id');
@@ -2801,13 +2895,18 @@ function writeSettingsToUI() {
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
+  if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
+  if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
+  if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
+  if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
+  if ($('spine-states-toggle')) setIfNotFocused($('spine-states-toggle'), 'checked', state.spineStatesEnabled !== false);
   if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
   if ($('day-start-gap-hours')) setIfNotFocused($('day-start-gap-hours'), 'value', state.dayStartGapHours ?? 3);
   if ($('brief-lookahead-days')) setIfNotFocused($('brief-lookahead-days'), 'value', state.briefLookaheadDays ?? 3);
@@ -2819,6 +2918,7 @@ function writeSettingsToUI() {
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
@@ -2836,7 +2936,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('max-tokens'),         'value',   state.maxTokens);
   if ($('thalamus-dynamic-depth')) setIfNotFocused($('thalamus-dynamic-depth'), 'value', state.thalamusDynamicDepth ?? 4);
   setIfNotFocused($('user-name'),          'value',   state.userName ?? 'My human');
-  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'Assistant');
+  setIfNotFocused($('char-name'),          'value',   state.charName ?? 'the Familiar');
   setIfNotFocused($('system-prompt'),      'value',   state.systemPrompt);
   setIfNotFocused($('char-profile'),       'value',   state.characterProfile);
   setIfNotFocused($('user-profile'),       'value',   state.userProfile);
@@ -2854,6 +2954,7 @@ function writeSettingsToUI() {
   syncWebSearchPanels();
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
+  setIfNotFocused($('discord-tools-enabled'), 'checked', state.discordToolsEnabled !== false);
   setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
   setIfNotFocused($('discord-ward-user-id'), 'value', state.discordWardUserId ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
@@ -3412,14 +3513,147 @@ function initTailscaleToggle() {
   });
 }
 
-// ── Logs modal ──────────────────────────────────────────────
-function openLogsModal() {
-  $('logs-modal').classList.remove('hidden');
-  refreshLogsList();
+// ── Self-update indicator + popover ──────────────────────────
+// The server checks origin/<branch> on its own timer (30 min) and caches the
+// result; the UI just polls that cache so the dot lights up in near-real-time
+// even on a tab the ward left open — no client-side git knowledge at all. The
+// repo/branch the install tracks is whatever git says (fork now, upstream
+// later), so this surfaces "owner/repo · branch" straight from the server.
+const UPDATE_POLL_MS = 60_000;
+let _updateState = null;
+
+async function fetchUpdateStatus() {
+  const r = await fetch('/api/update-status', { cache: 'no-store' });
+  if (!r.ok) throw new Error(`update-status HTTP ${r.status}`);
+  return r.json();
 }
 
+function renderUpdateState(st) {
+  _updateState = st;
+  const btn      = $('update-btn');
+  const dot      = $('update-dot');
+  const headline = $('update-headline');
+  const detail   = $('update-detail');
+  const repoEl   = $('update-repo');
+  const applyBtn = $('update-apply-btn');
+  if (!btn) return;
+
+  if (st?.disabled) {
+    btn.classList.remove('update-available');
+    dot.classList.add('hidden');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.title = 'Self-update is disabled on this install';
+    headline.textContent = 'Updates disabled';
+    detail.textContent = 'Self-update is switched off (PROTO_FAMILIAR_UPDATE_DISABLED=1).';
+    repoEl.textContent = '';
+    applyBtn.disabled = true;
+    return;
+  }
+
+  const avail = !!st?.updateAvailable;
+  btn.classList.toggle('update-available', avail);
+  dot.classList.toggle('hidden', !avail);
+  btn.setAttribute('aria-pressed', avail ? 'true' : 'false');
+
+  const repoLine = [st?.repo, st?.branch].filter(Boolean).join(' · ');
+  repoEl.textContent = repoLine ? `${repoLine}` : '';
+
+  if (st && st.ok === false && st.error) {
+    // Couldn't check (offline, no origin, detached HEAD…). Say so plainly.
+    btn.title = 'Couldn’t check for updates';
+    headline.textContent = 'Couldn’t check for updates';
+    detail.textContent = st.error;
+    applyBtn.disabled = true;
+    return;
+  }
+
+  if (avail) {
+    const v = st.remote?.version ? `v${st.remote.version}` : 'a new version';
+    btn.title = `Update available: ${v} (click to review)`;
+    headline.textContent = `Update available — ${v}`;
+    const subject = st.remote?.subject ? `Latest: “${st.remote.subject}”. ` : '';
+    const behind  = st.behind ? `${st.behind} commit${st.behind === 1 ? '' : 's'} behind. ` : '';
+    detail.textContent = st.dirty
+      ? `${subject}${behind}You have uncommitted local changes — commit or stash them before updating.`
+      : `${subject}${behind}Currently on v${st.current?.version ?? '?'}.`;
+    applyBtn.disabled = !!st.dirty;
+  } else {
+    const v = st?.current?.version ? `v${st.current.version}` : '';
+    btn.title = `Up to date${v ? ` (${v})` : ''}`;
+    headline.textContent = 'You’re up to date';
+    detail.textContent = v ? `Running ${v} — the latest on this branch.` : 'Running the latest on this branch.';
+    applyBtn.disabled = true;
+  }
+}
+
+function initUpdateChecker() {
+  const btn      = $('update-btn');
+  const popover  = $('update-popover');
+  const applyBtn = $('update-apply-btn');
+  const recheck  = $('update-recheck-btn');
+  const statusEl = $('update-status');
+  if (!btn) return;
+
+  const poll = () => fetchUpdateStatus().then(renderUpdateState).catch(() => {});
+  poll();
+  setInterval(poll, UPDATE_POLL_MS);
+
+  btn.addEventListener('click', () => {
+    const willOpen = popover.classList.contains('hidden');
+    popover.classList.toggle('hidden');
+    if (willOpen) { statusEl.textContent = ''; poll(); }
+  });
+
+  // Click-outside to dismiss
+  document.addEventListener('click', e => {
+    if (popover.classList.contains('hidden')) return;
+    if (e.target === btn || btn.contains(e.target)) return;
+    if (popover.contains(e.target)) return;
+    popover.classList.add('hidden');
+  });
+
+  recheck.addEventListener('click', async () => {
+    statusEl.textContent = 'Checking…';
+    try {
+      const r = await fetch('/api/update-check', { method: 'POST' });
+      const st = await r.json();
+      renderUpdateState(st);
+      statusEl.textContent = st?.updateAvailable ? '' : 'Checked just now.';
+    } catch {
+      statusEl.textContent = 'Check failed — is the server reachable?';
+    }
+  });
+
+  applyBtn.addEventListener('click', async () => {
+    if (applyBtn.disabled) return;
+    applyBtn.disabled = true;
+    statusEl.textContent = 'Updating…';
+    try {
+      const r = await fetch('/api/update-apply', { method: 'POST' });
+      const res = await r.json();
+      if (res?.ok) {
+        statusEl.textContent = `Updated to v${res.version} — restart Proto-Familiar to run the new version.`;
+        $('update-headline').textContent = 'Update applied';
+        $('update-detail').textContent = 'The new code is on disk. Restart the server (or use your launcher) to load it.';
+        $('update-dot').classList.add('hidden');
+        btn.classList.remove('update-available');
+      } else {
+        statusEl.textContent = res?.error || 'Update failed.';
+        applyBtn.disabled = false;
+      }
+    } catch {
+      statusEl.textContent = 'Update failed — is the server reachable?';
+      applyBtn.disabled = false;
+    }
+  });
+}
+
+// ── Logs modal ──────────────────────────────────────────────
+// Saved Sessions now lives as the "Sessions" tab in the Knowledge (Phylactery)
+// modal — refreshed by keSwitchTab('sessions'). Picking a session to load closes
+// the whole modal (back to chat), which is what closeLogsModal now does.
 function closeLogsModal() {
-  $('logs-modal').classList.add('hidden');
+  closeKnowledgeModal();
 }
 
 async function refreshLogsList() {
@@ -3680,18 +3914,25 @@ function init() {
   });
   $('websearch-apply-btn')?.addEventListener('click', applyWebSearchBackend);
 
-  // Google Calendar config modal (mirrors the web-search backend modal).
-  $('gcal-configure-btn')?.addEventListener('click', openGcalModal);
-  $('gcal-modal-close')?.addEventListener('click', closeGcalModal);
-  $('gcal-modal-cancel')?.addEventListener('click', closeGcalModal);
+  // Connections modal (provider/key/model editor + saved connections + per-feature routing).
+  $('connections-btn')?.addEventListener('click', openConnectionsModal);
+  $('connections-modal-close')?.addEventListener('click', closeConnectionsModal);
+  $('connections-modal')?.addEventListener('click', e => { if (e.target === $('connections-modal')) closeConnectionsModal(); });
+
+  // Google Calendar config (now the "Calendar" tab in the Unruh modal —
+  // populated by loadGcalTab() on tab-switch; no standalone modal anymore).
   $('gcal-sync-now')?.addEventListener('click', gcalSyncNow);
   $('gcal-cal-refresh')?.addEventListener('click', renderGcalCalendars);
-  $('gcal-modal')?.addEventListener('click', e => { if (e.target === $('gcal-modal')) closeGcalModal(); });
   // Source selector — toggle the source panels on change.
   $('gcal-source')?.addEventListener('change', () => { readSettingsFromUI(); syncGcalSourcePanels(); });
   $('gcal-google-connect')?.addEventListener('click', gcalGoogleConnect);
   $('gcal-google-savetoken')?.addEventListener('click', gcalGoogleSaveToken);
   $('gcal-google-disconnect')?.addEventListener('click', gcalGoogleDisconnect);
+  // Weather places (W-B) — the "Weather" tab in the Unruh modal.
+  $('weather-geocode-btn')?.addEventListener('click', weatherGeocode);
+  $('weather-save-place')?.addEventListener('click', weatherSavePlace);
+  $('weather-cancel-place')?.addEventListener('click', weatherCancelPlace);
+  $('weather-place-query')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); weatherGeocode(); } });
   $('guide-chat-send')?.addEventListener('click', sendGuideChat);
   $('guide-chat-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGuideChat(); }
@@ -3703,6 +3944,7 @@ function init() {
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
@@ -3712,6 +3954,7 @@ function init() {
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead',
+    'weather-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -3720,7 +3963,7 @@ function init() {
     'web-search-enabled', 'web-search-max-results', 'web-search-max-chars',
     'web-search-api-key', 'web-search-google-cse-id',
     'user-discord-webhook',
-    'discord-enabled', 'discord-bot-token', 'discord-ward-user-id',
+    'discord-enabled', 'discord-tools-enabled', 'discord-bot-token', 'discord-ward-user-id',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
@@ -3871,12 +4114,11 @@ function init() {
   // ── Tailscale / external-access toggle ───────────────────────
   initTailscaleToggle();
 
-  // ── Logs modal ────────────────────────────────────────────
-  $('logs-btn').addEventListener('click', openLogsModal);
-  $('logs-modal-close').addEventListener('click', closeLogsModal);
-  $('logs-modal').addEventListener('click', e => {
-    if (e.target === $('logs-modal')) closeLogsModal();
-  });
+  // ── Self-update indicator + popover ──────────────────────────
+  initUpdateChecker();
+
+  // Saved Sessions is now the "Sessions" tab in the Knowledge modal
+  // (refreshed on tab-switch); no standalone Logs modal to wire.
 
   // ── Topic system ─────────────────────────────────────────────
   $('new-topic-btn').addEventListener('click', openTopicNameModal);
@@ -4016,6 +4258,7 @@ function init() {
     $('te-cal-next').addEventListener('click',  () => teShiftCalendarMonth(+1));
     $('te-cal-today').addEventListener('click', () => teGotoCalendarToday());
     $('te-routine-refresh').addEventListener('click',     teLoadRoutine);
+    $('te-rounds-refresh')?.addEventListener('click',     teLoadRounds);
     $('te-routine-add').addEventListener('click',         () => teToggleRoutineForm(true));
     $('te-routine-form-cancel').addEventListener('click', () => teToggleRoutineForm(false));
     $('te-routine-form-save').addEventListener('click',   teSavePhase);
@@ -4028,7 +4271,7 @@ function init() {
   $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
   $('ke-cov-next')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, 1);  keRenderCalendar(); } });
   $('ke-cov-import')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.toggle('hidden'));
-  $('ke-cov-import-cancel')?.addEventListener('click', () => $('ke-cov-import-form')?.classList.add('hidden'));
+  $('ke-cov-import-cancel')?.addEventListener('click', () => { $('ke-cov-import-form')?.classList.add('hidden'); keCovImportReset(); });
   $('ke-cov-import-file')?.addEventListener('change', keCovImportFileChosen);
   $('ke-cov-import-preview')?.addEventListener('click', keCovImportPreview);
   $('ke-cov-import-commit')?.addEventListener('click', keCovImportCommit);
@@ -5958,7 +6201,7 @@ function downloadDiagnosticReport() {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'snapshots'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'remember', 'snapshots', 'sessions', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -6027,7 +6270,9 @@ function keSwitchTab(tab) {
     else                        { keSetGraphView('list'); keLoadGraphNodes(); }
   }
   if (tab === 'identity')   keLoadIdentity();
+  if (tab === 'remember')   keOpenRememberMap();
   if (tab === 'snapshots')  keLoadSnapshots();
+  if (tab === 'sessions')   refreshLogsList();
 }
 
 function keSetDetail(paneId, html) { $(paneId).innerHTML = html; }
@@ -6318,20 +6563,50 @@ async function keMemorizeDay(date) {
 }
 
 // ── Coverage: foreign-log import ────────────────────────────────────────
-let _keImportPreviewed = null; // last preview's {dates, days, messages, format}
+let _keImportPreviewed = null; // last single-file preview's {dates, days, messages, format}
 let _keImportFilename = '';    // name of the chosen file (for filename-date extraction)
+let _keBatchFiles = null;      // [{ filename, content }] when >1 file is chosen
+let _keBatchPreview = null;    // last batch preview's per-file results
 
-async function keCovImportFileChosen(e) {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  if (file.size > 30 * 1024 * 1024) { $('ke-cov-import-status').textContent = 'File too large (max 30 MB).'; return; }
-  try {
-    $('ke-cov-import-text').value = await file.text();
-    _keImportFilename = file.name;
-    $('ke-cov-import-status').textContent = `Loaded ${file.name}.`;
-  } catch { $('ke-cov-import-status').textContent = 'Could not read that file.'; }
+function keCovImportReset() {
+  _keImportPreviewed = null; _keImportFilename = '';
+  _keBatchFiles = null; _keBatchPreview = null;
+  $('ke-cov-import-text').value = '';
+  $('ke-cov-import-commit').disabled = true;
+  const b = $('ke-cov-import-batch'); if (b) { b.classList.add('hidden'); b.innerHTML = ''; }
+  const st = $('ke-cov-import-status'); if (st) st.textContent = '';
+  const f = $('ke-cov-import-file'); if (f) f.value = '';
 }
 
+async function keCovImportFileChosen(e) {
+  const files = [...(e.target.files || [])];
+  if (!files.length) return;
+  const status = $('ke-cov-import-status');
+  const tooBig = files.find(f => f.size > 30 * 1024 * 1024);
+  if (tooBig) { status.textContent = `"${tooBig.name}" is too large (max 30 MB each).`; return; }
+
+  // One file → the paste/preview single flow. Several → batch mode.
+  if (files.length === 1) {
+    _keBatchFiles = null; _keBatchPreview = null;
+    const b = $('ke-cov-import-batch'); if (b) { b.classList.add('hidden'); b.innerHTML = ''; }
+    try {
+      $('ke-cov-import-text').value = await files[0].text();
+      _keImportFilename = files[0].name;
+      status.textContent = `Loaded ${files[0].name}.`;
+    } catch { status.textContent = 'Could not read that file.'; }
+    return;
+  }
+  try {
+    _keBatchFiles = await Promise.all(files.map(async f => ({ filename: f.name, content: await f.text() })));
+    _keImportFilename = ''; _keImportPreviewed = null; _keBatchPreview = null;
+    $('ke-cov-import-text').value = '';
+    $('ke-cov-import-commit').disabled = true;
+    const b = $('ke-cov-import-batch'); if (b) { b.classList.add('hidden'); b.innerHTML = ''; }
+    status.textContent = `${_keBatchFiles.length} files loaded — Preview to see the per-file breakdown.`;
+  } catch { status.textContent = 'Could not read one of those files.'; }
+}
+
+// ── Single-file path ──
 function keCovImportBody(commit) {
   return {
     content: $('ke-cov-import-text').value,
@@ -6344,6 +6619,7 @@ function keCovImportBody(commit) {
 }
 
 async function keCovImportPreview() {
+  if (_keBatchFiles) return keCovBatchPreview();
   const status = $('ke-cov-import-status');
   if (!$('ke-cov-import-text').value.trim()) { status.textContent = 'Paste or choose a log first.'; return; }
   status.textContent = 'Reading…';
@@ -6373,6 +6649,7 @@ async function keCovImportPreview() {
 }
 
 async function keCovImportCommit() {
+  if (_keBatchFiles) return keCovBatchCommit();
   const status = $('ke-cov-import-status');
   if (!_keImportPreviewed) { status.textContent = 'Preview first.'; return; }
   if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
@@ -6389,6 +6666,97 @@ async function keCovImportCommit() {
     status.textContent = `Imported ${data.days} day(s), queued ${data.enqueued} for memorizing. Coverage updates as they finish.`;
     _keImportPreviewed = null;
     $('ke-cov-import-text').value = '';
+    setTimeout(keLoadCoverage, 1500);
+  } catch (err) {
+    status.textContent = `Import failed: ${err.message}`;
+    $('ke-cov-import-commit').disabled = false;
+  }
+}
+
+// ── Batch path (several files at once) ──
+// Per-file date the user typed into the batch table for a dateless file (else '').
+function keBatchDateFor(i) {
+  return $('ke-cov-import-batch')?.querySelector(`input[data-batch-idx="${i}"]`)?.value || '';
+}
+function keBatchFilesPayload() {
+  return _keBatchFiles.map((f, i) => {
+    const d = keBatchDateFor(i);
+    return d ? { ...f, fallbackDate: d } : f;
+  });
+}
+
+function keRenderBatch(files) {
+  const el = $('ke-cov-import-batch');
+  if (!el) return;
+  const rows = files.map((f, i) => {
+    let detail;
+    if (!f.ok) detail = `<span class="ke-batch-err">✗ ${esc(f.error || 'could not parse')}</span>`;
+    else if (f.needsDate) detail = `<span class="ke-batch-warn">needs a date</span> <input type="date" data-batch-idx="${i}">`;
+    else {
+      const range = f.dates?.length ? (f.dates.length > 1 ? `${f.dates[0]} → ${f.dates[f.dates.length - 1]}` : f.dates[0]) : '—';
+      detail = `<span class="ke-batch-ok">✓ ${esc(f.format)} · ${f.days} day(s) (${range}) · ${f.messages} msg</span>`;
+    }
+    return `<div class="ke-batch-row"><span class="ke-batch-name">${esc(f.filename)}</span>${detail}</div>`;
+  }).join('');
+  el.innerHTML = rows;
+  el.classList.remove('hidden');
+}
+
+async function keCovBatchPreview() {
+  const status = $('ke-cov-import-status');
+  if (!_keBatchFiles?.length) { status.textContent = 'Choose files first.'; return; }
+  status.textContent = 'Reading…';
+  $('ke-cov-import-commit').disabled = true;
+  try {
+    const res = await fetch('/api/import-logs-batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: keBatchFilesPayload(),
+        selfNames: $('ke-cov-import-self').value,
+        source: $('ke-cov-import-source').value,
+      }),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    _keBatchPreview = data.files || [];
+    keRenderBatch(_keBatchPreview);
+    const ready = _keBatchPreview.filter(f => f.ok && !f.needsDate && f.days);
+    const needDate = _keBatchPreview.filter(f => f.needsDate);
+    const totalDays = ready.reduce((n, f) => n + f.days, 0);
+    status.textContent =
+      `${ready.length}/${_keBatchPreview.length} file(s) ready — ${totalDays} day(s) total.` +
+      (needDate.length ? ` ${needDate.length} need a date (set it above, then Preview again).` : '') +
+      ` "Import & memorize" runs one extraction pass per day.`;
+    $('ke-cov-import-commit').disabled = !_keBatchPreview.some(f => f.ok && !f.needsDate);
+  } catch (err) { status.textContent = `Couldn't read them: ${err.message}`; }
+}
+
+async function keCovBatchCommit() {
+  const status = $('ke-cov-import-status');
+  if (!_keBatchPreview) { status.textContent = 'Preview first.'; return; }
+  if (!state.apiKey.trim()) { status.textContent = 'Set an API key in Settings first.'; return; }
+  const ready = _keBatchPreview.filter(f => f.ok && !f.needsDate && f.days);
+  if (!ready.length) { status.textContent = 'No file is ready — set the missing dates and Preview again.'; return; }
+  if (!confirm(`Import ${ready.length} file(s) and memorize them now? This runs one extraction pass per day.`)) return;
+  status.textContent = 'Importing…';
+  $('ke-cov-import-commit').disabled = true;
+  try {
+    const res = await fetch('/api/import-logs-batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: keBatchFilesPayload(),
+        selfNames: $('ke-cov-import-self').value,
+        source: $('ke-cov-import-source').value,
+        commit: true, provider: state.provider, apiKey: state.apiKey, model: state.model,
+      }),
+    });
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    const skipped = (data.files || []).filter(f => f.skipped);
+    status.textContent = `Imported ${data.days} day(s), queued ${data.enqueued} for memorizing.`
+      + (skipped.length ? ` Skipped ${skipped.length}: ${skipped.map(s => `${s.filename} (${s.reason})`).join('; ')}.` : '')
+      + ` Coverage updates as they finish.`;
+    _keBatchFiles = null; _keBatchPreview = null;
     setTimeout(keLoadCoverage, 1500);
   } catch (err) {
     status.textContent = `Import failed: ${err.message}`;
@@ -6962,14 +7330,15 @@ async function keLoadIdentity() {
         list.appendChild(row);
       }
       if (isWard) {
-        // Always expose Remember settings even when there are no ward files yet.
+        // Remember settings live in their own tab now; this row is a cross-link
+        // kept for discoverability from the ward's identity section.
         any = true;
         const rmRow = document.createElement('div');
         rmRow.className = 'ke-row ke-row-settings';
         rmRow.innerHTML = `
           <div class="ke-row-title">Remember settings</div>
-          <div class="ke-row-sub">Memory storage policy per category</div>`;
-        rmRow.addEventListener('click', keOpenRememberMap);
+          <div class="ke-row-sub">Memory storage policy per category → Remember tab</div>`;
+        rmRow.addEventListener('click', () => keSwitchTab('remember'));
         list.appendChild(rmRow);
       }
     }
@@ -7018,13 +7387,14 @@ function keOpenIdentity(category, file) {
 
 // ── Remember-consent map ─────────────────────────────────────────────────────
 async function keOpenRememberMap() {
-  const det = $('ke-id-detail');
+  const det = $('ke-remember-detail');
   det.innerHTML = '<p class="logs-loading">Loading remember settings…</p>';
   try {
     const res = await fetch('/api/entity/ward/remember');
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
     const map = data.map ?? {};
+    const standing = data.standing ?? {};
     const categories = ['basics', 'emotional_content', 'health_info', 'relationships', 'whereabouts'];
     const labels = {
       basics: 'Basics (name, age, daily facts)',
@@ -7042,11 +7412,31 @@ async function keOpenRememberMap() {
       ].join('');
       return `<select id="rm-${cat}" class="ke-select">${opts}</select>`;
     }
+    // Standing consent only makes sense on an 'ask' category — the middle tier
+    // that auto-keeps new facts for a window instead of checking each one.
+    function standingFor(cat) {
+      const active = standing[cat];
+      const cur = (active && typeof active.until === 'number' && active.until > Date.now()) ? (active.window ?? '') : '';
+      const until = cur ? new Date(active.until).toLocaleString() : '';
+      const opts = [
+        `<option value="" ${cur === '' ? 'selected' : ''}>Ask me each time</option>`,
+        `<option value="6h"  ${cur === '6h'  ? 'selected' : ''}>Trust me for 6 hours</option>`,
+        `<option value="24h" ${cur === '24h' ? 'selected' : ''}>Trust me for 24 hours</option>`,
+        `<option value="7d"  ${cur === '7d'  ? 'selected' : ''}>Trust me for 7 days</option>`,
+        `<option value="30d" ${cur === '30d' ? 'selected' : ''}>Trust me for 30 days</option>`,
+      ].join('');
+      const activeNote = cur ? `<span class="field-hint" style="margin-left:.5rem">trusted until ${esc(until)}</span>` : '';
+      const hidden = map[cat] === 'ask' ? '' : ' style="display:none"';
+      return `<div class="ke-standing-row"${hidden} data-cat="${cat}">
+        <span class="field-hint">While I'm asking, standing consent:</span>
+        <select id="rst-${cat}" class="ke-select">${opts}</select>${activeNote}</div>`;
+    }
     const rows = categories.map(cat => `
       <div class="ke-meta-row">
         <label class="ke-meta-label" for="rm-${cat}">${esc(labels[cat])}</label>
         ${selFor(cat)}
-      </div>`).join('');
+      </div>
+      ${standingFor(cat)}`).join('');
     det.innerHTML = `
       <div class="ke-detail-header"><h3>Ward · Remember settings</h3></div>
       <p class="field-hint">Controls how I handle information about <strong>my human themselves</strong>, per category.
@@ -7054,10 +7444,21 @@ async function keOpenRememberMap() {
         "Store freely" means I remember it immediately.
         "Ask first" means I store it as pending and surface it for confirmation.
         "Never store" means I drop it silently — use with care.</p>
+      <p class="field-hint">On an "Ask first" category you can also give me <strong>standing consent</strong> for a while —
+        "trust my judgment for the next few hours/days". While that window is open I quietly keep new facts of that kind
+        without checking each one with you, then go back to asking when it lapses. A gentler middle ground than flipping
+        the whole category to "Store freely" forever.</p>
       ${rows}
       <div class="ke-actions">
         <button id="ke-rm-save" class="btn-send">Save</button>
       </div>`;
+    // Show/hide each standing row live as its category select changes.
+    for (const cat of categories) {
+      det.querySelector(`#rm-${cat}`)?.addEventListener('change', (e) => {
+        const row = det.querySelector(`.ke-standing-row[data-cat="${cat}"]`);
+        if (row) row.style.display = e.target.value === 'ask' ? '' : 'none';
+      });
+    }
     $('ke-rm-save').addEventListener('click', async () => {
       const newMap = {};
       for (const cat of categories) {
@@ -7069,6 +7470,21 @@ async function keOpenRememberMap() {
         body: JSON.stringify({ map: newMap }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
+      // Persist standing-consent windows for 'ask' categories only — the server
+      // clears any lingering window on a category that isn't asking anyway. Skip
+      // unchanged windows so re-saving the panel doesn't keep re-stamping the
+      // expiry forward.
+      for (const cat of categories) {
+        if (newMap[cat] !== 'ask') continue;
+        const win = det.querySelector(`#rst-${cat}`)?.value ?? '';
+        const active = standing[cat];
+        const cur = (active && active.until > Date.now()) ? (active.window ?? '') : '';
+        if (win === cur) continue;
+        await fetch('/api/entity/ward/remember/standing', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category: cat, window: win || null }),
+        }).catch(() => {});
+      }
       alert('Remember settings saved.');
       keOpenRememberMap();
     });
@@ -7405,7 +7821,7 @@ async function saveLoreEditorEntry() {
 // only with the Familiar (the `interest_set_standing` tool); don't add a
 // ward control for it.
 
-const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff'];
+const TE_TABS = ['interests', 'threat', 'ponderings', 'schedule', 'routine', 'handoff', 'automation', 'calendar', 'weather'];
 
 function openTemporalModal() {
   $('temporal-modal').classList.remove('hidden');
@@ -7430,6 +7846,172 @@ function teSwitchTab(name) {
   else if (name === 'schedule')   teReloadScheduleView();
   else if (name === 'routine')    teLoadRoutine();
   else if (name === 'handoff')    teLoadHandoff();
+  else if (name === 'automation') teLoadReflectionStatus();
+  else if (name === 'calendar')   loadGcalTab();
+  else if (name === 'weather')    teLoadWeather();
+}
+
+// ── Weather places (W-B) ──────────────────────────────────────────────
+// The ward's places live server-side and are NEVER told to the AI. The
+// browser handles coords only to confirm-and-save; the list it shows back
+// is the public shape (label + which is current), no coordinates.
+let _weatherPending = null;   // { lat, lon, place_name, timezone } awaiting a label
+
+async function teLoadWeather() {
+  const t = $('weather-toggle');
+  if (t) t.checked = state.weatherEnabled !== false;
+  weatherCancelPlace();
+  await renderWeatherPlaces();
+}
+
+async function renderWeatherPlaces() {
+  const list = $('weather-places-list');
+  if (!list) return;
+  try {
+    const data = await (await fetch('/api/locations')).json();
+    const locs = Array.isArray(data?.locations) ? data.locations : [];
+    if (!locs.length) { list.innerHTML = '<div class="field-hint">No places yet.</div>'; return; }
+    list.innerHTML = '';
+    for (const l of locs) {
+      const row = document.createElement('div');
+      row.className = 'field-row';
+      row.style.cssText = 'align-items:center; gap:8px';
+      const name = document.createElement('span');
+      name.style.flex = '1';
+      name.textContent = l.label;
+      if (l.is_current) {
+        const tag = document.createElement('span');
+        tag.style.opacity = '.7';
+        tag.textContent = ' · current';
+        name.appendChild(tag);
+      }
+      row.appendChild(name);
+      if (!l.is_current) {
+        const setBtn = document.createElement('button');
+        setBtn.className = 'btn-secondary';
+        setBtn.textContent = 'Make current';
+        setBtn.onclick = () => weatherSetCurrent(l.id);
+        row.appendChild(setBtn);
+      }
+      const del = document.createElement('button');
+      del.className = 'btn-secondary';
+      del.textContent = '✕';
+      del.title = 'Remove place';
+      del.onclick = () => weatherDeletePlace(l.id, l.label);
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+  } catch {
+    list.innerHTML = '<div class="field-hint">Couldn\'t load places.</div>';
+  }
+}
+
+async function weatherGeocode() {
+  const q = ($('weather-place-query')?.value ?? '').trim();
+  const status = $('weather-places-status');
+  if (!q) { if (status) status.textContent = 'Type a city, ZIP, or address first.'; return; }
+  if (status) status.textContent = 'Looking it up…';
+  try {
+    const r = await (await fetch('/api/locations/geocode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q }),
+    })).json();
+    if (!r?.ok) { if (status) status.textContent = 'No match for that — try a nearby city or a postal code.'; return; }
+    _weatherPending = { lat: r.lat, lon: r.lon, place_name: r.place_name, timezone: r.timezone };
+    if (status) status.textContent = '';
+    if ($('weather-found-name')) $('weather-found-name').textContent = r.place_name || q;
+    // Suggest a label from the resolved place's first word.
+    const lbl = $('weather-place-label');
+    if (lbl && !lbl.value) lbl.value = String(r.place_name || q).split(',')[0].trim();
+    $('weather-geocode-result')?.classList.remove('hidden');
+  } catch {
+    if (status) status.textContent = 'Lookup failed — check your connection and try again.';
+  }
+}
+
+async function weatherSavePlace() {
+  const label = ($('weather-place-label')?.value ?? '').trim();
+  const status = $('weather-places-status');
+  if (!_weatherPending) { if (status) status.textContent = 'Find a place first.'; return; }
+  if (!label) { if (status) status.textContent = 'Give the place a short label (e.g. "home").'; return; }
+  try {
+    const r = await (await fetch('/api/locations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, ..._weatherPending }),
+    })).json();
+    if (!r?.ok) { if (status) status.textContent = r?.error || 'Could not save the place.'; return; }
+    weatherCancelPlace();
+    if ($('weather-place-query')) $('weather-place-query').value = '';
+    if (status) status.textContent = `Saved "${label}".`;
+    await renderWeatherPlaces();
+  } catch {
+    if (status) status.textContent = 'Could not save the place.';
+  }
+}
+
+function weatherCancelPlace() {
+  _weatherPending = null;
+  $('weather-geocode-result')?.classList.add('hidden');
+  if ($('weather-place-label')) $('weather-place-label').value = '';
+}
+
+async function weatherSetCurrent(id) {
+  const status = $('weather-places-status');
+  try {
+    const r = await (await fetch('/api/locations/current', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ident: id }),
+    })).json();
+    if (!r?.ok && status) status.textContent = r?.error || 'Could not switch the current place.';
+    await renderWeatherPlaces();
+  } catch { if (status) status.textContent = 'Could not switch the current place.'; }
+}
+
+async function weatherDeletePlace(id, label) {
+  if (!confirm(`Remove "${label}" from your places?`)) return;
+  const status = $('weather-places-status');
+  try {
+    const r = await (await fetch(`/api/locations/${encodeURIComponent(id)}`, { method: 'DELETE' })).json();
+    if (!r?.ok && status) status.textContent = r?.error || 'Could not remove the place.';
+    await renderWeatherPlaces();
+  } catch { if (status) status.textContent = 'Could not remove the place.'; }
+}
+
+// Reflection heartbeat readout (temporal-bridges Piece 5). Proves the
+// learning loop is alive: last-ran time + what it graded. A stale/empty
+// readout is itself the signal that reflection hasn't been running.
+async function teLoadReflectionStatus() {
+  const el = $('te-reflection-status');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/reflection-events?limit=1');
+    const events = await r.json();
+    if (!Array.isArray(events) || !events.length) {
+      el.textContent = 'Reflection: no runs recorded yet. It runs when enough surface outcomes have accrued since the last one — this stays empty until then.';
+      return;
+    }
+    const e = events[0];
+    const when = e.loggedAt ? relTimeShort(e.loggedAt) : 'unknown';
+    const bits = [];
+    bits.push(`graded ${e.edgesGraded ?? 0} forecast${(e.edgesGraded ?? 0) === 1 ? '' : 's'}`);
+    if (e.promotions) bits.push(`promoted ${e.promotions} noticing${e.promotions === 1 ? '' : 's'}`);
+    if (e.wroteIdentity) bits.push('wrote to what-lapses-cost');
+    if (e.routineReview) bits.push('carried the weekly routine review');
+    el.textContent = `Reflection: last ran ${when} — ${bits.join(', ')}.`;
+  } catch {
+    el.textContent = 'Reflection: status unavailable right now.';
+  }
+}
+
+// Compact relative time for the readout ("3h ago", "2d ago").
+function relTimeShort(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 'recently';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
 }
 
 function teEscapeHtml(s) {
@@ -8017,7 +8599,11 @@ async function teLoadScheduleMap() {
     const data = await r.json();
     if (gen !== _teSchedMapGen) return;
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
-    const nodes = (data.nodes || []).map(n => ({ ...n, type: n.type || 'task' }));
+    // Window nodes + linked endpoints (undated consequence states, anchors
+    // outside the window) — without linked, edges to them dangled and the
+    // map engine dropped them, so the consequence graph looked empty.
+    const nodes = [...(data.nodes || []), ...(data.linked || [])]
+      .map(n => ({ ...n, type: n.type || 'task' }));
     // Engine edges want { id, fromId, toId, type }. Schedule edges carry
     // src / dst / kind — map them across (kind becomes the edge's type,
     // which the engine hues and the legend lists).
@@ -8498,6 +9084,45 @@ async function teLoadRoutine() {
   } catch (err) {
     list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
   }
+  // The Familiar's own rounds ride the same refresh (read-only view).
+  teLoadRounds();
+}
+
+// "Eury's rounds" (Initiative Pass 3): a read-only view of the standing
+// rounds the Familiar keeps, honouring its own visibility choice. Private
+// rounds are counted but their contents withheld — the Familiar decides
+// what's legible here; we never expose a hidden round's text.
+async function teLoadRounds() {
+  const el = $('te-rounds-list');
+  if (!el) return;
+  el.innerHTML = '<p class="logs-empty">Loading…</p>';
+  try {
+    const r = await fetch('/api/rounds');
+    const data = await r.json();
+    const rounds = Array.isArray(data.rounds) ? data.rounds : [];
+    const hidden = Number(data.hidden_count) || 0;
+    if (!rounds.length && !hidden) {
+      el.innerHTML = '<p class="logs-empty">No standing rounds yet — your Familiar hasn\'t set any self-maintenance routines for itself.</p>';
+      return;
+    }
+    const byPhase = new Map();
+    for (const rd of rounds) {
+      const p = rd.phase || 'anytime';
+      if (!byPhase.has(p)) byPhase.set(p, []);
+      byPhase.get(p).push(rd);
+    }
+    const groups = [...byPhase.entries()].map(([phase, items]) => `
+      <div style="margin-bottom:8px">
+        <div style="font-size:0.82em; text-transform:uppercase; letter-spacing:0.04em; opacity:0.6">${teEscapeHtml(phase)}</div>
+        ${items.map(it => `<div style="padding:3px 0">• ${teEscapeHtml(it.what)}</div>`).join('')}
+      </div>`).join('');
+    const hiddenNote = hidden
+      ? `<div class="field-hint" style="margin-top:6px; font-style:italic">Your Familiar keeps ${hidden} round${hidden === 1 ? '' : 's'} privately — you know ${hidden === 1 ? 'it exists' : 'they exist'}, but ${hidden === 1 ? 'its' : 'their'} contents are theirs.</div>`
+      : '';
+    el.innerHTML = (groups || '') + hiddenNote;
+  } catch (err) {
+    el.innerHTML = `<p class="logs-empty">Failed to load rounds: ${teEscapeHtml(err.message)}</p>`;
+  }
 }
 
 async function teEditPhase(id, phase) {
@@ -8767,8 +9392,8 @@ function formatOutboxAsMessageContent(item) {
     if (body) return body;
     return title ? `*(reminder)* ${title}` : '';
   }
-  if (item.kind === 'event_alert') {
-    // Title carries the event name, body the code-built countdown — show both.
+  if (item.kind === 'event_alert' || item.kind === 'weather_alert') {
+    // Title carries the event/heads-up name, body the code-built detail — both.
     const head = title ? `**${title}**` : '';
     if (head && body) return `${head}\n${body}`;
     return head || body;
@@ -9261,7 +9886,7 @@ function vlRenderPersonDetail(villager) {
       <textarea id="vl-p-private-notes" placeholder="Sensitive context, for you and the Familiar only…" style="width:100%;min-height:3.5em;resize:vertical">${isNew ? '' : esc(villager.privateNotes ?? '')}</textarea>
     </div>
     <div>
-      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Identity → ward → Remember settings)</span></div>
+      <div class="vl-field-label">Memory consent <span class="field-hint">(what I may store about this person — for my human's own settings, see Knowledge → Remember tab)</span></div>
       <div id="vl-p-remember" class="vl-rem-grid">${remRows}</div>
     </div>
     <div>

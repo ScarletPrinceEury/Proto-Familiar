@@ -495,6 +495,36 @@ class TestDeleteNode:
         assert row is not None
 
 
+class TestMarkAlerted:
+    def test_event_channel_stamps_alerted_at(self, conn):
+        e = sched.add_node(conn, type="event", label="appt", when="2099-07-09T14:00:00")
+        assert sched.mark_alerted(conn, id=e)
+        row = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (e,)).fetchone()
+        import json
+        p = json.loads(row["payload_json"])
+        assert "alerted_at" in p and "weather_alerted_at" not in p
+
+    def test_weather_channel_is_separate(self, conn):
+        e = sched.add_node(conn, type="event", label="market", when="2099-07-09T14:00:00")
+        # Both channels for the same one-time event coexist without collision.
+        assert sched.mark_alerted(conn, id=e, kind="event")
+        assert sched.mark_alerted(conn, id=e, kind="weather")
+        import json
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (e,)).fetchone()["payload_json"])
+        assert "alerted_at" in p and "weather_alerted_at" in p
+
+    def test_weather_channel_per_occurrence(self, conn):
+        e = sched.add_node(conn, type="event", label="walk", when="2099-07-09T14:00:00")
+        assert sched.mark_alerted(conn, id=e, occurrence_date="2099-07-09", kind="weather")
+        import json
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (e,)).fetchone()["payload_json"])
+        assert p["weather_alerts"]["2099-07-09"]
+        assert "alerts" not in p   # coming-up channel untouched
+
+    def test_unknown_id_returns_false(self, conn):
+        assert sched.mark_alerted(conn, id="nope", kind="weather") is False
+
+
 # ── Reads ─────────────────────────────────────────────────────────────
 
 
@@ -545,6 +575,55 @@ class TestGetWindow:
         eid = sched.add_edge(conn, src=a, dst=b, kind="requires")
         result = sched.get_window(conn)
         assert any(e["id"] == eid for e in result["edges"])
+
+    # ── The consequence-graph visibility regression (the "causal system
+    #    doesn't work" defect). Edges must be fetched even when their
+    #    endpoints are outside the time window, and those endpoints must
+    #    ride along in `linked` so renderers can resolve their labels. ──
+
+    def test_state_node_needs_no_when(self, conn):
+        nid = sched.add_node(conn, type="state", label="crash")
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id = ?", (nid,)).fetchone()
+        assert row["when_ts"] is None
+
+    def test_edge_to_undated_state_is_returned_with_linked_endpoint(self, conn):
+        now = datetime.now(timezone.utc)
+        task = sched.add_node(conn, type="task", label="skip dinner",
+                              when=_iso(now + timedelta(hours=1)))
+        state = sched.add_node(conn, type="state", label="crash")
+        eid = sched.add_edge(conn, src=task, dst=state, kind="causes",
+                             payload={"valence": "harm", "condition": "on_lapse"})
+        result = sched.get_window(conn)
+        assert any(e["id"] == eid for e in result["edges"])
+        # The undated state is not a window node — it must arrive as linked.
+        assert not any(n["id"] == state for n in result["nodes"])
+        assert any(n["id"] == state for n in result["linked"])
+
+    def test_edge_between_two_out_of_window_nodes_is_still_returned(self, conn):
+        # The flagship rot case: a recurring anchor stamped months ago,
+        # pointing at a state authored days ago. Neither endpoint is a
+        # window node; the edge and BOTH endpoints must still be visible.
+        now = datetime.now(timezone.utc)
+        anchor = sched.add_node(conn, type="event", label="dinner",
+                                when=_iso(now - timedelta(days=90)),
+                                payload={"recurrence": {"freq": "daily"}})
+        state = sched.add_node(conn, type="state", label="crash")
+        eid = sched.add_edge(conn, src=anchor, dst=state, kind="causes",
+                             payload={"valence": "harm", "condition": "on_lapse"})
+        result = sched.get_window(conn)
+        assert any(e["id"] == eid for e in result["edges"])
+        linked_ids = {n["id"] for n in result["linked"]}
+        assert anchor in linked_ids and state in linked_ids
+
+    def test_linked_excludes_nodes_already_in_window(self, conn):
+        now = datetime.now(timezone.utc)
+        a = sched.add_node(conn, type="task", label="prep",
+                           when=_iso(now + timedelta(hours=1)))
+        b = sched.add_node(conn, type="event", label="interview",
+                           when=_iso(now + timedelta(hours=2)))
+        sched.add_edge(conn, src=a, dst=b, kind="requires")
+        result = sched.get_window(conn)
+        assert result["linked"] == []
 
     def test_limit_respected(self, conn):
         now = datetime.now(timezone.utc)
@@ -811,3 +890,26 @@ def test_mark_alerted_one_time_and_occurrence(conn):
 
 def test_mark_alerted_missing_node(conn):
     assert sched.mark_alerted(conn, id="nope") is False
+
+
+def test_set_lead_sets_clears_and_preserves_payload(conn):
+    # Per-event lead (Initiative Pass 5): a read-merge-write that leaves the
+    # rest of the payload intact.
+    nid = sched.add_node(
+        conn, type="event", label="Therapy", when="2026-07-04T17:00:00",
+        payload={"obstacle_tags": ["outside"]},
+    )
+    assert sched.set_lead(conn, id=nid, lead_minutes=90) is True
+    node = sched.get_node(conn, id=nid)
+    assert node["payload"]["lead_minutes"] == 90
+    assert node["payload"]["obstacle_tags"] == ["outside"], "other payload fields preserved"
+
+    # Clearing (None) removes the override without touching the rest.
+    assert sched.set_lead(conn, id=nid, lead_minutes=None) is True
+    node = sched.get_node(conn, id=nid)
+    assert "lead_minutes" not in node["payload"]
+    assert node["payload"]["obstacle_tags"] == ["outside"]
+
+
+def test_set_lead_missing_node(conn):
+    assert sched.set_lead(conn, id="nope", lead_minutes=30) is False

@@ -1,0 +1,279 @@
+# Trackers — design document
+
+**Status: DESIGN (ward-directed) — fully resolved; the implementation
+contract is [`trackers-build-spec.md`](trackers-build-spec.md).** This
+document remains the *why and shape*; the build spec carries the exact
+schemas, templates, invariants, and session plan. Queued after weather.
+
+## 0. What this is (and is not)
+
+Trackers give the Familiar a way to hold **state about its human's life that
+isn't a schedule item and isn't a memory**: whether the laundry is clean, what
+is in the pantry and when it goes bad, where a menstrual cycle stands, how
+mood has moved across a week. Pragmatic instruments, not gamification — they
+exist so the ward can prepare for daily challenges and so the Familiar can
+learn the prep steps and consequences that surround them. (A streak can be
+*rendered* from a ledger for a ward who enjoys one — a formatter, never a
+mechanic.)
+
+The ward's three hard requirements shape everything below:
+1. **Templates + full custom tooling** — common trackers work out of the box;
+   the Familiar can build new ones itself.
+2. **Complexity must scale down** — a laundry tracker is one fact; it must
+   not carry mood-tracker machinery.
+3. **Minimal questionnaires** — data arrives by inference from ordinary
+   conversation, with at most an occasional, gentle clarifying question.
+
+## 1. The core insight: three archetypes, one substrate
+
+Every tracker the ward named — and every one we could think of — reduces to
+one of three shapes, in increasing order of complexity:
+
+| archetype | example | what it stores | hard part |
+|---|---|---|---|
+| **state** | clean laundry | one current value + transition history | nothing — deliberately trivial |
+| **inventory** | pantry | a set of items, each with attributes (qty, expiry) | projecting item dates into time |
+| **series** | mood, menses, sleep, meds | timestamped observations against a small schema | correlation & prediction |
+
+**One store serves all three** (an Unruh migration: `trackers` +
+`tracker_entries`), because the differences are in the *schema descriptor*
+and the *derivations*, not the storage. A tracker row carries:
+
+```
+tracker(id slug, label, archetype, schema_json, config_json,
+        sensitive INTEGER, created_at, updated_at)
+tracker_entries(id slug, tracker_id, ts local-naive, payload_json,
+                source, superseded INTEGER)
+```
+
+`schema_json` is a small field spec (`{name, type: enum|number|scale|
+quantity|date|text, required?}`); `config_json` holds per-archetype knobs
+(staleness threshold, projection rules, prediction on/off). A laundry tracker
+is `archetype:'state'`, one enum field, done — requirement 2 satisfied by
+construction, not by discipline.
+
+**Templates are data, not code** (the `seed_routine.json` / requirement-
+template precedent): shipped descriptor files for pantry / laundry / menses /
+mood / meds / sleep that `tracker_create_from_template` instantiates. A
+custom tracker is the same call with a hand-built descriptor
+(`tracker_create`), which the Familiar composes itself — the schema vocabulary
+is small enough to describe fully in one first-person tool description.
+
+Unruh owns the store because tracker data is *temporal* state (the ponderings/
+intentions precedent: per-embodiment, time-anchored, not canonical identity).
+What IS canonical is addressed in §5.
+
+## 2. Capture: how data arrives without questionnaires
+
+Three paths, in priority order — the first two do almost all the work:
+
+**2.1 Live logging in conversation (a chat tool).** The ward says "hung up
+the laundry" or "we're out of milk" mid-conversation; the Familiar calls
+`tracker_log(tracker_id, payload)` in the same turn. This is the common case
+and it is *zero* friction — no question was asked; the ward was already
+talking. A `trackers` tool-surfacing module triggers on tracker labels and
+domain words **generated from the registry** (the `villagerNameRegex`
+precedent: the trigger regex is built from the trackers that actually exist,
+so a "pantry" tracker makes food talk surface the tools).
+
+**2.2 Passive inference riding memorization.** The session-fact extraction
+pipeline already reads every conversation once (session end / idle / sweep).
+Its output schema gains an optional `tracker_observations[]` — exactly the
+`schedule_refs` precedent: the prompt gets a compact legend of existing
+trackers + their fields, the model tags what the conversation *revealed*
+("mentioned sleeping badly", "bought groceries incl. milk"), and code
+validates every observation against the schema before it lands (ids from the
+legend only; malformed dropped). This is the backstop for everything nobody
+logged live, and it costs **no new LLM call**.
+
+**2.3 Clarification as a cue, never a form.** A code gate — not the model —
+detects *woefully incomplete*: a required field missing on a recent entry, or
+a tracker past its staleness threshold (per-tracker, in `config_json`). The
+result is a **capped, aging cue line** riding existing turns (the gcal
+projection-cue machinery: one or two items max, expires after a few turns,
+auto-clears when the data arrives), plus a line in the noticing situation
+report when genuinely stale. The Familiar then asks *one* natural question if
+the moment fits — or doesn't. There is no questionnaire anywhere in the
+design; there is a Familiar who knows what it doesn't know.
+**The ask-budget is per-tracker (WARD-DECIDED),** set in each template's
+`config_json` to match its natural cadence: pantry/laundry change slowly (a
+question a week is plenty); mood tracks closely (a daily allowance). The erp
+template stays hard-capped regardless — the monitoring-as-compulsion guard
+outranks any budget.
+
+**2.4 Mood-tagged send — the calibration affordance (ward idea).**
+A small mood control by the message input: the ward picks a mood *as* they
+send, and the message goes out tagged with it. Each tagged message writes a
+mood-series entry (`source:'send-button'`, linked to the message id) AND
+stamps the message metadata in the session log — so reflection can study
+**mood ↔ how they actually write**. This is the design's quiet keystone:
+tagged messages are *labeled examples* for the passive-inference path (§2.2).
+A calibration period for new wards (a stretch where the mood-send is the
+primary way to send) builds the corpus that lets reflection distill "what
+low sounds like in my human's words" into Phylactery — after which passive
+inference has ground truth to lean on and the button can relax to optional.
+Web UI affordance first (Discord has no compose surface we control; a
+Discord equivalent is a later question). Tags are mood-tracker data:
+sensitive, ward-private, fail-closed everywhere (§6).
+
+**WARD-DECIDED (all four):**
+- **Vocabulary: a small named palette (~7)** — plain named moods (proposal:
+  good · calm · tired · stressed · low · irritable · numb; final wording at
+  build time). Crisp code labels, one tap, unambiguous series keys. No
+  numeric flattening.
+- **Lock shape: soft lock.** For a new ward's first two weeks the mood-send
+  is the *primary* send button, with a plain send always reachable as a
+  small secondary control; skips are allowed and are themselves data. After
+  day 14 it relaxes to a normal Settings toggle (existing wards: same
+  toggle, opt-in).
+- **Visibility: learning-only.** The tag NEVER enters the live turn — only
+  memorization/reflection see it (the ward's read: more organic; the
+  Familiar shouldn't be reacting to the label but to the human). This also
+  keeps calibration pure: reflection learns what "low" *sounds like*
+  without the model ever having read the answer in-turn.
+- **Safety link: yes, gently.** Bottom-tier tags (low/numb) contribute a
+  small, dampened, deduped delta to the shared threat scalar — a weak
+  crisis-signal, never a flag_distress-style severe floor, never a forced
+  triage look. Ward-signed; the exact delta/damping lands in the
+  crisis-signals sign-off set at build time. Note the deliberate pairing
+  with learning-only visibility: the Familiar doesn't *mention* the tag,
+  but a dark run of tags still reaches the caring machinery.
+
+## 3. Surfacing & derivation: ride the temporal graph
+
+Trackers must be *reachable by the Familiar* (the capability rule) and must
+*reach the ward* through surfaces that already exist:
+
+- **Inventory → time.** An item with a date attribute (expiry) **projects a
+  schedule node** (the ward's "attach food to time nodes"): code mints/updates
+  a ward-private `type:'reminder'`-class node per expiring item (dedup on
+  tracker entry id), so "eat the spinach first" rides the existing reminders/
+  event-alert machinery — no new loop. An "eat-first" line (code-built, sorted
+  by days-left) joins the temporal context when items are near expiry.
+- **State → a fact line.** Current state renders as one line in temporal
+  context when relevant (config: always / when-stale / on-topic). Laundry is
+  one line, sometimes.
+- **Series → prediction, in code.** Where a series supports it (menses:
+  cycle-length arithmetic over history; meds: next-due), **code computes the
+  prediction** and projects a window node ("likely period start ±2d") the
+  same way inventory projects expiry. The model reads the projection; it
+  never computes a date (exact-machine-values).
+- **Series → correlation, via reflection.** The mood tracker does NOT get a
+  correlation engine. Series entries become **windowed inputs to the existing
+  reflection pass** (which already grades consequence edges, reads
+  `windowMemories`, and consumes the needs ledger): code hands reflection the
+  aligned series ("mood by day; outside-time by day; med adherence by day"),
+  and the model does what it's for — reads the *pattern* and writes it down
+  as consequence edges (`co_occurs_with` → tentative `causes`, the existing
+  noticed→suspected→confirmed ladder) or an intention ("more outside time in
+  the mornings"). Counting is code; meaning is the model; storage is the
+  graph that already exists.
+- **Prep/consequence.** Tracker-derived facts feed the surfaces that already
+  weigh preparation: an outside-tagged event + a "low spoons" mood read is
+  readiness context; an empty pantry near a low-energy stretch is a surface
+  candidate. These are *inputs to existing calculators*, not new ones.
+
+## 4. The mood tracker, specifically
+
+Hardest case, so it gets its own statement. A mood tracker here is:
+- a **series tracker** (scale field + free facet tags), captured almost
+  entirely by **2.2 passive inference** (mood is exactly what conversation
+  reveals and questionnaires poison — asking "rate your mood 1–5" daily is
+  how tracking dies) with occasional 2.3 clarifications;
+- correlated **only** through the reflection ladder (§3) against the series
+  the system already has: needs ledger, outside/social time (schedule +
+  obstacle tags), med trackers, sleep, menses phase, threat-tier history;
+- distilled (§5) into durable understanding — which is the part the ward
+  actually wants for "future installations."
+
+## 5. Portability: raw series are local, distilled understanding is canonical
+
+The ward's goal — *"invaluable for future installations so they can get a
+good idea of their wards"* — is served by a split, per the repo's canonical-
+store doctrine:
+
+- **Raw ledgers live in Unruh** (per-embodiment temporal state, like
+  ponderings and intentions).
+- **Reflection distills durable learnings into Phylactery** — the store that
+  travels: *"my human dips reliably ~2 days before menses"*, *"outside time
+  lifts mood with about a day's lag"*, *"dairy expires on them more than
+  anything else"* — as standing truths / `what_lapses_cost` sections /
+  knowledge-graph edges, through the existing consent-gated writers. A future
+  embodiment inherits the *understanding* without needing (or leaking) ten
+  thousand raw datapoints. This is tome-graduation's philosophy applied to
+  time-series: gather freely, distill deliberately, let the distillate be the
+  legacy.
+
+## 6. Privacy
+
+- `sensitive: 1` trackers (menses, mood, meds — the template default for all
+  three) are **ward-private everywhere, fail-closed**: never in gated
+  context, never in villager-visible legends, their projections minted as
+  sensitive nodes (the spine-state `stripSensitiveScheduleNodes` machinery
+  already does this for exactly this class of node).
+- Non-sensitive trackers (pantry, laundry) still default ward-private;
+  audience opt-in per tracker is a later, deliberate choice.
+- Passive capture honors the existing memorization consent gates — an
+  inferred observation about a sensitive tracker is still an inference the
+  ward can see and prune (entries carry `source:
+  'chat'|'inferred'|'clarified'` for exactly this audit).
+
+## 7. What the Familiar knows (capability rule)
+
+Same-commit requirements when this builds: first-person tool descriptions
+(`tracker_create/log/read/list/adjust`), the surfacing module with
+registry-generated triggers, template awareness in the tool description
+("I have templates for pantry, laundry, menses, mood, meds, sleep"), and —
+because the ward asked for the Familiar to *offer* tracking where useful —
+one line in the relevant injected surfaces (e.g. the stewardship agenda) when
+a recurring untracked pattern shows (code-detected: the same lapse class
+missed N times with no tracker attached → a cue, once, with a long cooldown).
+
+## 8. Ward decisions
+
+**Resolved (mood-tagged send, §2.4):** named palette (~7) · soft lock
+(two weeks, plain send reachable, then a toggle) · learning-only visibility
+(the tag never enters the live turn) · gentle safety link (dampened weak
+delta on low/numb, never a severe floor). Defaults set without further
+ceremony: web-only v1; existing wards opt in via the same toggle.
+
+**Evidence pass done:** see
+[`trackers-research.md`](trackers-research.md) — condition-specific
+self-monitoring practice (bipolar Life Chart, BA diaries, ERP logs, the
+Mobility Inventory, ADHD function-tracking, EMA burden findings) and its
+§6 cross-cutting conclusions. Design consequences already absorbed: the mood
+scale is **bidirectional** (low ↔ elevated, not a happiness scale); sleep is
+its own v1 tracker and the mood↔sleep join is the flagship code-detected
+deviation (24–72h prodrome lag); the meds template carries an
+**effect-window** field; the outings template is MIA-shaped
+(**alone/accompanied** + **anticipated-vs-actual**, a field pair that
+generalizes); **no breakable streaks anywhere** (cumulative counts, neutral
+gaps — the ADHD shame finding); and **entry-rate watchdogs** guard against
+monitoring-as-compulsion (the OCD finding): per-tracker caps + a private
+"this tracker is being fed unusually often" reflection signal.
+
+**ALL RESOLVED (ward-decided):**
+
+1. **Template set for v1** → **confirmed**: mood · sleep · meds · outings ·
+   pantry · laundry, with erp and menses shipped-but-not-suggested.
+2. **Sensitive-by-default** → **menses · mood · meds · sleep** (all four;
+   sleep included). Fail-closed everywhere per §6.
+3. **Prediction projections** → **always on** (ward-private schedule
+   surface; no per-tracker opt-in ceremony).
+4. **Store split** → **confirmed**: raw ledgers in Unruh, distilled
+   learnings to Phylactery via the existing consent gates.
+5. **Clarification budget** → **per-tracker, not global** — the cap lives
+   in each template's `config_json` and matches the tracker's natural
+   cadence: laundry/pantry barely change (a question a week is plenty);
+   mood tracks closely (a higher daily allowance when the moment fits).
+   The erp template stays hard-capped regardless (the §4-research
+   monitoring-as-compulsion guard outranks any budget).
+6. **Offer-a-tracker cue** → **in v1**, with the framing the ward set: the
+   offer is CARE-FIRST, never deficit-first. Not *"you keep missing X —
+   want me to track it?"* but the shape of *"hey, about X — I've noticed it
+   really stresses you out. Want to try tracking it, to see if that helps?"*
+   The code trigger stays the same (a recurring pattern with no tracker
+   attached, once, long cooldown); the prompt wording anchors to what the
+   Familiar has *noticed about how X weighs on their human*, in its own
+   voice — a friend's observation, not a compliance nudge. (Final wording
+   ward-reviewed at build time, like every when-to-act prompt.)

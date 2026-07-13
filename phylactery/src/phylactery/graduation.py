@@ -38,7 +38,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from phylactery.db import get_conn, new_id, now_iso
+from phylactery.db import get_conn, insert_with_slug_retry, now_iso
 from phylactery.snapshot import auto_snapshot
 
 # ── Signed-off thresholds (build-spec §7) ─────────────────────────────────────
@@ -261,10 +261,15 @@ def run_graduation_audit(
                     conn.execute("UPDATE memories SET register=? WHERE id=?", (register, mem_id))
             summary = (item.get("summary") or item["content"])[:120]
             with conn:
-                conn.execute(
+                # Slug id (summary-derived) — the notice block surfaces this id
+                # and the Familiar repeats it into graduation_acknowledge, so it
+                # follows the readable-id convention like memories/graph nodes.
+                insert_with_slug_retry(
+                    conn,
                     "INSERT INTO graduation_log(id, source_category, source_filename, memory_id, "
                     "register, summary, acknowledged, created_at) VALUES (?,?,?,?,?,?,0,?)",
-                    (new_id(), cand["category"], cand["filename"], mem_id, register, summary, now_iso()),
+                    lambda gid: (gid, cand["category"], cand["filename"], mem_id, register, summary, now_iso()),
+                    label=summary, kind="grad",
                 )
             graduated_total += 1
             details.append({"file": cand["filename"], "register": register, "summary": summary})

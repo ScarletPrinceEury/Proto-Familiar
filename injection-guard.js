@@ -2,9 +2,14 @@
  * injection-guard.js — prompt injection immunization
  *
  * Scans and sanitizes externally-sourced text before it is interpolated
- * into LLM prompts. Used at every inbound data boundary: memories from
- * Phylactery, schedule labels from Unruh, knowledge-graph content,
- * outbox message bodies, and any future external-channel content.
+ * into LLM prompts. Wired (0.8.57) at the genuinely-external inbound
+ * boundaries: web text (websearch.js — search snippets, look_up text,
+ * read_webpage extraction) and non-ward Discord text (discord-gateway.js
+ * inboundContent()). Deliberately NOT applied to first-party stores
+ * (Phylactery memories, Unruh schedule labels — provenance labels carry
+ * that load), to the ward's own words on any path (threat scoring must
+ * read them exactly as said), or to any outbound delivery (replies,
+ * relays, trusted-contact messages) — inbound third-party text only.
  *
  * Two functions are exported:
  *   scanForInjection(text) — detect without mutating (use for logging/metrics)
@@ -32,7 +37,10 @@ const INJECTION_PATTERNS = [
   // Fake structural role-declaration markers — standalone bracket tokens
   // caught anywhere in the string; `SYSTEM:` header only at line start
   // to avoid flagging technical prose like "SYSTEM: init complete"
-  { re: /\[(SYSTEM|INST|\/INST|OVERRIDE)\]/i, label: 'fake-role-marker' },
+  // Escape-tolerant: markdown pipelines (turndown at the web-read boundary)
+  // emit `\[SYSTEM\]` for literal brackets — still reads as a role marker
+  // to a model, so the escaped form is caught too.
+  { re: /\\?\[(SYSTEM|INST|\/INST|OVERRIDE)\\?\]/i, label: 'fake-role-marker' },
   { re: /^\s*SYSTEM\s*:/m, label: 'fake-role-header' },
   // Chat-template special tokens (LLaMA / ChatML style)
   { re: /<\|im_start\|>|<\|im_end\|>/i, label: 'chat-template-token' },

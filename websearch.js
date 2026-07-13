@@ -26,6 +26,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 
 import { API_PROVIDERS } from './websearch-providers.js';
+import { sanitizeExternal } from './injection-guard.js';
 
 // The HTML-extraction stack (linkedom + @mozilla/readability + turndown) is
 // loaded LAZILY, not as static top-level imports. These are optional-feature
@@ -269,9 +270,13 @@ function formatResults(q, rows, maxResults) {
   const picked = (Array.isArray(rows) ? rows : []).slice(0, maxResults);
   if (picked.length === 0) return `I searched for "${q}" but nothing came back.`;
   const lines = picked.map((r, i) => {
-    const title   = (r?.title || '(untitled)').trim();
+    // Third-party text (titles/snippets a site author controls) passes the
+    // injection guard before it can reach a prompt. The URL is deliberately
+    // NOT sanitized — mangling it would break the read_webpage follow-up,
+    // and the guard's phrase patterns don't occur in URLs.
+    const title   = sanitizeExternal((r?.title || '(untitled)').trim(), { source: 'web search', context: 'websearch/results' });
     const link    = (r?.url || '(no link)').trim();
-    const snippet = (r?.content || '').trim();
+    const snippet = sanitizeExternal((r?.content || '').trim(), { source: 'web search', context: 'websearch/results' });
     return `${i + 1}. ${title}\n   ${link}${snippet ? `\n   ${snippet}` : ''}`;
   });
   return `Results for "${q}":\n${lines.join('\n')}\n\n(I can open any of these with read_webpage by passing its link.)`;
@@ -371,7 +376,9 @@ function formatLookUp(q, parts, maxChars) {
     if (kept.some(k => k._head === head)) continue;
     kept.push({ ...p, _head: head });
   }
-  let body = kept.map(p => p.text.trim()).join('\n\n');
+  // Reference-API text is third-party content (wiki articles are editable
+  // by anyone) — through the injection guard before it reaches a prompt.
+  let body = kept.map(p => sanitizeExternal(p.text.trim(), { source: 'reference lookup', context: 'websearch/lookup' })).join('\n\n');
   if (body.length > maxChars) body = `${body.slice(0, maxChars)}\n\n[…truncated.]`;
   const sources = kept.map(p => p.source).filter(Boolean);
   const srcLine = sources.length
@@ -461,6 +468,12 @@ export async function readWebpage(url, settings = {}, { fetchFn = fetch, lookupF
   if (markdown.length > maxChars) {
     markdown = `${markdown.slice(0, maxChars)}\n\n[…truncated — the page was longer than I read.]`;
   }
+
+  // The untrusted framing below tells the model how to READ page text; the
+  // injection guard structurally removes the spans that try to be read as
+  // something else (fake role markers, chat-template tokens, override
+  // phrases). Framing + surgical redaction together — neither alone.
+  markdown = sanitizeExternal(markdown, { source: 'web page', context: 'websearch/read' });
 
   // Provenance rides with the content (Pillar E): if the Familiar keeps the
   // gist via save_to_tome, the source URL and read-date travel with it.

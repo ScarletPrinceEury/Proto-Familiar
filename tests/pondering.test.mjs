@@ -7,6 +7,7 @@ import { promises as fsp, mkdtempSync, rmSync } from 'fs';
 import {
   ponderOnce,
   buildPonderPrompt,
+  buildGroundingBlock,
   parsePondering,
   findOrCreatePonderingsTome,
   PONDERINGS_TOME_NAME,
@@ -36,6 +37,50 @@ test('buildPonderPrompt embeds the topic verbatim', () => {
   assert.match(prompt, /first-person/i);
 });
 
+test('buildGroundingBlock: recalled memories render as "what I remember"', () => {
+  const b = buildGroundingBlock({
+    memories: [{ date: '2026-05-01', excerpt: 'My human has read all the Tiffany Aching books and loves the Feegles.' }],
+    recent: [],
+  });
+  assert.match(b, /What I remember about this/);
+  assert.match(b, /read all the Tiffany Aching books/);
+  assert.match(b, /I don't talk about it like I'm looking in from outside/);
+});
+
+test('buildGroundingBlock: no memories → honest "I don\'t remember, I\'d just ask"', () => {
+  const b = buildGroundingBlock({ memories: [], recent: [] });
+  assert.match(b, /I don't really remember anything about this/);
+  assert.match(b, /mostly what I want is to just ask them/);
+});
+
+test('buildGroundingBlock: recent thought is carried forward to build on (not just "don\'t repeat")', () => {
+  const b = buildGroundingBlock({
+    memories: [],
+    recent: [{ when: '2026-07-12', excerpt: 'I keep circling the Feegles from the outside — blue, loud, steal everything.' }],
+  });
+  assert.match(b, /Where I got to last time I thought about this/);
+  assert.match(b, /circling the Feegles from the outside/);
+  assert.match(b, /I pick up from there/);
+  assert.match(b, /I don't keep sending them the same question/);
+});
+
+test('buildGroundingBlock: null (reflection / no grounding) → no block; an attempted-but-empty ponder → the honest note', () => {
+  assert.equal(buildGroundingBlock(null), '');            // grounding not attempted → nothing added
+  assert.equal(buildGroundingBlock('nope'), '');          // non-object → nothing
+  // grounding attempted for an interest ponder but nothing recalled → the note renders.
+  assert.match(buildGroundingBlock({ memories: [], recent: [] }), /don't really remember anything/);
+});
+
+test('buildPonderPrompt threads grounding after the topic', () => {
+  const prompt = buildPonderPrompt('Tiffany Aching books', {
+    memories: [{ date: '2026-05-01', excerpt: 'They have read them.' }],
+    recent: [{ when: '2026-07-13', excerpt: 'Wondered what the Feegles feel like on the page.' }],
+  });
+  assert.match(prompt, /Tiffany Aching books/);
+  assert.match(prompt, /They have read them\./);
+  assert.match(prompt, /Where I got to last time/);
+});
+
 test('parsePondering accepts a clean JSON object', () => {
   const { title, content } = parsePondering('{"title":"hello","content":"world"}');
   assert.equal(title, 'hello');
@@ -58,6 +103,32 @@ test('parsePondering rejects missing fields', () => {
 test('parsePondering rejects non-JSON', () => {
   assert.throws(() => parsePondering('no braces here'), /No JSON object/i);
   assert.throws(() => parsePondering('{not really json}'), /not valid JSON/i);
+});
+
+// Initiative Pass 3: reflection can end in commitments (intentions).
+test('parsePondering: parses reflection intentions, caps at 3, drops malformed', () => {
+  const raw = JSON.stringify({
+    title: 't', content: 'c',
+    intentions: [
+      { what: 'I widen the lead times', why: 'they landed late', trigger: { kind: 'phase', phase: 'morning', recurring: true } },
+      { what: '   ' },                                   // empty what → dropped
+      { nope: 1 },                                       // no what → dropped
+      { what: 'second', trigger: { kind: 'whoops' } },   // bad trigger kind → trigger dropped, item kept
+      { what: 'third' },
+      { what: 'fourth — over the cap' },                 // 4th valid → capped out
+    ],
+  });
+  const r = parsePondering(raw);
+  assert.equal(r.intentions.length, 3, 'capped at 3 valid entries');
+  assert.equal(r.intentions[0].what, 'I widen the lead times');
+  assert.deepEqual(r.intentions[0].trigger, { kind: 'phase', phase: 'morning', recurring: true });
+  assert.equal(r.intentions[1].what, 'second');
+  assert.equal(r.intentions[1].trigger, undefined, 'invalid trigger kind dropped, item kept');
+});
+
+test('parsePondering: no intentions key → no intentions field', () => {
+  const r = parsePondering('{"title":"t","content":"c"}');
+  assert.equal(r.intentions, undefined);
 });
 
 test('findOrCreatePonderingsTome creates the tome on first call, reuses on second', async () => {

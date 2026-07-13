@@ -16,7 +16,7 @@ import sqlite3
 from datetime import datetime, date
 from typing import Any
 
-from phylactery.db import get_conn, new_id, now_iso
+from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now_iso
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
 
@@ -46,6 +46,16 @@ _DECAY_FLOOR_HIGH_CARE = 0.5
 _DEDUP_MERGE_MIN = 0.78       # ≈ cosine 0.90
 _DEDUP_IDENTICAL_MIN = 0.85   # ≈ cosine 0.95
 
+# The consent-review queue collapses MORE aggressively than the permanent store.
+# A not-yet-reviewed fact only needs to reach the ward ONCE; a reworded
+# restatement that lands just under the conservative store threshold should still
+# fold into its pending sibling instead of asking twice. Moderate on purpose:
+# high enough that two genuinely distinct pending facts stay separable for
+# review (over-merging pendings is the one lossy failure — the ward would review
+# a blob and lose the ability to keep one / drop the other), low enough to catch
+# same-fact paraphrases the 0.78 store bar misses. Tunable against real queues.
+_DEDUP_PENDING_MERGE_MIN = 0.70  # ≈ cosine 0.85
+
 
 def _derive_slug(title: str | None, content: str) -> str:
     source = (title or content[:80]).strip()
@@ -55,6 +65,25 @@ def _derive_slug(title: str | None, content: str) -> str:
 
 def _today() -> str:
     return date.today().isoformat()
+
+
+def _source_label(source_json: str | None) -> str | None:
+    """A compact 'who caused this' label for recall results — surfaced ONLY when a
+    memory was written by someone other than me (e.g. a villager acting through me
+    on Discord). Returns None for my own memorization writes (the common case) so
+    normal results stay clean. This is the Familiar-facing half of provenance: it
+    lets me SEE a memory's source when I recall it, and decide whether to trust it."""
+    if not source_json:
+        return None
+    try:
+        s = json.loads(source_json)
+    except Exception:
+        return None
+    via = s.get("via")
+    if not via or via == "memorization":
+        return None
+    who = s.get("villager") or s.get("author")
+    return f"{who} (via {via})" if who else str(via)
 
 
 def _row_to_thin(row: sqlite3.Row) -> dict:
@@ -128,7 +157,7 @@ def search(
             # KNN via sqlite-vec.
             rows = conn.execute(f"""
                 SELECT m.id, m.granularity, m.register, m.date_key, m.content, m.audience,
-                       m.care_weight, m.last_recalled_at,
+                       m.care_weight, m.last_recalled_at, m.source_json,
                        v.distance
                 FROM memory_vecs v
                 JOIN memories m ON m.id = v.memory_id
@@ -144,8 +173,15 @@ def search(
                 similarity = max(0.0, 1.0 - dist / 2.0)
                 dw = _decay_weight(r["last_recalled_at"], r["care_weight"])
                 score = similarity * dw
-                scored.append({"id": r["id"], "granularity": r["granularity"], "register": r["register"],
-                               "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": round(score, 4)})
+                item = {"id": r["id"], "granularity": r["granularity"], "register": r["register"],
+                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": round(score, 4)}
+                lbl = _source_label(r["source_json"])
+                if lbl:
+                    item["source"] = lbl
+                refs = _schedule_refs(r["source_json"])
+                if refs:
+                    item["schedule_refs"] = refs
+                scored.append(item)
             scored.sort(key=lambda x: x["score"], reverse=True)
             results = scored[:max_results]
         except Exception:
@@ -170,6 +206,73 @@ def search(
             print(f"[phylactery] recall tracking failed (ignored): {e}", file=sys.stderr)
 
         return {"results": results}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _schedule_refs(source_json: str | None) -> list[str] | None:
+    """The schedule-node slugs a memory was cross-referenced to at extraction
+    time (temporal-bridges Piece 2). Surfaced on recall so I can walk from a
+    remembered fact to the scheduled moment it belongs to. None when absent."""
+    if not source_json:
+        return None
+    try:
+        s = json.loads(source_json)
+    except Exception:
+        return None
+    refs = s.get("schedule_refs")
+    if isinstance(refs, list) and refs:
+        return [str(r) for r in refs if r]
+    return None
+
+
+def by_timerange(
+    from_date: str,
+    to_date: str,
+    limit: int = 12,
+    audiences=None,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Recall memories anchored to a span of DAYS — 'what was happening around
+    then' — the temporal counterpart to semantic search (temporal-bridges
+    Piece 3). Compares on the calendar-date prefix so date_slug keys
+    ('2026-07-02_foo') fall in range by their day. Audience-gated exactly like
+    search (Pillar E). Newest day first. No embedding call — an indexed read.
+    `from_date`/`to_date` are inclusive YYYY-MM-DD bounds."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        lo = str(from_date)[:10]
+        hi = str(to_date)[:10]
+        if lo > hi:
+            lo, hi = hi, lo
+        aud_clause, aud_params = audience_in_sql(audiences)
+        k = max(1, min(50, int(limit or 12)))
+        rows = conn.execute(f"""
+            SELECT id, granularity, register, date_key, content, source_json
+              FROM memories
+             WHERE kind='narrative'
+               AND substr(date_key,1,10) BETWEEN ? AND ?
+               AND {aud_clause}
+             ORDER BY date_key DESC, updated_at DESC
+             LIMIT ?
+        """, [lo, hi] + aud_params + [k]).fetchall()
+        results = []
+        for r in rows:
+            item = {
+                "id": r["id"], "granularity": r["granularity"], "register": r["register"],
+                "date": r["date_key"], "excerpt": (r["content"] or "")[:300],
+            }
+            lbl = _source_label(r["source_json"])
+            if lbl:
+                item["source"] = lbl
+            refs = _schedule_refs(r["source_json"])
+            if refs:
+                item["schedule_refs"] = refs
+            results.append(item)
+        return {"results": results, "from": lo, "to": hi}
     finally:
         if own_conn:
             conn.close()
@@ -203,18 +306,29 @@ def _lexically_contained(new: str, existing: str) -> bool:
 
 
 def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str,
-                         standalone_only: bool = False):
+                         standalone_only: bool = False, *,
+                         threshold: float = _DEDUP_MERGE_MIN,
+                         ignore_audience: bool = False):
     """Nearest existing narrative memory to `content`, if it's similar enough to
     be a duplicate. Returns (id, content, consent_pending, similarity) or None.
     Degrades to None (→ normal insert) if embeddings are unavailable.
 
     standalone_only restricts the search to per-fact / significant rows (those
     with a slug), so a discrete extracted fact dedups against other discrete
-    facts and never folds itself into a date-bucketed daily journal blob."""
+    facts and never folds itself into a date-bucketed daily journal blob.
+
+    threshold is the minimum similarity to count as a duplicate — the confirmed
+    store uses the conservative default; the pending queue passes a looser bar.
+    ignore_audience drops the audience-scope filter: a not-yet-reviewed fact is a
+    duplicate of the same fact regardless of which room-tag it was derived under
+    (audience still gates where a memory SURFACES, just not whether it's a dup)."""
     try:
         from phylactery.embed import embed_text
         q_vec = embed_text(content)
-        aud_clause, aud_params = audience_filter_sql(audience)
+        if ignore_audience:
+            aud_clause, aud_params = "1=1", []
+        else:
+            aud_clause, aud_params = audience_filter_sql(audience)
         slug_clause = " AND m.slug IS NOT NULL" if standalone_only else ""
         row = conn.execute(f"""
             SELECT m.id, m.content, m.consent_pending, v.distance
@@ -228,18 +342,155 @@ def _find_near_duplicate(conn: sqlite3.Connection, content: str, audience: str,
         if not row:
             return None
         sim = max(0.0, 1.0 - row["distance"] / 2.0)
-        if sim < _DEDUP_MERGE_MIN:
+        if sim < threshold:
             return None
         return (row["id"], row["content"], row["consent_pending"], sim)
     except Exception:
         return None
 
 
+def vector_health(conn: sqlite3.Connection | None = None) -> dict:
+    """Probe the vector stack that semantic dedup depends on, so a silent
+    degradation is observable (CLAUDE.md: failures that matter must be visible).
+    Reports whether the embedder loads and whether memory_vecs is queryable,
+    and which dedup mode is therefore in effect. Never raises."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        embed_ok, embed_err = False, None
+        try:
+            from phylactery.embed import embed_text
+            embed_text("health probe")
+            embed_ok = True
+        except Exception as e:
+            embed_err = f"{type(e).__name__}: {e}"
+        vec_ok, vec_err, vec_rows, mem_rows = False, None, None, None
+        try:
+            vec_rows = conn.execute("SELECT COUNT(*) AS c FROM memory_vecs").fetchone()["c"]
+            mem_rows = conn.execute(
+                "SELECT COUNT(*) AS c FROM memories WHERE kind='narrative'"
+            ).fetchone()["c"]
+            vec_ok = True
+        except Exception as e:
+            vec_err = f"{type(e).__name__}: {e}"
+        healthy = embed_ok and vec_ok
+        return {
+            "ok": True,
+            "healthy": healthy,
+            "dedup_mode": "semantic" if healthy else "lexical-fallback",
+            "embed_ok": embed_ok, "embed_error": embed_err,
+            "vec_ok": vec_ok, "vec_error": vec_err,
+            "vec_rows": vec_rows, "memory_rows": mem_rows,
+        }
+    finally:
+        if own:
+            conn.close()
+
+
+def _find_lexical_duplicate(conn: sqlite3.Connection, content: str, audience: str,
+                            standalone_only: bool = False, *,
+                            ignore_audience: bool = False, limit: int = 300):
+    """Embedding-FREE duplicate finder — the graceful-degradation net for when
+    the vector stack is unavailable (fastembed model not downloaded, or the
+    sqlite-vec extension can't load). Without this, a dead vector stack silently
+    disables ALL dedup and the consent queue floods with the same facts every
+    session — a silent failure with only an stderr line as signal.
+
+    Conservative on purpose: matches only when the new fact's normalized text is
+    CONTAINED in an existing entry (equality included), i.e. the new fact adds
+    nothing lexically. That can't conflate two genuinely different facts (the
+    risk the vector threshold guards against), so it's safe to run even when
+    vectors are healthy — it just catches verbatim / near-verbatim restatements
+    the vector search might rank a hair below threshold, or rows that never got
+    embedded. Returns (id, content, consent_pending, 1.0) or None.
+    """
+    n_new = _norm_text(content)
+    if not n_new:
+        return None
+    if ignore_audience:
+        aud_clause, aud_params = "1=1", []
+    else:
+        aud_clause, aud_params = audience_filter_sql(audience)
+    slug_clause = " AND slug IS NOT NULL" if standalone_only else ""
+    rows = conn.execute(f"""
+        SELECT id, content, consent_pending FROM memories
+        WHERE kind='narrative'{slug_clause} AND {aud_clause}
+        ORDER BY updated_at DESC
+        LIMIT ?
+    """, aud_params + [limit]).fetchall()
+    for r in rows:
+        if n_new in _norm_text(r["content"] or ""):
+            return (r["id"], r["content"], r["consent_pending"], 1.0)
+    return None
+
+
+def _find_duplicate(conn, content, audience, standalone_only, *,
+                    threshold, ignore_audience):
+    """Vector-first duplicate finder with a lexical fallback. The vector path
+    catches paraphrase; the lexical path is the net when vectors are down or a
+    row was never embedded. Returns the vector hit if there is one, else the
+    lexical hit, else None."""
+    dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only,
+                               threshold=threshold, ignore_audience=ignore_audience)
+    if dup is not None:
+        return dup
+    return _find_lexical_duplicate(conn, content, audience,
+                                   standalone_only=standalone_only, ignore_audience=ignore_audience)
+
+
+def _dedup_merge_pending(conn, content, audience, now, standalone_only: bool):
+    """Dedup for a not-yet-reviewed (consent_pending) incoming fact.
+
+    The review queue's job is to show the ward each distinct new thing ONCE, so
+    it collapses harder than the permanent store and ignores audience scoping:
+      - near-dup of another PENDING fact → fold together, so the queue holds one
+        candidate instead of five paraphrases (the reported pile-up).
+      - near-dup of an already-CONFIRMED memory → DROP the incoming: the ward
+        already greenlit this, re-asking is the churn they complained about. The
+        confirmed row is left UNTOUCHED — new unreviewed wording never folds into
+        a memory that already passed consent (that would slip text past review).
+    Returns a create-style result on a hit, or None (caller inserts normally)."""
+    dup = _find_duplicate(conn, content, audience, standalone_only,
+                          threshold=_DEDUP_PENDING_MERGE_MIN, ignore_audience=True)
+    if dup is None:
+        return None
+    dup_id, dup_content, dup_pending, sim = dup
+    import sys
+    if not dup_pending:
+        # Already known and consented — honour it silently, don't re-ask.
+        print(f"[phylactery] dedup: pending fact already held as confirmed memory {dup_id} "
+              f"(sim {sim:.2f}); dropped without re-asking", file=sys.stderr)
+        return {"ok": True, "id": dup_id, "merged": True, "already_known": True}
+    # Both pending — safe to collapse into the sibling already in the queue.
+    if sim >= _DEDUP_IDENTICAL_MIN or _lexically_contained(content, dup_content):
+        with conn:
+            conn.execute("UPDATE memories SET updated_at=? WHERE id=?", (now, dup_id))
+        print(f"[phylactery] dedup: pending restatement folded into pending {dup_id} "
+              f"(sim {sim:.2f})", file=sys.stderr)
+        return {"ok": True, "id": dup_id, "merged": True,
+                "identical": sim >= _DEDUP_IDENTICAL_MIN}
+    new_content = (dup_content or "") + "\n" + content
+    with conn:
+        conn.execute("UPDATE memories SET content=?, updated_at=? WHERE id=?", (new_content, now, dup_id))
+    _upsert_embedding(conn, dup_id, new_content)
+    print(f"[phylactery] dedup: pending detail merged into pending {dup_id} (sim {sim:.2f})", file=sys.stderr)
+    return {"ok": True, "id": dup_id, "merged": True}
+
+
 def _dedup_merge(conn, content, audience, consent_pending, now, source,
                  standalone_only: bool = False):
     """If `content` duplicates an existing memory, fold it in and return a
     create-style result; otherwise return None (caller inserts normally)."""
-    dup = _find_near_duplicate(conn, content, audience, standalone_only=standalone_only)
+    # A not-yet-reviewed fact takes the aggressive, audience-agnostic queue path
+    # (kept separate so the conservative confirmed-store behaviour below is
+    # unchanged — the threshold that protects long-term memory from conflating
+    # two real facts is never loosened).
+    if consent_pending:
+        return _dedup_merge_pending(conn, content, audience, now, standalone_only)
+
+    dup = _find_duplicate(conn, content, audience, standalone_only,
+                          threshold=_DEDUP_MERGE_MIN, ignore_audience=False)
     if dup is None:
         return None
     dup_id, dup_content, dup_pending, sim = dup
@@ -287,6 +538,7 @@ def create(
     confidence: float = 1.0,
     standalone: bool = False,
     register: str = "episodic",
+    source_meta: dict | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     if granularity not in VALID_GRANULARITIES:
@@ -298,7 +550,6 @@ def create(
         conn = get_conn()
     try:
         now = now_iso()
-        rec_id = new_id()
         subj_json = json.dumps(subjects or [])
 
         # Three storage shapes:
@@ -320,12 +571,19 @@ def create(
         elif standalone:
             dk = date_key or _today()
             if not slug:
-                slug = _derive_slug(None, content) or f"fact-{rec_id[:8]}"
+                slug = _derive_slug(None, content)
         else:
             dk = date_key or _today()
             slug = None
 
-        source = json.dumps({"author": source_author, "via": "memorization", "at": now})
+        # Provenance. `source_meta` (when a write is attributable to someone other
+        # than me — e.g. a villager acting through me on Discord) is merged in and
+        # may override `via`, so a memory carries WHO caused it. This is what lets
+        # the Familiar reevaluate later whether to trust a given source.
+        src = {"author": source_author, "via": "memorization", "at": now}
+        if source_meta:
+            src.update(source_meta)
+        source = json.dumps(src)
 
         # Semantic dedup/merge — fold a near-identical fact into an existing
         # memory instead of piling up paraphrase duplicates (the consent-queue
@@ -357,15 +615,25 @@ def create(
                     _upsert_embedding(conn, existing["id"], new_content)
                     return {"ok": True, "id": existing["id"], "dateKey": dk, "appended": True}
 
-            conn.execute("""
+            # Model-facing id is a content-derived slug ("low-on-tea-k3"), not a
+            # uuid4 hex — the mandatory readable-id convention (db.slug_id). The
+            # id rides out in recall / the consent block / graduation, so the
+            # Familiar repeats a legible, greppable id instead of ~16 tokens of
+            # meaningless hex. Legacy hex ids stay valid (ids are opaque TEXT).
+            insert_sql = """
                 INSERT INTO memories(id,kind,register,granularity,date_key,slug,content,
                     audience,subjects_json,care_weight,category,consent_pending,
                     confidence,source_json,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (rec_id, "narrative", register, granularity, dk, slug,
-                  content, audience, subj_json, care_weight, category,
-                  1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
-                  source, now, now))
+            """
+            rec_id = insert_with_slug_retry(
+                conn, insert_sql,
+                lambda cid: (cid, "narrative", register, granularity, dk, slug,
+                             content, audience, subj_json, care_weight, category,
+                             1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
+                             source, now, now),
+                label=content, kind="mem",
+            )
 
         _upsert_embedding(conn, rec_id, content)
         return {"ok": True, "id": rec_id, "dateKey": dk}
@@ -684,6 +952,142 @@ def _delete_embedding(conn: sqlite3.Connection, record_id: str) -> None:
         conn.execute("DELETE FROM memory_vecs WHERE memory_id=?", (record_id,))
     except Exception:
         pass
+
+
+def _unembedded_narrative(conn: sqlite3.Connection) -> list:
+    """Narrative memories with content but NO vector row. Raises if the vec
+    table is unavailable (caller decides how to degrade)."""
+    return conn.execute("""
+        SELECT m.id, m.content FROM memories m
+        LEFT JOIN memory_vecs v ON v.memory_id = m.id
+        WHERE m.kind='narrative' AND v.memory_id IS NULL
+          AND m.content IS NOT NULL AND TRIM(m.content) != ''
+        ORDER BY m.updated_at DESC
+    """).fetchall()
+
+
+def backfill_embeddings(conn: sqlite3.Connection | None = None, *, limit: int | None = None) -> dict:
+    """Embed narrative memories that have content but no vector row — heals the
+    gap left by bulk inserts that skipped embedding (notably the entity-core
+    migration, which INSERT-ORs rows without a vector). Those rows are invisible
+    to semantic dedup, so a new fact paraphrasing a migrated memory can't match
+    it and re-queues — a real contributor to the consent-queue pile-up. Runs the
+    embedder in-process; idempotent (a fully-embedded store is a no-op). Never
+    raises. Returns {ok, embedded, remaining, total_gap}."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        try:
+            rows = _unembedded_narrative(conn)
+        except Exception as e:
+            return {"ok": False, "error": f"vec table unavailable: {e}", "embedded": 0}
+        total_gap = len(rows)
+        if not rows:
+            return {"ok": True, "embedded": 0, "remaining": 0, "total_gap": 0}
+        # Confirm the embedder loads before churning through the batch.
+        try:
+            from phylactery.embed import embed_text
+            embed_text("health probe")
+        except Exception as e:
+            return {"ok": False, "error": f"embedder unavailable: {e}",
+                    "embedded": 0, "remaining": total_gap, "total_gap": total_gap}
+        todo = rows[:limit] if limit else rows
+        embedded = 0
+        for r in todo:
+            before = conn.total_changes
+            _upsert_embedding(conn, r["id"], r["content"])
+            # _upsert_embedding swallows its own errors; count only real inserts.
+            if conn.total_changes > before:
+                embedded += 1
+        remaining = len(_unembedded_narrative(conn))
+        return {"ok": True, "embedded": embedded, "remaining": remaining, "total_gap": total_gap}
+    finally:
+        if own:
+            conn.close()
+
+
+# Legacy hex/uuid id shape — memories created before the readable-id fix.
+_LEGACY_ID_RE = re.compile(
+    r"^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def ids_to_slugs(conn: sqlite3.Connection | None = None) -> dict:
+    """One-shot mechanical re-key of legacy hex/uuid memory ids to readable
+    content-derived slugs — mirrors graph.ids_to_slugs. Updates every reference
+    (the memory_vecs embedding row, graduation_log.memory_id, and the dormant
+    tracker_entries.tracker_id FK if present) and preserves each embedding by
+    COPYING its bytes to the new key — so it works even when the embedder is
+    unavailable (no re-embedding). Idempotent (only touches legacy-shaped ids);
+    one transaction with foreign_keys off. Returns {ok, remapped, mapping}."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        taken = {r["id"] for r in conn.execute("SELECT id FROM memories")}
+        mapping: dict[str, str] = {}
+
+        def fresh(content: str) -> str:
+            for suffix_len in (2, 3, 5):
+                cand = slug_id((content or "")[:80], kind="mem", suffix_len=suffix_len)
+                if cand not in taken:
+                    taken.add(cand)
+                    return cand
+            cand = new_id()
+            taken.add(cand)
+            return cand
+
+        has_grad = _table_exists(conn, "graduation_log")
+        has_tracker = _table_exists(conn, "tracker_entries")
+        has_vecs = _table_exists(conn, "memory_vecs")
+
+        # PRAGMA foreign_keys is a no-op inside a transaction — commit any
+        # in-flight implicit one first so the toggle applies.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with conn:
+                remapped = 0
+                rows = conn.execute("SELECT id, content FROM memories").fetchall()
+                for r in rows:
+                    if not _LEGACY_ID_RE.match(r["id"]):
+                        continue
+                    old = r["id"]
+                    new = fresh(r["content"])
+                    mapping[old] = new
+                    conn.execute("UPDATE memories SET id=? WHERE id=?", (new, old))
+                    if has_grad:
+                        conn.execute("UPDATE graduation_log SET memory_id=? WHERE memory_id=?", (new, old))
+                    if has_tracker:
+                        conn.execute("UPDATE tracker_entries SET tracker_id=? WHERE tracker_id=?", (new, old))
+                    # Re-key the embedding row by COPYING its bytes (vec0 can't
+                    # UPDATE its PK; and copying avoids needing the embedder).
+                    if has_vecs:
+                        try:
+                            vrow = conn.execute(
+                                "SELECT embedding FROM memory_vecs WHERE memory_id=?", (old,)
+                            ).fetchone()
+                            conn.execute("DELETE FROM memory_vecs WHERE memory_id=?", (old,))
+                            if vrow is not None:
+                                conn.execute(
+                                    "INSERT INTO memory_vecs(memory_id, embedding) VALUES(?,?)",
+                                    (new, vrow["embedding"]),
+                                )
+                        except Exception:
+                            pass  # vec stack unavailable → skip (dedup already degraded)
+                    remapped += 1
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+        return {"ok": True, "remapped": remapped, "mapping": mapping}
+    finally:
+        if own:
+            conn.close()
 
 
 # ── Consent flow (Pillar C) ───────────────────────────────────────────────────

@@ -25,6 +25,8 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { wardLocalNowISO } from './relative-time.js';
+import { readWeatherMirrorSync } from './weather-mirror.js';
+import { forecastAtHour, isAdverseHour, formatItemWeather } from './weather-format.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -252,9 +254,19 @@ export async function buildStewardshipBlock(opts = {}) {
       items: scheduleItems, edges: scheduleEdges, nowMs, wardTimeZone,
       leadHours: readinessLeadHours, flaggedAt: state.readinessFlaggedAt ?? {}, max: slots,
     });
+    const mirror = readWeatherMirrorSync();   // rides the tick's cache; null when weather's off/absent
     for (const r of ready) {
       const tagNote = r.obstacleTags.length ? ` (this one means ${r.obstacleTags.join(', ')})` : '';
-      bullets.push(`"${r.label}" (${r.when.slice(0, 10)} ${r.when.slice(11, 16)}) needs ${r.unmet.join(', ')} sorted first — still open${tagNote}. I check in while there's time.`);
+      // Outside-join: an outside-tagged item whose hour looks adverse in the
+      // cached forecast carries a code-built weather note, so the prep nudge
+      // is weather-aware. Only when the sky's genuinely worth flagging.
+      const outside = r.obstacleTags.some(t => String(t).toLowerCase() === 'outside');
+      let wxNote = '';
+      if (outside && mirror) {
+        const hour = forecastAtHour(mirror.hourly, Date.parse(r.when));
+        if (hour && isAdverseHour(hour)) wxNote = ` — ${formatItemWeather(hour)}`;
+      }
+      bullets.push(`"${r.label}" (${r.when.slice(0, 10)} ${r.when.slice(11, 16)}) needs ${r.unmet.join(', ')} sorted first — still open${tagNote}${wxNote}. I check in while there's time.`);
     }
     slots -= ready.length;
     if (ready.length && liveTurn) {

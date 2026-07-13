@@ -134,6 +134,10 @@ def migrate_memories(
             date_key = stem
 
             if not dry_run:
+                # No embedding here (keeps a large migration fast) — these rows
+                # would otherwise be invisible to semantic dedup. memory.backfill_
+                # embeddings heals the gap, and the server auto-runs it in the
+                # background at boot when it sees vec_rows < memory_rows.
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO memories

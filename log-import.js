@@ -160,15 +160,63 @@ export function parseOpenClaw(raw) {
   return looksOpenClaw && out.length >= 2 ? { messages: out, format: 'OpenClaw' } : null;
 }
 
+// ── Parser: ChatGPT copy/share export (markdown) ─────────────────────────────
+// ChatGPT's clipboard/share format: each turn opens with a STANDALONE bold
+// speaker header on its own line (**You:** / **ChatGPT:**) and turns are split
+// by a `* * *` rule. There are no per-message timestamps, so the caller supplies
+// a date (filename or explicit) like the other undated formats.
+//
+// Only a header that is the WHOLE line counts as a turn boundary — so an inline
+// `**Reminder:** …` (a system note ChatGPT drops mid-answer) stays as content of
+// the turn it's in, and bold headings inside a message (**CHAPTER 1**, a bolded
+// title with no colon) are never mistaken for speakers. A non-You/ChatGPT
+// standalone header maps to the system role with its speaker preserved.
+const GPT_HEADER = /^\*\*([A-Za-z][\w .-]{0,40}?):\*\*\s*$/;
+const GPT_SEP    = /^\s*\*\s\*\s\*\s*$/;   // the "* * *" turn separator
+export function parseChatGPT(raw) {
+  const out = [];
+  let cur = null;
+  let sawYou = false, sawGpt = false;
+  const flush = () => {
+    if (cur) {
+      const content = cur.lines.join('\n').trim();
+      if (content) out.push({ role: cur.role, content, timestamp: null, speaker: cur.speaker });
+    }
+    cur = null;
+  };
+  for (const line of String(raw).split(/\r?\n/)) {
+    const h = line.match(GPT_HEADER);
+    if (h) {
+      flush();
+      const speaker = h[1].trim();
+      const low = speaker.toLowerCase();
+      if (low === 'you') sawYou = true;
+      else if (low === 'chatgpt') sawGpt = true;
+      const role = low === 'you' ? 'user' : low === 'chatgpt' ? 'assistant' : 'system';
+      cur = { role, speaker, lines: [] };
+      continue;
+    }
+    if (!cur) continue;                 // preamble before the first header → ignore
+    if (GPT_SEP.test(line)) continue;   // turn separator → not content
+    cur.lines.push(line);
+  }
+  flush();
+  // Require the real signature (both sides present) so arbitrary markdown that
+  // happens to bold a "Word:" line isn't claimed as a ChatGPT log.
+  if (!sawYou || !sawGpt || out.length < 2) return null;
+  return { messages: out, format: 'ChatGPT' };
+}
+
 // Registry — order matters (JSON shapes before the text catch-all).
 const PARSERS = [
   parsePfJson,
   parseSillyTavern,
   parseOpenClaw,
+  parseChatGPT,
   parseTimestampedText,
 ];
 
-export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'timestamped text'];
+export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'ChatGPT (copy/share export)', 'timestamped text'];
 
 /**
  * Parse `raw` into normalized messages. Returns { ok, messages, format } or

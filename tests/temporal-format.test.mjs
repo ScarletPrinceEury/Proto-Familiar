@@ -59,6 +59,28 @@ test('renders open threads as strings or objects', () => {
   assert.match(out, /fallback-id/);
 });
 
+test('renders intentions coming due with why, condition, and the marker (Pass 3)', () => {
+  const out = formatTemporalContext({
+    intentions_due: [
+      { id: 'check-in-on-chen-x7', what: 'I check in on Chen', why: 'we haven\'t spoken in a while',
+        condition: { minContactGapMs: 3600000 } },
+      { id: 'review-calendar-k3', what: 'I review the calendar', condition: {} },
+    ],
+  });
+  // The marker string is what surfaces the intentions tool module.
+  assert.match(out, /\[Intentions coming due\]/);
+  assert.match(out, /check-in-on-chen-x7/);
+  assert.match(out, /I check in on Chen/);
+  assert.match(out, /because we haven't spoken in a while/);
+  assert.match(out, /only if we haven't talked in at least 1h/);
+  assert.match(out, /intention_mark_fired/);
+});
+
+test('no intentions-due block when the list is empty or absent', () => {
+  assert.doesNotMatch(formatTemporalContext({ intentions_due: [] }), /Intentions coming due/);
+  assert.doesNotMatch(formatTemporalContext({ handoff: { intent: 'x' } }), /Intentions coming due/);
+});
+
 test('renders current phase and schedule window', () => {
   const out = formatTemporalContext({
     schedule: {
@@ -213,6 +235,31 @@ test('renders a Consequence links section with the consequence tag', () => {
   assert.match(out, /Consequence links/);
   assert.match(out, /skip dinner → causes → crash \[on lapse · in ~4h · harms · high stakes · high certainty\]/);
   assert.match(out, /prep → requires → interview/);   // bare structural edge, no tag
+});
+
+test('edges resolve endpoints from schedule.linked (the visibility regression)', () => {
+  // The rot case: the consequence state is NOT a window node (undated, or
+  // scrolled out) and the src is a recurring anchor stamped months ago —
+  // both arrive via `linked`. The edge must still render, and the linked
+  // endpoints must appear in the [schedule ids] legend so I can act on them.
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'tk-9', type: 'task', label: 'today thing', when: '2026-07-07T15:00:00Z' },
+      ],
+      edges: [
+        { id: 'e1', src: 'dinner-x7', dst: 'crash-q2', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse' } },
+      ],
+      linked: [
+        { id: 'dinner-x7', type: 'event', label: 'dinner', when: '2026-01-02T18:00:00Z' },
+        { id: 'crash-q2',  type: 'state', label: 'crash' },
+      ],
+    },
+  });
+  assert.match(out, /Consequence links/);
+  assert.match(out, /dinner → causes → crash/);
+  assert.match(out, /crash \[state\] = crash-q2/);   // linked nodes reach the id legend
 });
 
 test('co_occurs_with renders undirected with [noticed] when untagged', () => {

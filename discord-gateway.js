@@ -39,17 +39,21 @@ import { enrich, withLock, getScheduleWindow } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
-import { readSettingsSync, primaryConnectionFrom } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
+import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
+import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { recordKnock, recordLocationKnock } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { sanitizeExternal } from './injection-guard.js';
+import { checkForUpdate, applyUpdate, updateDisabled } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR  = path.join(__dirname, 'logs');
@@ -279,6 +283,7 @@ async function fireRevisit(item) {
     participants: session.participants, settings,
     ambient: true, ambientStrategy: regLoc.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
     directedAt, revisitNote: true,
+    waitStreakLine: buildWaitStreakLine({ settings }),
   });
 
   const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
@@ -313,6 +318,8 @@ async function fireRevisit(item) {
     const list = await readRevisits();
     await writeRevisits([...list.filter(r => r.locationKey !== item.locationKey), newEntry]);
     armRevisitTimer().catch(() => {});
+    // Wait-streak (Pass 1): a re-defer is another taken wait choice.
+    Promise.resolve(recordWait('discord-defer')).catch(() => {});
     console.log(`[discord] revisit: re-deferred (${item.deferCount + 1}/${REVISIT_MAX_DEFER}) in ${item.locationKey} — next in ${Math.round(ms/60_000)}min`);
     return;
   }
@@ -329,6 +336,9 @@ async function fireRevisit(item) {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId, session, locationKey: item.locationKey, regLoc, priorMessages: [],
   });
+  // Wait-streak (Pass 1): a revisit where I actually spoke is a proactive
+  // payoff — the streak resets.
+  Promise.resolve(recordProactive('revisit')).catch(() => {});
   console.log(`[discord] revisit: spoke in ${item.locationKey}`);
 }
 
@@ -646,6 +656,32 @@ export function resolveMentions(content, { mentions = [], botUserId = null, char
   return text.replace(/<@!?(\d+)>/g, (_m, id) => `@${nameFor(id)}`);
 }
 
+/**
+ * Inbound Discord text made prompt-safe in ONE place: mention tokens
+ * resolved to names, capped, and — for anyone who is NOT my human — passed
+ * through the injection guard so a villager or stranger can't smuggle
+ * fake role markers / override phrases into my context.
+ *
+ * The guard is surgical (span-level redaction of near-unambiguous
+ * adversarial patterns; everything else byte-identical), so a villager
+ * genuinely relaying distress ("Chen needs help right now") passes
+ * untouched — sanitization can never swallow a crisis signal, only the
+ * adversarial span itself. And it is DELIBERATELY skipped for my human:
+ * their words are never altered (threat scoring must read exactly what
+ * they said, and rewriting their distress as "[removed:…]" could make
+ * triage misread genuine crisis as a jailbreak). Outbound text — my own
+ * replies, relays either direction — never goes through this: the guard
+ * is for third-party INBOUND text only, which is what keeps the relay
+ * system and trusted-contact delivery structurally unblockable by it.
+ */
+export function inboundContent(msg, { botUserId, charName, villagers, isWard, speakerName } = {}) {
+  const resolved = resolveMentions(String(msg?.content ?? ''), {
+    mentions: msg?.mentions, botUserId, charName, villagers,
+  }).slice(0, INPUT_CHAR_CAP);
+  if (isWard) return resolved;
+  return sanitizeExternal(resolved, { source: 'discord', context: `discord/${speakerName ?? 'unknown speaker'}` });
+}
+
 /** Names this message is explicitly aimed at, other than me — @-mentions
  *  of other users (people OR other Familiars) plus a reply to someone
  *  else's message. Lets an active-mode Familiar tell "this is between
@@ -737,7 +773,7 @@ async function availabilityBlockFor(decision, audienceGrants) {
 
 // ── Presence preamble (my own orientation, first person) ─────────
 
-function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false }) {
+function presenceBlock({ kind, locationLabel, speakerName, participants, settings, ambient = false, ambientStrategy = DEFAULT_ACTIVE_STRATEGY, directedAt = [], revisitNote = false, waitStreakLine = '' }) {
   const lines = ['[Discord Presence]'];
   if (kind === 'ward-dm') {
     lines.push(
@@ -748,6 +784,14 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
     lines.push(
       `I am in a private Discord DM with ${speakerName} — someone from {{user}}'s Village, not {{user}} themselves. ` +
       'I am still myself: same voice, same temperament. The context I carry into this room is what my human has granted this person; whatever I don\'t find in my context, I simply don\'t have here.',
+    );
+    // Capability awareness: I am not stuck merely talking here. If something said
+    // matters to {{user}}, I can hand it up to them myself (I don't have to be
+    // in a DM with {{user}} to reach them); and within what {{user}} has cleared
+    // this person for, I can actually act — the tools I hold this turn are the
+    // ones their clearance allows, and I only reach for what's genuinely there.
+    lines.push(
+      `If ${speakerName} says something {{user}} would want to know or act on, I pass it up to {{user}} myself rather than promising and leaving it — and within this person's clearance I can act here, not only talk.`,
     );
   } else {
     const present = (participants ?? []).map(p => p.name).filter(Boolean).join(', ');
@@ -821,6 +865,12 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
         );
       }
     }
+    // Wait-streak awareness (initiative-build-spec Pass 1): the [later:…]
+    // defer is an offered wait choice, so the deliberation carries the one
+    // neutral fact line. '' when the experiment is off (W3). Rendered
+    // after the option lines, before macro substitution — the line is
+    // code-built and contains no macros.
+    if (waitStreakLine) lines.push(waitStreakLine);
   }
   return substituteMacros(lines.join('\n'), settings);
 }
@@ -921,7 +971,13 @@ async function touchLocation(locationKey, sessionId) {
 
 // ── LLM call ──────────────────────────────────────────────────────
 
-async function callChat({ conn, messages, settings }) {
+// Raw provider call — returns the parsed response object (with choices[0].message
+// .tool_calls / finish_reason), and accepts an optional `tools` array. This is
+// the shape runToolCallLoop's callUpstream needs. callChat below is the plain
+// string wrapper for the no-tools path.
+// Exported so the noticing loop (Initiative Pass 4) can run its bounded
+// tool-call loop through the same provider call rather than duplicating it.
+export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
   const resp = await fetch(url, {
@@ -936,12 +992,18 @@ async function callChat({ conn, messages, settings }) {
       stream:      false,
       temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
       max_tokens:  1024,
+      ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
     }),
   });
   const text = await resp.text();
   if (!resp.ok) throw new Error(`provider ${conn.provider} returned ${resp.status}: ${text.slice(0, 200)}`);
   const data = JSON.parse(text);
   if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'provider error'));
+  return data;
+}
+
+async function callChat({ conn, messages, settings }) {
+  const data = await callChatRaw({ conn, messages, settings });
   const content = data.choices?.[0]?.message?.content ?? '';
   if (!content.trim()) throw new Error('provider returned empty content');
   return content;
@@ -973,6 +1035,67 @@ async function sendChannelMessage(token, channelId, content) {
       method: 'POST',
       body: { content: chunk },
     });
+  }
+}
+
+// Ward-only `/update` control from a Discord conversation — the chat-side
+// twin of the web UI's update button. `/update` reports status against the
+// repo/branch this install tracks (fork now, upstream later — updater.js keys
+// off git origin); `/update now` fast-forwards it (refused on a dirty tree).
+// Never spends an LLM call — it's a mechanical git operation, so it's a plain
+// command intercepted before any turn. Villagers never reach this (gated by
+// isWard at the call site); a villager typing "/update" is just chat.
+function isUpdateCommand(content) {
+  return /^\/update(\s+now)?\s*$/i.test(String(content ?? '').trim());
+}
+
+async function handleUpdateCommand(gw, msg, content) {
+  const channelId = msg.channel_id;
+  const token = gw.config.token;
+  const wantsApply = /\bnow\b/i.test(content);
+  const send = (text) => sendChannelMessage(token, channelId, text).catch(err =>
+    console.error('[discord] /update reply failed:', err?.message ?? err));
+
+  if (updateDisabled()) {
+    await send('Self-update is switched off on this install (`PROTO_FAMILIAR_UPDATE_DISABLED=1`).');
+    return;
+  }
+
+  let st;
+  try { st = await checkForUpdate(); }
+  catch (e) { await send(`I couldn't check for updates: ${e?.message ?? e}`); return; }
+
+  const where = [st.repo, st.branch].filter(Boolean).join(' · ');
+  if (st.ok === false && st.error) {
+    await send(`I couldn't check for updates${where ? ` (${where})` : ''}: ${st.error}`);
+    return;
+  }
+
+  if (!st.updateAvailable) {
+    await send(`I'm up to date — running v${st.current?.version ?? '?'}${where ? ` on ${where}` : ''}.`);
+    return;
+  }
+
+  const rv = st.remote?.version ? `v${st.remote.version}` : 'a new version';
+  const subject = st.remote?.subject ? `\nLatest: “${st.remote.subject}”` : '';
+
+  if (!wantsApply) {
+    if (st.dirty) {
+      await send(`An update is available (${rv}${where ? ` on ${where}` : ''}), but there are uncommitted local changes here — I won't overwrite them. Commit or stash them, then run \`/update now\`.${subject}`);
+    } else {
+      await send(`Update available: ${rv}${where ? ` on ${where}` : ''} — you're on v${st.current?.version ?? '?'}, ${st.behind} commit${st.behind === 1 ? '' : 's'} behind. Run \`/update now\` to apply it.${subject}`);
+    }
+    return;
+  }
+
+  // /update now — apply.
+  let res;
+  try { res = await applyUpdate(); }
+  catch (e) { await send(`Update failed: ${e?.message ?? e}`); return; }
+  if (res?.ok) {
+    await send(`Updated to v${res.version}${where ? ` on ${where}` : ''}. The new code is on disk — restart Proto-Familiar to run it.`);
+  } else {
+    await send(`I couldn't apply the update: ${res?.error ?? 'unknown error'}`);
   }
 }
 
@@ -1163,11 +1286,13 @@ async function observeMessage(gw, msg, decision) {
     });
   }
   const audienceTag = audienceTagFor(audienceInputFor(decision, session.participants), registry);
-  // Resolve mention tokens here too so what I read back later is legible.
-  const content = resolveMentions(String(msg.content), {
-    mentions: msg.mentions, botUserId: gw.botUserId,
+  // Resolve mention tokens here too so what I read back later is legible;
+  // non-ward text passes the injection guard (see inboundContent).
+  const content = inboundContent(msg, {
+    botUserId: gw.botUserId,
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
-  }).slice(0, INPUT_CHAR_CAP);
+    isWard: decision.isWard, speakerName: decision.speakerName,
+  });
   const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
@@ -1225,10 +1350,13 @@ async function handleTurn(gw, msg, decision) {
   // Resolve <@id> mention tokens to @Name BEFORE truncation so the room
   // stays legible to me — I can tell who each message is aimed at instead
   // of seeing raw snowflakes. (registry resolved at the top of handleTurn.)
-  const content  = resolveMentions(String(msg.content), {
-    mentions: msg.mentions, botUserId: gw.botUserId,
+  // Non-ward text passes the injection guard; my human's words stay raw —
+  // threat scoring below must read exactly what they said (inboundContent).
+  const content  = inboundContent(msg, {
+    botUserId: gw.botUserId,
     charName: settings?.charName, villagers: registry.villagers,
-  }).slice(0, INPUT_CHAR_CAP);
+    isWard: decision.isWard, speakerName: decision.speakerName,
+  });
   const nowIso   = new Date().toISOString();
 
   // Ward speech counts as ward activity wherever it happens — the
@@ -1317,6 +1445,9 @@ async function handleTurn(gw, msg, decision) {
     ambient: !!decision.ambient,
     ambientStrategy: decision.activeStrategy ?? DEFAULT_ACTIVE_STRATEGY,
     directedAt,
+    // Pass 1: ambient turns offer the [later:…] defer, so they carry the
+    // wait-streak fact line ('' when the experiment is off).
+    waitStreakLine: decision.ambient ? buildWaitStreakLine({ settings }) : '',
   });
 
   const availability = await availabilityBlockFor(decision, audienceGrants);
@@ -1344,7 +1475,79 @@ async function handleTurn(gw, msg, decision) {
     { role: 'user', content: userContent },
   ];
 
-  const rawReply = await callChat({ conn, messages: apiMessages, settings });
+  // Discord clearance-gated tools (discord-tools-build-spec). The Familiar's
+  // tools this turn follow the SPEAKER: ward alone → full web-chat parity; a
+  // villager → the universal relay + their grant-authorised subset; a stranger →
+  // none. Off via PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED=1 or the Settings toggle;
+  // default on. No tools → the plain single call, exactly as before.
+  const toolsOn = process.env.PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED !== '1'
+    && settings.discordToolsEnabled !== false;
+  const isVillager = !decision.isWard && !!decision.villager;
+  const discordTools = toolsOn
+    ? composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings })
+    : [];
+
+  let rawReply;
+  if (discordTools.length) {
+    // The result gate rides in toolCtx: a non-ward turn is wardPrivate:false and
+    // carries the room's visible-audience set, so audience-scoped reads (recall)
+    // return only what this room may see — never ward-private. viaVillager lets
+    // relay_to_ward name who it's passing along from.
+    const toolCtx = {
+      discord:     true,
+      wardPrivate: audienceTag === 'ward-private',
+      audienceTag,
+      audiences:   audienceVisible,
+      grants:      audienceGrants ?? {},
+      apiKey:      conn.apiKey,
+      viaVillager: isVillager
+        ? { id: decision.villager?.id ?? null, name: decision.speakerName ?? decision.villager?.name ?? null }
+        : null,
+    };
+    // On a villager turn, audit every state-mutating tool with the causing
+    // villager before it runs — a villager-driven write is never silent. Reads
+    // and the ward's own turns run unwrapped.
+    const executeTool = isVillager
+      ? async (name, argsJson, tctx) => {
+          if (VILLAGER_WRITE_TOOLS.has(name)) {
+            let parsed; try { parsed = argsJson ? JSON.parse(argsJson) : {}; } catch { parsed = { _raw: String(argsJson).slice(0, 200) }; }
+            await logDiscordWrite({ villager: tctx?.viaVillager, tool: name, args: parsed, locationKey: decision.locationKey });
+          }
+          return executeToolCall(name, argsJson, tctx);
+        }
+      : executeToolCall;
+    try {
+      const { data } = await runToolCallLoop({
+        callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings, tools: roundTools ?? discordTools }),
+        baseMessages: apiMessages,
+        getTools:     () => discordTools,
+        executeTool,
+        toolCtx,
+      });
+      rawReply = data?.choices?.[0]?.message?.content ?? '';
+    } catch (err) {
+      // A whole-loop failure (e.g. provider error) must never cost the person a
+      // reply — fall back to a plain no-tools call.
+      console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
+      rawReply = await callChat({ conn, messages: apiMessages, settings }).catch(() => '');
+    }
+    // A tool chain can end with no closing text — don't send an empty message;
+    // accumulate the turn and stay quiet, like an abstain.
+    if (!rawReply || !rawReply.trim()) {
+      session.messages = [
+        ...(session.messages ?? []),
+        { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      ];
+      session.audienceTag = audienceTag;
+      session.updatedAt   = new Date().toISOString();
+      await writeSessionLog(session);
+      await touchLocation(decision.locationKey, session.sessionId);
+      console.log(`[discord] tool turn produced no closing text in ${decision.locationKey} — stayed quiet`);
+      return;
+    }
+  } else {
+    rawReply = await callChat({ conn, messages: apiMessages, settings });
+  }
 
   // Ambient 'llm' turn where I chose to stay quiet: accumulate the
   // message into the room (so the context is there next time) and send
@@ -1374,6 +1577,9 @@ async function handleTurn(gw, msg, decision) {
       { id: randomUUID(), locationKey: decision.locationKey, dueAt: Date.now() + ms, deferCount: 0, queuedAt: nowIso },
     ]);
     armRevisitTimer().catch(() => {});
+    // Wait-streak (Pass 1): an offered defer, taken. ([pass] deliberately
+    // does NOT count — room pacing, not outreach deferral.)
+    Promise.resolve(recordWait('discord-defer')).catch(() => {});
     session.messages = [
       ...(session.messages ?? []),
       { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
@@ -1531,6 +1737,15 @@ function onDispatch(t, d) {
             context: d.guild_id ? 'guild' : 'dm',
             locationKey: discordLocationKey(d),
           }).catch(() => { /* best-effort */ });
+        }
+
+        // Ward-only `/update` control (the chat twin of the web update
+        // button). Intercepted before any turn — it's a mechanical git op,
+        // not an LLM turn, and only my human can drive it. A villager typing
+        // "/update" falls through to normal handling (it's just chat to them).
+        if (decision.isWard && isUpdateCommand(d.content)) {
+          await handleUpdateCommand(gw, d, d.content);
+          return;
         }
 
         // V8 lurk: read the room without replying.

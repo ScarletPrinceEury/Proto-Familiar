@@ -36,7 +36,7 @@ server.js  (Express, Node 22+, ESM)
     │
     │  ── cognitive bridge (per-request enrichment, INWARD) ────────
     ├── thalamus.js       ──►  Phylactery  (Python via uv, stdio MCP) — identity / memory / graph / snapshots
-    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / routine
+    │                     ──►  Unruh       (Python via uv, stdio MCP) — schedule / interests / handoff / intentions / routine
     │
     │  ── motor module (action + delivery, OUTWARD) ───────────────
     ├── cerebellum.js       ── tool registry + executors + tool-call loop,
@@ -56,6 +56,10 @@ server.js  (Express, Node 22+, ESM)
     ├── reachout.js         ── warm-outreach decision (ward + warm villagers)
     ├── outbox.js           ── persistent delivery queue (reminders, triage, alerts)
     ├── last-activity.js    ── timestamps user activity for the silence loop
+    ├── wait-streak.js      ── wait-streak experiment: counts deliberated waits since last proactive act
+    ├── contact-baselines.js ─ derives normal contact rhythm (median/p90 gaps) from session logs
+    ├── noticing.js         ── the Familiar's own turn: wake conditions + situation report + prompt + tick
+    ├── noticing-loop.js    ── autonomous: drives the noticing tick, self-paced (Initiative Pass 4)
     │
     │  ── village (audience gating + external presence) ───────────
     ├── village.js          ── registry: categories/grants, villagers, locations
@@ -99,6 +103,7 @@ ponderings injection, care-check framing) and as background loops
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
+├── spine-states.js          Temporal-bridges Pass A — the caring spine mints graph citizens. On a live ward turn `enrich()` fire-and-forgets `syncSpineState`: threat crossing into moderate+ mints a ward-private `state` node (`payload.spine`) for the hard stretch so it becomes relatable to schedule events (the missing causal middle); falling back below closes it at the code-derived decay-crossing instant (`decayCrossingMs`, same half-life as the tracker) and derives `co_occurs_with` edges to overlapping schedule items (arithmetic, capped/deduped, recurring anchors linked once). All machine values code-derived; never moves the tier / gates nothing / delays no triage. Villager privacy is structural + fail-closed: `isSensitiveNode` + `stripSensitiveScheduleNodes` (gated-turn context) + the `schedule_find` filter hide `spine`/`sensitive` nodes from every non-ward surface. Open-episode pointer in `tomes/.spine-episode.json`. Off: `spineStatesEnabled` (default ON) + `PROTO_FAMILIAR_SPINE_STATES_DISABLED=1`. Pure helpers unit-tested; MCP wrappers injected by the call site (no thalamus cycle)
 ├── pondering.js             Pure `ponderOnce()` primitive — LLM call + tome write
 ├── pondering-cadence.js     Tiered interval formula + threat multiplier + user-stretch scale
 ├── pondering-loop.js        Autonomous singleton loop; integrates with cadence + isEnabled gate
@@ -115,9 +120,17 @@ ponderings injection, care-check framing) and as background loops
 ├── gcal-source.js           Inbound FETCH half (Node owns network + the iCal URL): normalizeIcalUrl (webcal→https) + fetchIcal (timeout, ok:false on any failure, rejects non-iCal bodies so an auth wall can't read as "empty calendar"). Advanced tier (§1.5): fetchViaCli runs a ward-configured authenticated command (gogcli/gcalcli presets, overridable) that emits `.ics` (reuses Unruh's parser) or JSON (normalizeCliEvents) — a windowed read, always reconcileDeletes:false; detectCli probes installed/authed. Write-back (§7-5, the ONLY path that mutates the real calendar): pushIcsViaCli imports a generated `.ics` (reuses icalwrite — code builds it, never the model) through the ward's import command (ADD only) — gated behind the `schedule_push_to_google` tool's opt-in. Unruh stays parse-only/network-free
 ├── gcal-google.js           Native Google Calendar (0.8.1; multi-calendar 0.8.22): OAuth (parseCredentials, buildAuthUrl, exchangeCode, refreshAccessToken, getFreshAccessToken) + Calendar API (listCalendars enumerates the account's own AND shared-in calendars; listEvents(calendarId) windowed/showDeleted/paginated, insertEvent ADD-only write-back) + gitignored token store. SCOPE widened to calendar.events + calendar.readonly so shared calendars can be enumerated/read (existing users reconnect once; hasCalendarListScope tells the UI). normalizeGoogleEvents(items, calendarId) stamps each event's source calendar. buildEventResource sends local time + IANA zone. publicStatus redacted; status reports sharedScope Every network call takes an injectable fetchFn. normalizeGoogleEvents reuses the shared normalizer; buildEventResource sends local time + IANA zone and lets Google do local→instant. publicStatus is redacted (never leaks tokens). Replaces the CLI for the authenticated path — no terminal
 ├── gcal-projection.js       The §4 projection cue: pure selectCueItems (per-turn cap + turn/time aging) + buildCueBlock (first-person, literal "my human") over Unruh's `gcal_projection` feed; persisted aging state in tomes/.gcal-projection-cue.json. Rides chat turns (no standalone request); auto-clears when a node gains a consequence edge (Unruh drops it). Injected as a dynamic block in thalamus enrich()
+├── weather-source.js        Weather FETCH half (W-A; Node owns the network, the gcal precedent): geocode(query) resolves a city/ZIP ONCE at location-entry → {lat, lon, place_name, timezone} (Open-Meteo keyless geocoding); fetchForecast(lat, lon) is the 6-hourly refresh, walking the provider chain until one returns, stamping a location-local-naive `fetched_at`. fetchFn/now injectable for tests; total failure → {ok:false} (caller keeps the stale cache, the [Now] line simply drops). Coordinates go to the API only — the model never sees them
+├── weather-providers.js     Provider adapters (W-A, mirrors websearch-providers.js): fetchOpenMeteo (primary, keyless, timezone=auto→local times) + fetchMetNorway (fallback, keyless, symbol_code→WMO, m/s→km/h, UTC→local via utcToLocalNaive using the location's stored zone). Both normalise to one internal shape {provider, current, hourly[]}; PROVIDER_CHAIN orders them
+├── weather-format.js        Weather PURE formatters (W-A + W-B; the exact-machine-values rule — code speaks the words, never the model): WMO code→words, qualitative bands (tempBand/precipBand/windBand), precipTransition (12h lookahead), buildNowWeatherLine → "Weather where my human is: 6°C (cold), light rain, easing off around 17:00." **W-B additions:** weatherArc (today+tomorrow morning/afternoon/evening + notable turns, from the hourly array's own local-naive date/hour prefixes — no tz math), forecastAtHour + isAdverseHour (adverse code / likely-and-wet / temp extreme / strong wind — the outside-join + severe-alert gate), formatItemWeather (a compact per-item clause), formatWeatherVague (§5.6: qualitative-only, no numbers/units/times/labels). The HONESTY rule lives here: a forecast older than WEATHER_STALE_MS (12h) yields '' (the line drops rather than lie), as does any missing/garbage field
+├── weather-service.js       Weather GET-OR-FETCH seam (W-B; coordinates stay Node-side): resolveLocation (by ward label or current, from the Node-only private shape), getForecast (cache-first; fetches on demand when absent/stale/a needed date is beyond the ~48h cache — Open-Meteo reaches 16 days — then ingests to warm the cache; degrades to the stale cache on a fetch failure), dayDatesFor (location-local today/tomorrow via wardLocalNowISO). Backs weather_today + the outside-join
+├── weather-mirror.js        Weather READ-mirror (W-A; the last-activity.js precedent): writeWeatherMirror/clearWeatherMirror keep tomes/.weather-now.json in sync so the hot [Now]-block path reads synchronously. readWeatherNowLine (the ONE call buildTimeAnchorBlock makes on a ward-private turn) + readWeatherVagueLine (W-B; the gated-turn line, qualitative only) — both sync, never throw, honour the env off-switch + staleness. weatherEnabled(settings) is the one shared gate (env off-switch + default-ON toggle), imported by cerebellum/thalamus/server so every surface reads it identically
 ├── reachout.js              Warm-outreach decision: getWarmVillagers (relationToFamiliar==='warm' + reachable), buildReachoutPrompt (warm-framed, not crisis), decideReachoutViaLLM
 ├── outbox.js                Delivery queue (reminders / triage / reachout / relay / outbound_alert), dedup on originId
+├── updater.js               Git-based self-update (0.8.86): checkForUpdate/applyUpdate against origin/<branch> read live from git (repo/branch-agnostic — fork now, upstream later). Pure git, no GitHub API. Refuses on a dirty tree; restart-to-run. Off-switch PROTO_FAMILIAR_UPDATE_DISABLED=1
 ├── last-activity.js         Tiny persistent "user last typed at" timestamp
+├── wait-streak.js           Wait-streak experiment (Pass 1): deliberated-wait counter + the neutral prompt fact line
+├── contact-baselines.js     Contact-rhythm baselines (Pass 2): median/p90 gaps per weekday-class; the warmth rhythm line
 ├── recent-ponderings.js     Read recent pondering tome entries for in-chat reference
 ├── interest-picker.js       Weight-proportional sampler for the pondering loop
 ├── relative-time.js         Natural-English relative phrasing for every timestamped surface (memories, ponderings, schedule, handoff, "Now")
@@ -135,12 +148,13 @@ ponderings injection, care-check framing) and as background loops
 ├── audience.js              Audience grant resolution (V3) — union/intersection/ladders, fetch eligibility, identity section markers; consumed by thalamus.enrich() and the Discord router
 ├── discord-gateway.js       Discord gateway adapter (V4+V5+V6) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); V6: relayToDiscord() REST send (DM-open or channel post) backing the relay_message tool; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
-├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer applied at every external-data boundary
-├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail
+├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer (span-surgical, conservative false-positive budget; escape-tolerant bracket markers). WIRED (0.8.57) at the two genuinely-external inbound boundaries: web text (websearch.js — search titles/snippets, look_up reference text, read_webpage extraction; URLs deliberately untouched) and Village communications (discord-gateway.js inboundContent() — villager/stranger text only). The ward's OWN words are never sanitized on any path (threat scoring must read them raw; a redacted distress line could read as a jailbreak to triage), and no OUTBOUND path (replies, relay_message, relay_to_ward, trusted-contact delivery) passes through it — the guard is inbound-third-party-only, which is what keeps relay and triage structurally unblockable by it. NOT applied to Phylactery/Unruh recall (first-party stores; villager-written memories carry provenance labels instead) or gcal event titles (the ward's own calendar)
+├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail. Source-aware consent (0.8.88): direct ward-self facts kept on implied consent, only third-party/group-room facts ask; extractor tags temporality (episodic→daily dated / standing→ward register)
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
+├── llm-call.js              One chat-completion call for the autonomous background loops (pondering / reach-out / memorization / tome-graduation) — replaces four byte-identical `defaultCallLLM` copies. THINKING-MODEL handling lives here: a reasoning model bills its chain-of-thought against `max_tokens`, so a small cap returned an empty `message.content` (the "Provider returned empty content" the loops logged). `callProviderChat` uses a generous default cap (free for non-thinking models — they stop when done), falls back to `reasoning_content`/`reasoning` when `content` is empty (`extractContent`, shared with memorization which keeps its own finish_reason handling), and throws a diagnostic naming `finish_reason` (=length → raise the cap) instead of a bare mystery. The safety-critical triage call in `cerebellum.js` (silence-triage) now routes through this too (ward-signed, 0.8.82): its cap was 600 with no reasoning handling, and its empty-content path returns `action:'wait'` — so a thinking model there degraded to a SILENT no-op on a distressed ward (the 1.5-hour-silence class). The call now uses `callProviderChat` (cap 4000 + reasoning recovery); the decision logic is unchanged — a genuine transient failure still degrades to the safe `wait`, never a fabricated decision
 ├── (quiet success)          Write-tool success results collapse at the `executeToolCall` boundary (0.8.13): a WRITE executor's success branch returns `quietOk(fullText, {id})` and the model sees `ok` (+ the new id when chaining needs it) instead of confirmation prose — success confirmations recur every turn the transcript survives, and carry nothing the model didn't imply by making the call. The safety contract: ONLY genuine success branches opt in (the boundary never classifies text, so a failure can never read as success); READ tools never opt in (the result IS the payload); load-bearing successes stay loud (contact_trusted_person, show_crisis_resources, schedule_push_to_google, schedule_export, memorize_now, village_upsert, convert_ids_to_slugs). Debug escape hatch: PROTO_FAMILIAR_QUIET_TOOLS_DISABLED=1 restores full prose
-├── schedule-availability.js Coarse availability (stewardship Pass 4, 0.8.24) — LABEL-FREE-by-construction free/busy per day-part (morning/afternoon/evening) for coordinating with a villager the ward permitted. computeAvailability(nodes,{nowMs,days}) marks a part busy when an event or `hold` overlaps it (tasks/reminders don't block time); formatAvailabilityLines renders coarse rows; buildAvailabilityBlock is the villager-DM block, gated on the `schedule` grant ('coarse'|'full'). The derivation NEVER emits a label — structural privacy, not model discretion; 'full' additionally names items (ward's choice). Pure. Permission tier = the EXISTING audience.js `schedule` grant (category-level, V3 model); injected on villager-DM turns in discord-gateway (availabilityBlockFor), never a tool (Discord turns run no tools). Familiar-facing: schedule_availability (own free/busy check) + schedule_add_hold (a 'hold' node — new SCHEDULE_NODE_TYPES member, keep-a-time-free, counted busy)
+├── schedule-availability.js Coarse availability (stewardship Pass 4, 0.8.24) — LABEL-FREE-by-construction free/busy per day-part (morning/afternoon/evening) for coordinating with a villager the ward permitted. computeAvailability(nodes,{nowMs,days}) marks a part busy when an event or `hold` overlaps it (tasks/reminders don't block time); formatAvailabilityLines renders coarse rows; buildAvailabilityBlock is the villager-DM block, gated on the `schedule` grant ('coarse'|'full'). The derivation NEVER emits a label — structural privacy, not model discretion; 'full' additionally names items (ward's choice). Pure. Permission tier = the EXISTING audience.js `schedule` grant (category-level, V3 model); injected on villager-DM turns in discord-gateway (availabilityBlockFor) as context, and — since the clearance-gated Discord tools (V10, below) — also reachable as the `schedule_availability` tool when the speaker's grant authorises it. Familiar-facing: schedule_availability (own free/busy check) + schedule_add_hold (a 'hold' node — new SCHEDULE_NODE_TYPES member, keep-a-time-free, counted busy)
 ├── routine-review.js        Routine review (stewardship Pass 3, 0.8.21) — pure ledger + due-check + the pivot-menu prompt section. buildNeedsLedger counts met/missed per tracked need over the week (from each need anchor's payload.resolutions); isRoutineReviewDue is true only when the cadence (routineReviewDays) has elapsed AND ≥1 routine actually slipped (a good week manufactures nothing); buildRoutineReviewSection is the first-person pivot-menu text (keep/shrink/move/make-enjoyable/swap/shelve — "not ready yet" a finding, both costs named). RIDES one reflection tick, no new LLM call: server.js's shouldReflect lets a due review claim the tick, getReflectionInput attaches the section, the reflection prompt (pondering.js buildReflectionPrompt) emits a first-person `routine_review` finding, and runPonder's follow-through stamps the cadence + stashes the finding via stewardship.recordRoutineReview. Off-switch routineReviewEnabled + PROTO_FAMILIAR_ROUTINE_REVIEW_DISABLED=1; borrows the reflection slot without colonizing the pondering loop
 ├── stewardship.js           The executive layer over the temporal world model (0.8.18, Pass 1 of docs/stewardship-build-spec.md; default-ON, injection-only). The temporal window / consequence graph / needs ledger are truthful but, injected every turn, habituate into scenery — this picks a TINY conditional agenda instead (hard cap 3 items, block ABSENT when nothing qualifies; the salience lives in the absence). buildStewardshipBlock() is orchestration over pure selectors (selectDocket, buildOpeningBrief, medianHHMM, tierAtLeastModerate): (1) opening brief on the first REAL contact of the ward-local day — two conditions, past the dayStartAnchor AND after a dayStartGapHours inactivity gap (lastUserMessageAt); (2) docket — aging floating tasks (type='task', no when, unresolved) past docketMinAgeDays, oldest-first with a 3-day re-offer cooldown, at most once/ward-day; (3) anchor learning — after ≥14 first-contact samples it surfaces a >90-min drift so the Familiar adopts the observed rhythm via set_day_start_anchor. Code selects WHAT; the Familiar owns HOW it raises each item. Stands down at moderate+ threat (tierAtLeastModerate — deferral to triage, same posture as warm reach-out/needs-tracking). All facts code-computed (days-floating, the gap, the median) so the Familiar can't soften a record it didn't author. State (brief-fired flag, rotation cursors, first-contact samples) in tomes/.stewardship-state.json, mutated ONLY on liveTurn (a debug preview never fires a false opening); every path degrades to "" and never throws into the chat path. Assembled in thalamus.enrich() between careBlock and temporalLines. Off-switch: stewardshipEnabled + PROTO_FAMILIAR_STEWARDSHIP_DISABLED=1. **Pass 2a (0.8.19):** adds selectReadiness — for an event/task inside its readinessLeadHours window, walks the schedule EDGES (temporalPayload.schedule.edges, threaded in as scheduleEdges) for `requires`/`depends_on` prerequisites (direction: edge reads "src requires dst", so prereqs are the dst of edges whose src is the item) and surfaces any still-unresolved one it can see in the window (~6h per-event cooldown, never invents a blocker). Reads `payload.obstacle_tags` (a barrier vocabulary like "outside") to annotate readiness items
 ├── (regex/trigger tracer)   Ward-facing diagnostic (0.8.25) for tuning the keyword/regex surfaces. tool-surfacing.js exports explainSelection({turnText,dynamicBlock,villagerNames}) → per-module which regex matched which substrings / which block markers / villager names. POST /api/diagnostics/session-trace runs the REAL server modules per turn — explainSelection (surfacing) + scoreMessage (crisis-signals threat, with the matched text). The tome-keyword analyzer runs client-side in public/app.js (runSessionTrace) via the real matchKeyword over state.tomeCache entries, since tome/world-info lives client-side. Two Debug-section buttons (surfacing-only quick + a configurable modal: signal checkboxes + last-N-turns), plaintext output, copy/download. Localhost-gated like all endpoints; nothing stored
@@ -158,11 +172,11 @@ ponderings injection, care-check framing) and as background loops
 │   ├── src/phylactery/server.py  FastMCP server (identity / memory / graph / snapshots / lifecycle / backup)
 │   ├── src/phylactery/identity.py + memory.py + graph.py + consolidate.py
 │   ├── src/phylactery/graduation.py  Pillar H — signed-off graduation-eligibility rule + Familiar-led audit
-│   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED)
+│   ├── src/phylactery/scheduler.py   Pillar H — volume-gated lifecycle worker (off-switch PROTO_FAMILIAR_CONSOLIDATE_DISABLED). Pass 4 = distill-only memory lifecycle (temporal-bridges Piece 4): rides the pass, ADDS standing pattern-memories out of aged episodic facts, never demotes/deletes an original (distilled_at breadcrumb). Opt-in via memoryLifecycleEnabled → PROTO_FAMILIAR_MEMORY_LIFECYCLE_ENABLED env; hard off PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED=1
 │   ├── src/phylactery/backup.py      Pillar H — passphrase-encrypted single-file export/restore
-│   ├── src/phylactery/remember.py    Pillar I — ward remember-consent map (per-category true/false/ask policy)
+│   ├── src/phylactery/remember.py    Pillar I — ward remember-consent map (true/false/ask) + time-boxed standing consent
 │   ├── src/phylactery/snapshot.py + audience.py + embed.py + db.py
-│   ├── data/                SQLite database + snapshots + backups + remember_map.json (auto-created, git-ignored)
+│   ├── data/                SQLite database + snapshots + backups + remember_map.json + remember_standing.json (auto-created, git-ignored)
 │   └── tests/               pytest contract tests (test_graduation.py + test_retrieval_decay.py)
 │
 ├── unruh/                   In-tree Python module (Unruh — temporal context)
@@ -172,6 +186,7 @@ ponderings injection, care-check framing) and as background loops
 │   ├── src/unruh/ical.py      iCal (.ics) parse → normalized-event contract (0.8 inbound; RRULE subset-map + 90-day fallback expansion)
 │   ├── src/unruh/gcal.py      normalized events → schedule nodes; change-classifying upsert/reconcile keyed by gcal_uid
 │   ├── src/unruh/icalwrite.py schedule node → .ics + Google-render URL (0.8 outbound; local→UTC at this one boundary)
+│   ├── src/unruh/location.py  Weather-location store (W-A) — pure fns over a `locations` table (migration 0006) + a `weather_cache` table. PRIVACY SPINE: coords never leave the store toward the model. location_public returns {id, label, is_current} ONLY; location_private / weather_locations_private carry lat/lon and are called by NODE CODE ONLY (never bound as a model tool). First location auto-current; delete reassigns current; ingest validates + replaces the per-location cache (JSON times are local-naive, same frame as the forecast). Unruh never fetches — Node owns the network (the gcal precedent)
 │   ├── data/                SQLite + state (auto-created, git-ignored)
 │   └── tests/               pytest contract tests
 │
@@ -234,10 +249,28 @@ lifecycle of the autonomous loops:
 **Coverage (day-anchoring Phase 3):** `GET /api/memory-coverage` (per-date
 status for the calendar) + `POST /api/memorize-day {date,force}` ((re)feed a
 day's slices) — see `memory-coverage.js`.
+**Dedup health:** `GET /api/memory-health` — is semantic dedup live or degraded
+to the lexical fallback (`{healthy, dedup_mode, embed_ok, vec_ok, vec_rows,
+memory_rows}`, from Phylactery's `memory_health`). A dead vector stack
+(fastembed/sqlite-vec) silently disabled dedup and flooded the consent queue;
+the fallback keeps dedup working and this surface + a loud boot log make the
+degradation visible instead of silent. `POST /api/memory-backfill` embeds
+memories that never got a vector — the entity-core migration imported rows
+without embeddings, leaving them invisible to semantic dedup (a "healthy" stack
+can still show `vec_rows < memory_rows`); the backfill also auto-runs in the
+background at boot when that gap is detected. Idempotent.
 **Import (day-anchoring Phase 4):** `POST /api/import-logs` — without `commit`
 PREVIEWS (parse + segment, no writes); with `commit` places foreign logs by date
-(one imported session per date) and enqueues them for immediate ingestion. Parsers
-in `log-import.js` (Proto-Familiar JSON, timestamped text; rejects unknown loudly).
+(one imported session per date) and enqueues them for immediate ingestion.
+`POST /api/import-logs-batch` does the same for MANY files in one request (each
+resolves its own date from a per-file `fallbackDate` or its filename; preview
+returns a per-file breakdown; commit ingests every file that resolved and SKIPS —
+never fails the whole batch on — any that need a date or didn't parse). Both share
+`resolveImportSegs` (parse→date→segment) + `commitImportSegs` (write+enqueue) so
+the rules can't drift. Parsers in `log-import.js` (Proto-Familiar JSON,
+SillyTavern & OpenClaw `.jsonl`, **ChatGPT copy/share export** — `**You:**` /
+`**ChatGPT:**` markdown with `* * *` separators, standalone-header-only so an
+inline `**Reminder:**` stays content — and timestamped text; rejects unknown loudly).
 
 **Diagnostics (ward-facing, localhost-gated):** `POST /api/diagnostics/session-trace`
 — the regex/trigger tracer (0.8.25); per turn, runs the real tool-surfacing +
@@ -268,6 +301,13 @@ multi-calendar panel.
 - `GET /api/temporal/ponderings[?limit&sinceDays]` + DELETE
 - `POST /api/ponderings/intents/acted-on` — mark a deferred intent as filed (body: `{ uid, index }`); called by the `acknowledge_deferred_intent` LLM tool
 
+**Weather locations (W-A — ward-facing, coords never modelled):**
+- `GET /api/locations` — the ward's saved weather locations, PUBLIC shape only (`{id, label, is_current}` — never coordinates)
+- `POST /api/locations/geocode` — resolve a city/ZIP to `{place_name}` for the ward to confirm before saving (the geocode runs server-side; coords stay in the response envelope the UI posts back, never surfaced to the model)
+- `POST /api/locations` — save a location (label + resolved coords + timezone); first one becomes current; forces a weather refresh
+- `POST /api/locations/current` — switch the current location; forces a refresh
+- `DELETE /api/locations/:id` — remove a location (current is reassigned); forces a refresh
+
 **Village surface (V1 — registry only; gating lands in V3):**
 - `GET /api/village` — full registry (categories + villagers + locations, normalized)
 - `POST /api/village/categories` + `PATCH /api/village/categories/:id` + `DELETE /api/village/categories/:id?reassignTo=` — built-ins not deletable; Strangers locked
@@ -276,6 +316,7 @@ multi-calendar panel.
 - `GET /api/village/knocks` + `DELETE /api/village/knocks/:platform/:id` — pending contact attempts from unregistered people (captured by the Discord gateway; identity metadata only, never message content)
 - `GET /api/discord/status` — gateway connection state, bot identity, turn/failure counters, a `fatal` flag (token/intents rejected — the UI shows red instead of a perpetual "reconnecting"), plus `webSocketSupported`/`nodeVersion` so the Settings UI can warn proactively when the runtime is too old (Node < 22) to open the gateway
 - `POST /api/discord/apply` — apply the saved Discord settings and (re)connect immediately (the Settings "Apply & connect" button), clearing any fatal state; returns the resulting status. Saves the ward waiting for the 30s supervisor tick or reloading the page
+- `GET /api/discord-writes` — the villager-write audit trail (`discord-write-log.js` → `logs/discord-writes.jsonl`): every state-mutating tool a villager triggered through the Familiar on Discord, with who caused it. Newest first.
 
 **Web search (the Settings "Configure search backend" modal):**
 - `POST /api/guide-chat` — the in-modal Familiar explainer (0.7.29): same entity, stripped context (identity + the four prompt fields + tools-info/no-jargon), non-streaming, no tools, not persisted. Degrades calmly. Off-switch `PROTO_FAMILIAR_GUIDE_CHAT_DISABLED=1`
@@ -302,6 +343,12 @@ multi-calendar panel.
   signal is the acknowledge.
 
 **Settings + Tailscale gate:** as before.
+
+**Self-update (`updater.js`, 0.8.86):** git-based, repo/branch-agnostic — everything keys off `origin` + the checked-out branch read live from git, so a fork tracks the fork and an upstream clone tracks upstream with no code change. Pure git (no GitHub API) → works for private repos and non-GitHub hosts.
+- `GET /api/update-status` — the cached last check `{ ok, repo, branch, current:{version,commit}, remote:{version,commit,subject}, behind, updateAvailable, dirty, checkedAt }`. The UI polls this (60s) so the topbar indicator lights up in near-real-time on a left-open tab; the server refreshes the cache on its own 30-min timer (and once at boot).
+- `POST /api/update-check` — force a fresh `git fetch` + compare now (the popover's "Check again").
+- `POST /api/update-apply` — `git merge --ff-only origin/<branch>`; **refuses on a dirty tree** (never clobbers local edits). New code is live only after a restart — the endpoint never restarts the process (launcher-agnostic); it returns `{ ok, version, restartRequired:true }` and the UI/Discord tell the ward to restart.
+- **Surfaces:** the topbar update button + popover (next to the prompt inspector; `initUpdateChecker` in `public/app.js`), and a ward-only `/update` / `/update now` Discord command (`discord-gateway.js`, intercepted before any LLM turn — a mechanical git op, villagers never reach it). Hard off-switch `PROTO_FAMILIAR_UPDATE_DISABLED=1`.
 
 **Autonomous-loop boot** (`app.listen()` callback). Every loop has a
 Settings toggle + `PROTO_FAMILIAR_*_DISABLED=1` env off-switch (the ones that
@@ -504,11 +551,35 @@ positives are the regression cases the test suite watches).
 `tomes/.threat-state.json` with 3-day half-life. Cap MAX=10, floor 0,
 FIFO audit history (50). Off-switches: `PROTO_FAMILIAR_THREAT_DISABLED=1`
 silences recording; `resetThreat()` always works regardless.
+**`flagDistress`** (ward-signed, safety-critical) is the channel by which the
+model's OWN read of distress moves the tier: it floors the weight to
+`FLAG_FLOOR_WEIGHT` (8.0 — solidly severe with a real window, then decays like
+any threat), dedups repeat flags within `FLAG_DEDUP_MS` (per-turn), and never
+lowers an already-higher state. The `flag_distress` executor (cerebellum, CORE
+tool + noticing toolset + every villager) raises it, forces an immediate triage
+re-check (`resetTriageCooldown`), and — on a villager-triggered flag — always
+mirrors to the ward (`enqueueAndDispatch`, no covert safety action). It sends
+nothing itself; triage owns what care actually lands.
 
-**`pondering.js`** — pure `ponderOnce({topic, provider, apiKey, model})`
-that calls the LLM as the Familiar and writes a real first-person tome
-entry to "Familiar's Ponderings" (entries are `enabled: false` so they
-don't auto-fire as RAG lore — they're inspectable artifacts).
+**`pondering.js`** — pure `ponderOnce({topic, provider, apiKey, model,
+grounding})` that calls the LLM as the Familiar and writes a real
+first-person tome entry to "Familiar's Ponderings" (entries are
+`enabled: false` so they don't auto-fire as RAG lore — they're
+inspectable artifacts). **Grounded pondering (0.8.85):** for an interest
+ponder, `runPonder` (server.js) first recalls what the Familiar actually
+knows — a `searchMemory` on the topic + recent ponderings on the SAME
+topic (from `getRecentPonderings`, matched on the stored `topic_pondered`)
+— and passes it as `grounding`. `buildGroundingBlock` turns that into a
+prompt section: the recalled memories are "the grounded truth I draw on"
+(so it doesn't muse from the outside about something its human has a real
+relationship to — the confident-wrong-AURORA case), and recent same-topic
+ponders become "I already turned this over, so I do NOT reach out asking
+the same question a third morning in a row" (the repeated-reach-out case).
+No memories recalled → an honest "I don't hold anything concrete about
+this yet, so the ponder is the pull and what I'd want to ASK" note, which
+steers to not-knowing over confabulation. Best-effort: one cheap recall
+that degrades to an ungrounded ponder; reflection mode is already grounded
+(windowMemories) and is skipped.
 
 **`recent-ponderings.js`** — reads the N most recent pondering entries
 within sinceDays and formats them as a prompt-injection block. Also
@@ -548,6 +619,53 @@ Unruh's `schedule_mark_alerted` — atomic merge, enqueue-first
 mark-second like reminders). All-day events never ping (their
 when_ts is midnight). All comparisons run in the ward-local frame
 (nowMs derived from `wardLocalNowISO`).
+
+The same pass also carries the **severe-weather heads-up** (W-B §5.4,
+`selectDueWeatherAlerts`): an `obstacle_tags:["outside"]` item whose
+occurrence-hour forecast turns adverse in the CACHED forecast (the
+read-mirror — "within lead range" means inside the ~48h it covers, so
+no fetch) gets a code-built `weather_alert` outbox ping. It rides the
+SAME window scan (a per-tick memo, `fetchAlertScanData`, shares one
+schedule fetch between the two passes) through the SAME enqueue-then-mark
+helper (`runAlertStream`), but into a SEPARATE dedup channel
+(`weather_alerted_at` / `weather_alerts[YYYY-MM-DD]`, `kind:'weather'`)
+so a coming-up ping and a weather ping for one occurrence never suppress
+each other. Weather alone (no outside item affected) never pings — this
+is a preparation surface, not a weather report. Gated by BOTH weather
+and event-alerts being on.
+
+The same 30s tick also carries the **weather refresh seam** (W-A,
+"ride existing requests, gate in code"): `refreshWeatherIfDue()` is a
+self-gated fire-and-forget — it no-ops unless weather is enabled
+(`weatherEnabled` default-ON + `PROTO_FAMILIAR_WEATHER_DISABLED=1`
+off-switch) and the current location's cache is older than
+`WEATHER_REFRESH_MS` (6h); a `_weatherRefreshing` guard prevents
+overlap. When due it geocodes-nothing (coords already stored),
+`fetchForecast`s the current location, writes the Unruh
+`weather_cache` (via `ingestWeather`) and syncs the read-mirror
+(`syncWeatherMirror` → tomes/.weather-now.json). It also runs once at
+boot and is forced on a location add / set-current / delete. No new
+LLM call and no new loop — weather is pure code end to end; the
+model only ever reads the code-built [Now] line.
+
+**W-B surfaces (the day at will + preparation).** Two ward-only tools
+(gated by `weatherEnabled`, surfaced by the `weather` tool-surfacing
+module on leaving-the-house language + the readiness/projection blocks):
+`weather_today` (the code-built arc for today+tomorrow, current place or
+another saved label — on-demand fetch via `weather-service.js` for a
+non-current place; falls closed to the vague tier on a gated turn) and
+`set_current_location` (moves the current place; warms the new sky).
+`weather_today` also joins the **noticing** toolset (read-only — NOT a
+wake condition; weather only flavours a turn already happening) and the
+**projection cue** prose (a reminder it can check the sky while thinking
+a new appointment's lead time through). The **readiness** note
+(`stewardship.js`) reads the mirror synchronously and, for an outside-
+tagged item whose hour looks adverse, appends a code-built weather clause
+so the prep nudge is weather-aware. The ward manages places in the
+Temporal editor's **Weather** tab (add-via-geocode-confirm / set-current
+/ delete over `/api/locations`), which only ever shows the public
+`{label, is_current}` shape — coordinates never reach the browser list
+nor the model.
 
 **`silence-triage-loop.js`** — autonomous singleton. Every 5min, gates
 on tier (calm/mild = no-op) and cool-down (LLM-controlled
@@ -592,6 +710,97 @@ stamped from the chat path; consumed by the silence-triage loop.
 Discord ward messages stamp it too — the Familiar's sense of "my human
 was just here" follows the human, not a particular window.
 
+**Intentions (Initiative Pass 3)** — a first-class "my intention" object the
+Familiar writes for its future self: the substrate for planning, follow-through,
+and *rounds* (phase-bound standing intentions — self-maintenance as identity).
+Stored in Unruh's own `intentions` table (`unruh/intention.py`, migration
+`0005`), NOT the schedule layer — intentions are per-embodiment cognition and
+the ward's schedule surfaces must never grow Familiar-internal rows. Each has a
+`what`, a `why` (read back as the payoff-turn reasoning), `refs` (slug ids kept,
+never snapshotted — dereferenced fresh when it surfaces), a `trigger`
+(`at`|`phase`|`on_next_contact`|`none`; `recurring` for rounds), an optional
+`condition` (a tiny tripwire vocab — `minContactGapMs`/`needsStatus`/
+`unresolvedRefs` — the Node side applies the live-signal gate), and a
+`visibility` the Familiar itself controls. Unruh owns storage + trigger TIMING
+(`intentions_due`); the Node side owns the condition gate and budgets.
+Chat-path tools (`cerebellum.js`, first-person, ward-only, `intentions`
+surfacing module): `intention_set/list/drop/done/mark_fired/
+set_rounds_visibility`. Budget caps enforced at set time, ward-configurable:
+`intentionStandingPerPhase` (default 3), `intentionOpenOneShots` (default 30) —
+a cap hit tells the Familiar to prune, never a silent drop. Due intentions
+surface in `[Temporal Context]` via `temporal_context` (a payoff turn riding the
+existing per-turn call; stripped on gated villager turns — private cognition).
+Reflection can also END in commitments: the pondering output schema gains
+`intentions[]` (≤3/tick, `source:'reflection'`, routed via `setIntention`).
+**"Eury's rounds"** is a ward-facing read-only view (`GET /api/rounds`, routine
+tab) honouring the Familiar's own visibility choice — a private round is counted
+(`hidden_count`) but its contents withheld: existence is never hidden, only what
+a private round *is*. The autonomous noticing turn that consumes due intentions
+with the full condition code-gate is Initiative Pass 4 (not yet built).
+
+**`noticing.js`** + **`noticing-loop.js`** — the Familiar's own turn (Initiative
+Pass 4): the organ that lets it *notice* and act without my human spelling it
+out. `noticing.js` holds the pure logic — wake conditions (a due intention whose
+condition passes, a contact gap past the baseline p90, a readiness gap, an aging
+untriggered intention; **no wake condition → no turn**), the condition
+code-gate (`conditionPasses` — evaluated here, not left to the model, since no
+human reads this turn), the code-built ≤5-item situation report, the ward-signed
+prompt (`buildNoticingPrompt` — threat-tier line only at moderate+, flag_distress
+clause only when that tool is in hand), and the injectable `runOneNoticingTick`.
+`noticing-loop.js` is the singleton that drives it, self-paced (`set_next_check`,
+clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
+in `server.js`'s `noticingDeliberate` (`composeNoticingTools`: intention CRUD + a
+few schedule reads + the noticing-scoped `reach_out_to_ward` warm-knock and
+`set_next_check`; a reach-out refused during quiet hours is not counted as
+acting). **Does NOT stand down at elevated threat** (ward-signed,
+safety-significant — the tier shifts the register, never skips the turn; joins
+the safety-critical sign-off set). A proactive act resets the wait streak; a
+stand-down increments it (`source:'noticing'`). Every decision-reaching tick —
+including quiet-window evaluations — lands in `logs/noticing-events.jsonl` (GET
+`/api/noticing-events`). Model via `connectionForFeature(s,'noticing')`. Off:
+`noticingEnabled` / `PROTO_FAMILIAR_NOTICING_DISABLED=1`.
+
+**`contact-baselines.js`** — a model of "normal contact rhythm," in code
+(initiative-build-spec Pass 2). Turns the contact history the system already
+records (ward user-message timestamps in session logs) into per-weekday-class
+arithmetic: median gap, p90 gap, longest-observed gap, over a rolling 4-week
+window. Ward-contact signal is conservative — only web-chat sessions (no
+`audienceTag`) and Discord ward-DMs (`audienceTag === 'ward-private'`) count,
+so a villager in a group room is never mistaken for the ward (it under-counts
+rather than over-counts, the safe direction for a "should I worry about their
+silence" input). Timestamps within 3h coalesce into one contact *episode*; the
+gaps that matter are the quiet stretches between episodes, classified by the
+ward-local weekday-class of when the quiet began. **Honesty rule:** below ~2
+weeks of span or too few samples for a class, `hasBaseline` is false and
+consumers render nothing — a fabricated rhythm is worse than none. No loop, no
+LLM call: recomputed lazily on read (cached in `tomes/.contact-baselines.json`,
+refreshed at most every ~3h). Consumed by exactly two surfaces: the warm
+reach-out prompt's rhythm line (`buildRhythmLine`, riding below Pass 0's
+silence line) and — once built — the Pass 4 noticing situation report. Triage
+and surface-candidates stay untouched (triage has the threat tier; baselines
+are companionship territory). Off: `contactBaselinesEnabled:false` or
+`PROTO_FAMILIAR_BASELINES_DISABLED=1`.
+
+**`wait-streak.js`** — the ward's wait-streak experiment
+(initiative-build-spec Pass 1): a persistent counter in
+`tomes/.wait-streak.json` of how many times the Familiar has chosen to
+wait/defer since its last proactive act. Increments ONLY on deliberated
+wait choices (triage `wait`, warmth `wait`, a Discord `[later:…]` defer,
+snoozing a deferred tell); resets ONLY on proactive decisions (triage /
+warmth `reach_out` at decision time, a revisit that actually speaks,
+acknowledging a deferred intent after acting). Gate-skipped ticks never
+count (the Familiar was never asked), and the ward speaking never resets.
+Read side: `buildWaitStreakLine` renders ONE neutral verbatim fact line
+into the three deliberations that offer the choice — `buildReachoutPrompt`,
+`decideTriageViaLLM`, and the ambient Discord presence block — no advice,
+no thresholds, no gate changes (the experiment contract: only the
+information varies). `streakAtDecision` is stamped into
+`triage-events.jsonl` / `reachout-events.jsonl` so the ward can correlate
+streak values with decisions. Off: `waitStreakEnabled:false` or
+`PROTO_FAMILIAR_WAIT_STREAK_DISABLED=1` — disabled means no recording AND
+no line, and the affected prompts are byte-identical to their pre-feature
+output.
+
 **`discord-gateway.js`** — autonomous singleton (Village V4). A
 supervisor tick (30s) compares Settings (`discordEnabled`,
 `discordBotToken`) against the live connection and starts / stops /
@@ -613,9 +822,28 @@ location is a session in `logs/` (rotated after 6h idle; map in
 `tomes/.discord-map.json`), participants accumulate, and the audience is
 re-resolved per turn from the accumulated list. Ward messages also run
 crisis-signal scoring + threat recording (`source: 'discord'`) on the
-reply path. Discord turns carry NO tools and never consume handoffs
-(`liveTurn: false`). Memorization of Discord sessions is deferred until
+reply path. Discord turns never consume handoffs (`liveTurn: false`).
+Memorization of Discord sessions is deferred until
 memories carry audience tags (see village-support-design.md).
+
+*Clearance-gated tools (V10, `docs/discord-tools-build-spec.md`).*
+`handleTurn` runs a tool loop (reusing `cerebellum.runToolCallLoop`;
+`callChatRaw` supplies the full provider response with `tool_calls`)
+whose toolset follows the SPEAKER: ward alone → full web parity
+(`composeActiveTools`); a registered villager → the universal
+`relay_to_ward` + a fail-closed allowlist from their `audience.js` grants
+(`composeDiscordTools`/`villagerToolNames`; `schedule`/`memories`/`contacts`
+ladders → their read/write tools, deletes + Google-push held ward-only); a
+stranger → none. The result gate is `discordReadAudiences(ctx)` — a gated
+non-ward read scopes to the room's `audienceVisible` set, **fail-closed to
+`[]`** (Phylactery `0=1`) so a tool result can never leak ward-private data;
+`recall` routes through it, `searchMemory` forwards the Pillar E `audiences`
+filter. Villager writes carry provenance (`discordWriteProvenance` →
+`source_meta` in `source_json`, surfaced on recall by `_source_label`) and
+are audit-logged (`discord-write-log.js` → `GET /api/discord-writes`). A
+whole-loop failure falls back to a plain reply; a tool chain with no closing
+text stays quiet. Default ON (`discordToolsEnabled`); off-switch
+`PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED=1`.
 Off-switch: `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
 `GET /api/discord/status`.
 
@@ -724,9 +952,38 @@ exponential backoff, idempotent enqueue on
 `sessionId+scope+topicId+messageRange`.
 
 **Extraction** uses a per-fact format: LLM returns
-`{facts: [{content, category, subjects, confidence}], relations: [{from, fromType, type, to, toType}]}`
-where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`.
+`{facts: [{content, category, subjects, temporality, confidence}], relations: [{from, fromType, type, to, toType}]}`
+where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`
+and `temporality` ∈ `episodic | standing` (default `episodic` when unsure).
 Facts with `confidence < 0.4` are silently skipped.
+
+**Source-aware consent (0.8.88).** The remember gate keys on WHO a fact is about
+and WHETHER my human told me directly — not category alone. `resolveRememberGate`
+takes `{direct, hasNamedSubjects}`:
+- **Direct + about my human themselves** (a DM / web chat, `audienceTag ===
+  'ward-private'`, no named third party) → **implied consent**: kept without
+  asking. They told me on purpose. This only fills the UNSET default — an
+  explicit ward `ask`/`false` in the remember map still wins.
+- **A third person's private life** (a registered villager subject, or any
+  named-but-unregistered person via `hasNamedSubjects`) → still asks for
+  sensitive categories, whatever the channel. A stranger's sensitive fact is
+  never swept in by implied consent.
+- **Indirect** (a group room, `direct=false`) → asks, as before.
+
+This is what stops the confusing flood of date-less asks for things my human
+said to me directly. The `[PENDING MEMORY CONSENT]` block now carries each
+item's `date` and a `reason` (`shared-room` / `third-party`) so the ask is
+explained and time-anchored, and the block states up front that directly-told
+self-facts are already kept.
+
+**Temporality → storage tier.** `episodic` facts land at `daily` (standalone,
+dated — the memory of a day, consolidates + decays). `standing` facts are
+"generally true now", not a memory of a day: a standing fact about my human goes
+on the **`ward` register** (`register` passthrough in `createMemoryFull` →
+`significant`, recalled-when-relevant, never day-bucketed); a standing fact about
+a specific person is a durable `significant` person-attached row. The extractor
+tags temporality, so a fact already knows whether it's dated or standing before
+it's stored.
 
 **Shared graph rubric (`graph-vocab.js`, 0.7.63).** What earns a node/edge is defined
 **once** and read by every surface that creates one: the entity-type vocabulary
@@ -815,6 +1072,35 @@ detail is never folded into an already-confirmed memory (it gets its own row).
 The merge marker rides back through `memory_create` → `thalamus.createMemoryFull`
 → `memorization.js`, which skips re-queuing a merged dup for consent. This is
 what stopped the "82 queued, only 5 new" duplicate pile-up.
+
+**Pending-queue dedup (0.8.27):** the confirmed store's conservative bar leaves
+the *review* queue noisier than it should be — a reworded restatement of a
+not-yet-reviewed fact lands just under 0.78 and both survive as separate
+pendings. So a `consent_pending` incoming fact now takes a distinct path
+(`_dedup_merge_pending`, separate from the untouched confirmed-store logic):
+a looser threshold (`_DEDUP_PENDING_MERGE_MIN = 0.70`) and **audience-agnostic**
+matching (the same pending fact is a dup regardless of the room-tag it was
+derived under; audience still gates where a memory *surfaces*). Two directions:
+a pending near-dup of another *pending* fact folds together (one queue candidate,
+not five paraphrases); a pending near-dup of an already-*confirmed* memory is
+**dropped** as `already_known` — the ward already greenlit it, so re-asking is
+suppressed — and the confirmed row is left byte-unchanged (unreviewed wording
+never folds into a consented memory). The confirmed-store threshold that protects
+long-term memory from conflating two real facts is never loosened.
+
+**Ward standing consent (0.8.27):** the middle tier between "ask about every
+fact" and flipping a whole category to permanent "Store freely". Per category,
+the ward can open a time-boxed window ("trust his judgment for 6h/24h/7d/30d");
+while it's open, an `'ask'` category's ward-self facts auto-confirm (stored, not
+queued). Stored as an absolute epoch-ms expiry in `remember_standing.json`
+(no timezone math — a machine value the server derives from the chosen preset,
+never typed). Phylactery tools `remember_standing_get` / `remember_standing_set`
+(`remember.py`, returns active-only grants) → thalamus `getStandingConsent` /
+`setStandingConsent` → the gate in `memorization.resolveRememberGate`
+(`wardStandingActive` promotes `'ask'`→`'true'`; never overrides `'false'`, never
+touches villager-subject facts). Surfaced in the Ward · Remember settings panel;
+when the pending queue reaches ≥4 items the Familiar's consent block reminds it
+it can *offer* the ward standing consent (the grant is the ward's to make).
 
 **Auto-graph (0.8.1):** the same extraction call also returns `relations` —
 concrete edges between named entities (person/place/organisation/pet/condition/
@@ -1226,6 +1512,13 @@ All `/api/entity/*` HTTP routes now delegate entirely to Phylactery via thalamus
   - thalamus.js helpers `getRememberMap()` / `setRememberMap()`
   - HTTP routes `GET /api/entity/ward/remember`, `PUT /api/entity/ward/remember`
   - KE Identity pane: "Remember settings" row always visible under the `ward` category header
+  - **Standing consent (0.8.27):** the time-boxed middle tier — per `'ask'` category,
+    a window ("trust his judgment for 6h/24h/7d/30d") that auto-confirms ward-self facts
+    while open. Absolute epoch-ms expiry in `remember_standing.json`; tools
+    `remember_standing_get` / `remember_standing_set`, thalamus `getStandingConsent()` /
+    `setStandingConsent()`, `PUT /api/entity/ward/remember/standing` (server derives the
+    expiry from the preset — no typed timestamp), gated in `resolveRememberGate`
+    (`wardStandingActive`; only promotes `'ask'`→`'true'`, never overrides `'false'`).
   - **Wired into the memorization gate** (`memorization.js`): the Village registry's
     per-villager `remember` map covers facts about *other* people; the ward is not a
     villager, so facts about my human themselves (no matched villager subject) are gated
@@ -1276,12 +1569,14 @@ thalamus.enrich(userMessage, { liveTurn: true })
    ├── getRecentPonderings() ──► local tome read          │  - [CARE CHECK]
    └── getThreat()           ──► local file read          ┘  - [Temporal Context]
        │
-       │  injection-guard.js is available but NOT applied to Phylactery /
-       │  Unruh content — those are trusted first-party systems. The guard
-       │  is reserved for genuinely external ingestion points (web search
-       │  results, Discord / channel-adapter messages) that do not yet exist.
-       │  When those are built, sanitizeExternal() goes on the inbound
-       │  boundary of each adapter, not on the recall path of own memory.
+       │  injection-guard.js is NOT applied to Phylactery / Unruh content —
+       │  those are trusted first-party systems. The guard runs at the
+       │  genuinely external ingestion points (wired 0.8.57, after the audit
+       │  found this paragraph's "when those are built" step had been skipped
+       │  when they WERE built): web text in websearch.js and non-ward
+       │  Discord text in discord-gateway.js inboundContent(). It sits on the
+       │  inbound boundary of each adapter, never on the recall path of own
+       │  memory, never on the ward's own words, never on outbound delivery.
        │
        ▼
 Prompt assembly (see "Prompt assembly" below)
@@ -1513,6 +1808,8 @@ The schedule edges (shipped `0.7.74`) carry a **consequence payload** so the Fam
 
 **Visibility & planning.** `temporal-format.js` renders a *Consequence links* section into `[Temporal Context]` (the edges were stored but invisible before). `selectSurfaceCandidates` reads the edges: a task an imminent node **requires** or that **blocks** one gets a pure-code pressure bump (survives the per-turn cap) + a rendered "why"; the `[Surface candidates]` block gained a **CONSEQUENCE & PLANNING** directive (both futures, predict-then-check, honesty about certainty — proactivity-rule-compliant, regression-guarded).
 
+**The `linked` set (0.8.47 — the visibility-rot fix).** The original wiring fetched edges *touching window nodes* and let renderers drop any edge with an unresolvable endpoint. But consequence endpoints are routinely OUTSIDE every time window — `state` nodes were stamped `when=now` and scrolled out ~12h after authoring; recurring anchors are stamped months back — so in practice **every consequence edge went invisible within hours** (stored fine, never rendered, never graded: the "causal system doesn't work" defect). Fixed at the source: Unruh's `get_window` now returns the **whole schedule-layer edge set** (bounded by `limit` — the graph is deliberately small) plus **`linked`** — every edge endpoint that isn't a window node — so consumers always resolve both ends. Updated in the same commit: `temporal-format.js` (label map + id legend include `linked`), thalamus's surface-candidate assembly (`scheduleNodes` includes `linked`), the reflection input in server.js (`labelById` includes `linked`), and the Schedule Map in `app.js` (linked nodes render, so state endpoints are visible/editable). `schedule_upsert_state` now creates states **undated** (`state` no longer requires `when` in `add_node`; a dated state is still allowed, just not forced). Regression tests pin the rot cases — an undated state endpoint, and an edge between a months-old recurring anchor and a state (`unruh/tests/test_schedule.py::TestGetWindow`, `tests/temporal-format.test.mjs`).
+
 **Learning (predict→observe→learn).** `resolve()` records `acted_at` + **`window_fraction`** (where in a `[when,end]` window the ward acted). The reflection loop (`pondering.js`) does three things, all riding the existing reflection call (no new loop): (1) learns window-timing into `what_lapses_cost.md` (needs ≥3–4 of a kind); (2) **calibrates its own forecasts** — fed its projected (unobserved) edges with ids, returns `edge_calibrations` (raise/lower `certainty`, mark `observed` only once truly seen), applied via `updateScheduleEdge`; (3) **promotes** a repeated `co_occurs_with` to a *tentative* cause — fed co-occurrence pairs with a noticed-count (pairs that already have a cause are filtered out server-side), it returns `promotions` and the server adds a `causes` edge between the existing endpoints with `observed:false` + low default certainty (the noticing stays as the trail; the new cause is graded next reflection). The ladder is **noticed → suspected → confirmed**, and the loop can only ever add a *tentative* rung — it never asserts `observed` from a promotion.
 
 **Needs-tracking (Pass 2).** A "need" is a recurring window-task (`payload.need`, a `[when,end]` window) — a meal, meds, sleep — created via `schedule_add_need`. That makes "skipped" *defined by the window*. `temporal-format` renders a live **Needs today** view (met / open / missed / upcoming), derived every turn so a missed window shows even though the expander drops resolved occurrences. The opt-in `needs-tracking-loop` (default OFF, `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1`, stands down at moderate+ threat) marks an elapsed-unresolved occurrence `missed`, building the fulfilment ledger. **It makes only the *lapse* factual** — it never touches the projected `on_lapse` consequence edges. Whether the predicted cost actually followed stays the Familiar's observation, confirmed *or corrected* through the reflection calibration above (which marks `observed` only once genuinely seen). Nothing auto-confirms a consequence. To close that loop, reflection is *fed the recently-missed needs* (last 7 days, from the ledger) as a **cue** to check each one's projected `on_lapse` consequence — confirm it only if the cost was actually seen, correct it (lower certainty) if it didn't land — never assume.
@@ -1622,8 +1919,14 @@ model; a slug costs ~3 and self-documents in tool calls.
   `VALID_GRAPH_ID_RE` / the export-endpoint check are `alnum+dash, bounded
   length` — traversal-proof without assuming UUID. Session ids, tome ids, and
   job ids remain strict UUIDs (`isValidUUID`).
-- **Memories stay integer ids** (Phylactery autoincrement) — already cheap,
-  already surfaced by recall/list/read; not part of this scheme.
+- **Memories get slug ids too** (`content`-derived, `memory.create` →
+  `db.insert_with_slug_retry`, `kind="mem"`). They're surfaced by
+  recall/list/read, the consent block, graduation, and intention `refs`, so
+  they follow the same readable-id rule as graph nodes. (An earlier note here
+  claimed memories "stay integer ids — already cheap"; that was wrong — the id
+  was `uuid.uuid4().hex`, not an integer, so it was exactly the expensive-hex
+  case the scheme exists to fix. Legacy hex ids remain valid — ids are opaque
+  TEXT.)
 - **Discovery is a capability, not a legend.** The `[schedule ids]` /
   `[graph ids]` legends cover what's in view; `schedule_find` (label search,
   any horizon) is how the Familiar reaches everything else — see below.

@@ -50,6 +50,8 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
   Ward consent (Pillar I):
     remember_map_get        — read the ward's remember consent map
     remember_map_set        — write the ward's remember consent map
+    remember_standing_get   — read the ward's active standing-consent windows
+    remember_standing_set   — open/close a per-category standing-consent window
 
 Original design by Zari Lewis (Psycheros). See docs/phylactery-build-spec.md.
 """
@@ -180,6 +182,7 @@ def memory_create(
     confidence: Optional[float] = None,
     standalone: Optional[bool] = None,
     register: Optional[str] = None,
+    source_meta: Optional[dict] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to store a new memory about my human or our world. I reach for it
@@ -205,6 +208,7 @@ def memory_create(
         confidence=float(confidence) if confidence is not None else 1.0,
         standalone=bool(standalone),
         register=register or "episodic",
+        source_meta=source_meta if isinstance(source_meta, dict) else None,
         conn=_c(),
     )
     if not result.get("ok"):
@@ -338,6 +342,24 @@ def memory_search(
 
 
 @mcp.tool()
+def memory_by_timerange(
+    fromDate: str,
+    toDate: str,
+    limit: Optional[int] = None,
+    instanceId: Optional[str] = None,
+    audiences: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """I use this to remember what was happening in my human's life around a span
+    of days — not by topic, but by WHEN. I reach for it to relate a moment in time
+    to what I actually kept from those days (e.g. what surrounded a hard stretch or
+    an appointment). `fromDate`/`toDate` are inclusive YYYY-MM-DD bounds; results
+    come newest day first. `audiences` is the room's allowed set (omit for a
+    ward-private room). Returns thin projections with ids I can then read in full.
+    """
+    return mem.by_timerange(fromDate, toDate, limit=int(limit or 12), audiences=audiences, conn=_c())
+
+
+@mcp.tool()
 def memory_search_restricted(
     query: str,
     roomAudience: str,
@@ -411,6 +433,27 @@ def memory_list_consent_pending() -> dict[str, Any]:
     """
     items = mem.list_consent_pending(conn=_c())
     return {"items": items}
+
+
+@mcp.tool()
+def memory_health() -> dict[str, Any]:
+    """I use this to check whether my memory's DEDUP is working — the semantic
+    matcher that stops the same fact piling up in my human's consent queue. It
+    depends on the vector stack (the embedder + sqlite-vec); if either is
+    unavailable I fall back to a cruder lexical dedup, so this tells me which
+    mode I'm in and why. Returns {healthy, dedup_mode, embed_ok, vec_ok,
+    vec_rows, memory_rows, ...}."""
+    return mem.vector_health(conn=_c())
+
+
+@mcp.tool()
+def memory_backfill_embeddings(limit: int | None = None) -> dict[str, Any]:
+    """I use this to embed any of my memories that never got a vector — usually
+    the ones carried over from before Phylactery (the migration imported them
+    without embeddings), which left them invisible to my dedup so the same fact
+    could pile up in my human's consent queue. Mechanical, idempotent, and safe
+    to re-run. Returns {embedded, remaining, total_gap}."""
+    return mem.backfill_embeddings(conn=_c(), limit=limit)
 
 
 @mcp.tool()
@@ -636,6 +679,16 @@ def graph_ids_to_slugs() -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_ids_to_slugs() -> dict[str, Any]:
+    """I convert my memories' old-style hex ids into readable content-derived
+    slugs, updating every reference (embeddings, graduation log) in one
+    transaction. Mechanical and idempotent — legacy ids created before the fix
+    become legible like new ones. Returns {remapped, mapping}.
+    """
+    return mem.ids_to_slugs(conn=_c())
+
+
+@mcp.tool()
 def graph_full(
     type: Optional[str] = None,
     limit: Optional[int] = None,
@@ -777,6 +830,36 @@ def remember_map_set(map: dict[str, Any]) -> dict[str, Any]:
     Returns {"ok": true, "map": ...} on success, {"ok": false, "errors": [...]} on validation failure.
     """
     return remember.set_map(map)
+
+
+@mcp.tool()
+def remember_standing_get() -> dict[str, Any]:
+    """I use this to read my human's ACTIVE standing-consent windows — the
+    categories where they've told me to trust my judgment and keep new facts for
+    a while without checking each one with them.
+
+    Returns a map keyed by category (only ones open right now); each value is
+    {until, window, grantedAt} where `until` is an epoch-ms expiry. An empty map
+    means every 'ask' category still asks me per-fact.
+    """
+    return remember.get_standing()
+
+
+@mcp.tool()
+def remember_standing_set(category: str, until: Any = None, window: str = "") -> dict[str, Any]:
+    """I use this to open or close a standing-consent window for one category —
+    the middle ground between asking about every fact and remembering a whole
+    category forever.
+
+    category: one of basics, emotional_content, health_info, relationships,
+      whereabouts.
+    until: an epoch-ms instant in the future to trust that category until, or
+      null/0 to close the window now.
+    window: an optional label for the duration ('6h', '7d') — display only.
+
+    Returns {"ok": true, "standing": <active grants>} or {"ok": false, "error": ...}.
+    """
+    return remember.set_standing(category, until, window or None)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

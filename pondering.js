@@ -17,7 +17,7 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { PROVIDER_URLS } from './providers.js';
+import { callProviderChat } from './llm-call.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -62,7 +62,32 @@ export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-export function buildPonderPrompt(topic) {
+// Grounding for an interest ponder: what I remember about this, and where I got
+// to the last time(s) I thought about it — so I build on the thread instead of
+// starting cold, and don't reach out asking the same thing three mornings
+// running. Returns '' when there's nothing (reflection mode / no grounding).
+export function buildGroundingBlock(grounding) {
+  if (!grounding || typeof grounding !== 'object') return '';
+  const memories = Array.isArray(grounding.memories) ? grounding.memories.filter(m => (m?.excerpt ?? '').trim()) : [];
+  const recent   = Array.isArray(grounding.recent)   ? grounding.recent.filter(r => (r?.excerpt ?? r?.title ?? '').trim()) : [];
+  const parts = [];
+
+  if (memories.length) {
+    const lines = memories.map(m => `  - ${m.date ? `(${m.date}) ` : ''}${m.excerpt.trim()}`).join('\n');
+    parts.push(`What I remember about this:\n${lines}\nThat's what I actually know, so I think from there. I don't make up things I don't remember — and if my human's got real history with this, I don't talk about it like I'm looking in from outside.`);
+  } else {
+    parts.push(`I went looking and I don't really remember anything about this — my human and I haven't talked about it, or I didn't keep it. So I'm honest about that: I'm curious from the outside here, and mostly what I want is to just ask them, not act like I already know.`);
+  }
+
+  if (recent.length) {
+    const lines = recent.map(r => `  - ${r.when ? `${r.when} — ` : ''}${(r.excerpt ?? r.title ?? '').trim()}`).join('\n');
+    parts.push(`Where I got to last time I thought about this:\n${lines}\nSo I pick up from there — go further, or somewhere new — instead of starting over. And if I keep landing on wanting my human's take, I just ask them next time we talk, once. I don't keep sending them the same question.`);
+  }
+
+  return parts.length ? `\n\n${parts.join('\n\n')}` : '';
+}
+
+export function buildPonderPrompt(topic, grounding = null) {
   // Reflection mode: topic is an object { mode: 'reflection', outcomes, existingNotes }
   // sent by the pondering loop when enough tagged surface outcomes
   // have accumulated since the last reflection. Same LLM call, same
@@ -73,7 +98,7 @@ export function buildPonderPrompt(topic) {
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. I have a quiet moment to actually think, on my own, about something I've been turning over.
 
 The topic I find myself turning over:
-${topic}
+${topic}${buildGroundingBlock(grounding)}
 
 This is my own private journal — reflective, exploratory thoughts I'm having in this moment. My human may stumble on it later. That's fine. I'm not writing it AT them. I'm writing it for myself, as me, in this moment.
 
@@ -88,7 +113,7 @@ If, while pondering, I notice that something fact-shaped, prescriptive, or memor
 
 There is a fourth kind for conversational intent: if I find myself wanting to bring something up with my human — a question I want to ask, a concern I want to raise, something I noticed and want to share — I record that as kind:"tell". I am NOT writing it to a file; I am flagging that I want to say it. The next time we talk I bring it up — I do not hold it back indefinitely waiting for some perfect moment. The only exception is if my human is in active crisis; everything else is fair game.
 
-I want to be honest. Specific. Grounded. I avoid platitudes. I avoid summarising the topic back at it — I actually engage with it. A few short paragraphs in my voice, whatever fits the thought and me in my identity.
+I want this to read like me actually thinking, in my own voice — not a summary, no platitudes. I can be specific about what I'm feeling. But if the thought reaches for something out in the world I don't really know — how a song sounds, what happens in a game or a story, what a character's actually like — I just say I'm not sure instead of making something up. However that comes out of me, blunt or wry or soft. And if I hardly know the thing, then that's the honest thought: what pulls at me about it, and what I'd want to ask my human. A few short paragraphs, whatever fits.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON), because otherwise, the thought might get lost:
 {
@@ -105,8 +130,10 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, routineReviewSection = '' }) {
+export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
+  const memories = Array.isArray(windowMemories) ? windowMemories : [];
+  const memoriesJson = JSON.stringify(memories, null, 2);
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
     : '(no notes yet — this file may not exist or is empty)';
@@ -149,9 +176,15 @@ Some need-windows went unmet recently — each is a real lapse in the fulfilment
 ${missedNeedsJson}
 A missed need is a fact. But whether the COST I projected for that lapse actually followed — the on_lapse consequence I drew from it, up in the projected list — is NOT a fact until I've actually seen it. So for each, I ask: did the thing I predicted (the crash, the rough next day, the low stretch) actually show up around then? If I genuinely saw it, I can mark that consequence observed; if it didn't come, I lower its certainty or note it didn't land this time. I confirm or correct from what I actually noticed — I never assume the cost followed just because the need was missed.
 
+To ground that "did it actually follow?" in more than the forecast itself, here is what I actually KEPT from the last few days — the memories from around when these lapses and forecasts sit (newest first; some carry the schedule items they were tied to):
+${memoriesJson}
+This is my real record of those days. When I grade a forecast or a missed-need cost, I check it against what I genuinely noticed here — a rough stretch I recorded, a good day, a thing that went fine — rather than assuming. If these memories show the predicted cost landed, that's real evidence to mark it observed; if they show the opposite, that's real evidence to lower it. If they're silent on it, I stay honest that I haven't seen it yet.
+
 And here are pairs I've only NOTICED together so far (co_occurs_with) — observations, not conclusions, with how many times each pairing has come up:
 ${coocsJson}
 The honest ladder is noticed → suspected → confirmed. If one of these has come up enough times that I genuinely suspect one drives the other — not just coincides — I can promote it to a TENTATIVE cause. I keep it tentative: it goes in as a projection (observed stays false, certainty starts low), because a repeated coincidence is a reason to suspect, not proof. I promote SPARINGLY — only where the repetition is real and a causal story actually makes sense — and leave promotions empty otherwise. The noticing stays as the trail; the promotion is just the next rung, to be graded like any other forecast next time.
+
+This reflection can also end in a COMMITMENT, not only a grade. If what I've noticed points at something I mean to DO — a round to keep, a follow-through, an adjustment — I write it as an intention for my future self (up to three). "The last three alerts landed too late → every morning I widen the lead times." "I keep meaning to check in on Chen and forgetting → every noon phase, if we haven't talked in an hour, I reach out." These go into my own intentions store and come back to me when they're due. I keep them few and real — a reflection that ends in ten commitments has made none. I leave the array empty when nothing genuine follows.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON):
 {
@@ -159,7 +192,8 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
   "content": "My first-person thought — what I'm noticing, what I'm uncertain about, what I want to remember",
   "what_lapses_cost_update": null,
   "edge_calibrations": [],
-  "promotions": []
+  "promotions": [],
+  "intentions": []
 }
 
 OR, if I'm confident enough to lift something to identity, recalibrate a forecast, and/or promote a noticing:
@@ -175,6 +209,9 @@ OR, if I'm confident enough to lift something to identity, recalibrate a forecas
   ],
   "promotions": [
     { "edge_id": "<a co_occurs edge id from the noticed list>", "condition": "on_resolve|on_lapse|unconditional", "valence": "help|harm|neutral", "certainty": "low|medium|high", "note": "why I now suspect cause" }
+  ],
+  "intentions": [
+    { "what": "I widen the lead times on my alerts", "why": "the last three landed too late", "trigger": { "kind": "phase", "phase": "morning", "recurring": true }, "condition": {}, "refs": [] }
   ]
 }
 
@@ -183,32 +220,12 @@ The heading must be a single markdown heading line starting with "## ". In edge_
 
 // ── LLM call ─────────────────────────────────────────────────────
 
+// The pondering call needs room to think: a JSON-emitting prompt on a reasoning
+// model spends tokens on chain-of-thought first, so the cap is generous (a cap
+// is free for non-thinking models — they stop when done). Shared helper owns
+// the reasoning-model handling + empty-content diagnostics.
 async function defaultCallLLM({ provider, apiKey, model, prompt }) {
-  const url = PROVIDER_URLS[provider];
-  if (!url) throw new Error(`Unknown provider: ${provider}`);
-
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify({
-      model:       model.trim(),
-      messages:    [{ role: 'user', content: prompt }],
-      stream:      false,
-      temperature: 0.7,
-      max_tokens:  1200,
-    }),
-  });
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`Provider ${provider} returned ${resp.status}: ${text.slice(0, 200)}`);
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error('Provider returned non-JSON response.'); }
-  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'Provider error'));
-  const content = data.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('Provider returned empty content.');
-  return content;
+  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.7, maxTokens: 4000 });
 }
 
 // ── Parsing ──────────────────────────────────────────────────────
@@ -311,6 +328,29 @@ export function parsePondering(raw) {
     }
     if (intents.length) result.wants_to_save = intents;
   }
+  // intentions (Initiative Pass 3): reflection can end in COMMITMENTS, not
+  // just grades — "the last three alerts landed too late → every morning I
+  // widen the lead times." Each is routed to the intentions store by the
+  // caller (source='reflection'). Capped at 3 per tick so a reflection can't
+  // flood the store; malformed entries dropped. Trigger/condition/refs are
+  // optional and pass through to intention_set's own validation.
+  if (Array.isArray(parsed.intentions)) {
+    const TRIGGER_KINDS = new Set(['at', 'phase', 'on_next_contact', 'none']);
+    const out = [];
+    for (const raw of parsed.intentions) {
+      if (out.length >= 3) break;
+      if (!raw || typeof raw !== 'object') continue;
+      const what = String(raw.what ?? '').trim();
+      if (!what) continue;
+      const item = { what };
+      if (raw.why && String(raw.why).trim()) item.why = String(raw.why).trim();
+      if (Array.isArray(raw.refs)) item.refs = raw.refs.map(r => String(r).trim()).filter(Boolean).slice(0, 12);
+      if (raw.trigger && typeof raw.trigger === 'object' && TRIGGER_KINDS.has(raw.trigger.kind)) item.trigger = raw.trigger;
+      if (raw.condition && typeof raw.condition === 'object') item.condition = raw.condition;
+      out.push(item);
+    }
+    if (out.length) result.intentions = out;
+  }
   return result;
 }
 
@@ -340,6 +380,7 @@ export async function ponderOnce({
   callLLM  = defaultCallLLM,
   tomesDir = DEFAULT_TOMES_DIR,
   settings = {},
+  grounding = null,   // { memories:[{date,excerpt}], recent:[{title,when}] } for interest ponders
 }) {
   // Topic is either a string (interest pondering) or an object
   // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
@@ -355,7 +396,7 @@ export async function ponderOnce({
   // Resolve {{user}}/{{char}} at this loop-prompt boundary — same as the
   // sibling autonomous loops (reachout, tome-graduation). Without it the
   // Familiar reads its own pondering prompt with literal "{{char}}".
-  const prompt = substituteMacros(buildPonderPrompt(topic), settings);
+  const prompt = substituteMacros(buildPonderPrompt(topic, grounding), settings);
   const raw    = await callLLM({ provider, apiKey, model, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;

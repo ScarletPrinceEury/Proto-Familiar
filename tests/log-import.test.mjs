@@ -108,6 +108,44 @@ test('parses an OpenClaw event-log .jsonl (message events; non-text/non-message 
   assert.equal(r.messages[1].timestamp, '2026-06-17T07:13:43.598Z');
 });
 
+test('ChatGPT copy/share export: headers, separators, inline system note', () => {
+  const raw = [
+    '**You:**', '', 'Hey, can you read page 11?', '', '* * *', '',
+    '**ChatGPT:**', '', 'Sure. Here is **CHAPTER 1**', '', 'the text continues.', '', '* * *', '',
+    '**You:**', '', 'Thanks!', '', '* * *', '',
+    '**ChatGPT:**', '', 'A saved fact.', '', '**Reminder:** this note is from voice mode.', '', 'Let me know.',
+  ].join('\n');
+  const r = parseImport(raw);
+  assert.equal(r.ok, true);
+  assert.equal(r.format, 'ChatGPT');
+  assert.equal(r.messages.length, 4);
+  assert.deepEqual(r.messages.map(m => m.role), ['user', 'assistant', 'user', 'assistant']);
+  // The `* * *` separators are stripped; a bold heading with no colon (**CHAPTER 1**)
+  // stays as content (internal blank lines preserved), not a speaker turn.
+  assert.equal(r.messages[1].content, 'Sure. Here is **CHAPTER 1**\n\nthe text continues.');
+  assert.doesNotMatch(r.messages[1].content, /\* \* \*/);
+  // An INLINE **Reminder:** (content after the colon) is NOT a turn — it stays
+  // inside the assistant message it appeared in.
+  assert.equal(r.messages[3].role, 'assistant');
+  assert.equal(r.messages[3].content, 'A saved fact.\n\n**Reminder:** this note is from voice mode.\n\nLet me know.');
+  // No timestamps in this format → all null (caller supplies a date).
+  assert.ok(r.messages.every(m => m.timestamp === null));
+});
+
+test('ChatGPT: a standalone non-You/ChatGPT header maps to system', () => {
+  const raw = ['**You:**', '', 'hi', '', '* * *', '', '**ChatGPT:**', '', 'hello', '', '* * *', '', '**System:**', '', 'a note'].join('\n');
+  const r = parseImport(raw);
+  assert.equal(r.format, 'ChatGPT');
+  assert.equal(r.messages[2].role, 'system');
+  assert.equal(r.messages[2].speaker, 'System');
+});
+
+test('ChatGPT: bold "Word:" prose is not mistaken for a ChatGPT log', () => {
+  // Has a bold-colon line but no You/ChatGPT signature → not claimed.
+  const r = parseImport('**Note:** just some prose\n\nmore prose');
+  assert.equal(r.ok, false);
+});
+
 test('unknown format → loud structured error listing what is supported', () => {
   const r = parseImport('just some prose with no structure at all');
   assert.equal(r.ok, false);

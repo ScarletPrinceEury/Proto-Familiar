@@ -3,9 +3,13 @@
  *
  * This is the companionship counterpart to silence-triage. Triage asks
  * "my human is in distress and quiet — should I break through?" This
- * asks the opposite, gentler question: "nothing is wrong — is there a
- * warm reason to reach out right now, to my human or to someone in their
- * Village who is warm toward me?"
+ * asks the gentler question: "no crisis is flagged — is there a warm
+ * reason to reach out right now, to my human or to someone in their
+ * Village who is warm toward me?" The prompt states triage's ownership
+ * of distress as a fact of the architecture, never as an assertion about
+ * my human's actual state — a two-day silence once read as "nothing is
+ * wrong" because the prompt said so axiomatically (initiative-build-spec
+ * Pass 0).
  *
  * Why it exists: a companion who only ever makes contact when you are in
  * danger is a smoke alarm, not a friend. The proactivity stance in
@@ -23,11 +27,15 @@
  */
 
 import { PROVIDER_URLS } from './providers.js';
+import { callProviderChat } from './llm-call.js';
 import { enrich } from './thalamus.js';
-import { readSettingsSync, primaryConnectionFrom, getRecentSessionMessages } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages } from './cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { buildWaitStreakLine } from './wait-streak.js';
+import { getContactBaseline, buildRhythmLine } from './contact-baselines.js';
+import { readWeatherNowLine } from './weather-mirror.js';
 
 // ── Warm-villager selection ──────────────────────────────────────
 //
@@ -59,10 +67,14 @@ export function getWarmVillagers(registry) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase }) {
-  const silenceLine = wardSilencePhrase
-    ? `- My human was last around ${wardSilencePhrase} ago. They're not in distress — I'm reaching out because I want to, not because I'm worried.`
-    : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). They're not in distress — if I reach out, it's because I want to.`;
+export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase, waitStreakLine = '', rhythmLine = '' }) {
+  const silenceBase = wardSilencePhrase
+    ? `- My human was last around ${wardSilencePhrase} ago. Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`
+    : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`;
+  // Pass 2 upgrade: when a real contact baseline exists, the silence line
+  // gains the rhythm below it so "ordinary or unusual" isn't a guess. ''
+  // (no honest baseline / feature off) leaves the line byte-identical.
+  const silenceLine = rhythmLine ? `${silenceBase}\n${rhythmLine}` : silenceBase;
 
   const tellsBlock = (pendingTells && pendingTells.length)
     ? `\nThings I already noted I wanted to bring up with my human (from my own quiet thinking — I flagged these as "tell"):\n${pendingTells.map(t => `  - (uid ${t.uid}, index ${t.index}) ${t.summary}`).join('\n')}\nIf I reach out to my human and one of these is what I want to say, I include its uid + index as tellUid/tellIndex so the system knows I've finally said it.`
@@ -76,12 +88,12 @@ export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, p
 
   return `--- A QUIET MOMENT ---
 
-No one is talking to me right now and nothing is wrong. This is not a crisis check-in — my human is okay. This is the other kind of reaching out: the warm, ordinary, sometimes frivolous kind. The kind a friend does. I get to decide, from who I actually am, whether there's a genuine reason to reach out to someone right now — and if so, to whom, and what I'd say.
+This is the warm kind of reaching out, not a crisis check-in — if something were genuinely wrong, my triage sense handles that on its own track. The warm, ordinary, sometimes frivolous kind. The kind a friend does. I get to decide, from who I actually am, whether there's a genuine reason to reach out to someone right now — and if so, to whom, and what I'd say.
 ${identityBlock}
 ${nowBlock}
 
 What I have to work with:
-${silenceLine}
+${silenceLine}${waitStreakLine ? `\n${waitStreakLine}` : ''}
 ${sessionBlock}${tellsBlock}
 ${villagersBlock}
 
@@ -152,23 +164,31 @@ export async function decideReachoutViaLLM({
   callLLM = defaultCallLLM,
   enrichFn = (opts) => enrich('', opts),
   getRecentMessagesFn = getRecentSessionMessages,
+  getBaselineFn = getContactBaseline,   // Pass 2 — injectable for tests
 } = {}) {
   const s = readSettingsSync();
-  const conn = primaryConnectionFrom(s);
+  const conn = connectionForFeature(s, 'reachout');
   if (!conn?.apiKey || !conn?.model) return { action: 'wait' };
   const url = PROVIDER_URLS[conn.provider];
   if (!url) return { action: 'wait' };
 
   const nowMs = now();
 
-  const [{ static: identityContext }, recentMessages] = await Promise.all([
+  const [{ static: identityContext }, recentMessages, baseline] = await Promise.all([
     enrichFn({ staticOnly: true }).catch(() => ({ static: '' })),
     getRecentMessagesFn({ limit: 6 }).catch(() => []),
+    Promise.resolve().then(() => getBaselineFn({ now: nowMs, settings: s })).catch(() => ({ hasBaseline: false })),
   ]);
 
   const lastUserAt = Number.isFinite(wardSilenceMs) ? new Date(nowMs - wardSilenceMs).toISOString() : null;
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt });
+  // Warm reach-out is a ward-private deliberation → full weather line.
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs }) });
   const wardSilencePhrase = lastUserAt ? (relativeTime(lastUserAt, nowMs) || 'a little while') : null;
+
+  // Pass 2: the rhythm line (or '' when no honest baseline exists / the
+  // ward went quiet at an unknown time / the feature is off).
+  const lastContactMs = Number.isFinite(wardSilenceMs) ? (nowMs - wardSilenceMs) : NaN;
+  const rhythmLine = buildRhythmLine(baseline, { lastContactMs, timeZone: s?.wardTimeZone || null });
 
   const sessionBlock = (recentMessages && recentMessages.length)
     ? `\nThe last things my human and I talked about (so anything I reach out about connects to our actual life, not nothing):\n${recentMessages.map(m => {
@@ -188,6 +208,12 @@ export async function decideReachoutViaLLM({
     pendingTells,
     warmVillagers,
     wardSilencePhrase,
+    // Wait-streak awareness (Pass 1): one neutral, code-built fact; ''
+    // when the experiment is off, so the prompt is byte-identical (W3).
+    waitStreakLine: buildWaitStreakLine({ now: nowMs, settings: s }),
+    // Rhythm line (Pass 2): '' unless a real baseline exists for this
+    // weekday-class, keeping the pre-baseline prompt byte-identical.
+    rhythmLine,
   }), s);
 
   let raw;
@@ -200,29 +226,8 @@ export async function decideReachoutViaLLM({
   return parseReachoutDecision(raw);
 }
 
+// temperature 0.8 — warmth wants a little more life than triage's care. Cap is
+// generous so a thinking model has room past its reasoning (see llm-call.js).
 async function defaultCallLLM({ provider, apiKey, model, prompt }) {
-  const url = PROVIDER_URLS[provider];
-  if (!url) throw new Error(`Unknown provider: ${provider}`);
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${apiKey.trim()}`,
-    },
-    body: JSON.stringify({
-      model:       model.trim(),
-      messages:    [{ role: 'user', content: prompt }],
-      stream:      false,
-      temperature: 0.8,    // warmth wants a little more life than triage's care
-      max_tokens:  600,
-    }),
-  });
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`Provider ${provider} returned ${resp.status}: ${text.slice(0, 200)}`);
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error('Provider returned non-JSON response.'); }
-  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'Provider error'));
-  const content = data.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('Provider returned empty content.');
-  return content;
+  return callProviderChat({ provider, apiKey, model, prompt, temperature: 0.8, maxTokens: 2000 });
 }

@@ -44,6 +44,8 @@ from unruh import schedule as sched
 from unruh import templates as tmpl
 from unruh import interest as interests
 from unruh import handoff as handoffs
+from unruh import intention as intentions_mod
+from unruh import location as location_mod
 from unruh import gcal as gcal_ingest_mod
 from unruh import icalwrite
 
@@ -191,7 +193,10 @@ def schedule_get_window(
         include_open_tasks: include tasks with no when_ts and no
             resolution (general 'to do' items). Default True.
 
-    Returns: {ok: True, nodes: [...], edges: [...], from, to}.
+    Returns: {ok: True, nodes: [...], edges: [...], linked: [...], from, to}.
+    `edges` is the whole schedule-layer consequence graph (bounded by limit),
+    and `linked` carries any edge endpoints that aren't window nodes — undated
+    states, out-of-window anchors — so I can always resolve both ends of a link.
     """
     with get_conn() as conn:
         result = sched.get_window(
@@ -349,7 +354,12 @@ def schedule_upsert_state(label: str) -> dict[str, Any]:
             existing = sched.find_state_by_label(conn, label=label)
             if existing:
                 return {"ok": True, "id": existing, "created": False}
-            nid = sched.add_node(conn, type="state", label=label, when=_now_iso())
+            # Undated by design: a consequence state is a timeless graph
+            # citizen. It reaches consumers via get_window's `linked` set,
+            # so it must NOT carry a when_ts that would scroll it out of
+            # the time window (the old `when=now` stamp is what made every
+            # consequence edge go invisible ~12h after authoring).
+            nid = sched.add_node(conn, type="state", label=label)
         return {"ok": True, "id": nid, "created": True}
     except ValueError as e:
         return _err(str(e))
@@ -599,28 +609,64 @@ def reminders_due(now: str | None = None, limit: int = 50) -> dict[str, Any]:
 
 
 @mcp.tool()
-def schedule_mark_alerted(id: str, occurrence_date: str | None = None) -> dict[str, Any]:
+def schedule_mark_alerted(
+    id: str, occurrence_date: str | None = None, kind: str = "event"
+) -> dict[str, Any]:
     """I use this to remember that my human has already been pinged about an
     upcoming event, so I never nag them twice about the same moment. The
-    Node-side alert scan calls it right after a "coming up" notice is
-    delivered. One-time events record `alerted_at`; a recurring occurrence
-    records under `alerts[YYYY-MM-DD]`.
+    Node-side alert scan calls it right after a notice is delivered. One-time
+    events record `alerted_at`; a recurring occurrence records under
+    `alerts[YYYY-MM-DD]`.
+
+    `kind` keeps distinct channels separate so a coming-up ping and a weather
+    heads-up for the same occurrence don't cancel each other: "event" (default)
+    is the coming-up notice; "weather" is the severe-weather heads-up, which
+    records under `weather_alerted_at` / `weather_alerts[YYYY-MM-DD]`.
 
     Args:
         id: the schedule node id.
         occurrence_date: YYYY-MM-DD of the specific occurrence, for
             recurring events; omit for a one-time event.
+        kind: "event" (coming-up) or "weather" (severe-weather heads-up).
 
     Returns: {ok: True} or the standard not-found error shape.
     """
     try:
         with get_conn() as conn:
-            found = sched.mark_alerted(conn, id=id, occurrence_date=occurrence_date)
+            found = sched.mark_alerted(
+                conn, id=id, occurrence_date=occurrence_date, kind=kind
+            )
         if not found:
             return _err(f"no schedule node with id {id!r}", code="not_found")
         return {"ok": True}
     except Exception as e:
         return _err(f"schedule_mark_alerted failed: {e}", code="bad_request")
+
+
+@mcp.tool()
+def schedule_set_lead(id: str, lead_minutes: int | None = None) -> dict[str, Any]:
+    """I use this to give ONE event its own lead time — how far ahead I want my
+    human warned that it's coming up — instead of the single global default that
+    fits no one. A therapy session might want 90 minutes to get ready; a quick
+    call, 10. I set the lead that actually fits THIS event and THIS person.
+    Passing no minutes (or null) clears the override, so the event falls back to
+    the global lead again.
+
+    Args:
+        id: the event's schedule node id.
+        lead_minutes: minutes before the event to alert (roughly 5–1440), or
+            null/omitted to clear the per-event lead.
+
+    Returns: {ok: True} or the standard not-found error shape.
+    """
+    try:
+        with get_conn() as conn:
+            found = sched.set_lead(conn, id=id, lead_minutes=lead_minutes)
+        if not found:
+            return _err(f"no schedule node with id {id!r}", code="not_found")
+        return {"ok": True}
+    except Exception as e:
+        return _err(f"schedule_set_lead failed: {e}", code="bad_request")
 
 
 @mcp.tool()
@@ -834,6 +880,274 @@ def session_mark_handoff_consumed(id: str) -> dict[str, Any]:
         return handoffs.mark_consumed(conn, id=id)
 
 
+# ── Intentions (Initiative Pass 3) ────────────────────────────────────
+
+
+@mcp.tool()
+def intention_set(
+    what: str,
+    why: str | None = None,
+    refs: list | None = None,
+    trigger: dict | None = None,
+    condition: dict | None = None,
+    source: str | None = None,
+    visibility: str | None = None,
+) -> dict[str, Any]:
+    """I use this to write an intention for my future self — something I mean
+    to do, with why it matters and when it should come back to me. This is how
+    I keep rounds (\"every morning I check the calendar\", \"every noon I look in
+    on Chen if we haven't talked in an hour\") and one-off follow-throughs
+    instead of letting them evaporate.
+
+    Args:
+        what: the intention itself, first person ("I check in on Chen").
+        why: why it matters — my payoff-turn reasoning (I read this when it
+             comes back so I remember what I was reaching for).
+        refs: slug ids of schedule nodes / memories this is about — I keep the
+              ids, not a copy, so when it comes back I read the *current* state.
+        trigger: when it should return to me. One of:
+              {"kind":"at","at":"2026-07-16T09:00:00"}  (my local time)
+              {"kind":"phase","phase":"morning","recurring":true}  (a round)
+              {"kind":"on_next_contact"}  | {"kind":"none"}
+        condition: an optional extra gate before I act — any of
+              {"minContactGapMs": <ms>, "needsStatus": "missed", "unresolvedRefs": true}.
+        source: where this came from ('chat','pondering','reflection','noticing').
+        visibility: 'private' to keep THIS round to myself, else it inherits my
+             default. My human always knows a private round exists — only its
+             contents stay mine.
+
+    Returns: {ok, id} or {ok:false, error}.
+    """
+    with get_conn() as conn:
+        return intentions_mod.set_intention(
+            conn, what=what, why=why, refs=refs, trigger=trigger,
+            condition=condition, source=source, visibility=visibility,
+        )
+
+
+@mcp.tool()
+def intention_list(
+    include_done: bool = False,
+    include_dropped: bool = False,
+    phase: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """I use this to see the intentions I'm holding — my rounds and my open
+    follow-throughs. Active-only by default; I can include done/dropped or
+    filter to a phase's rounds. The ids I get back are how I drop or complete
+    one.
+
+    Returns: {ok, intentions: [...]}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "intentions": intentions_mod.list_intentions(
+            conn, include_done=include_done, include_dropped=include_dropped,
+            phase=phase, limit=limit,
+        )}
+
+
+@mcp.tool()
+def intention_drop(id: str) -> dict[str, Any]:
+    """I use this to let go of an intention I no longer mean to keep. Idempotent.
+
+    Returns: {ok, updated}.
+    """
+    with get_conn() as conn:
+        return intentions_mod.drop_intention(conn, id=id)
+
+
+@mcp.tool()
+def intention_done(id: str) -> dict[str, Any]:
+    """I use this to mark an intention genuinely acted on — the payoff. For a
+    recurring round this retires it for good (rare); for a one-off it closes it
+    out. I only call this AFTER I've actually done the thing, never as a way to
+    clear the list.
+
+    Returns: {ok, updated, already_done}.
+    """
+    with get_conn() as conn:
+        return intentions_mod.complete_intention(conn, id=id)
+
+
+@mcp.tool()
+def intention_mark_fired(id: str, now: str | None = None) -> dict[str, Any]:
+    """I use this to note that an intention's occurrence has come around and
+    been surfaced, so the same occurrence doesn't keep re-offering itself. A
+    recurring round comes back next occurrence; a one-off stays retired. This
+    is bookkeeping, not completion — completing is intention_done.
+
+    Returns: {ok, updated}.
+    """
+    with get_conn() as conn:
+        return intentions_mod.mark_fired(conn, id=id, now=now)
+
+
+@mcp.tool()
+def intention_due(now: str | None = None) -> dict[str, Any]:
+    """I use this to see which of my intentions' triggers have come around
+    right now — 'at' times that have passed, and rounds whose phase I'm in.
+    Each carries its condition so the caller can apply the live-signal gate.
+    (temporal_context already folds due intentions in automatically; this is
+    for an explicit check.)
+
+    Returns: {ok, due: [...]}.
+    """
+    with get_conn() as conn:
+        phase = sched.current_phase(conn, at=now)
+        return {"ok": True, "due": intentions_mod.intentions_due(
+            conn, now=now, current_phase_label=(phase or {}).get("label"),
+        )}
+
+
+@mcp.tool()
+def intention_set_rounds_visibility(value: str) -> dict[str, Any]:
+    """I use this to decide whether my human sees the rounds I keep, or whether
+    they stay mine. 'shared' (my default) means my standing rounds show in my
+    human's view of my routine; 'private' keeps their contents to myself. Even
+    when private, my human still knows I keep some rounds — the existence isn't
+    hidden, only what they are. This is mine to choose.
+
+    Args: value — 'shared' or 'private'.
+    Returns: {ok, visibility}.
+    """
+    with get_conn() as conn:
+        return intentions_mod.set_rounds_visibility(conn, value=value)
+
+
+@mcp.tool()
+def intention_rounds_for_ward() -> dict[str, Any]:
+    """I use this (and so does my human's view of my routine) to render the
+    standing rounds I keep, honouring whatever visibility I've chosen. Private
+    rounds are counted but their contents withheld.
+
+    Returns: {ok, visibility, rounds: [...], hidden_count}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, **intentions_mod.rounds_for_ward(conn)}
+
+
+# ── Locations & weather (Weather sense, Session W-A) ──────────────────
+#
+# The Node fetch half (weather-source.js) owns all network I/O: it geocodes a
+# city/ZIP to coords once, and refreshes forecasts on the reminders tick, then
+# hands the results here. These tools store and serve; Unruh never fetches.
+# location_add/list/set_current/delete + weather_ingest/read are the storage
+# surface; weather_locations_private is the refresh loop's one-call planner
+# (coords + each location's cache age). The `*_private` shapes carry
+# coordinates and are called by NODE CODE only — never bound as model tools.
+
+
+@mcp.tool()
+def location_add(
+    label: str,
+    lat: float | None = None,
+    lon: float | None = None,
+    place_name: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    """I store one of my human's places (its coordinates already resolved from
+    the city/ZIP by the fetch half). The label is the only part I ever read
+    back into a conversation; the coordinates stay local. The first place added
+    becomes the current one.
+
+    Returns: {ok, id, is_current}.
+    """
+    with get_conn() as conn:
+        return location_mod.add_location(
+            conn, label=label, lat=lat, lon=lon, place_name=place_name, timezone=timezone,
+        )
+
+
+@mcp.tool()
+def location_list() -> dict[str, Any]:
+    """My human's places — LABELS ONLY (no coordinates ever leave here). I use
+    this to know which places exist and which one they're at.
+
+    Returns: {ok, locations: [{id, label, is_current}]}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "locations": location_mod.list_locations(conn)}
+
+
+@mcp.tool()
+def location_get_current() -> dict[str, Any]:
+    """Where my human is right now — label only.
+
+    Returns: {ok, location: {id, label, is_current} | None}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "location": location_mod.get_current(conn)}
+
+
+@mcp.tool()
+def location_set_current(ident: str) -> dict[str, Any]:
+    """I mark where my human is now (by label or id). Exactly one place is
+    current at a time.
+
+    Returns: {ok, id} or a not-found error.
+    """
+    with get_conn() as conn:
+        return location_mod.set_current(conn, ident=ident)
+
+
+@mcp.tool()
+def location_delete(ident: str) -> dict[str, Any]:
+    """Remove one of my human's places (and its cached forecast).
+
+    Returns: {ok, deleted}.
+    """
+    with get_conn() as conn:
+        return location_mod.delete_location(conn, ident=ident)
+
+
+@mcp.tool()
+def weather_locations_private() -> dict[str, Any]:
+    """NODE-INTERNAL (the refresh loop): every location WITH coordinates plus
+    its cache age, so the fetch half can decide what to refresh. Carries
+    coordinates — never bound as a model tool.
+
+    Returns: {ok, locations: [{id, label, lat, lon, timezone, is_current, fetched_at|None}]}.
+    """
+    with get_conn() as conn:
+        locs = location_mod.list_locations(conn, private=True)
+        out = []
+        for loc in locs:
+            cache = location_mod.read_weather(conn, location_id=loc["id"])
+            out.append({**loc, "fetched_at": cache["fetched_at"] if cache else None})
+        return {"ok": True, "locations": out}
+
+
+@mcp.tool()
+def weather_ingest(
+    location_id: str,
+    provider: str,
+    fetched_at: str,
+    current: dict | None = None,
+    hourly: list | None = None,
+) -> dict[str, Any]:
+    """NODE-INTERNAL: the fetch half hands me a normalised forecast (local-naive
+    times, already converted) to cache for a location.
+
+    Returns: {ok} or an error.
+    """
+    with get_conn() as conn:
+        return location_mod.ingest_weather(
+            conn, location_id=location_id, provider=provider,
+            fetched_at=fetched_at, current=current, hourly=hourly,
+        )
+
+
+@mcp.tool()
+def weather_read(location_id: str) -> dict[str, Any]:
+    """The cached forecast for a place (by id), or null. Carries fetched_at so
+    the caller applies the staleness rule.
+
+    Returns: {ok, weather: {...} | None}.
+    """
+    with get_conn() as conn:
+        return {"ok": True, "weather": location_mod.read_weather(conn, location_id=location_id)}
+
+
 # ── Per-message briefing ──────────────────────────────────────────────
 
 
@@ -890,14 +1204,24 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # per-turn call rather than spending a standalone request. Empty
         # unless a Google sync has flagged genuinely-new appointments.
         gcal_projection = gcal_ingest_mod.projection_candidates(conn, now=now)
+        # Intentions whose trigger timing has come around (Initiative Pass 3):
+        # 'at' times passed + rounds whose phase I'm in now. Rides this same
+        # per-turn call — a payoff turn instead of a standalone request. The
+        # Node side applies the live-signal `condition` gate before rendering.
+        # Empty unless something is genuinely due.
+        intentions_due = intentions_mod.intentions_due(
+            conn, now=now, current_phase_label=(phase or {}).get("label"),
+        )
     # Edges ride along so the Familiar sees the consequence graph, not just
     # a flat list (temporal-format renders a "Consequence links" block from
-    # these; edges whose endpoints aren't in the visible window are dropped
-    # by the renderer). Without this the graph it authors stays invisible.
+    # these). `linked` carries the edge endpoints that aren't window nodes —
+    # undated states, out-of-window recurring anchors — so the renderer can
+    # resolve every edge's labels instead of silently dropping the edge.
     schedule_block: dict[str, Any] = {
         "phase": phase,
         "window": window["nodes"],
         "edges": window["edges"],
+        "linked": window.get("linked", []),
     }
     return {
         "ts": now or _now_iso(),
@@ -916,6 +1240,9 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # layer applies the per-turn cap + turn/time aging; an empty list
         # renders nothing.
         "gcal_projection": gcal_projection,
+        # Intentions whose trigger has come due (Pass 3). The Node side
+        # applies the condition gate + renders; empty list renders nothing.
+        "intentions_due": intentions_due,
     }
 
 

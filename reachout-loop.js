@@ -25,7 +25,15 @@
  * Ward-recent-activity is NOT a hard gate — it's passed to the LLM as
  * context. The model won't banner someone who's right here, but it can
  * still reach a warm villager. ("Trust the model to decide from context.")
+ *
+ * Wait-streak (initiative-build-spec Pass 1): a deliberated 'wait'
+ * increments the streak; a reach_out decision (either target) resets it
+ * at decision time. Gate-skipped ticks (crisis-defer, quiet hours,
+ * cooldown) never touch it — I was never asked (invariant W1). Recording
+ * is fire-and-forget and can never change an outcome (invariant W5).
  */
+
+import { getWaitStreak, recordWait, recordProactive, isWaitStreakEnabled } from './wait-streak.js';
 
 const DEFAULT_TICK_MS = 10 * 60_000;     // 10 min — warmth doesn't need a fast pulse
 
@@ -71,6 +79,10 @@ export async function runOneReachoutTick({
   deliverWardKnock,      // async ({ message, tell }) => { ok, deduped? }
   deliverVillagerReach,  // async ({ villager, message }) => { ok, error? }
   now = Date.now,
+  // Wait-streak recording (injectable for tests; defaults never throw).
+  getWaitStreakFn   = () => (isWaitStreakEnabled() ? getWaitStreak() : null),
+  recordWaitFn      = recordWait,
+  recordProactiveFn = recordProactive,
 }) {
   for (const [name, fn] of Object.entries({ getThreat, getLastActivity, decideReachout, deliverWardKnock, deliverVillagerReach })) {
     if (typeof fn !== 'function') throw new Error(`${name} is required`);
@@ -107,6 +119,11 @@ export async function runOneReachoutTick({
     (typeof getWarmVillagers === 'function' ? getWarmVillagers().catch(() => []) : Promise.resolve([])),
   ]);
 
+  // Streak value at deliberation time — the same state the prompt line was
+  // rendered from; recording happens only after the decision returns.
+  let streakAtDecision = null;
+  try { streakAtDecision = getWaitStreakFn()?.count ?? null; } catch { /* never gates warmth */ }
+
   const decision = await decideReachout({ pendingTells, warmVillagers, wardSilenceMs });
 
   // Set the cool-down regardless of outcome — the LLM has spoken.
@@ -114,14 +131,20 @@ export async function runOneReachoutTick({
   _nextAllowedTickTs = nowMs + cooldownMs;
 
   if (!decision || decision.action !== 'reach_out' || !decision.message) {
-    return { acted: false, reason: 'llm_said_wait', decision, nextCheckInMs: cooldownMs, at: nowMs };
+    // Offered the choice, chose to wait — increment (fire-and-forget).
+    Promise.resolve(recordWaitFn('warmth')).catch(() => {});
+    return { acted: false, reason: 'llm_said_wait', decision, streakAtDecision, nextCheckInMs: cooldownMs, at: nowMs };
   }
+
+  // A reach_out decision (either target) resets the streak at decision
+  // time — delivery state is the outbox's concern, not the streak's.
+  Promise.resolve(recordProactiveFn('warmth')).catch(() => {});
 
   if (decision.target === 'villager') {
     const villager = warmVillagers.find(v => v.id === decision.villagerId);
     if (!villager) {
       // The LLM named someone not on the warm list — refuse, don't guess.
-      return { acted: false, reason: 'unknown_villager', decision, nextCheckInMs: cooldownMs, at: nowMs };
+      return { acted: false, reason: 'unknown_villager', decision, streakAtDecision, nextCheckInMs: cooldownMs, at: nowMs };
     }
     const res = await deliverVillagerReach({ villager, message: decision.message }).catch(err => ({ ok: false, error: err?.message }));
     return {
@@ -129,6 +152,7 @@ export async function runOneReachoutTick({
       reason: res?.ok ? 'reached_villager' : 'delivery_failed',
       decision, target: 'villager', villager: { id: villager.id, name: villager.name },
       error:  res?.ok ? undefined : (res?.error ?? 'unknown'),
+      streakAtDecision,
       nextCheckInMs: cooldownMs, at: nowMs,
     };
   }
@@ -142,6 +166,7 @@ export async function runOneReachoutTick({
     acted:  !!res?.ok && !res?.deduped,
     reason: !res?.ok ? 'delivery_failed' : (res?.deduped ? 'rate_limited' : 'reached_ward'),
     decision, target: 'ward',
+    streakAtDecision,
     nextCheckInMs: cooldownMs, at: nowMs,
   };
 }
