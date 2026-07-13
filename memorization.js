@@ -56,28 +56,52 @@ export function wardStandingActive(wardStanding, category, nowMs = Date.now()) {
   return typeof until === 'number' && until > nowMs;
 }
 
-// Resolve the effective gate for a fact. When no villager subject matched,
-// the fact is about my human themselves → the ward remember map gates it, and an
-// open standing-consent window promotes that category's 'ask' to auto-confirm.
-// Otherwise the most restrictive map among the matched villagers wins
-// (false beats ask beats true).
-export function resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding = null) {
-  if (!subjectVillagers || subjectVillagers.length === 0) {
-    const gate = gateForCategory(category, wardRemember);
-    // Standing consent only ever RELAXES an 'ask' to auto-confirm — it never
-    // overrides an explicit 'false' (never store) or touches 'true'.
-    if (gate === 'ask' && wardStandingActive(wardStanding, category)) return 'true';
+// Resolve the effective gate for a fact. Consent is source-aware: WHO the fact
+// is about and WHETHER my human told me directly both matter, not the category
+// alone. The shape my human asked for:
+//
+//   • A fact about a registered villager (subjectVillagers non-empty) → their
+//     own remember map gates it; a third person's private life is asked for
+//     regardless of channel. Most restrictive villager wins (false > ask > true).
+//   • A fact about a NAMED-but-unregistered third party (hasNamedSubjects) →
+//     their private life is asked for too; direct-channel implied consent never
+//     sweeps a stranger's sensitive info in.
+//   • A fact about my human themselves (no named subjects), told to me DIRECTLY
+//     (a DM or the web chat — direct=true) → implied consent: they told me on
+//     purpose, so I keep it without asking. This is the default; an EXPLICIT
+//     ward setting still wins (an explicit 'ask' still asks, 'false' never
+//     stores) — implied consent only fills the UNSET default.
+//   • The same fact heard INDIRECTLY (a group room — direct=false) → asked for,
+//     as before. Standing consent still relaxes an 'ask' to auto-confirm.
+export function resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding = null, opts = {}) {
+  const { direct = false, hasNamedSubjects = false } = opts;
+  if (subjectVillagers && subjectVillagers.length > 0) {
+    let gate = 'true';
+    for (const v of subjectVillagers) {
+      const vGate = gateForCategory(category, v.remember);
+      if (vGate === 'false') return 'false';
+      // Standing mutual consent (my human AND this person both agreed) clears the
+      // per-fact `ask` for them — but never overrides an explicit `false` above.
+      if (vGate === 'ask' && !standingConsentActive(v)) gate = 'ask';
+    }
     return gate;
   }
-  let gate = 'true';
-  for (const v of subjectVillagers) {
-    const vGate = gateForCategory(category, v.remember);
-    if (vGate === 'false') return 'false';
-    // Standing mutual consent (my human AND this person both agreed) clears the
-    // per-fact `ask` for them — but never overrides an explicit `false` above.
-    if (vGate === 'ask' && !standingConsentActive(v)) gate = 'ask';
-  }
-  return gate;
+  // No registered villager subject.
+  const explicit = !!wardRemember && Object.prototype.hasOwnProperty.call(wardRemember, category);
+  const gate = gateForCategory(category, wardRemember);
+  if (gate === 'false') return 'false';   // explicit 'never store' always wins
+  if (gate === 'true')  return 'true';
+  // gate === 'ask' from here.
+  // A named-but-unregistered third party's private life: always ask. Never let
+  // direct-channel implied consent or the ward's own standing window store a
+  // stranger's sensitive fact without review.
+  if (hasNamedSubjects) return 'ask';
+  // About my human (or me) themselves. Told directly → implied consent, but only
+  // over the DEFAULT ask — an explicit ward 'ask' still asks.
+  if (direct && !explicit) return 'true';
+  // Standing consent only ever RELAXES an 'ask' to auto-confirm.
+  if (wardStandingActive(wardStanding, category)) return 'true';
+  return 'ask';
 }
 
 mkdirSync(TOMES_DIR, { recursive: true });
@@ -220,6 +244,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "content":    "A first-person note stating one fact clearly (1–2 sentences max).",
       "category":   "emotional_content",
       "subjects":   ["Alice"],
+      "temporality": "episodic",
       "confidence": 0.85${scheduleFieldLine}
     }
   ],
@@ -249,6 +274,17 @@ category — pick exactly one from this list:
 
 subjects — list the NAMES of the people the fact is about (first name or how I know them).
   Empty list [] means the fact is about me or my human in general (no specific third party).
+
+temporality — is this something that HAPPENED, or something that's just TRUE now?
+  "episodic" — I experienced or was told this on this day: a mood, an event, what
+    happened, how they felt today, a one-off. It belongs to the date of the
+    conversation and I'll find it later under "what was going on around then".
+  "standing" — a fact that is generally true right now, not tied to a day: a job,
+    a diagnosis, where someone lives, a lasting preference, a relationship. It's
+    part of the standing picture of who they are, and I keep it as a fact I hold,
+    not as a memory of a particular day.
+  When it's genuinely both or I'm unsure, I choose "episodic" — a dated memory is
+    the safe default; the standing truth can surface from it later.
 
 confidence — 0.0 to 1.0. How certain am I that this fact is accurate and not misread?
   I omit facts with confidence below 0.4.
@@ -301,6 +337,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "content":    "A first-person note about my human or myself (1–2 sentences max).",
       "category":   "emotional_content",
       "subjects":   [],
+      "temporality": "episodic",
       "confidence": 0.85
     }
   ],
@@ -330,6 +367,10 @@ category — pick exactly one:
 
 subjects — list REGISTERED names only. Use [] for facts about my human or me in general.
   Do NOT name unregistered strangers — just skip facts that are purely about them.
+
+temporality — "episodic" if I experienced/heard it on this day (a mood, an event,
+  what happened); "standing" if it's a fact that's just generally true now (a job,
+  where they live, a lasting preference). Unsure or both → "episodic".
 
 confidence — 0.0 to 1.0. I omit facts below 0.4.
 
@@ -637,6 +678,12 @@ async function processJob(job) {
   const wardStanding = await getStandingConsent().catch(() => ({}));
 
   const audience = job.audienceTag ?? 'ward-private';
+  // Did my human tell me this DIRECTLY — a DM or the web chat, just the two of
+  // us? Then keeping it is implied consent: they said it to me on purpose. A
+  // shared room (any non-ward-private tag) is indirect — I heard it, I wasn't
+  // told it, so those facts still get a check-in. This is the axis the consent
+  // gate turns on, alongside who the fact is about.
+  const direct = audience === 'ward-private';
   // The day this slice actually belongs to. Day-scoped jobs (segmentByDay) carry
   // the calendar date as topicId — pass it as the memory's date_key so a slice
   // from an older conversation files under ITS day, not today. Without this every
@@ -655,15 +702,26 @@ async function processJob(job) {
     const category = REMEMBER_CATS.includes(fact.category) ? fact.category : 'basics';
     const subjectNames = Array.isArray(fact.subjects) ? fact.subjects : [];
 
-    // Resolve names to villagers
-    const subjectVillagers = subjectNames
-      .map(n => byName.get(String(n).toLowerCase()))
+    // Names other than my human. My human's own name never reads as a "third
+    // party" even if the model lists it — an empty namedOthers means the fact is
+    // about them (or me), which is what earns direct-channel implied consent.
+    const namedOthers = subjectNames
+      .map(n => String(n).trim())
+      .filter(n => n && n.toLowerCase() !== wardName.toLowerCase());
+    const hasNamedSubjects = namedOthers.length > 0;
+
+    // Resolve the named others to registered villagers (unregistered names drop
+    // out — a stranger the fact is about, gated as a third party below).
+    const subjectVillagers = namedOthers
+      .map(n => byName.get(n.toLowerCase()))
       .filter(Boolean);
     const subjectIds = [...new Set(subjectVillagers.map(v => v.id))];
 
-    // Apply the remember gate (ward map for self-facts, most-restrictive
-    // villager map for facts about others).
-    const gate = resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding);
+    // Source-aware consent: a fact my human told me directly about themselves is
+    // kept on implied consent; a third person's private life, or anything heard
+    // in a group room, still asks.
+    const gate = resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding,
+      { direct, hasNamedSubjects });
     if (gate === 'false') continue; // drop silently
 
     // Derive WHERE this fact may surface (audience), in code — the extractor is
@@ -673,13 +731,22 @@ async function processJob(job) {
       category, subjects: subjectVillagers, sessionTag: audience, registry,
     });
 
-    // Discrete session facts land at the `daily` tier — the doc's baseline for
-    // conversation-derived memory — but as STANDALONE rows so each keeps its own
-    // category / subjects / consent. They then consolidate (daily→weekly→…) and
-    // decay like daily memory should, instead of every fact being mis-filed as a
-    // permanent `significant` milestone (which bypasses consolidation and was a
-    // root cause of the consent-queue pile-up). `significant` is reserved for
-    // genuine milestones the Familiar marks deliberately via save_memory.
+    // Temporality decides the storage tier — the distinction my human asked for
+    // between "I experienced this that day" and "this is just generally true now":
+    //   • episodic → the `daily` tier, STANDALONE + dated. Each fact keeps its own
+    //     category / subjects / consent, then consolidates (daily→weekly→…) and
+    //     decays like a memory of a day should. This is the safe default.
+    //   • standing → a durable fact, not a memory of a day. A standing fact about
+    //     my human themselves lives on their `ward` standing register (recalled
+    //     when relevant, never day-bucketed); a standing fact about a specific
+    //     person is a durable person-attached fact. Both use `significant` so
+    //     they skip daily consolidation/decay. (`significant` stays reserved from
+    //     the always-on surface — these are recalled, not injected every turn.)
+    const standing = fact.temporality === 'standing';
+    const storage = standing
+      ? { granularity: 'significant', standalone: true, date: factDate,
+          ...(hasNamedSubjects ? {} : { register: 'ward' }) }
+      : { granularity: 'daily', standalone: true, date: factDate };
     const slug = `fact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     // Validate the model's schedule_refs in CODE against the legend it was
     // shown — a cited id survives only if it's a real node id. The model
@@ -688,9 +755,7 @@ async function processJob(job) {
     const scheduleRefs = [...new Set(rawRefs.map(String).filter(id => validScheduleIds.has(id)))];
     const result = await createMemoryFull({
       content,
-      granularity: 'daily',
-      standalone: true,
-      date: factDate,
+      ...storage,
       audience: factAudience,
       subjects: subjectIds,
       category,
@@ -711,10 +776,18 @@ async function processJob(job) {
       pendingConsent.push({
         id: result.id,
         brief: content.slice(0, 120),
-        villagerName: subjectVillagers.map(v => v.name).join(', ') || '(no specific person)',
+        villagerName: subjectVillagers.map(v => v.name).join(', ')
+          || (hasNamedSubjects ? namedOthers.join(', ') : '(no specific person)'),
         villagerId: subjectIds[0] ?? null,
         category,
         sessionId: job.sessionId,
+        // Context so the ask isn't detached from time or reason (my human found
+        // date-less, unexplained asks confusing). `date` = the day the fact is
+        // from; `reason` = WHY it needs review rather than being kept on implied
+        // consent: a group room, or a third person's private life.
+        date: factDate ?? new Date().toISOString().slice(0, 10),
+        reason: !direct ? 'shared-room' : (hasNamedSubjects ? 'third-party' : 'ask'),
+        standing,
       });
     }
     created++;

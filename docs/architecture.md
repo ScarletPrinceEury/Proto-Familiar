@@ -149,7 +149,7 @@ ponderings injection, care-check framing) and as background loops
 ├── discord-gateway.js       Discord gateway adapter (V4+V5+V6) — bot-token WebSocket presence; DM policy + mention-only guild replies, per-location sessions, V3 gate applied before every reply; V5: per-location connection routing (location.connectionId → settings.connections → primary fallback) + hourly token-bucket rate limiting (tomes/.rate-limits.json, ward outbox notice on exhaustion); V6: relayToDiscord() REST send (DM-open or channel post) backing the relay_message tool; off-switch PROTO_FAMILIAR_DISCORD_DISABLED=1
 ├── knocks.js                Village knock list (V4.x) — contact attempts from unregistered people, captured for one-click registration in the Village editor; tomes/.village-knocks.json, capped, metadata only
 ├── injection-guard.js       Prompt injection immunization — pattern scanner + sanitizer (span-surgical, conservative false-positive budget; escape-tolerant bracket markers). WIRED (0.8.57) at the two genuinely-external inbound boundaries: web text (websearch.js — search titles/snippets, look_up reference text, read_webpage extraction; URLs deliberately untouched) and Village communications (discord-gateway.js inboundContent() — villager/stranger text only). The ward's OWN words are never sanitized on any path (threat scoring must read them raw; a redacted distress line could read as a jailbreak to triage), and no OUTBOUND path (replies, relay_message, relay_to_ward, trusted-contact delivery) passes through it — the guard is inbound-third-party-only, which is what keeps relay and triage structurally unblockable by it. NOT applied to Phylactery/Unruh recall (first-party stores; villager-written memories carry provenance labels instead) or gcal event titles (the ward's own calendar)
-├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail
+├── memorization.js          Persistent per-session memorization queue + worker; V7: buildSharedRoomPrompt variant selected when audienceTag !== 'ward-private' — focuses on ward-only facts, skips unregistered-third-party detail. Source-aware consent (0.8.88): direct ward-self facts kept on implied consent, only third-party/group-room facts ask; extractor tags temporality (episodic→daily dated / standing→ward register)
 ├── outgoing-filter.js       Pillar D outgoing gate — semantic check before delivery; retries up to budget then safe-refusal
 ├── providers.js             Shared chat-completions URL map (used by server.js + thalamus.js)
 ├── llm-call.js              One chat-completion call for the autonomous background loops (pondering / reach-out / memorization / tome-graduation) — replaces four byte-identical `defaultCallLLM` copies. THINKING-MODEL handling lives here: a reasoning model bills its chain-of-thought against `max_tokens`, so a small cap returned an empty `message.content` (the "Provider returned empty content" the loops logged). `callProviderChat` uses a generous default cap (free for non-thinking models — they stop when done), falls back to `reasoning_content`/`reasoning` when `content` is empty (`extractContent`, shared with memorization which keeps its own finish_reason handling), and throws a diagnostic naming `finish_reason` (=length → raise the cap) instead of a bare mystery. The safety-critical triage call in `cerebellum.js` (silence-triage) now routes through this too (ward-signed, 0.8.82): its cap was 600 with no reasoning handling, and its empty-content path returns `action:'wait'` — so a thinking model there degraded to a SILENT no-op on a distressed ward (the 1.5-hour-silence class). The call now uses `callProviderChat` (cap 4000 + reasoning recovery); the decision logic is unchanged — a genuine transient failure still degrades to the safe `wait`, never a fabricated decision
@@ -952,9 +952,38 @@ exponential backoff, idempotent enqueue on
 `sessionId+scope+topicId+messageRange`.
 
 **Extraction** uses a per-fact format: LLM returns
-`{facts: [{content, category, subjects, confidence}], relations: [{from, fromType, type, to, toType}]}`
-where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`.
+`{facts: [{content, category, subjects, temporality, confidence}], relations: [{from, fromType, type, to, toType}]}`
+where `category` ∈ `basics | emotional_content | health_info | relationships | whereabouts`
+and `temporality` ∈ `episodic | standing` (default `episodic` when unsure).
 Facts with `confidence < 0.4` are silently skipped.
+
+**Source-aware consent (0.8.88).** The remember gate keys on WHO a fact is about
+and WHETHER my human told me directly — not category alone. `resolveRememberGate`
+takes `{direct, hasNamedSubjects}`:
+- **Direct + about my human themselves** (a DM / web chat, `audienceTag ===
+  'ward-private'`, no named third party) → **implied consent**: kept without
+  asking. They told me on purpose. This only fills the UNSET default — an
+  explicit ward `ask`/`false` in the remember map still wins.
+- **A third person's private life** (a registered villager subject, or any
+  named-but-unregistered person via `hasNamedSubjects`) → still asks for
+  sensitive categories, whatever the channel. A stranger's sensitive fact is
+  never swept in by implied consent.
+- **Indirect** (a group room, `direct=false`) → asks, as before.
+
+This is what stops the confusing flood of date-less asks for things my human
+said to me directly. The `[PENDING MEMORY CONSENT]` block now carries each
+item's `date` and a `reason` (`shared-room` / `third-party`) so the ask is
+explained and time-anchored, and the block states up front that directly-told
+self-facts are already kept.
+
+**Temporality → storage tier.** `episodic` facts land at `daily` (standalone,
+dated — the memory of a day, consolidates + decays). `standing` facts are
+"generally true now", not a memory of a day: a standing fact about my human goes
+on the **`ward` register** (`register` passthrough in `createMemoryFull` →
+`significant`, recalled-when-relevant, never day-bucketed); a standing fact about
+a specific person is a durable `significant` person-attached row. The extractor
+tags temporality, so a fact already knows whether it's dated or standing before
+it's stored.
 
 **Shared graph rubric (`graph-vocab.js`, 0.7.63).** What earns a node/edge is defined
 **once** and read by every surface that creates one: the entity-type vocabulary
