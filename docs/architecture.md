@@ -554,10 +554,25 @@ re-check (`resetTriageCooldown`), and — on a villager-triggered flag — alway
 mirrors to the ward (`enqueueAndDispatch`, no covert safety action). It sends
 nothing itself; triage owns what care actually lands.
 
-**`pondering.js`** — pure `ponderOnce({topic, provider, apiKey, model})`
-that calls the LLM as the Familiar and writes a real first-person tome
-entry to "Familiar's Ponderings" (entries are `enabled: false` so they
-don't auto-fire as RAG lore — they're inspectable artifacts).
+**`pondering.js`** — pure `ponderOnce({topic, provider, apiKey, model,
+grounding})` that calls the LLM as the Familiar and writes a real
+first-person tome entry to "Familiar's Ponderings" (entries are
+`enabled: false` so they don't auto-fire as RAG lore — they're
+inspectable artifacts). **Grounded pondering (0.8.85):** for an interest
+ponder, `runPonder` (server.js) first recalls what the Familiar actually
+knows — a `searchMemory` on the topic + recent ponderings on the SAME
+topic (from `getRecentPonderings`, matched on the stored `topic_pondered`)
+— and passes it as `grounding`. `buildGroundingBlock` turns that into a
+prompt section: the recalled memories are "the grounded truth I draw on"
+(so it doesn't muse from the outside about something its human has a real
+relationship to — the confident-wrong-AURORA case), and recent same-topic
+ponders become "I already turned this over, so I do NOT reach out asking
+the same question a third morning in a row" (the repeated-reach-out case).
+No memories recalled → an honest "I don't hold anything concrete about
+this yet, so the ponder is the pull and what I'd want to ASK" note, which
+steers to not-knowing over confabulation. Best-effort: one cheap recall
+that degrades to an ungrounded ponder; reflection mode is already grounded
+(windowMemories) and is skipped.
 
 **`recent-ponderings.js`** — reads the N most recent pondering entries
 within sinceDays and formats them as a prompt-injection block. Also

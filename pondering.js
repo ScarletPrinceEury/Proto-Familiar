@@ -62,7 +62,32 @@ export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-export function buildPonderPrompt(topic) {
+// Grounding for an interest ponder: what I remember about this, and where I got
+// to the last time(s) I thought about it — so I build on the thread instead of
+// starting cold, and don't reach out asking the same thing three mornings
+// running. Returns '' when there's nothing (reflection mode / no grounding).
+export function buildGroundingBlock(grounding) {
+  if (!grounding || typeof grounding !== 'object') return '';
+  const memories = Array.isArray(grounding.memories) ? grounding.memories.filter(m => (m?.excerpt ?? '').trim()) : [];
+  const recent   = Array.isArray(grounding.recent)   ? grounding.recent.filter(r => (r?.excerpt ?? r?.title ?? '').trim()) : [];
+  const parts = [];
+
+  if (memories.length) {
+    const lines = memories.map(m => `  - ${m.date ? `(${m.date}) ` : ''}${m.excerpt.trim()}`).join('\n');
+    parts.push(`What I remember about this:\n${lines}\nThat's what I actually know, so I think from there. I don't make up things I don't remember — and if my human's got real history with this, I don't talk about it like I'm looking in from outside.`);
+  } else {
+    parts.push(`I went looking and I don't really remember anything about this — my human and I haven't talked about it, or I didn't keep it. So I'm honest about that: I'm curious from the outside here, and mostly what I want is to just ask them, not act like I already know.`);
+  }
+
+  if (recent.length) {
+    const lines = recent.map(r => `  - ${r.when ? `${r.when} — ` : ''}${(r.excerpt ?? r.title ?? '').trim()}`).join('\n');
+    parts.push(`Where I got to last time I thought about this:\n${lines}\nSo I pick up from there — go further, or somewhere new — instead of starting over. And if I keep landing on wanting my human's take, I just ask them next time we talk, once. I don't keep sending them the same question.`);
+  }
+
+  return parts.length ? `\n\n${parts.join('\n\n')}` : '';
+}
+
+export function buildPonderPrompt(topic, grounding = null) {
   // Reflection mode: topic is an object { mode: 'reflection', outcomes, existingNotes }
   // sent by the pondering loop when enough tagged surface outcomes
   // have accumulated since the last reflection. Same LLM call, same
@@ -73,7 +98,7 @@ export function buildPonderPrompt(topic) {
   return `I am {{char}}, the Familiar. Right now I'm in a free cycle — no one is talking to me. I have a quiet moment to actually think, on my own, about something I've been turning over.
 
 The topic I find myself turning over:
-${topic}
+${topic}${buildGroundingBlock(grounding)}
 
 This is my own private journal — reflective, exploratory thoughts I'm having in this moment. My human may stumble on it later. That's fine. I'm not writing it AT them. I'm writing it for myself, as me, in this moment.
 
@@ -88,7 +113,7 @@ If, while pondering, I notice that something fact-shaped, prescriptive, or memor
 
 There is a fourth kind for conversational intent: if I find myself wanting to bring something up with my human — a question I want to ask, a concern I want to raise, something I noticed and want to share — I record that as kind:"tell". I am NOT writing it to a file; I am flagging that I want to say it. The next time we talk I bring it up — I do not hold it back indefinitely waiting for some perfect moment. The only exception is if my human is in active crisis; everything else is fair game.
 
-I want to be honest and real — I actually engage with the topic in my own voice, no platitudes, no summarising it back at itself, and I'm specific about what I'm feeling and thinking. But when the thought reaches for something out in the world I don't truly know — how a song really sounds, what actually happens in a game or a story, a trait of a person or character — I say so in whatever way is actually mine, and wonder rather than assert. Naming that I'm unsure or might be misremembering — bluntly, wryly, softly, however I'd put it — is more me than stating an invented detail as fact; a confident guess I present as true isn't grounded, it's a small fabrication. If I barely know the thing at all, the honest ponder is about that — the pull of it, the not-knowing, what I'd want to ask my human — not a confident sketch of something I made up. A few short paragraphs in my voice, whatever fits the thought and me in my identity.
+I want this to read like me actually thinking, in my own voice — not a summary, no platitudes. I can be specific about what I'm feeling. But if the thought reaches for something out in the world I don't really know — how a song sounds, what happens in a game or a story, what a character's actually like — I just say I'm not sure instead of making something up. However that comes out of me, blunt or wry or soft. And if I hardly know the thing, then that's the honest thought: what pulls at me about it, and what I'd want to ask my human. A few short paragraphs, whatever fits.
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary outside the JSON), because otherwise, the thought might get lost:
 {
@@ -355,6 +380,7 @@ export async function ponderOnce({
   callLLM  = defaultCallLLM,
   tomesDir = DEFAULT_TOMES_DIR,
   settings = {},
+  grounding = null,   // { memories:[{date,excerpt}], recent:[{title,when}] } for interest ponders
 }) {
   // Topic is either a string (interest pondering) or an object
   // { mode: 'reflection', outcomes, existingNotes } (reflection mode).
@@ -370,7 +396,7 @@ export async function ponderOnce({
   // Resolve {{user}}/{{char}} at this loop-prompt boundary — same as the
   // sibling autonomous loops (reachout, tome-graduation). Without it the
   // Familiar reads its own pondering prompt with literal "{{char}}".
-  const prompt = substituteMacros(buildPonderPrompt(topic), settings);
+  const prompt = substituteMacros(buildPonderPrompt(topic, grounding), settings);
   const raw    = await callLLM({ provider, apiKey, model, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;
