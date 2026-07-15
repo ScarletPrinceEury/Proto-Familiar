@@ -6002,6 +6002,13 @@ async function buildDiagnosticReport() {
   catch { add('timezone',    '?'); }
 
   section('Proto-Familiar');
+  // The running server version — the first thing to check when a fix "isn't
+  // working": an install that can't self-update is often simply on old code.
+  try {
+    const vr = await fetch('/api/version', { cache: 'no-store' });
+    const vd = vr.ok ? await vr.json() : null;
+    add('app version',       vd?.version ?? '(endpoint present but no version)');
+  } catch { add('app version', '(unreachable / old build without /api/version)'); }
   add('url',                 location.href);
   add('provider',            state.provider ?? '?');
   add('model',               state.model ?? '?');

@@ -42,7 +42,9 @@ REM the tracked PID and the port owner) so the update can proceed cleanly.
 set "PF_PORT=8742"
 if not "%PROTO_FAMILIAR_PORT%"=="" set "PF_PORT=%PROTO_FAMILIAR_PORT%"
 for /f %%R in ('powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]'%PF_PORT%'); $c.Close(); 'busy' } catch { 'free' }" 2^>nul') do set "PORT_STATE=%%R"
+set "WAS_RUNNING=0"
 if "%PORT_STATE%"=="busy" (
+  set "WAS_RUNNING=1"
   echo Proto-Familiar is still running on port %PF_PORT% — stopping it
   echo before applying the update so file replacements can land...
   call "%DEST%\stop.bat" >nul 2>nul
@@ -123,8 +125,21 @@ REM the "not a git checkout - use update.bat" warning back at us.
 set "PF_FROM_UPDATER=1"
 call "%DEST%\install.bat"
 
-echo.
-echo === Update complete. Restart Proto-Familiar to use the new version. ===
+REM Restart the server if it was running before the update, so the new code
+REM actually takes effect (a stopped-but-not-restarted install leaves the ward
+REM staring at an app that never comes back, or an old process if they relaunch
+REM the wrong way). start.bat launches a fresh server and reopens the browser.
+if "%WAS_RUNNING%"=="1" (
+  echo.
+  echo Restarting Proto-Familiar so the new version takes effect...
+  call "%DEST%\start.bat"
+  echo.
+  echo === Update complete - Proto-Familiar restarted on the new version. ===
+  echo     Reload the browser tab if it doesn't refresh on its own.
+) else (
+  echo.
+  echo === Update complete. Start Proto-Familiar to use the new version. ===
+)
 echo.
 pause
 endlocal
