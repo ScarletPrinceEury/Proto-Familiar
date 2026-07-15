@@ -328,7 +328,7 @@ test('open tasks show how long they have floated (created_at age)', () => {
   assert.match(out, /file the housing form \(floating 12d — no time set\)/);
 });
 
-test('upcoming items grouped under their own header with type tag', () => {
+test('today\'s timed items grouped under "Still to come today" with type tag', () => {
   const t = new Date(); t.setHours(15, 0, 0, 0);
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
@@ -336,9 +336,20 @@ test('upcoming items grouped under their own header with type tag', () => {
       { type: 'task',  when: t.toISOString(), label: 'reply to Sam' },
     ]},
   });
-  assert.match(out, /Upcoming in this window:/);
+  assert.match(out, /Still to come today:/);
   assert.match(out, /\[event\] dentist/);
   assert.match(out, /\[task\] reply to Sam/);
+});
+
+test('future-day timed items go under "Coming days", not the today header', () => {
+  const soon = new Date(Date.now() + 3 * 24 * 3600 * 1000); soon.setHours(15, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: soon.toISOString(), label: 'far-event' },
+    ]},
+  });
+  assert.match(out, /Coming days:[\s\S]*far-event/);
+  assert.equal(/Still to come today:/.test(out), false);
 });
 
 test('reminders get their own "set to fire" header', () => {
@@ -352,17 +363,61 @@ test('reminders get their own "set to fire" header', () => {
   assert.match(out, /take meds/);
 });
 
-test('resolved items grouped under "Recently resolved" header (not mixed with upcoming)', () => {
+test('a RECENTLY-resolved item shows under its own header, apart from upcoming', () => {
   const t = new Date(); t.setHours(15, 0, 0, 0);
-  const t2 = new Date(); t2.setHours(11, 0, 0, 0);
+  const justNow = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // resolved 1h ago
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
-      { type: 'task', when: t.toISOString(),  label: 'upcoming-thing' },
-      { type: 'task', when: t2.toISOString(), label: 'past-thing', resolution: 'done' },
+      { type: 'task', when: t.toISOString(), label: 'upcoming-thing' },
+      { type: 'task', when: t.toISOString(), label: 'past-thing', resolution: 'done', updated_at: justNow },
     ]},
   });
-  assert.match(out, /Upcoming in this window:[\s\S]*upcoming-thing/);
-  assert.match(out, /Recently resolved in this window:[\s\S]*past-thing \[done\]/);
+  assert.match(out, /Still to come today:[\s\S]*upcoming-thing/);
+  assert.match(out, /Just wrapped up \(recent\):[\s\S]*past-thing \[done\]/);
+});
+
+test('a CANCELLED item is dropped from the briefing entirely', () => {
+  const justNow = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: justNow, label: 'therapy-cancelled', resolution: 'cancelled', updated_at: justNow },
+    ]},
+  });
+  assert.equal(out.includes('therapy-cancelled'), false);
+  assert.equal(/Just wrapped up/.test(out), false);
+});
+
+test('a resolution older than the recent window is not shown', () => {
+  const old = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString(); // 30h ago
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'task', when: old, label: 'done-yesterday', resolution: 'done', updated_at: old },
+    ]},
+  });
+  assert.equal(out.includes('done-yesterday'), false);
+});
+
+test('a future-dated resolution (e.g. a cancelled future occurrence) is not shown', () => {
+  const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: future, label: 'future-done', resolution: 'done' },
+    ]},
+  });
+  assert.equal(out.includes('future-done'), false);
+});
+
+test('exact duplicates (same label + time) render once, not two or three times', () => {
+  const t = new Date(); t.setHours(15, 0, 0, 0);
+  const iso = t.toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: iso, label: 'HEART' },
+      { type: 'event', when: iso, label: 'HEART' },
+      { type: 'event', when: iso, label: 'HEART' },
+    ]},
+  });
+  assert.equal((out.match(/HEART/g) || []).length, 1);
 });
 
 test('past-date phase rows in schedule.window do NOT pollute the schedule sections', () => {
@@ -415,6 +470,33 @@ test("today's rhythm: current phase is marked '← I am here'", () => {
   assert.equal(/afternoon work.*← I am here/.test(out), false);
 });
 
+test("today's rhythm marks non-current phases as past or upcoming", () => {
+  const out = formatTemporalContext({
+    schedule: { phase: { id: 'p2', label: 'now-phase', when: '2026-03-14T10:00:00', end: '2026-03-14T13:00:00' }, window: [] },
+    routine: [
+      { id: 'p1', label: 'first-phase', when: '2026-03-14T06:00:00', end: '2026-03-14T09:00:00' },
+      { id: 'p2', label: 'now-phase',   when: '2026-03-14T10:00:00', end: '2026-03-14T13:00:00' },
+      { id: 'p3', label: 'last-phase',  when: '2026-03-14T20:00:00', end: '2026-03-14T22:00:00' },
+    ],
+  });
+  assert.match(out, /now-phase.*← I am here/);
+  // The non-current phases carry a relative marker rather than a bare line.
+  assert.match(out, /first-phase\s+·\s+(begins in|ended|earlier)/);
+  assert.match(out, /last-phase\s+·\s+(begins in|ended|earlier)/);
+});
+
+test("today's rhythm salvages HH:MM from a legacy UTC-artifact phase time", () => {
+  // Old, date-less, offset-stamped values ("T13:00:00+00:00") must not leak raw.
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [] },
+    routine: [
+      { id: 'x', label: 'artifact-phase', when: 'T13:00:00+00:00', end: 'T18:00:00+00:00' },
+    ],
+  });
+  assert.match(out, /13:00–18:00\s+artifact-phase/);
+  assert.equal(out.includes('T13:00:00+00:00'), false);
+});
+
 test("today's rhythm: phases sorted by local time-of-day, not by stored date", () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [] },
@@ -431,11 +513,11 @@ test("today's rhythm: phases sorted by local time-of-day, not by stored date", (
   assert.ok(iEarly < iNoon && iNoon < iLate, `order should be early→noon→late, got ${iEarly}/${iNoon}/${iLate}`);
 });
 
-test('renders resolution badge on resolved items', () => {
-  const t = new Date(); t.setHours(15, 0, 0, 0);
+test('renders resolution badge on a recently-resolved item', () => {
+  const justNow = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1h ago
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
-      { when: t.toISOString(), label: 'laundry', resolution: 'done' },
+      { when: justNow, label: 'laundry', resolution: 'done', updated_at: justNow },
     ]},
   });
   assert.match(out, /laundry \[done\]/);
