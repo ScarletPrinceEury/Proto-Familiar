@@ -66,10 +66,25 @@ function formatIntentionCondition(condition) {
   return parts.join(' and ');
 }
 
+// Salvage a wall-clock "HH:MM" out of a time string Date can't parse — a bare
+// "23:00:00", or a legacy UTC artifact like "T13:00:00+00:00" (an old
+// offset-stamped, date-less value from before the local-naive migration). The
+// offset is dropped on purpose: routine phases are the ward's local wall-clock,
+// so 13:00 is what they configured. Returns null if there's no HH:MM to find.
+function hhmmFromString(s) {
+  const m = String(s).match(/(?:^|T)(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return `${String(parseInt(m[1], 10)).padStart(2, '0')}:${m[2]}`;
+}
+
 function formatLocalTime(iso, opts = {}) {
   if (!iso) return '';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  if (Number.isNaN(d.getTime())) {
+    // Unparseable (a date-less "HH:MM:SS" or a mangled "T…+00:00" artifact).
+    // Salvage the wall-clock HH:MM so the rhythm never leaks a raw token.
+    return hhmmFromString(iso) || iso;
+  }
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   const hhmm = `${hh}:${mm}`;
@@ -157,22 +172,40 @@ export function formatTemporalContext(payload) {
   const phase = schedule.phase;
   const routine = Array.isArray(payload.routine) ? payload.routine : [];
   if (routine.length) {
+    // Minute-of-day for a phase's start/end, robust to the date-less/artifact
+    // time strings (falls back to the salvaged HH:MM). -1 when nothing parses.
+    const minsOfDay = (whenStr) => {
+      const d = new Date(whenStr);
+      if (!Number.isNaN(d.getTime())) return d.getHours() * 60 + d.getMinutes();
+      const hhmm = hhmmFromString(whenStr);
+      if (!hhmm) return -1;
+      const [h, m] = hhmm.split(':').map(Number);
+      return h * 60 + m;
+    };
+    const nowD = new Date();
+    const nowMins = nowD.getHours() * 60 + nowD.getMinutes();
+    const durMarker = (mins) => {
+      if (mins < 60) return `${mins}min`;
+      const h = Math.floor(mins / 60), m = mins % 60;
+      return m ? `${h}h ${m}min` : `${h}h`;
+    };
     const rhythm = routine
       .slice()
-      .map(p => {
-        const d = new Date(p.when || 0);
-        const mins = Number.isFinite(d.getTime())
-          ? d.getHours() * 60 + d.getMinutes()
-          : -1;
-        return { p, mins };
-      })
-      .sort((a, b) => a.mins - b.mins)
-      .map(({ p }) => {
+      .map(p => ({ p, startMins: minsOfDay(p.when), endMins: minsOfDay(p.end) }))
+      .sort((a, b) => a.startMins - b.startMins)
+      .map(({ p, startMins, endMins }) => {
         const start = formatLocalTime(p.when, { timeOnly: true });
         const end   = formatLocalTime(p.end,  { timeOnly: true });
-        const here  = phase && p.id === phase.id ? '  ← I am here' : '';
         const texture = p.payload?.texture ? ` — ${p.payload.texture}` : '';
-        return `  ${start}–${end}  ${p.label ?? p.id}${texture}${here}`;
+        // Where this phase sits relative to now, so passed and upcoming phases
+        // read as such instead of a flat list. The current phase (Unruh's own
+        // time-of-day computation) wins; otherwise start-of-day ordering decides.
+        let marker;
+        if (phase && p.id === phase.id) marker = '  ← I am here';
+        else if (startMins > nowMins) marker = `  · begins in ${durMarker(startMins - nowMins)}`;
+        else if (endMins >= 0 && endMins <= nowMins) marker = `  · ended ${durMarker(nowMins - endMins)} ago`;
+        else marker = '  · earlier today';
+        return `  ${start}–${end}  ${p.label ?? p.id}${texture}${marker}`;
       });
     blocks.push(["Today's rhythm:", ...rhythm].join('\n'));
   }
@@ -184,18 +217,43 @@ export function formatTemporalContext(payload) {
     // unresolved), open tasks (my human committed to these, no time
     // yet, not done), resolved (recently terminal — usually noise
     // but useful when the Familiar wants to acknowledge a finish).
+    const nowMs = Date.now();
+    const nowDate = new Date(nowMs);
+    // A cancelled item, or one resolved more than this long ago, is noise in the
+    // briefing — it surfaces only if my human brings it up. Keep "recently
+    // resolved" to GENUINELY recent finishes, never a future or days-old one.
+    const RESOLVE_RECENT_MS = 12 * 3600 * 1000;
+    const resolvedRecently = (item) => {
+      const ts = item.updated_at ? Date.parse(item.updated_at)
+               : item.when ? Date.parse(item.when) : NaN;
+      if (!Number.isFinite(ts)) return false;      // no signal → don't clutter
+      const age = nowMs - ts;
+      return age >= 0 && age <= RESOLVE_RECENT_MS; // recent PAST only
+    };
+    // Collapse exact duplicates (same label at the same time) — a Google-synced
+    // node next to a hand-added twin shouldn't render two or three times.
+    const seen = new Set();
+    const isDup = (item) => {
+      const key = `${(item.label ?? item.id ?? '').toLowerCase()}|${item.when ?? item.fires_at ?? ''}`;
+      if (seen.has(key)) return true;
+      seen.add(key);
+      return false;
+    };
+
     const upcoming  = [];
     const openTasks = [];
     const reminders = [];
     const resolved  = [];
     for (const item of window) {
-      // Skip the phase that's already shown as "Current phase" — no
-      // need to repeat it as a separate line.
-      if (item.type === 'phase' && phase && item.id === phase.id) continue;
-      // Other phases (past/future date stamps) — skip; they live in
-      // their own Routine surface, not the briefing.
+      // Phases live in "Today's rhythm", never repeated here.
       if (item.type === 'phase') continue;
-      if (item.resolution) { resolved.push(item); continue; }
+      if (item.resolution) {
+        // Cancelled leaves the briefing entirely; other resolutions show only
+        // while genuinely recent (and never a future occurrence).
+        if (item.resolution !== 'cancelled' && resolvedRecently(item) && !isDup(item)) resolved.push(item);
+        continue;
+      }
+      if (isDup(item)) continue;
       if (item.type === 'reminder') { reminders.push(item); continue; }
       if (item.when || item.end) { upcoming.push(item); continue; }
       // type=='task' with no when_ts → open task on the radar.
@@ -205,9 +263,8 @@ export function formatTemporalContext(payload) {
     // Each timed item is rendered through relativeTime() so the
     // Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30
     // minutes" rather than an ISO timestamp. Recomputed every turn
-    // against `nowMs`, which is the same moment used for "Now" at the
-    // top of dynamic — the model perceives a consistent present.
-    const nowMs = Date.now();
+    // against `nowMs` (defined above), the same moment used for "Now" at
+    // the top of dynamic — the model perceives a consistent present.
     const renderWhen = (whenIso) => {
       if (!whenIso) return '';
       const rel = relativeTime(whenIso, nowMs);
@@ -229,17 +286,33 @@ export function formatTemporalContext(payload) {
       const t = Array.isArray(item.payload?.obstacle_tags) ? item.payload.obstacle_tags.filter(Boolean) : [];
       return t.length ? ` ⟨${t.join(', ')}⟩` : '';
     };
-    if (upcoming.length) {
-      schedLines.push('Upcoming in this window:');
-      for (const item of upcoming) {
-        const when = renderWhen(item.when ?? item.fires_at ?? '');
-        const whenText = when ? `${when} — ` : '';
-        const type = item.type ? `[${item.type}] ` : '';
-        // 📅 marks an item the Google-Calendar sync manages (§5) — the
-        // Familiar can tell which fields aren't its to hand-edit; a shared
-        // calendar also names whose it is.
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}${obstacleSuffix(item)}`);
-      }
+    // Split what's still to come TODAY from future days, so a day-away event is
+    // never read as happening in the current phase/window. Each line still
+    // carries its own relative time ("tomorrow at 3:30pm", "in 6 days").
+    const isToday = (whenIso) => {
+      const d = new Date(whenIso);
+      if (Number.isNaN(d.getTime())) return false;
+      return d.getFullYear() === nowDate.getFullYear()
+        && d.getMonth() === nowDate.getMonth() && d.getDate() === nowDate.getDate();
+    };
+    const renderTimed = (item) => {
+      const when = renderWhen(item.when ?? item.fires_at ?? '');
+      const whenText = when ? `${when} — ` : '';
+      const type = item.type ? `[${item.type}] ` : '';
+      // 📅 marks an item the Google-Calendar sync manages (§5) — the Familiar
+      // can tell which fields aren't its to hand-edit; a shared calendar also
+      // names whose it is.
+      return `  ${whenText}${type}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}${obstacleSuffix(item)}`;
+    };
+    const laterToday = upcoming.filter(it => isToday(it.when ?? it.fires_at ?? ''));
+    const comingDays = upcoming.filter(it => !isToday(it.when ?? it.fires_at ?? ''));
+    if (laterToday.length) {
+      schedLines.push('Still to come today:');
+      for (const item of laterToday) schedLines.push(renderTimed(item));
+    }
+    if (comingDays.length) {
+      schedLines.push('Coming days:');
+      for (const item of comingDays) schedLines.push(renderTimed(item));
     }
     if (reminders.length) {
       schedLines.push('Reminders set to fire:');
@@ -268,7 +341,7 @@ export function formatTemporalContext(payload) {
       }
     }
     if (resolved.length) {
-      schedLines.push('Recently resolved in this window:');
+      schedLines.push('Just wrapped up (recent):');
       for (const item of resolved) {
         const when = renderWhen(item.when ?? item.fires_at ?? '');
         const whenText = when ? `${when} — ` : '';
