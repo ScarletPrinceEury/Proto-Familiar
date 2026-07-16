@@ -35,6 +35,12 @@ sources:
   - id: relative-time-js
     type: file
     path: relative-time.js
+  - id: unruh-db
+    type: file
+    path: unruh/src/unruh/db.py
+  - id: unruh-gcal
+    type: file
+    path: unruh/src/unruh/gcal.py
 ---
 
 # Unruh
@@ -147,6 +153,22 @@ spring-forward gap or the fall-back overlap is ambiguous, roughly ±1 hour, twic
 [@unruh-design]. Pre-migration UTC-stored rows are healed once by `db.migrate_timestamps_to_local`
 on first connect [@unruh-design].
 
+### Healing malformed schedule times
+
+Some rows slipped through the one-time UTC migration, chiefly legacy date-less, offset-stamped
+times like `'T13:00:00+00:00'` (with no calendar date) that `datetime.fromisoformat` cannot parse
+[@unruh-db]. These are now repaired by `heal_malformed_schedule_times()` which runs on every
+database connection. The healer is idempotent by design: it only rewrites values that actually
+change, so a healed row is never touched again and there is no flag to set prematurely — which
+is exactly why these artifacts survived the one-time flag-gated migration [@unruh-db]. The
+healer is cheap (schedule nodes number in the dozens) and firing-neutral: it makes stored times
+more correct, never changes which items fire or when [@unruh-db].
+
+The healer salvages the wall-clock HH:MM from unparseable legacy times by anchoring them to the
+node's `created_at` date (with offset dropped) — routine phases are the ward's local wall-clock,
+not absolute times [@unruh-db]. A display-level salvage pass, `formatLocalTime` in the temporal
+briefing, complements the db-level healer for any time still unparseable at render [@temporal-format-js].
+
 ## Reminders and threat both ride the same "decaying persistent variable" shape
 
 Threat level — the scalar that drives silence-triage urgency (see
@@ -200,6 +222,29 @@ the shipped code currently names, and neither is implemented [@fable-review-conv
 Neither mechanic exists in `threat-tracker.js` or the schedule tools today; both are recorded
 here as unshipped design intent so a future implementer does not have to re-derive the
 frog-boiling failure mode from scratch.
+
+## Google Calendar adoption: merging hand-added nodes
+
+The [Autonomous loops](autonomous-loops) Google Calendar sync loop reconciles schedule nodes
+by UID. A hand-added node (created by the ward directly in the schedule) has no `gcal_uid`,
+so uid-keyed reconcile never matches it — when the same event is later synced from Google
+Calendar, the sync would create a parallel second node instead of recognizing the existing
+one [@unruh-gcal]. This was the root cause of the "one 📅 twin + one plain twin" duplicate
+pairs.
+
+The fix, `_adopt_hand_added_twin()`, runs before `gcal_ingest` creates a new node
+[@unruh-gcal]. It looks for an existing schedule node with the exact same title and exact
+local-naive time, no `gcal_uid` (not already synced), and no resolution (unresolved). If found,
+the adoption merges the nodes: the node keeps its id and consequence edges, and gains the sync
+payload (`source='gcal'`, the uid, and related metadata), so from the next sync forward it is
+the one managed node for that event [@unruh-gcal]. The match is strict (title and time must be
+exact, both unresolved, not already synced) to prevent genuinely-distinct items from being
+conflated [@unruh-gcal].
+
+This is the data-layer adoption. The display layer already had two redundant dedup passes
+before this fix: `dedupe_gcal_nodes` (gcal-vs-gcal dedup) and `display-level dedup` in the
+temporal briefing (display-time exact-duplicate suppression) — those remain and still serve as
+safeguards [@temporal-format-js] [@unruh-gcal].
 
 ## The temporal briefing display: pure derivation, safe to edit
 
