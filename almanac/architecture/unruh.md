@@ -11,9 +11,6 @@ sources:
   - id: unruh-design
     type: file
     path: docs/unruh-design.md
-  - id: unruh-dir
-    type: file
-    path: unruh/
   - id: phylactery-design
     type: file
     path: docs/phylactery-design.md
@@ -32,12 +29,18 @@ sources:
   - id: reminders-loop-js
     type: file
     path: reminders-loop.js
+  - id: temporal-format-js
+    type: file
+    path: temporal-format.js
+  - id: relative-time-js
+    type: file
+    path: relative-time.js
 ---
 
 # Unruh
 
 Unruh is Proto-Familiar's in-tree Python/uv MCP specialist for temporal context: schedule,
-interests, handoff between sessions, ponderings, and threat level [@claude-md] [@unruh-dir].
+interests, handoff between sessions, ponderings, and threat level [@claude-md] [@unruh-design].
 Where [Phylactery](phylactery) holds who the Familiar is, Unruh holds how time flows around
 them and what they are currently oriented toward within that time — the design document
 frames this as the difference between time as coordinates ("it is 10:07") and time as lived
@@ -197,6 +200,20 @@ the shipped code currently names, and neither is implemented [@fable-review-conv
 Neither mechanic exists in `threat-tracker.js` or the schedule tools today; both are recorded
 here as unshipped design intent so a future implementer does not have to re-derive the
 frog-boiling failure mode from scratch.
+
+## The temporal briefing display: pure derivation, safe to edit
+
+The `[Temporal Context]` block that appears in every turn's prompt is built from Unruh's schedule graph via `buildTimeAnchorBlock()` in `relative-time.js`, then formatted for readability by `temporal-format.js` [@temporal-format-js] [@relative-time-js]. This display layer is pure derivation — all transformation, no new data — so changes to display hygiene, filtering, or formatting are safe to make without ward sign-off [@claude-md].
+
+The display pipeline applies three filters and a dedup pass to the raw schedule events [@temporal-format-js]:
+
+1. **Cancellation filter** — Cancelled items leave the briefing entirely. A cancelled event produces no line.
+2. **Recency filter for resolved items** — Resolved items (status="completed" or "cancelled") show only if their `updated_at` is recent (within 12 hours). Old resolved items disappear from briefing after enough time has passed.
+3. **Phase-marking and time formatting** — Non-current phases are marked with "· begins in …" / "· ended … ago" to distinguish them from active phases. Times are formatted via `formatLocalTime`, which salvages a wall-clock HH:MM from unparseable or legacy time strings (it drops timezone offsets and falls back to the time alone). This was added to handle pre-migration UTC-stored artifacts and buggy UTC-to-local conversions from earlier versions [@temporal-format-js] [@claude-md].
+4. **Timed-item split** — Items with a specific time are split into "Still to come today" (today's tasks) vs "Coming days" (later dates), while all-day or time-unspecified items remain grouped together.
+5. **Display-level dedup** — Exact duplicate detection at the display level (a separate pass from data-layer dedup). This handles cases like a Google-synced node plus a hand-added identical task showing up in both the schedule and a manual entry — one is shown, duplicates are suppressed [@temporal-format-js].
+
+All of these are transformation-only; no events are deleted or modified in the underlying data. The Temporal Context block is a view, not a mutating operation. A change to any of these filters is safe for the same reason weather display changes are safe: it is pure code-side derivation, not a decision point that changes the Familiar's reasoning [@claude-md].
 
 ## Related
 

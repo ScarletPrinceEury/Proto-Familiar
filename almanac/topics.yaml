@@ -63,3 +63,15 @@ topics:
     title: Weather
     description: Ward-local weather sense, provider chain, and location privacy
     parents: [architecture]
+  - slug: update
+    title: Update
+    description: Self-update mechanism (git vs download modes, web UI, Discord command)
+    parents: [architecture, installer]
+  - slug: data-ingestion
+    title: Data Ingestion
+    description: Foreign log import (ChatGPT, SillyTavern, OpenClaw), format parsing
+    parents: [architecture]
+  - slug: pondering
+    title: Pondering
+    description: Autonomous pondering loop, thought format, interest-weighted cadence
+    parents: [architecture, autonomous-loops]
