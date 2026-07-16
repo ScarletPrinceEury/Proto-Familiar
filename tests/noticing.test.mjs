@@ -82,6 +82,16 @@ test('gather: readiness gaps and aging intents wake', () => {
   assert.equal(g.conditions.filter(c => c.kind === 'aging_intent').length, 1);
 });
 
+test('gather: aging floating tasks and overdue events wake', () => {
+  const g = gatherWakeConditions({
+    agingTasks: [{ id: 't1', label: 'file the housing form', created_at: '2026-06-01T09:00:00' }],
+    overdueEvents: [{ id: 'ev1', label: 'Therapy 2nd session', when: '2026-07-02T15:00:00' }],
+  });
+  assert.equal(g.any, true);
+  assert.equal(g.conditions.filter(c => c.kind === 'aging_task').length, 1);
+  assert.equal(g.conditions.filter(c => c.kind === 'overdue_event').length, 1);
+});
+
 // ── buildSituationReport ─────────────────────────────────────────────
 
 test('report: renders each kind, caps at 5, due intentions first', () => {
@@ -98,6 +108,17 @@ test('report: renders each kind, caps at 5, due intentions first', () => {
   assert.match(lines[0], /intention of mine has come due: reach Chen/);
   assert.match(lines[0], /because it has been a while/);
   assert.match(lines.join('\n'), /past our usual weekday rhythm/);
+});
+
+test('report: overdue event and aging task render with the right framing', () => {
+  const lines = buildSituationReport([
+    { kind: 'overdue_event', event: { id: 'ev1', label: 'Therapy 2nd session', when: '2020-01-01T15:00:00' } },
+    { kind: 'aging_task', task: { id: 't1', label: 'housing form', created_at: '2020-01-01T09:00:00' } },
+  ], { relInterval: (ms) => `${Math.round(ms / HOUR)}h` });
+  const joined = lines.join('\n');
+  assert.match(joined, /came and went and I never recorded how it went: Therapy 2nd session/);
+  assert.match(joined, /asking my human how it turned out/);   // asks, never assumes done/missed
+  assert.match(joined, /floated without a time.*housing form/);
 });
 
 // ── buildNoticingPrompt ──────────────────────────────────────────────

@@ -51,7 +51,7 @@ import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
 import { startNoticingLoop } from './noticing-loop.js';
-import { buildNoticingPrompt, AGING_INTENT_MS } from './noticing.js';
+import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './noticing.js';
 import { getContactBaseline, weekdayClass } from './contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
 import {
@@ -4294,6 +4294,9 @@ async function gatherNoticingWakeInputs() {
   const contactGapMs = lastAct?.ms ? Math.max(0, nowMs - lastAct.ms) : null;
   const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
   const edges = Array.isArray(win?.edges) ? win.edges : [];
+  // Edge endpoints outside the time window (undated states, PAST events that
+  // carry consequence edges — a two-week-old therapy appointment rides here).
+  const linked = Array.isArray(win?.linked) ? win.linked : [];
   // Read-only readiness detection — fresh flaggedAt so we NEVER consume the
   // stewardship loop's own cooldown state; noticing only *notices* the gap.
   const readiness = selectReadiness({ items: nodes, edges, nowMs, wardTimeZone: tz, leadHours, flaggedAt: {}, max: 2 });
@@ -4306,6 +4309,28 @@ async function gatherNoticingWakeInputs() {
   const agingTells = (Array.isArray(tells) ? tells : []).filter(t => t.kind === 'tell');
   const agingIntents = [...untriggered, ...agingTells].slice(0, 3);
 
+  // Aging floating tasks — my human's, no time set, unresolved, drifting past
+  // the aging threshold. Floating tasks ride in `nodes` regardless of the time
+  // window (get_window UNIONs them), so this catches the "28-day task nobody
+  // surfaced" case. Capped for legibility.
+  const agingTasks = nodes.filter(n =>
+    n?.type === 'task' && !n.when && !n.resolution
+    && n.created_at && (nowMs - Date.parse(n.created_at) > AGING_TASK_MS)
+  ).slice(0, 3);
+
+  // Overdue events — an appointment whose time has passed and I never recorded
+  // how it went. Recently-past ones are in `nodes`; older edge-bearing ones (the
+  // therapy 2 weeks ago) ride in `linked`. Scoping to what's reachable naturally
+  // limits this to events that MATTER (carry consequences), not every past speck.
+  const seenOverdue = new Set();
+  const overdueEvents = [...nodes, ...linked].filter(n => {
+    if (n?.type !== 'event' || n.resolution || !n.id || seenOverdue.has(n.id)) return false;
+    const t = Date.parse(n.end || n.when || '');
+    if (!Number.isFinite(t) || t >= nowMs - OVERDUE_EVENT_GRACE_MS) return false;
+    seenOverdue.add(n.id);
+    return true;
+  }).slice(0, 3);
+
   return {
     dueIntentions: Array.isArray(dueRes?.due) ? dueRes.due : [],
     // Live signals for the condition code-gate. contactGapMs is wired;
@@ -4316,6 +4341,8 @@ async function gatherNoticingWakeInputs() {
     contactGapMs,
     readiness,
     agingIntents,
+    agingTasks,
+    overdueEvents,
     weekdayClass: weekdayClass(nowMs, tz),
   };
 }

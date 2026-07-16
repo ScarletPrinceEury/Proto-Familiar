@@ -42,6 +42,17 @@
 // "aging" — worth a look so it doesn't rot silently.
 export const AGING_INTENT_MS = 5 * 24 * 60 * 60_000;   // 5 days
 
+// A FLOATING task (my human's, no time set, unresolved) older than this is
+// aging — it's been drifting long enough to be worth a gentle nudge (pin a
+// time, do it, or check whether it's still wanted). A touch more grace than my
+// own intentions: it's their commitment, not mine.
+export const AGING_TASK_MS = 7 * 24 * 60 * 60_000;     // 7 days
+
+// A past EVENT still unresolved this long after its time is OVERDUE — it came
+// and went and I never recorded how it went, so it lingers as "open" and its
+// consequences never get graded. I don't assume done/missed; I ask and record.
+export const OVERDUE_EVENT_GRACE_MS = 6 * 60 * 60_000; // 6 hours
+
 /**
  * Evaluate a due intention's `condition` tripwire against live signals.
  * Returns true when the intention may act (no condition, or every present
@@ -88,6 +99,8 @@ function toSet(v) {
  * @param {number} p.contactGapMs    current ms since last ward contact
  * @param {Array}  p.readiness       stewardship selectReadiness output
  * @param {Array}  p.agingIntents    intentions/tells older than AGING_INTENT_MS
+ * @param {Array}  p.agingTasks      floating ward tasks older than AGING_TASK_MS
+ * @param {Array}  p.overdueEvents   past unresolved events (edge-bearing) to record
  * @param {string} p.weekdayClass    'weekday'|'weekend' for baseline lookup
  */
 export function gatherWakeConditions({
@@ -97,12 +110,18 @@ export function gatherWakeConditions({
   contactGapMs = null,
   readiness = [],
   agingIntents = [],
+  agingTasks = [],
+  overdueEvents = [],
   weekdayClass = 'weekday',
 } = {}) {
   const conditions = [];
 
   const dueReady = dueIntentions.filter(i => conditionPasses(i.condition, signals));
   for (const i of dueReady) conditions.push({ kind: 'due_intention', intention: i });
+
+  // A past appointment I never recorded the outcome of — worth asking about so
+  // it stops living as "open" and its consequences can finally be graded.
+  for (const e of overdueEvents) conditions.push({ kind: 'overdue_event', event: e });
 
   // Contact gap past the baseline p90 for this weekday-class — a deviation
   // from our normal rhythm worth noticing.
@@ -113,6 +132,8 @@ export function gatherWakeConditions({
 
   for (const r of readiness) conditions.push({ kind: 'readiness_gap', item: r });
   for (const a of agingIntents) conditions.push({ kind: 'aging_intent', intent: a });
+  // A floating task of my human's that's been drifting without a time.
+  for (const t of agingTasks) conditions.push({ kind: 'aging_task', task: t });
 
   return { any: conditions.length > 0, conditions };
 }
@@ -131,7 +152,10 @@ export const SITUATION_REPORT_CAP = 5;
 export function buildSituationReport(conditions, { relInterval } = {}) {
   const fmt = typeof relInterval === 'function' ? relInterval : (ms) => `${Math.round(ms / 60000)}min`;
   const lines = [];
-  const order = { due_intention: 0, rhythm_deviation: 1, readiness_gap: 2, aging_intent: 3 };
+  const order = {
+    due_intention: 0, overdue_event: 1, rhythm_deviation: 2,
+    readiness_gap: 3, aging_intent: 4, aging_task: 5,
+  };
   const sorted = conditions.slice().sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
   for (const c of sorted) {
     if (lines.length >= SITUATION_REPORT_CAP) break;
@@ -139,6 +163,10 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
       const it = c.intention;
       const why = it.why ? ` (I set this because ${it.why})` : '';
       lines.push(`- An intention of mine has come due: ${it.what}${why} [id ${it.id}]`);
+    } else if (c.kind === 'overdue_event') {
+      const e = c.event;
+      const when = e.when ? ` (was ${fmt(Math.max(0, Date.now() - Date.parse(e.end || e.when)))} ago)` : '';
+      lines.push(`- An event came and went and I never recorded how it went: ${e.label ?? e.id}${when}. Worth asking my human how it turned out, so I can mark it and stop carrying it as open.`);
     } else if (c.kind === 'rhythm_deviation') {
       lines.push(`- We're past our usual ${c.weekdayClass} rhythm — it's been ${fmt(c.contactGapMs)} since my human was last around, and our longest ordinary gap lately is about ${fmt(c.p90GapMs)}.`);
     } else if (c.kind === 'readiness_gap') {
@@ -147,6 +175,10 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
     } else if (c.kind === 'aging_intent') {
       const a = c.intent;
       lines.push(`- Something I meant to get to is aging: ${a.what ?? a.summary ?? a.label ?? a.id}.`);
+    } else if (c.kind === 'aging_task') {
+      const t = c.task;
+      const age = t.created_at ? fmt(Math.max(0, Date.now() - Date.parse(t.created_at))) : 'a while';
+      lines.push(`- A task I've been holding has floated without a time for ${age}: ${t.label ?? t.id}. Worth pinning a time, doing it, or checking whether it's still wanted.`);
     }
   }
   return lines;
