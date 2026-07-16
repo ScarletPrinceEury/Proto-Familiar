@@ -72,6 +72,11 @@ export const TOOL_MODULES = {
   acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
   graduation_acknowledge: 'acks',
+  // Reading my own recent thought in full — the expand path for the pondering
+  // index, which renders on every ward turn, so the tool must always be reachable
+  // (like recall). Ward-only: it's absent from the villager allowlist, so a
+  // villager can never read my private ponderings through it.
+  read_pondering: 'core',
 
   list_files: 'files', read_file: 'files',
 

@@ -262,3 +262,45 @@ class TestLocalZone:
         assert zone_berlin is not None
         assert zone_ny is not None
         assert str(zone_berlin) != str(zone_ny)
+
+
+class TestHealMalformedScheduleTimes:
+    """Repair of legacy date-less / offset-stamped schedule times (the
+    "T13:00:00+00:00" artifacts that leaked raw into the temporal briefing)."""
+
+    def _phase(self, conn, node_id, when_ts, end_ts, created="2026-07-01T09:00:00"):
+        conn.execute(
+            "INSERT INTO nodes (id, layer, type, label, when_ts, end_ts, created_at, updated_at) "
+            "VALUES (?, 'schedule', 'phase', 'Sweep', ?, ?, ?, ?)",
+            (node_id, when_ts, end_ts, created, created),
+        )
+        conn.commit()
+
+    def test_salvages_dateless_utc_artifact(self, tmp_path):
+        conn = db.get_conn(tmp_path / "u.db")
+        self._phase(conn, "p1", "T13:00:00+00:00", "T18:00:00+00:00")
+        n = db.heal_malformed_schedule_times(conn)
+        assert n == 1
+        row = conn.execute("SELECT when_ts, end_ts FROM nodes WHERE id='p1'").fetchone()
+        assert row["when_ts"] == "2026-07-01T13:00:00"   # wall-clock kept, offset dropped, dated
+        assert row["end_ts"] == "2026-07-01T18:00:00"
+
+    def test_salvages_bare_time_string(self, tmp_path):
+        conn = db.get_conn(tmp_path / "u.db")
+        self._phase(conn, "p2", "23:00:00", None)
+        db.heal_malformed_schedule_times(conn)
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id='p2'").fetchone()
+        assert row["when_ts"] == "2026-07-01T23:00:00"
+
+    def test_is_idempotent(self, tmp_path):
+        conn = db.get_conn(tmp_path / "u.db")
+        self._phase(conn, "p3", "T13:00:00+00:00", None)
+        assert db.heal_malformed_schedule_times(conn) == 1
+        assert db.heal_malformed_schedule_times(conn) == 0   # already clean
+
+    def test_leaves_clean_local_naive_untouched(self, tmp_path):
+        conn = db.get_conn(tmp_path / "u.db")
+        self._phase(conn, "p4", "2026-07-01T10:00:00", "2026-07-01T11:00:00")
+        assert db.heal_malformed_schedule_times(conn) == 0
+        row = conn.execute("SELECT when_ts FROM nodes WHERE id='p4'").fetchone()
+        assert row["when_ts"] == "2026-07-01T10:00:00"

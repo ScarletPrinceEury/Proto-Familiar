@@ -107,19 +107,32 @@ test('renders standing values without weights', () => {
   assert.doesNotMatch(out, /\[\d/);
 });
 
-test('renders live interests with weight to 2dp', () => {
+test('renders live interests as plain labels (no numeric weight), heaviest first', () => {
   const out = formatTemporalContext({
     interests: {
       standing: [],
       live: [
-        { label: 'owl feather aerodynamics', weight: 0.7432 },
         { label: 'biomimetic engineering', weight: 0.31 },
+        { label: 'owl feather aerodynamics', weight: 0.7432 },
       ],
     },
   });
-  assert.match(out, /Live interests \(by weight\):/);
-  assert.match(out, /owl feather aerodynamics \[0\.74\]/);
-  assert.match(out, /biomimetic engineering \[0\.31\]/);
+  assert.match(out, /Lately I keep being drawn to think about:/);
+  // Labels present, weights gone.
+  assert.match(out, /owl feather aerodynamics/);
+  assert.match(out, /biomimetic engineering/);
+  assert.equal(/\[0\.\d\d\]/.test(out), false);
+  // Sorted by weight desc regardless of input order.
+  assert.ok(out.indexOf('owl feather') < out.indexOf('biomimetic'));
+});
+
+test('live interests are capped so the surface stays light', () => {
+  const live = Array.from({ length: 12 }, (_, n) => ({ label: `topic-${n}`, weight: 1 - n * 0.05 }));
+  const out = formatTemporalContext({ interests: { standing: [], live } });
+  const shown = (out.match(/topic-\d+/g) || []).length;
+  assert.ok(shown <= 6, `expected at most 6 interests shown, got ${shown}`);
+  assert.match(out, /topic-0/);            // the heaviest is kept
+  assert.equal(out.includes('topic-11'), false); // the lightest is trimmed
 });
 
 test('falls back to id when label missing', () => {

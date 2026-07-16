@@ -447,11 +447,15 @@ export function formatTemporalContext(payload) {
       for (const v of standing) interestLines.push(`  ${v.label ?? v}`);
     }
     if (live.length) {
-      interestLines.push('Live interests (by weight):');
-      for (const i of live) {
-        const w = typeof i.weight === 'number' ? ` [${i.weight.toFixed(2)}]` : '';
-        interestLines.push(`  ${i.label ?? i.id}${w}`);
-      }
+      // These feed the pondering loop — they're what I keep being drawn to think
+      // about, character not task. The raw engagement WEIGHT is machinery, not
+      // something I need in my working context: I show the top few as plain
+      // labels (heaviest first), no numbers, so the surface stays light.
+      interestLines.push('Lately I keep being drawn to think about:');
+      const topLive = [...live]
+        .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
+        .slice(0, 6);
+      for (const i of topLive) interestLines.push(`  ${i.label ?? i.id}`);
     }
     blocks.push(interestLines.join('\n'));
   }

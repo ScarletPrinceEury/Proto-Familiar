@@ -174,3 +174,10 @@ the Node minimum is 22 — required for the native WebSocket the Discord
 gateway uses — not 18 [@win-install-ps1] [@getting-started]. When editing
 older docs or scripts that still assume the earlier numbers, treat them as
 stale rather than authoritative.
+
+## After installation: updates
+
+Once Proto-Familiar is installed, the ward can update to the latest version without re-running
+the installer. See [Update](update) for how the self-update subsystem works, including the two
+update modes (git vs download-and-replace), web UI and Discord command interfaces, and the
+design principle that updates are manual ceremonies, never automatic.
