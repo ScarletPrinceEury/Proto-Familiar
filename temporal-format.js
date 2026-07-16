@@ -400,11 +400,42 @@ export function formatTemporalContext(payload) {
   const nodeLabel = new Map();
   for (const n of scheduleNodes) { if (n?.id) nodeLabel.set(n.id, n.label ?? n.id); }
   const edges = Array.isArray(schedule.edges) ? schedule.edges : [];
+
+  // Retire SETTLED consequence links so the map stays a picture of live pressure,
+  // not history. A node is settled when it's resolved, or it's a dated event
+  // whose time is well past (>24h) — its predicted futures are decided, not
+  // pending. We then close over `requires` edges: a whole prerequisite chain
+  // hanging off a settled node is settled too (the therapy-paperwork clutter — a
+  // dozen "requires"/"on-lapse" links for an appointment that was two weeks ago,
+  // which linger because nothing auto-resolves a past event). Pure derivation:
+  // it hides stale links from the briefing, it never deletes an edge or a node.
+  const STALE_PAST_MS = 24 * 3600 * 1000;
+  const nowForLinks = Date.now();
+  const settled = new Set();
+  for (const n of scheduleNodes) {
+    if (!n?.id) continue;
+    const ms = n.when ? Date.parse(n.when) : NaN;
+    if (n.resolution || (Number.isFinite(ms) && ms < nowForLinks - STALE_PAST_MS)) settled.add(n.id);
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const e of edges) {
+      if (e.kind !== 'requires') continue;
+      if (settled.has(e.src) && !settled.has(e.dst)) { settled.add(e.dst); grew = true; }
+      if (settled.has(e.dst) && !settled.has(e.src)) { settled.add(e.src); grew = true; }
+    }
+  }
+
   const linkLines = [];
+  const linkedRefIds = new Set();   // node ids that survive in a VISIBLE link
   for (const e of edges) {
     const a = nodeLabel.get(e.src);
     const b = nodeLabel.get(e.dst);
     if (!a || !b) continue;
+    if (settled.has(e.src) || settled.has(e.dst)) continue;   // history, not live pressure
+    linkedRefIds.add(e.src);
+    linkedRefIds.add(e.dst);
     const tag = consequenceTag(e.payload);
     if (e.kind === 'co_occurs_with') {
       linkLines.push(`  ${a} — co-occurs — ${b}${tag || ' [noticed]'}`);
@@ -416,12 +447,24 @@ export function formatTemporalContext(payload) {
     blocks.push(['Consequence links — how my human\'s scheduled items bear on each other:', ...linkLines].join('\n'));
   }
 
+  // Legend = ids the Familiar might act on. Two prunes keep it from ballooning:
+  // resolved nodes (done — nothing to act on), and orphaned link endpoints — a
+  // `linked` state/anchor (e.g. "guilt crash", "therapy discontinued") that
+  // Unruh sends only to complete an edge, but whose every edge was just retired
+  // as settled. Those states were the bulk of the oversized legend. Live
+  // schedule items (routine + window) always stay, addressable by id.
+  const routineIds = new Set((Array.isArray(payload.routine) ? payload.routine : []).map(n => n?.id).filter(Boolean));
+  const windowIds  = new Set((Array.isArray(schedule.window) ? schedule.window : []).map(n => n?.id).filter(Boolean));
   const idLegend = [];
   const seenScheduleIds = new Set();
   let anyGcal = false;
   for (const n of scheduleNodes) {
     if (!n?.id || seenScheduleIds.has(n.id)) continue;
     seenScheduleIds.add(n.id);
+    if (n.resolution) continue;   // resolved → not an action surface
+    // A pure link endpoint (in `linked`, not part of the live schedule) with no
+    // surviving visible link is orphaned — drop it.
+    if (!routineIds.has(n.id) && !windowIds.has(n.id) && !linkedRefIds.has(n.id)) continue;
     if (n.payload?.source === 'gcal') anyGcal = true;
     idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${gcalMarkerFor(n)} = ${n.id}`);
   }

@@ -229,15 +229,18 @@ test('no [schedule ids] legend when there are no schedule nodes', () => {
   assert.doesNotMatch(out, /\[schedule ids/);
 });
 
+// A live (future) time so consequence-link fixtures aren't retired as settled.
+const SOON_ISO = new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString();
+
 test('renders a Consequence links section with the consequence tag', () => {
   const out = formatTemporalContext({
     schedule: {
       phase: null,
       window: [
         { id: 'tk-1', type: 'task',  label: 'skip dinner' },
-        { id: 'st-1', type: 'state', label: 'crash', when: '2026-06-22T20:00:00Z' },
+        { id: 'st-1', type: 'state', label: 'crash' },            // undated state
         { id: 'tk-2', type: 'task',  label: 'prep' },
-        { id: 'ev-1', type: 'event', label: 'interview', when: '2026-06-23T10:00:00Z' },
+        { id: 'ev-1', type: 'event', label: 'interview', when: SOON_ISO },
       ],
       edges: [
         { id: 'e1', src: 'tk-1', dst: 'st-1', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse', horizon_hours: 4, severity: 'high', certainty: 'high' } },
@@ -251,21 +254,19 @@ test('renders a Consequence links section with the consequence tag', () => {
 });
 
 test('edges resolve endpoints from schedule.linked (the visibility regression)', () => {
-  // The rot case: the consequence state is NOT a window node (undated, or
-  // scrolled out) and the src is a recurring anchor stamped months ago —
-  // both arrive via `linked`. The edge must still render, and the linked
-  // endpoints must appear in the [schedule ids] legend so I can act on them.
+  // The rot case: the consequence state is NOT a window node (undated) and the
+  // src is a recurring anchor whose next occurrence is live — both via `linked`.
   const out = formatTemporalContext({
     schedule: {
       phase: null,
       window: [
-        { id: 'tk-9', type: 'task', label: 'today thing', when: '2026-07-07T15:00:00Z' },
+        { id: 'tk-9', type: 'task', label: 'today thing', when: SOON_ISO },
       ],
       edges: [
         { id: 'e1', src: 'dinner-x7', dst: 'crash-q2', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse' } },
       ],
       linked: [
-        { id: 'dinner-x7', type: 'event', label: 'dinner', when: '2026-01-02T18:00:00Z' },
+        { id: 'dinner-x7', type: 'event', label: 'dinner', when: SOON_ISO },
         { id: 'crash-q2',  type: 'state', label: 'crash' },
       ],
     },
@@ -279,10 +280,57 @@ test('co_occurs_with renders undirected with [noticed] when untagged', () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
       { id: 'a', type: 'task',  label: 'errands' },
-      { id: 'b', type: 'state', label: 'low stretch', when: '2026-06-22T20:00:00Z' },
+      { id: 'b', type: 'state', label: 'low stretch' },   // undated
     ], edges: [{ id: 'e', src: 'a', dst: 'b', kind: 'co_occurs_with' }] },
   });
   assert.match(out, /errands — co-occurs — low stretch \[noticed\]/);
+});
+
+test('settled consequence links (past anchor + its requires-chain) are retired', () => {
+  // A therapy appointment two weeks ago, its paperwork prerequisites, and the
+  // on-lapse cost state. All of it is history — none should render as live
+  // pressure, and the orphaned cost state should drop from the id legend.
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'therapy-x', type: 'event', label: 'Therapy 2nd session', when: twoWeeksAgo },
+        { id: 'email-x',   type: 'task',  label: 'Email the form' },   // floating prereq
+      ],
+      edges: [
+        { id: 'e1', src: 'therapy-x', dst: 'email-x', kind: 'requires' },
+        { id: 'e2', src: 'email-x', dst: 'discont-x', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse' } },
+      ],
+      linked: [{ id: 'discont-x', type: 'state', label: 'therapy discontinued' }],
+    },
+  });
+  // Every link touching the past therapy (directly or via the requires chain) is gone.
+  assert.equal(/therapy discontinued/.test(out), false);
+  assert.equal(/Email the form → causes/.test(out), false);
+  assert.equal(/requires → Email the form/.test(out), false);
+  // The orphaned cost state is dropped from the legend too.
+  assert.equal(out.includes('discont-x'), false);
+});
+
+test('a live link is kept even when a DIFFERENT link is settled', () => {
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'old-ev', type: 'event', label: 'Old thing', when: twoWeeksAgo },
+        { id: 'live-ev', type: 'event', label: 'Live thing', when: SOON_ISO },
+        { id: 's1', type: 'state', label: 'good streak' },
+      ],
+      edges: [
+        { id: 'e1', src: 'old-ev', dst: 's1', kind: 'causes', payload: { condition: 'on_resolve' } },
+        { id: 'e2', src: 'live-ev', dst: 's1', kind: 'causes', payload: { condition: 'on_resolve', valence: 'help' } },
+      ],
+    },
+  });
+  assert.match(out, /Live thing → causes → good streak/);   // live link kept
+  assert.equal(/Old thing → causes/.test(out), false);      // settled link gone
 });
 
 test('renders a Needs today block from payload.needs, sorted with missed/open first', () => {
