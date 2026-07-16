@@ -8459,11 +8459,29 @@ async function teResolveSchedule(id, resolution, occurrenceDate = null) {
     const body = occurrenceDate
       ? { occurrence_date: occurrenceDate, resolution }
       : { resolution };
-    const r = await fetch(url, {
+    let r = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body),
     }).then(r => r.json());
+    // Recurring anchor resolved without a specific date: the server
+    // refuses to silently end the whole series. Ask which was meant —
+    // one occurrence is the usual case (use that occurrence's own
+    // button); confirming here means ending every future occurrence.
+    if (r && r.ok === false && r.code === 'recurring_needs_scope') {
+      const name = r.label ? `"${r.label}"` : 'This item';
+      const endSeries = confirm(
+        `${name} repeats. Marking it ${resolution} here ends the ENTIRE series — every future occurrence.\n\n` +
+        `To ${resolution} just one date instead, use that occurrence's own button in the list.\n\n` +
+        `End the whole series now?`
+      );
+      if (!endSeries) return;
+      r = await fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ resolution, series: true }),
+      }).then(r => r.json());
+    }
     if (!r.ok) throw new Error(r.error || 'resolve failed');
     teReloadScheduleView();
   } catch (err) {

@@ -714,13 +714,13 @@ export async function updateScheduleNode({ id, label, when, end, payload }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
-export async function resolveScheduleNode({ id, resolution }) {
+export async function resolveScheduleNode({ id, resolution, series = false }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({
       name: 'schedule_resolve',
-      arguments: { id, resolution },
+      arguments: { id, resolution, series },
     });
     return parseToolText(r, { ok: true });
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }

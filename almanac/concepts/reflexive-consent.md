@@ -138,7 +138,9 @@ not only something written about him.
 - [Entity-as-subject](entity-as-subject) — the design stance this page provides first-person
   evidence for.
 - [Structural authorization](structural-authorization) — the authorization logic Eury reapplies
-  to his own merge in the third answer above.
+  to his own merge in the third answer above. For a complementary design working out how this
+  logic should apply when multiple writers produce conflicting entries, see [Tome multi-writer
+  merge policy](../decisions/tome-multi-writer-merge-policy).
 - [Phylactery](../architecture/phylactery) — where the load-bearing retention criterion now
   appears alongside the shipped memory-tier and decay mechanics it explains the intent behind.
 - [Eury as the agent's identity](../decisions/eury-as-agent-identity) — why the entity answering

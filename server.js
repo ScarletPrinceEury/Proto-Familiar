@@ -2854,9 +2854,12 @@ app.patch('/api/temporal/schedule/:id', async (req, res) => {
 });
 
 app.post('/api/temporal/schedule/:id/resolve', async (req, res) => {
-  const { resolution } = req.body ?? {};
+  const { resolution, series } = req.body ?? {};
   if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
-  try { res.json(await resolveScheduleNode({ id: req.params.id, resolution })); }
+  // series:true is the deliberate opt-in to end a whole recurring series.
+  // Without it, resolving a recurring anchor returns {ok:false,
+  // code:'recurring_needs_scope'} so the UI can ask which the ward meant.
+  try { res.json(await resolveScheduleNode({ id: req.params.id, resolution, series: series === true })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3718,7 +3721,10 @@ function startRemindersScheduler() {
       return Array.isArray(r.reminders) ? r.reminders : [];
     },
     fireReminder: async ({ id }) => {
-      const r = await resolveScheduleNode({ id, resolution: 'fired' });
+      // series:true keeps the historical whole-node fire semantics — the
+      // recurring-series guard on resolve() is for the ambiguous LLM/UI
+      // cancel, not for the scheduler marking a due reminder fired.
+      const r = await resolveScheduleNode({ id, resolution: 'fired', series: true });
       if (!r.ok) throw new Error(r.error || 'resolve failed');
     },
     // Event lead-time alerts (the timeblindness surface): unresolved

@@ -207,10 +207,16 @@ def schedule_get_window(
 
 
 @mcp.tool()
-def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
+def schedule_resolve(id: str, resolution: str, series: bool = False) -> dict[str, Any]:
     """I use this to mark a schedule node as done, cancelled, or carried forward.
     I reach for it when my human completes a task, tells me something was cancelled,
     or when an item should roll into the next period rather than expire.
+
+    For a RECURRING node this ends the WHOLE series, so it is fail-closed: I get
+    back {ok: False, code: 'recurring_needs_scope'} unless I pass series=True. To
+    resolve just one instance (this week's cleaning, this month's bill) I use
+    schedule_resolve_occurrence instead. This stops me from cancelling an entire
+    series when my human only meant one occurrence.
 
     Args:
         id: node id.
@@ -219,14 +225,20 @@ def schedule_resolve(id: str, resolution: str) -> dict[str, Any]:
             future briefing without losing the original date —
             the design doc's "skipped laundry rolls into tomorrow"
             pattern.
+        series: for a recurring node, pass True to deliberately end the
+            entire series. Ignored for one-time nodes.
 
     Returns: {ok: True, updated: <bool>} — updated is False when
-    no node with the given id exists.
+    no node with the given id exists. For a recurring node without
+    series=True, returns {ok: False, code: 'recurring_needs_scope',
+    id, label} so the caller can choose one occurrence or the series.
     """
     try:
         with get_conn() as conn:
-            updated = sched.resolve(conn, id=id, resolution=resolution)
+            updated = sched.resolve(conn, id=id, resolution=resolution, series=series)
         return {"ok": True, "updated": updated}
+    except sched.RecurringSeriesError as e:
+        return {"ok": False, "code": "recurring_needs_scope", "id": e.id, "label": e.label}
     except ValueError as e:
         return _err(str(e))
 

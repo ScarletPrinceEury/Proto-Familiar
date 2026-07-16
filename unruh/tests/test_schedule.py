@@ -283,6 +283,60 @@ class TestResolve:
         p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()["payload_json"])
         assert abs(p["window_fraction"] - 0.25) < 0.02
 
+    def test_recurring_resolve_is_fail_closed_without_series(self, conn):
+        # A recurring node's own resolution ends the WHOLE series — that is
+        # never the silent default of an ambiguous call. resolve() must raise
+        # and leave the anchor untouched, so a "cancel this week's wash day"
+        # can't wipe out every future Sunday.
+        t = sched.add_node(
+            conn, type="task", label="Wash Day",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        with pytest.raises(sched.RecurringSeriesError) as exc:
+            sched.resolve(conn, id=t, resolution="cancelled")
+        assert exc.value.id == t
+        assert exc.value.label == "Wash Day"
+        # Anchor is still unresolved — the series survived.
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] is None
+
+    def test_recurring_resolve_with_series_true_ends_the_series(self, conn):
+        # The deliberate opt-in: series=True is how the whole series is
+        # intentionally cancelled.
+        t = sched.add_node(
+            conn, type="task", label="Bin Day",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        updated = sched.resolve(conn, id=t, resolution="cancelled", series=True)
+        assert updated is True
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] == "cancelled"
+
+    def test_one_time_node_resolves_without_series_flag(self, conn):
+        # The guard only fires for recurring nodes — a plain task still
+        # resolves on the default (series=False) path.
+        t = sched.add_node(conn, type="task", label="pay rent")
+        assert sched.resolve(conn, id=t, resolution="done") is True
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] == "done"
+
+    def test_recurring_single_occurrence_still_resolves(self, conn):
+        # The intended common path is untouched: resolving ONE occurrence
+        # writes into payload.resolutions and never trips the series guard.
+        import json
+        t = sched.add_node(
+            conn, type="task", label="weekly cleaning",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        assert sched.resolve_occurrence(
+            conn, id=t, occurrence_date="2026-07-19", resolution="done",
+        ) is True
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()["payload_json"])
+        assert p["resolutions"]["2026-07-19"] == "done"
+        # Series anchor itself remains unresolved.
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] is None
+
 
 # ── Update / delete (M9b) ─────────────────────────────────────────────
 

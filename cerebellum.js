@@ -1689,13 +1689,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_resolve',
-      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward". For recurring nodes (weekly cleaning, monthly bill, yearly birthday), passing the optional `occurrence_date` resolves ONLY that specific occurrence — the rest of the series stays alive. Without `occurrence_date`, the whole series is cancelled/done.',
+      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward". For a RECURRING node (weekly cleaning, monthly bill, yearly birthday) I almost always mean just ONE instance: I pass `occurrence_date` for that day and the rest of the series lives on. Resolving a recurring node WITHOUT `occurrence_date` would end every future occurrence, so I can\'t do it by accident — I have to pass `scope:"series"` to say I truly mean the whole series. If I forget, I get a reminder back rather than a cancelled series.',
       parameters: {
         type: 'object',
         properties: {
           id:         { type: 'string', description: 'Schedule node id, from the [schedule ids] legend in my [Temporal Context]. For a recurring occurrence, this is the anchor node\'s id.' },
           resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
-          occurrence_date: { type: 'string', description: 'Optional. For recurring nodes only. "YYYY-MM-DD" (local-TZ) date of the specific occurrence to resolve — e.g. resolve THIS Sunday\'s cleaning without affecting next Sunday. Omit to resolve the entire series.' },
+          occurrence_date: { type: 'string', description: 'Optional. For recurring nodes: "YYYY-MM-DD" (local-TZ) date of the ONE occurrence to resolve — e.g. this Sunday\'s cleaning without touching next Sunday. I take the exact date from my [Temporal Context], I don\'t compute it. This is the usual way to resolve a recurring item.' },
+          scope: { type: 'string', enum: ['series'], description: 'Optional. For recurring nodes only: pass "series" to deliberately end the ENTIRE series (every future occurrence), when my human really wants the whole recurring thing gone — not just one day. Omit for one-time nodes and for single occurrences (use occurrence_date for those).' },
         },
         required: ['id', 'resolution'],
       },
@@ -2967,21 +2968,28 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
-  schedule_resolve: async ({ id, resolution, occurrence_date }) => {
+  schedule_resolve: async ({ id, resolution, occurrence_date, scope }) => {
     if (!resolution || typeof resolution !== 'string') return 'Failed to resolve: resolution (string) is required';
     try {
-      // If occurrence_date is supplied AND the node is recurring,
-      // resolve THIS occurrence only — keeps the rest of the series
-      // alive. Without occurrence_date, the whole node (or whole
-      // series for a recurring one) is resolved.
-      const data = occurrence_date
-        ? await resolveScheduleOccurrence({ id, occurrence_date, resolution })
-        : await resolveScheduleNode({ id, resolution });
+      // occurrence_date → resolve THIS occurrence only; the series stays alive.
+      if (occurrence_date) {
+        const data = await resolveScheduleOccurrence({ id, occurrence_date, resolution });
+        if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
+        if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
+        return quietOk(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`);
+      }
+      // No occurrence_date → whole-node resolve. For a recurring node this is
+      // fail-closed: Unruh refuses (recurring_needs_scope) unless I pass
+      // series=true, so I never end an entire series when my human meant one
+      // occurrence. scope:'series' is my deliberate opt-in to end the series.
+      const data = await resolveScheduleNode({ id, resolution, series: scope === 'series' });
+      if (data?.code === 'recurring_needs_scope') {
+        const name = data.label ? `"${data.label}"` : id;
+        return `${name} repeats, so marking it ${resolution} without saying which occurrence would end EVERY future one. If my human meant just this one, I pass occurrence_date="YYYY-MM-DD" — the exact date is in my [Temporal Context], I read it there rather than guess. To end the whole series on purpose, I pass scope="series".`;
+      }
       if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
       if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
-      return occurrence_date
-        ? quietOk(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`)
-        : quietOk(`Marked ${id} as ${resolution}.`);
+      return quietOk(`Marked ${id} as ${resolution}.`);
     } catch (err) { return `Failed to resolve: ${err.message}`; }
   },
 

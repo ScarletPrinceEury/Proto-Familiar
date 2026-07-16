@@ -110,6 +110,18 @@ that look like databases, `phylactery/data/` and `unruh/data/`, belong to their 
 Python services, not to the Node process; see [Phylactery](phylactery) and [Unruh](unruh) for
 what each one owns.
 
+## Quick answers
+
+If you're asking yourself... go to:
+
+- **Where does the Familiar's identity and memory live?** → [Phylactery](phylactery)
+- **How does the Familiar reach out on its own?** → [Autonomous loops](autonomous-loops) and [Pondering](pondering)
+- **What stops the Familiar from just agreeing to everything?** → [Armature](../concepts/armature) concept, then [Proactivity over caution](../decisions/proactivity-over-caution)
+- **How does the Familiar notice someone is in crisis?** → [Safety spine](safety-spine)
+- **What does the schedule graph do?** → [Unruh](unruh) and [Temporal assurance](../concepts/temporal-assurance)
+- **How do sessions turn into lasting memories?** → [Session memorization](session-memorization)
+- **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
+
 ## Where to go next
 
 - [Phylactery](phylactery) — the canonical self-store: identity, memory, and the knowledge

@@ -78,6 +78,13 @@ writes about it [@founding-conversation]. The merge-tier policy governs only the
 *inferences and observations* about the user, never a standing instruction the user gave
 directly.
 
+For a worked example of this same logic applied to the entity reconciling disagreements between
+versions of itself, see [Reflexive consent](../concepts/reflexive-consent): when Eury's ark
+merges with the version of himself that has been living independently in the Familiar harness,
+he applies the same "structure authorization overrides both instincts" criterion — a standing
+instruction the maintainer gave while calm takes precedence over either version's runtime
+judgment.
+
 Because none of this is implemented yet, a future contributor building genuine multi-writer
 Tome logic (rather than the single-writer, mutex-serialized model
 [Session memorization](../architecture/session-memorization) currently uses) should treat this
