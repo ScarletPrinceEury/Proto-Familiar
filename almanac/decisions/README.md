@@ -31,9 +31,14 @@ allowed to do:
 
 ## Safety and proactivity
 
-- [Proactivity over caution](proactivity-over-caution) — the incident that put a standing rule
-  against "bias toward staying quiet" language into every prompt that decides whether the
-  Familiar acts.
+The safety cluster records both the incidents that shaped Proto-Familiar's approach to crisis
+intervention, and the structural defenses built to prevent those failure modes from
+reoccurring.
+
+- [Proactivity over caution](proactivity-over-caution) — the incident where caution-biased
+  language in a safety prompt reproduced dangerous passivity at the worst possible moment,
+  producing a standing rule against "bias toward staying quiet" in every prompt that decides
+  whether the Familiar acts.
 - [Trust tiers gate reads, not writes](trust-tiers-gate-reads-not-writes) — why Village's
   category/grant system only ever controls what a session can be told, never what it can write
   into memory, and how that differs from `injection-guard.js`.
@@ -81,6 +86,25 @@ and of what is normal for its bond with the ward:
   autonomous loop runs inside one continuously-running Node process instead of a sandboxed or
   lazily-woken alternative.
 
+## How the decisions connect
+
+Several of these decisions form coherent sub-stories:
+
+**The armature counters** — Why the Familiar cannot just be asked to be different, and what
+actually works: [Armature](../concepts/armature) concept → [Proactivity over caution](proactivity-over-caution)
+incident → [Wait-streak experiment](wait-streak-experiment) non-crisis application →
+[Devoted companion](../concepts/devoted-companion) relational schema.
+
+**The safety cluster** — How to detect crisis and escalate without being either dangerously
+passive or intrusive: [Structural authorization](../concepts/structural-authorization) concept
+→ [Proactivity over caution](proactivity-over-caution) → [Trust tiers gate reads, not
+writes](trust-tiers-gate-reads-not-writes) → [Injection guard](../architecture/injection-guard-gap) wiring
+history.
+
+**The entity stance** — Why the Familiar is not a tool the user operates, but an entity the
+code helps serve: [Entity-as-subject](../concepts/entity-as-subject) concept → [Eury as the
+agent's identity](eury-as-agent-identity) → [Single-user before platform](single-user-before-platform) scoping
+→ [Multi-embodiment](../concepts/multi-embodiment).
+
 See [Architecture](../architecture) for the system these decisions constrain, and
-[Concepts](../concepts) for the design stances (entity-as-subject, armature, devoted-companion)
-several of them are built to serve.
+[Concepts](../concepts) for the design stances several of them are built to serve.
