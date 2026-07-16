@@ -2001,7 +2001,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // sessions — ponderings are per-embodiment thoughts, not public data.
     const ponderings = (staticOnly || gated)
       ? []
-      : await getRecentPonderings().catch(err => {
+      // Fetch a few more than we render in full: the newest shows in full and
+      // the rest become a one-line index the Familiar can expand via read_pondering.
+      : await getRecentPonderings({ limit: 6 }).catch(err => {
           console.error('[thalamus] getRecentPonderings failed:', err?.message ?? err);
           return [];
         });

@@ -68,7 +68,7 @@ import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
+import { markIntentActedOn, snoozeIntent, readPonderingByUid } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { readWeatherNowLine, weatherEnabled } from './weather-mirror.js';
 import { resolveLocation, getForecast, dayDatesFor } from './weather-service.js';
@@ -1085,6 +1085,20 @@ export const BUILTIN_TOOLS = [
           index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
         },
         required: ['uid', 'index'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_pondering',
+      description: 'I bring one of my own recent thoughts fully to mind. My recent-thoughts block shows my latest thought in full and lists older ones one line each with an id; when one of those brief ones fits what my human is saying — or they ask what I have been thinking about — I read its full text with this before I speak to it, so I quote myself truly instead of half-remembering. The id comes from that list (shown as [id: …]).',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid: { type: 'string', description: 'The id of the thought to read in full, from the [id: …] in my recent-thoughts list.' },
+        },
+        required: ['uid'],
       },
     },
   },
@@ -2351,6 +2365,17 @@ export const TOOL_EXECUTORS = {
       if (data.ok) Promise.resolve(recordProactive('tell-payoff')).catch(() => {});
       return data.ok ? quietOk('Deferred intent marked as filed.') : `Acknowledge failed: ${data.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
+  },
+
+  read_pondering: async ({ uid }) => {
+    if (typeof uid !== 'string' || !uid.trim()) {
+      return 'To read a thought I need its id (shown as [id: …] in my recent-thoughts list).';
+    }
+    try {
+      const r = await readPonderingByUid({ uid: uid.trim() });
+      if (!r.ok) return `I couldn't bring that thought up: ${r.error}.`;
+      return `My earlier thought — "${r.title}":\n\n${r.content}`;
+    } catch (err) { return `I couldn't read that thought: ${err.message}`; }
   },
 
   memory_confirm_consent: async ({ ids }) => {
