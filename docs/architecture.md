@@ -744,7 +744,10 @@ with the full condition code-gate is Initiative Pass 4 (not yet built).
 Pass 4): the organ that lets it *notice* and act without my human spelling it
 out. `noticing.js` holds the pure logic — wake conditions (a due intention whose
 condition passes, a contact gap past the baseline p90, a readiness gap, an aging
-untriggered intention; **no wake condition → no turn**), the condition
+untriggered intention, an aging floating task (`AGING_TASK_MS`), an overdue
+unresolved event (`OVERDUE_EVENT_GRACE_MS`, reached via the window's `linked`
+endpoints — ward-signed 0.8.98, the Familiar ASKS the outcome and records it, it
+never assumes done/missed); **no wake condition → no turn**), the condition
 code-gate (`conditionPasses` — evaluated here, not left to the model, since no
 human reads this turn), the code-built ≤5-item situation report, the ward-signed
 prompt (`buildNoticingPrompt` — threat-tier line only at moderate+, flag_distress
