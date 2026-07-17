@@ -1438,7 +1438,11 @@ button { cursor: pointer; font-family: var(--font); }
     position: fixed;
     top: calc(var(--topbar-h) + env(safe-area-inset-top));
     left: 0;
-    bottom: 0;
+    /* Height from the VISUAL viewport (--app-h), not bottom:0 — the
+       layout viewport's bottom sits behind the soft keyboard on
+       iOS Safari / Firefox Android, which made the sidebar's lower
+       settings unreachable while typing in any of its inputs. */
+    height: calc(var(--app-h, 100dvh) - var(--topbar-h) - env(safe-area-inset-top));
     width: min(var(--sidebar-w), 100vw);
     /* Above the overlay (50) so its contents stay interactive while
        the dim layer covers everything else. */
@@ -1475,7 +1479,9 @@ button { cursor: pointer; font-family: var(--font); }
   /* Cap the auto-growing textarea so the conversation above always has
      room to scroll. autoResize() also enforces this dynamically. */
   #user-input {
-    max-height: 40dvh;
+    /* Capped against the VISUAL viewport too — 40dvh alone ignores the
+       soft keyboard, letting the composer outgrow the visible area. */
+    max-height: min(40dvh, calc(var(--app-h, 100dvh) * 0.4));
   }
 }
 /* NOTE: mobile modal / knowledge-editor / calendar overrides live at the
@@ -2481,6 +2487,28 @@ button { cursor: pointer; font-family: var(--font); }
   overflow-y: auto;
 }
 .ke-graph-popover.hidden { display: none; }
+/* Phone: the popover is a bottom sheet pinned to the viewport. It
+   ignores tap coordinates (JS adds this class instead of positioning),
+   tracks the soft keyboard via --app-h so the save button stays
+   reachable while typing, and scrolls internally. */
+.ke-graph-popover-sheet {
+  position: fixed;
+  /* The modal backdrop's backdrop-filter makes it the CONTAINING BLOCK
+     for fixed descendants (spec'd, all modern engines), and the mobile
+     backdrop already ends at the soft keyboard's top (--app-h). So
+     bottom:0 here means "rest on the keyboard" — do NOT add --kb-inset,
+     it double-counts against the shortened backdrop. */
+  left: 0; right: 0; bottom: 0;
+  top: auto;
+  width: 100%;
+  max-width: 100%;
+  max-height: calc(var(--app-h, 100dvh) * 0.72);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: none;
+  z-index: 90;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+.ke-graph-popover-sheet .ke-graph-popover-head { cursor: default; }
 .ke-graph-popover .field { margin-bottom: 8px; display: flex; flex-direction: column; gap: 3px; }
 .ke-graph-popover .field label { font-size: 0.72rem; color: var(--text-dim); }
 .ke-graph-popover .field input,
@@ -3180,16 +3208,24 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   .modal-backdrop {
     align-items: flex-end;
     padding: 0 0 env(safe-area-inset-bottom);
+    /* The backdrop's bottom edge must sit at the KEYBOARD's top, not the
+       layout viewport's bottom — otherwise the bottom-anchored sheet
+       (and its save buttons) hides behind the soft keyboard on browsers
+       where the keyboard only shrinks the visual viewport. */
+    height: var(--app-h, 100dvh);
+    bottom: auto;
   }
   .modal,
   .modal-wide {
     max-width: 100%;
     width: 100%;
-    /* Full-height sheet: on a phone a modal IS the screen. Partial-height
-       sheets wasted a third of tiny screens and forced inner panes into
-       impossible heights. dvh tracks the browser chrome. */
-    height: 100dvh;
-    max-height: 100dvh;
+    /* Full-height sheet: on a phone a modal IS the screen. --app-h is
+       the VISUAL viewport height (initMobileViewport) — it shrinks when
+       the soft keyboard opens, so the sheet and its scrollable body
+       shrink with it and the focused input stays visible above the
+       keyboard instead of buried behind it. dvh is the pre-JS fallback. */
+    height: var(--app-h, 100dvh);
+    max-height: var(--app-h, 100dvh);
     border-radius: 0;
   }
   /* Drag-handle indicator at the top of every bottom-sheet modal */
@@ -3213,8 +3249,8 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
      sheet, drop the resize handle (pointless on touch). */
   .modal-resizable {
     width: 100%;
-    height: 100dvh;
-    max-height: 100dvh;
+    height: var(--app-h, 100dvh);
+    max-height: var(--app-h, 100dvh);
     min-width: 0;
     min-height: 0;
     resize: none;
@@ -3264,7 +3300,7 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
    only the input area tightens so the conversation keeps room. */
 @media (max-width: 767px) and (orientation: landscape) {
   #user-input {
-    max-height: 25dvh;
+    max-height: min(25dvh, calc(var(--app-h, 100dvh) * 0.4));
   }
 }
 

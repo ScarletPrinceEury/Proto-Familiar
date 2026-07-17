@@ -107,6 +107,37 @@ for (const [id, name] of [
   await page.evaluate((mid) => document.getElementById(mid).classList.add('hidden'), id);
 }
 
+// Soft-keyboard simulation: shrink --app-h (what initMobileViewport
+// writes from the visual viewport) and check that an open modal tracks
+// it — if it doesn't, focused inputs hide behind the keyboard (the
+// reported "typing under the keyboard" bug class).
+await page.evaluate(() => {
+  document.getElementById('knowledge-modal').classList.remove('hidden');
+  document.documentElement.style.setProperty('--app-h', '380px');
+});
+await page.waitForTimeout(300);
+const kb = await page.evaluate(() => ({
+  modal: Math.round(document.getElementById('knowledge-modal-inner').getBoundingClientRect().height),
+  backdrop: Math.round(document.getElementById('knowledge-modal').getBoundingClientRect().height),
+}));
+if (kb.modal > 385 || kb.backdrop > 385) {
+  problems.push(`modal ignores soft keyboard: modal=${kb.modal}px backdrop=${kb.backdrop}px at --app-h:380px`);
+}
+// The sidebar and the map popover sheet must track the keyboard too —
+// both hold text inputs and both are fixed-position surfaces.
+await page.evaluate(() => {
+  document.getElementById('knowledge-modal').classList.add('hidden');
+  document.getElementById('sidebar').classList.add('mobile-open');
+});
+await page.waitForTimeout(200);
+const sb = await page.evaluate(() =>
+  Math.round(document.getElementById('sidebar').getBoundingClientRect().bottom));
+if (sb > 385) problems.push(`sidebar ignores soft keyboard: bottom=${sb}px at --app-h:380px`);
+await page.evaluate(() => {
+  document.getElementById('sidebar').classList.remove('mobile-open');
+  document.documentElement.style.removeProperty('--app-h');
+});
+
 // White-input sweep: unthemed native controls are the recurring bug class.
 const white = await page.evaluate(() => {
   const bad = [];
