@@ -61,6 +61,8 @@ happened and what to do next.
 | Full-screen sheets | `.modal` mobile rules (style.css) | On phones every modal is a full-height sheet with sticky header and internally scrolling body |
 | Structured grant editor | `vlRenderCatDetail` (app.js) | Known grants render as labeled selects with plain-language options; free-text rows only for unknown/custom keys |
 | Model browser | Connections modal + `POST /api/models` | Visible, clickable list of the provider's actual models — never only a type-to-discover datalist |
+| Sidebar nav | `SIDEBAR_NAV` + `initSidebarNav()` (app.js) | Master-detail settings: searchable grouped menu → one section at a time with a back button; advanced group hidden until "Show advanced settings" (first-run essentials mode, synced as `uiShowAdvanced`) |
+| List search | `.vl-search` + cached-render pattern | Villagers, KE memories, and TE schedule lists filter a cached fetch live (no refetch per keystroke) and show an N-of-M count |
 
 ## Testing changes
 

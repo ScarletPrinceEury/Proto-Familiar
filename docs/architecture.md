@@ -1464,6 +1464,16 @@ popover to those.
   actual user input" bug); post-history prompt is `role: 'system'`
   not `'user'`. One /api/chat request per user message — the server
   runs all tool rounds inside it.
+- **Settings sidebar (master-detail, 0.8.101)** — the sidebar shows a
+  searchable grouped MENU of sections (config: `SIDEBAR_NAV` in app.js);
+  opening one shows that section alone with a back header. Section
+  markup/ids are untouched — visibility-only orchestration — so field
+  bindings are stable. Search deep-matches each section's rendered text
+  ("webhook" finds Trusted contacts). The Advanced group (Tools,
+  Diagnostics) stays hidden until "Show advanced settings" — the
+  first-run essentials mode, persisted as the synced `uiShowAdvanced`
+  setting. Last-open section is restored per device via localStorage
+  (never stealing focus from the chat input at load).
 - **Temporal editor modal** — six tabs (Interests / Threat /
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
   applicable. **Time handling is local-naive end to end (0.8.100):** the

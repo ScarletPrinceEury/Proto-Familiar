@@ -87,8 +87,25 @@
       <!-- ── Sidebar / Settings ────────────────────────────── -->
       <aside class="sidebar" id="sidebar" aria-label="Settings panel">
 
+        <!-- Master-detail navigation (docs/ui-ux-guidelines.md): the
+             sidebar shows ONE thing at a time — a searchable menu of
+             sections, or a single opened section with a back button.
+             The menu itself is built by initSidebarNav() in app.js from
+             the SIDEBAR_NAV config; the section markup below is
+             untouched (all field ids/bindings stay stable). -->
+        <div class="sidebar-nav" id="sidebar-nav">
+          <div class="sidebar-nav-search">
+            <input type="search" id="settings-search" placeholder="Search settings…" aria-label="Search all settings" autocomplete="off">
+          </div>
+          <nav id="sidebar-menu" class="sidebar-menu" aria-label="Settings sections"></nav>
+        </div>
+        <div class="sidebar-detail-head hidden" id="sidebar-detail-head">
+          <button id="sidebar-back" class="btn-ghost sidebar-back" type="button">← All settings</button>
+          <span id="sidebar-detail-title" class="sidebar-detail-title"></span>
+        </div>
+
         <!-- Connection -->
-        <div class="sidebar-section">
+        <div class="sidebar-section" id="section-connection">
           <h3 class="section-label">Connection</h3>
           <div class="action-row">
             <button id="connections-btn" class="btn-secondary">🔌 Connections &amp; models…</button>
@@ -137,7 +154,7 @@
         </div>
 
         <!-- Chat Actions -->
-        <div class="sidebar-section">
+        <div class="sidebar-section" id="section-chat">
           <h3 class="section-label">Chat</h3>
           <div class="action-row">
             <button id="clear-chat-btn" class="btn-danger">✕ Clear history</button>
@@ -666,6 +683,7 @@
       <div class="modal-body ke-body">
         <div class="ke-pane ke-pane-active" id="ke-pane-memories">
           <div class="ke-toolbar">
+            <input type="search" id="ke-mem-search" class="vl-search" placeholder="Search memories…" aria-label="Search memories by text, date, or tag" autocomplete="off">
             <label>Granularity
               <select id="ke-mem-granularity">
                 <option value="">all</option>
@@ -676,6 +694,7 @@
                 <option value="significant">significant</option>
               </select>
             </label>
+            <span id="ke-mem-count" class="vl-count" aria-live="polite"></span>
             <button id="ke-mem-refresh" class="btn-ghost">Refresh</button>
           </div>
           <div class="ke-split">
@@ -1260,6 +1279,8 @@
         <!-- SCHEDULE PANE -->
         <div class="ke-pane" id="te-pane-schedule">
           <div class="ke-toolbar">
+            <input type="search" id="te-sched-search" class="vl-search" placeholder="Search schedule…" aria-label="Search schedule items by name or type" autocomplete="off">
+            <span id="te-sched-count" class="vl-count" aria-live="polite"></span>
             <button id="te-sched-refresh" class="btn-ghost">Refresh</button>
             <label id="te-sched-hours-label">Window (hours)
               <input type="number" id="te-sched-hours" value="48" min="1" max="720" step="1" style="width: 5em">

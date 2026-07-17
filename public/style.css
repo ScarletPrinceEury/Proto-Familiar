@@ -367,6 +367,92 @@ textarea:focus-visible {
   user-select: text;
 }
 
+/* ── Sidebar master-detail navigation ────────────────────────── */
+/* Default state: the searchable menu is visible and every section is
+   hidden. Opening a section (aside.sidebar-nav-open + .nav-active on
+   the section) swaps to that one section with a back header. Section
+   markup is untouched — visibility only. */
+.sidebar-nav-search { padding: 12px 14px 6px; }
+.sidebar-nav-search input {
+  width: 100%;
+  padding: 7px 11px;
+  font-size: 0.88rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.sidebar-menu { display: flex; flex-direction: column; padding: 4px 8px 12px; }
+.sidebar-menu-group {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 14px 8px 4px;
+}
+.sidebar-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.sidebar-menu-row:hover { background: var(--surface-raise); }
+.sidebar-menu-icon { flex: none; width: 1.4em; text-align: center; }
+.sidebar-menu-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sidebar-menu-title { font-size: 0.9rem; font-weight: 600; }
+.sidebar-menu-desc {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-menu-chev { color: var(--text-dim); flex: none; }
+.sidebar-menu-empty { padding: 14px 10px; font-size: 0.84rem; color: var(--text-dim); }
+.sidebar-menu-advanced {
+  margin: 14px 8px 0;
+  padding: 8px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.sidebar-menu-advanced:hover { color: var(--text); border-color: var(--text-dim); }
+
+.sidebar-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 2;
+}
+.sidebar-detail-head.hidden { display: none; }
+.sidebar-back { font-size: 0.82rem; white-space: nowrap; }
+.sidebar-detail-title { font-weight: 700; font-size: 0.9rem; }
+
+/* Menu mode: all sections hidden. Detail mode: only the active one. */
+.sidebar .sidebar-section { display: none; }
+.sidebar.sidebar-nav-open .sidebar-section.nav-active { display: block; }
+/* Opened-as-a-page: the detail header names the section, so the
+   section's own label row is redundant; content always expanded. */
+.sidebar.sidebar-nav-open .sidebar-section.nav-active > .section-label { display: none; }
+.sidebar.sidebar-nav-open .sidebar-section.nav-active .section-content { display: block; }
+
 /* Sidebar sections */
 .sidebar-section {
   padding: 14px 16px;

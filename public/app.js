@@ -386,7 +386,7 @@ const SERVER_SYNCED_KEYS = [
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
-  'memorySweepEnabled',
+  'memorySweepEnabled', 'uiShowAdvanced',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
@@ -3046,6 +3046,118 @@ async function browseModels() {
   renderModelBrowser();
 }
 
+// ── Sidebar navigation (master-detail) ───────────────────────────
+// The settings sidebar shows ONE thing at a time: a searchable menu of
+// sections, or a single opened section with a back button — instead of
+// ten dense sections stacked into a wall (docs/ui-ux-guidelines.md
+// rule 1). The section markup/ids are untouched, so every existing
+// field binding keeps working; only visibility is orchestrated here.
+const SIDEBAR_NAV = [
+  { group: 'Start here', items: [
+    { id: 'section-connection', icon: '🔌', title: 'Connection',       desc: 'Provider, API key, model' },
+    { id: 'section-chat',       icon: '💬', title: 'Chat',             desc: 'History, sounds, sessions' },
+  ]},
+  { group: 'Your Familiar', items: [
+    { id: 'section-knowledge',  icon: '🧠', title: 'Knowledge',        desc: 'Memories, identity, graph' },
+    { id: 'section-temporal',   icon: '🕰', title: 'Temporal',         desc: 'Schedule, interests, automation' },
+    { id: 'section-tomes',      icon: '📚', title: 'Tomes',            desc: 'Topic notes injected by keyword' },
+  ]},
+  { group: 'People & channels', items: [
+    { id: 'section-village',    icon: '🏘', title: 'Village',          desc: 'Who your Familiar knows' },
+    { id: 'section-discord',    icon: '🗨', title: 'Discord presence', desc: 'The bot connection', onOpen: () => { try { refreshDiscordStatus(); } catch {} } },
+    { id: 'section-contacts',   icon: '🤝', title: 'Trusted contacts', desc: 'Crisis outreach list' },
+  ]},
+  { group: 'Advanced', advanced: true, items: [
+    { id: 'section-tools',      icon: '🛠', title: 'Tools',            desc: 'Tool use & custom tools' },
+    { id: 'section-debug',      icon: '🩺', title: 'Diagnostics',      desc: 'Debug info & prompt logs' },
+  ]},
+];
+const SIDEBAR_LAST_KEY = 'pf-sidebar-open-section';
+
+function sidebarNavItems() { return SIDEBAR_NAV.flatMap(g => g.items); }
+
+function openSidebarSection(id, { focusBack = true } = {}) {
+  const item = sidebarNavItems().find(i => i.id === id);
+  const section = document.getElementById(id);
+  if (!item || !section) return;
+  document.getElementById('sidebar').classList.add('sidebar-nav-open');
+  document.querySelectorAll('.sidebar-section').forEach(s => s.classList.toggle('nav-active', s.id === id));
+  // A section opened as its own page is always expanded.
+  section.classList.remove('collapsed');
+  section.querySelector('.collapse-toggle')?.setAttribute('aria-expanded', 'true');
+  $('sidebar-nav').classList.add('hidden');
+  $('sidebar-detail-head').classList.remove('hidden');
+  $('sidebar-detail-title').textContent = item.title;
+  try { localStorage.setItem(SIDEBAR_LAST_KEY, id); } catch {}
+  item.onOpen?.();
+  // Keyboard/SR users land on the back control, not lost mid-page —
+  // except on the silent restore at page load, which must not steal
+  // focus from the chat input.
+  if (focusBack) $('sidebar-back').focus({ preventScroll: true });
+  document.getElementById('sidebar').scrollTop = 0;
+}
+
+function closeSidebarSection() {
+  document.getElementById('sidebar').classList.remove('sidebar-nav-open');
+  document.querySelectorAll('.sidebar-section').forEach(s => s.classList.remove('nav-active'));
+  $('sidebar-nav').classList.remove('hidden');
+  $('sidebar-detail-head').classList.add('hidden');
+  try { localStorage.removeItem(SIDEBAR_LAST_KEY); } catch {}
+  document.getElementById('sidebar').scrollTop = 0;
+}
+
+function renderSidebarMenu() {
+  const menu = $('sidebar-menu');
+  const q = ($('settings-search')?.value ?? '').trim().toLowerCase();
+  const showAdvanced = state.uiShowAdvanced === true || !!q; // searching sees everything
+  const html = [];
+  for (const g of SIDEBAR_NAV) {
+    if (g.advanced && !showAdvanced) continue;
+    const items = g.items.filter(i => {
+      if (!q) return true;
+      if (`${i.title} ${i.desc}`.toLowerCase().includes(q)) return true;
+      // Deep search: match against the section's actual labels/hints, so
+      // "quiet hours" finds the section that holds it.
+      return (document.getElementById(i.id)?.textContent ?? '').toLowerCase().includes(q);
+    });
+    if (!items.length) continue;
+    html.push(`<div class="sidebar-menu-group">${teEscapeHtml(g.group)}</div>`);
+    for (const i of items) {
+      html.push(`<button type="button" class="sidebar-menu-row" data-section="${i.id}">
+        <span class="sidebar-menu-icon" aria-hidden="true">${i.icon}</span>
+        <span class="sidebar-menu-text">
+          <span class="sidebar-menu-title">${teEscapeHtml(i.title)}</span>
+          <span class="sidebar-menu-desc">${teEscapeHtml(i.desc)}</span>
+        </span>
+        <span class="sidebar-menu-chev" aria-hidden="true">›</span>
+      </button>`);
+    }
+  }
+  if (!html.length) html.push(`<p class="sidebar-menu-empty">Nothing matches “${teEscapeHtml(q)}”.</p>`);
+  // The advanced toggle lives at the menu bottom — advanced sections are
+  // hidden until asked for (first-run essentials mode), not gone.
+  html.push(`<button type="button" class="sidebar-menu-advanced" id="sidebar-advanced-toggle">${state.uiShowAdvanced ? 'Hide advanced settings' : 'Show advanced settings…'}</button>`);
+  menu.innerHTML = html.join('');
+  menu.querySelectorAll('.sidebar-menu-row').forEach(btn =>
+    btn.addEventListener('click', () => openSidebarSection(btn.dataset.section)));
+  $('sidebar-advanced-toggle')?.addEventListener('click', () => {
+    state.uiShowAdvanced = !state.uiShowAdvanced;
+    saveSettings();
+    renderSidebarMenu();
+  });
+}
+
+function initSidebarNav() {
+  renderSidebarMenu();
+  $('sidebar-back')?.addEventListener('click', closeSidebarSection);
+  $('settings-search')?.addEventListener('input', renderSidebarMenu);
+  // Restore the last-open section so a reload doesn't lose your place.
+  try {
+    const last = localStorage.getItem(SIDEBAR_LAST_KEY);
+    if (last && document.getElementById(last)) openSidebarSection(last, { focusBack: false });
+  } catch {}
+}
+
 // ── Collapsible sections ─────────────────────────────────────────
 function initCollapsibles() {
   document.querySelectorAll('.collapsible').forEach(section => {
@@ -4322,6 +4434,7 @@ function init() {
     $('te-pond-refresh').addEventListener('click',   teLoadPonderings);
     $('te-pond-limit').addEventListener('change',    teLoadPonderings);
     $('te-sched-refresh').addEventListener('click',  teReloadScheduleView);
+    $('te-sched-search')?.addEventListener('input',  teRenderScheduleList);
     $('te-sched-hours').addEventListener('change',   teLoadSchedule);
     $('te-sched-add').addEventListener('click',      () => teToggleScheduleForm(true));
     $('te-sched-form-cancel').addEventListener('click', () => teToggleScheduleForm(false));
@@ -4342,6 +4455,7 @@ function init() {
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-mem-search')?.addEventListener('input', keRenderMemories);
   $('ke-cov-refresh')?.addEventListener('click', keLoadCoverage);
   $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
   $('ke-cov-next')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, 1);  keRenderCalendar(); } });
@@ -4547,6 +4661,7 @@ function init() {
   // ── Overwhelm-reduction primitives (docs/ui-ux-guidelines.md) ─
   initScrollableTabs();
   initHintDisclosure();
+  initSidebarNav();
 
   // ── Focus input ──────────────────────────────────────────────
   $('user-input').focus();
@@ -6478,6 +6593,7 @@ async function keReadServerError(res) {
 }
 
 // ── Memories tab ────────────────────────────────────────────────────────
+let _keMemCache = [];   // last-fetched memories; the search filters this, no refetch
 async function keLoadMemories() {
   const list = $('ke-mem-list');
   list.innerHTML = '<p class="logs-loading">Loading…</p>';
@@ -6486,26 +6602,45 @@ async function keLoadMemories() {
     const res = await fetch('/api/entity/memories' + (granularity ? `?granularity=${encodeURIComponent(granularity)}` : ''));
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const memories = data.memories ?? [];
-    if (!memories.length) { list.innerHTML = '<p class="logs-empty">No memories found.</p>'; return; }
-    list.innerHTML = '';
-    for (const m of memories) {
-      const row = document.createElement('div');
-      row.className = 'ke-row';
-      const audienceBadge = (m.audience && m.audience !== 'ward-private')
-        ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
-      const cwBadge = m.care_weight
-        ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
-      // A me/ward register memory is a standing truth, not a passing moment — badge it.
-      const registerBadge = (m.register === 'me' || m.register === 'ward')
-        ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
-      row.innerHTML = `
-        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
-        <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m));
-      list.appendChild(row);
-    }
+    _keMemCache = data.memories ?? [];
+    keRenderMemories();
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
+}
+
+// Render the cached memories through the live search filter — a memory
+// archive grows for years, so the list ships with search from the start
+// (docs/ui-ux-guidelines.md rule 4). Matches preview text, date, id,
+// granularity, register, and audience tag.
+function keRenderMemories() {
+  const list = $('ke-mem-list');
+  const countEl = $('ke-mem-count');
+  const q = ($('ke-mem-search')?.value ?? '').trim().toLowerCase();
+  const memories = _keMemCache.filter(m => !q ||
+    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''}`
+      .toLowerCase().includes(q));
+  if (countEl) {
+    countEl.textContent = !_keMemCache.length ? ''
+      : q ? `${memories.length} of ${_keMemCache.length}` : `${_keMemCache.length}`;
+  }
+  if (!_keMemCache.length) { list.innerHTML = '<p class="logs-empty">No memories found.</p>'; return; }
+  if (!memories.length) { list.innerHTML = `<p class="logs-empty">Nothing matches “${esc(q)}”.</p>`; return; }
+  list.innerHTML = '';
+  for (const m of memories) {
+    const row = document.createElement('div');
+    row.className = 'ke-row';
+    const audienceBadge = (m.audience && m.audience !== 'ward-private')
+      ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
+    const cwBadge = m.care_weight
+      ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
+    // A me/ward register memory is a standing truth, not a passing moment — badge it.
+    const registerBadge = (m.register === 'me' || m.register === 'ward')
+      ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
+    row.innerHTML = `
+      <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
+      <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
+    row.addEventListener('click', () => keOpenMemory(m));
+    list.appendChild(row);
+  }
 }
 
 // Audience <option> list shared by the memory + graph-node editors: "just us"
@@ -8558,6 +8693,7 @@ async function teDeletePondering(uid) {
 
 // ── Schedule tab (M9b) ────────────────────────────────────────────
 
+let _teSchedCache = [];   // last-fetched window nodes; search filters this, no refetch
 async function teLoadSchedule() {
   const list = $('te-sched-list');
   if (!list) return;
@@ -8571,13 +8707,37 @@ async function teLoadSchedule() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
-    const nodes = (data.nodes || [])
+    _teSchedCache = (data.nodes || [])
       .filter(n => n.type !== 'phase')             // Routine tab handles phases
       .sort((a, b) => (a.when || '').localeCompare(b.when || ''));
-    if (!nodes.length) {
-      list.innerHTML = '<p class="logs-empty">Nothing scheduled in this window. Use "+ Add" above to create an event or task.</p>';
-      return;
-    }
+    teRenderScheduleList();
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+// Render the cached window through the live search filter (matches
+// label, type, id, and resolution — docs/ui-ux-guidelines.md rule 4).
+function teRenderScheduleList() {
+  const list = $('te-sched-list');
+  if (!list) return;
+  const countEl = $('te-sched-count');
+  const q = ($('te-sched-search')?.value ?? '').trim().toLowerCase();
+  const nodes = _teSchedCache.filter(n => !q ||
+    `${n.label ?? ''} ${n.type ?? ''} ${n.id ?? ''} ${n.resolution ?? ''}`.toLowerCase().includes(q));
+  if (countEl) {
+    countEl.textContent = !_teSchedCache.length ? ''
+      : q ? `${nodes.length} of ${_teSchedCache.length}` : `${_teSchedCache.length}`;
+  }
+  if (!_teSchedCache.length) {
+    list.innerHTML = '<p class="logs-empty">Nothing scheduled in this window. Use "+ Add" above to create an event or task.</p>';
+    return;
+  }
+  if (!nodes.length) {
+    list.innerHTML = `<p class="logs-empty">Nothing matches “${teEscapeHtml(q)}” in this window.</p>`;
+    return;
+  }
+  try {
     list.innerHTML = nodes.map(n => {
       const id    = teEscapeHtml(n.id);
       const label = teEscapeHtml(n.label);
@@ -8631,7 +8791,7 @@ async function teLoadSchedule() {
       btn.addEventListener('click', () => teDeleteSchedule(btn.dataset.id));
     });
   } catch (err) {
-    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+    list.innerHTML = `<p class="logs-empty">Failed to render: ${teEscapeHtml(err.message)}</p>`;
   }
 }
 
