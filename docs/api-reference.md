@@ -18,6 +18,7 @@ index names what each does and the architecture doc section that owns it.
 | `GET /api/version` | App version (read once at boot from `package.json`) |
 | `POST /api/chat` | The chat turn (detailed below) |
 | `POST /api/guide-chat` | The Connections modal's setup-guide mini chat |
+| `POST /api/models` | Proxy the provider's own model list (backs the visible model browser) |
 | `GET/PUT /api/settings` | Central settings store (`settings.json`) |
 | `GET/POST /api/tailscale` | Non-loopback access gate state / toggle |
 | `POST /api/log` · `GET /api/logs` · `GET/DELETE /api/logs/:id` | Session logs (write, list, read, delete) |

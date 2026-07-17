@@ -2979,6 +2979,71 @@ function refreshModelSuggestions(provider) {
     opt.value = m;
     dl.appendChild(opt);
   }
+  // Provider changed → any fetched model list belongs to the old one.
+  resetModelBrowser();
+}
+
+// ── Visible model browser ────────────────────────────────────────
+// "Show available models" fetches the provider's real model list via
+// the server proxy (POST /api/models) and renders it as a clickable,
+// filterable list — the options exist where the ward can SEE them, not
+// only behind type-to-discover (docs/ui-ux-guidelines.md). Falls back
+// to the curated per-provider suggestions when the live fetch fails.
+let _modelBrowserModels = null;
+function resetModelBrowser() {
+  _modelBrowserModels = null;
+  const list = $('model-browser-list'), filter = $('model-filter'), status = $('model-browser-status');
+  if (!list) return;
+  list.classList.add('hidden'); list.innerHTML = '';
+  filter.classList.add('hidden'); filter.value = '';
+  status.style.display = 'none';
+  const btn = $('model-browse-btn');
+  if (btn) { btn.textContent = 'Show available models'; btn.disabled = false; }
+}
+function renderModelBrowser() {
+  const list = $('model-browser-list');
+  const q = ($('model-filter')?.value ?? '').trim().toLowerCase();
+  const models = (_modelBrowserModels ?? []).filter(id => !q || id.toLowerCase().includes(q));
+  list.innerHTML = models.length
+    ? models.map(id => `<li><button type="button" class="model-pick${id === $('model-input').value ? ' model-pick-current' : ''}" data-model="${teEscapeHtml(id)}">${teEscapeHtml(id)}</button></li>`).join('')
+    : `<li class="model-none">Nothing matches “${teEscapeHtml(q)}”.</li>`;
+  list.classList.remove('hidden');
+  list.querySelectorAll('.model-pick').forEach(btn => btn.addEventListener('click', () => {
+    $('model-input').value = btn.dataset.model;
+    $('model-input').dispatchEvent(new Event('change'));
+    renderModelBrowser();   // move the "current" highlight
+  }));
+}
+async function browseModels() {
+  const btn = $('model-browse-btn'), status = $('model-browser-status'), filter = $('model-filter');
+  const provider = $('provider-select').value;
+  const apiKey = $('api-key').value.trim();
+  btn.disabled = true; btn.textContent = 'Fetching…';
+  status.style.display = 'none';
+  let out = null;
+  if (apiKey) {
+    try {
+      const r = await fetch('/api/models', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, apiKey }),
+      });
+      out = await r.json().catch(() => null);
+    } catch { /* fall through to curated list */ }
+  }
+  if (out?.ok && Array.isArray(out.models) && out.models.length) {
+    _modelBrowserModels = out.models.map(m => m.id);
+    status.textContent = `${_modelBrowserModels.length} models your key can use — click one to select it.`;
+  } else {
+    _modelBrowserModels = [...(PROVIDER_MODELS[provider] ?? [])];
+    status.textContent = apiKey
+      ? `Couldn't fetch the live list (${out?.error ?? 'no response'}) — showing known ${provider} models instead.`
+      : 'Add your API key to fetch the live list — showing known models for this provider.';
+  }
+  status.style.display = '';
+  filter.classList.toggle('hidden', _modelBrowserModels.length <= 8);
+  btn.textContent = 'Refresh model list';
+  btn.disabled = false;
+  renderModelBrowser();
 }
 
 // ── Collapsible sections ─────────────────────────────────────────
@@ -3991,6 +4056,9 @@ function init() {
   // auto-fill the API key field from any saved connection using the same
   // provider, so a user with multiple saved keys per provider doesn't have
   // to retype the bearer token when switching providers.
+  $('model-browse-btn')?.addEventListener('click', browseModels);
+  $('model-filter')?.addEventListener('input', renderModelBrowser);
+
   $('provider-select').addEventListener('change', e => {
     const prov  = e.target.value;
     const input = $('model-input');
@@ -4233,6 +4301,8 @@ function init() {
     });
     $('vl-people-refresh').addEventListener('click', () => vlLoadPeople());
     $('vl-people-add').addEventListener('click', vlStartNewPerson);
+    // Live filter over the cached registry — no refetch per keystroke.
+    $('vl-people-search')?.addEventListener('input', () => { if (_vlReg) vlRenderPeopleGrid(_vlReg); });
     $('vl-cat-refresh').addEventListener('click', () => vlLoadCategories());
     $('vl-cat-add').addEventListener('click', vlStartNewCategory);
     $('vl-loc-refresh').addEventListener('click', () => vlLoadLocations());
@@ -4474,8 +4544,110 @@ function init() {
   // ── Touch gesture: swipe down on modal header to dismiss ─────
   initModalSwipeDismiss();
 
+  // ── Overwhelm-reduction primitives (docs/ui-ux-guidelines.md) ─
+  initScrollableTabs();
+  initHintDisclosure();
+
   // ── Focus input ──────────────────────────────────────────────
   $('user-input').focus();
+}
+
+// ── Scrollable tab bars ─────────────────────────────────────────
+// Every .ke-tabs row can hold more tabs than fit its width (the
+// Knowledge editor has 9+, and modals are user-resizable), so each bar
+// scrolls horizontally inside a wrapper that paints edge fades + a
+// chevron while more tabs exist in that direction (UX rule 2 in
+// docs/ui-ux-guidelines.md: nothing hides offscreen without a cue).
+// The active tab is auto-scrolled into view on every tab switch.
+function initScrollableTabs() {
+  const wrap = (bar) => {
+    if (bar.closest('.ke-tabs-wrap')) return;
+    const w = document.createElement('div');
+    w.className = 'ke-tabs-wrap';
+    bar.parentNode.insertBefore(w, bar);
+    w.appendChild(bar);
+    const more = document.createElement('span');
+    more.className = 'ke-tabs-more';
+    more.setAttribute('aria-hidden', 'true');
+    more.textContent = '›';
+    w.appendChild(more);
+    const update = () => {
+      const canLeft  = bar.scrollLeft > 2;
+      const canRight = bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 2;
+      w.classList.toggle('fade-left', canLeft);
+      w.classList.toggle('fade-right', canRight);
+    };
+    bar.addEventListener('scroll', update, { passive: true });
+    new ResizeObserver(update).observe(bar);
+    // Vertical wheel scrolls the bar horizontally — desktop mice have no
+    // horizontal wheel, and a clipped bar they can't reach is the bug
+    // this component exists to fix.
+    bar.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && bar.scrollWidth > bar.clientWidth) {
+        bar.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+    }, { passive: false });
+    update();
+  };
+  document.querySelectorAll('.ke-tabs').forEach(wrap);
+  // Tab switches (any pane, any modal) re-scroll the active tab into view.
+  // Registered once even though initScrollableTabs re-runs for dynamically
+  // added bars.
+  if (!initScrollableTabs._clickBound) {
+    initScrollableTabs._clickBound = true;
+    document.addEventListener('click', (e) => {
+      const tab = e.target.closest('.ke-tab');
+      if (tab) tab.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    });
+  }
+}
+
+// ── Hint disclosure ─────────────────────────────────────────────
+// Long explanation text is the sidebar's biggest source of visual
+// overwhelm. Every .field-hint over the length threshold collapses
+// behind a small "ⓘ what's this?" toggle — statically present hints AND
+// ones re-rendered by pane code, via a MutationObserver, so the ~130
+// render sites don't each need touching. Short hints stay visible
+// (a one-liner is information, not clutter); .hint-keep opts out
+// entirely (safety-relevant text stays readable at all times).
+const HINT_COLLAPSE_MIN_CHARS = 90;
+function enhanceHint(el) {
+  if (el.dataset.hintEnhanced || el.classList.contains('hint-keep')) return;
+  if (el.style.display === 'none') return;                // status hints shown later
+  const text = (el.textContent || '').trim();
+  if (text.length < HINT_COLLAPSE_MIN_CHARS) return;      // short = leave visible
+  if (el.closest('.hint-toggle')) return;
+  el.dataset.hintEnhanced = '1';
+  const id = 'hint-' + Math.random().toString(36).slice(2, 8);
+  el.id = el.id || id;
+  el.classList.add('hint-collapsed');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'hint-toggle';
+  btn.setAttribute('aria-expanded', 'false');
+  btn.setAttribute('aria-controls', el.id);
+  btn.innerHTML = '<span class="hint-chev" aria-hidden="true">▸</span> what’s this?';
+  btn.addEventListener('click', () => {
+    const open = el.classList.toggle('hint-open');
+    el.classList.toggle('hint-collapsed', !open);
+    btn.setAttribute('aria-expanded', String(open));
+  });
+  el.parentNode.insertBefore(btn, el);
+}
+function initHintDisclosure() {
+  document.querySelectorAll('.field-hint').forEach(enhanceHint);
+  const mo = new MutationObserver((muts) => {
+    for (const m of muts) {
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.classList?.contains('field-hint')) enhanceHint(n);
+        n.querySelectorAll?.('.field-hint').forEach(enhanceHint);
+        if (n.classList?.contains('ke-tabs')) initScrollableTabs();
+      }
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
 }
 
 // ── Mobile viewport: keyboard inset + scroll preservation ──────
@@ -9773,12 +9945,35 @@ async function vlClaimKnockAsWard(k) {
 
 function vlRenderPeopleGrid(reg) {
   const grid = $('vl-people-grid');
+  const countEl = $('vl-people-count');
   if (!reg.villagers.length) {
     grid.innerHTML = '<p class="vl-chip-dim" style="grid-column:1/-1;padding:12px">No villagers yet. Click "+ Add person".</p>';
+    if (countEl) countEl.textContent = '';
     return;
   }
   const catMap = new Map(reg.categories.map(c => [c.id, c]));
-  grid.innerHTML = reg.villagers.map(v => {
+  // Search + stable name sort: a village grows past what a wall of cards
+  // can carry (docs/ui-ux-guidelines.md rule 4 — lists must scale).
+  // Matches name, platform aliases, and category names.
+  const q = ($('vl-people-search')?.value ?? '').trim().toLowerCase();
+  const villagers = reg.villagers
+    .filter(v => {
+      if (!q) return true;
+      if ((v.name ?? '').toLowerCase().includes(q)) return true;
+      if ((v.aliases ?? []).some(a => `${a.platform ?? ''} ${a.id ?? ''} ${a.name ?? ''}`.toLowerCase().includes(q))) return true;
+      return (v.categoryIds ?? []).some(cid => (catMap.get(cid)?.name ?? '').toLowerCase().includes(q));
+    })
+    .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+  if (countEl) {
+    countEl.textContent = q
+      ? `${villagers.length} of ${reg.villagers.length}`
+      : `${reg.villagers.length} ${reg.villagers.length === 1 ? 'person' : 'people'}`;
+  }
+  if (!villagers.length) {
+    grid.innerHTML = `<p class="vl-chip-dim" style="grid-column:1/-1;padding:12px">No one matches “${esc(q)}”.</p>`;
+    return;
+  }
+  grid.innerHTML = villagers.map(v => {
     const chips = (v.categoryIds ?? []).map(cid => {
       const c = catMap.get(cid);
       return c ? `<span class="vl-chip${c.builtin ? ' vl-chip-green' : ''}">${esc(c.name)}</span>` : '';
@@ -10092,13 +10287,66 @@ function vlStartNewCategory() {
   vlOpenDetail('vl-cat-detail');
 }
 
+// Every permission a category can carry, with plain-language options —
+// visible up front instead of a free-text key/value guessing game
+// (docs/ui-ux-guidelines.md). Values mirror audience.js GRANT_LADDERS
+// (false is "off" and omitted on save; absent ≡ denied) plus the
+// identity-gate booleans from MARKER_GRANT_MAP.
+const VL_KNOWN_GRANTS = [
+  { key: 'schedule', label: 'Schedule', options: [
+      { v: false,          t: 'Off — nothing about their time' },
+      { v: 'coarse',       t: 'Free/busy only — day-parts, never what fills them' },
+      { v: 'full',         t: 'Full — can also see what’s on' },
+    ],
+    hint: 'Lets people here coordinate time. "Free/busy" shares whether a morning/afternoon/evening is open; "Full" also names the items.' },
+  { key: 'memories', label: 'Memories', options: [
+      { v: false,    t: 'Off — no memory recall about them' },
+      { v: 'shared', t: 'Shared only — things said in rooms they were in' },
+      { v: true,     t: 'Broad — non-private memories may surface' },
+    ],
+    hint: 'How much remembered context the Familiar may draw on when talking with them. Ward-private memories never surface regardless.' },
+  { key: 'contacts', label: 'Contacts', options: [
+      { v: false,          t: 'Off — contact info stays hidden' },
+      { v: 'care-visible', t: 'Care-visible — reachable in a crisis' },
+      { v: true,           t: 'Full — normal contact visibility' },
+    ],
+    hint: '"Care-visible" means the Familiar may reach them when checking on you seriously matters, without day-to-day visibility.' },
+  { key: 'identitySensitive', label: 'Sensitive identity notes', bool: true,
+    hint: 'Identity sections marked sensitive become visible to this category.' },
+  { key: 'health', label: 'Health context', bool: true,
+    hint: 'Identity sections about health become visible to this category.' },
+  { key: 'location', label: 'Location context', bool: true,
+    hint: 'Identity sections about where you are/live become visible to this category.' },
+];
+
+function vlKnownGrantRow(def, current, disabled) {
+  const d = disabled ? ' disabled' : '';
+  const cur = current === undefined || current === null ? false : current;
+  const opts = def.bool
+    ? [{ v: false, t: 'Off' }, { v: true, t: 'On' }]
+    : def.options;
+  const optHtml = opts.map(o =>
+    `<option value="${esc(String(o.v))}"${String(o.v) === String(cur) ? ' selected' : ''}>${esc(o.t)}</option>`).join('');
+  return `<div class="vl-grant-known" data-grant-key="${esc(def.key)}">
+    <div class="vl-grant-known-label">${esc(def.label)}</div>
+    <select class="vl-grant-known-val"${d} aria-label="${esc(def.label)} permission">${optHtml}</select>
+    <p class="field-hint">${esc(def.hint)}</p>
+  </div>`;
+}
+
 function vlRenderCatDetail(cat) {
   const detail = $('vl-cat-detail');
   const isNew    = !cat;
   const isLocked = cat?.id === VL_STRANGERS;
   const isBuiltin = cat?.builtin && !isNew;
 
-  const grantRows = Object.entries(cat?.grants ?? {}).map(([k, v], i) =>
+  const grants = cat?.grants ?? {};
+  const knownKeys = new Set(VL_KNOWN_GRANTS.map(g => g.key));
+  const knownRows = VL_KNOWN_GRANTS.map(def => vlKnownGrantRow(def, grants[def.key], isLocked)).join('');
+  // Unknown/custom keys (forward-compat, hand-added) keep the free-form
+  // editor — but tucked behind an "Advanced" disclosure, not up front.
+  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k));
+  const customRows = customEntries.map(([k, v], i) =>
     vlGrantRowHtml(i, k, typeof v === 'string' ? 'str' : 'bool', typeof v === 'string' ? v : (v ? 'true' : 'false'), isLocked)
   ).join('');
 
@@ -10110,10 +10358,13 @@ function vlRenderCatDetail(cat) {
       <input type="text" id="vl-c-name" value="${isNew ? '' : esc(cat.name)}" placeholder="e.g. Close Friends" style="width:100%"${isBuiltin ? ' disabled' : ''}>
     </div>
     <div>
-      <div class="vl-field-label">Grants <span class="field-hint">(what this category lets someone know or see)</span></div>
-      <div class="field-hint" style="margin-bottom:4px">Known grant: <code>schedule</code> (string) = <code>coarse</code> or <code>full</code> — lets people in this category coordinate ${esc(state.userName || 'my human')}'s time. <em>coarse</em> shares only free/busy day-parts (never what fills them); <em>full</em> also names what's on. Add a person to this category to permit them.</div>
-      <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${grantRows}</div>
-      ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Grant</button></div>` : ''}
+      <div class="vl-field-label">What people in this category may know or see</div>
+      <div id="vl-c-grants-known">${knownRows}</div>
+      <details class="vl-grants-advanced"${customEntries.length ? ' open' : ''}>
+        <summary>Advanced: custom grants</summary>
+        <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${customRows}</div>
+        ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Custom grant</button></div>` : ''}
+      </details>
     </div>
     ${!isLocked ? `
     <div class="vl-actions">
@@ -10125,7 +10376,7 @@ function vlRenderCatDetail(cat) {
   `;
 
   if (!isLocked) {
-    $('vl-c-grant-add').addEventListener('click', () => {
+    $('vl-c-grant-add')?.addEventListener('click', () => {
       const container = $('vl-c-grants');
       const i = container.querySelectorAll('.vl-grant-row').length;
       const div = document.createElement('div');
@@ -10158,6 +10409,16 @@ function vlGrantRowHtml(i, key, type, val, disabled) {
 
 function vlReadGrants() {
   const grants = {};
+  // Structured known grants: "false" selections are omitted entirely —
+  // absent ≡ denied in audience.js, and an explicit false would read as
+  // a grant row in every list view.
+  document.querySelectorAll('#vl-c-grants-known .vl-grant-known').forEach(row => {
+    const key = row.dataset.grantKey;
+    const raw = row.querySelector('.vl-grant-known-val')?.value;
+    if (!key || raw === undefined || raw === 'false') return;
+    grants[key] = raw === 'true' ? true : raw;
+  });
+  // Advanced free-form rows (custom keys) keep the old shape.
   document.querySelectorAll('#vl-c-grants .vl-grant-row').forEach(row => {
     const key = row.querySelector('.vl-grant-key')?.value.trim();
     const type = row.querySelector('.vl-grant-type')?.value;
