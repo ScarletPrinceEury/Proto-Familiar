@@ -1438,7 +1438,11 @@ button { cursor: pointer; font-family: var(--font); }
     position: fixed;
     top: calc(var(--topbar-h) + env(safe-area-inset-top));
     left: 0;
-    bottom: 0;
+    /* Height from the VISUAL viewport (--app-h), not bottom:0 — the
+       layout viewport's bottom sits behind the soft keyboard on
+       iOS Safari / Firefox Android, which made the sidebar's lower
+       settings unreachable while typing in any of its inputs. */
+    height: calc(var(--app-h, 100dvh) - var(--topbar-h) - env(safe-area-inset-top));
     width: min(var(--sidebar-w), 100vw);
     /* Above the overlay (50) so its contents stay interactive while
        the dim layer covers everything else. */
@@ -1475,7 +1479,9 @@ button { cursor: pointer; font-family: var(--font); }
   /* Cap the auto-growing textarea so the conversation above always has
      room to scroll. autoResize() also enforces this dynamically. */
   #user-input {
-    max-height: 40dvh;
+    /* Capped against the VISUAL viewport too — 40dvh alone ignores the
+       soft keyboard, letting the composer outgrow the visible area. */
+    max-height: min(40dvh, calc(var(--app-h, 100dvh) * 0.4));
   }
 }
 /* NOTE: mobile modal / knowledge-editor / calendar overrides live at the
@@ -2487,6 +2493,11 @@ button { cursor: pointer; font-family: var(--font); }
    reachable while typing, and scrolls internally. */
 .ke-graph-popover-sheet {
   position: fixed;
+  /* The modal backdrop's backdrop-filter makes it the CONTAINING BLOCK
+     for fixed descendants (spec'd, all modern engines), and the mobile
+     backdrop already ends at the soft keyboard's top (--app-h). So
+     bottom:0 here means "rest on the keyboard" — do NOT add --kb-inset,
+     it double-counts against the shortened backdrop. */
   left: 0; right: 0; bottom: 0;
   top: auto;
   width: 100%;
@@ -3289,7 +3300,7 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
    only the input area tightens so the conversation keeps room. */
 @media (max-width: 767px) and (orientation: landscape) {
   #user-input {
-    max-height: 25dvh;
+    max-height: min(25dvh, calc(var(--app-h, 100dvh) * 0.4));
   }
 }
 

@@ -86,6 +86,14 @@ Two structural rules the walk exists to enforce:
   `input/select/textarea` rules in style.css) — never rely on a scoped
   wrapper class to theme a control; anything that escapes the scope
   renders white browser chrome.
+- **Every fixed-position surface that holds a text input must track the
+  soft keyboard** — size it from `--app-h` (the visual-viewport height)
+  or anchor it with `--kb-inset`; `bottom: 0` / `100dvh` are the LAYOUT
+  viewport, which sits behind the keyboard on iOS Safari and Firefox
+  Android. Gotcha: `backdrop-filter` (on `.modal-backdrop`) makes the
+  backdrop the containing block for fixed descendants, so inside a modal
+  `bottom: 0` already means "the keyboard's top" — don't add the inset
+  twice.
 
 ## Sources
 
