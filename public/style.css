@@ -225,6 +225,25 @@ body {
 .field-hint.hint-collapsed { display: none; }
 .field-hint.hint-open { display: block; }
 
+/* ── Base form controls ──────────────────────────────────────── */
+/* Element-level theming so EVERY text-like input, select, and textarea
+   is themed by default — component rules later in the file still win
+   where they specialise. Without this, any control outside a .field /
+   .ke-toolbar scope rendered white browser chrome (the recurring
+   "unthemed input" bug: model picker, toolbar numbers, moved contacts
+   fields, web-search numbers). Checkboxes/radios/ranges/files keep
+   native rendering. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+}
+
 /* ── Keyboard focus (WCAG 2.4.7) ─────────────────────────────── */
 /* One visible focus indicator for every interactive element, but only
    for keyboard/programmatic focus (:focus-visible) — mouse clicks stay
@@ -2032,7 +2051,12 @@ button { cursor: pointer; font-family: var(--font); }
 .ke-tab:hover { color: var(--text); }
 .ke-tab-active { color: var(--text); border-bottom-color: var(--accent); }
 
-.ke-body { padding: 0; display: flex; flex-direction: column; }
+/* flex:1 makes the body FILL fixed-height modals (resizable desktop,
+   100dvh phone sheets) — without it, canvas panes like the graph map
+   collapsed to a fallback height with a dead void below (the reported
+   phone bug). min-height:0 lets inner panes scroll instead of forcing
+   the modal taller. */
+.ke-body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .ke-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .ke-pane-active { display: flex; }
 
@@ -2412,6 +2436,36 @@ button { cursor: pointer; font-family: var(--font); }
   pointer-events: none;
 }
 .ke-graph-legend.hidden { display: none; }
+.ke-graph-legend-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.ke-graph-legend-toggle:hover { color: var(--text); }
+.ke-graph-legend-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  /* A long type list must never eat the canvas — scroll inside itself. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.ke-graph-legend-rows.hidden { display: none; }
+
+/* Map hint: one version for mouse, a shorter one for touch; never wider
+   than the canvas leaves room for beside the zoom controls. */
+.ke-graph-hint .hint-touch { display: none; }
+@media (pointer: coarse) {
+  .ke-graph-hint .hint-mouse { display: none; }
+  .ke-graph-hint .hint-touch { display: inline; }
+  .ke-graph-hint { max-width: calc(100% - 70px); font-size: 0.68rem; }
+}
 
 .ke-graph-popover {
   position: absolute;
@@ -3603,12 +3657,16 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 }
 .ws-opt input { margin-top: 3px; flex: none; }
 
-/* Web search modal — resizable */
-#websearch-modal .modal {
-  resize: both;
-  overflow: auto;
-  min-width: 340px;
-  min-height: 300px;
-  max-width: 95vw;
-  max-height: 92vh;
+/* Web search modal — resizable on desktop only; on phones the shared
+   full-screen sheet rules must win (this block is later in the cascade,
+   so it needs the media scope). */
+@media (min-width: 768px) {
+  #websearch-modal .modal {
+    resize: both;
+    overflow: auto;
+    min-width: 340px;
+    min-height: 300px;
+    max-width: 95vw;
+    max-height: 92vh;
+  }
 }

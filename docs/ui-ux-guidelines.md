@@ -67,11 +67,25 @@ happened and what to do next.
 
 ## Testing changes
 
-Render in headless Chromium at iPhone-12 emulation AND a narrow desktop
-window (modals are user-resizable — a 500px-wide modal must still work).
-Check: nothing clipped without a cue, keyboard focus visible, hints
-collapsed, contrast per the WCAG tokens (see CLAUDE.md "hold the WCAG
+**Run the full walk, not a sample.** `node scripts/ui-walk.mjs` screenshots
+EVERY modal, tab, and view at phone size, flags horizontal overflow and
+unthemed (white) native controls automatically, and leaves the shots for
+you to actually look at. Sampled verification is how the graph-map mobile
+bug shipped — "the modals are responsive" was checked on a few panes and
+extrapolated to the rest. Also check a narrow desktop window (modals are
+user-resizable — a 500px-wide modal must still work), keyboard focus
+visibility, and contrast per the WCAG tokens (CLAUDE.md "hold the WCAG
 line").
+
+Two structural rules the walk exists to enforce:
+- **Fixed-height containers must fill**: a pane inside a fixed-height
+  modal gets its height from the flex chain (`.ke-body { flex:1 }`) — a
+  canvas or list that sizes itself from a collapsed parent renders tiny
+  with a void below.
+- **Form controls are themed at the element level** (base
+  `input/select/textarea` rules in style.css) — never rely on a scoped
+  wrapper class to theme a control; anything that escapes the scope
+  renders white browser chrome.
 
 ## Sources
 
