@@ -1464,6 +1464,7 @@ popover to those.
   actual user input" bug); post-history prompt is `role: 'system'`
   not `'user'`. One /api/chat request per user message — the server
   runs all tool rounds inside it.
+- **Icons are vendored Material Symbols (0.8.102)** — `public/icons.js` holds inline SVG path data (Apache-2.0, fully offline; no Google Fonts request). Static markup declares `data-ms-icon="name"`; generated templates call `msIcon(name)`. Trusted contacts moved from their own sidebar section into the **Village modal** (a "Trusted contacts" tab — they're people), and the ward's own push webhook into the **Discord** section (it's a notification channel); the sidebar nav's `keywords` keep settings search finding both at their new homes.
 - **Settings sidebar (master-detail, 0.8.101)** — the sidebar shows a
   searchable grouped MENU of sections (config: `SIDEBAR_NAV` in app.js);
   opening one shows that section alone with a back header. Section
