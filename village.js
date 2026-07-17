@@ -526,6 +526,25 @@ function sanitizeDisclosure(raw) {
   return Object.keys(out).length ? out : null;
 }
 
+// Merge per-category remember gates into ONE villager's map — the narrow
+// setter behind the Discord consent menu (a villager updating their OWN
+// settings). Values per REMEMBER_CATEGORIES: true (keep) | 'ask' | false
+// (never). Unknown categories are ignored; other villager fields are
+// untouched.
+export async function setVillagerRemember(villagerId, patch, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  return mutate(filePath, (reg) => {
+    const v = reg.villagers.find(x => x.id === villagerId);
+    if (!v) throw new Error(`unknown villager: ${villagerId}`);
+    const rem = { ...(v.remember ?? {}) };
+    for (const [cat, val] of Object.entries(patch ?? {})) {
+      if (!REMEMBER_CATEGORIES.includes(cat)) continue;
+      if (val === true || val === false || val === 'ask') rem[cat] = val;
+    }
+    if (Object.keys(rem).length) v.remember = rem;
+    return { villager: v };
+  });
+}
+
 // ── Villager CRUD ─────────────────────────────────────────────────
 
 export async function upsertVillager({

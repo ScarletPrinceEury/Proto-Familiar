@@ -13,6 +13,7 @@ import {
   decideAmbientReply,
   adaptiveSettleMs,
   isAmbientAbstain,
+  stripLeadingSilenceTags,
   resolveMentions,
   directedAtOthers,
   messageNamesBot,
@@ -403,6 +404,47 @@ describe('isAmbientAbstain', () => {
   it('a real reply is not an abstain', () => {
     assert.equal(isAmbientAbstain('I can pass the salt!'), false);
     assert.equal(isAmbientAbstain('Sure, happy to help.'), false);
+  });
+  it('a LEADING bracketed tag is the command — trailing reasoning does not un-abstain it', () => {
+    assert.equal(isAmbientAbstain('[pass] they are mid-conversation, not my moment'), true);
+    assert.equal(isAmbientAbstain('[silence] — nothing to add here'), true);
+    assert.equal(isAmbientAbstain('(pass) the room is between two people'), true);
+  });
+  it('a bare leading "pass" can open a real sentence and is NOT an abstain', () => {
+    assert.equal(isAmbientAbstain('pass the salt please'), false);
+    assert.equal(isAmbientAbstain('silence can be golden, you know'), false);
+  });
+});
+
+// ── stripLeadingSilenceTags ───────────────────────────────────────
+
+describe('stripLeadingSilenceTags', () => {
+  it('removes a leading [pass]/[silence]/[later:…] and connective punctuation', () => {
+    assert.equal(stripLeadingSilenceTags('[pass] — they are mid-conversation'), 'they are mid-conversation');
+    assert.equal(stripLeadingSilenceTags('[later:20m] because it might wrap up'), 'because it might wrap up');
+    assert.equal(stripLeadingSilenceTags('[silence]: not my place'), 'not my place');
+  });
+  it('a tags-only message strips to empty', () => {
+    assert.equal(stripLeadingSilenceTags('[pass]'), '');
+    assert.equal(stripLeadingSilenceTags('[pass] [later:soon]'), '');
+  });
+  it('leaves untagged replies untouched', () => {
+    assert.equal(stripLeadingSilenceTags('Sure, happy to help.'), 'Sure, happy to help.');
+  });
+  it('does not touch a tag mentioned mid-sentence', () => {
+    assert.equal(stripLeadingSilenceTags('I could reply [pass] if I wanted'), 'I could reply [pass] if I wanted');
+  });
+});
+
+// ── parseDeferToken (leading form) ────────────────────────────────
+
+describe('parseDeferToken leading form', () => {
+  it('a leading [later:…] with trailing reasoning still parses', () => {
+    assert.equal(parseDeferToken('[later:20m] they may finish soon'), 20 * 60_000);
+    assert.equal(parseDeferToken('[later:soon] — checking back'), 15 * 60_000);
+  });
+  it('mid-sentence [later:…] does not parse', () => {
+    assert.equal(parseDeferToken('maybe [later:20m] would be wise'), null);
   });
 });
 

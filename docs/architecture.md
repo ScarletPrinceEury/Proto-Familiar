@@ -110,7 +110,7 @@ ponderings injection, care-check framing) and as background loops
 ├── reminders-loop.js        Autonomous singleton loop; polls Unruh for due reminders
 ├── silence-triage-loop.js   Autonomous singleton loop; LLM-deliberated proactive check-ins
 ├── reachout-loop.js         Autonomous singleton loop; warm non-crisis outreach (companionship). Stands down at moderate+ threat (triage owns distress); quiet-hours + cooldown gated
-├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG)
+├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG); per-tome opt-out `graduationExempt` (0.8.106): ward-toggleable in the Tomes modal, stamped on runtime tomes at creation, exposed via GET/PATCH /api/tomes — the name-exclusion list stays as belt-and-suspenders
 ├── needs-tracking-loop.js   Autonomous singleton loop (Pass 2, opt-in/default-OFF); marks a recurring need-window's occurrence `missed` once its [when,end] elapses unresolved (builds the needs-fulfilment ledger). Pure selection in needs-tracking.js. Stands down at moderate+ threat (never competes with triage); only the LAPSE is made factual — projected consequence edges are untouched. Off-switch PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1
 ├── needs-tracking.js        Pure Pass-2 logic: isNeedWindow / selectMissedOccurrences / summarizeNeedsForDay (the live "Needs today" view)
 ├── gcal-sync-loop.js        Autonomous singleton loop (0.8, opt-in/default-OFF); ward-configurable cadence (hourly default). Each due tick: fetch the iCal feed (gcal-source.js) → Unruh gcal_ingest (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Fetch/parse failure degrades silently and NEVER reconciles deletions. Off-switch PROTO_FAMILIAR_GCAL_DISABLED=1 + "Google Calendar sync" toggle
@@ -834,6 +834,21 @@ reply path. Discord turns never consume handoffs (`liveTurn: false`).
 Memorization of Discord sessions is deferred until
 memories carry audience tags (see village-support-design.md).
 
+*Villager consent self-service (0.8.106, `villager-consent.js`).*
+`!consent` in a REGISTERED villager's own DM is a pure-code surface (no
+LLM): a menu of what the Familiar holds about them (`memory_list_by_subject`
+— kept facts where they are a recorded subject, thin briefs), what is
+pending review about them, and their per-category remember settings, which
+they change themselves (`!consent keep|ask|never <category|all>` →
+`setVillagerRemember`). A keep/never answer also settles their PENDING
+items in those categories (confirm/drop + queue prune) — the original
+meaning of "ask": the person the fact is about answers, not only the ward.
+Changes are audit-logged (discord-writes) and visible in the ward's
+Village UI; strangers never reach the code (ignored upstream); in a guild
+room the command is ignored (personal data never renders in a room); the
+ward's DM points at the Village UI. The villager-DM presence block tells
+the Familiar the command exists so it can offer it.
+
 *Clearance-gated tools (V10, `docs/discord-tools-build-spec.md`).*
 `handleTurn` runs a tool loop (reusing `cerebellum.runToolCallLoop`;
 `callChatRaw` supplies the full provider response with `tool_calls`)
@@ -924,6 +939,13 @@ with `readBots: true` lets them through `classifyMessage` as normal, so
 they're answered when addressed and paced by the room's mode +
 `activeCooldownSec` + rate limit otherwise. For shared Familiar
 channels; the loop is the ward's to pace, not a hard block.
+
+*Silence tags are leading-commands (0.8.106).* `[pass]` / `[silence]` /
+`[later:…]` count when they LEAD a message, not only when they are the
+whole message — the tag is the command; trailing text is the model's
+private reasoning (logged, never posted). `deliverReply` additionally
+strips any leading control tag on every delivery path and skips the send
+when a reply was only tags, so a control token can never reach a room.
 
 *Deferred presence (V9).* Ambient turns now have a third option beyond
 speak / `[pass]`: `[later:…]` schedules a revisit. Three syntax forms —

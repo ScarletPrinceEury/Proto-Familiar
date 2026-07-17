@@ -28,6 +28,16 @@ test('selectCandidates skips excluded, disabled, reviewed, and empty entries', (
   assert.deepEqual(got.map(c => c.uid), ['good']);
 });
 
+test('selectCandidates skips graduationExempt tomes (the ward\'s per-tome protection)', () => {
+  const entries = { u1: { content: 'a durable fact', enabled: true } };
+  const got = selectCandidates([
+    { file: 'protected.json', tome: { name: 'My Reference', graduationExempt: true,  entries } },
+    { file: 'open.json',      tome: { name: 'Open Notes',   graduationExempt: false, entries } },
+  ]);
+  assert.strictEqual(got.length, 1);
+  assert.strictEqual(got[0].tomeName, 'Open Notes');
+});
+
 test('selectCandidates respects batchSize', () => {
   const entries = {}; for (let i = 0; i < 10; i++) entries[`u${i}`] = entry({ uid: `u${i}`, content: `f${i}` });
   const got = selectCandidates([{ file: 'a.json', tome: { name: 'K', entries } }], { batchSize: 3 });
