@@ -114,7 +114,7 @@ export function readSettingsSync() {
  * other's fields. Atomic .tmp+rename, so the file is never torn. Only the
  * keys in `patch` change; everything else is preserved.
  */
-export async function writeSettingsPatch(patch = {}) {
+async function writeSettingsPatch(patch = {}) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     return { ok: false, error: 'patch must be an object' };
   }
@@ -208,9 +208,9 @@ export function connectionForFeature(settings, feature) {
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
-export const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
-export const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
-export const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
+const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
+const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
+const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
 
 // Shared JSONL event-log primitives — triage and warm reach-out both use
 // them, so decisions from either loop are auditable the same way.
@@ -298,7 +298,7 @@ const DISCORD_CONTENT_LIMIT = 1900; // hard API limit is 2000; leave headroom
 
 /** POST one message to a Discord webhook. The shared primitive under
  *  both the user's own push channel and trusted-contact delivery. */
-export async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
+async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
   try {
     const resp = await fetchFn(webhookUrl, {
       method: 'POST',
@@ -3748,12 +3748,12 @@ export const TOOL_EXECUTORS = {
 // (keyless reference APIs / in-process scrape floor respectively); the
 // toggle still gates them because egress itself is the opt-in. A tool the
 // Familiar can't actually use should never appear in its tool list.
-export const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
+const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 
 // The weather tools only appear when weather is enabled (default-ON settings
 // toggle + the env off-switch) — a Familiar with no places saved still sees
 // them, and weather_today tells it kindly there's nowhere to check yet.
-export const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
+const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
 
 export function webSearchEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;
@@ -3765,7 +3765,7 @@ export function webSearchEnabled(settings = readSettingsSync()) {
 // command (and never under the hard off-switch). A tool the Familiar can't
 // actually use should never appear in its list — and one that changes the
 // real calendar shouldn't be offered before the ward has opted in.
-export const GCAL_WRITE_TOOL = 'schedule_push_to_google';
+const GCAL_WRITE_TOOL = 'schedule_push_to_google';
 
 export function gcalWriteEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') return false;
@@ -3786,7 +3786,7 @@ export function gcalWriteEnabled(settings = readSettingsSync()) {
 // intention tools + a few schedule READS the Familiar already holds. No
 // villager contact, no destructive ops, no ward-schedule writes here.
 
-export const REACH_OUT_TO_WARD_TOOL = {
+const REACH_OUT_TO_WARD_TOOL = {
   type: 'function',
   function: {
     name: 'reach_out_to_ward',
@@ -3801,7 +3801,7 @@ export const REACH_OUT_TO_WARD_TOOL = {
   },
 };
 
-export const SET_NEXT_CHECK_TOOL = {
+const SET_NEXT_CHECK_TOOL = {
   type: 'function',
   function: {
     name: 'set_next_check',
@@ -3819,7 +3819,7 @@ export const SET_NEXT_CHECK_TOOL = {
 // The existing (registry) tools the noticing turn may use: act on intentions
 // + a few reads. Names only — schemas pulled from BUILTIN_TOOLS, macro-
 // resolved, so their first-person descriptions stay consistent.
-export const NOTICING_REGISTRY_TOOL_NAMES = [
+const NOTICING_REGISTRY_TOOL_NAMES = [
   'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
   'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
   // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;

@@ -14,7 +14,7 @@
  * They DO need a timeout so one hung host can't stall a tool round.
  */
 
-export const WEB_FETCH_TIMEOUT_MS = 9000;
+const WEB_FETCH_TIMEOUT_MS = 9000;
 
 /**
  * Fetch with a hard timeout. Returns the Response (callers do res.ok /

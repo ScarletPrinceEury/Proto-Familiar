@@ -41,7 +41,7 @@ export const DEFAULT_TAU_DAYS = 3.0;
 const DAY_MS             = 24 * 60 * 60 * 1000;
 
 export const MAX_RAW_WEIGHT = 10.0;
-export const MIN_RAW_WEIGHT = 0.0;
+const MIN_RAW_WEIGHT = 0.0;
 export const HISTORY_CAP    = 50;
 
 // Threat tiers — keep in lockstep with crisis-signals tier weights
@@ -215,7 +215,7 @@ export const FLAG_DEDUP_MS = 90 * 1000;
 // (~14h at tau=3d before it decays past 7, then high for a few days), so a
 // flag reliably IS severe and arms everything severe does, while still
 // fading on its own like any threat.
-export const FLAG_FLOOR_WEIGHT = 8.0;
+const FLAG_FLOOR_WEIGHT = 8.0;
 
 /**
  * flag_distress (Initiative / threat-diagnosis follow-up, ward-signed).

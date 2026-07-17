@@ -33,7 +33,7 @@ export function shortPonderUid() {
 }
 
 export const PONDERINGS_TOME_NAME = "Familiar's Ponderings";
-export const PONDERINGS_TOME_DESC =
+const PONDERINGS_TOME_DESC =
   "Quiet thoughts the Familiar had during free cycles. Not keyword-triggered " +
   "into chat context; written here so my human can find and read them. Each " +
   "entry is a real, timestamped record of an actual moment of thinking.";
@@ -130,7 +130,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 The wants_to_save field is OPTIONAL. If I have no intents to record, I omit it or set it to []. If I do have intents, I list each one with its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-export function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
+function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
   const memories = Array.isArray(windowMemories) ? windowMemories : [];
   const memoriesJson = JSON.stringify(memories, null, 2);

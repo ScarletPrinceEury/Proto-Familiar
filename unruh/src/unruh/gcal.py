@@ -320,7 +320,10 @@ def gcal_ingest(
     # cancel every non-keeper so the ward's schedule shows each Google
     # event exactly once again.
     for did in duplicate_ids:
-        sched.resolve(conn, id=did, resolution="cancelled")
+        # series=True: mechanical reconcile against Google's snapshot — for a
+        # duplicated recurring anchor the WHOLE duplicate is the mistake, so
+        # whole-node semantics are correct (the keeper carries the series).
+        sched.resolve(conn, id=did, resolution="cancelled", series=True)
         removed_ids.append(did)
 
     for ev in events:
@@ -358,7 +361,10 @@ def gcal_ingest(
             continue
 
         if cancelled:
-            sched.resolve(conn, id=node["id"], resolution="cancelled")
+            # series=True: Google says this event is cancelled. Google owns a
+            # synced series, so a cancelled recurring anchor means the whole
+            # series ended on Google's side — whole-node resolve is correct.
+            sched.resolve(conn, id=node["id"], resolution="cancelled", series=True)
             removed_ids.append(node["id"])
             continue
 
@@ -398,7 +404,10 @@ def gcal_ingest(
             when_local = to_local_naive(node["when_ts"]) if node["when_ts"] else None
             if when_local and when_local < now_local:
                 continue  # past / aged-out occurrence → not a deletion
-            sched.resolve(conn, id=node["id"], resolution="cancelled")
+            # series=True: deletion reconcile — the event vanished from
+            # Google's confirmed snapshot, so the synced node (series and
+            # all, for a recurring anchor Google owns) goes with it.
+            sched.resolve(conn, id=node["id"], resolution="cancelled", series=True)
             removed_ids.append(node["id"])
 
     return {

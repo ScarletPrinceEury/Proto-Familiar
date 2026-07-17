@@ -234,12 +234,12 @@ What's in my hands this moment: I can reach out warmly to my human if there's so
 // bookkeeping/reads (which alone do not). Reaching out, keeping a new
 // intention, or advancing a due one is acting; a read or a bare mark-fired
 // with nothing else is not, and no tool call at all is a stand-down.
-export const NOTICING_PROACTIVE_TOOLS = new Set([
+const NOTICING_PROACTIVE_TOOLS = new Set([
   'reach_out_to_ward', 'intention_set', 'intention_done',
 ]);
 // mark_fired is progress on a due intention only when paired with real
 // action; on its own it's just clearing the occurrence, so it's neutral.
-export const NOTICING_NEUTRAL_TOOLS = new Set([
+const NOTICING_NEUTRAL_TOOLS = new Set([
   'intention_mark_fired', 'intention_list', 'intention_drop',
   'schedule_find', 'schedule_availability', 'schedule_export', 'get_datetime',
 ]);
@@ -257,8 +257,8 @@ export function classifyNoticingOutcome(toolNamesCalled = []) {
 // ── Cadence ──────────────────────────────────────────────────────────
 
 export const DEFAULT_NOTICING_TICK_MS = 20 * 60_000;      // 20 min base pulse
-export const MIN_NOTICING_RECHECK_MS  = 5 * 60_000;       // 5 min floor
-export const MAX_NOTICING_RECHECK_MS  = 6 * 60 * 60_000;  // 6 h ceiling
+const MIN_NOTICING_RECHECK_MS  = 5 * 60_000;       // 5 min floor
+const MAX_NOTICING_RECHECK_MS  = 6 * 60 * 60_000;  // 6 h ceiling
 // Adaptive default when the model doesn't self-set: a turn that ACTED has
 // done its thing and can wait longer; a turn that stood down re-checks sooner
 // (something was flagged and left, so it's worth another look before long).

@@ -1463,9 +1463,18 @@ popover to those.
   runs all tool rounds inside it.
 - **Temporal editor modal** — six tabs (Interests / Threat /
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
-  applicable. The Routine tab hits `/api/temporal/phases` so phases
-  on past dates surface (they recur). The Schedule tab has a **view
-  toggle** (List / Calendar / Map):
+  applicable. **Time handling is local-naive end to end (0.9.x):** the
+  browser IS the ward's clock, so the editor sends plain local wall-clock
+  strings (`YYYY-MM-DDTHH:MM:SS`, no offset) for creates, edits, AND the
+  windowed-read `from`/`to` bounds — matching Unruh's local-naive storage
+  with no conversion anywhere. (It previously converted to UTC `Z` strings
+  and relied on the server-side `to_local_naive` seam to convert straight
+  back, which silently shifted times whenever `wardTimeZone` wasn't set —
+  the Berlin-bug class. Do not reintroduce `toISOString()` on any schedule
+  write or query-bound path; `teNaiveFromDate`/`teLocalTimeToday`/
+  `teDatetimeLocalToNaive` in `app.js` are the helpers.) The Routine tab
+  hits `/api/temporal/phases` so phases on past dates surface (they
+  recur). The Schedule tab has a **view toggle** (List / Calendar / Map):
   - **List** — the existing linear schedule view with windowed
     look-ahead (default 48h, configurable).
   - **Calendar** — month-grid view, Monday-start, 6×7 cells.

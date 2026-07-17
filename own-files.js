@@ -23,8 +23,8 @@ import { fileURLToPath } from 'node:url';
 // This file sits at the repo root, so its dir IS the root.
 export const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
-export const MAX_READ_BYTES   = 64 * 1024;
-export const MAX_LIST_ENTRIES = 500;
+const MAX_READ_BYTES   = 64 * 1024;
+const MAX_LIST_ENTRIES = 500;
 
 // Path segments that are never traversed or listed — secrets + noise.
 const DENY_SEGMENTS = new Set([

@@ -140,16 +140,6 @@ export function withLock(key, fn) {
   return run;
 }
 
-/** Locked read of a tome JSON file. Returns null on missing/corrupt. */
-export async function readTomeFile(filePath) {
-  return withLock(filePath, async () => {
-    try {
-      const raw = await fsp.readFile(filePath, 'utf8');
-      return JSON.parse(raw);
-    } catch { return null; }
-  });
-}
-
 /**
  * Atomically write a tome JSON file under the per-file lock. Use this
  * for whole-file creates / replacements. For read-modify-write, use
@@ -2588,7 +2578,7 @@ let _gradCache = { at: 0, items: [] };
  * TTL-cached. Best-effort: returns [] if Phylactery is unavailable.
  * @returns {Promise<Array<{id,filename,memoryId,summary,createdAt}>>}
  */
-export async function listPendingGraduations({ force = false } = {}) {
+async function listPendingGraduations({ force = false } = {}) {
   const now = Date.now();
   if (!force && now - _gradCache.at < GRADUATION_TTL_MS) return _gradCache.items;
   try {

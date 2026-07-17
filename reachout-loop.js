@@ -42,7 +42,7 @@ const DEFAULT_TICK_MS = 10 * 60_000;     // 10 min — warmth doesn't need a fas
 // requests; default is deliberately leisurely.
 const MIN_RECHECK_MS     = 15 * 60_000;          // 15 min
 const MAX_RECHECK_MS     = 24 * 60 * 60_000;     // 24 h
-export const DEFAULT_REACHOUT_RECHECK_MS = 2 * 60 * 60_000;   // 2 h
+const DEFAULT_REACHOUT_RECHECK_MS = 2 * 60 * 60_000;   // 2 h
 
 // Threat tiers at or above which the warm loop stands down for triage.
 const CRISIS_TIERS = new Set(['moderate', 'high', 'severe']);

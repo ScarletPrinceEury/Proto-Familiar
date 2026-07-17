@@ -105,7 +105,7 @@ export function parseTimestampedText(raw, { selfNames = [] } = {}) {
 // user_name, character_name}), then messages {name, is_user, is_system,
 // send_date, mes, swipes…}. is_user gives the role; send_date is ISO; mes is the
 // active swipe. System lines are skipped.
-export function parseSillyTavern(raw) {
+function parseSillyTavern(raw) {
   const lines = String(raw).split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return null;
   const out = [];
@@ -137,7 +137,7 @@ export function parseSillyTavern(raw) {
 // `message:{ role, content:[{type:"text",text}|…], timestamp }`. Outer event has
 // a clean ISO `timestamp`. Non-text content parts (tool calls, thinking) and
 // non-message events (runtime-context, snapshots) are skipped.
-export function parseOpenClaw(raw) {
+function parseOpenClaw(raw) {
   const lines = String(raw).split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return null;
   const out = [];
@@ -190,7 +190,7 @@ function gptHeaderSpeaker(line) {
   return null;
 }
 
-export function parseChatGPT(raw) {
+function parseChatGPT(raw) {
   const out = [];
   let cur = null;
   let sawYou = false, sawGpt = false;
@@ -232,7 +232,7 @@ const PARSERS = [
   parseTimestampedText,
 ];
 
-export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'ChatGPT (copy/share export)', 'timestamped text'];
+const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'ChatGPT (copy/share export)', 'timestamped text'];
 
 /**
  * Parse `raw` into normalized messages. Returns { ok, messages, format } or

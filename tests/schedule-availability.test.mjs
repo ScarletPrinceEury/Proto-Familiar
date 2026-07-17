@@ -64,43 +64,21 @@ test('computeAvailability: all-day event (payload.all_day) → all parts busy', 
 });
 
 test('computeAvailability: date-only when (≤10 chars) → all-day busy', () => {
+  // An all-day item can arrive with a bare date and no time at all (Google
+  // all-day events, hand-entered dates). It has no minutes to parse — only a
+  // day to occupy — so the whole day is busy.
   const nodes = [{
     type: 'event',
     label: 'all day',
-    when: '2026-07-06T00:00:00',  // Date-only string would fail parsing, use full timestamp
-    when_ts: '2026-07-06',  // But store the short version to test the length check
+    when: '2026-07-06',
   }];
-  // Actually, the code checks startOf(n).length which uses the when field.
-  // For a truly date-only to be tested, it needs the when field to be 10 chars.
-  // But dateAndMinutes requires 16 chars. This is a contradiction in the design.
-  // Let me test the alternate way: when with Z offset which gets stripped to 19 chars.
-  const nodes2 = [{
-    type: 'event',
-    label: 'all day',
-    when: '2026-07-06T00:00:00Z',  // Will be stripped to '2026-07-06T00:00:00' (19 chars) after the Z is removed
-  }];
-  // Actually, the code does replace('Z', '').slice(0, 19), so '2026-07-06T00:00:00Z' becomes '2026-07-06T00:00:00'
-  // Let me just test that a short when field is correctly identified as all-day.
-  // But the problem is dateAndMinutes still needs >= 16 chars to work.
-  // I think the test is exposing a code issue: the check for "length <= 10" happens AFTER
-  // we've already parsed the timestamp. Let me re-read the code...
-
-  // Looking at lines 74-75:
-  // const allDay = !!(n.payload?.all_day) || (startOf(n).length <= 10);
-  // const e = dateAndMinutes(endOf(n));
-
-  // So the code does check length BEFORE it's used to determine allDay.
-  // But then at line 75, it tries to use dateAndMinutes(endOf(n)) which would fail on a short string.
-  // This IS a potential source bug if someone passes a date-only when without an end.
-  // For now, I'll test with a proper timestamp and rely on the payload.all_day flag.
+  const avail = computeAvailability(nodes, { nowMs: NOW_MS, days: 1 });
+  assert.strictEqual(avail[0].parts.morning, 'busy');
+  assert.strictEqual(avail[0].parts.afternoon, 'busy');
+  assert.strictEqual(avail[0].parts.evening, 'busy');
 });
 
-// Replace the second test with a corrected version
-test('computeAvailability: date-only when string → all-day busy', () => {
-  // The code does: const allDay = !!(n.payload?.all_day) || (startOf(n).length <= 10);
-  // But also needs startOf(n) to have at least 16 chars for dateAndMinutes to work.
-  // This appears to be a design gap, but we can test the payload.all_day path.
-  // Skip the literal 10-char test and just verify the working path.
+test('computeAvailability: payload.all_day with full timestamp → all-day busy', () => {
   const nodes = [{
     type: 'event',
     label: 'all day',
@@ -111,6 +89,18 @@ test('computeAvailability: date-only when string → all-day busy', () => {
   assert.strictEqual(avail[0].parts.morning, 'busy');
   assert.strictEqual(avail[0].parts.afternoon, 'busy');
   assert.strictEqual(avail[0].parts.evening, 'busy');
+});
+
+test('computeAvailability: date-only when outside the window → not counted', () => {
+  const nodes = [{
+    type: 'event',
+    label: 'far away all-day',
+    when: '2026-08-20',
+  }];
+  const avail = computeAvailability(nodes, { nowMs: NOW_MS, days: 3 });
+  avail.forEach(day => {
+    assert.strictEqual(day.parts.morning, 'free');
+  });
 });
 
 test('computeAvailability: task (type task) → not busy', () => {

@@ -4,6 +4,137 @@ All endpoints are served by the Express server at `http://localhost:8742` (or yo
 
 ---
 
+## Endpoint index
+
+Every HTTP endpoint the server exposes, grouped by subsystem. The sections
+further down document the high-traffic ones in detail; for the rest, this
+index names what each does and the architecture doc section that owns it.
+
+### Core
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/health` | Liveness + version + peer (Phylactery/Unruh) status |
+| `GET /api/version` | App version (read once at boot from `package.json`) |
+| `POST /api/chat` | The chat turn (detailed below) |
+| `POST /api/guide-chat` | The Connections modal's setup-guide mini chat |
+| `GET/PUT /api/settings` | Central settings store (`settings.json`) |
+| `GET/POST /api/tailscale` | Non-loopback access gate state / toggle |
+| `POST /api/log` · `GET /api/logs` · `GET/DELETE /api/logs/:id` | Session logs (write, list, read, delete) |
+| `GET /api/active-session` | The session id chat turns are currently writing to |
+| `POST /api/session/handoff` | Summarise the ending session into a handoff note |
+| `POST /api/debug-prompt` | Rebuild the last prompt with source attribution (Prompt inspector) |
+| `POST /api/diagnostics/session-trace` | Keyword/regex scan across session logs (Diagnostics modal) |
+
+### Self-update
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/update-check` | Compare local version against the origin repo/branch |
+| `GET /api/update-status` | Last check result (feeds the topbar dot) |
+| `POST /api/update-apply` | Apply the update (git fast-forward or download-overlay) |
+
+### Memory & identity (Phylactery)
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/entity/memory` | Create a memory (consent-gated like the chat path) |
+| `GET /api/entity/memories` | List memories (filterable) |
+| `GET/PUT/DELETE /api/entity/memories/:granularity/:date` | Read / rewrite / delete one date-bucketed entry |
+| `GET/PUT/DELETE /api/entity/memories/by-id/:id` | Read / rewrite / delete one memory by slug id |
+| `POST /api/entity/memories/by-id/:id/move` | Re-date a memory |
+| `POST /api/entity/memories/supersede` | Replace one memory with a corrected one |
+| `GET/POST /api/entity/identity` | Identity files (read all / append) |
+| `PUT /api/entity/identity/:category/:filename/sections/:section` | Rewrite one identity section |
+| `GET/POST /api/entity/snapshots` · `POST /api/entity/snapshots/:id/restore` | Identity snapshots |
+| `POST /api/entity/backup/export` · `POST /api/entity/backup/restore` | Passphrase-encrypted whole-store backup |
+| `POST /api/entity/lifecycle` | Run consolidation now (`{force:true}` sweeps immediately) |
+| `GET/PUT /api/entity/ward/remember` · `PUT …/standing` | The ward's remember-consent map / standing consent |
+| `POST /api/memory-backfill` | Embed narrative rows missing vectors (migration gap) |
+| `GET /api/memory-health` | Vector-stack health + dedup mode |
+| `GET /api/memory-coverage` | Which past days have been memorized (Coverage tab) |
+| `GET/POST /api/memorize` · `DELETE /api/memorize/:id` · `POST /api/memorize/:id/ack` | Memorization queue (list, enqueue, drop, greenlight) |
+| `POST /api/memorize-day` | Enqueue one past day's sessions for memorization |
+
+### Knowledge graph (Phylactery)
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/entity/graph/full` · `GET …/nodes` · `GET …/search` | Read the graph |
+| `POST/PATCH/DELETE /api/entity/graph/nodes(/:id)` | Node CRUD |
+| `POST/PATCH/DELETE /api/entity/graph/edges(/:id)` | Edge CRUD |
+| `GET /api/entity/graph/nodes/:id/subgraph` | Neighbourhood around a node (Map view) |
+
+### Temporal (Unruh)
+
+| Endpoint | What it does |
+|---|---|
+| `GET/POST /api/temporal/schedule` · `PATCH/DELETE …/:id` | Schedule node CRUD |
+| `POST /api/temporal/schedule/:id/resolve` | Whole-node resolve (recurring needs `series:true` — fail-closed) |
+| `POST /api/temporal/schedule/:id/resolve_occurrence` | Resolve ONE occurrence of a recurring node |
+| `POST /api/temporal/schedule/edge` · `PATCH/DELETE …/edge/:id` | Consequence-graph edges |
+| `GET /api/schedule/:id/export.ics` | Deterministic `.ics` export for any node |
+| `GET /api/temporal/phases` | Daily routine phases |
+| `GET /api/temporal/bookmarks` | Idle-surfaceable bookmarks |
+| `GET /api/temporal/handoff` · `POST …/:id/consume` | Session handoff notes |
+| `GET /api/temporal/interests` · `POST …/bump` · `POST …/:id/demote` · `POST …/set-standing` | Interest weights |
+| `GET /api/temporal/ponderings` · `DELETE …/:uid` | Pondering entries |
+| `GET /api/temporal/reminders/health` | Reminders scheduler observability |
+| `GET /api/rounds` | Pondering rounds view |
+| `POST /api/ponderings/intents/acted-on` | Mark a deferred intent consumed |
+| `POST /api/interest/engage` | Record engagement with an interest |
+
+### Google Calendar sync
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/gcal/calendars` | Calendars visible to the configured source |
+| `GET /api/gcal/sync-status` · `POST /api/gcal/sync-now` | Last outcome / clear the cadence gate |
+| `GET /api/gcal/google/auth-url` · `GET /api/gcal/oauth/callback` | Native OAuth sign-in flow |
+| `POST /api/gcal/google/credentials` · `POST …/token` · `POST …/disconnect` · `GET …/status` | Native-account credential management |
+
+### Safety & care
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/threat` · `GET /api/threat/history` · `POST /api/threat/reset` | Threat tier state (reset works even when detection is disabled) |
+| `POST /api/crisis-resources` | Region-appropriate crisis contact lines |
+| `POST /api/contact-trusted-person` | Send a ward-mirrored message to a trusted contact |
+| `GET /api/triage-events` · `GET /api/noticing-events` · `GET /api/reachout-events` · `GET /api/reflection-events` | Audit logs of the autonomous loops' decisions |
+| `GET /api/outbox` · `POST …/:id/acknowledge` · `POST …/clear-acknowledged` | Proactive-message outbox |
+
+### Village (Discord)
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/village` | Villagers + categories + locations snapshot |
+| `POST/PATCH/DELETE /api/village/villagers(/:id)` | Villager registry CRUD |
+| `POST/PATCH/DELETE /api/village/categories(/:id)` | Audience categories CRUD |
+| `POST/PATCH/DELETE /api/village/locations` | Location (channel) presence config |
+| `GET /api/village/knocks` · `DELETE …/:platform/:id` | Unknown-DM knocks (list / dismiss) |
+| `GET/DELETE /api/village/location-knocks` | Unconfigured-channel knocks |
+| `GET /api/discord/status` · `POST /api/discord/apply` | Gateway status / apply settings now |
+| `GET /api/discord-writes` | Audit log of villager-initiated writes |
+
+### Tomes & import
+
+| Endpoint | What it does |
+|---|---|
+| `GET/POST /api/tomes` · `GET/PUT/PATCH/DELETE /api/tomes/:id` | Tome CRUD |
+| `POST /api/tomes/default/entries` · `DELETE /api/tomes/:id/entries/:uid` | Entry-level ops |
+| `GET /api/tomes/session-memories` | The session-memories runtime tome |
+| `POST /api/import-logs` · `POST /api/import-logs-batch` | Foreign chat-log import (ChatGPT, SillyTavern, OpenClaw…) |
+
+### Places & weather
+
+| Endpoint | What it does |
+|---|---|
+| `GET/POST /api/locations` · `DELETE /api/locations/:id` | Saved places |
+| `POST /api/locations/current` | Set the current place |
+| `POST /api/locations/geocode` | Name → coordinates lookup |
+
+---
+
 ## Chat
 
 ### `POST /api/chat`
