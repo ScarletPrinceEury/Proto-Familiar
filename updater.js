@@ -42,7 +42,7 @@ export function updateDisabled() {
 }
 
 /** Default git runner (repo cwd, no shell → no injection). Tests inject a fake. */
-export async function defaultGit(args, { timeout = 20000 } = {}) {
+async function defaultGit(args, { timeout = 20000 } = {}) {
   const { stdout } = await execFileP('git', args, { cwd: __dirname, timeout, windowsHide: true });
   return String(stdout).trim();
 }

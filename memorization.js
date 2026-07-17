@@ -110,8 +110,8 @@ const MAX_ATTEMPTS    = 5;
 const BACKOFF_MS      = [5_000, 30_000, 120_000, 600_000, 1_800_000]; // 5s, 30s, 2m, 10m, 30m
 const TICK_MS         = 5_000;
 const ACK_TTL_MS      = 24 * 60 * 60 * 1000; // prune acknowledged terminal jobs after a day
-export const SESSION_MEMORIES_TOME_NAME = 'Session Memories';
-export const SESSION_MEMORIES_TOME_DESC = 'Auto-generated entries from past conversations. Created on first session memorization.';
+const SESSION_MEMORIES_TOME_NAME = 'Session Memories';
+const SESSION_MEMORIES_TOME_DESC = 'Auto-generated entries from past conversations. Created on first session memorization.';
 // Aliases kept for the module-local code below.
 const TOME_NAME        = SESSION_MEMORIES_TOME_NAME;
 const TOME_DESCRIPTION = SESSION_MEMORIES_TOME_DESC;
@@ -439,7 +439,7 @@ async function callProvider({ provider, apiKey, model, prompt }) {
  * produced four whole entries and one cut-off one keeps the four. Shared by
  * both the topic and fact parsers so the counter lives in exactly one place.
  */
-export function salvageArrayField(raw, key) {
+function salvageArrayField(raw, key) {
   const text = String(raw);
   const keyAt = text.indexOf(`"${key}"`);
   if (keyAt < 0) return [];

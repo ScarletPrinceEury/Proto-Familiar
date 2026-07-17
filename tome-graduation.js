@@ -38,7 +38,7 @@ export const EXCLUDED_TOME_NAMES = new Set([
   'Ponderings',
 ]);
 
-export const DEFAULT_BATCH_SIZE = 5;
+const DEFAULT_BATCH_SIZE = 5;
 
 /**
  * Pure candidate selection. Given loaded tomes ([{ file, tome }]), return up

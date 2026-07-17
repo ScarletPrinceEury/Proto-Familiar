@@ -2,7 +2,10 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+  <!-- Pinch-zoom stays enabled (WCAG 1.4.4); iOS input auto-zoom is prevented
+       by the 16px font-size on coarse pointers in style.css, not by locking
+       the viewport. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="description" content="Proto-Familiar — lightweight LLM chat frontend">
   <title>Proto-Familiar</title>
   <!-- Ese ne Tekrema — "the teeth and the tongue" — Adinkra symbol of
@@ -13,6 +16,9 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Keyboard users can jump straight to the conversation instead of
+       tabbing through the whole sidebar (WCAG 2.4.1 bypass blocks). -->
+  <a class="skip-link" href="#chat-pane">Skip to conversation</a>
   <div class="app">
 
     <!-- ── Top bar ─────────────────────────────────────────── -->
@@ -54,7 +60,7 @@
             <div class="tailscale-row">
               <span class="tailscale-state-label">Access from other devices</span>
               <label class="switch">
-                <input type="checkbox" id="tailscale-switch" />
+                <input type="checkbox" id="tailscale-switch" aria-label="Access from other devices" />
                 <span class="switch-slider"></span>
               </label>
             </div>
@@ -229,8 +235,8 @@
             <p class="field-hint">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
             <div id="contacts-list" style="margin-top: 8px"></div>
             <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
-              <input type="text" id="contact-name"    placeholder="Name (e.g. Sam)" style="flex: 1; min-width: 8em">
-              <input type="text" id="contact-webhook" placeholder="Discord webhook URL" style="flex: 2; min-width: 14em">
+              <input type="text" id="contact-name"    aria-label="Contact name" placeholder="Name (e.g. Sam)" style="flex: 1; min-width: 8em">
+              <input type="text" id="contact-webhook" aria-label="Contact Discord webhook URL" placeholder="Discord webhook URL" style="flex: 2; min-width: 14em">
               <button id="contact-add" class="btn-secondary">+ Add</button>
             </div>
             <p class="field-hint" style="margin-top: 6px"><strong>How to make a Discord webhook:</strong> on the contact's side, in their Discord server's channel settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it here.</p>
@@ -347,7 +353,7 @@
                 </div>
                 <div id="audience-participants" class="audience-participants"></div>
                 <div class="audience-add-row">
-                  <input type="text" id="audience-search" placeholder="Add a name…" autocomplete="off" list="audience-datalist">
+                  <input type="text" id="audience-search" aria-label="Add a participant by name" placeholder="Add a name…" autocomplete="off" list="audience-datalist">
                   <datalist id="audience-datalist"></datalist>
                   <button id="audience-add-btn" class="btn-secondary" style="flex-shrink:0">Add</button>
                 </div>
@@ -433,7 +439,7 @@
         <p class="field-hint">Save the fields above as a named connection. The first one is your <strong>primary</strong>; the rest are tried in order as <strong>fallbacks</strong> when a request fails or returns empty content.</p>
         <ul id="connections-list" class="connections-list" aria-label="Saved connections"></ul>
         <div class="field connection-save-row">
-          <input type="text" id="connection-name-input" placeholder="Name this connection (e.g. Primary, Work, Backup)" maxlength="64" spellcheck="false">
+          <input type="text" id="connection-name-input" aria-label="Connection name" placeholder="Name this connection (e.g. Primary, Work, Backup)" maxlength="64" spellcheck="false">
           <button id="save-connection-btn" class="btn-secondary" type="button">+ Save current as connection</button>
         </div>
         <div class="field">
@@ -500,7 +506,7 @@
           <div id="guide-chat-messages" style="max-height:240px;overflow-y:auto;margin:8px 0;display:flex;flex-direction:column;gap:8px"></div>
           <p class="field-hint hidden" id="guide-chat-unavailable">I can't chat here just now — there's no model connection set up yet. The buttons below still work.</p>
           <div class="field-row" style="gap:6px;align-items:stretch">
-            <input type="text" id="guide-chat-input" placeholder="e.g. which is best if I don't want to sign up for anything?" style="flex:1" autocomplete="off">
+            <input type="text" id="guide-chat-input" aria-label="Ask the setup guide" placeholder="e.g. which is best if I don't want to sign up for anything?" style="flex:1" autocomplete="off">
             <button class="btn-send" id="guide-chat-send" type="button">Ask</button>
           </div>
         </details>

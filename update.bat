@@ -24,7 +24,14 @@ REM   set BRANCH=my-feature-branch
 REM   update.bat
 REM GitHub's archive endpoint accepts branch names with slashes verbatim.
 if "%BRANCH%"=="" set "BRANCH=main"
-set "REPO_ZIP=https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/%BRANCH%.zip"
+REM Which repo to pull from: read package.json's `repository` field via node
+REM when available (so a fork updates from ITSELF, same as the in-app updater),
+REM falling back to the canonical repo. node exists on any installed system.
+set "REPO_SLUG=ScarletPrinceEury/Proto-Familiar"
+where node >nul 2>nul && (
+  for /f "delims=" %%S in ('node -e "try{const r=require('./package.json').repository;const u=typeof r==='string'?r:(r&&r.url)||'';const m=u.match(/github\.com[:/]+([^/]+\/[^/.]+)/);if(m)console.log(m[1])}catch{}" 2^>nul') do set "REPO_SLUG=%%S"
+)
+set "REPO_ZIP=https://github.com/%REPO_SLUG%/archive/refs/heads/%BRANCH%.zip"
 
 REM A git checkout should update via install.bat's git pull, not an overlay.
 if exist "%DEST%\.git" (
@@ -39,8 +46,11 @@ REM modules), so the update would partially-succeed and the running process
 REM would keep serving the old code — exactly the "previous version in the
 REM corner after update" symptom. We use stop.bat (which knows how to kill
 REM the tracked PID and the port owner) so the update can proceed cleanly.
+REM PORT is the variable every other script (start.bat, start.sh, server.js)
+REM reads; PROTO_FAMILIAR_PORT is kept as a legacy fallback.
 set "PF_PORT=8742"
 if not "%PROTO_FAMILIAR_PORT%"=="" set "PF_PORT=%PROTO_FAMILIAR_PORT%"
+if not "%PORT%"=="" set "PF_PORT=%PORT%"
 for /f %%R in ('powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]'%PF_PORT%'); $c.Close(); 'busy' } catch { 'free' }" 2^>nul') do set "PORT_STATE=%%R"
 set "WAS_RUNNING=0"
 if "%PORT_STATE%"=="busy" (
@@ -84,9 +94,10 @@ if errorlevel 1 (
 )
 
 REM Find the extracted top-level folder rather than hardcoding the name,
-REM so a repo/branch rename doesn't silently break the updater.
+REM so a repo/branch rename (or a differently-named fork) doesn't silently
+REM break the updater — any single top-level dir with a package.json is it.
 set "SRC="
-for /d %%D in ("%TMP%\x\Proto-Familiar-*") do set "SRC=%%D"
+for /d %%D in ("%TMP%\x\*") do if exist "%%D\package.json" set "SRC=%%D"
 if not defined SRC (
   echo [ERROR] Unexpected archive layout - aborting without changing anything.
   rmdir /s /q "%TMP%" 2>nul
@@ -100,8 +111,17 @@ if not exist "%SRC%\package.json" (
   exit /b 1
 )
 
-REM Never copy the updater scripts over themselves - a running script that
-REM gets overwritten mid-run can misbehave. You keep your current ones.
+REM Update the updater scripts too - but SAFELY. cmd reads a running batch
+REM file from disk as it goes, so overwriting update.bat mid-run corrupts
+REM this very execution. Stage the new copies as *.pfnew now; a detached
+REM helper swaps them into place AFTER this script exits (see the very end).
+REM Without this, download installs keep a stale updater forever, so a fix
+REM to the update flow itself never reaches the people who need it.
+for %%F in (update.bat update.sh update.command) do (
+  if exist "%SRC%\%%F" copy /y "%SRC%\%%F" "%DEST%\%%F.pfnew" >nul 2>nul
+)
+REM Drop them from the source so the bulk overlay below can't overwrite the
+REM script we're currently running.
 del "%SRC%\update.bat" "%SRC%\update.sh" "%SRC%\update.command" 2>nul
 
 echo Applying update - your settings, memories, tomes, and logs are preserved...
@@ -142,4 +162,9 @@ if "%WAS_RUNNING%"=="1" (
 )
 echo.
 pause
+REM Swap the staged updater scripts into place AFTER this script exits: a
+REM detached helper waits a beat for cmd to release update.bat, then renames
+REM the .pfnew files over the old ones. The next update run uses the fresh
+REM updater. Harmless when nothing was staged.
+start "" /min cmd /c "timeout /t 2 /nobreak >nul & for %%F in (update.bat update.sh update.command) do if exist "%DEST%\%%F.pfnew" move /y "%DEST%\%%F.pfnew" "%DEST%\%%F" >nul 2>nul"
 endlocal

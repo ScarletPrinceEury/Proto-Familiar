@@ -1790,6 +1790,11 @@ function setStatus(type) {
   // type: '' | 'ok' | 'busy' | 'err'
   const badge = $('status-badge');
   badge.className = 'status-badge' + (type ? ' ' + type : '');
+  // The dot's color is not the only carrier of state (WCAG 1.4.1):
+  // name the state for screen readers and colorblind users hovering.
+  const label = { ok: 'Connected', busy: 'Working…', err: 'Connection error' }[type] || 'Idle';
+  badge.title = label;
+  badge.setAttribute('aria-label', label);
 }
 
 /**
@@ -5788,7 +5793,7 @@ async function refreshTomesList() {
         <div class="lorebook-entry-actions">
           <button class="btn-ghost tome-open-btn" data-id="${esc(tome.id)}" title="View entries">Open</button>
           <button class="btn-ghost tome-toggle-btn" data-id="${esc(tome.id)}" title="${tome.enabled ? 'Disable tome' : 'Enable tome'}">${tome.enabled ? 'Enabled' : 'Disabled'}</button>
-          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome">✕</button>
+          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome" aria-label="Delete tome">✕</button>
         </div>
       </div>
       ${tome.description ? `<div class="lorebook-entry-content">${esc(tome.description)}</div>` : ''}
@@ -7006,8 +7011,8 @@ function keGraphEdgeRowHTML(ownerId, e, sg) {
   const w          = typeof e.weight === 'number' ? e.weight.toFixed(2) : '0.50';
   return `<div class="ke-edge-row" data-edge-id="${esc(e.id)}">
     <span class="ke-edge-text">${dir} ${esc(t)} <span class="ke-edge-weight-display">[${esc(w)}]</span> ${dir} <strong>${esc(otherLabel)}</strong></span>
-    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit">✎</button>
-    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete">✕</button>
+    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit" aria-label="Edit link">✎</button>
+    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete" aria-label="Delete link">✕</button>
   </div>`;
 }
 
@@ -8027,37 +8032,48 @@ function teEscapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// ── Local <-> UTC conversion helpers for the temporal editor ────────
+// ── Time helpers for the temporal editor ───────────────────────────
 //
-// All Unruh storage is ISO-8601 UTC. The browser UI takes / shows
-// times in the user's local timezone. These helpers bridge the two
-// so a phase set to "10pm" really fires at 10pm by the user's clock,
-// not at 22:00 UTC.
+// Unruh's time model is LOCAL-NAIVE (0.7.84): every stored timestamp is
+// the ward's wall clock with no offset, and the browser IS the ward's
+// clock. So the UI sends plain local-naive strings and does NO timezone
+// math — a phase set to "10pm" is stored as T22:00:00 and fires at 10pm.
+// (These helpers used to convert to UTC with a Z suffix; that only
+// worked because a server-side seam converted it straight back, and it
+// silently broke whenever the ward zone wasn't configured. Naive parse
+// in `new Date(...)` is LOCAL per spec, so display needs no conversion
+// either — and legacy offset-bearing rows still render correctly.)
 
-// "HH:MM" in user's LOCAL time, today's local date → ISO UTC string.
-function teLocalTimeTodayToIsoUtc(hhmm) {
+// "HH:MM" on today's local date → local-naive "YYYY-MM-DDTHH:MM:00".
+function teLocalTimeToday(hhmm) {
   if (!/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
   const [hh, mm] = hhmm.split(':').map(Number);
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   const now = new Date();
-  const local = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
-  return local.toISOString();
+  const pad = n => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(hh)}:${pad(mm)}:00`;
 }
 
-// <input type="datetime-local"> value ("YYYY-MM-DDTHH:MM"), which the
-// browser hands back as user's LOCAL wall-clock time with no offset →
-// ISO UTC string. Returns null on empty/invalid input.
-function teDatetimeLocalToIsoUtc(value) {
+// Date object → local-naive "YYYY-MM-DDTHH:MM:SS" on the browser's clock.
+// Used for query-window bounds so they compare against Unruh's local-naive
+// storage without an offset shift (a Z-suffixed bound reads hours off).
+function teNaiveFromDate(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// <input type="datetime-local"> value ("YYYY-MM-DDTHH:MM") — already the
+// ward's local wall clock with no offset → local-naive with seconds.
+// Returns null on empty/invalid input.
+function teDatetimeLocalToNaive(value) {
   if (!value || typeof value !== 'string') return null;
-  // new Date("YYYY-MM-DDTHH:MM") parses as LOCAL time per spec.
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  if (Number.isNaN(new Date(value).getTime())) return null;
+  return value.length === 16 ? `${value}:00` : value;
 }
 
-// ISO UTC → local "HH:MM" for display in the routine list.
-function teIsoUtcToLocalHhMm(iso) {
+// Stored timestamp → local "HH:MM" for display in the routine list.
+function teIsoToLocalHhMm(iso) {
   if (!iso) return '?';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '?';
@@ -8066,9 +8082,9 @@ function teIsoUtcToLocalHhMm(iso) {
   return `${hh}:${mm}`;
 }
 
-// ISO UTC → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local input
-// from an existing schedule node.
-function teIsoUtcToDatetimeLocal(iso) {
+// Stored timestamp → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local
+// input from an existing schedule node.
+function teIsoToDatetimeLocal(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
@@ -8076,10 +8092,10 @@ function teIsoUtcToDatetimeLocal(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// ISO UTC → friendly local datetime string for list rows ("today 22:00",
+// Stored timestamp → friendly local datetime string for list rows ("today 22:00",
 // "tomorrow 09:30", "Mon 10:00", "May 30 14:00"). Keeps the timezone
 // implicit (the user's own) — no offset noise.
-function teIsoUtcToLocalFriendly(iso) {
+function teIsoToLocalFriendly(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -8376,8 +8392,8 @@ async function teLoadSchedule() {
   list.innerHTML = '<p class="logs-empty">Loading…</p>';
   const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
   const now   = new Date();
-  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();   // half-window behind
-  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  const from  = teNaiveFromDate(new Date(now.getTime() - hours * 30 * 60_000));   // half-window behind
+  const to    = teNaiveFromDate(new Date(now.getTime() + hours * 30 * 60_000));
   try {
     const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -8394,8 +8410,8 @@ async function teLoadSchedule() {
       const id    = teEscapeHtml(n.id);
       const label = teEscapeHtml(n.label);
       const type  = teEscapeHtml(n.type);
-      const when  = n.when ? `<span style="font-size: 0.85em; opacity: 0.8">${teEscapeHtml(teIsoUtcToLocalFriendly(n.when))}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
-      const end   = n.end  ? `<span style="font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(teIsoUtcToLocalFriendly(n.end))}</span>` : '';
+      const when  = n.when ? `<span style="font-size: 0.85em; opacity: 0.8">${teEscapeHtml(teIsoToLocalFriendly(n.when))}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
+      const end   = n.end  ? `<span style="font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(teIsoToLocalFriendly(n.end))}</span>` : '';
       const resolution = n.resolution
         ? `<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${teEscapeHtml(n.resolution)}</span>`
         : '';
@@ -8427,7 +8443,7 @@ async function teLoadSchedule() {
           <strong style="flex: 1">${label}${recurringTag}</strong>
           ${resolution}
           ${resolveBtns}
-          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)">🗑</button>
+          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)" aria-label="Permanently delete schedule item">🗑</button>
         </div>
         <div style="margin-top: 2px">${when}${end}</div>
       </div>`;
@@ -8588,7 +8604,7 @@ function teScheduleMapInstance() {
     },
     tooltipNodeHTML: n => {
       const time = n.when
-        ? teIsoUtcToLocalFriendly(n.when) + (n.end ? ' → ' + teIsoUtcToLocalFriendly(n.end) : '')
+        ? teIsoToLocalFriendly(n.when) + (n.end ? ' → ' + teIsoToLocalFriendly(n.end) : '')
         : 'no time set';
       return `<div class="ke-graph-tooltip-title">${teEscapeHtml(n.label ?? n.id)}</div>
         <div class="ke-graph-tooltip-sub">${teEscapeHtml(n.type ?? 'task')}${n.resolution ? ' · ' + teEscapeHtml(n.resolution) : ''}</div>
@@ -8615,8 +8631,8 @@ async function teLoadScheduleMap() {
   status.classList.remove('hidden');
   const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
   const now   = new Date();
-  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();
-  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  const from  = teNaiveFromDate(new Date(now.getTime() - hours * 30 * 60_000));
+  const to    = teNaiveFromDate(new Date(now.getTime() + hours * 30 * 60_000));
   try {
     const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
     if (gen !== _teSchedMapGen) return;
@@ -8702,13 +8718,13 @@ function teSchedOpenPopover(node, clientX, clientY) {
     const tag = tBits.length ? ` <span class="te-edge-tag">[${teEscapeHtml(tBits.join(' · '))}]</span>` : '';
     return `<div class="ke-edge-row" data-edge-id="${teEscapeHtml(e.id)}">
       <span class="ke-edge-text">${arrow} ${teEscapeHtml(e.type)} ${arrow} <strong>${teEscapeHtml(other?.label ?? otherId)}</strong>${tag}</span>
-      <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link">✕</button>
+      <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link" aria-label="Remove link">✕</button>
     </div>`;
   }).join('');
   const kindOptions   = TE_EDGE_KINDS.map(k => `<option value="${k}">${k}</option>`).join('');
   const targetOptions = others.map(n => `<option value="${teEscapeHtml(n.id)}">${teEscapeHtml(n.label ?? n.id)}</option>`).join('');
   const time = node.when
-    ? teIsoUtcToLocalFriendly(node.when) + (node.end ? ' → ' + teIsoUtcToLocalFriendly(node.end) : '')
+    ? teIsoToLocalFriendly(node.when) + (node.end ? ' → ' + teIsoToLocalFriendly(node.end) : '')
     : 'no time set';
 
   pop.innerHTML = `
@@ -8838,8 +8854,8 @@ async function teLoadCalendar() {
   const gridStart = teCalendarGridStart(year, month);
   const gridEnd = new Date(gridStart);
   gridEnd.setDate(gridEnd.getDate() + 6 * 7); // 6 weeks
-  const fromIso = gridStart.toISOString();
-  const toIso   = new Date(gridEnd.getTime() - 1).toISOString();
+  const fromIso = teNaiveFromDate(gridStart);
+  const toIso   = teNaiveFromDate(new Date(gridEnd.getTime() - 1));
 
   let nodes = [];
   try {
@@ -8887,7 +8903,7 @@ async function teLoadCalendar() {
       const cls = [`te-cal-event`, `type-${teEscapeHtml(ev.type || 'event')}`];
       if (ev.__occurrence_of) cls.push('recurring');
       if (ev.resolution)      cls.push('resolved');
-      const time = ev.when ? teEscapeHtml(teIsoUtcToLocalHhMm(ev.when)) : '';
+      const time = ev.when ? teEscapeHtml(teIsoToLocalHhMm(ev.when)) : '';
       return `<div class="${cls.join(' ')}" title="${teEscapeHtml(ev.label || '')}${time ? ' · ' + time : ''}">${time ? `${time} ` : ''}${teEscapeHtml(ev.label || '')}</div>`;
     }).join('');
     const more = events.length > 3 ? `<div class="te-cal-more">+${events.length - 3} more</div>` : '';
@@ -8922,7 +8938,7 @@ function teOpenCalendarCreate(dateKey) {
   teSetScheduleView('list');
   teToggleScheduleForm(true);
   // Pre-fill the datetime-local input with the chosen day at 9am
-  // local. teDatetimeLocalToIsoUtc handles the conversion when the
+  // local. teDatetimeLocalToNaive handles the conversion when the
   // user saves.
   const whenInput = $('te-sched-when');
   if (whenInput && dateKey) {
@@ -8987,8 +9003,8 @@ async function teSaveScheduleNode() {
   // right wall-clock no matter where the server's TZ is.
   const whenLocal = $('te-sched-when').value;
   const endLocal  = $('te-sched-end').value;
-  const when = teDatetimeLocalToIsoUtc(whenLocal);
-  const end  = teDatetimeLocalToIsoUtc(endLocal);
+  const when = teDatetimeLocalToNaive(whenLocal);
+  const end  = teDatetimeLocalToNaive(endLocal);
   if (!label) { alert('Label is required.'); return; }
   // Reminders MUST have a fire time — the Python layer would reject
   // the create otherwise, but failing fast here is friendlier.
@@ -9088,8 +9104,8 @@ async function teLoadRoutine() {
       // Show time-of-day in the USER'S local TZ (storage is UTC).
       // Slicing the raw ISO string would print UTC hours and lie to
       // anyone not in UTC.
-      const whenT   = teEscapeHtml(teIsoUtcToLocalHhMm(p.when));
-      const endT    = teEscapeHtml(teIsoUtcToLocalHhMm(p.end));
+      const whenT   = teEscapeHtml(teIsoToLocalHhMm(p.when));
+      const endT    = teEscapeHtml(teIsoToLocalHhMm(p.end));
       return `
       <div data-phase-id="${id}" style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
         <div style="display: flex; gap: 8px; align-items: baseline">
@@ -9157,15 +9173,15 @@ async function teEditPhase(id, phase) {
   // Display existing times in user's LOCAL TZ so what they see is what
   // they're editing (the storage is UTC, but the user thinks in their
   // own clock).
-  const whenT = prompt('Start time (HH:MM, 24-hour, your local time):', teIsoUtcToLocalHhMm(phase.when));
+  const whenT = prompt('Start time (HH:MM, 24-hour, your local time):', teIsoToLocalHhMm(phase.when));
   if (whenT == null) return;
-  const endT  = prompt('End time (HH:MM, 24-hour, your local time):',   teIsoUtcToLocalHhMm(phase.end));
+  const endT  = prompt('End time (HH:MM, 24-hour, your local time):',   teIsoToLocalHhMm(phase.end));
   if (endT  == null) return;
   const texture = prompt('Texture (short description of what the Familiar is like in this phase):', phase.payload?.texture ?? '');
   if (texture == null) return;
 
-  const when = teLocalTimeTodayToIsoUtc(whenT.trim());
-  const end  = teLocalTimeTodayToIsoUtc(endT.trim());
+  const when = teLocalTimeToday(whenT.trim());
+  const end  = teLocalTimeToday(endT.trim());
   if (!when || !end) { alert('Times must be HH:MM (e.g. 09:30) — entered in your local time.'); return; }
 
   try {
@@ -9211,8 +9227,8 @@ async function teSavePhase() {
   // compares only the HH:MM:SS portion when deciding which phase is
   // active right now. We still stamp today's date for ordering /
   // audit purposes.
-  const when = teLocalTimeTodayToIsoUtc(startT);
-  const end  = teLocalTimeTodayToIsoUtc(endT);
+  const when = teLocalTimeToday(startT);
+  const end  = teLocalTimeToday(endT);
   if (!when || !end) { alert('Could not parse the times. Use HH:MM (the picker should fill this).'); return; }
   try {
     const r = await fetch('/api/temporal/schedule', {
@@ -9504,16 +9520,6 @@ async function acknowledgeOutboxItem(id) {
   }
 }
 
-// HTML-escape for the few remaining places that still build innerHTML
-// from outbox-adjacent strings (trusted-contacts list rendering, etc).
-// Kept with its historical name so the call sites below don't have to
-// move when we eventually phase the banner UI out completely.
-function escapeOutboxText(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 function startOutboxPolling() {
   if (_outboxPollTimer) return;
   fetchOutbox();
@@ -9531,15 +9537,15 @@ function renderTrustedContacts() {
     return;
   }
   list.innerHTML = contacts.map((c, i) => {
-    const name    = escapeOutboxText(c.name ?? '?');
-    const channel = escapeOutboxText(c.channel ?? '?');
+    const name    = teEscapeHtml(c.name ?? '?');
+    const channel = teEscapeHtml(c.channel ?? '?');
     const hint    = c.webhook ? `${c.webhook.slice(0, 32)}…` : '(no webhook)';
     return `
       <div style="display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
         <strong style="flex: 1">${name}</strong>
         <span style="font-size: 0.85em; opacity: 0.7">${channel}</span>
-        <code style="font-size: 0.75em; opacity: 0.55">${escapeOutboxText(hint)}</code>
-        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact">🗑</button>
+        <code style="font-size: 0.75em; opacity: 0.55">${teEscapeHtml(hint)}</code>
+        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact" aria-label="Remove this contact">🗑</button>
       </div>`;
   }).join('');
   list.querySelectorAll('.contact-remove').forEach(btn => {
@@ -9692,7 +9698,7 @@ function vlRenderKnocks(knocks) {
           <select class="vl-knock-target" aria-label="Register as">${options}</select>
           <button class="btn-secondary vl-knock-bind" type="button">Register</button>
           <button class="btn-ghost vl-knock-me" type="button" title="This is my own Discord account">This is me</button>
-          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)">×</button>
+          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)" aria-label="Dismiss knock">×</button>
         </div>
       </div>`;
     }).join('');
@@ -9965,7 +9971,7 @@ function vlAliasRowHtml(i, platform, id, handle) {
     <input type="text" placeholder="platform" value="${esc(platform)}" class="vl-alias-plat">
     <input type="text" placeholder="stable id" value="${esc(id)}" class="vl-alias-id">
     <input type="text" placeholder="handle" value="${esc(handle)}" class="vl-alias-hdl">
-    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" style="padding:2px 7px">×</button>
+    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" aria-label="Remove alias" style="padding:2px 7px">×</button>
   </div>`;
 }
 
@@ -10146,7 +10152,7 @@ function vlGrantRowHtml(i, key, type, val, disabled) {
       <option value="str"${type === 'str' ? ' selected' : ''}>string</option>
     </select>
     <input type="text" placeholder="true / value" value="${esc(val)}" class="vl-grant-val"${d}>
-    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" style="padding:2px 7px">×</button>` : '<span></span>'}
+    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" aria-label="Remove grant" style="padding:2px 7px">×</button>` : '<span></span>'}
   </div>`;
 }
 
@@ -10256,7 +10262,7 @@ function vlRenderLocationKnocks(knocks) {
         </div>
         <div class="vl-knock-actions">
           <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
-          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)">×</button>
+          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">×</button>
         </div>
       </div>`;
     }).join('');

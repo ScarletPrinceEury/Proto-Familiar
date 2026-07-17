@@ -388,7 +388,7 @@ function ambientFor(locationKey) {
 }
 
 /** Record an inbound message timestamp for activity-rate tiering. */
-export function recordGuildActivity(locationKey, now = Date.now()) {
+function recordGuildActivity(locationKey, now = Date.now()) {
   const st = ambientFor(locationKey);
   st.recentTs.push(now);
   const cutoff = now - ACTIVITY_WINDOW_MS;
@@ -396,11 +396,10 @@ export function recordGuildActivity(locationKey, now = Date.now()) {
 }
 
 /** Stamp that an unprompted turn was just attempted (starts the cooldown). */
-export function markAmbientTurn(locationKey, now = Date.now()) {
+function markAmbientTurn(locationKey, now = Date.now()) {
   ambientFor(locationKey).lastTurnAt = now;
 }
 
-export function resetAmbientState() { ambientState.clear(); }
 
 /**
  * Settle window for active-mode reply batching, adapted to room pace. Waits a

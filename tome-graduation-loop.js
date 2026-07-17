@@ -35,7 +35,7 @@ let _started  = false;
 let _interval = null;
 let _active   = null;
 
-export function tomeGraduationHardDisabled() {
+function tomeGraduationHardDisabled() {
   return process.env.PROTO_FAMILIAR_TOME_GRADUATION_DISABLED === '1';
 }
 
@@ -61,7 +61,7 @@ async function loadTomes() {
 }
 
 // ── The judgment prompt (first-person; reuses the Phase 3 rubric) ──
-export function buildGraduationPrompt({ identityContext, items }) {
+function buildGraduationPrompt({ identityContext, items }) {
   const rubric =
 `I'm tidying knowledge that's been sitting in my tomes, moving anything durable into its right home in my canonical self. For each entry I decide where it truly belongs:
 - A standing fact about who I am, as I grow and change → my self identity (home "self").

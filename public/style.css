@@ -17,9 +17,13 @@
   --border:          #383b55;
   --border-light:    #2f3248;
 
+  /* Text hierarchy. dim/muted are real text colors (hints, timestamps,
+     chips), so both must clear WCAG AA 4.5:1 against the LIGHTEST dark
+     surface (--surface-raise #252837): dim 5.6:1, muted 5.0:1. Don't
+     darken them back below that for looks — low-vision users read these. */
   --text:            #cdd6f4;
-  --text-dim:        #6c7186;
-  --text-muted:      #45475a;
+  --text-dim:        #9aa1bb;
+  --text-muted:      #8f96b0;
 
   --accent:          #89b4fa;
   --accent-hover:    #74a5f8;
@@ -52,9 +56,11 @@
   --border:          #d4d4e0;
   --border-light:    #e4e4ef;
 
+  /* Same AA rule as dark: dim/muted must clear 4.5:1 on white AND the
+     tinted surfaces (#f0f0f6 worst case): dim 5.9:1, muted 4.9:1. */
   --text:            #1e1e2e;
-  --text-dim:        #6c6c84;
-  --text-muted:      #b4b4c8;
+  --text-dim:        #5f5f78;
+  --text-muted:      #696982;
 
   --accent:          #1d6fce;
   --accent-hover:    #155db3;
@@ -62,9 +68,12 @@
 
   --user-bg:         #dbeafe;
   --assistant-bg:    #f7f7fb;
-  --error-color:     #d9534f;
+  /* error/success are used as TEXT (status lines, badges) — the classic
+     bootstrap values fail AA on light backgrounds (3.6:1 / 2.9:1), so
+     these are darkened variants that pass (4.8:1 / 5.3:1). */
+  --error-color:     #c13c38;
   --error-bg:        #fff0f0;
-  --success-color:   #28a745;
+  --success-color:   #1a7431;
   --warn-color:      #856404;
 
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.10);
@@ -91,6 +100,43 @@ body {
   color: var(--text);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ── Keyboard focus (WCAG 2.4.7) ─────────────────────────────── */
+/* One visible focus indicator for every interactive element, but only
+   for keyboard/programmatic focus (:focus-visible) — mouse clicks stay
+   clean. Individual controls may ALSO restyle borders on :focus; they
+   must never suppress this outline. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Inputs draw their focus as an accent border (below); double outlines
+   read as clutter, so keep the outline tight there. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 0;
+}
+
+/* ── Skip link (WCAG 2.4.1) ──────────────────────────────────── */
+/* Visually hidden until keyboard-focused, then a small pill under the
+   topbar so a keyboard user can jump past the sidebar to the chat. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 200;
+  padding: 8px 14px;
+  background: var(--surface-raise);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.skip-link:focus {
+  transform: none;
 }
 
 /* ── App shell ───────────────────────────────────────────────── */
@@ -145,6 +191,11 @@ body {
   letter-spacing: 0.03em;
   color: var(--text);
   user-select: none;
+  /* Never wrap to two lines on narrow phones — ellipsize instead. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .status-badge {
@@ -291,8 +342,14 @@ body {
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
-  outline: none;
   border-color: var(--accent);
+}
+/* Suppress the outline only for non-keyboard focus — the global
+   :focus-visible indicator must survive (WCAG 2.4.7). */
+.field input:focus:not(:focus-visible),
+.field select:focus:not(:focus-visible),
+.field textarea:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .field textarea {
@@ -1094,8 +1151,10 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 #user-input:focus {
-  outline: none;
   border-color: var(--accent);
+}
+#user-input:focus:not(:focus-visible) {
+  outline: none;
 }
 
 #user-input::placeholder {

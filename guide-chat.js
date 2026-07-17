@@ -64,7 +64,7 @@ How I use all this: I don't dump the whole list on {{user}}. I ask what matters 
 
 // §5c — keep it plain. Steers register + term-explaining only; the identity
 // anchor ("in my own voice") keeps whatever personality {{user}} configured.
-export const GUIDE_NO_JARGON = `When I explain this, I keep it plain. I don't reach for tech words like "terminal", "server", or "API" without saying what they mean in a sentence, and I check {{user}} is with me before I move on. I do this in my own voice — however that actually sounds for me.`;
+const GUIDE_NO_JARGON = `When I explain this, I keep it plain. I don't reach for tech words like "terminal", "server", or "API" without saying what they mean in a sentence, and I check {{user}} is with me before I move on. I do this in my own voice — however that actually sounds for me.`;
 
 /**
  * Assemble the stripped system context for the guide chat. `identityStatic` is

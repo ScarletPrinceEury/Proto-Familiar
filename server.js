@@ -50,7 +50,7 @@ import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
-import { startNoticingLoop } from './noticing-loop.js';
+import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown } from './noticing-loop.js';
 import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './noticing.js';
 import { getContactBaseline, weekdayClass } from './contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
@@ -2520,11 +2520,14 @@ app.put('/api/settings', async (req, res) => {
   // lock here makes the prior-vs-next diff consistent against the
   // file each PUT actually replaces.
   let priorCreds = { id: null, apiKey: '', provider: '', model: '' };
+  let priorNoticingEnabled;
   try {
     await withLock(SETTINGS_FILE, async () => {
       try {
         const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-        priorCreds = phylacteryCredsSnapshot(JSON.parse(raw));
+        const prior = JSON.parse(raw);
+        priorCreds = phylacteryCredsSnapshot(prior);
+        priorNoticingEnabled = prior?.noticingEnabled;
       } catch { /* no prior settings — first write */ }
       const tmp = SETTINGS_FILE + '.tmp';
       await fsp.writeFile(tmp, serialised, 'utf8');
@@ -2542,6 +2545,15 @@ app.put('/api/settings', async (req, res) => {
   if (!phylacteryCredsEqual(priorCreds, nextCreds)) {
     console.log('[server] Phylactery API-key designation changed — respawning');
     reconnectPhylactery().catch(err => console.error('[server] reconnectPhylactery failed:', err.message));
+  }
+
+  // Re-enabling noticing (or leaving it on through a settings save) clears
+  // the loop's self-set cooldown, so a ward who just flipped the toggle sees
+  // the Familiar look around within a tick instead of waiting out a stale
+  // "next check in 6h" from before the change. Cheap and safe: the loop's
+  // own gates (wake conditions, threat register) still decide what happens.
+  if (settings.noticingEnabled !== false && priorNoticingEnabled === false) {
+    resetNoticingCooldown();
   }
 
   return res.json({ ok: true });
@@ -4522,6 +4534,7 @@ async function handleSignal(signal) {
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
   try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
+  try { await stopNoticingLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }

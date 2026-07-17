@@ -24,7 +24,15 @@ DEST="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # GitHub's archive endpoint accepts branch names with slashes verbatim;
 # the extracted top-level folder is still globbed by `Proto-Familiar-*`.
 BRANCH="${BRANCH:-main}"
-REPO_TARBALL="https://github.com/ScarletPrinceEury/Proto-Familiar/archive/refs/heads/${BRANCH}.tar.gz"
+# Which repo to pull from: read package.json's `repository` field via node
+# when available (so a fork updates from ITSELF, same as the in-app updater),
+# falling back to the canonical repo. node exists on any installed system.
+REPO_SLUG="ScarletPrinceEury/Proto-Familiar"
+if command -v node >/dev/null 2>&1 && [ -f "$DEST/package.json" ]; then
+  DETECTED="$(cd "$DEST" && node -e "try{const r=require('./package.json').repository;const u=typeof r==='string'?r:(r&&r.url)||'';const m=u.match(/github\.com[:\/]+([^\/]+\/[^\/.]+)/);if(m)console.log(m[1])}catch{}" 2>/dev/null)"
+  [ -n "$DETECTED" ] && REPO_SLUG="$DETECTED"
+fi
+REPO_TARBALL="https://github.com/${REPO_SLUG}/archive/refs/heads/${BRANCH}.tar.gz"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mXX %s\033[0m\n' "$*"; exit 1; }
@@ -55,8 +63,9 @@ fi
 say "Extracting…"
 tar -xzf "$TMP/pf.tar.gz" -C "$TMP" || die "Could not extract the download."
 # Find the extracted top-level dir rather than hardcoding the name, so a
-# repo/branch rename doesn't silently break the updater.
-SRC="$(find "$TMP" -maxdepth 1 -type d -name 'Proto-Familiar-*' | head -n 1)"
+# repo/branch rename (or a differently-named fork) doesn't silently break
+# the updater — any top-level dir carrying a package.json is it.
+SRC="$(find "$TMP" -maxdepth 2 -name package.json -not -path "$TMP/package.json" | head -n 1 | xargs -r dirname)"
 [ -n "$SRC" ] && [ -f "$SRC/package.json" ] || die "Unexpected archive layout — aborting without changing anything."
 
 # Update the updater scripts too — but SAFELY. An in-place `cp` truncates and
