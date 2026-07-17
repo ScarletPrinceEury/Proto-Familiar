@@ -51,6 +51,10 @@ Hard off-switch: `PROTO_FAMILIAR_UPDATE_DISABLED=1` disables the entire subsyste
 
 Update is never automatic and never silent. Detection runs on demand (via `/api/update-status`), not on a background loop. A ward who has disabled updates can go weeks without seeing an available update notice. The system respects this: updates are opt-in ceremonies, not surprise background work. The ward chooses the moment to restart and load new code.
 
+## Windows shell updater self-replacement
+
+Windows batch and PowerShell scripts that apply updates cannot replace themselves while running — the OS holds the running script file open. Download-mode updates on Windows use a staged `.pfnew` + post-exit swap pattern: the new tarball is laid down as `.pfnew` before the script exits, and an exit-phase handler completes the swap from the old script to the new one. Both shell updaters (`update.bat` and the PowerShell equivalent) are fork-aware via the `repository` field in `package.json`, so each fork applies updates to its own remote rather than to upstream.
+
 ## Related
 
 - [Installer and launcher](installer-and-launcher) — the one-click install path that also acts as the launcher after installation.

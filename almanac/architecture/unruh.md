@@ -151,7 +151,9 @@ Two real incidents motivated the fix:
 The one accepted trade-off is a bounded DST edge case: a timestamp that falls inside the
 spring-forward gap or the fall-back overlap is ambiguous, roughly ±1 hour, twice a year
 [@unruh-design]. Pre-migration UTC-stored rows are healed once by `db.migrate_timestamps_to_local`
-on first connect [@unruh-design].
+on first connect [@unruh-design]. By 0.9.0, this local-naive model extends end-to-end through
+the temporal editor in the browser, closing a final UTC round-trip where the browser converted
+to Z-strings that the server seam converted straight back.
 
 ### Healing malformed schedule times
 
