@@ -4816,6 +4816,20 @@ function initMobileViewport() {
     root.style.setProperty('--kb-inset', '0px');
   }
 
+  // When the soft keyboard opens over a modal or the map popover, nudge
+  // the focused control into the middle of the (now shorter) scrollable
+  // area once the viewport settles — browsers don't reliably do this
+  // for inputs inside nested scroll containers (the reported "typing
+  // under the keyboard" bug).
+  document.addEventListener('focusin', (e) => {
+    if (window.innerWidth > 767) return;
+    const scrollable = e.target.closest?.('.modal-body, .ke-graph-popover, .sidebar');
+    if (!scrollable) return;
+    setTimeout(() => {
+      try { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* older engines */ }
+    }, 250);
+  });
+
   // Keep the conversation anchored as the composer grows / shrinks.
   const scroller = $('messages-scroller');
   const input    = $('user-input');
@@ -7491,6 +7505,11 @@ async function keGraphCreateNewNode() {
 let _kePopoverNodeId = null;
 let _kePopoverDragged = false;
 
+// On phones the node-edit popover is a fixed bottom sheet (CSS
+// .ke-graph-popover-sheet) — coordinate positioning next to the tapped
+// node is meaningless on a 390px screen and ran offscreen (reported).
+function popoverAsSheet() { return window.innerWidth <= 767; }
+
 function keGraphClosePopover() {
   const pop = $('ke-graph-popover');
   if (pop) pop.classList.add('hidden');
@@ -7504,6 +7523,7 @@ function keGraphInitPopoverDrag(pop) {
   const head = pop.querySelector('.ke-graph-popover-head');
   if (!head) return;
   head.addEventListener('mousedown', e => {
+    if (popoverAsSheet()) return;    // sheets don't drag
     // Don't start a drag from the ✕ button.
     if (e.target.closest('.ke-graph-popover-close')) return;
     e.preventDefault();
@@ -7533,6 +7553,12 @@ function keGraphInitPopoverDrag(pop) {
 }
 
 function keGraphPositionPopover(pop, clientX, clientY) {
+  if (popoverAsSheet()) {
+    pop.classList.add('ke-graph-popover-sheet');
+    pop.style.left = ''; pop.style.top = '';
+    return;
+  }
+  pop.classList.remove('ke-graph-popover-sheet');
   const map = $('ke-graph-map');
   const r   = map.getBoundingClientRect();
   pop.style.left = `${(clientX - r.left) + 14}px`;
@@ -9025,6 +9051,12 @@ function teSchedClosePopover() {
 }
 
 function teSchedPositionPopover(pop, clientX, clientY) {
+  if (popoverAsSheet()) {
+    pop.classList.add('ke-graph-popover-sheet');
+    pop.style.left = ''; pop.style.top = '';
+    return;
+  }
+  pop.classList.remove('ke-graph-popover-sheet');
   const r = $('te-sched-map').getBoundingClientRect();
   pop.style.left = `${(clientX - r.left) + 14}px`;
   pop.style.top  = `${(clientY - r.top)  + 14}px`;
