@@ -279,6 +279,9 @@ crisis-signal modules and reports which regex matched which text. Nothing stored
 `GET /api/gcal/calendars` — discovered calendars + their attribution, for the
 multi-calendar panel.
 
+**Provider models:**
+- `POST /api/models` — proxy the provider's own `GET /models` (URL derived from `providers.js`, normalised in `provider-models.js`) so the Connections modal can show a live, clickable model list. Falls back client-side to the curated per-provider suggestions.
+
 **Temporal editor (M9):**
 - `GET /api/temporal/interests` — live + standing with decay metadata
 - `POST /api/temporal/interests/bump` — manual engagement bump
@@ -1463,7 +1466,7 @@ popover to those.
   runs all tool rounds inside it.
 - **Temporal editor modal** — six tabs (Interests / Threat /
   Ponderings / Schedule / Routine / Handoff), each with CRUD where
-  applicable. **Time handling is local-naive end to end (0.9.x):** the
+  applicable. **Time handling is local-naive end to end (0.8.100):** the
   browser IS the ward's clock, so the editor sends plain local wall-clock
   strings (`YYYY-MM-DDTHH:MM:SS`, no offset) for creates, edits, AND the
   windowed-read `from`/`to` bounds — matching Unruh's local-naive storage

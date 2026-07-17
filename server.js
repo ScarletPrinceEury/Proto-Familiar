@@ -247,6 +247,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS } from './providers.js';
+import { listProviderModels } from './provider-models.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -1379,6 +1380,19 @@ app.post('/api/update-apply', async (_req, res) => {
     if (r.ok) _updateStatus = { ..._updateStatus, updateAvailable: false, behind: 0, applied: true, appliedVersion: r.version, checkedAt: Date.now() };
     res.json(r);
   } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
+});
+
+// ── Provider model listing ──────────────────────────────────────
+// Backs the Connections modal's visible model browser: proxies the
+// provider's own GET /models so the ward can SEE what their key can
+// use instead of guessing model names (docs/ui-ux-guidelines.md).
+// POST (not GET) because the API key rides in the body, never a URL.
+app.post('/api/models', async (req, res) => {
+  const { provider, apiKey } = req.body ?? {};
+  if (!provider || typeof provider !== 'string') return badRequest(res, 'provider (string) is required');
+  if (!apiKey || typeof apiKey !== 'string') return badRequest(res, 'apiKey (string) is required');
+  try { res.json(await listProviderModels({ provider, apiKey })); }
+  catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
 });
 
 // ── Tome endpoints ──────────────────────────────────────────────

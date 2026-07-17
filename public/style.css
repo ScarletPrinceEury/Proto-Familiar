@@ -102,6 +102,118 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ── Village: people search + structured grant editor ────────── */
+.vl-search {
+  flex: 1 1 160px;
+  min-width: 120px;
+  max-width: 260px;
+  padding: 5px 9px;
+  font-size: 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.vl-count { font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; }
+.vl-grant-known {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 2px 10px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.vl-grant-known:last-child { border-bottom: none; }
+.vl-grant-known-label { font-size: 0.84rem; color: var(--text); }
+.vl-grant-known-val {
+  font-size: 0.82rem;
+  padding: 4px 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  min-width: 0;
+}
+.vl-grant-known .field-hint,
+.vl-grant-known .hint-toggle { grid-column: 1 / -1; margin: 0; }
+.vl-grants-advanced { margin-top: 10px; }
+.vl-grants-advanced summary {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.vl-grants-advanced summary:hover { color: var(--text); }
+@media (max-width: 560px) {
+  .vl-grant-known { grid-template-columns: 1fr; }
+}
+
+/* ── Model browser (Connections modal) ───────────────────────── */
+.model-browser { margin-top: 6px; }
+.model-browser-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.model-filter {
+  flex: 1;
+  min-width: 140px;
+  padding: 5px 9px;
+  font-size: 0.82rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.model-browser-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 3px;
+}
+.model-pick {
+  width: 100%;
+  text-align: left;
+  padding: 6px 9px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-pick:hover { background: var(--surface-raise); border-color: var(--border); }
+.model-pick-current { border-color: var(--accent); color: var(--accent); }
+.model-none { padding: 8px; color: var(--text-dim); font-size: 0.82rem; }
+
+/* ── Disclosure hints (UX rule 1: one thing at a time) ───────── */
+/* enhanceHints() in app.js collapses every long .field-hint behind a
+   small ⓘ toggle, static and dynamically-rendered alike. Short hints
+   and .hint-keep (safety-relevant text) stay visible. */
+.hint-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.hint-toggle:hover { color: var(--accent); }
+.hint-toggle .hint-chev { transition: transform 0.15s; font-size: 0.6rem; }
+.hint-toggle[aria-expanded="true"] .hint-chev { transform: rotate(90deg); }
+.field-hint.hint-collapsed { display: none; }
+.field-hint.hint-open { display: block; }
+
 /* ── Keyboard focus (WCAG 2.4.7) ─────────────────────────────── */
 /* One visible focus indicator for every interactive element, but only
    for keyboard/programmatic focus (:focus-visible) — mouse clicks stay
@@ -1749,14 +1861,65 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 /* ── Knowledge editor ──────────────────────────────────────── */
+/* Tab bars scroll horizontally instead of clipping (UX rule 2: nothing
+   hides offscreen without a cue). The wrapper (.ke-tabs-wrap, added by
+   initScrollableTabs in app.js) paints edge fades while more tabs exist
+   in that direction; the bar itself scrolls by touch, wheel, or keyboard
+   focus, and the active tab is auto-scrolled into view. */
+.ke-tabs-wrap {
+  position: relative;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
 .ke-tabs {
   display: flex;
   gap: 4px;
   padding: 0 14px;
-  border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;           /* the fades are the affordance */
 }
+.ke-tabs::-webkit-scrollbar { display: none; }
+/* Unwrapped bars (before initScrollableTabs runs) carry their own border;
+   wrapped ones defer to the wrapper's so the fades sit flush over it. */
+.ke-tabs { border-bottom: 1px solid var(--border); }
+.ke-tabs-wrap .ke-tabs { border-bottom: none; }
+.ke-tabs-wrap::before,
+.ke-tabs-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.ke-tabs-wrap::before {
+  left: 0;
+  background: linear-gradient(to right, var(--surface), transparent);
+}
+.ke-tabs-wrap::after {
+  right: 0;
+  background: linear-gradient(to left, var(--surface), transparent);
+}
+.ke-tabs-wrap.fade-left::before  { opacity: 1; }
+.ke-tabs-wrap.fade-right::after  { opacity: 1; }
+/* A subtle chevron riding the right fade — makes "there's more" explicit
+   rather than inferred from a gradient. */
+.ke-tabs-wrap.fade-right .ke-tabs-more {
+  position: absolute;
+  right: 2px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 2;
+}
+.ke-tabs-more { display: none; }
+.ke-tabs-wrap.fade-right .ke-tabs-more { display: block; }
 .ke-tab {
   background: none;
   border: none;
@@ -1766,6 +1929,8 @@ button { cursor: pointer; font-family: var(--font); }
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  white-space: nowrap;             /* a tab label never wraps mid-word */
+  flex-shrink: 0;
 }
 .ke-tab:hover { color: var(--text); }
 .ke-tab-active { color: var(--text); border-bottom-color: var(--accent); }
@@ -2869,9 +3034,12 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   .modal-wide {
     max-width: 100%;
     width: 100%;
-    max-height: 90vh;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
+    /* Full-height sheet: on a phone a modal IS the screen. Partial-height
+       sheets wasted a third of tiny screens and forced inner panes into
+       impossible heights. dvh tracks the browser chrome. */
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
   }
   /* Drag-handle indicator at the top of every bottom-sheet modal */
   .modal-header {
@@ -2890,16 +3058,16 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
     background: var(--text-muted);
     opacity: 0.7;
   }
-  /* Resizable modals (KE, TE, Lore, Tome entries): go full-width
+  /* Resizable modals (KE, TE, Lore, Tome entries): go full-screen
      sheet, drop the resize handle (pointless on touch). */
   .modal-resizable {
     width: 100%;
-    height: 88vh;
+    height: 100dvh;
+    max-height: 100dvh;
     min-width: 0;
     min-height: 0;
     resize: none;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
+    border-radius: 0;
   }
 
   /* ── Knowledge-editor split: stack on mobile ─────────────── */
@@ -2940,16 +3108,10 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 }
 
 /* ── Responsive: landscape phones ────────────────────────────── */
-/* In landscape on a phone, viewport height shrinks dramatically.
-   Cap modals tighter so the header and footer remain reachable. */
+/* Modals are full-screen sheets on phones in both orientations (100dvh
+   tracks the real viewport), so no separate modal caps are needed here —
+   only the input area tightens so the conversation keeps room. */
 @media (max-width: 767px) and (orientation: landscape) {
-  .modal,
-  .modal-wide {
-    max-height: 80vh;
-  }
-  .modal-resizable {
-    height: 78vh;
-  }
   #user-input {
     max-height: 25dvh;
   }

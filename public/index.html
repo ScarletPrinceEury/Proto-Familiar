@@ -232,7 +232,7 @@
               <input type="text" id="user-discord-webhook" placeholder="https://discord.com/api/webhooks/…" spellcheck="false">
             </div>
             <p class="field-hint">When set, reminders, check-ins, and outreach notices are <em>also</em> pushed to this webhook — so your Familiar can still reach you when no tab is open. The escalation countdown for trusted-contact outreach only starts once a check-in actually reaches you here.</p>
-            <p class="field-hint">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
+            <p class="field-hint hint-keep">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
             <div id="contacts-list" style="margin-top: 8px"></div>
             <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
               <input type="text" id="contact-name"    aria-label="Contact name" placeholder="Name (e.g. Sam)" style="flex: 1; min-width: 8em">
@@ -416,6 +416,14 @@
           <label for="model-input">Model</label>
           <input list="model-suggestions" id="model-input" placeholder="e.g. gpt-4o-mini" autocomplete="off" spellcheck="false">
           <datalist id="model-suggestions"></datalist>
+          <div class="model-browser">
+            <div class="model-browser-head">
+              <button id="model-browse-btn" class="btn-secondary" type="button">Show available models</button>
+              <input type="search" id="model-filter" class="model-filter hidden" placeholder="Filter models…" aria-label="Filter model list" autocomplete="off">
+            </div>
+            <p class="model-browser-status field-hint" id="model-browser-status" style="display:none"></p>
+            <ul id="model-browser-list" class="model-browser-list hidden" aria-label="Available models — click one to use it"></ul>
+          </div>
         </div>
         <div class="field-row">
           <label for="streaming-toggle">Streaming</label>
@@ -1671,6 +1679,8 @@
         <!-- PEOPLE PANE -->
         <div class="ke-pane ke-pane-active" id="vl-pane-people">
           <div class="ke-toolbar">
+            <input type="search" id="vl-people-search" class="vl-search" placeholder="Search people…" aria-label="Search villagers by name, platform, or category" autocomplete="off">
+            <span id="vl-people-count" class="vl-count" aria-live="polite"></span>
             <button id="vl-people-refresh" class="btn-ghost">Refresh</button>
             <button id="vl-people-add" class="btn-secondary" style="margin-left:auto">+ Add person</button>
           </div>
