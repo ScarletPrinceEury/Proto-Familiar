@@ -25,19 +25,16 @@
     <header class="topbar">
       <div class="topbar-left">
         <button id="sidebar-toggle" class="icon-btn" aria-label="Toggle settings panel" title="Settings">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          <span data-ms-icon="menu" data-ms-size="20"></span>
         </button>
         <h1 class="app-title">Proto-Familiar</h1>
       </div>
       <div class="topbar-right">
         <span id="status-badge" class="status-badge" title="Connection status">●</span>
-        <button id="prompt-inspector-btn" class="icon-btn" aria-label="Inspect last prompt — color-coded by source (Phylactery, lore, base)" title="Inspect last prompt (color-coded by source)">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-        </button>
+        <button id="prompt-inspector-btn" class="icon-btn" aria-label="Inspect last prompt — color-coded by source (Phylactery, lore, base)" title="Inspect last prompt (color-coded by source)"><span data-ms-icon="manage_search" data-ms-size="18"></span></button>
         <!-- Self-update: state-reflective (subtle when up-to-date, highlighted with a dot when a new version is out) -->
         <div class="update-wrap">
-          <button id="update-btn" class="icon-btn" aria-label="Check for updates" title="Checking for updates…" aria-pressed="false">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>
+          <button id="update-btn" class="icon-btn" aria-label="Check for updates" title="Checking for updates…" aria-pressed="false"><span data-ms-icon="sync" data-ms-size="18"></span>
             <span id="update-dot" class="update-dot hidden" aria-hidden="true"></span>
           </button>
           <div id="update-popover" class="update-popover hidden" role="dialog" aria-label="Software update">
@@ -52,10 +49,7 @@
           </div>
         </div>
         <div class="tailscale-wrap">
-          <button id="tailscale-btn" class="icon-btn" aria-label="Toggle access from other devices over Tailscale / LAN" title="Tailscale / LAN access (off)" aria-pressed="false">
-            <!-- globe-with-arc icon: clearly distinct from settings, theme, magnifier -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>
-          </button>
+          <button id="tailscale-btn" class="icon-btn" aria-label="Toggle access from other devices over Tailscale / LAN" title="Tailscale / LAN access (off)" aria-pressed="false"><span data-ms-icon="language" data-ms-size="18"></span></button>
           <div id="tailscale-popover" class="tailscale-popover hidden" role="dialog" aria-label="Tailscale access">
             <div class="tailscale-row">
               <span class="tailscale-state-label">Access from other devices</span>
@@ -69,10 +63,7 @@
             <p class="tailscale-hint">When enabled, this server is reachable from anything that can hit your machine on the network. On a plain LAN that includes anyone on the same Wi-Fi; on a Tailnet, anyone signed into your tailnet.</p>
           </div>
         </div>
-        <button id="theme-toggle" class="icon-btn" aria-label="Toggle light/dark theme" title="Toggle theme">
-          <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
+        <button id="theme-toggle" class="icon-btn" aria-label="Toggle light/dark theme" title="Toggle theme"><span id="theme-icon-dark" data-ms-icon="light_mode" data-ms-size="18"></span><span id="theme-icon-light" data-ms-icon="dark_mode" data-ms-size="18" style="display:none"></span></button>
       </div>
     </header>
     <!-- Holds layout open below the fixed topbar -->
@@ -100,7 +91,7 @@
           <nav id="sidebar-menu" class="sidebar-menu" aria-label="Settings sections"></nav>
         </div>
         <div class="sidebar-detail-head hidden" id="sidebar-detail-head">
-          <button id="sidebar-back" class="btn-ghost sidebar-back" type="button">← All settings</button>
+          <button id="sidebar-back" class="btn-ghost sidebar-back" type="button"><span data-ms-icon="arrow_back"></span> All settings</button>
           <span id="sidebar-detail-title" class="sidebar-detail-title"></span>
         </div>
 
@@ -108,7 +99,7 @@
         <div class="sidebar-section" id="section-connection">
           <h3 class="section-label">Connection</h3>
           <div class="action-row">
-            <button id="connections-btn" class="btn-secondary">🔌 Connections &amp; models…</button>
+            <button id="connections-btn" class="btn-secondary"><span data-ms-icon="cable"></span> Connections &amp; models…</button>
           </div>
           <p class="field-hint">Your provider, API key, model, generation settings, saved connections &amp; fallbacks, and which connection each feature uses — all in one place.</p>
         </div>
@@ -232,31 +223,8 @@
           <div class="section-content" id="content-knowledge">
             <p class="field-hint">Browse and edit the memories, identity files, and knowledge-graph entries the Familiar sees. Destructive ops auto-snapshot first.</p>
             <div class="action-row" style="margin-top:4px">
-              <button id="knowledge-btn" class="btn-secondary">🧠 Open Knowledge editor</button>
+              <button id="knowledge-btn" class="btn-secondary"><span data-ms-icon="psychology"></span> Open Knowledge editor</button>
             </div>
-          </div>
-        </div>
-
-        <!-- Trusted contacts (M12c — silence-triage outreach) -->
-        <div class="sidebar-section collapsible collapsed" id="section-contacts">
-          <button class="section-label collapse-toggle" aria-expanded="false" aria-controls="content-contacts">
-            Trusted contacts
-            <span class="chevron">▾</span>
-          </button>
-          <div class="section-content" id="content-contacts">
-            <div class="field">
-              <label for="user-discord-webhook">My Discord webhook <span class="label-hint">(push notifications to me)</span></label>
-              <input type="text" id="user-discord-webhook" placeholder="https://discord.com/api/webhooks/…" spellcheck="false">
-            </div>
-            <p class="field-hint">When set, reminders, check-ins, and outreach notices are <em>also</em> pushed to this webhook — so your Familiar can still reach you when no tab is open. The escalation countdown for trusted-contact outreach only starts once a check-in actually reaches you here.</p>
-            <p class="field-hint hint-keep">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
-            <div id="contacts-list" style="margin-top: 8px"></div>
-            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
-              <input type="text" id="contact-name"    aria-label="Contact name" placeholder="Name (e.g. Sam)" style="flex: 1; min-width: 8em">
-              <input type="text" id="contact-webhook" aria-label="Contact Discord webhook URL" placeholder="Discord webhook URL" style="flex: 2; min-width: 14em">
-              <button id="contact-add" class="btn-secondary">+ Add</button>
-            </div>
-            <p class="field-hint" style="margin-top: 6px"><strong>How to make a Discord webhook:</strong> on the contact's side, in their Discord server's channel settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it here.</p>
           </div>
         </div>
 
@@ -268,6 +236,11 @@
           </button>
           <div class="section-content" id="content-discord">
             <div id="discord-node-warning" class="field-warning" style="display: none"></div>
+            <div class="field">
+              <label for="user-discord-webhook">My Discord webhook <span class="label-hint">(push notifications to me)</span></label>
+              <input type="text" id="user-discord-webhook" placeholder="https://discord.com/api/webhooks/…" spellcheck="false">
+            </div>
+            <p class="field-hint">When set, reminders, check-ins, and outreach notices are <em>also</em> pushed to this webhook — so your Familiar can still reach you when no tab is open. The escalation countdown for trusted-contact outreach only starts once a check-in actually reaches you here.</p>
             <div class="field checkbox-field">
               <label><input type="checkbox" id="discord-enabled"> Enable Discord presence</label>
             </div>
@@ -317,7 +290,7 @@
           <div class="section-content" id="content-temporal">
             <p class="field-hint">Inspect what Unruh is tracking — current interest weights, threat-detection state &amp; audit history, and the Familiar's autonomous ponderings.</p>
             <div class="action-row" style="margin-top:4px">
-              <button id="temporal-btn" class="btn-secondary">🕰 Open Temporal editor</button>
+              <button id="temporal-btn" class="btn-secondary"><span data-ms-icon="schedule"></span> Open Temporal editor</button>
             </div>
           </div>
         </div>
@@ -406,7 +379,7 @@
     <div class="modal modal-wide modal-resizable" id="connections-modal-inner">
       <div class="modal-header">
         <h2 class="modal-title" id="connections-modal-title">Connections &amp; models</h2>
-        <button class="icon-btn modal-close" id="connections-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="connections-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body" style="overflow:auto; padding:12px">
         <h3 class="section-label" style="margin-top:0">Active connection</h3>
@@ -485,7 +458,7 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2 class="modal-title" id="prompt-inspector-title">Full Prompt (last message)</h2>
-        <button class="icon-btn modal-close" id="prompt-inspector-close" aria-label="Close modal">✕</button>
+        <button class="icon-btn modal-close" id="prompt-inspector-close" aria-label="Close modal" data-ms-icon="close"></button>
       </div>
       <div class="modal-body" id="prompt-inspector-body">
         <p class="logs-empty">Send a message first.</p>
@@ -500,7 +473,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2 class="modal-title" id="topic-name-modal-title">Start New Topic</h2>
-        <button class="icon-btn modal-close" id="topic-name-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="topic-name-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <div class="field">
@@ -521,7 +494,7 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2 class="modal-title" id="websearch-modal-title">Web search</h2>
-        <button class="icon-btn modal-close" id="websearch-modal-close" aria-label="Close modal">✕</button>
+        <button class="icon-btn modal-close" id="websearch-modal-close" aria-label="Close modal" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <p class="field-hint"><strong>Definitions &amp; facts</strong> (<code>look_up</code>) are always on and need no setup. The choice below is only how I <strong>find web pages</strong> (<code>web_search</code>).</p>
@@ -585,7 +558,7 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2 class="modal-title" id="summary-modal-title">Review Tome Entry</h2>
-        <button class="icon-btn modal-close" id="summary-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="summary-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <p class="field-hint" id="summary-generating-hint">Generating tome entry… please wait.</p>
@@ -622,7 +595,7 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2 class="modal-title" id="diagnostics-modal-title">Diagnostic report</h2>
-        <button class="icon-btn modal-close" id="diagnostics-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="diagnostics-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <p class="field-hint">A snapshot of system info, Proto-Familiar state, and the recent in-app event log. Nothing is sent anywhere — copy or download to share.</p>
@@ -640,7 +613,7 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2 class="modal-title" id="trace-modal-title">Trigger trace</h2>
-        <button class="icon-btn modal-close" id="trace-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="trace-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <p class="field-hint">For each turn of the current session, which regexes/keywords fired. Runs locally against this session — nothing is stored. Tune triggers, re-run.</p>
@@ -667,7 +640,7 @@
     <div class="modal modal-wide modal-resizable" id="knowledge-modal-inner">
       <div class="modal-header">
         <h2 class="modal-title" id="knowledge-modal-title">Knowledge editor</h2>
-        <button class="icon-btn modal-close" id="knowledge-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="knowledge-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="ke-tabs" role="tablist">
         <button class="ke-tab ke-tab-active" data-tab="memories"  role="tab">Memories</button>
@@ -936,7 +909,7 @@
         <h2 class="modal-title" id="tomes-modal-title">Tomes</h2>
         <div class="modal-header-actions">
           <button class="btn-secondary" id="tome-new-btn">+ New Tome</button>
-          <button class="icon-btn modal-close" id="tomes-modal-close" aria-label="Close">✕</button>
+          <button class="icon-btn modal-close" id="tomes-modal-close" aria-label="Close" data-ms-icon="close"></button>
         </div>
       </div>
       <div class="modal-body tome-graduation-settings" style="border-bottom:1px solid var(--border, #333); padding-bottom:10px">
@@ -969,7 +942,7 @@
           <button class="btn-ghost" id="tome-entries-back-btn">← Back</button>
           <button class="btn-ghost" id="tome-entries-depth-btn" title="Move every non-constant (keyword-triggered) entry out of the system-message positions to @ chat depth 4, so they stop invalidating the prompt cache. Constant entries are left in place.">↓ Non-constant → depth 4</button>
           <button class="btn-secondary" id="tome-entries-new-btn">+ New</button>
-          <button class="icon-btn modal-close" id="tome-entries-modal-close" aria-label="Close">✕</button>
+          <button class="icon-btn modal-close" id="tome-entries-modal-close" aria-label="Close" data-ms-icon="close"></button>
         </div>
       </div>
       <div class="modal-body" id="tome-entries-list">
@@ -983,7 +956,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2 class="modal-title" id="new-tome-modal-title">New Tome</h2>
-        <button class="icon-btn modal-close" id="new-tome-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="new-tome-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <div class="field">
@@ -1007,7 +980,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2 class="modal-title" id="memorize-choice-title">Memorize Session</h2>
-        <button class="icon-btn modal-close" id="memorize-choice-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="memorize-choice-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <p class="field-hint" id="memorize-choice-subtitle">Choose how to extract Tome entries from this session.</p>
@@ -1029,7 +1002,7 @@
     <div class="modal modal-wide">
       <div class="modal-header">
         <h2 class="modal-title" id="manual-memorize-title">Memorize Session — Manual Topics</h2>
-        <button class="icon-btn modal-close" id="manual-memorize-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="manual-memorize-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body">
         <p class="field-hint">
@@ -1049,7 +1022,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2 class="modal-title" id="retro-end-modal-title">End Which Topic Here?</h2>
-        <button class="icon-btn modal-close" id="retro-end-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="retro-end-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body" id="retro-end-list">
       </div>
@@ -1064,7 +1037,7 @@
     <div class="modal modal-wide modal-resizable" id="lore-editor-modal-inner">
       <div class="modal-header">
         <h2 class="modal-title" id="lore-editor-title">Edit Entry</h2>
-        <button class="icon-btn modal-close" id="lore-editor-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="lore-editor-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="modal-body lore-editor-body">
 
@@ -1225,7 +1198,7 @@
     <div class="modal modal-wide modal-resizable" id="temporal-modal-inner">
       <div class="modal-header">
         <h2 class="modal-title" id="temporal-modal-title">Temporal editor — Unruh inspection</h2>
-        <button class="icon-btn modal-close" id="temporal-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="temporal-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="ke-tabs" role="tablist">
         <button class="ke-tab ke-tab-active" data-temporal-tab="interests"  role="tab">Interests</button>
@@ -1688,14 +1661,31 @@
     <div class="modal modal-wide modal-resizable" id="village-modal-inner">
       <div class="modal-header">
         <h2 class="modal-title" id="village-modal-title">Village</h2>
-        <button class="icon-btn modal-close" id="village-modal-close" aria-label="Close">✕</button>
+        <button class="icon-btn modal-close" id="village-modal-close" aria-label="Close" data-ms-icon="close"></button>
       </div>
       <div class="ke-tabs" role="tablist">
         <button class="ke-tab ke-tab-active" data-village-tab="people"     role="tab">People</button>
         <button class="ke-tab"               data-village-tab="categories" role="tab">Categories</button>
         <button class="ke-tab"               data-village-tab="locations"  role="tab">Locations</button>
+        <button class="ke-tab"               data-village-tab="contacts"   role="tab">Trusted contacts</button>
       </div>
       <div class="modal-body ke-body">
+
+        <!-- TRUSTED CONTACTS PANE (moved from the sidebar 0.8.102 — these
+             are PEOPLE, so they live in the Village; the ward's own push
+             webhook moved to the Discord section) -->
+        <div class="ke-pane" id="vl-pane-contacts">
+          <div class="ke-detail" style="padding:14px 18px">
+            <p class="field-hint hint-keep">People your Familiar may reach out to <em>about you</em> when threat is severe and you've been quiet a long time. The Familiar can only contact someone listed here — and every outbound also lands in your chat outbox so you can see exactly what was sent. Leave empty to disable outreach entirely.</p>
+            <div id="contacts-list" style="margin-top: 8px"></div>
+            <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+              <input type="text" id="contact-name"    aria-label="Contact name" placeholder="Name (e.g. Sam)" style="flex: 1; min-width: 8em">
+              <input type="text" id="contact-webhook" aria-label="Contact Discord webhook URL" placeholder="Discord webhook URL" style="flex: 2; min-width: 14em">
+              <button id="contact-add" class="btn-secondary">+ Add</button>
+            </div>
+            <p class="field-hint" style="margin-top: 6px"><strong>How to make a Discord webhook:</strong> on the contact's side, in their Discord server's channel settings → Integrations → Webhooks → New Webhook → Copy URL. Paste it here.</p>
+          </div>
+        </div>
 
         <!-- PEOPLE PANE -->
         <div class="ke-pane ke-pane-active" id="vl-pane-people">
@@ -1760,6 +1750,7 @@
   </div>
 
   <script src="graph-map.js"></script>
+  <script src="icons.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

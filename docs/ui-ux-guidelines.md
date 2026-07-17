@@ -63,6 +63,7 @@ happened and what to do next.
 | Model browser | Connections modal + `POST /api/models` | Visible, clickable list of the provider's actual models — never only a type-to-discover datalist |
 | Sidebar nav | `SIDEBAR_NAV` + `initSidebarNav()` (app.js) | Master-detail settings: searchable grouped menu → one section at a time with a back button; advanced group hidden until "Show advanced settings" (first-run essentials mode, synced as `uiShowAdvanced`) |
 | List search | `.vl-search` + cached-render pattern | Villagers, KE memories, and TE schedule lists filter a cached fetch live (no refetch per keystroke) and show an N-of-M count |
+| Icons | `public/icons.js` (vendored Material Symbols) + `data-ms-icon` / `msIcon()` | One icon language app-wide, fully offline (inline SVG paths, Apache-2.0). Static markup uses `data-ms-icon="name"`; templates call `msIcon('name')`. Icons are decorative — the owning control carries the accessible name. |
 
 ## Testing changes
 

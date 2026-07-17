@@ -102,6 +102,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ── Material Symbols (icons.js) ─────────────────────────────── */
+.ms-icon {
+  display: inline-block;
+  vertical-align: -0.2em;
+  fill: currentColor;
+  flex: none;
+}
+[data-ms-icon] { display: inline-flex; align-items: center; justify-content: center; }
+.sidebar-menu-icon .ms-icon { vertical-align: middle; color: var(--text-dim); }
+.sidebar-menu-row:hover .sidebar-menu-icon .ms-icon { color: var(--accent); }
+
 /* ── Village: people search + structured grant editor ────────── */
 .vl-search {
   flex: 1 1 160px;

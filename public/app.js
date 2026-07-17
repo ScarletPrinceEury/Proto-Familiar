@@ -3054,22 +3054,26 @@ async function browseModels() {
 // field binding keeps working; only visibility is orchestrated here.
 const SIDEBAR_NAV = [
   { group: 'Start here', items: [
-    { id: 'section-connection', icon: '🔌', title: 'Connection',       desc: 'Provider, API key, model' },
-    { id: 'section-chat',       icon: '💬', title: 'Chat',             desc: 'History, sounds, sessions' },
+    { id: 'section-connection', icon: 'cable',        title: 'Connection',       desc: 'Provider, API key, model' },
+    { id: 'section-chat',       icon: 'chat',         title: 'Chat',             desc: 'History, sounds, sessions' },
   ]},
   { group: 'Your Familiar', items: [
-    { id: 'section-knowledge',  icon: '🧠', title: 'Knowledge',        desc: 'Memories, identity, graph' },
-    { id: 'section-temporal',   icon: '🕰', title: 'Temporal',         desc: 'Schedule, interests, automation' },
-    { id: 'section-tomes',      icon: '📚', title: 'Tomes',            desc: 'Topic notes injected by keyword' },
+    { id: 'section-knowledge',  icon: 'psychology',   title: 'Knowledge',        desc: 'Memories, identity, graph' },
+    { id: 'section-temporal',   icon: 'schedule',     title: 'Temporal',         desc: 'Schedule, interests, automation' },
+    { id: 'section-tomes',      icon: 'menu_book',    title: 'Tomes',            desc: 'Topic notes injected by keyword' },
   ]},
   { group: 'People & channels', items: [
-    { id: 'section-village',    icon: '🏘', title: 'Village',          desc: 'Who your Familiar knows' },
-    { id: 'section-discord',    icon: '🗨', title: 'Discord presence', desc: 'The bot connection', onOpen: () => { try { refreshDiscordStatus(); } catch {} } },
-    { id: 'section-contacts',   icon: '🤝', title: 'Trusted contacts', desc: 'Crisis outreach list' },
+    // Trusted contacts live in the Village modal (they're people) and the
+    // ward's own webhook in the Discord section — the keywords keep
+    // settings search finding them at their new homes.
+    { id: 'section-village',    icon: 'holiday_village', title: 'Village',       desc: 'People, circles, trusted contacts',
+      keywords: 'trusted contacts crisis outreach webhook villager category grants' },
+    { id: 'section-discord',    icon: 'forum',        title: 'Discord presence', desc: 'The bot & your notifications',
+      keywords: 'webhook push notifications', onOpen: () => { try { refreshDiscordStatus(); } catch {} } },
   ]},
   { group: 'Advanced', advanced: true, items: [
-    { id: 'section-tools',      icon: '🛠', title: 'Tools',            desc: 'Tool use & custom tools' },
-    { id: 'section-debug',      icon: '🩺', title: 'Diagnostics',      desc: 'Debug info & prompt logs' },
+    { id: 'section-tools',      icon: 'handyman',     title: 'Tools',            desc: 'Tool use & custom tools' },
+    { id: 'section-debug',      icon: 'monitor_heart', title: 'Diagnostics',     desc: 'Debug info & prompt logs' },
   ]},
 ];
 const SIDEBAR_LAST_KEY = 'pf-sidebar-open-section';
@@ -3115,7 +3119,7 @@ function renderSidebarMenu() {
     if (g.advanced && !showAdvanced) continue;
     const items = g.items.filter(i => {
       if (!q) return true;
-      if (`${i.title} ${i.desc}`.toLowerCase().includes(q)) return true;
+      if (`${i.title} ${i.desc} ${i.keywords ?? ''}`.toLowerCase().includes(q)) return true;
       // Deep search: match against the section's actual labels/hints, so
       // "quiet hours" finds the section that holds it.
       return (document.getElementById(i.id)?.textContent ?? '').toLowerCase().includes(q);
@@ -3124,7 +3128,7 @@ function renderSidebarMenu() {
     html.push(`<div class="sidebar-menu-group">${teEscapeHtml(g.group)}</div>`);
     for (const i of items) {
       html.push(`<button type="button" class="sidebar-menu-row" data-section="${i.id}">
-        <span class="sidebar-menu-icon" aria-hidden="true">${i.icon}</span>
+        <span class="sidebar-menu-icon" aria-hidden="true">${msIcon(i.icon, { size: '20' })}</span>
         <span class="sidebar-menu-text">
           <span class="sidebar-menu-title">${teEscapeHtml(i.title)}</span>
           <span class="sidebar-menu-desc">${teEscapeHtml(i.desc)}</span>
@@ -4661,6 +4665,7 @@ function init() {
   // ── Overwhelm-reduction primitives (docs/ui-ux-guidelines.md) ─
   initScrollableTabs();
   initHintDisclosure();
+  initMsIcons();
   initSidebarNav();
 
   // ── Focus input ──────────────────────────────────────────────
@@ -4759,10 +4764,26 @@ function initHintDisclosure() {
         if (n.classList?.contains('field-hint')) enhanceHint(n);
         n.querySelectorAll?.('.field-hint').forEach(enhanceHint);
         if (n.classList?.contains('ke-tabs')) initScrollableTabs();
+        if (n.dataset?.msIcon) applyMsIcon(n);
+        n.querySelectorAll?.('[data-ms-icon]').forEach(applyMsIcon);
       }
     }
   });
   mo.observe(document.body, { childList: true, subtree: true });
+}
+
+// ── Material Symbols rendering ──────────────────────────────────
+// Declarative: any element carrying data-ms-icon gets the inline SVG
+// from icons.js (vendored paths — fully offline). Static markup is
+// swept at init; dynamically rendered panes ride the same observer as
+// the hint disclosure above.
+function applyMsIcon(el) {
+  if (el.dataset.msDone) return;
+  el.dataset.msDone = '1';
+  el.innerHTML = msIcon(el.dataset.msIcon, { size: el.dataset.msSize || '1.1em' });
+}
+function initMsIcons() {
+  document.querySelectorAll('[data-ms-icon]').forEach(applyMsIcon);
 }
 
 // ── Mobile viewport: keyboard inset + scroll preservation ──────
@@ -6080,7 +6101,7 @@ async function refreshTomesList() {
         <div class="lorebook-entry-actions">
           <button class="btn-ghost tome-open-btn" data-id="${esc(tome.id)}" title="View entries">Open</button>
           <button class="btn-ghost tome-toggle-btn" data-id="${esc(tome.id)}" title="${tome.enabled ? 'Disable tome' : 'Enable tome'}">${tome.enabled ? 'Enabled' : 'Disabled'}</button>
-          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome" aria-label="Delete tome">✕</button>
+          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome" aria-label="Delete tome">${msIcon('delete')}</button>
         </div>
       </div>
       ${tome.description ? `<div class="lorebook-entry-content">${esc(tome.description)}</div>` : ''}
@@ -7318,8 +7339,8 @@ function keGraphEdgeRowHTML(ownerId, e, sg) {
   const w          = typeof e.weight === 'number' ? e.weight.toFixed(2) : '0.50';
   return `<div class="ke-edge-row" data-edge-id="${esc(e.id)}">
     <span class="ke-edge-text">${dir} ${esc(t)} <span class="ke-edge-weight-display">[${esc(w)}]</span> ${dir} <strong>${esc(otherLabel)}</strong></span>
-    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit" aria-label="Edit link">✎</button>
-    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete" aria-label="Delete link">✕</button>
+    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit" aria-label="Edit link">${msIcon('edit')}</button>
+    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete" aria-label="Delete link">${msIcon('delete')}</button>
   </div>`;
 }
 
@@ -8775,7 +8796,7 @@ function teRenderScheduleList() {
           <strong style="flex: 1">${label}${recurringTag}</strong>
           ${resolution}
           ${resolveBtns}
-          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)" aria-label="Permanently delete schedule item">🗑</button>
+          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)" aria-label="Permanently delete schedule item">${msIcon('delete')}</button>
         </div>
         <div style="margin-top: 2px">${when}${end}</div>
       </div>`;
@@ -9050,7 +9071,7 @@ function teSchedOpenPopover(node, clientX, clientY) {
     const tag = tBits.length ? ` <span class="te-edge-tag">[${teEscapeHtml(tBits.join(' · '))}]</span>` : '';
     return `<div class="ke-edge-row" data-edge-id="${teEscapeHtml(e.id)}">
       <span class="ke-edge-text">${arrow} ${teEscapeHtml(e.type)} ${arrow} <strong>${teEscapeHtml(other?.label ?? otherId)}</strong>${tag}</span>
-      <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link" aria-label="Remove link">✕</button>
+      <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link" aria-label="Remove link">${msIcon('close')}</button>
     </div>`;
   }).join('');
   const kindOptions   = TE_EDGE_KINDS.map(k => `<option value="${k}">${k}</option>`).join('');
@@ -9877,7 +9898,7 @@ function renderTrustedContacts() {
         <strong style="flex: 1">${name}</strong>
         <span style="font-size: 0.85em; opacity: 0.7">${channel}</span>
         <code style="font-size: 0.75em; opacity: 0.55">${teEscapeHtml(hint)}</code>
-        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact" aria-label="Remove this contact">🗑</button>
+        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact" aria-label="Remove this contact">${msIcon('delete')}</button>
       </div>`;
   }).join('');
   list.querySelectorAll('.contact-remove').forEach(btn => {
@@ -9915,7 +9936,7 @@ function removeTrustedContact(idx) {
 
 const VL_STRANGERS = 'strangers';
 const VL_EMERGENCY = 'emergency-contacts';
-const VL_TABS      = ['people', 'categories', 'locations'];
+const VL_TABS      = ['people', 'categories', 'locations', 'contacts'];
 
 const VL_REL_FAM_LABELS = {
   unaware:             'Unaware of the Familiar',
@@ -9956,6 +9977,7 @@ function vlSwitchTab(tab) {
   if (tab === 'people')     vlLoadPeople();
   if (tab === 'categories') vlLoadCategories();
   if (tab === 'locations')  vlLoadLocations();
+  if (tab === 'contacts')   renderTrustedContacts();
 }
 
 async function vlFetch(force = false) {
@@ -10030,7 +10052,7 @@ function vlRenderKnocks(knocks) {
           <select class="vl-knock-target" aria-label="Register as">${options}</select>
           <button class="btn-secondary vl-knock-bind" type="button">Register</button>
           <button class="btn-ghost vl-knock-me" type="button" title="This is my own Discord account">This is me</button>
-          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)" aria-label="Dismiss knock">×</button>
+          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)" aria-label="Dismiss knock">${msIcon('close')}</button>
         </div>
       </div>`;
     }).join('');
@@ -10326,7 +10348,7 @@ function vlAliasRowHtml(i, platform, id, handle) {
     <input type="text" placeholder="platform" value="${esc(platform)}" class="vl-alias-plat">
     <input type="text" placeholder="stable id" value="${esc(id)}" class="vl-alias-id">
     <input type="text" placeholder="handle" value="${esc(handle)}" class="vl-alias-hdl">
-    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" aria-label="Remove alias" style="padding:2px 7px">×</button>
+    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" aria-label="Remove alias" style="padding:2px 7px">${msIcon('close')}</button>
   </div>`;
 }
 
@@ -10563,7 +10585,7 @@ function vlGrantRowHtml(i, key, type, val, disabled) {
       <option value="str"${type === 'str' ? ' selected' : ''}>string</option>
     </select>
     <input type="text" placeholder="true / value" value="${esc(val)}" class="vl-grant-val"${d}>
-    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" aria-label="Remove grant" style="padding:2px 7px">×</button>` : '<span></span>'}
+    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" aria-label="Remove grant" style="padding:2px 7px">${msIcon('close')}</button>` : '<span></span>'}
   </div>`;
 }
 
@@ -10683,7 +10705,7 @@ function vlRenderLocationKnocks(knocks) {
         </div>
         <div class="vl-knock-actions">
           <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
-          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">×</button>
+          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">${msIcon('close')}</button>
         </div>
       </div>`;
     }).join('');
