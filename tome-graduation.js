@@ -51,6 +51,10 @@ export function selectCandidates(tomes, { excludeNames = EXCLUDED_TOME_NAMES, ba
   for (const { file, tome } of (Array.isArray(tomes) ? tomes : [])) {
     if (!tome || tome.enabled === false) continue;
     if (excludeNames.has(tome.name)) continue;
+    // Per-tome opt-out (ward-set in the Tomes UI, or stamped on runtime
+    // tomes at creation). The flag protects tomes the NAME list can't
+    // know about — renamed built-ins, hand-curated reference tomes.
+    if (tome.graduationExempt === true) continue;
     const entries = tome.entries && typeof tome.entries === 'object' ? tome.entries : {};
     for (const [uid, entry] of Object.entries(entries)) {
       if (!entry || entry.enabled === false) continue;

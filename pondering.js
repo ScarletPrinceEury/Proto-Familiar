@@ -56,6 +56,7 @@ export async function findOrCreatePonderingsTome(tomesDir = DEFAULT_TOMES_DIR) {
     name:        PONDERINGS_TOME_NAME,
     description: PONDERINGS_TOME_DESC,
     enabled:     true,
+    graduationExempt: true,   // my own episodic store, never graduation fodder
     entries:     {},
   });
 }

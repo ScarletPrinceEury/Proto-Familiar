@@ -177,6 +177,7 @@ export function findOrCreateSessionMemoriesTome() {
     name:        TOME_NAME,
     description: TOME_DESCRIPTION,
     enabled:     true,
+    graduationExempt: true,   // runtime store — graduation never eats it
     entries:     {},
   });
 }
@@ -579,7 +580,7 @@ export function parseRelations(raw, finishReason = null) {
 
 // ── Consent-pending helpers ───────────────────────────────────────
 
-async function readConsentPending() {
+export async function readConsentPending() {
   try {
     const raw = await fsp.readFile(CONSENT_PENDING_FILE, 'utf8');
     const data = JSON.parse(raw);

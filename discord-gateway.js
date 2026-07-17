@@ -35,13 +35,14 @@ import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { sessionSlugId } from './slug-ids.js';
 
-import { enrich, withLock, getScheduleWindow } from './thalamus.js';
+import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
 import { logDiscordWrite } from './discord-write-log.js';
-import { enqueueSessionByDay } from './memorization.js';
+import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
+import { isConsentCommand, parseConsentCommand, buildConsentMenu, applyConsentSet, consentHelpText } from './villager-consent.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
@@ -145,9 +146,11 @@ const REVISIT_MAX_DEFER = 2;           // may re-defer this many times total
 
 let revisitTimer = null;
 
-/** Parse a [later:…] token. Returns ms until the revisit, or null. */
+/** Parse a [later:…] token — whole-message OR leading ("[later:20m]
+ * because they might wrap up…" defers, trailing reasoning discarded).
+ * Returns ms until the revisit, or null. */
 export function parseDeferToken(text) {
-  const m = String(text ?? '').trim().match(/^\[later:([^\]]+)\]$/i);
+  const m = String(text ?? '').trim().match(/^\[later:([^\]]+)\]/i);
   if (!m) return null;
   const val = m[1].trim().toLowerCase();
   // Named buckets
@@ -792,6 +795,11 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
     lines.push(
       `If ${speakerName} says something {{user}} would want to know or act on, I pass it up to {{user}} myself rather than promising and leaving it — and within this person's clearance I can act here, not only talk.`,
     );
+    // Consent transparency: the person I'm talking with has their own say
+    // over what I keep about them, right here in this DM.
+    lines.push(
+      `${speakerName} has their own say over what I remember about them: typing \`!consent\` here shows them everything I hold about them and lets them change what I may keep (keep / ask first / never). If they wonder what I know about them, or seem uneasy about being remembered, I tell them about it.`,
+    );
   } else {
     const present = (participants ?? []).map(p => p.name).filter(Boolean).join(', ');
     lines.push(
@@ -874,13 +882,35 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
   return substituteMacros(lines.join('\n'), settings);
 }
 
-// An ambient reply where I chose to stay quiet. Matches [pass] / pass /
-// [silence] / silence (optionally bracketed) and nothing else. Bare words
-// like "nothing", "quiet", "skip" are valid chat replies and are NOT caught.
-const AMBIENT_ABSTAIN_RE = /^\s*[[(]?\s*(pass|silence)\s*[\])]?\s*[.!]?\s*$/i;
+// An ambient reply where I chose to stay quiet. Two forms count:
+//  - the whole message is the token: [pass] / pass / [silence] / silence
+//    (optionally bracketed) — bare words like "nothing", "quiet", "skip"
+//    are valid chat replies and are NOT caught;
+//  - the message STARTS with the bracketed token: "[pass] they're mid-
+//    conversation…" — the tag is the command and the trailing text is the
+//    model's private reasoning, never room content. Only the bracketed
+//    form leads (a bare leading "pass" could open a real sentence).
+const AMBIENT_ABSTAIN_RE         = /^\s*[[(]?\s*(pass|silence)\s*[\])]?\s*[.!]?\s*$/i;
+const AMBIENT_ABSTAIN_LEADING_RE = /^\s*[[(]\s*(pass|silence)\s*[\])]/i;
 export function isAmbientAbstain(text) {
   const t = (text ?? '').trim();
-  return t === '' || AMBIENT_ABSTAIN_RE.test(t);
+  return t === '' || AMBIENT_ABSTAIN_RE.test(t) || AMBIENT_ABSTAIN_LEADING_RE.test(t);
+}
+
+// Strip any LEADING silence/defer tokens off a reply. Used at delivery as
+// a last-resort guard: whatever path a reply took, a control tag must
+// never be posted into a room as text. Returns the remainder ('' when the
+// message was only tags — the caller should then skip the send).
+export function stripLeadingSilenceTags(text) {
+  let t = String(text ?? '');
+  for (;;) {
+    const next = t
+      .replace(AMBIENT_ABSTAIN_LEADING_RE, '')
+      .replace(/^\s*\[later:[^\]]+\]/i, '')
+      .replace(/^\s*[—–\-:,.]+\s*/, '');
+    if (next === t) return t.trim();
+    t = next;
+  }
 }
 
 // ── Conversation map (location key → session id), persisted ──────
@@ -1133,6 +1163,62 @@ function resolveLocationGate(audienceInput, registry) {
  *  drift from the other or quietly skip a safety step. `priorMessages` are
  *  appended before my reply (the incoming user turn for a live turn; empty
  *  for a revisit, where there is no new incoming message). */
+// `!consent` handler: fetch what I hold about this villager, render the
+// menu or apply their change, reply in their DM. Changes are audit-logged
+// (discord-writes) and visible to my human in the Village UI — mutual
+// transparency, no covert state movement in either direction.
+async function handleConsentCommand(gw, { msg, decision }) {
+  const v = decision.villager;
+  try {
+    const cmd = parseConsentCommand(msg.content) ?? { action: 'help' };
+    let reply;
+    if (cmd.action === 'menu') {
+      const [mem, pending, registry] = await Promise.all([
+        getMemoriesBySubject({ villagerId: v.id }).catch(() => ({ items: [] })),
+        readConsentPending().catch(() => []),
+        getRegistry().catch(() => null),
+      ]);
+      const mine  = (Array.isArray(pending) ? pending : []).filter(p => p.villagerId === v.id);
+      const fresh = registry?.villagers?.find(x => x.id === v.id) ?? v;
+      reply = buildConsentMenu({ villager: fresh, memories: mem.items ?? [], pending: mine });
+    } else if (cmd.action === 'set') {
+      reply = await applyConsentSet({ villagerId: v.id, gate: cmd.gate, categories: cmd.categories });
+      // Their answer also settles what's already WAITING about them in the
+      // affected categories: keep -> confirmed into memory, never -> dropped,
+      // ask -> stays queued. This is the original "ask" intent — the person
+      // the fact is about gets to answer, not only my human.
+      if (cmd.gate !== 'ask') {
+        try {
+          const pending = await readConsentPending().catch(() => []);
+          const mine = (Array.isArray(pending) ? pending : [])
+            .filter(p => p.villagerId === v.id && cmd.categories.includes(p.category));
+          if (mine.length) {
+            const ids = mine.map(p => p.id);
+            if (cmd.gate === true) await confirmConsentMemories(ids);
+            else                   await dropPendingMemories(ids);
+            await pruneConsentPending(ids);
+            reply += `\n(That also settled ${ids.length} waiting item${ids.length === 1 ? '' : 's'} about you: ${cmd.gate === true ? 'kept' : 'dropped'}.)`;
+          }
+        } catch (err) {
+          console.error('[discord] consent pending-sweep failed:', err?.message ?? err);
+        }
+      }
+      logDiscordWrite({
+        villager: v.name, tool: 'consent_set', locationKey: decision.locationKey,
+        args: { gate: cmd.gate === true ? 'keep' : cmd.gate === false ? 'never' : 'ask', categories: cmd.categories },
+      }).catch(() => { /* best-effort audit */ });
+      console.log(`[discord] consent: ${v.name} set ${cmd.categories.join(',')} -> ${cmd.gate}`);
+    } else {
+      reply = consentHelpText(cmd.error);
+    }
+    await sendChannelMessage(gw.config.token, msg.channel_id, reply);
+  } catch (err) {
+    console.error('[discord] consent command failed:', err?.message ?? err);
+    await sendChannelMessage(gw.config.token, msg.channel_id,
+      'Something went wrong opening your consent menu just now — it\'s been logged.').catch(() => {});
+  }
+}
+
 async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [] }) {
   // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
   // fast-paths; every other room is filtered before I say anything.
@@ -1153,6 +1239,19 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
   }
 
   reply = stripLlmTimestamps(reply);
+  // Last-resort guard: a leading [pass]/[silence]/[later:…] is a control
+  // token, never room content — strip it whatever path led here. A reply
+  // that was ONLY tags means I chose silence; sending nothing is the
+  // faithful delivery of that choice.
+  const untagged = stripLeadingSilenceTags(reply);
+  if (untagged !== reply) {
+    console.log(`[discord] stripped leading control tag before delivery (audience=${audienceTag})`);
+    reply = untagged;
+  }
+  if (!reply) {
+    console.log(`[discord] reply was only control tags — nothing sent to ${locationKey}`);
+    return;
+  }
   await sendChannelMessage(gw.config.token, channelId, reply);
 
   // Persist the turn. Sessions land in logs/ exactly like web sessions
@@ -1357,6 +1456,24 @@ async function handleTurn(gw, msg, decision) {
     isWard: decision.isWard, speakerName: decision.speakerName,
   });
   const nowIso   = new Date().toISOString();
+
+  // Villager consent self-service: `!consent` in a villager's own DM is a
+  // CODE surface, not a chat turn — a consent menu must be exact, so no
+  // LLM is consulted and no session turn is recorded. (In the ward's DM
+  // the same command just points at the Village UI, where they already
+  // hold the full controls.)
+  if (isConsentCommand(msg.content)) {
+    if (decision.kind === 'villager-dm') {
+      await handleConsentCommand(gw, { msg, decision });
+      return;
+    }
+    if (decision.kind === 'ward-dm') {
+      await sendChannelMessage(gw.config.token, msg.channel_id,
+        'The consent menu is for villagers about themselves — your full controls live in the Village panel of the web app (People → remember settings).').catch(() => {});
+      return;
+    }
+    // In a guild room: ignore quietly (personal data never renders in a room).
+  }
 
   // Ward speech counts as ward activity wherever it happens — the
   // silence-triage clock and the threat detector follow my human, not
@@ -1563,7 +1680,9 @@ async function handleTurn(gw, msg, decision) {
     session.updatedAt   = new Date().toISOString();
     await writeSessionLog(session);
     await touchLocation(decision.locationKey, session.sessionId);
-    console.log(`[discord] ambient abstain in ${decision.locationKey} — stayed quiet`);
+    const reasoning = stripLeadingSilenceTags(rawReply);
+    console.log(`[discord] ambient abstain in ${decision.locationKey} — stayed quiet`
+      + (reasoning ? ` (reasoning: ${reasoning.slice(0, 80)})` : ''));
     return;
   }
 

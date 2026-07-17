@@ -1463,9 +1463,9 @@ app.get('/api/tomes', async (_req, res) => {
       if (!isTomeFile(f)) continue;
       try {
         const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-        const { id, name, description, enabled, entries } = JSON.parse(raw);
+        const { id, name, description, enabled, entries, graduationExempt } = JSON.parse(raw);
         if (!id) continue; // not a tome (no id) — skip rather than poison the registry
-        tomes.push({ id, name, description, enabled, entryCount: Object.keys(entries ?? {}).length });
+        tomes.push({ id, name, description, enabled, graduationExempt: graduationExempt === true, entryCount: Object.keys(entries ?? {}).length });
       } catch { /* skip corrupt */ }
     }
     tomes.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
@@ -1561,6 +1561,7 @@ app.patch('/api/tomes/:id', async (req, res) => {
       if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
       if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
       if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
+      if (req.body.graduationExempt !== undefined) tome.graduationExempt = !!req.body.graduationExempt;
     });
     res.json({ ok: true });
   } catch (err) {

@@ -2690,6 +2690,23 @@ export async function getStandingConsent() {
   });
 }
 
+/**
+ * Kept memories where a villager is a subject — thin projections. Backs
+ * the villager consent menu (a person may see what the Familiar holds
+ * about them). Degrades to an empty list when Phylactery is down.
+ */
+export async function getMemoriesBySubject({ villagerId, limit = 50 }) {
+  await startThalamus();
+  if (!phylacteryClient) return { ok: false, items: [] };
+  try {
+    const r = await phylacteryClient.callTool({
+      name: 'memory_list_by_subject',
+      arguments: { villager_id: villagerId, limit },
+    });
+    return parseToolText(r, { ok: true, items: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
+}
+
 export async function setStandingConsent(category, until, window) {
   return callTool('remember_standing_set', { category, until, window: window ?? '' }).catch(err => {
     console.warn('[thalamus] setStandingConsent failed:', err?.message ?? err);

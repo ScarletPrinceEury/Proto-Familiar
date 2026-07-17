@@ -6115,6 +6115,7 @@ async function refreshTomesList() {
         <div class="lorebook-entry-actions">
           <button class="btn-ghost tome-open-btn" data-id="${esc(tome.id)}" title="View entries">Open</button>
           <button class="btn-ghost tome-toggle-btn" data-id="${esc(tome.id)}" title="${tome.enabled ? 'Disable tome' : 'Enable tome'}">${tome.enabled ? 'Enabled' : 'Disabled'}</button>
+          <button class="btn-ghost tome-grad-btn" data-id="${esc(tome.id)}" title="${tome.graduationExempt ? 'Graduation skips this tome. Click to allow it again.' : 'Tome Graduation may move durable facts out of this tome. Click to protect it.'}">${tome.graduationExempt ? '🛡 Protected' : 'Graduatable'}</button>
           <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome" aria-label="Delete tome">${msIcon('delete')}</button>
         </div>
       </div>
@@ -6123,8 +6124,24 @@ async function refreshTomesList() {
     `;
     div.querySelector('.tome-open-btn').addEventListener('click', () => openTomeEntriesModal(tome.id));
     div.querySelector('.tome-toggle-btn').addEventListener('click', () => toggleTomeEnabled(tome.id));
+    div.querySelector('.tome-grad-btn').addEventListener('click', () => toggleTomeGraduation(tome.id));
     div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteTome(tome.id));
     container.appendChild(div);
+  }
+}
+
+async function toggleTomeGraduation(tomeId) {
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  if (!tome) return;
+  try {
+    await fetch(`/api/tomes/${tomeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graduationExempt: !tome.graduationExempt }),
+    });
+    await refreshTomesList();
+  } catch (err) {
+    console.error('toggle tome graduation failed', err);
   }
 }
 
