@@ -40,6 +40,8 @@ import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
+import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
+import { materializeAttachments, resolveVisionCapable } from './vision.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
 import {
@@ -302,6 +304,9 @@ async function fireRevisit(item) {
       return {
         role: m.role,
         content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+        // Media references ride beside content into the materializer (§5) so a
+        // past image message replays as a live image or a stand-in, not lost.
+        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
       };
     });
 
@@ -1495,6 +1500,119 @@ function enqueueTurn(locationKey, fn) {
 // what was said. Deliberately threat-neutral: observing never moves the
 // ward's last-activity clock or threat tier (that stays on the reply
 // path, out of the safety-critical surface).
+// ── Discord image ingest (vision build spec §5, Pass 3) ───────────
+// Discord CDN attachment URLs are ephemeral (signed, expiring), so image
+// attachments are fetched and stored AT ARRIVAL, not at read time. Bounded
+// fetch via the media proxy's own resize params (long edge 1568) — the same
+// downscale bound the browser applies, without adding an image library. Who
+// gets ingested: the ward always; a registered villager yes (room context,
+// stamped with the room's audienceTag + origin.speaker provenance); a stranger
+// never (their message text flows through the gate, but their bytes aren't
+// stored). Caps: MAX_IMAGES_PER_MESSAGE per message + a per-location hourly cap.
+const DISCORD_MEDIA_EDGE = 1568;
+const DISCORD_IMAGE_MIMES = new Set(Object.keys(IMAGE_MIME_EXT));
+
+function discordVisionOff() {
+  if (process.env.PROTO_FAMILIAR_VISION_DISABLED === '1') return true;
+  try { return readSettingsSync()?.visionEnabled === false; } catch { return false; }
+}
+
+export function clampDiscordMediaPerHour(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 20;
+  return Math.max(0, Math.min(200, Math.round(v)));
+}
+
+// Does a Discord attachment look like an image we ingest? By declared mime, or
+// (when Discord omits content_type) by the filename extension. Pure.
+export function isDiscordImageAttachment(att) {
+  const mime = String(att?.content_type || '').split(';')[0].trim();
+  if (DISCORD_IMAGE_MIMES.has(mime)) return true;
+  return /\.(jpe?g|png|webp|gif)$/i.test(att?.filename || '');
+}
+
+// The download URL for a Discord image, downscaled via the media proxy's own
+// resize params (long edge `edge`) when dimensions are known and exceed it.
+// Falls back to the plain proxy_url/url. Pure; returns '' when there's no url.
+export function discordResizeUrl(att, edge = DISCORD_MEDIA_EDGE) {
+  const base = att?.proxy_url || att?.url;
+  if (!base) return '';
+  const w = Number(att.width), h = Number(att.height);
+  if (att?.proxy_url && Number.isFinite(w) && Number.isFinite(h) && Math.max(w, h) > edge) {
+    try {
+      const scale = edge / Math.max(w, h);
+      const u = new URL(base);
+      u.searchParams.set('width', String(Math.max(1, Math.round(w * scale))));
+      u.searchParams.set('height', String(Math.max(1, Math.round(h * scale))));
+      return u.toString();
+    } catch { return base; }
+  }
+  return base;
+}
+
+// Per-location hourly ingest counter (in-memory; a restart resetting it is
+// harmless — the cap only guards a busy room from pumping the disk).
+const _discordMediaHourly = new Map();
+function discordMediaHourCount(locationKey) {
+  const now = Date.now();
+  const arr = (_discordMediaHourly.get(locationKey) ?? []).filter(t => now - t < 3600_000);
+  _discordMediaHourly.set(locationKey, arr);
+  return arr.length;
+}
+function noteDiscordMediaIngest(locationKey) {
+  const arr = _discordMediaHourly.get(locationKey) ?? [];
+  arr.push(Date.now());
+  _discordMediaHourly.set(locationKey, arr);
+}
+
+// Fetch one Discord image attachment, downscaled via the media proxy's resize
+// params, bounded by a timeout + MEDIA_MAX_BYTES. Returns {buffer, mime} or null.
+async function fetchDiscordImage(att, { timeoutMs = 8000 } = {}) {
+  try {
+    const url = discordResizeUrl(att);
+    if (!url) return null;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    let res;
+    try { res = await fetch(url, { signal: ac.signal }); }
+    finally { clearTimeout(timer); }
+    if (!res.ok) return null;
+    const mime = (res.headers.get('content-type') || att.content_type || '').split(';')[0].trim();
+    if (!IMAGE_MIME_EXT[mime]) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > MEDIA_MAX_BYTES) return null;
+    return { buffer: buf, mime };
+  } catch { return null; }
+}
+
+// Ingest a message's image attachments. Returns { attachments:[{id,kind,mime}],
+// failed:<count> }. Never throws — a failed fetch is a count, not an error.
+async function ingestDiscordImages(msg, decision, { audienceTag, sessionId }) {
+  if (discordVisionOff()) return { attachments: [], failed: 0 };
+  // Ward always; registered villager yes; stranger never.
+  if (!decision.isWard && !decision.villager) return { attachments: [], failed: 0 };
+  const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+  const images = atts.filter(isDiscordImageAttachment);
+  if (!images.length) return { attachments: [], failed: 0 };
+  const cap = clampDiscordMediaPerHour(readSettingsSync()?.discordMediaPerHour);
+  const out = [];
+  let failed = 0;
+  for (const a of images.slice(0, MAX_IMAGES_PER_MESSAGE)) {
+    if (discordMediaHourCount(decision.locationKey) >= cap) break;
+    const got = await fetchDiscordImage(a);
+    if (!got) { failed++; continue; }
+    const meta = await saveAsset({
+      buffer: got.buffer, mime: got.mime,
+      origin: { surface: 'discord', sessionId: sessionId ?? null, speaker: decision.isWard ? null : (decision.speakerName ?? null) },
+      audienceTag: audienceTag || 'ward-private',
+      label: a.filename || '',
+    });
+    if (meta?.id) { out.push({ id: meta.slugs?.[0] ?? meta.id, kind: 'image', mime: meta.mime }); noteDiscordMediaIngest(decision.locationKey); }
+    else failed++;
+  }
+  return { attachments: out, failed };
+}
+
 async function observeMessage(gw, msg, decision) {
   const registry = await getRegistry();
   const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
@@ -1522,7 +1640,12 @@ async function observeMessage(gw, msg, decision) {
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
     isWard: decision.isWard, speakerName: decision.speakerName,
   });
-  const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
+  // Ingest image attachments at arrival (§5) — observing counts too, so when
+  // someone finally turns to me I can see what the room was looking at. A
+  // failed fetch degrades to a visible note, never blocks.
+  const { attachments: obsAttachments, failed: obsFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const failNote = obsFailed > 0 ? '\n[image failed to load]' : '';
+  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + failNote;
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
   const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
@@ -1530,7 +1653,7 @@ async function observeMessage(gw, msg, decision) {
   const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
   session.messages = [
     ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...(obsAttachments.length ? { attachments: obsAttachments } : {}) },
   ];
   session.audienceTag = audienceTag;
   session.updatedAt   = new Date().toISOString();
@@ -1707,20 +1830,47 @@ async function handleTurn(gw, msg, decision) {
       return {
         role: m.role,
         content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+        // Media references ride beside content into the materializer (§5) so a
+        // past image message replays as a live image or a stand-in, not lost.
+        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
       };
     });
 
   // Non-ward speakers are name-prefixed so multi-party rooms stay
   // legible to me across turns. The ward's own words stay raw, same
   // as the web chat.
-  const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
+  // Ingest this message's image attachments at arrival (§5) — stored beside
+  // the content, materialized into provider image parts just before the call.
+  const { attachments: turnAttachments, failed: turnFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const turnFailNote = turnFailed > 0 ? '\n[image failed to load]' : '';
+  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + turnFailNote;
+  const turnAttField = turnAttachments.length ? { attachments: turnAttachments } : {};
 
-  const apiMessages = [
+  let apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
-    { role: 'user', content: userContent },
+    { role: 'user', content: userContent, ...turnAttField },
   ];
+
+  // Vision materialization (§3) — the same seam as the web path, applied once
+  // to the assembled array so it rides every tool round. Gated turn → the
+  // room's visible-audience set (fail-closed); ward → no gate. Degrades to
+  // stand-ins on a blind connection; never throws into the reply path.
+  let visionCapableTurn = false;
+  if (!discordVisionOff()) {
+    try {
+      visionCapableTurn = await resolveVisionCapable(conn, settings);
+      const mat = await materializeAttachments(apiMessages, {
+        connection: conn, settings,
+        visibleAudiences: audienceTag === 'ward-private' ? null : audienceVisible,
+      });
+      apiMessages = mat.messages;
+      if (mat.imagesLive || mat.imagesStoodIn) console.log(`[discord] vision: ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s) (audience=${audienceTag})`);
+    } catch (err) {
+      console.error('[discord] vision materialize failed (passing through):', err?.message ?? err);
+    }
+  }
 
   // Discord clearance-gated tools (discord-tools-build-spec). The Familiar's
   // tools this turn follow the SPEAKER: ward alone → full web-chat parity; a
@@ -1731,7 +1881,7 @@ async function handleTurn(gw, msg, decision) {
     && settings.discordToolsEnabled !== false;
   const isVillager = !decision.isWard && !!decision.villager;
   const discordTools = toolsOn
-    ? composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings })
+    ? composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn })
     : [];
 
   let rawReply;
@@ -1783,7 +1933,7 @@ async function handleTurn(gw, msg, decision) {
     if (!rawReply || !rawReply.trim()) {
       session.messages = [
         ...(session.messages ?? []),
-        { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+        { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
       ];
       session.audienceTag = audienceTag;
       session.updatedAt   = new Date().toISOString();
@@ -1805,7 +1955,7 @@ async function handleTurn(gw, msg, decision) {
   if (decision.ambient && isAmbientAbstain(rawReply)) {
     session.messages = [
       ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
     ];
     session.audienceTag = audienceTag;
     session.updatedAt   = new Date().toISOString();
@@ -1831,7 +1981,7 @@ async function handleTurn(gw, msg, decision) {
     Promise.resolve(recordWait('discord-defer')).catch(() => {});
     session.messages = [
       ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
     ];
     session.audienceTag = audienceTag;
     session.updatedAt   = new Date().toISOString();
@@ -1847,7 +1997,7 @@ async function handleTurn(gw, msg, decision) {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId: msg.channel_id, session, locationKey: decision.locationKey, regLoc,
     priorMessages: [
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
     ],
   });
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);

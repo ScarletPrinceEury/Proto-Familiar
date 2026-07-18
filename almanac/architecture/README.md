@@ -121,6 +121,7 @@ If you're asking yourself... go to:
 - **What does the schedule graph do?** → [Unruh](unruh) and [Temporal assurance](../concepts/temporal-assurance)
 - **How do sessions turn into lasting memories?** → [Session memorization](session-memorization)
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
+- **How does image input work?** → [Vision and media](vision-and-media)
 
 ## Where to go next
 
@@ -132,6 +133,8 @@ If you're asking yourself... go to:
   system, and the local-naive time model.
 - [Weather](weather) — ward-local weather sensing, the provider chain, and the
   [location-privacy](../decisions/location-privacy) invariant.
+- [Vision and media](vision-and-media) — multimodal image input, content-addressed storage,
+  and modality fallback at the materialization seam.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
   to turn one off.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a

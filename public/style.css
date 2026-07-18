@@ -1408,6 +1408,152 @@ button { cursor: pointer; font-family: var(--font); }
 .btn-send:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-send svg { display: none; }
 
+/* ── Composer image attachments (vision) ─────────────────────────── */
+.btn-attach {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-raise);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-attach:hover { color: var(--accent); border-color: var(--accent); }
+
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px 0;
+}
+.attach-strip.hidden { display: none; }
+.attach-chip {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.attach-chip { width: 60px; }
+.attach-chip img { width: 60px; height: 60px; object-fit: cover; display: block; }
+.attach-chip-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-chip-tag {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 0.66rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-chip-badge {
+  display: block;
+  max-width: 60px;
+  margin-top: 2px;
+  font-size: 0.62rem;
+  line-height: 1.1;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* Graph-node tag picker (composer) */
+.tag-picker {
+  position: fixed;
+  z-index: 1000;
+  width: 240px;
+  background: var(--surface-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  padding: 8px;
+}
+.tag-picker input {
+  width: 100%;
+  padding: 7px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.tag-picker-results { margin-top: 6px; max-height: 200px; overflow-y: auto; }
+.tag-picker-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+.tag-picker-item:hover { background: var(--surface); }
+.tag-picker-empty { padding: 8px 9px; font-size: 0.78rem; color: var(--text-muted); }
+
+/* Thumbnails rendered inside a chat message */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.msg-attachment-thumb {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+  display: block;
+}
+.msg-attachment-missing { color: var(--text-muted); font-size: 0.8rem; font-style: italic; }
+
+/* Drag-over affordance on the chat pane */
+.chat-pane.drag-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
+/* Per-connection vision capability control */
+.conn-vision {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.conn-vision select { font-size: 0.78rem; padding: 2px 6px; }
+
 /* ── Scrollbar ───────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
