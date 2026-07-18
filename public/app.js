@@ -184,6 +184,7 @@ const state = {
   messages:                [],     // { role, content, timestamp }[]
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
+  toolRoundsPerTurn: 12,     // live-turn tool-round budget (clamped 3–30 server-side)
   customTools:       '',     // JSON array string of user-defined tool definitions
   // ── Web search (opt-in; works in-box, no setup) ─────────────
   webSearchEnabled:    false,
@@ -354,6 +355,17 @@ const state = {
   // connectionForFeature(). Synced so the server-side loops can honour it.
   featureConnections: {},
 
+  // Vision (image input, vision build spec). Default ON but inert until an
+  // image is actually sent. visionMaxLiveImages bounds how many recent images
+  // ride live per request (older ones degrade to text stand-ins server-side).
+  visionEnabled: true,
+  visionMaxLiveImages: 4,
+  // Image→threat scoring (ward-signed, §15.1): a distressing image I share can
+  // raise my Familiar's concern, same as if I'd typed it. Raise-only for now.
+  visionThreatScoring: true,
+  // Transient (never synced/saved): images picked in the composer, awaiting send.
+  pendingAttachments: [],
+
   // Session audience (Village Support V2).
   // Tracks who is physically present during this session so the Familiar
   // can reference them and (in V3) gate knowledge appropriately.
@@ -376,7 +388,7 @@ const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
-  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
+  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'toolRoundsPerTurn',
   'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
@@ -401,6 +413,7 @@ const SERVER_SYNCED_KEYS = [
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
+  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -496,6 +509,7 @@ const FEATURE_CONNECTIONS = [
   { key: 'triage',         label: 'Crisis triage (safety check-ins)' },
   { key: 'reachout',       label: 'Warm reach-outs' },
   { key: 'tomeGraduation', label: 'Tome graduation' },
+  { key: 'vision',         label: 'Describing images (vision)' },
   // Session-handoff summaries are generated client-side on the chat connection,
   // so they already follow whatever you're chatting on — no separate routing.
 ];
@@ -1302,6 +1316,27 @@ function renderConnectionsList() {
       `<div class="conn-name">${esc(conn.name)}${primaryBadge}${fallbackBadge}${entityBadge}</div>` +
       `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
 
+    // Vision capability tri-state (spec §3.1): the ward's explicit word, or
+    // Auto (the first image sent settles it). Stored on the connection object,
+    // which already syncs. Model names don't reliably encode modality, so this
+    // is how the ward can pin it when they know.
+    const visRow = document.createElement('div');
+    visRow.className = 'conn-vision';
+    const vcur = conn.visionCapable === 'yes' || conn.visionCapable === 'no' ? conn.visionCapable : 'auto';
+    const vId = `conn-vision-${conn.id}`;
+    visRow.innerHTML =
+      `<label for="${vId}">Can see images?</label>` +
+      `<select id="${vId}" class="ke-select">` +
+      `<option value="auto"${vcur === 'auto' ? ' selected' : ''}>Auto</option>` +
+      `<option value="yes"${vcur === 'yes' ? ' selected' : ''}>Yes</option>` +
+      `<option value="no"${vcur === 'no' ? ' selected' : ''}>No</option>` +
+      `</select>`;
+    visRow.querySelector('select').addEventListener('change', (e) => {
+      const c = state.connections.find(x => x.id === conn.id);
+      if (c) { c.visionCapable = e.target.value; saveSettings(); }
+    });
+    info.appendChild(visRow);
+
     // Actions column
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
@@ -1429,6 +1464,12 @@ function formatDuration(ms) {
 // lands), and without this the macro would compare the two prior
 // user messages and miss "user just returned after being away."
 let _pendingUserMsgTimestamp = null;
+// The live turn's image attachments (vision), carried into the new user turn
+// built by _buildApiMessagesInner. Cleared in buildApiMessages' finally.
+let _pendingAttachments = null;
+// Set when the server reports the tool-round budget ran out mid-reach
+// (_roundCapHit) — after the reply lands we offer a one-click "Go on".
+let _roundCapHitThisTurn = false;
 
 function elapsedBetweenUserMessages() {
   const stamps = [];
@@ -1570,15 +1611,20 @@ function stampContent(content, ts) {
   return tag ? `${tag} ${cleaned}` : cleaned;
 }
 
-function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
+function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, attachments }) {
   if (role === 'tool')      return { role, tool_call_id, content };
   // Each historical user/assistant message carries its own timestamp
   // in state.messages — prepended to the API-bound content here (NOT
   // to the stored state) so the Familiar perceives WHEN each turn
   // happened across the whole conversation, not just the current one.
   const stamped = stampContent(content, timestamp);
-  if (tool_calls)           return { role, content: stamped ?? null, tool_calls };
-  return { role, content: stamped };
+  // Media references ride BESIDE content as an optional sibling field (spec
+  // §1) — never inside the string. The server-side materializer is the only
+  // seam that turns them into provider image parts; stampContent above still
+  // only ever sees the string, so timestamp hygiene is untouched.
+  const atts = Array.isArray(attachments) && attachments.length ? { attachments } : {};
+  if (tool_calls)           return { role, content: stamped ?? null, tool_calls, ...atts };
+  return { role, content: stamped, ...atts };
 }
 
 /**
@@ -1592,12 +1638,14 @@ function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
  *   [user: userInput]            ← new turn
  *   [user: postHistoryPrompt]    ← optional, injected last
  */
-function buildApiMessages(userInput, pendingUserMsgTimestamp = null) {
+function buildApiMessages(userInput, pendingUserMsgTimestamp = null, pendingAttachments = null) {
   _pendingUserMsgTimestamp = pendingUserMsgTimestamp;
+  _pendingAttachments = Array.isArray(pendingAttachments) && pendingAttachments.length ? pendingAttachments : null;
   try {
   return _buildApiMessagesInner(userInput);
   } finally {
   _pendingUserMsgTimestamp = null;
+  _pendingAttachments = null;
   }
 }
 
@@ -1659,7 +1707,11 @@ function _buildApiMessagesInner(userInput) {
   // captured at send time (also used by the elapsedTime macro), so
   // it's marked the same way as history. The stamp lives only on
   // this temporary API message — state.messages keeps clean content.
-  msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
+  msgs.push({
+    role: 'user',
+    content: stampContent(userInput, _pendingUserMsgTimestamp),
+    ...(_pendingAttachments ? { attachments: _pendingAttachments } : {}),
+  });
 
   // ── Post-history prompt ───────────────────────────────────────
   // Role is user-configurable (default 'system'). The chat path always
@@ -1805,7 +1857,28 @@ function setStatus(type) {
  * Create and return a message DOM element.
  * Returns { el, bubble } so callers can update the bubble during streaming.
  */
-function createMessageEl(role, htmlContent, timestamp) {
+// A thumbnail row for a message's image attachments (vision). Each thumb
+// streams from GET /api/media/:id and opens full-size in a new tab. Returns
+// null when there's nothing to show.
+function attachmentRow(attachments) {
+  const atts = Array.isArray(attachments) ? attachments.filter(a => a && a.id) : [];
+  if (!atts.length) return null;
+  const row = document.createElement('div');
+  row.className = 'msg-attachments';
+  for (const a of atts) {
+    const img = document.createElement('img');
+    img.className = 'msg-attachment-thumb';
+    img.src = `/api/media/${encodeURIComponent(a.id)}`;
+    img.alt = 'shared image';
+    img.loading = 'lazy';
+    img.addEventListener('click', () => window.open(`/api/media/${encodeURIComponent(a.id)}`, '_blank', 'noopener'));
+    img.addEventListener('error', () => { img.replaceWith(Object.assign(document.createElement('span'), { className: 'msg-attachment-missing', textContent: '[image no longer available]' })); });
+    row.appendChild(img);
+  }
+  return row;
+}
+
+function createMessageEl(role, htmlContent, timestamp, attachments = null) {
   const el = document.createElement('div');
   el.className = `message ${role}`;
 
@@ -1861,6 +1934,8 @@ function createMessageEl(role, htmlContent, timestamp) {
     timeEl.title = new Date(timestamp).toLocaleString();
   }
 
+  const attRow = attachmentRow(attachments);
+  if (attRow) body.appendChild(attRow);   // thumbnails above the bubble text
   body.appendChild(bubble);
   body.appendChild(actions);
   body.appendChild(timeEl);
@@ -1882,9 +1957,9 @@ function wireCopyButton(btn, getText) {
   });
 }
 
-function appendUserMessage(text, timestamp) {
-  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp);
-  wireCopyButton(copyBtn, () => text);
+function appendUserMessage(text, timestamp, attachments = null) {
+  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp, attachments);
+  wireCopyButton(copyBtn, () => text);   // copy is text only (never the image)
   // Index will be assigned by refreshTopicGutter after state.messages is updated
   el.dataset.msgIndex = String(state.messages.length); // optimistic: will be corrected
   $('messages').appendChild(el);
@@ -1901,6 +1976,35 @@ function appendAssistantShell(timestamp) {
 function appendErrorMessage(text) {
   const { el } = createMessageEl('error', `⚠ ${esc(text)}`);
   $('messages').appendChild(el);
+  scrollToBottom();
+}
+
+// ── "Go on" offer (tool-round budget ran out mid-reach) ───────────
+// Each conversation turn carries a fresh tool-round budget, so granting more
+// rounds IS just asking the Familiar to continue — this renders that as one
+// click. The sent message is a normal, visible user turn (honest history).
+function removeContinueRoundsOffer() {
+  document.getElementById('continue-rounds-offer')?.remove();
+}
+
+function offerContinueRounds() {
+  removeContinueRoundsOffer();
+  const wrap = document.createElement('div');
+  wrap.id = 'continue-rounds-offer';
+  wrap.className = 'continue-rounds-offer';
+  const note = document.createElement('span');
+  note.textContent = 'Tool rounds ran out mid-task.';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary';
+  btn.textContent = '▶ Go on — grant a fresh set of rounds';
+  btn.addEventListener('click', () => {
+    removeContinueRoundsOffer();
+    sendMessage('Go on — you have a fresh set of tool rounds. Pick up exactly where you left off.');
+  });
+  wrap.appendChild(note);
+  wrap.appendChild(btn);
+  $('messages').appendChild(wrap);
   scrollToBottom();
 }
 
@@ -2005,7 +2109,7 @@ function renderAllMessages() {
     const html = msg.role === 'user'
       ? esc(displayContent).replace(/\n/g, '<br>')
       : renderMarkdown(displayContent);
-    const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
+    const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
@@ -2051,9 +2155,211 @@ function extractErrorText(payload, fallback) {
   return String(e) || fallback;
 }
 
+// ── Composer image attachments (vision) ──────────────────────────
+const VISION_MAX_PER_MESSAGE = 4;      // mirrors media.js MAX_IMAGES_PER_MESSAGE
+const VISION_DOWNSCALE_EDGE  = 1568;   // long-edge cap before upload (spec §4)
+
+function visionActive() {
+  return state.visionEnabled !== false;
+}
+
+// Canvas re-encode: bound the long edge and re-compress before upload, so the
+// raw camera photo never leaves the browser (spec §4). Animated GIFs are sent
+// as-is (a canvas re-encode would flatten them); PNGs keep PNG to preserve
+// transparency; everything else becomes JPEG q≈0.85.
+function downscaleImage(file) {
+  return new Promise((resolve) => {
+    if (file.type === 'image/gif') { resolve({ blob: file, mime: 'image/gif' }); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const { width, height } = img;
+      const scale = Math.min(1, VISION_DOWNSCALE_EDGE / Math.max(width, height));
+      const w = Math.max(1, Math.round(width * scale));
+      const h = Math.max(1, Math.round(height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const keepPng = file.type === 'image/png';
+      const mime = keepPng ? 'image/png' : 'image/jpeg';
+      canvas.toBlob(
+        (blob) => resolve(blob ? { blob, mime } : { blob: file, mime: file.type }),
+        mime, keepPng ? undefined : 0.85,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve({ blob: file, mime: file.type || 'image/jpeg' }); };
+    img.src = url;
+  });
+}
+
+async function uploadImage(file) {
+  const { blob, mime } = await downscaleImage(file);
+  const label = (file.name && !/^(image|clipboard)\.?\w*$/i.test(file.name)) ? file.name : '';
+  const qs = new URLSearchParams();
+  if (label) qs.set('label', label);
+  if (state.sessionId) qs.set('sessionId', state.sessionId);
+  const res = await fetch(`/api/media${qs.toString() ? `?${qs}` : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': mime },
+    body: blob,
+  });
+  if (!res.ok) {
+    let msg = `upload failed (${res.status})`;
+    try { msg = (await res.json())?.error || msg; } catch { /* keep */ }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+async function addPendingImages(fileList) {
+  if (!visionActive()) return;
+  state.pendingAttachments ||= [];
+  const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+  for (const file of files) {
+    if (state.pendingAttachments.length >= VISION_MAX_PER_MESSAGE) {
+      appendErrorMessage(`I can hold up to ${VISION_MAX_PER_MESSAGE} images per message.`);
+      break;
+    }
+    try {
+      const meta = await uploadImage(file);
+      if (meta?.id) {
+        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id });
+        renderAttachStrip();
+      }
+    } catch (err) {
+      appendErrorMessage(`Couldn't attach that image: ${err.message}`);
+    }
+  }
+}
+
+function removePendingAttachment(id) {
+  state.pendingAttachments = (state.pendingAttachments || []).filter(a => a.id !== id);
+  renderAttachStrip();
+}
+
+function clearPendingAttachments() {
+  state.pendingAttachments = [];
+  renderAttachStrip();
+}
+
+function renderAttachStrip() {
+  const strip = $('attach-strip');
+  if (!strip) return;
+  const atts = state.pendingAttachments || [];
+  strip.innerHTML = '';
+  if (!atts.length) { strip.classList.add('hidden'); return; }
+  strip.classList.remove('hidden');
+  for (const a of atts) {
+    const chip = document.createElement('div');
+    chip.className = 'attach-chip';
+    const img = document.createElement('img');
+    img.src = `/api/media/${encodeURIComponent(a.id)}`;
+    img.alt = 'pending image';
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'attach-chip-remove';
+    rm.setAttribute('aria-label', 'Remove image');
+    rm.textContent = '✕';
+    rm.addEventListener('click', () => removePendingAttachment(a.id));
+    // Tag control (§6.5): tie this image to someone/something in the graph.
+    const tag = document.createElement('button');
+    tag.type = 'button';
+    tag.className = 'attach-chip-tag';
+    tag.setAttribute('aria-label', a.tagLabel ? `Tagged: ${a.tagLabel}. Change tag` : 'Tag this image to a person or thing');
+    tag.title = a.tagLabel ? `Tagged: ${a.tagLabel}` : 'Tag to a person/place/thing';
+    tag.textContent = '🏷';
+    tag.addEventListener('click', (e) => { e.stopPropagation(); openTagPicker(a, chip); });
+    chip.appendChild(img);
+    chip.appendChild(rm);
+    chip.appendChild(tag);
+    if (a.tagLabel) {
+      const badge = document.createElement('span');
+      badge.className = 'attach-chip-badge';
+      badge.textContent = a.tagLabel;
+      badge.title = `Tagged: ${a.tagLabel}`;
+      chip.appendChild(badge);
+    }
+    strip.appendChild(chip);
+  }
+}
+
+// A small search popover for tagging a pending image to a graph node.
+let _tagPickerEl = null;
+function closeTagPicker() { if (_tagPickerEl) { _tagPickerEl.remove(); _tagPickerEl = null; } }
+function openTagPicker(attachment, anchorChip) {
+  closeTagPicker();
+  const pop = document.createElement('div');
+  pop.className = 'tag-picker';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Search people, pets, places…';
+  input.setAttribute('aria-label', 'Search the graph to tag this image');
+  const results = document.createElement('div');
+  results.className = 'tag-picker-results';
+  pop.appendChild(input);
+  pop.appendChild(results);
+  document.body.appendChild(pop);
+  _tagPickerEl = pop;
+  // Position under the chip.
+  const r = anchorChip.getBoundingClientRect();
+  pop.style.left = `${Math.min(r.left, window.innerWidth - 260)}px`;
+  pop.style.top  = `${r.bottom + 4}px`;
+  input.focus();
+
+  let seq = 0, timer = null;
+  const runSearch = async () => {
+    const q = input.value.trim();
+    if (!q) { results.innerHTML = ''; return; }
+    const mine = ++seq;
+    try {
+      const data = await (await fetch(`/api/entity/graph/search?query=${encodeURIComponent(q)}&limit=8`)).json();
+      if (mine !== seq) return;   // a newer query superseded this one
+      // Search returns { results: [{ node:{id,label,type,description}, score }] };
+      // tolerate a bare-node shape too.
+      const raw = Array.isArray(data?.results) ? data.results : (Array.isArray(data?.nodes) ? data.nodes : []);
+      const nodes = raw.map(r => r?.node ?? r).filter(n => n && n.id);
+      results.innerHTML = '';
+      if (!nodes.length) { results.innerHTML = '<div class="tag-picker-empty">No matches. The Familiar can also tag it in chat.</div>'; return; }
+      for (const n of nodes) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'tag-picker-item';
+        item.textContent = `${n.label ?? n.id}${n.type ? ` · ${n.type}` : ''}`;
+        item.addEventListener('click', () => linkPendingToNode(attachment, n));
+        results.appendChild(item);
+      }
+    } catch { results.innerHTML = '<div class="tag-picker-empty">Couldn\'t reach the graph.</div>'; }
+  };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, 220); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTagPicker(); });
+  // Dismiss on outside click (next tick so this opening click doesn't close it).
+  setTimeout(() => {
+    const onDoc = (e) => { if (_tagPickerEl && !_tagPickerEl.contains(e.target)) { closeTagPicker(); document.removeEventListener('mousedown', onDoc); } };
+    document.addEventListener('mousedown', onDoc);
+  }, 0);
+}
+
+async function linkPendingToNode(attachment, node) {
+  try {
+    const res = await fetch(`/api/media/${encodeURIComponent(attachment.id)}/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId: node.id, label: node.label ?? node.id, kind: node.type ?? '' }),
+    });
+    if (res.ok) { attachment.tagLabel = node.label ?? node.id; renderAttachStrip(); }
+  } catch { /* non-blocking */ }
+  closeTagPicker();
+}
+
 async function sendMessage(userInput) {
   userInput = userInput.trim();
-  if (!userInput) return;
+  // Snapshot the pending images (vision) and clear the composer strip — an
+  // image-only turn (empty text) is allowed, so only bail when there's neither.
+  const attachments = (state.pendingAttachments || []).filter(a => a && a.id);
+  if (!userInput && !attachments.length) return;
+  clearPendingAttachments();
 
   if (!state.apiKey.trim()) {
     appendErrorMessage('Enter your API key in the Settings panel first.');
@@ -2084,12 +2390,12 @@ async function sendMessage(userInput) {
   resetSessionTimeout();
 
   const userTimestamp = now;
-  const apiMessages   = buildApiMessages(userInput, userTimestamp);
+  const apiMessages   = buildApiMessages(userInput, userTimestamp, attachments);
   lastSentMessages    = apiMessages;
   lastThalamus = null; // wait for the live answer to populate this
 
   // Optimistic UI
-  appendUserMessage(userInput, userTimestamp);
+  appendUserMessage(userInput, userTimestamp, attachments);
   setInputLocked(true);
   setTyping(true);
   setStatus('busy');
@@ -2097,11 +2403,14 @@ async function sendMessage(userInput) {
   const sendStart = performance.now();
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
+    _roundCapHitThisTurn = false;
+    removeContinueRoundsOffer();   // a new turn supersedes any standing offer
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
+      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
+      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     }
+    if (_roundCapHitThisTurn) offerContinueRounds();
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
     debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
@@ -2365,6 +2674,12 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
         lastThalamus = parsed._thalamus;
         continue;
       }
+      // The tool-round budget ran out mid-reach — offer a one-click "Go on"
+      // after the reply lands (a fresh turn carries a fresh budget).
+      if (parsed._roundCapHit) {
+        _roundCapHitThisTurn = true;
+        continue;
+      }
       // A mid-loop upstream failure on the server side - surface it as a
       // normal request error so the retry/fallback ladder handles it.
       if (parsed._loopError) throw new Error(parsed._loopError);
@@ -2417,7 +2732,7 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
   return { content: fullContent, pendingMsgs, finalShell: shell };
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null) {
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -2487,7 +2802,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp: ts,            id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -2543,6 +2858,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
     throw new Error(extractErrorText(data, `API error ${response.status}`));
   }
   if (data._thalamus) lastThalamus = data._thalamus;
+  if (data._roundCapHit) _roundCapHitThisTurn = true;
 
   // Server-side tool rounds: render each as a collapsible block and
   // record the same message shapes the old client-side loop produced.
@@ -2568,7 +2884,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
   return { content: message?.content ?? '', pendingMsgs, timestamp: roundTs };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null) {
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -2628,7 +2944,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp,                id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -2780,6 +3096,12 @@ function readSettingsFromUI() {
   }
   if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
   if ($('weather-toggle')) state.weatherEnabled = $('weather-toggle').checked;
+  if ($('vision-enabled-toggle')) {
+    const was = state.visionEnabled !== false;
+    state.visionEnabled = $('vision-enabled-toggle').checked;
+    if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
+  }
+  if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -2819,6 +3141,10 @@ function readSettingsFromUI() {
   if ($('tool-sticky-turns')) {
     const n = parseInt($('tool-sticky-turns').value, 10);
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
+  }
+  if ($('tool-rounds-per-turn')) {
+    const n = parseInt($('tool-rounds-per-turn').value, 10);
+    state.toolRoundsPerTurn = Number.isInteger(n) && n >= 3 && n <= 30 ? n : 12;
   }
   if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
   if ($('spine-states-toggle')) state.spineStatesEnabled = $('spine-states-toggle').checked;
@@ -2918,6 +3244,7 @@ function writeSettingsToUI() {
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
+  if ($('tool-rounds-per-turn')) setIfNotFocused($('tool-rounds-per-turn'), 'value', state.toolRoundsPerTurn ?? 12);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
   if ($('spine-states-toggle')) setIfNotFocused($('spine-states-toggle'), 'checked', state.spineStatesEnabled !== false);
   if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
@@ -2931,6 +3258,8 @@ function writeSettingsToUI() {
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
+  if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('elapsed-stamp-hours')) setIfNotFocused($('elapsed-stamp-hours'), 'value', state.elapsedStampHours ?? 24);
@@ -4141,7 +4470,7 @@ function init() {
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
     'memory-sweep-toggle',
-    'tool-surfacing-toggle', 'tool-sticky-turns',
+    'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
@@ -4149,7 +4478,7 @@ function init() {
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
-    'weather-toggle',
+    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -4270,6 +4599,43 @@ function init() {
   $('user-input').addEventListener('input', function() {
     autoResize(this);
   });
+
+  // ── Composer image attachments (vision) ────────────────────────
+  // Attach button → hidden picker; paste and drag-drop route to the same
+  // upload path. The affordance is hidden entirely when vision is off.
+  const attachBtn = $('attach-btn');
+  const imageInput = $('image-input');
+  const applyAttachVisibility = () => { if (attachBtn) attachBtn.style.display = visionActive() ? '' : 'none'; };
+  applyAttachVisibility();
+  window.addEventListener('vision-enabled-changed', applyAttachVisibility);
+  if (attachBtn && imageInput) {
+    attachBtn.addEventListener('click', () => imageInput.click());
+    imageInput.addEventListener('change', async () => {
+      await addPendingImages(imageInput.files);
+      imageInput.value = '';   // allow re-picking the same file
+    });
+  }
+  $('user-input')?.addEventListener('paste', (e) => {
+    if (!visionActive()) return;
+    const items = Array.from(e.clipboardData?.items || []).filter(it => it.type?.startsWith('image/'));
+    if (!items.length) return;
+    e.preventDefault();
+    addPendingImages(items.map(it => it.getAsFile()).filter(Boolean));
+  });
+  // Drag-and-drop onto the chat pane.
+  const dropZone = document.querySelector('.chat-pane') || $('messages');
+  if (dropZone) {
+    ['dragover', 'dragenter'].forEach(ev => dropZone.addEventListener(ev, (e) => {
+      if (!visionActive()) return;
+      if (Array.from(e.dataTransfer?.types || []).includes('Files')) { e.preventDefault(); dropZone.classList.add('drag-over'); }
+    }));
+    ['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, () => dropZone.classList.remove('drag-over')));
+    dropZone.addEventListener('drop', (e) => {
+      if (!visionActive()) return;
+      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith('image/'));
+      if (files.length) { e.preventDefault(); addPendingImages(files); }
+    });
+  }
 
   // Test chime — plays regardless of the toggle (it's an explicit request),
   // and doubles as the gesture that unlocks the AudioContext.

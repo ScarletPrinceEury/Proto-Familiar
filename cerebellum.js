@@ -65,6 +65,7 @@ import {
   withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
+import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
@@ -858,7 +859,22 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
  * Maximum tool-call rounds per user message before giving up.
  * Prevents infinite loops if a model repeatedly calls tools.
  */
+// The BACKGROUND budget: autonomous deliberations (noticing) and non-ward
+// Discord turns (villager/ambient) stay tightly bounded — that's what a round
+// cap is for. A LIVE conversation with my human is different: "check these six
+// files" legitimately needs six-plus reaches, so ward turns use the
+// ward-configurable budget below instead (ward decision, 0.9.8).
 export const MAX_TOOL_ROUNDS = 5;
+
+// Tool-round budget for a LIVE ward turn (web chat + ward Discord turns).
+// Ward-configurable via settings.toolRoundsPerTurn; clamped so a typo can't
+// make a turn unbounded. Default 12 — roomy for real multi-file/multi-step
+// asks, still a hard ceiling.
+export function toolRoundsPerTurn(settings = readSettingsSync()) {
+  const n = Number(settings?.toolRoundsPerTurn);
+  if (!Number.isFinite(n)) return 12;
+  return Math.max(3, Math.min(30, Math.round(n)));
+}
 
 // Validation shared by the HTTP routes (server.js) and the executors
 // below — one source of truth for what counts as a valid write.
@@ -1774,6 +1790,51 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'view_image',
+      description: "I use this to look again at an image {{user}} or a villager shared earlier — one that aged out of what I can currently see, or that I only ever knew as a text stand-in. Every image stand-in in my context carries its id (the `[image <id>: …]` marker); I pass that id and the actual image is placed before my eyes on my very next step. I reach for it when the words about an image aren't enough and I need to actually look.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The image id — from the `[image <id>: …]` stand-in in my context.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'link_image_to_node',
+      description: "I use this to tie an image to someone or something in my knowledge graph — a photo of Milkyway to the Milkyway node, a picture of the garden to the garden node — so I build continuity across everything I've seen of a person, pet, place, or thing. Next time {{user}} shows me that grey tabby, I know it's Milkyway. The image id comes from an `[image <id>: …]` stand-in; the node id comes from the graph legend or a graph search (I look it up first if I don't already have it). I lean toward tagging what I recognise — a wrong tag is easy to remove.",
+      parameters: {
+        type: 'object',
+        properties: {
+          image_id: { type: 'string', description: 'The image id — from an `[image <id>: …]` stand-in in my context.' },
+          node_id:  { type: 'string', description: 'The graph node id this image depicts — from the graph legend or a search_graph_nodes result.' },
+          label:    { type: 'string', description: "The node's name (e.g. 'Milkyway'), so the image stand-in can read who/what it shows. From the same graph result." },
+        },
+        required: ['image_id', 'node_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'unlink_image_from_node',
+      description: 'I use this to undo an image→node link I got wrong — the image and the node both stay, only the association between them is removed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          image_id: { type: 'string', description: 'The image id.' },
+          node_id:  { type: 'string', description: 'The graph node id to unlink from it.' },
+        },
+        required: ['image_id', 'node_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'request_tools',
       description: 'My full toolbox is bigger than what I\'m currently holding — most modules only surface when the moment calls for them. If I need a tool that isn\'t in my hands right now, I name its module here and I\'ll have those tools THIS turn, on my very next step. Modules: ' + MODULE_INDEX + '. Passing "all" hands me everything at once. This is also how I answer "what can you do?" honestly: the list above is complete, and I can pull any module to check its details. If I reach for a tool and it isn\'t there, this is ALWAYS the recovery — never "I can\'t do that."',
       parameters: {
@@ -2521,6 +2582,61 @@ export const TOOL_EXECUTORS = {
       if (!res.ok) return `Failed to delete memory ${mid}: ${res.error}`;
       return quietOk(`Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
+  },
+
+  view_image: async ({ id } = {}, ctx = {}) => {
+    const key = String(id ?? '').trim();
+    if (!key) return "I need the image id — it's on the `[image <id>: …]` stand-in in my context.";
+    const meta = await getAssetMeta(key);
+    if (!meta) return `I don't have an image with id ${key} — it may have been removed.`;
+    // Audience gate (fail-closed): on a gated villager turn a ward-private image
+    // is never mine to place before my eyes. undefined = ward/web (no gate).
+    const audiences = discordReadAudiences(ctx);
+    if (audiences !== undefined && !audiences.includes(meta.audienceTag)) {
+      return "That image isn't mine to look at on this turn.";
+    }
+    // Stash for the tool loop to place the actual image before me next round
+    // (the same-turn recompose precedent). The "result" is the image, not prose.
+    ctx._pendingImages = Array.isArray(ctx._pendingImages) ? ctx._pendingImages : [];
+    ctx._pendingImages.push({ id: meta.id });
+    return quietOk(`Looking at ${meta.slugs?.[0] ?? meta.id} now.`);
+  },
+
+  link_image_to_node: async ({ image_id, node_id, label } = {}, ctx = {}) => {
+    // Node associations are the ward's own — never settable from a gated
+    // villager turn (a villager's shared image carries provenance, not the
+    // right to tie my human's people/places together).
+    if (discordReadAudiences(ctx) !== undefined) {
+      return "I only tie images to my human's people and places on their own turns.";
+    }
+    const img = String(image_id ?? '').trim();
+    const node = String(node_id ?? '').trim();
+    if (!img || !node) return 'I need both the image id and the graph node id to link them.';
+    const meta = await getAssetMeta(img);
+    if (!meta) return `I don't have an image with id ${img}.`;
+    const r = await addAssetLink(img, { nodeId: node, label: label || node, by: 'familiar' });
+    if (r?.ok === false) return `I couldn't link that image: ${r.error}.`;
+    // If the image already carries a description, graduate it onto the node so
+    // "what Milkyway looks like" becomes durable graph knowledge. Dynamic import
+    // keeps vision.js out of cerebellum's static graph (vision imports cerebellum).
+    if (meta.description?.text) {
+      import('./vision.js')
+        .then(v => v.graduateImageDescriptionToNode(img, node))
+        .catch(() => {});
+    }
+    return quietOk(`Tied image ${meta.slugs?.[0] ?? meta.id} to ${label || node}.`);
+  },
+
+  unlink_image_from_node: async ({ image_id, node_id } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) {
+      return "I only change image links on my human's own turns.";
+    }
+    const img = String(image_id ?? '').trim();
+    const node = String(node_id ?? '').trim();
+    if (!img || !node) return 'I need both the image id and the node id to unlink them.';
+    const r = await removeAssetLink(img, node);
+    if (r?.ok === false) return `I couldn't unlink that: ${r.error}.`;
+    return quietOk(`Removed the link between image ${img} and ${node}.`);
   },
 
   recall: async ({ query, limit } = {}, ctx = {}) => {
@@ -3790,6 +3906,10 @@ const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 // toggle + the env off-switch) — a Familiar with no places saved still sees
 // them, and weather_today tells it kindly there's nowhere to check yet.
 const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
+// Vision link tools (vision build spec §6.5) — need vision enabled but not a
+// capable turn (linking is by-id metadata); view_image is gated separately on
+// capability. Villager turns never see these (not in villagerToolNames).
+const VISION_LINK_TOOL_NAMES = new Set(['link_image_to_node', 'unlink_image_from_node']);
 
 export function webSearchEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;
@@ -3891,11 +4011,20 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
   // it never widens them. No Set → today's full-registry behavior.
   const mods = opts.modules instanceof Set ? opts.modules : null;
   const inScope = (name) => !mods || TOOL_MODULES[name] === CORE || mods.has(TOOL_MODULES[name]);
+  // Vision tools (vision build spec §10): a lever I can't pull is worse than no
+  // lever. view_image only makes sense when THIS turn's model can actually see
+  // (opts.visionCapable), so it's hidden otherwise; the link tools need vision
+  // enabled but not a capable turn (linking is metadata by id). Both off when
+  // vision is disabled.
+  const visionOn = settings?.visionEnabled !== false && process.env.PROTO_FAMILIAR_VISION_DISABLED !== '1';
+  const visionCapableTurn = visionOn && opts.visionCapable === true;
   const tools = BUILTIN_TOOLS.filter(t =>
     inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
     (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)) &&
-    (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
+    (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL) &&
+    (visionCapableTurn || t.function?.name !== 'view_image') &&
+    (visionOn || !VISION_LINK_TOOL_NAMES.has(t.function?.name)));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);
@@ -4058,8 +4187,8 @@ export function discordWriteProvenance(ctx = {}) {
  *   - registered villager → relay + villagerToolNames(grants), macro-resolved.
  *   - stranger / neither → [] (no tools, unchanged from today).
  */
-export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools } = {}) {
-  if (isWard) return composeActiveTools(customTools, settings);
+export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools, visionCapable = false } = {}) {
+  if (isWard) return composeActiveTools(customTools, settings, { visionCapable });
   if (!isVillager) return [];
   const allow = villagerToolNames(grants);
   const picked = BUILTIN_TOOLS.filter(t => allow.has(t.function?.name));
@@ -4189,8 +4318,36 @@ export async function runToolCallLoop({
       ...currentMsgs,
       { role: 'assistant', content: message.content || null, tool_calls: toolCalls },
       ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
+      // view_image (§10): place any images the Familiar asked to see again
+      // before its eyes on the next round (a mid-loop context grow).
+      ...(await drainPendingImages(toolCtx)),
     ];
   }
 
-  return { data, toolRounds };
+  // Round-cap exhaustion: the model STILL wanted tools when the budget ran
+  // out. Without this, `data` is a tool_calls response with content:null — the
+  // caller renders silence, and the never-executed calls poison the model's
+  // sense of what it actually did (it later "remembers" acting). Force ONE
+  // closing round with tools withheld (opts.forceText) and a plain first-person
+  // note, so the turn ends in honest text: what was done, what wasn't.
+  const finalChoice = data?.choices?.[0];
+  let roundCapHit = false;
+  if (!signal?.aborted
+      && finalChoice?.finish_reason === 'tool_calls'
+      && Array.isArray(finalChoice?.message?.tool_calls) && finalChoice.message.tool_calls.length) {
+    roundCapHit = true;
+    const closingMsgs = [
+      ...currentMsgs,
+      { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done. If they tell me to go on, I get a fresh budget and continue.]" },
+      ...(timeAnchor ? [{ role: 'system', content: timeAnchor }] : []),
+    ];
+    try {
+      data = await callUpstream(closingMsgs, undefined, { forceText: true });
+      console.log('[tools] round cap reached with tools still pending — forced a closing text round');
+    } catch (err) {
+      console.warn('[tools] round-cap closing round failed (keeping tool_calls response):', err?.message ?? err);
+    }
+  }
+
+  return { data, toolRounds, roundCapHit };
 }

@@ -92,6 +92,10 @@ export const TOOL_MODULES = {
   intention_drop: 'intentions', intention_done: 'intentions',
   intention_mark_fired: 'intentions',
   intention_set_rounds_visibility: 'intentions',
+
+  // vision (vision build spec §6.5/§10) — looking again at an image + tying it
+  // to a graph node. Surfaced whenever an image stand-in is in context.
+  view_image: 'media', link_image_to_node: 'media', unlink_image_from_node: 'media',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 
@@ -112,7 +116,8 @@ export const MODULE_INDEX =
   'files (list/read my own folder), ' +
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
-  'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private)';
+  'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private), ' +
+  'media (look again at an image shared earlier, tie an image to someone/something in my graph)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +
@@ -184,6 +189,13 @@ const TRIGGERS = {
     // The due-intentions block travels with the tools so a payoff turn can act
     // on what's come due (mark fired / complete / adjust).
     blocks: ['[Intentions coming due]'],
+  },
+  media: {
+    // Surfaced by look-again / recognition language, OR whenever an image
+    // stand-in is in context (the `[image <id>: …]` marker) — that's exactly
+    // when view_image / link_image_to_node become reachable and useful.
+    text: /\b(look again|see (it|that|the (photo|picture|image))|which (photo|picture|image)|the (photo|picture|image) (of|I sent|you sent)|recognise|recognize|is (that|this) (the same|my)|tag (the|this) (photo|picture|image)|whose (photo|picture))\b/i,
+    blocks: ['[image '],
   },
 };
 

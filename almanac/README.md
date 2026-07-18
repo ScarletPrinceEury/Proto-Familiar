@@ -28,6 +28,8 @@ entity whose identity and memory live in a separate canonical store. Start with:
   every prompt governing when the Familiar acts on its own.
 - [Weather](architecture/weather) and [Location privacy](decisions/location-privacy) — how the
   Familiar learns the ward's weather without geographic location ever reaching the model.
+- [Vision and media](architecture/vision-and-media) — image input, storage, and the single seam
+  where attachments become LLM-visible (shipped 0.9.0-alpha).
 - [Engineering conventions](reference/engineering-conventions) — the repo-wide operating
   rules (versioning, degradation, ids) referenced throughout the architecture pages.
 
