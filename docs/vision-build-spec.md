@@ -451,6 +451,39 @@ ward-private nodes an image is tied to. Linking is a ward/Familiar capability;
 villager-shared images can carry `origin.speaker` provenance but the ward owns
 node associations.
 
+## 6.6. z.ai Coding-Plan vision (0.9.5 — ward-requested)
+
+On z.ai's **GLM Coding Plan**, vision is NOT available through the chat-
+completions endpoint. It is delivered only through a separate **"Vision
+Understanding" MCP server** (`@z_ai/mcp-server`, powered by GLM-4.6V) with its
+**own quota pool** (the docs: *"Vision Understanding MCP: all plans share the
+model's 5-hour maximum prompt resource pool"*), distinct from the coding-prompt
+allotment. So a Coding-Plan key can only do vision via that MCP server.
+
+`zai-vision.js` integrates it so a ward on the Coding Plan spends *that*
+allotment (rather than a separate pay-as-you-go vision key):
+
+- Lazily spawns `@z_ai/mcp-server` as a **stdio MCP child** (the same SDK
+  Phylactery/Unruh use), keyed by the API key, env `Z_AI_API_KEY` +
+  `Z_AI_MODE=ZAI`. Installed on first use via `npx -y`.
+- Discovers the `analyze_image` tool + its input schema at connect
+  (`pickAnalyzeTool` / `buildAnalyzeArgs` adapt to whatever the server names
+  its image param — path / url / base64 — materializing a temp file only when a
+  path is wanted, and passing the first-person describe prompt into whatever
+  prompt-shaped field exists).
+- **Routing:** `resolveVisionCapable` returns **false** for a `zai-coding`
+  connection (the coding chat models can't take live `image_url` parts, so the
+  materializer stands images in), while `resolveVisionConnection` still treats
+  it as **describe-capable**; `describeAsset` then routes to
+  `describeViaZaiVision` instead of `callProviderChat`. Net effect: a Coding-Plan
+  connection assigned to the `vision` feature makes every image **described via
+  the coding allotment**, then read as a stand-in — the Pass 2 path, on z.ai's
+  quota.
+- **Graceful + gated:** any spawn/connect/call failure returns `{ok:false}` and
+  the description stays null (retried later); nothing breaks. Off-switch
+  `PROTO_FAMILIAR_ZAI_VISION_DISABLED=1`; the spawn command is overridable via
+  `PROTO_FAMILIAR_ZAI_MCP_COMMAND`.
+
 ## 7. Memory & continuity
 
 - **Memorization:** a small helper (`contentWithStandins(message)`, in
