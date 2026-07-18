@@ -666,13 +666,20 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       try {
         const runLoop = (baseMessages) => runToolCallLoop({
           getTools: recomposeTools,
-          callUpstream: async (msgs, roundTools) => {
+          callUpstream: async (msgs, roundTools, opts) => {
+            // forceText (round-cap closing round): strip tools entirely so the
+            // model must answer in text — a silent tool-hungry turn is worse
+            // than a bounded answer.
+            const { tools: _pt, tool_choice: _ptc, ...basePayload } = payload;
+            const body = opts?.forceText
+              ? { ...basePayload, messages: msgs, stream: false }
+              : { ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false };
             let r;
             try {
               r = await fetch(upstreamUrl, {
                 method:  'POST',
                 headers: authHeaders,
-                body:    JSON.stringify({ ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false }),
+                body:    JSON.stringify(body),
                 signal:  ac.signal,
               });
             } catch (err) {
@@ -785,18 +792,27 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // Stop wasting upstream tokens if the browser goes away mid-loop.
     const clientGone = () => res.writableEnded || res.destroyed;
 
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    // forceTextRound: set when the round cap was reached with tools still
+    // pending — ONE extra round runs with tools stripped so the turn ends in
+    // honest text instead of silence (mirrors runToolCallLoop's closing round).
+    let forceTextRound = false;
+    for (let round = 0; round <= MAX_TOOL_ROUNDS + 1; round++) {
       if (clientGone() || ac.signal.aborted) break;
       const payloadMessages = timeAnchor
         ? [...currentMsgs, { role: 'system', content: timeAnchor }]
         : currentMsgs;
+
+      const { tools: _st, tool_choice: _stc, ...streamBase } = payload;
+      const roundBody = forceTextRound
+        ? { ...streamBase, messages: payloadMessages, stream: true }
+        : { ...payload, messages: payloadMessages, stream: true };
 
       let upstream;
       try {
         upstream = await fetch(upstreamUrl, {
           method:  'POST',
           headers: authHeaders,
-          body:    JSON.stringify({ ...payload, messages: payloadMessages, stream: true }),
+          body:    JSON.stringify(roundBody),
           signal:  ac.signal,
         });
       } catch (err) {
@@ -883,7 +899,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       }
 
       const toolCalls = Object.values(toolCallsAcc);
-      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < MAX_TOOL_ROUNDS) {
+      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < MAX_TOOL_ROUNDS && !forceTextRound) {
         const timestamp = new Date().toISOString();
         const results = await Promise.all(toolCalls.map(async tc => ({
           tool_call_id: tc.id,
@@ -908,6 +924,20 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           // eyes on the next round (same drain helper as the non-streaming loop).
           ...(await drainPendingImages(toolCtx)),
         ];
+        continue;
+      }
+
+      // Round-cap exhaustion with tools still pending: force ONE closing text
+      // round (tools stripped) so the turn ends in honest words instead of
+      // silence — and so the model is TOLD its last requested calls did not
+      // run, rather than half-remembering them as done.
+      if (finishReason === 'tool_calls' && toolCalls.length > 0 && !forceTextRound) {
+        forceTextRound = true;
+        currentMsgs = [
+          ...currentMsgs,
+          { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done.]" },
+        ];
+        console.log('[tools] round cap reached with tools still pending — forcing a closing text round (stream)');
         continue;
       }
 

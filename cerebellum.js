@@ -4309,5 +4309,28 @@ export async function runToolCallLoop({
     ];
   }
 
+  // Round-cap exhaustion: the model STILL wanted tools when the budget ran
+  // out. Without this, `data` is a tool_calls response with content:null — the
+  // caller renders silence, and the never-executed calls poison the model's
+  // sense of what it actually did (it later "remembers" acting). Force ONE
+  // closing round with tools withheld (opts.forceText) and a plain first-person
+  // note, so the turn ends in honest text: what was done, what wasn't.
+  const finalChoice = data?.choices?.[0];
+  if (!signal?.aborted
+      && finalChoice?.finish_reason === 'tool_calls'
+      && Array.isArray(finalChoice?.message?.tool_calls) && finalChoice.message.tool_calls.length) {
+    const closingMsgs = [
+      ...currentMsgs,
+      { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done.]" },
+      ...(timeAnchor ? [{ role: 'system', content: timeAnchor }] : []),
+    ];
+    try {
+      data = await callUpstream(closingMsgs, undefined, { forceText: true });
+      console.log('[tools] round cap reached with tools still pending — forced a closing text round');
+    } catch (err) {
+      console.warn('[tools] round-cap closing round failed (keeping tool_calls response):', err?.message ?? err);
+    }
+  }
+
   return { data, toolRounds };
 }

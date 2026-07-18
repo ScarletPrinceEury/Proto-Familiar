@@ -42,6 +42,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
+import { extractContent } from './llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
 import {
@@ -1015,6 +1016,14 @@ async function touchLocation(locationKey, sessionId) {
 // string wrapper for the no-tools path.
 // Exported so the noticing loop (Initiative Pass 4) can run its bounded
 // tool-call loop through the same provider call rather than duplicating it.
+// THINKING-model room (the 0.8.82 lesson, applied to the Discord turn path):
+// on a reasoning model (GLM/DeepSeek — the ward's coding plan runs one), the
+// chain-of-thought is billed against max_tokens. The old cap of 1024 got spent
+// reasoning, so content came back EMPTY (silent turns) or a tool call was cut
+// off mid-JSON (garbled/wrong-looking tool reaches). A generous cap is free
+// for non-thinking models — they stop when done.
+const DISCORD_MAX_TOKENS = 4000;
+
 export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
@@ -1029,7 +1038,7 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
       messages,
       stream:      false,
       temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
-      max_tokens:  1024,
+      max_tokens:  DISCORD_MAX_TOKENS,
       ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
     }),
   });
@@ -1042,8 +1051,11 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
 
 async function callChat({ conn, messages, settings }) {
   const data = await callChatRaw({ conn, messages, settings });
-  const content = data.choices?.[0]?.message?.content ?? '';
-  if (!content.trim()) throw new Error('provider returned empty content');
+  // extractContent falls back to reasoning_content when a thinking model (or a
+  // proxy in front of one) leaves `content` empty — the answer is often THERE,
+  // just in the wrong field. Without this, real replies read as empty turns.
+  const content = extractContent(data.choices?.[0]?.message ?? {});
+  if (!content.trim()) throw new Error(`provider returned empty content (finish_reason=${data.choices?.[0]?.finish_reason ?? 'unknown'})`);
   return content;
 }
 
@@ -1926,13 +1938,18 @@ async function handleTurn(gw, msg, decision) {
       : executeToolCall;
     try {
       const { data } = await runToolCallLoop({
-        callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings, tools: roundTools ?? discordTools }),
+        // opts.forceText (round-cap closing round): call WITHOUT tools so the
+        // model must answer in text instead of ending the turn silent.
+        callUpstream: (msgs, roundTools, opts) => callChatRaw({
+          conn, messages: msgs, settings,
+          tools: opts?.forceText ? undefined : (roundTools ?? discordTools),
+        }),
         baseMessages: apiMessages,
         getTools:     () => discordTools,
         executeTool,
         toolCtx,
       });
-      rawReply = data?.choices?.[0]?.message?.content ?? '';
+      rawReply = extractContent(data?.choices?.[0]?.message ?? {});
     } catch (err) {
       // A whole-loop failure (e.g. provider error) must never cost the person a
       // reply — fall back to a plain no-tools call.

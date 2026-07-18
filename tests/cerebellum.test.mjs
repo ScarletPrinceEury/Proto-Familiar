@@ -374,15 +374,39 @@ test('runToolCallLoop: executes tools and feeds results into the next round', as
   assert.equal(second.at(-1).content, 'result of fake_tool');
 });
 
-test('runToolCallLoop: caps at maxRounds even if the model keeps calling tools', async () => {
+test('runToolCallLoop: caps at maxRounds, then forces ONE closing text round', async () => {
   let calls = 0;
-  const { toolRounds } = await runToolCallLoop({
-    callUpstream: async () => { calls++; return toolCallResponse('fake_tool'); },
+  const forceTextCalls = [];
+  const { data, toolRounds } = await runToolCallLoop({
+    callUpstream: async (msgs, roundTools, opts) => {
+      calls++;
+      if (opts?.forceText) { forceTextCalls.push(msgs); return finalResponse; }
+      return toolCallResponse('fake_tool');
+    },
     baseMessages: [{ role: 'user', content: 'hi' }],
     executeTool:  async () => 'r',
   });
-  assert.equal(calls, MAX_TOOL_ROUNDS + 1);     // initial + one per executed round
   assert.equal(toolRounds.length, MAX_TOOL_ROUNDS);
+  assert.equal(calls, MAX_TOOL_ROUNDS + 2);     // rounds + the closing text round
+  // The closing round: tools withheld, a first-person budget note appended, and
+  // the turn ends in TEXT — never a silent tool_calls response.
+  assert.equal(forceTextCalls.length, 1);
+  const note = forceTextCalls[0].find(m => m.role === 'system' && /tool budget/i.test(m.content ?? ''));
+  assert.ok(note, 'closing round carries the budget-spent note');
+  assert.match(note.content, /did NOT run/);
+  assert.equal(data.choices[0].message.content, 'done');
+});
+
+test('runToolCallLoop: closing-round failure keeps the tool_calls response (caller handles empties)', async () => {
+  const { data } = await runToolCallLoop({
+    callUpstream: async (msgs, roundTools, opts) => {
+      if (opts?.forceText) throw new Error('provider hiccup');
+      return toolCallResponse('fake_tool');
+    },
+    baseMessages: [{ role: 'user', content: 'hi' }],
+    executeTool:  async () => 'r',
+  });
+  assert.equal(data.choices[0].finish_reason, 'tool_calls');   // unchanged, not a throw
 });
 
 test('runToolCallLoop: re-appends the time anchor as the LAST message every round', async () => {
