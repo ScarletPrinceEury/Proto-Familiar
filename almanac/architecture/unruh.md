@@ -210,13 +210,14 @@ the Familiar may act: the judgment already happened, at write time, and firing i
 follow-through [@fable-review-conversation]. This is a design lens on already-shipped behavior,
 not a code change.
 
-## The consequence-graph milestone (0.8.107): causal-chain fix
+## The consequence-graph milestone (0.8.107–0.8.108): causal-chain fix
 
 Events can be related by consequence edges — "I predicted this would cause that," "I'm anxious
 about tomorrow so I'm prepping today" — but for months, those edges existed in the data layer
 without being visible when the Familiar most needed them: before writing a forecast (will my
 earlier effort matter?) and after making a forecast (did it play out?) [@unruh-design]. The
-defect and its three-part fix shipped in 0.8.107-alpha (PR #218):
+defect and its four-part fix shipped across 0.8.107-alpha (PR #218, pieces 1–3) and 0.8.108-alpha
+(pieces 4, with ward sign-off):
 
 **Piece 1: Gathering projection candidates.** `gatherProjectionCandidates()` (in
 `gcal-projection.js`) unions Unruh's scheduled `gcal_projection` flags with *any* bare upcoming
@@ -252,8 +253,18 @@ widened the schedule-fetch window from the default centred-on-now (~24h) to ward
 Each graded edge now carries `from_when` (the node's timestamp it was graded from), so future
 passes can distinguish edges graded fresh from those resolved long ago [@unruh-db].
 
-**Not shipped: Piece 4.** Elapsed stamping of past events was specified but not built; it awaits
-ward sign-off, per the spec's safety note [@causal-chain-spec].
+**Piece 4: Elapsed stamping (0.8.108, ward-signed).** Past events remain unresolved until the
+ward acts on them, creating ambiguity between "pending" and "past but unexamined." The fix stamps
+`payload.elapsed_at` on one-off `type='event'` nodes that have passed their end time by more than a
+ward-configurable threshold (setting `elapsedStampHours` in the event-alerts section, default **24 hours
+after event end**, clamped 1–720h) with no resolution recorded [@causal-chain-spec]. The stamp is an
+observation, never a resolution: the node stays unresolved, all tools still work, nothing is hidden.
+Recurring anchors (payload.recurrence) and need-windows (payload.need) are excluded — their pasts are
+tracked per-occurrence by the recurrence and needs ledger respectively [@causal-chain-spec]. The pass is
+idempotent and rides the reminders tick with an hourly self-gate; it can be disabled with
+`PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1`. Display consumers move an elapsed-stamped event out of "Coming
+days" into a separate briefing group ("Past events with no word on how they went — still open, not
+forgotten"), and the piece-2 hindsight line tags it `[never marked done]` [@causal-chain-spec].
 
 ## Design intent: plan review and baseline as a decaying process, not a snapshot
 
