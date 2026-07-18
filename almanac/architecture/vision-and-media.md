@@ -20,6 +20,9 @@ sources:
   - id: cerebellum-js
     type: file
     path: cerebellum.js
+  - id: discord-gateway-js
+    type: file
+    path: discord-gateway.js
 ---
 
 # Vision and Media Input
@@ -116,10 +119,34 @@ The implementation carefully manages circular dependencies:
 
 - `vision.js` → `cerebellum.js` (for `connectionForFeature`, `primaryConnectionFrom`), `media.js`, `llm-call`, `macros`, `injection-guard`
 - `cerebellum.js` → `media.js` (for `getAssetMeta`, `addAssetLink`, `removeAssetLink`, `drainPendingImages`) — NOT `vision.js`
+- `discord-gateway.js` → `media.js` (for `saveAsset`, caps), `vision.js` (for `materializeAttachments`, `resolveVisionCapable`)
 - `memorization.js` → `vision.js` only via dynamic import at call time [@memorization-js]
 - `drainPendingImages()` lives in `media.js` (not `vision.js`) precisely so both tool loops can reach it without cerebellum importing vision [@media-js]
 
 This separation ensures no static cycles while keeping vision machinery available where needed.
+
+## Discord image ingest (Pass 3, 0.9.4-alpha)
+
+When a villager shares an image in Discord, `ingestDiscordImages()` in `discord-gateway.js` [@discord-gateway-js] fetches the attachment at arrival time from the Discord CDN (`proxy_url`). Because Discord attachment URLs are signed and ephemeral, images must be fetched on arrival, not on read.
+
+**Fetching and sizing**: Images are fetched with an 8-second timeout and bounded by `MEDIA_MAX_BYTES` (6 MB). They are downscaled via the media proxy's own resize params (long edge capped at 1568 pixels, matching the bound the browser applies client-side). No image library is added to the project — only the proxy's resize query parameters.
+
+**Privacy gate**: Who gets ingested depends on the sender:
+- Ward: always ingested
+- Registered villager: yes (ingest preserves room context and speaker provenance)
+- Stranger (not ward, no villager record): NEVER — their text flows through the audience gate but their bytes are not stored. This is the structural rule.
+
+Images are saved through `saveAsset()` with `origin.surface='discord'`, `origin.speaker` (villager name; null for ward), and `audienceTag` (room's tag or 'ward-private'). A failed fetch appends `[image failed to load]` to the message content; it never blocks the turn.
+
+**Caps**: `MAX_IMAGES_PER_MESSAGE` (4) per message. `discordMediaPerHour` (default 20, clamp [0,200]) guards busy rooms via an in-memory hourly counter (`_discordMediaHourly` Map, timestamps pruned to 1h window). A restart resets the counter harmlessly — it only guards against disk thrashing during a high-volume moment; the spec notes this is a constant unless tuning proves needed.
+
+**Observe path + history**: `observeMessage()` ingest applies to lurked rooms too (images are present when finally turned to — threat-neutral, same as observing text). Both Discord history `.map()` blocks now preserve `attachments` beside the message string, so a past image message replays as a live image or a stand-in.
+
+**Materialization wiring**: `materializeAttachments()` applies once to `handleTurn`'s assembled `apiMessages` (rides every tool round), fail-closed on the room's `visibleAudience` set for gated turns; ward turns don't gate. The `view_image` tool reaches the ward on Discord too: `composeDiscordTools()` now threads `visionCapable` → `composeActiveTools()` options (computed via `resolveVisionCapable(conn, settings)` in `handleTurn()`).
+
+**Off-switch**: `PROTO_FAMILIAR_VISION_DISABLED=1` or `visionEnabled=false` ignores attachments as before. `discordVisionOff()` gates both ingest and materialization.
+
+**Import structure**: `discord-gateway.js` imports `saveAsset` + caps from `media.js` and `materializeAttachments` + `resolveVisionCapable` from `vision.js`. No cycle: `media.js` and `vision.js` do not import `discord-gateway.js`.
 
 ## Image descriptions feeding threat scoring
 
@@ -127,11 +154,22 @@ Starting in 0.9.2-alpha (PR #219), image descriptions are also consumed by the s
 
 The feature is known to false-positive on fictional violence (horror film stills, dark artwork) until interpretation can be context-aware. De-escalation from positive images is also deferred until descriptions are confident enough to trust [@vision-js]. Full details of the ward-signed design decisions and deferred work are in [Safety spine](../architecture/safety-spine).
 
-## Planned future work
+## Vision milestone status
 
-**Pass 2 tail** (0.9.2+): ward-side composer tag control for pictures, description→node graduation into Phylactery.
+The vision milestone is feature-complete as of 0.9.4-alpha (PR #219):
 
-**Pass 3** (not yet shipped): Discord image ingest — when a villager sends an image via Discord, the system fetches the image from `proxy_url`, resizes it to cap, applies audience/provenance stamping, records an observe-path ref, and materializes it in `callChatRaw()` [@vision-js].
+- **Pass 1** (0.9.0): introductory vision spine
+- **Pass 2** (0.9.1): sight-for-everything + picture→node linking
+- **Pass 2 tail** (0.9.3): composer tag UI + node graduation
+- **Image threat scoring** (0.9.2): image descriptions consumed by the safety spine
+- **Pass 3** (0.9.4): Discord image ingest
+
+## Deferred work
+
+Two ward-flagged threat-scoring refinements remain (out of the main spec):
+
+1. **Horror/fiction context exception**: Currently, the system can false-positive on fictional violence (horror film stills, dark artwork). Full weight applies to all image descriptions equally. Future work would allow context-aware interpretation to weight fictional vs. real scenarios differently.
+2. **Context-aware de-escalation**: Images can only raise threat (raise-only), never lower it. De-escalation from positive images is deferred until descriptions are confident enough to trust. Full details in [Safety spine](../architecture/safety-spine).
 
 ## Related
 
