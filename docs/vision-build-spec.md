@@ -11,9 +11,21 @@ can land later as new media *kinds* on the same spine, not as a rewrite.
 Those are out of scope (§14), though §11 pins the invariants a future
 continuous-sensing feature must honor so nothing built here has to be undone.
 
-Status: **spec — not yet built.** Target milestone: vision owns the next MINOR
-(one milestone = one minor; Pass 1 landing is the `0.X.0`, later passes bump
-patch).
+Status: **Pass 1 SHIPPED (0.9.0-alpha — the milestone minor).** Passes 2–3
+pending (patch bumps). Vision owns this MINOR (one milestone = one minor; Pass 1
+landing is the `0.X.0`).
+
+**Pass 1 deviation worth recording — the capability probe (§3.1).** The spec
+described a synthetic one-time probe image. As built, an uncached `auto`
+connection is instead treated as **optimistically capable** and the *real turn
+serves as the probe*: a modality rejection triggers the mid-turn hard fallback
+(retry with stand-ins, cache `no`); a successful live-image turn caches `yes`.
+This is strictly better against the acceptance criteria — a synthetic probe
+would add an LLM call on the first image, breaking "**zero** additional LLM
+calls beyond the turn." No bundled test image ships.
+
+**Ward decision recorded (§15.1) — image→threat scoring is a YES**, landing in
+Pass 2 as its own confirmed safety-critical change (not Pass 1).
 
 ---
 
@@ -537,14 +549,27 @@ the data-flow note at the materializer seam, the endpoints).
 - Sending images *outward* (outbox/relay attachments) — text-only channels
   stay text-only this milestone.
 
-## 15. Ward decisions (open — answer before or during Pass 1)
+## 15. Ward decisions (ANSWERED — recorded during Pass 1 kickoff)
 
-1. **Threat signals from images:** default in this spec is NO scoring of image
-   content or descriptions (§8). Sign off on that default — or spec the
-   alternative as its own safety-critical change.
-2. **Villager images by default:** ingest-with-provenance as specced (§5), or
-   ward-DM-only until trust is established?
-3. **Retention:** unlimited keep + manual delete (specced), or a size-capped
-   store with oldest-orphan eviction?
-4. **`visionEnabled` default ON** (inert until used) — confirm, or ship
-   default OFF like the canonical-writer loops.
+1. **Threat signals from images — WARD CHOSE: score descriptions too.** The
+   ward wants a shared image to be able to move the threat tier (the spec's
+   own default was NO scoring). This is a **safety-critical change to
+   `crisis-signals.js` / the scoring path** and does NOT ride Pass 1 — it
+   depends on descriptions existing (Pass 2). When Pass 2 lands `describeAsset`,
+   the exact mechanism ships as its own carefully-designed, separately-confirmed
+   change: which text feeds `scoreMessage` (the description, not the model's
+   raw alarmed prose), how it's weighted, and the guard against a describer's
+   clinical wording inflating the tier on an innocuous photo. The ward has
+   signed off on the *direction*; the *specific behavior* (weights, path) gets
+   confirmed before it ships, per CLAUDE.md's safety-sign-off rule. Until then
+   §8's default (typed text only) holds.
+2. **Villager images — WARD CHOSE: ingest with provenance (spec default, §5).**
+   A registered villager's images are stored as room context, stamped with the
+   room's `audienceTag` + `origin.speaker`; strangers' bytes are never stored.
+   Lands in Pass 3 (Discord).
+3. **Retention — WARD CHOSE: keep all + manual delete (spec default, §7).**
+   Nothing auto-deletes in v1; assets are content-addressed and inspectable via
+   `GET/DELETE /api/media`. Orphan sweep deferred.
+4. **`visionEnabled` default — WARD CHOSE: ON, inert until used (spec default,
+   §9).** Nothing happens until my human sends an image; the composer shows the
+   attach affordance, no background loop.

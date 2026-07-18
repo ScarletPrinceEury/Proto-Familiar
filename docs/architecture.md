@@ -136,6 +136,8 @@ ponderings injection, care-check framing) and as background loops
 ├── relative-time.js         Natural-English relative phrasing for every timestamped surface (memories, ponderings, schedule, handoff, "Now")
 ├── recurrence.js            Recurrence-rule expansion — turns one "weekly cleaning" anchor into occurrences within the temporal window
 ├── temporal-format.js       Pure renderer for the Unruh temporal_context payload
+├── media.js                 Media store (vision build spec §2, Pass 1) — content-addressed image persistence in media/ (sha256 bytes + `.json` meta + `.slugs.json` index). saveAsset (dedup free — same bytes = one asset), getAsset/getAssetMeta, setAssetDescription (Pass 2; also upgrades a generic `img-xxxx` slug to a meaning-bearing alias once described), listAssets/deleteAsset, resolveAssetId (slug/sha → sha, index + meta-scan heal). Caps at save (MEDIA_MAX_BYTES 6MB, image mime allow-list). Pure-code readImageSize (JPEG/PNG/GIF/WebP headers, no native lib). buildStandin + contentWithStandins (§6/§7 — the textual trace text-only consumers read). Never throws into a caller. Off via PROTO_FAMILIAR_VISION_DISABLED=1 (endpoints refuse) — the store itself is inert until an image arrives
+├── vision.js                The provider boundary (vision build spec §3, Pass 1) — the ONE seam turning media references into provider content-parts. materializeAttachments(apiMessages,{connection,settings,visibleAudiences}) → live `image_url` data-URL parts (capable + within the live budget, newest-first) OR a text stand-in appended to the content STRING (otherwise); a request with no attachments is returned identical, and the internal `attachments` field is stripped from every outgoing message. Audience gate first, fail-closed (a ward-private asset contributes nothing on a gated turn). Capability (§3.1): per-connection `visionCapable` tri-state ('yes'/'no' the ward's word; 'auto' → cache tomes/.vision-capability.json, uncached = optimistic — the real turn is the probe, no synthetic image). isModalityError classifies a modality rejection for the mid-turn hard fallback (retry with stand-ins, cache 'no')
 ├── unruh/ templates.py      Requirement templates (stewardship Pass 2b, 0.8.20) — a `templates` table (migration 0004, keyed by obstacle tag UNIQUE, one bundle per barrier) + upsert/list/delete accessors, exposed as MCP tools template_upsert/list/delete. Storage ONLY — deliberately NOT schedule nodes, so templates never leak into the schedule window. APPLYING a template is JS orchestration in cerebellum's template_apply: reads an event's payload.obstacle_tags, matches templates, resolve-or-creates each prerequisite task (findScheduleNodes exact-label reuse of an open task, else addScheduleNode — never duplicates) and links a `requires` edge (addScheduleEdge) — SUGGESTED + prunable per instance. schedule_add_event hints (loud) when a tagged event has a matching template. Templates are the Familiar's own editable objects (no ward UI, per spec §3.2)
 ├── surface-context.js       Consumer pipeline — hard gates + candidate selection + block format. Consequence-aware scoring reads schedule edges (summarizeConsequences: requires/depends_on/blocks/causes → priority pressure + plain "why"). Stewardship Pass 2a (0.8.19) adds an obstacle-radar nudge: a task whose `payload.obstacle_tags` names a real barrier (e.g. "outside") gets +1 pressure and a "worth keeping on the radar" reason, so an outside-the-house errand doesn't slide under the easier tasks
 ├── surface-events.js        Event store (offers + outcomes) + pure-code tagger + reflection inputs
@@ -231,13 +233,25 @@ lifecycle of the autonomous loops:
 - `POST /api/chat` — validates request, fires `recordUserActivity()`
   (fire-and-forget timestamp) + `scoreMessage()` → `recordThreat()`
   on the user text, then `thalamus.enrich()` to assemble static +
-  dynamic context. Returns the `_thalamus` envelope so the prompt
+  dynamic context. **After the context is assembled and before the
+  provider fetch, `materializeAttachments` (vision.js) runs ONCE** on
+  the full message array — a message carrying `attachments` gains live
+  `image_url` parts or a text stand-in, and every tool round carries
+  that forward (the loop reuses the materialized `baseMessages`). A
+  modality rejection triggers the mid-turn hard fallback (retry with
+  stand-ins, cache the connection `no`); a successful live-image turn
+  caches `yes`. Returns the `_thalamus` envelope so the prompt
   inspector can show what was actually injected. With
   `runToolLoop: true` (sent by the app when tools are enabled) the
   server also runs the multi-round tool-call loop here, executing via
   cerebellum and emitting `_toolRound` SSE events / a `_toolRounds`
   response array — see "Data flow" below.
 - `POST /api/debug-prompt` — offline preview (no upstream call).
+- **Media (vision build spec §2):** `POST /api/media` (its OWN
+  `express.raw({type:'image/*'})` body parser, so image bytes never
+  touch the global JSON limit), `GET /api/media/:id` (streams bytes for
+  a thumbnail, slug or sha), `GET /api/media?limit=N` (inventory),
+  `DELETE /api/media/:id`. All refuse politely when vision is off.
 - `POST /api/interest/engage` — fire-and-forget engagement bump.
 - `POST /api/session/handoff` — store session-end intent for the
   next session.
