@@ -803,6 +803,24 @@ export async function updateScheduleEdge({ id, payload }) {
 }
 
 /**
+ * Stamp payload.elapsed_at on one-off events past their time by more
+ * than `hours` with no resolution (causal-chain fix piece 4, ward-
+ * signed). Observation, not resolution — nothing is hidden. Called by
+ * the reminders scheduler on a slow cadence; idempotent in Unruh.
+ */
+export async function stampElapsedEvents({ hours = 24 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_stamp_elapsed',
+      arguments: { hours },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
  * Remove one consequence edge by id, leaving both endpoint nodes intact
  * — the way a mis-stated link gets corrected without deleting the
  * events themselves.

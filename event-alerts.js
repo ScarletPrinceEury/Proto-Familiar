@@ -43,6 +43,20 @@ export function clampLeadMinutes(mins) {
   return Math.max(MIN_LEAD_MINUTES, Math.min(MAX_LEAD_MINUTES, Math.round(n)));
 }
 
+// Elapsed stamping (causal-chain fix piece 4, ward-signed): how long past an
+// event's end before it's stamped "came and went without a word". Ward-
+// configurable (default 24h after event end, per the ward's decision);
+// clamped [1h, 30d]. Unruh clamps to the same range as a belt-and-suspenders.
+export const DEFAULT_ELAPSED_STAMP_HOURS = 24;
+const MIN_ELAPSED_STAMP_HOURS = 1;
+const MAX_ELAPSED_STAMP_HOURS = 720;
+
+export function clampElapsedStampHours(hours) {
+  const n = Number(hours);
+  if (!Number.isFinite(n)) return DEFAULT_ELAPSED_STAMP_HOURS;
+  return Math.max(MIN_ELAPSED_STAMP_HOURS, Math.min(MAX_ELAPSED_STAMP_HOURS, Math.round(n)));
+}
+
 // Per-event lead (Initiative Pass 5): a node carrying payload.lead_minutes
 // overrides the global default; anything else falls back to it. Clamped to
 // the same [5min, 24h] range. This is what turns the one-size-fits-none

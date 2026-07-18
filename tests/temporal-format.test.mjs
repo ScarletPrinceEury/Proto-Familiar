@@ -689,3 +689,33 @@ test('hindsight: a resolved recent event still gets its forecast checked (with i
   const lines = out.split('\n').filter(l => /Did that follow\?/.test(l));
   assert.equal(lines.length, 3, 'capped at 3 question lines');
 });
+
+// ── Elapsed-stamped events (causal-chain fix, piece 4 display) ────
+
+test('an elapsed-stamped event renders in its own group, never under Coming days', () => {
+  const past = new Date(Date.now() - 8 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Missed appointment',
+                 payload: { elapsed_at: past } }],
+    },
+  });
+  assert.match(out, /Past events with no word on how they went[\s\S]*Missed appointment/);
+  assert.ok(!/Coming days:[\s\S]*Missed appointment/.test(out), 'must not read as still coming');
+});
+
+test('hindsight line tags an elapsed-stamped unresolved event as never marked done', () => {
+  const past = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Dentist',
+                 payload: { elapsed_at: past } }],
+      linked: [{ id: 'st', type: 'state', label: 'relief' }],
+      edges: [{ id: 'e1', src: 'ev', dst: 'st', kind: 'causes',
+                payload: { valence: 'help', certainty: 'medium' } }],
+    },
+  });
+  assert.match(out, /Dentist was .* \[never marked done\] — I projected/);
+});

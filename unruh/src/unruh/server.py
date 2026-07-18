@@ -656,6 +656,31 @@ def schedule_mark_alerted(
 
 
 @mcp.tool()
+def schedule_stamp_elapsed(hours: float = 24.0) -> dict[str, Any]:
+    """I use this to note which one-off events came and went without a word — once an
+    event's time (its end, or its start if it has no end) has been past for more than
+    `hours` with no resolution, it gets `payload.elapsed_at` stamped. That's an
+    observation, not a resolution: nothing is hidden or auto-resolved, the event stays
+    open and every tool still works on it — the stamp just lets me tell "past, never
+    followed up" apart from "still coming". The Node-side scheduler calls this on a slow
+    cadence; recurring series and need-windows are excluded (their pasts are tracked
+    per-occurrence). Idempotent — an already-stamped event is left alone.
+
+    Args:
+        hours: how long past the event's end before it counts as elapsed
+            (ward-configurable; default 24, clamped 1–720).
+
+    Returns: {ok: True, count: <int>, stamped: [{id, label}, ...]}.
+    """
+    try:
+        with get_conn() as conn:
+            result = sched.stamp_elapsed(conn, hours=hours)
+        return {"ok": True, **result}
+    except Exception as e:
+        return _err(f"schedule_stamp_elapsed failed: {e}", code="bad_request")
+
+
+@mcp.tool()
 def schedule_set_lead(id: str, lead_minutes: int | None = None) -> dict[str, Any]:
     """I use this to give ONE event its own lead time — how far ahead I want my
     human warned that it's coming up — instead of the single global default that

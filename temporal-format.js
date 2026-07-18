@@ -244,6 +244,7 @@ export function formatTemporalContext(payload) {
     const openTasks = [];
     const reminders = [];
     const resolved  = [];
+    const elapsed   = [];
     for (const item of window) {
       // Phases live in "Today's rhythm", never repeated here.
       if (item.type === 'phase') continue;
@@ -254,6 +255,10 @@ export function formatTemporalContext(payload) {
         continue;
       }
       if (isDup(item)) continue;
+      // An elapsed-stamped event (piece 4) came and went without a word — it
+      // must never read as still coming, so it gets its own group instead of
+      // landing under "Coming days" with an "N days ago" time.
+      if (item.payload?.elapsed_at) { elapsed.push(item); continue; }
       if (item.type === 'reminder') { reminders.push(item); continue; }
       if (item.when || item.end) { upcoming.push(item); continue; }
       // type=='task' with no when_ts → open task on the radar.
@@ -338,6 +343,14 @@ export function formatTemporalContext(payload) {
           ? Math.floor((nowMs - created) / (24 * 3600 * 1000)) : null;
         const ageTag = (floatDays != null && floatDays >= 1) ? ` (floating ${floatDays}d — no time set)` : '';
         schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}${obstacleSuffix(item)}`);
+      }
+    }
+    if (elapsed.length) {
+      schedLines.push("Past events with no word on how they went — still open, not forgotten:");
+      for (const item of elapsed) {
+        const when = renderWhen(item.when ?? item.fires_at ?? '');
+        const whenText = when ? `${when} — ` : '';
+        schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}`);
       }
     }
     if (resolved.length) {
@@ -482,7 +495,7 @@ export function formatTemporalContext(payload) {
       if (hindsightLines.length >= 3) break;
       const a = nodeLabel.get(e.src) ?? e.src;
       const b = nodeLabel.get(e.dst) ?? e.dst;
-      const res = n.resolution ? ` [${n.resolution}]` : '';
+      const res = n.resolution ? ` [${n.resolution}]` : (n.payload?.elapsed_at ? ' [never marked done]' : '');
       hindsightLines.push(`  ${n.label ?? n.id} was ${rel}${res} — I projected: ${a} → ${EDGE_VERB[e.kind] ?? e.kind} → ${b}${consequenceTag(e.payload)}. Did that follow? (edge: ${e.id})`);
     }
   }

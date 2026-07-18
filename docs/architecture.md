@@ -639,6 +639,22 @@ each other. Weather alone (no outside item affected) never pings — this
 is a preparation surface, not a weather report. Gated by BOTH weather
 and event-alerts being on.
 
+The same tick also carries **elapsed stamping** (causal-chain fix
+piece 4, 0.8.108, ward-signed): a pure-code pass, self-gated in
+`server.js` to an hourly cadence, that calls Unruh's
+`schedule_stamp_elapsed` — one-off `type='event'` nodes whose time
+(`end_ts` when present, else `when_ts`) has been past for more than the
+ward-configurable `elapsedStampHours` (Settings, default 24h, clamped
+1–720h) with no resolution get `payload.elapsed_at` stamped. An
+**observation, not a resolution**: the node stays unresolved, nothing
+is hidden, and the safety-audit surface (overdue-event noticing) still
+reads raw timestamps. Recurring anchors and need-windows are excluded
+(their pasts are per-occurrence). Display consumers in
+`temporal-format.js`: a stamped event renders under "Past events with
+no word on how they went" instead of "Coming days", and the hindsight
+question line tags it `[never marked done]`. Idempotent Unruh-side;
+hard off-switch `PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1`.
+
 The same 30s tick also carries the **weather refresh seam** (W-A,
 "ride existing requests, gate in code"): `refreshWeatherIfDue()` is a
 self-gated fire-and-forget — it no-ops unless weather is enabled

@@ -579,6 +579,57 @@ class TestMarkAlerted:
         assert sched.mark_alerted(conn, id="nope", kind="weather") is False
 
 
+class TestStampElapsed:
+    """Causal-chain fix piece 4 (ward-signed): payload.elapsed_at on one-off
+    events past their end by more than `hours`, resolution untouched."""
+
+    def _payload(self, conn, nid):
+        import json
+        row = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (nid,)).fetchone()
+        return json.loads(row["payload_json"] or "{}")
+
+    def test_stamps_past_unresolved_event_and_keeps_it_unresolved(self, conn):
+        e = sched.add_node(conn, type="event", label="Dentist", when="2026-07-15T14:00:00")
+        out = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:01")
+        assert out["count"] == 1 and out["stamped"][0]["id"] == e
+        assert self._payload(conn, e)["elapsed_at"]
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (e,)).fetchone()
+        assert row["resolution"] is None   # observation, never a resolution
+
+    def test_threshold_measured_from_end_when_present(self, conn):
+        # Started 30h ago but ended only 2h ago → NOT elapsed at 24h.
+        sched.add_node(conn, type="event", label="Retreat",
+                       when="2026-07-16T08:00:00", end="2026-07-17T12:00:00")
+        out = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:00")
+        assert out["count"] == 0
+
+    def test_leaves_future_recent_resolved_recurring_and_needs_alone(self, conn):
+        sched.add_node(conn, type="event", label="Future", when="2099-01-01T10:00:00")
+        sched.add_node(conn, type="event", label="Recent", when="2026-07-17T10:00:00")
+        done = sched.add_node(conn, type="event", label="Done", when="2026-07-01T10:00:00")
+        sched.resolve(conn, id=done, resolution="done")
+        sched.add_node(conn, type="event", label="Weekly",
+                       when="2026-01-05T10:00:00",
+                       payload={"recurrence": {"freq": "weekly"}})
+        sched.add_node(conn, type="task", label="Meds",
+                       when="2026-07-01T09:00:00", end="2026-07-01T11:00:00",
+                       payload={"need": True})
+        out = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:00")
+        assert out["count"] == 0
+
+    def test_idempotent(self, conn):
+        sched.add_node(conn, type="event", label="Old", when="2026-07-10T10:00:00")
+        first = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:00")
+        second = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T15:00:00")
+        assert first["count"] == 1 and second["count"] == 0
+
+    def test_hours_clamped(self, conn):
+        # hours=0 clamps to 1h, so a 30min-past event is NOT stamped.
+        sched.add_node(conn, type="event", label="Just now", when="2026-07-17T13:30:00")
+        out = sched.stamp_elapsed(conn, hours=0, now="2026-07-17T14:00:00")
+        assert out["count"] == 0
+
+
 # ── Reads ─────────────────────────────────────────────────────────────
 
 

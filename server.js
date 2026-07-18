@@ -39,7 +39,7 @@ import {
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   exportSchedule,
   getHandoff, markHandoffConsumed,
-  getDueReminders, getRemindersHealth, markEventAlerted,
+  getDueReminders, getRemindersHealth, markEventAlerted, stampElapsedEvents,
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
@@ -73,7 +73,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
   selectDueWeatherAlerts, formatWeatherAlert,
-  clampLeadMinutes, ALERT_GRACE_MS, MAX_LEAD_MS,
+  clampLeadMinutes, clampElapsedStampHours, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
@@ -3815,10 +3815,35 @@ function startRemindersScheduler() {
       // (ride existing requests, gate in code). Fire-and-forget — never
       // blocks the reminders path.
       refreshWeatherIfDue().catch(err => console.error('[weather]', err?.message ?? err));
+      // Elapsed stamping rides here too, self-gated to an hourly cadence.
+      stampElapsedIfDue().catch(err => console.error('[elapsed-stamp]', err?.message ?? err));
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
   console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Elapsed stamping (causal-chain fix piece 4, ward-signed) ──────
+// A slow pure-code pass: one-off events past their end by more than the
+// ward-configurable threshold (elapsedStampHours, default 24h) with no
+// resolution get payload.elapsed_at stamped in Unruh. An observation,
+// not a resolution — nothing is hidden or auto-resolved; the stamp only
+// lets derivations tell "past, never followed up" from "still coming".
+// Rides the reminders tick, gated in code to an hourly cadence; the
+// stamping itself is idempotent Unruh-side. Hard off-switch:
+// PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1.
+const ELAPSED_STAMP_INTERVAL_MS = 60 * 60_000;
+let _lastElapsedStampMs = 0;
+async function stampElapsedIfDue() {
+  if (process.env.PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED === '1') return;
+  const nowMs = Date.now();
+  if (nowMs - _lastElapsedStampMs < ELAPSED_STAMP_INTERVAL_MS) return;
+  _lastElapsedStampMs = nowMs;
+  const hours = clampElapsedStampHours(readSettingsSync()?.elapsedStampHours);
+  const r = await stampElapsedEvents({ hours });
+  if (r?.ok && r.count > 0) {
+    console.log(`[elapsed-stamp] marked ${r.count} past unresolved event(s) as elapsed (>${hours}h past): ${r.stamped?.map(s => s.label ?? s.id).join(', ')}`);
+  }
 }
 
 // ── Weather refresh (Weather sense, W-A) ─────────────────────────
