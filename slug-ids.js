@@ -40,45 +40,6 @@ export function outboxSlugId(kind = 'item') {
   return `${base}-${shortSlug(6)}`;
 }
 
-// Camera-noise filenames that carry no meaning to slugify (IMG_2043, PXL_…,
-// DSC0001, Screenshot_…, a bare timestamp). We fall back to a generic slug
-// rather than mint `img-2043` and pretend it's meaningful.
-const CAMERA_NOISE = /^((img|pxl|dsc|photo|image|screenshot|capture)[-_ ]?[\d_\- ]+|screenshot[-_ ].*|[\d][\d_\- ]{5,})$/i;
-
-/**
- * Turn a human label into slug words — lowercased, non-alphanumerics collapsed
- * to single hyphens, trimmed, and capped to the first `maxWords` content words
- * so a long caption doesn't become a 12-word id. Returns '' when there's
- * nothing meaningful left (empty, punctuation-only, or camera-noise filename).
- */
-export function slugifyLabel(label, { maxWords = 4 } = {}) {
-  let s = String(label ?? '').trim();
-  if (!s) return '';
-  // Drop a file extension before the noise check ("IMG_2043.jpg" → "img_2043").
-  const noExt = s.replace(/\.[a-z0-9]{1,5}$/i, '');
-  if (CAMERA_NOISE.test(noExt.trim())) return '';
-  s = noExt
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!s) return '';
-  return s.split('-').filter(Boolean).slice(0, maxWords).join('-');
-}
-
-/**
- * Meaning-bearing model-facing id: `slugify(label)-xx` (2-char suffix, the
- * Phylactery/Unruh `slug_id` pattern). When the label yields no meaningful
- * words, fall back to `<fallbackKind>-xxxxxx` so the id is still readable by
- * KIND even when nothing better exists. `suffixLen` grows on collision at the
- * call site (the insert_with_slug_retry discipline), so callers can pass a
- * larger value to widen the space.
- */
-export function meaningSlugId(label, { fallbackKind = 'img', suffixLen = 2 } = {}) {
-  const words = slugifyLabel(label);
-  if (!words) return outboxSlugId(fallbackKind);
-  return `${words}-${shortSlug(suffixLen)}`;
-}
-
 /** Old-style ids the converter re-keys: uuid4 hex (32) or dashed UUID (36). */
 export function isLegacyId(id) {
   return typeof id === 'string' &&

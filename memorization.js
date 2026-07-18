@@ -171,36 +171,6 @@ import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { segmentByDay, dayDelta } from './day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
-import { contentWithStandins, getAssetMeta } from './media.js';
-
-// Vision (§7): fold image stand-ins into a slice's transcript so an image-
-// carrying message is memorable — an image-only message (empty text, one
-// attachment) becomes eligible because the stand-in gives it text, and every
-// image message gains legibility. Any undescribed asset gets one look first
-// (describeAsset via dynamic import — keeps vision.js out of the static
-// import cycle memorization↔cerebellum; memorization is background, so a
-// describe call here is fine and means the memory reads the image, not "not
-// yet described"). Returns the messages unchanged when none carry attachments.
-async function foldImageStandins(messages, settings) {
-  const list = Array.isArray(messages) ? messages : [];
-  if (!list.some(m => Array.isArray(m?.attachments) && m.attachments.length)) return list;
-  let describeAsset = null;
-  try { ({ describeAsset } = await import('./vision.js')); } catch { /* describe optional */ }
-  const out = [];
-  for (const m of list) {
-    if (!Array.isArray(m?.attachments) || !m.attachments.length) { out.push(m); continue; }
-    if (describeAsset) {
-      for (const a of m.attachments) {
-        try {
-          const meta = await getAssetMeta(a?.id);
-          if (meta && meta.description === null) await describeAsset(a.id, settings);
-        } catch { /* best effort */ }
-      }
-    }
-    out.push({ ...m, content: await contentWithStandins(m) });
-  }
-  return out;
-}
 
 export function findOrCreateSessionMemoriesTome() {
   return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
@@ -674,11 +644,9 @@ async function processJob(job) {
     } catch { /* no legend this job */ }
   }
 
-  // Fold image stand-ins into the slice so image-carrying turns are memorable.
-  const visionMessages = await foldImageStandins(job.messages, readSettingsSync());
   const prompt = promptFn === buildPrompt
-    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend)
-    : promptFn(visionMessages, job.topicLabel ?? null, wardName);
+    ? buildPrompt(job.messages, job.topicLabel ?? null, wardName, scheduleLegend)
+    : promptFn(job.messages, job.topicLabel ?? null, wardName);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
