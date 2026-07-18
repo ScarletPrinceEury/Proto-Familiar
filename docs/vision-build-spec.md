@@ -11,9 +11,22 @@ can land later as new media *kinds* on the same spine, not as a rewrite.
 Those are out of scope (§14), though §11 pins the invariants a future
 continuous-sensing feature must honor so nothing built here has to be undone.
 
-Status: **Pass 1 SHIPPED (0.9.0-alpha — the milestone minor).** Passes 2–3
-pending (patch bumps). Vision owns this MINOR (one milestone = one minor; Pass 1
-landing is the `0.X.0`).
+Status: **Pass 1 SHIPPED (0.9.0-alpha).** **Pass 2 SHIPPED (0.9.1-alpha)**
+except the ward-gated image→threat scoring (below) and the ward-side composer
+tag UI (Familiar-side linking shipped; a composer control for my human to tag is
+a small follow-up). Pass 3 (Discord) pending. Vision owns this MINOR (one
+milestone = one minor; Pass 1 landing is the `0.X.0`).
+
+**Pass 2 as shipped:** `describeAsset` (look-once-keep-forever, capability-aware
+`resolveVisionConnection`, injection-guard on the result before caching, fired
+on-demand + fire-and-forget from the chat path when a stand-in is emitted, and
+from memorization); `contentWithStandins` folded into memorization so an image-
+carrying turn is memorable; `view_image` + its capability/audience gates and the
+`drainPendingImages` same-turn recompose in both tool loops; and the **picture→
+node linking** (§6.5: `addAssetLink`/`removeAssetLink`/`assetsForNode`,
+`link_image_to_node`/`unlink_image_from_node` tools, the stand-in naming linked
+nodes). **Still to come:** the ward-side composer tag control, description→node
+graduation, and the two items below.
 
 **Pass 1 deviation worth recording — the capability probe (§3.1).** The spec
 described a synthetic one-time probe image. As built, an uncached `auto`
@@ -372,6 +385,64 @@ assembly.
   a machine timestamp rendered by the existing `relative-time.js`/formatting
   helpers. The id in the stand-in is what makes `view_image` operable (§10).
 
+## 6.5. Picture → node linking (Pass 2 — ward-requested)
+
+An image can be **linked to graph nodes** it depicts — a photo of Milkyway the
+cat is tied to the `milkyway-x7` node — so the Familiar gains continuity across
+everything it has seen of a person, pet, place, or thing.
+
+**Honest scope first.** This is **not** pixel-level recognition (no vision
+embeddings, no "is this the same cat" from image data — we don't run that
+stack). It is **semantic continuity**: the *link* + the *description* let the
+Familiar reason from what it has actually seen and been told, which is the
+achievable and genuinely useful version.
+
+**The data model.** The asset meta (§2) gains an optional field:
+
+```json
+"links": [ { "nodeId": "milkyway-x7", "label": "Milkyway", "kind": "pet", "by": "ward|familiar" } ]
+```
+
+- `nodeId` references a Phylactery graph node. The **bytes stay local** to the
+  embodiment (§7 is undisturbed); the link is an embodiment-local annotation on
+  the asset meta, not a write into Phylactery's graph. (The *description*
+  graduating to the node — below — is the canonical, cross-embodiment trace.)
+- `media.js` gains `addAssetLink(id, {nodeId,label,kind,by})` /
+  `removeAssetLink(id, nodeId)` — atomic meta rewrites, deduped by `nodeId`,
+  never throwing.
+
+**Two tag paths (both required — discoverable AND operable):**
+
+1. **My human tags it** — a control on the composer thumbnail that searches the
+   graph (`search_graph_nodes`) and attaches the chosen node. One click, at
+   send time or after.
+2. **The Familiar tags it** — a `link_image_to_node(image_id, node_id)` chat
+   tool (and `unlink_image_from_node`). The node id is operable because it
+   **rides in on graph-recall results** — the same discipline as `mem_delete`
+   riding on recall ids. The describe pass (§6) MAY propose a link in its output
+   ("this looks like Milkyway — a cat my human has mentioned") which the
+   Familiar then confirms with the tool; it never fabricates a node id.
+
+**Where the link shows up (operability + legibility):**
+
+- **The stand-in names the node(s):** `[image milkyway-sill-x7: a grey tabby on
+  the windowsill — Milkyway (my human's cat), shared by my human, 7 Jul]`. Code-
+  built from the link labels on the meta; the model never composes it.
+- **Recall surfacing:** when a linked node is surfaced in graph context, the
+  Familiar knows images of it exist and can `view_image` them (§10) — so "show
+  me what Milkyway looks like" resolves to an image it can actually look at.
+- **Graduation:** the description graduates into Phylactery as a fact **attached
+  to the linked node** ("Milkyway is a grey tabby, favours the windowsill") —
+  routed through the canonical MCP like every other memory/graph write, never a
+  direct write. This is what makes recognition survive across embodiments and
+  outlast the local bytes.
+
+**Gating.** A link is only as visible as the asset: on a gated turn the
+audience gate (§3 step 1) still fail-closes, so a villager can never learn which
+ward-private nodes an image is tied to. Linking is a ward/Familiar capability;
+villager-shared images can carry `origin.speaker` provenance but the ward owns
+node associations.
+
 ## 7. Memory & continuity
 
 - **Memorization:** a small helper (`contentWithStandins(message)`, in
@@ -507,7 +578,9 @@ extension of this spine, honoring:
    off-switch. *This is the milestone `0.X.0` bump.*
 2. **Pass 2 — sight for everything else:** `describeAsset` + the `vision`
    feature key + injection-guard pass; `contentWithStandins` into
-   memorization + the loop prompts; `view_image` + its gates. Patch bumps.
+   memorization + the loop prompts; `view_image` + its gates; **picture→node
+   linking (§6.5)**; and the ward-signed **image→threat scoring** (§8/§15.1 —
+   exact mechanism confirmed with the ward before it ships). Patch bumps.
 3. **Pass 3 — Discord:** arrival-time ingest via `proxy_url` resize, caps,
    audience/provenance stamping, observe-path references, materializer wiring
    in `callChatRaw` assembly. Patch bump.

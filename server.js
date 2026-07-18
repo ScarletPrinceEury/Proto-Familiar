@@ -147,8 +147,8 @@ import {
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
-import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability } from './vision.js';
+import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
+import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -481,6 +481,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const visionGate = audienceTag && audienceTag !== 'ward-private' ? audienceVisible : null;
   let imagesLiveThisTurn = 0;
   let visionFellBack = false;
+  let visionCapableTurn = false;   // does THIS turn's connection see? (gates view_image)
   // Re-materialize forcing stand-ins — the mid-turn hard fallback when a
   // provider rejects the image modality despite an optimistic 'capable' verdict.
   const fallbackToStandins = async () => {
@@ -498,6 +499,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const settingsForVision = readSettingsSync() || {};
       const connForVision = findConnection(settingsForVision, { provider, model })
         || { provider, model, visionCapable: 'auto' };
+      visionCapableTurn = await resolveVisionCapable(connForVision, settingsForVision);
       const mat = await materializeAttachments(enrichedMessages, {
         connection: connForVision,
         settings: settingsForVision,
@@ -507,6 +509,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       imagesLiveThisTurn = mat.imagesLive;
       if (mat.imagesLive || mat.imagesStoodIn) {
         console.log(`[vision] materialized ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s)`);
+      }
+      // Fire-and-forget describe (§6): an undescribed asset stood in as text
+      // gets one look, once, so NEXT time it carries real words. Never blocks
+      // this turn; skips when there's no capable connection (stays null).
+      for (const id of (mat.stoodInUndescribed ?? [])) {
+        describeAsset(id, settingsForVision)
+          .then(r => { if (r?.ok !== false) console.log(`[vision] described ${id.slice(0, 8)} in the background`); })
+          .catch(() => {});
       }
     } catch (err) {
       console.error('[vision] materialization failed (passing messages through):', err?.message ?? err);
@@ -539,10 +549,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         sticky: stickyModulesFor(sessionInfo?.sessionId),
       });
       surfacing = { selection, used: new Set() };
-      activeTools = composeActiveTools(customTools, sset, { modules: selection });
+      activeTools = composeActiveTools(customTools, sset, { modules: selection, visionCapable: visionCapableTurn });
       console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised`);
     } else {
-      activeTools = composeActiveTools(customTools);
+      activeTools = composeActiveTools(customTools, readSettingsSync(), { visionCapable: visionCapableTurn });
     }
     if (activeTools.length > 0) {
       payload.tools = activeTools;
@@ -576,7 +586,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const recomposeTools = () => {
       if (!surfacing || !toolCtx._requestedModules?.size) return undefined;
       const union = new Set([...surfacing.selection, ...toolCtx._requestedModules]);
-      return composeActiveTools(customTools, readSettingsSync(), { modules: union });
+      return composeActiveTools(customTools, readSettingsSync(), { modules: union, visionCapable: visionCapableTurn });
     };
     const tickSurfacing = (toolNamesUsed = []) => {
       if (!surfacing) return;
@@ -872,6 +882,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           ...currentMsgs,
           { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
           ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
+          // view_image (§10): place any images I asked to see again before my
+          // eyes on the next round (same drain helper as the non-streaming loop).
+          ...(await drainPendingImages(toolCtx)),
         ];
         continue;
       }

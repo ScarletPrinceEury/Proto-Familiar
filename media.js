@@ -279,6 +279,50 @@ export async function setAssetDescription(idOrSlug, description) {
   return meta;
 }
 
+/**
+ * Link an asset to a graph node it depicts (picture→node, §6.5) — a photo of
+ * Milkyway ties to the `milkyway-x7` node, so the Familiar gains continuity
+ * across everything it has seen of a person, pet, place, or thing. The bytes
+ * stay local; this is an embodiment-local annotation on the asset meta, deduped
+ * by nodeId. Atomic write; never throws.
+ */
+export async function addAssetLink(idOrSlug, { nodeId, label = '', kind = '', by = 'familiar' } = {}) {
+  const id = await resolveAssetId(idOrSlug);
+  if (!id) return { ok: false, error: 'asset not found' };
+  const node = String(nodeId ?? '').trim();
+  if (!node) return { ok: false, error: 'a node id is required' };
+  const meta = await readJson(metaPath(id), null);
+  if (!meta) return { ok: false, error: 'asset meta not found' };
+  const links = Array.isArray(meta.links) ? meta.links.filter(l => l && l.nodeId !== node) : [];
+  links.push({ nodeId: node, label: String(label || node).slice(0, 120), kind: String(kind || '').slice(0, 40), by: by === 'ward' ? 'ward' : 'familiar' });
+  meta.links = links;
+  try { await atomicWrite(metaPath(id), JSON.stringify(meta, null, 2)); }
+  catch (err) { return { ok: false, error: `link write failed: ${err?.message ?? err}` }; }
+  return meta;
+}
+
+/** Remove one asset→node link (leaves the asset and the node intact). */
+export async function removeAssetLink(idOrSlug, nodeId) {
+  const id = await resolveAssetId(idOrSlug);
+  if (!id) return { ok: false, error: 'asset not found' };
+  const meta = await readJson(metaPath(id), null);
+  if (!meta) return { ok: false, error: 'asset meta not found' };
+  const node = String(nodeId ?? '').trim();
+  meta.links = (Array.isArray(meta.links) ? meta.links : []).filter(l => l && l.nodeId !== node);
+  try { await atomicWrite(metaPath(id), JSON.stringify(meta, null, 2)); }
+  catch (err) { return { ok: false, error: `link write failed: ${err?.message ?? err}` }; }
+  return meta;
+}
+
+/** Every asset linked to a given graph node, newest first — powers "show me
+ *  what Milkyway looks like" (the Familiar view_images them). */
+export async function assetsForNode(nodeId, { limit = 20 } = {}) {
+  const node = String(nodeId ?? '').trim();
+  if (!node) return [];
+  const all = await listAssets({ limit: 1000 });
+  return all.filter(m => Array.isArray(m.links) && m.links.some(l => l.nodeId === node)).slice(0, limit);
+}
+
 /** Ward-facing inventory, newest first. */
 export async function listAssets({ limit = 100 } = {}) {
   try {
@@ -342,9 +386,40 @@ export function buildStandin(meta, { now = Date.now() } = {}) {
   } else {
     body = 'no vision connection available to look';
   }
+  // Named node links (picture→node, §6.5) ride in the stand-in so the Familiar
+  // reads WHO/WHAT an image depicts — continuity across everything it's seen of
+  // Milkyway, not just "a cat". Code-built from the link labels.
+  const links = Array.isArray(meta.links) ? meta.links.filter(l => l && l.label) : [];
+  const linkPart = links.length ? ` — of ${links.map(l => l.label).join(', ')}` : '';
   const when = meta.receivedAt ? (relativeTime(meta.receivedAt, now) || '') : '';
   const whenPart = when ? `, ${when}` : '';
-  return `[image ${slug}: ${body} — ${sharedByPhrase(meta)}${whenPart}]`;
+  return `[image ${slug}: ${body}${linkPart} — ${sharedByPhrase(meta)}${whenPart}]`;
+}
+
+/**
+ * §10 helper: drain images the Familiar asked to look at again (view_image
+ * stashed them on `toolCtx._pendingImages` after validating id + audience gate)
+ * into a user-role message carrying the image parts, for the tool loop's next
+ * round. Clears the stash. Returns [] when there's nothing pending. Lives here
+ * (not vision.js) so BOTH the streaming loop (server.js) and runToolCallLoop
+ * (cerebellum.js) can call it without the cerebellum↔vision import cycle.
+ */
+export async function drainPendingImages(toolCtx = {}) {
+  const pending = Array.isArray(toolCtx?._pendingImages) ? toolCtx._pendingImages : [];
+  if (!pending.length) return [];
+  toolCtx._pendingImages = [];
+  const parts = [];
+  for (const p of pending) {
+    const got = await getAsset(p?.id);
+    if (got?.buffer && got?.meta) {
+      parts.push({ type: 'image_url', image_url: { url: `data:${got.meta.mime};base64,${got.buffer.toString('base64')}` } });
+    }
+  }
+  if (!parts.length) return [];
+  const label = pending.length === 1
+    ? 'Here is the image I asked to look at again.'
+    : `Here are the ${parts.length} images I asked to look at again.`;
+  return [{ role: 'user', content: [{ type: 'text', text: label }, ...parts] }];
 }
 
 /**

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {
   materializeAttachments, resolveVisionCapable, findConnection,
   isModalityError, DEFAULT_MAX_LIVE_IMAGES,
+  describeAsset, resolveVisionConnection,
 } from '../vision.js';
-import { saveAsset, deleteAsset } from '../media.js';
+import { saveAsset, deleteAsset, getAssetMeta } from '../media.js';
 
 function gif(w, h) {
   const b = Buffer.from('GIF89a\x00\x00\x00\x00\x00\x00\x00', 'binary');
@@ -150,4 +151,47 @@ test('isModalityError classifies only modality-shaped 4xx', () => {
   assert.equal(isModalityError(429, 'rate limit'), false);
   assert.equal(isModalityError(401, 'invalid api key'), false);
   assert.equal(isModalityError(400, 'temperature must be a number'), false);
+});
+
+// ── describeAsset (Pass 2, §6) — look once, keep forever ──────────
+
+const okCompletion = (text) => ({
+  ok: true, status: 200,
+  text: async () => JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop' }] }),
+});
+
+test('resolveVisionConnection prefers the vision feature assignment when capable', async () => {
+  const settings = {
+    connections: [
+      { id: 'blind', provider: 'nanogpt', model: 'text', apiKey: 'k', visionCapable: 'no' },
+      { id: 'sees', provider: 'zai', model: 'v', apiKey: 'k', visionCapable: 'yes' },
+    ],
+    featureConnections: { vision: 'sees' },
+    primaryConnectionId: 'blind',
+  };
+  const conn = await resolveVisionConnection(settings);
+  assert.equal(conn.id, 'sees');
+});
+
+test('describeAsset caches a sanitized description via one injected call', async () => {
+  const m = await mk('cluttered desk');
+  let calls = 0;
+  const fetchFn = async () => { calls++; return okCompletion('A mug of tea on a cluttered desk.'); };
+  const settings = { connections: [{ id: 'v', provider: 'zai', model: 'x', apiKey: 'k', visionCapable: 'yes' }], primaryConnectionId: 'v' };
+  const r = await describeAsset(m.id, settings, { fetchFn });
+  assert.equal(calls, 1);
+  assert.equal(r.description.text, 'A mug of tea on a cluttered desk.');
+  // Cached — a second call never hits the provider again.
+  const r2 = await describeAsset(m.id, settings, { fetchFn });
+  assert.equal(calls, 1);
+  assert.equal(r2.description.text, 'A mug of tea on a cluttered desk.');
+});
+
+test('describeAsset returns a reason (not a throw) when no connection can see', async () => {
+  const m = await mk('unseen');
+  const settings = { connections: [{ id: 'b', provider: 'nanogpt', model: 't', apiKey: 'k', visionCapable: 'no' }], primaryConnectionId: 'b' };
+  const r = await describeAsset(m.id, settings, { fetchFn: async () => okCompletion('x') });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'no-vision-connection');
+  assert.equal((await getAssetMeta(m.id)).description, null);   // stays null (retry later)
 });

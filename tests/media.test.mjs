@@ -11,6 +11,7 @@ import os from 'os';
 import {
   saveAsset, getAsset, getAssetMeta, setAssetDescription, listAssets,
   deleteAsset, resolveAssetId, buildStandin, contentWithStandins,
+  addAssetLink, removeAssetLink, assetsForNode, drainPendingImages,
   readImageSize, MEDIA_MAX_BYTES, IMAGE_MIME_EXT,
 } from '../media.js';
 import { slugifyLabel, meaningSlugId } from '../slug-ids.js';
@@ -44,6 +45,12 @@ function jpeg(w, h) {
 const created = [];
 async function track(meta) { if (meta?.id) created.push(meta.id); return meta; }
 after(async () => { for (const id of created) await deleteAsset(id); });
+
+// Unique-per-call bytes so content-addressing never dedups two distinct fixtures.
+let _lseq = 700;
+async function mkAsset(label, over = {}) {
+  return track(await saveAsset({ buffer: gif(_lseq++, _lseq++), mime: 'image/gif', label, ...over }));
+}
 
 test('readImageSize parses PNG / GIF / JPEG headers', () => {
   assert.deepEqual(readImageSize(PNG_1x1), { width: 1, height: 1 });
@@ -164,4 +171,54 @@ test('meaningSlugId: meaning-bearing, else fallback by kind', () => {
   assert.match(meaningSlugId('tea ritual'), /^tea-ritual-[a-z0-9]{2}$/);
   assert.match(meaningSlugId('IMG_2043.jpg'), /^img-[a-z0-9]{6}$/);
   assert.match(meaningSlugId('', { fallbackKind: 'frame' }), /^frame-[a-z0-9]{6}$/);
+});
+
+// ── Picture → node linking (Pass 2, §6.5) ─────────────────────────
+
+test('addAssetLink ties an asset to a node, dedups, and the stand-in names it', async () => {
+  const m = await mkAsset('milkyway on the sill');
+  const linked = await addAssetLink(m.id, { nodeId: 'milkyway-x7', label: 'Milkyway', kind: 'pet', by: 'ward' });
+  assert.equal(linked.links.length, 1);
+  assert.equal(linked.links[0].nodeId, 'milkyway-x7');
+  assert.match(buildStandin(linked), /— of Milkyway —/);
+  // Re-linking the same node dedups (no duplicate entry).
+  const again = await addAssetLink(m.id, { nodeId: 'milkyway-x7', label: 'Milkyway' });
+  assert.equal(again.links.length, 1);
+});
+
+test('assetsForNode finds every asset linked to a node; removeAssetLink detaches', async () => {
+  const a = await mkAsset('cat one');
+  const b = await mkAsset('cat two');
+  await addAssetLink(a.id, { nodeId: 'shared-node-z9', label: 'Milkyway' });
+  await addAssetLink(b.id, { nodeId: 'shared-node-z9', label: 'Milkyway' });
+  const found = await assetsForNode('shared-node-z9');
+  assert.ok(found.length >= 2 && found.some(x => x.id === a.id) && found.some(x => x.id === b.id));
+  const detached = await removeAssetLink(a.id, 'shared-node-z9');
+  assert.equal((detached.links || []).length, 0);
+});
+
+test('a stand-in with two links names both', async () => {
+  const m = await mkAsset('two friends');
+  await addAssetLink(m.id, { nodeId: 'ada-1', label: 'Ada' });
+  const meta = await addAssetLink(m.id, { nodeId: 'ben-2', label: 'Ben' });
+  assert.match(buildStandin(meta), /— of Ada, Ben —/);
+});
+
+// ── drainPendingimages (§10 — view_image plumbing) ────────────────
+
+test('drainPendingImages builds a user image message and clears the stash', async () => {
+  const m = await mkAsset('look again');
+  const ctx = { _pendingImages: [{ id: m.id }] };
+  const drained = await drainPendingImages(ctx);
+  assert.equal(drained.length, 1);
+  assert.equal(drained[0].role, 'user');
+  assert.equal(drained[0].content[0].type, 'text');
+  assert.equal(drained[0].content[1].type, 'image_url');
+  assert.match(drained[0].content[1].image_url.url, /^data:image\/gif;base64,/);
+  assert.deepEqual(ctx._pendingImages, []);   // stash cleared
+});
+
+test('drainPendingImages returns [] with nothing pending', async () => {
+  assert.deepEqual(await drainPendingImages({}), []);
+  assert.deepEqual(await drainPendingImages({ _pendingImages: [] }), []);
 });
