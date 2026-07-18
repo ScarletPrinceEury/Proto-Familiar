@@ -41,7 +41,7 @@ import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_AC
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable } from './vision.js';
+import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
 import {
@@ -1861,12 +1861,23 @@ async function handleTurn(gw, msg, decision) {
   if (!discordVisionOff()) {
     try {
       visionCapableTurn = await resolveVisionCapable(conn, settings);
+      // Blind chat connection (text-only, or z.ai-coding describe-only) →
+      // describe the shared images NOW so their stand-ins carry a real
+      // description on THIS turn, not "not yet described". Bounded + timed.
+      if (!visionCapableTurn) {
+        const d = await ensureDescribed(apiMessages, settings);
+        if (d.described) console.log(`[discord] described ${d.described} image(s) before the turn`);
+      }
       const mat = await materializeAttachments(apiMessages, {
         connection: conn, settings,
         visibleAudiences: audienceTag === 'ward-private' ? null : audienceVisible,
       });
       apiMessages = mat.messages;
       if (mat.imagesLive || mat.imagesStoodIn) console.log(`[discord] vision: ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s) (audience=${audienceTag})`);
+      // Anything still undescribed (over the sync cap) gets a background look.
+      for (const id of (mat.stoodInUndescribed ?? [])) {
+        describeAsset(id, settings).catch(() => {});
+      }
     } catch (err) {
       console.error('[discord] vision materialize failed (passing through):', err?.message ?? err);
     }

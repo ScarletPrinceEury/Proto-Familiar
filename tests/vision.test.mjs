@@ -4,7 +4,7 @@ import {
   materializeAttachments, resolveVisionCapable, findConnection,
   isModalityError, DEFAULT_MAX_LIVE_IMAGES,
   describeAsset, resolveVisionConnection, scoreImageDescriptionThreat,
-  graduateImageDescriptionToNode,
+  graduateImageDescriptionToNode, ensureDescribed,
 } from '../vision.js';
 import { saveAsset, deleteAsset, getAssetMeta, setAssetDescription } from '../media.js';
 
@@ -201,6 +201,22 @@ test('describeAsset caches a sanitized description via one injected call', async
   const r2 = await describeAsset(m.id, settings, { fetchFn });
   assert.equal(calls, 1);
   assert.equal(r2.description.text, 'A mug of tea on a cluttered desk.');
+});
+
+test('ensureDescribed describes undescribed images synchronously and skips described ones', async () => {
+  const a = await mk('to describe');
+  const b = await mk('already described');
+  await setAssetDescription(b.id, { text: 'already has words' });
+  const settings = { connections: [{ id: 'v', provider: 'zai', model: 'x', apiKey: 'k', visionCapable: 'yes' }], primaryConnectionId: 'v' };
+  let calls = 0;
+  const fetchFn = async () => { calls++; return okCompletion('a freshly described scene'); };
+  const r = await ensureDescribed(
+    [{ attachments: [{ id: a.id }, { id: b.id }] }],
+    settings, { fetchFn },
+  );
+  assert.equal(r.described, 1);                 // only the undescribed one
+  assert.equal(calls, 1);                        // b was already described → no call
+  assert.match((await getAssetMeta(a.id)).description.text, /a freshly described scene/);
 });
 
 test('describeAsset returns a reason (not a throw) when no connection can see', async () => {

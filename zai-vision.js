@@ -120,7 +120,15 @@ async function ensureClient(apiKey) {
     });
     const client = new Client({ name: 'proto-familiar', version: '0' }, { capabilities: {} });
     client.onclose = () => { if (_client === client) { _client = null; _clientKey = null; _toolName = null; _toolSchema = null; } };
-    await client.connect(transport);
+    // Bound the spawn+connect (first run does an npx install) so a stuck child
+    // can't hang the caller forever — the describe just falls back to null.
+    let connectTimer;
+    try {
+      await Promise.race([
+        client.connect(transport),
+        new Promise((_, rej) => { connectTimer = setTimeout(() => rej(new Error('connect timed out')), 45_000); }),
+      ]);
+    } finally { clearTimeout(connectTimer); }
     // Discover the analyze tool + its schema once per client.
     const listed = await client.listTools().catch(() => ({ tools: [] }));
     const tools = Array.isArray(listed?.tools) ? listed.tools : [];
@@ -167,7 +175,14 @@ export async function describeViaZaiVision({ apiKey, buffer, mime, prompt } = {}
       await fsp.writeFile(tmpPath, buffer);
       for (const k of Object.keys(args)) if (args[k] === '__PENDING__') args[k] = tmpPath;
     }
-    const result = await client.callTool({ name: _toolName, arguments: args });
+    let callTimer;
+    let result;
+    try {
+      result = await Promise.race([
+        client.callTool({ name: _toolName, arguments: args }),
+        new Promise((_, rej) => { callTimer = setTimeout(() => rej(new Error('analyze_image timed out')), 40_000); }),
+      ]);
+    } finally { clearTimeout(callTimer); }
     const text = textFromToolResult(result);
     if (!text) return { ok: false, reason: 'empty-result' };
     return { ok: true, text, by: { provider: 'zai-coding', model: 'glm-4.6v(vision-mcp)' } };

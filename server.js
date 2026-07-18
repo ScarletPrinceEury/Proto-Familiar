@@ -148,7 +148,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
+import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -500,6 +500,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const connForVision = findConnection(settingsForVision, { provider, model })
         || { provider, model, visionCapable: 'auto' };
       visionCapableTurn = await resolveVisionCapable(connForVision, settingsForVision);
+      // If the chat model can't see live (text-only, or a z.ai-coding describe-
+      // only connection), describe the shared images NOW — synchronously —
+      // so their stand-ins carry a real description on THIS turn instead of
+      // "not yet described". Bounded + timed, so it never hangs the turn.
+      if (!visionCapableTurn) {
+        const d = await ensureDescribed(enrichedMessages, settingsForVision);
+        if (d.described) console.log(`[vision] described ${d.described} image(s) before the turn`);
+      }
       const mat = await materializeAttachments(enrichedMessages, {
         connection: connForVision,
         settings: settingsForVision,
@@ -510,9 +518,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       if (mat.imagesLive || mat.imagesStoodIn) {
         console.log(`[vision] materialized ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s)`);
       }
-      // Fire-and-forget describe (§6): an undescribed asset stood in as text
-      // gets one look, once, so NEXT time it carries real words. Never blocks
-      // this turn; skips when there's no capable connection (stays null).
+      // Anything still undescribed (over the sync cap, or a live-connection's
+      // over-budget older image) gets a background look so NEXT time it carries
+      // real words. Never blocks this turn.
       for (const id of (mat.stoodInUndescribed ?? [])) {
         describeAsset(id, settingsForVision)
           .then(r => { if (r?.ok !== false) console.log(`[vision] described ${id.slice(0, 8)} in the background`); })
@@ -522,8 +530,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       // THIS turn can raise the tier (full weight, raise-only). Fire-and-forget
       // — the description is scored via the ward's own detector; never blocks
       // the turn, never lowers the tier, never fires for a villager's image.
-      // Only on the ward's own live turn.
-      if (liveTurn && audienceTag === 'ward-private' && visionThreatScoringOn()) {
+      // Only on the ward's own live turn (enrichMode 'full').
+      if (enrichMode === 'full' && audienceTag === 'ward-private' && visionThreatScoringOn()) {
         const turnImageIds = (Array.isArray(lastUser?.attachments) ? lastUser.attachments : [])
           .map(a => a?.id).filter(Boolean);
         for (const id of turnImageIds) {
