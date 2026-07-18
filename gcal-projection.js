@@ -38,6 +38,41 @@ export const MAX_WINDOW_MS = 48 * 60 * 60_000;
 // anchor — because Unruh returns the anchor node, not its occurrences).
 export const MAX_PER_TURN = 3;
 
+// Projection candidates need at least this much runway before the event —
+// cueing something 2h away invites a rushed, worthless forecast.
+export const MIN_LEAD_MS = 6 * 60 * 60_000;
+// An aged-out item gets ONE more look when the event is nearly here.
+export const LAST_CHANCE_MS = 48 * 60 * 60_000;
+
+/**
+ * Gather projection candidates from the briefing window (causal-chain fix,
+ * piece 1): ANY unresolved event with no consequence edges touching it and
+ * at least MIN_LEAD_MS of runway — hand-added, chat-created, or synced —
+ * unioned with Unruh's gcal-flagged list (which stays the fast path for
+ * fresh sync arrivals). Pure; dedupes by id.
+ */
+export function gatherProjectionCandidates({ window = [], edges = [], gcalFlagged = [], now = Date.now() } = {}) {
+  const touched = new Set();
+  for (const e of (Array.isArray(edges) ? edges : [])) {
+    if (e?.src) touched.add(e.src);
+    if (e?.dst) touched.add(e.dst);
+  }
+  const out = new Map();
+  for (const c of (Array.isArray(gcalFlagged) ? gcalFlagged : [])) {
+    if (c?.id) out.set(c.id, { id: c.id, label: c.label, when: c.when });
+  }
+  for (const n of (Array.isArray(window) ? window : [])) {
+    if (!n?.id || out.has(n.id)) continue;
+    if (n.type !== 'event' || n.resolution) continue;
+    if (touched.has(n.id)) continue;
+    const when = n.when ?? n.when_ts;
+    const t = when ? Date.parse(when) : NaN;
+    if (!Number.isFinite(t) || t - now < MIN_LEAD_MS) continue;
+    out.set(n.id, { id: n.id, label: n.label, when });
+  }
+  return [...out.values()];
+}
+
 /**
  * Choose which flagged items to surface this turn and advance the aging
  * state. Pure — no I/O.
@@ -63,13 +98,27 @@ export function selectCueItems({ candidates, state = {}, now = Date.now() }) {
   const agedOut = (entry) =>
     entry && (entry.turnsShown >= MAX_TURNS || (now - entry.firstSeenTs) >= MAX_WINDOW_MS);
 
-  const eligible = list.filter(c => !agedOut(nextState[c.id]));
+  // Last-chance pass (causal-chain fix): an item that aged out unprojected
+  // re-surfaces ONCE when the event is within LAST_CHANCE_MS — if I'm ever
+  // going to think about what it sets in motion, it's now. One shot only.
+  const lastChance = (c) => {
+    const entry = nextState[c.id];
+    if (!entry || !agedOut(entry) || entry.lastChanceShown) return false;
+    const t = c.when ? Date.parse(c.when) : NaN;
+    return Number.isFinite(t) && t > now && (t - now) <= LAST_CHANCE_MS;
+  };
+
+  const eligible = list.filter(c => !agedOut(nextState[c.id]) || lastChance(c));
   const items = eligible.slice(0, MAX_PER_TURN);
 
   // Advance the count only for items actually surfaced this turn.
   for (const c of items) {
     const entry = nextState[c.id] || { firstSeenTs: now, turnsShown: 0 };
-    nextState[c.id] = { firstSeenTs: entry.firstSeenTs, turnsShown: entry.turnsShown + 1 };
+    nextState[c.id] = {
+      firstSeenTs: entry.firstSeenTs,
+      turnsShown: entry.turnsShown + 1,
+      ...(entry.lastChanceShown || (agedOut(entry) && lastChance(c)) ? { lastChanceShown: true } : {}),
+    };
   }
 
   return { items, nextState };
@@ -94,9 +143,9 @@ export function buildCueBlock(items, { now = Date.now(), weatherOn = false } = {
     ? " If one takes my human outside, I can check weather_today while I think it through — rain or heat across town means more lead, which I set with schedule_set_lead."
     : '';
   return [
-    "[New on my human's calendar — not yet thought through]",
+    "[Coming up with nothing hanging off it yet]",
     ...lines,
-    `These are freshly synced from my human's Google Calendar. For each, I think two moves ahead: what does it lead to if it resolves, and what does skipping it cost — I record both with schedule_link (leading with what doing it earns). A blank forecast helps no one; an honest one now is what lets me learn later.${weatherHint} Then I'm done with each for now — these are appointments, not tasks to chase, and I don't keep re-raising them once I've thought them through (I'm still free to revisit, project further, or export one later).`,
+    `Upcoming things on my human's schedule that I haven't thought through. For each, I think two moves ahead: what does it lead to if it goes well, and what does skipping it cost — I record both with schedule_link (leading with what doing it earns). A blank forecast helps no one; an honest one now is what lets me learn later.${weatherHint} If one is genuinely routine, leaving it be is fine — then I'm done with each for now; I don't keep re-raising what I've already considered (I'm still free to revisit, project further, or export one later).`,
   ].join('\n');
 }
 

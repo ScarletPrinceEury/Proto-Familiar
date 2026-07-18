@@ -302,6 +302,10 @@ const state = {
   // node starts (synced or hand-added). Default ON — the timeblindness net.
   eventAlertsEnabled:      true,
   eventAlertLeadMinutes:   60,    // clamped 5–1440 server-side
+  // Elapsed stamping (causal-chain piece 4): hours past an event's end
+  // before it's noted as "came and went without a word". Observation only —
+  // nothing is auto-resolved or hidden. Clamped 1–720 server-side.
+  elapsedStampHours:       24,
   // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
   // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
   gcalSource:              'link',
@@ -390,7 +394,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
-  'eventAlertsEnabled', 'eventAlertLeadMinutes',
+  'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'gcalWriteEnabled', 'gcalWriteCommand',
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
@@ -2780,6 +2784,10 @@ function readSettingsFromUI() {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
   }
+  if ($('elapsed-stamp-hours')) {
+    const n = parseInt($('elapsed-stamp-hours').value, 10);
+    state.elapsedStampHours = Number.isInteger(n) && n >= 1 && n <= 720 ? n : 24;
+  }
   if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
   if ($('gcal-cli-format')) state.gcalCliFormat = $('gcal-cli-format').value === 'json' ? 'json' : 'ics';
@@ -2925,6 +2933,7 @@ function writeSettingsToUI() {
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
+  if ($('elapsed-stamp-hours')) setIfNotFocused($('elapsed-stamp-hours'), 'value', state.elapsedStampHours ?? 24);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
@@ -4139,7 +4148,7 @@ function init() {
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
-    'event-alerts-toggle', 'event-alerts-lead',
+    'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',

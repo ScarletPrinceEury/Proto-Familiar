@@ -39,7 +39,7 @@ import {
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   exportSchedule,
   getHandoff, markHandoffConsumed,
-  getDueReminders, getRemindersHealth, markEventAlerted,
+  getDueReminders, getRemindersHealth, markEventAlerted, stampElapsedEvents,
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
@@ -73,7 +73,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
   selectDueWeatherAlerts, formatWeatherAlert,
-  clampLeadMinutes, ALERT_GRACE_MS, MAX_LEAD_MS,
+  clampLeadMinutes, clampElapsedStampHours, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
@@ -3474,6 +3474,10 @@ function startAutonomousPondering() {
       return shouldReflectNow();
     },
     getReflectionInput: async () => {
+      const teNaive = (d) => {
+        const p2 = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+      };
       const outcomes = await getNewOutcomesSinceLastReflection();
       const id = await getIdentityAll().catch(() => ({}));
       const file = (id?.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
@@ -3502,7 +3506,17 @@ function startAutonomousPondering() {
       let consequenceEdges = [];
       let cooccurrences = [];
       try {
-        const win = await getScheduleWindow({});
+        // Hindsight window (causal-chain fix, piece 3): the default window
+        // reaches only hours back, so a chain whose event passed days ago
+        // vanished before reflection could grade it. Reflection reads a
+        // week back (+2 days forward) — same single call, wider range.
+        const wardNow = wardLocalNowISO(readSettingsSync()?.wardTimeZone);
+        const base = new Date(wardNow).getTime();
+        const isoAt = (ms) => teNaive(new Date(ms));
+        const win = await getScheduleWindow({
+          from_ts: isoAt(base - 7 * 24 * 3600_000),
+          to_ts:   isoAt(base + 2 * 24 * 3600_000),
+        });
         // Window nodes + linked endpoints (undated states, out-of-window
         // anchors) — without `linked` the grader saw unresolvable endpoint
         // ids and the calibration loop starved on its own projections.
@@ -3511,6 +3525,7 @@ function startAutonomousPondering() {
           ...(Array.isArray(win?.linked) ? win.linked : []),
         ];
         const labelById = new Map(nodes.map(n => [n.id, n.label]));
+        const whenById  = new Map(nodes.map(n => [n.id, n.when ?? n.when_ts ?? null]));
         const allEdges = Array.isArray(win?.edges) ? win.edges : [];
         consequenceEdges = allEdges
           .filter(ed => ed?.payload && (ed.payload.valence || ed.payload.condition) && ed.payload.observed !== true)
@@ -3519,6 +3534,7 @@ function startAutonomousPondering() {
             kind: ed.kind, valence: ed.payload.valence, condition: ed.payload.condition,
             horizon_hours: ed.payload.horizon_hours, severity: ed.payload.severity,
             certainty: ed.payload.certainty, note: ed.payload.note,
+            from_when: whenById.get(ed.src) ?? null,
           }));
         // co_occurs_with noticings, grouped by unordered endpoint pair so
         // reflection sees how often a pairing has come up (the signal for
@@ -3799,10 +3815,35 @@ function startRemindersScheduler() {
       // (ride existing requests, gate in code). Fire-and-forget — never
       // blocks the reminders path.
       refreshWeatherIfDue().catch(err => console.error('[weather]', err?.message ?? err));
+      // Elapsed stamping rides here too, self-gated to an hourly cadence.
+      stampElapsedIfDue().catch(err => console.error('[elapsed-stamp]', err?.message ?? err));
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
   console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Elapsed stamping (causal-chain fix piece 4, ward-signed) ──────
+// A slow pure-code pass: one-off events past their end by more than the
+// ward-configurable threshold (elapsedStampHours, default 24h) with no
+// resolution get payload.elapsed_at stamped in Unruh. An observation,
+// not a resolution — nothing is hidden or auto-resolved; the stamp only
+// lets derivations tell "past, never followed up" from "still coming".
+// Rides the reminders tick, gated in code to an hourly cadence; the
+// stamping itself is idempotent Unruh-side. Hard off-switch:
+// PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1.
+const ELAPSED_STAMP_INTERVAL_MS = 60 * 60_000;
+let _lastElapsedStampMs = 0;
+async function stampElapsedIfDue() {
+  if (process.env.PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED === '1') return;
+  const nowMs = Date.now();
+  if (nowMs - _lastElapsedStampMs < ELAPSED_STAMP_INTERVAL_MS) return;
+  _lastElapsedStampMs = nowMs;
+  const hours = clampElapsedStampHours(readSettingsSync()?.elapsedStampHours);
+  const r = await stampElapsedEvents({ hours });
+  if (r?.ok && r.count > 0) {
+    console.log(`[elapsed-stamp] marked ${r.count} past unresolved event(s) as elapsed (>${hours}h past): ${r.stamped?.map(s => s.label ?? s.id).join(', ')}`);
+  }
 }
 
 // ── Weather refresh (Weather sense, W-A) ─────────────────────────

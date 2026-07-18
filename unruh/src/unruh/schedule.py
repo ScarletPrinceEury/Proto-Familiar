@@ -501,6 +501,54 @@ def mark_alerted(
     return True
 
 
+def stamp_elapsed(
+    conn: sqlite3.Connection,
+    *,
+    hours: float = 24.0,
+    now: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Stamp `payload.elapsed_at` on one-off events whose time has been
+    past for more than `hours` — measured from end_ts when the event has
+    one, else when_ts — and that never got a resolution. (Causal-chain
+    fix piece 4, ward-signed: threshold ward-configurable, default 24h
+    after event end.)
+
+    An OBSERVATION, not a resolution: the node stays unresolved, every
+    schedule tool still works on it, nothing is hidden. The stamp only
+    lets derivations distinguish "past, never followed up" from
+    "upcoming"/"pending". Recurring anchors (payload.recurrence) and
+    need-windows (payload.need) are excluded — their pasts are tracked
+    per-occurrence (payload.resolutions / the needs ledger), and an
+    anchor's own when_ts is just the first occurrence. Idempotent: an
+    already-stamped node is never re-stamped.
+    """
+    hours = max(1.0, min(720.0, float(hours)))
+    now_dt = datetime.fromisoformat(now) if now else datetime.now()
+    cutoff = (now_dt - timedelta(hours=hours)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """SELECT id, label, payload_json FROM nodes
+            WHERE layer = 'schedule' AND type = 'event' AND resolution IS NULL
+              AND COALESCE(end_ts, when_ts) IS NOT NULL
+              AND COALESCE(end_ts, when_ts) < ?
+            LIMIT ?""",
+        (cutoff, limit),
+    ).fetchall()
+    ts = now_iso()
+    stamped: list[dict[str, Any]] = []
+    for r in rows:
+        payload = json.loads(r["payload_json"] or "{}")
+        if payload.get("elapsed_at") or payload.get("recurrence") or payload.get("need"):
+            continue
+        payload["elapsed_at"] = ts
+        conn.execute(
+            "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(payload), ts, r["id"]),
+        )
+        stamped.append({"id": r["id"], "label": r["label"]})
+    return {"stamped": stamped, "count": len(stamped)}
+
+
 def set_lead(
     conn: sqlite3.Connection,
     *,

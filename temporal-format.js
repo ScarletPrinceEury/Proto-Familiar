@@ -244,6 +244,7 @@ export function formatTemporalContext(payload) {
     const openTasks = [];
     const reminders = [];
     const resolved  = [];
+    const elapsed   = [];
     for (const item of window) {
       // Phases live in "Today's rhythm", never repeated here.
       if (item.type === 'phase') continue;
@@ -254,6 +255,10 @@ export function formatTemporalContext(payload) {
         continue;
       }
       if (isDup(item)) continue;
+      // An elapsed-stamped event (piece 4) came and went without a word — it
+      // must never read as still coming, so it gets its own group instead of
+      // landing under "Coming days" with an "N days ago" time.
+      if (item.payload?.elapsed_at) { elapsed.push(item); continue; }
       if (item.type === 'reminder') { reminders.push(item); continue; }
       if (item.when || item.end) { upcoming.push(item); continue; }
       // type=='task' with no when_ts → open task on the radar.
@@ -338,6 +343,14 @@ export function formatTemporalContext(payload) {
           ? Math.floor((nowMs - created) / (24 * 3600 * 1000)) : null;
         const ageTag = (floatDays != null && floatDays >= 1) ? ` (floating ${floatDays}d — no time set)` : '';
         schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}${obstacleSuffix(item)}`);
+      }
+    }
+    if (elapsed.length) {
+      schedLines.push("Past events with no word on how they went — still open, not forgotten:");
+      for (const item of elapsed) {
+        const when = renderWhen(item.when ?? item.fires_at ?? '');
+        const whenText = when ? `${when} — ` : '';
+        schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}`);
       }
     }
     if (resolved.length) {
@@ -445,6 +458,53 @@ export function formatTemporalContext(payload) {
   }
   if (linkLines.length) {
     blocks.push(['Consequence links — how my human\'s scheduled items bear on each other:', ...linkLines].join('\n'));
+  }
+
+  // ── Recently past, unexamined (causal-chain fix, piece 2) ────────
+  // An event whose time just passed and that still carries un-graded
+  // forecasts is at the one moment a forecast can be checked against what
+  // actually happened — while my human can still remember the answer.
+  // Pure derivation, same class as the settled-links retirement above:
+  // events with when/end in [now − 72h, now] whose consequence edges are
+  // still unobserved, rendered as questions with the edge id so the
+  // answer is actionable (schedule_calibrate_link). Capped at 3 lines;
+  // a line drops when its edge is graded observed or the window closes.
+  const HINDSIGHT_MS = 72 * 3600 * 1000;
+  const isUngraded = (p) => p && typeof p === 'object'
+    && (p.valence || p.condition || p.certainty) && p.observed !== true;
+  const hindsightEdges = new Map();   // node id → its ungraded consequence edges
+  for (const e of edges) {
+    if (!e?.id || !isUngraded(e.payload)) continue;
+    for (const end of [e.src, e.dst]) {
+      if (!hindsightEdges.has(end)) hindsightEdges.set(end, []);
+      hindsightEdges.get(end).push(e);
+    }
+  }
+  const hindsightLines = [];
+  const seenHindsight = new Set();
+  for (const n of scheduleNodes) {
+    if (hindsightLines.length >= 3) break;
+    if (!n?.id || seenHindsight.has(n.id) || n.type !== 'event') continue;
+    seenHindsight.add(n.id);
+    const t = Date.parse(n.when ?? n.end ?? '');
+    if (!Number.isFinite(t) || t > nowForLinks || nowForLinks - t > HINDSIGHT_MS) continue;
+    const nodeEdges = hindsightEdges.get(n.id);
+    if (!nodeEdges?.length) continue;
+    const rel = relativeTime(n.when ?? n.end, nowForLinks) || formatLocalTime(n.when ?? n.end);
+    for (const e of nodeEdges) {
+      if (hindsightLines.length >= 3) break;
+      const a = nodeLabel.get(e.src) ?? e.src;
+      const b = nodeLabel.get(e.dst) ?? e.dst;
+      const res = n.resolution ? ` [${n.resolution}]` : (n.payload?.elapsed_at ? ' [never marked done]' : '');
+      hindsightLines.push(`  ${n.label ?? n.id} was ${rel}${res} — I projected: ${a} → ${EDGE_VERB[e.kind] ?? e.kind} → ${b}${consequenceTag(e.payload)}. Did that follow? (edge: ${e.id})`);
+    }
+  }
+  if (hindsightLines.length) {
+    blocks.push([
+      'Recently past, not yet examined — forecasts whose moment has come:',
+      ...hindsightLines,
+      "  If I can tell how it actually went — or my human mentions it — I grade the forecast with schedule_calibrate_link (the edge id above): observed if it really happened, certainty up or down. If I don't know, asking is natural while it's still fresh.",
+    ].join('\n'));
   }
 
   // Legend = ids the Familiar might act on. Two prunes keep it from ballooning:

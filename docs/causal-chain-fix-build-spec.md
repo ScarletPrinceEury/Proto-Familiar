@@ -1,7 +1,30 @@
-# Causal-chain fix — build spec (draft for ward review)
+# Causal-chain fix — build spec
 
-**Status: DRAFT.** Nothing here is built. The ward reported the defect;
-this spec proposes the fix and marks the two decisions that are theirs.
+**Status: Pieces 1–3 SHIPPED (0.8.107); Piece 4 SHIPPED (0.8.108) with
+the ward's sign-off** — their decision: threshold ward-configurable
+(`elapsedStampHours`, Settings → event alerts, clamped 1–720h), default
+**24h after event end** (not the drafted 72h; measured from `end_ts`
+when present, else `when_ts`). Deviations from the draft, made while
+building:
+
+- **Piece 1** reuses `gcal-projection.js`'s existing pacing regime
+  (state in `tomes/.gcal-projection-cue.json`: 3 turns / 48h aging, 3
+  per turn) instead of the drafted per-node `payload` cooldowns — one
+  pacing regime for both sources, no node-payload state. Candidates
+  come from the temporal briefing's window (reaches ~7 days ahead)
+  rather than a separate 14-day fetch — no new request; events further
+  out get their cue as they enter the window, still with days of
+  runway. The last-chance re-surface (decision 2) is built: one extra
+  look within 48h of the event. The cue rides chat turns; wiring it
+  into noticing deliberations is deferred until wanted.
+- **Piece 2** shipped per spec (72h window, question form, 3-line cap) —
+  plus a chat tool the draft missed: `schedule_calibrate_link`, because
+  edge ids were not actionable from chat at all (the reachability rule —
+  a question the Familiar can't record the answer to is theater).
+- **Piece 3** shipped: the reflection input's schedule fetch widened to
+  ward-local −7d..+2d (one call, same tick), and each graded edge now
+  carries its source node's `when` so the reflection can tell whether
+  the projected moment has actually arrived.
 
 **The defect (ward's bug-bucket, verbatim intent):** the causal machinery
 exists — consequence edges, projections, the calibration loop — but
@@ -77,26 +100,45 @@ exactly the calibration discipline needs already get. Outcomes land in
 auditable). **No new LLM request** — the judgment folds into a call that
 already happens.
 
-### Piece 4 — Elapsed marking ⚠ WARD DECISION REQUIRED
+### Piece 4 — Elapsed marking (SHIPPED 0.8.108, ward-signed)
 
 The architecture doc names the deeper gap: nothing auto-resolves a
 past-dated event, so "past" and "unresolved" are indistinguishable from
-"pending". Proposal: a slow code pass (riding the needs-tracking tick)
-stamps `payload.elapsed_at` on events >72h past with no resolution —
-**an observation, not a resolution**: the node stays unresolved, nothing
-is hidden, the schedule tools still work on it. The stamp only lets
-derivations distinguish "past, never followed up" from "upcoming".
+"pending". The fix: a slow code pass stamps `payload.elapsed_at` on
+one-off events past their time with no resolution — **an observation,
+not a resolution**: the node stays unresolved, nothing is hidden, the
+schedule tools still work on it. The stamp only lets derivations
+distinguish "past, never followed up" from "upcoming".
 
-This touches event lifecycle adjacent to the safety-audit surface
-(overdue-event noticing reads past unresolved events), so it ships only
-with explicit ward sign-off — and if declined, Pieces 1–3 still work,
-using raw timestamps instead of the stamp.
+As shipped (per the ward's sign-off in this thread):
 
-## Decisions that are the ward's
+- **Threshold is ward-configurable** — `elapsedStampHours` in Settings
+  (event-alerts section), default **24h after event end** (`end_ts`
+  when present, else `when_ts`), clamped 1–720h at both ends (Node
+  `clampElapsedStampHours` + Unruh).
+- The pass rides the **reminders tick** (default-on infrastructure, not
+  the opt-in needs-tracking loop the draft named — a stamp that only
+  runs when needs-tracking is enabled would be dead for most installs),
+  self-gated in code to an hourly cadence. Hard off-switch
+  `PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1`.
+- The stamping itself is one Unruh call (`schedule_stamp_elapsed` →
+  `schedule.stamp_elapsed`): pure code, idempotent, excludes recurring
+  anchors (`payload.recurrence`) and need-windows (`payload.need`) —
+  their pasts are tracked per-occurrence.
+- Display consumers (derivation class, no gating change): an
+  elapsed-stamped event moves out of "Coming days" into its own
+  briefing group ("Past events with no word on how they went — still
+  open, not forgotten"), and the Piece-2 hindsight line tags it
+  `[never marked done]`.
+- The safety-audit surface is untouched: overdue-event noticing still
+  reads raw timestamps; nothing gates on the stamp.
 
-1. **Piece 4 (elapsed stamping)** — yes/no, and the 72h threshold.
-2. **The last-chance re-surface at T−48h** (Piece 1) — it mildly
-   overrides the "3 passes then quiet" rule; confirm that's wanted.
+## Decisions that were the ward's (both made)
+
+1. **Piece 4 (elapsed stamping)** — approved; threshold customizable,
+   default 24h after event end.
+2. **The last-chance re-surface at T−48h** (Piece 1) — approved with
+   the pieces 1–3 delivery.
 
 ## Non-goals
 

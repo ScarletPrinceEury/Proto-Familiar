@@ -53,7 +53,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
+  addScheduleEdge, updateScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
   templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds, convertMemoryIds,
   bumpInterest, setStandingInterest,
@@ -1743,6 +1743,23 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_calibrate_link',
+      description: 'I grade a consequence link I authored earlier, once reality has weighed in — this is how my forecasts get honest over time. When an event has passed and I learn what actually happened (the "Recently past, not yet examined" lines in my [Temporal Context] surface these, or {{user}} just tells me), I mark the projection observed if it truly came about, raise or lower its certainty, or note what I saw. It merges over the link\'s existing details, so a partial grade leaves the rest intact. I only call something observed when it actually happened — grading a guess as fact would poison what I learn from.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The consequence-link (edge) id — it rides on the "Recently past, not yet examined" lines in my [Temporal Context].' },
+          observed:  { type: 'boolean', description: 'true = the projected consequence actually happened. I never set this on a guess.' },
+          certainty: { type: 'string', enum: ['low', 'medium', 'high'], description: 'My recalibrated confidence in this link, after seeing how it went.' },
+          note: { type: 'string', description: 'A short note in my own words about what actually happened.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_export',
       description: 'I turn one of {{user}}\'s scheduled items into something they can drop straight into their own calendar — a downloadable `.ics` file and a one-click "add to Google" link. I reach for this when an appointment or plan lives in my sense of their day but not yet in the calendar app on their phone, or when {{user}} asks me to send them something for their calendar. I pass the node `id` from the [schedule ids] legend; Unruh builds the exact dates, file, and URL in code — I never type a calendar link or date myself, I just hand it over and say what it is. It works on ANY schedule item, including ones {{user}} added by hand, and it only reads — it never changes their calendar.',
       parameters: {
@@ -3037,6 +3054,25 @@ export const TOOL_EXECUTORS = {
       const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
       return quietOk(`Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`, { id: data.id });
     } catch (err) { return `I couldn't connect those items: ${err.message}`; }
+  },
+
+  schedule_calibrate_link: async ({ id, observed, certainty, note } = {}) => {
+    const eid = String(id ?? '').trim();
+    if (!eid) return 'I need the edge id — it rides on the "Recently past, not yet examined" lines in my [Temporal Context].';
+    const payload = {};
+    if (observed !== undefined) payload.observed = !!observed;
+    if (['low', 'medium', 'high'].includes(certainty)) payload.certainty = certainty;
+    if (note && String(note).trim()) payload.note = String(note).trim();
+    if (!Object.keys(payload).length) return 'I need at least one grading field — observed, certainty, or a note.';
+    try {
+      const data = await updateScheduleEdge({ id: eid, payload });
+      if (!data?.ok) return `I couldn't grade that link: ${data?.error ?? 'Unruh unavailable'}.`;
+      if (data.updated === false) return `There's no consequence link with id ${eid} — it may have been removed.`;
+      const parts = [];
+      if (payload.observed) parts.push('observed — it really happened');
+      if (payload.certainty) parts.push(`certainty → ${payload.certainty}`);
+      return quietOk(`Graded link ${eid}${parts.length ? ` (${parts.join(', ')})` : ''}.`);
+    } catch (err) { return `I couldn't grade that link: ${err.message}`; }
   },
 
   schedule_export: async ({ id } = {}) => {
