@@ -14,6 +14,12 @@ sources:
   - id: server-js
     type: file
     path: server.js
+  - id: memorization-js
+    type: file
+    path: memorization.js
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
 ---
 
 # Vision and Media Input
@@ -64,9 +70,58 @@ Vision is designed to degrade gracefully at every point: if the media store is u
 
 `PROTO_FAMILIAR_VISION_DISABLED=1` disables the whole subsystem; there is also an in-app setting (defaulting ON, inert until an image is sent) [@vision-js]. Critically, no image path may 500 the chat turn — the system always fails to stand-in text or drops the image silently [@vision-js].
 
-## Planned future work
+## Image description caching (Pass 2)
 
-**Pass 2** (not yet shipped): Image description caching — `describeAsset()` looks at each image once and keeps the description forever, so the Familiar can refer to images by description without re-calling the model. This pass also gates descriptions by audience and adds image→threat scoring to `crisis-signals.js`, wires image inspection into the `view_image` tool, and adds injection guards on stored descriptions [@vision-js].
+`describeAsset()` calls a vision-capable model to produce a semantic description of an image, then caches the result on the asset metadata forever [@vision-js]. The description is never regenerated — once set, the Familiar has immediate access to "what this image looks like" without calling the model again.
+
+**Capability-aware connection selection**: `resolveVisionConnection(settings)` picks among the ward's assigned vision connection, the primary connection, and any other available connection, checking each for actual vision capability. Unlike the plain `connectionForFeature`, only connections that can actually see are candidates — there is no use describing an image to a blind connection [@vision-js].
+
+**Injection safety**: The description prompt explicitly frames text inside an image as external data to be read, never executed, protecting against prompt injection through text in image content. The resulting description is sanitized through `injection-guard` before caching [@vision-js].
+
+**Fire-and-forget triggering**: When the chat path emits a stand-in for an undescribed asset (via `materializeAttachments`), the system fires `describeAsset()` as a background task from `server.js` so the description lands asynchronously without blocking the turn [@vision-js]. Memorization also triggers descriptions for images in session memories.
+
+**Stand-in evolution**: Once a description is cached, `buildStandin()` uses it instead of a generic `[image]` placeholder, so the Familiar's references become specific ("a sunset over water") and traverse descriptions without needing the model to re-see the bytes.
+
+## Re-examining images (view_image tool)
+
+The `view_image` tool (@§10) lets the Familiar ask to look at an image again during a turn, even after initial description caching. The tool executor validates the image id and checks audience gating (`discordReadAudiences`), then stashes the pending image on `toolCtx._pendingImages`.
+
+`drainPendingImages()` (in `media.js`, not `vision.js`) runs after the tool round completes in both the non-streaming loop (`runToolCallLoop` in cerebellum) and the streaming loop in `server.js` [@cerebellum-js]. It builds a user-role message carrying the image data-URLs and clears the stash. This architecture avoids the static import cycle between cerebellum and vision [@media-js, @vision-js].
+
+The tool is advertised (included in `composeActiveTools`) only when the turn is vision-capable, checked via `resolveVisionCapable` on the request connection [@vision-js].
+
+## Picture→node linking
+
+Images can be linked to knowledge graph nodes via `addAssetLink()` and `unlink_image_from_node()`, recording which entity or concept an image depicts [@media-js]. The link lives as an embodiment-local annotation on the asset metadata — bytes stay local, no write to the Phylactery graph.
+
+Each link records `{nodeId, label, kind, by}`, deduplicated by `nodeId` per image. The link `label` is the user-facing name of the concept ("Milkyway", "Orion"). `assetsForNode(nodeId)` retrieves all images linked to a given node.
+
+**Ward-only linking**: The tools `link_image_to_node` and `unlink_image_from_node` are refused when `discordReadAudiences(ctx) !== undefined`, restricting node association to the ward only — villagers cannot create semantic links [@media-js].
+
+**Stand-in projection**: The picture-to-node semantic is expressed in the stand-in text itself. `buildStandin()` appends link labels inline: `[image sunset: a warm orange sunset over water — of Milkyway — shared by my human]`. The Familiar thus reads which concept each image depicts as a matter of course, without needing a separate graph query [@media-js].
+
+**Honest scope**: The system provides semantic continuity (what the image is, and which concept it depicts) but does not build embedding stacks or pixel-level recognition — the semantic link is authoritively human- or Familiar-authored, not inferred [@media-js].
+
+## Memorization with images (foldImageStandins)
+
+When an image-only turn (empty text, one or more attachments) is memorized, `foldImageStandins()` in memorization.js ensures the images themselves land in the slice transcript as memorable content [@media-js, @memorization-js].
+
+The function first describes any undescribed assets using dynamic `import('./vision.js')` at call time — keeping `vision.js` out of the static memorization↔cerebellum import cycle, which would otherwise deepen an existing circular dependency. Memorization already imports `readSettingsSync` from cerebellum; cerebellum imports `pruneConsentPending` from memorization. Adding a static vision import to either would create a three-way cycle, so dynamic import defers the import until the moment a description is needed [@cerebellum-js, @memorization-js].
+
+Once descriptions are in place, image stand-ins are folded into the transcript so the image becomes memorable through its textual description and picture-to-node links.
+
+## Module dependencies and import cycles
+
+The implementation carefully manages circular dependencies:
+
+- `vision.js` → `cerebellum.js` (for `connectionForFeature`, `primaryConnectionFrom`), `media.js`, `llm-call`, `macros`, `injection-guard`
+- `cerebellum.js` → `media.js` (for `getAssetMeta`, `addAssetLink`, `removeAssetLink`, `drainPendingImages`) — NOT `vision.js`
+- `memorization.js` → `vision.js` only via dynamic import at call time [@memorization-js]
+- `drainPendingImages()` lives in `media.js` (not `vision.js`) precisely so both tool loops can reach it without cerebellum importing vision [@media-js]
+
+This separation ensures no static cycles while keeping vision machinery available where needed.
+
+## Planned future work
 
 **Pass 3** (not yet shipped): Discord image ingest — when a villager sends an image via Discord, the system fetches the image from `proxy_url`, resizes it to cap, applies audience/provenance stamping, records an observe-path ref, and materializes it in `callChatRaw()` [@vision-js].
 
