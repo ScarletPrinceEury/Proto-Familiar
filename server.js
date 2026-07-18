@@ -148,7 +148,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset } from './vision.js';
+import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, scoreImageDescriptionThreat } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -517,6 +517,20 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         describeAsset(id, settingsForVision)
           .then(r => { if (r?.ok !== false) console.log(`[vision] described ${id.slice(0, 8)} in the background`); })
           .catch(() => {});
+      }
+      // Image→threat scoring (§15.1, ward-signed): the ward's OWN images shared
+      // THIS turn can raise the tier (full weight, raise-only). Fire-and-forget
+      // — the description is scored via the ward's own detector; never blocks
+      // the turn, never lowers the tier, never fires for a villager's image.
+      // Only on the ward's own live turn.
+      if (liveTurn && audienceTag === 'ward-private' && visionThreatScoringOn()) {
+        const turnImageIds = (Array.isArray(lastUser?.attachments) ? lastUser.attachments : [])
+          .map(a => a?.id).filter(Boolean);
+        for (const id of turnImageIds) {
+          scoreImageDescriptionThreat(id, settingsForVision)
+            .then(r => { if (r?.raised) console.log(`[vision] image ${String(id).slice(0, 8)} raised threat +${r.level} [${(r.signals ?? []).map(s => s.id).join(',')}]`); })
+            .catch(err => console.error('[vision] image threat scoring failed:', err?.message ?? err));
+        }
       }
     } catch (err) {
       console.error('[vision] materialization failed (passing messages through):', err?.message ?? err);
@@ -1453,6 +1467,17 @@ app.get('/api/discord-writes', async (_req, res) => {
 function visionDisabled() {
   if (process.env.PROTO_FAMILIAR_VISION_DISABLED === '1') return true;
   try { return readSettingsSync()?.visionEnabled === false; } catch { return false; }
+}
+
+// Image→threat scoring gate (§15.1, ward-signed). ON by default (the ward opted
+// in) whenever vision is on; its own hard off-switch so it can be silenced
+// without disabling sight. Follows the threat detector's own off-switch too —
+// if the ward silenced threat entirely, images don't reopen it.
+function visionThreatScoringOn() {
+  if (process.env.PROTO_FAMILIAR_VISION_THREAT_DISABLED === '1') return false;
+  if (process.env.PROTO_FAMILIAR_THREAT_DISABLED === '1') return false;
+  if (visionDisabled()) return false;
+  try { return readSettingsSync()?.visionThreatScoring !== false; } catch { return true; }
 }
 
 app.post('/api/media', express.raw({ type: 'image/*', limit: '12mb' }), async (req, res) => {

@@ -30,6 +30,8 @@ import { callProviderChat } from './llm-call.js';
 import { connectionForFeature, primaryConnectionFrom } from './cerebellum.js';
 import { substituteMacros } from './macros.js';
 import { sanitizeExternal } from './injection-guard.js';
+import { scoreMessage } from './crisis-signals.js';
+import { recordThreat } from './threat-tracker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CAP_FILE = path.join(__dirname, 'tomes', '.vision-capability.json');
@@ -311,5 +313,55 @@ export async function describeAsset(idOrSlug, settings = {}, { fetchFn = fetch }
     return updated;   // the updated meta (or {ok:false} from the store)
   } catch (err) {
     return { ok: false, reason: `describe-failed: ${err?.message ?? err}` };
+  }
+}
+
+// ── Image → threat scoring (§15.1) — WARD-SIGNED (safety-critical) ─
+//
+// The ward signed off on a shared image being able to move the threat tier.
+// Decisions recorded (their words):
+//   • FULL weighting — an image-derived distress signal counts the same as one
+//     the ward typed (no damping). REVISIT for people who enjoy fictional
+//     violence healthily (horror fans) — full weighting will false-positive on
+//     horror imagery, and this wants a context-aware exception later.
+//   • RAISE-ONLY — an image can only raise the tier, never lower it. REVISIT
+//     for more context-aware picture interpretation (a genuinely calming image
+//     de-escalating) once that reading is trustworthy.
+//
+// This does NOT change crisis-signals.js or threat-tracker.js: it reuses the
+// ward's own scorer on the image's DESCRIPTION (the transcribed text + what I
+// saw), never the raw model prose, and feeds the delta through the existing
+// recordThreat with source:'vision'. Only fires on the ward's OWN image (a
+// villager's shared bytes never move the ward's safety state). Gated by the
+// caller to the ward's own turn; `scoreFn`/`recordFn` are injectable for tests.
+export async function scoreImageDescriptionThreat(idOrSlug, settings = {}, {
+  fetchFn = fetch, scoreFn = scoreMessage, recordFn = recordThreat,
+} = {}) {
+  try {
+    const meta = await getAssetMeta(idOrSlug);
+    if (!meta) return { ok: false, reason: 'not-found' };
+    // Only the ward's OWN image moves the ward's threat tier — never a
+    // villager's shared bytes (the no-covert-safety-move discipline).
+    if (meta.audienceTag !== 'ward-private') return { ok: false, reason: 'not-ward-image' };
+
+    // Score the DESCRIPTION — so describe it once if it isn't yet (cached).
+    let text = meta.description?.text;
+    if (!text) {
+      const r = await describeAsset(meta.id, settings, { fetchFn });
+      text = r?.description?.text;
+    }
+    if (!text) return { ok: false, reason: 'no-description' };
+
+    const { level, signals } = scoreFn(text) || { level: 0, signals: [] };
+    // RAISE-ONLY (ward decision): a negative/damping score from an image never
+    // lowers the tier. Only a genuine distress signal in what the ward shared
+    // raises it. (Revisit for de-escalation once picture reading is richer.)
+    if (level > 0) {
+      await recordFn({ delta: level, source: 'vision', signals });
+      return { ok: true, level, signals, raised: true };
+    }
+    return { ok: true, level: level || 0, raised: false };
+  } catch (err) {
+    return { ok: false, reason: `score-failed: ${err?.message ?? err}` };
   }
 }

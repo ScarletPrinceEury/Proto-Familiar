@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {
   materializeAttachments, resolveVisionCapable, findConnection,
   isModalityError, DEFAULT_MAX_LIVE_IMAGES,
-  describeAsset, resolveVisionConnection,
+  describeAsset, resolveVisionConnection, scoreImageDescriptionThreat,
 } from '../vision.js';
-import { saveAsset, deleteAsset, getAssetMeta } from '../media.js';
+import { saveAsset, deleteAsset, getAssetMeta, setAssetDescription } from '../media.js';
 
 function gif(w, h) {
   const b = Buffer.from('GIF89a\x00\x00\x00\x00\x00\x00\x00', 'binary');
@@ -194,4 +194,48 @@ test('describeAsset returns a reason (not a throw) when no connection can see', 
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'no-vision-connection');
   assert.equal((await getAssetMeta(m.id)).description, null);   // stays null (retry later)
+});
+
+// ── Image → threat scoring (§15.1, ward-signed) ───────────────────
+
+test('scoreImageDescriptionThreat: raises the tier on a distressing description (full weight)', async () => {
+  const m = await mk('a hard image');
+  await setAssetDescription(m.id, { text: 'a note with a distress message' });
+  const recorded = [];
+  const r = await scoreImageDescriptionThreat(m.id, {}, {
+    scoreFn: () => ({ level: 6, signals: [{ id: 'crisis' }] }),   // pretend the description scored high
+    recordFn: async (args) => { recorded.push(args); return { ok: true }; },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.raised, true);
+  assert.equal(r.level, 6);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].delta, 6);          // FULL weight (no damping)
+  assert.equal(recorded[0].source, 'vision');
+});
+
+test('scoreImageDescriptionThreat: RAISE-ONLY — a negative score never lowers the tier', async () => {
+  const m = await mk('a calm image');
+  await setAssetDescription(m.id, { text: 'a peaceful garden' });
+  const recorded = [];
+  const r = await scoreImageDescriptionThreat(m.id, {}, {
+    scoreFn: () => ({ level: -3, signals: [] }),   // a de-escalating score
+    recordFn: async (args) => { recorded.push(args); return { ok: true }; },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.raised, false);
+  assert.equal(recorded.length, 0);   // never recorded — images can only raise
+});
+
+test('scoreImageDescriptionThreat: a villager image never moves the ward tier', async () => {
+  const m = await mk('villager pic', { audienceTag: 'room-7', origin: { surface: 'discord', speaker: 'Sam' } });
+  await setAssetDescription(m.id, { text: 'a distress message' });
+  const recorded = [];
+  const r = await scoreImageDescriptionThreat(m.id, {}, {
+    scoreFn: () => ({ level: 9, signals: [] }),
+    recordFn: async (args) => { recorded.push(args); return { ok: true }; },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not-ward-image');
+  assert.equal(recorded.length, 0);
 });

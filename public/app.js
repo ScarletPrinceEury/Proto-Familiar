@@ -359,6 +359,9 @@ const state = {
   // ride live per request (older ones degrade to text stand-ins server-side).
   visionEnabled: true,
   visionMaxLiveImages: 4,
+  // Image→threat scoring (ward-signed, §15.1): a distressing image I share can
+  // raise my Familiar's concern, same as if I'd typed it. Raise-only for now.
+  visionThreatScoring: true,
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -409,7 +412,7 @@ const SERVER_SYNCED_KEYS = [
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
-  'visionEnabled', 'visionMaxLiveImages',
+  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -2971,6 +2974,7 @@ function readSettingsFromUI() {
     state.visionEnabled = $('vision-enabled-toggle').checked;
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
+  if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -3123,6 +3127,7 @@ function writeSettingsToUI() {
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
+  if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('elapsed-stamp-hours')) setIfNotFocused($('elapsed-stamp-hours'), 'value', state.elapsedStampHours ?? 24);
@@ -4341,7 +4346,7 @@ function init() {
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
-    'weather-toggle', 'vision-enabled-toggle',
+    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',

@@ -624,18 +624,32 @@ the data-flow note at the materializer seam, the endpoints).
 
 ## 15. Ward decisions (ANSWERED — recorded during Pass 1 kickoff)
 
-1. **Threat signals from images — WARD CHOSE: score descriptions too.** The
-   ward wants a shared image to be able to move the threat tier (the spec's
-   own default was NO scoring). This is a **safety-critical change to
-   `crisis-signals.js` / the scoring path** and does NOT ride Pass 1 — it
-   depends on descriptions existing (Pass 2). When Pass 2 lands `describeAsset`,
-   the exact mechanism ships as its own carefully-designed, separately-confirmed
-   change: which text feeds `scoreMessage` (the description, not the model's
-   raw alarmed prose), how it's weighted, and the guard against a describer's
-   clinical wording inflating the tier on an innocuous photo. The ward has
-   signed off on the *direction*; the *specific behavior* (weights, path) gets
-   confirmed before it ships, per CLAUDE.md's safety-sign-off rule. Until then
-   §8's default (typed text only) holds.
+1. **Threat signals from images — SHIPPED (0.9.2, ward-signed).** A shared
+   image can now move the threat tier. The confirmed mechanism
+   (`scoreImageDescriptionThreat` in `vision.js`): score the image's
+   **description** (the transcribed text + what the model saw — never the raw
+   model prose) with the ward's OWN `scoreMessage`, and feed the delta through
+   the existing `recordThreat` with `source:'vision'`. `crisis-signals.js` and
+   `threat-tracker.js` are unchanged — this is orchestration around them.
+   - **FULL weighting** (ward's word): an image-derived signal counts the same
+     as one the ward typed (`delta = level`, no damping).
+   - **RAISE-ONLY** (ward's word): `level > 0` only; an image never lowers the
+     tier.
+   - **Ward images only**: `audienceTag === 'ward-private'` — a villager's
+     shared bytes never move the ward's safety state.
+   - Fires fire-and-forget on the ward's own live turn, per image shared that
+     turn; the description is generated once (cached) if it isn't yet. Gated by
+     `visionThreatScoring` (default ON) + `PROTO_FAMILIAR_VISION_THREAT_DISABLED=1`,
+     and it also stands down under the threat detector's own off-switch.
+
+   **Two ward-flagged revisits (do NOT lose these):**
+   - **Full weighting → context for fictional violence.** Full weight will
+     false-positive for people who enjoy fictional violence healthily (horror
+     fans, dark-art lovers) — a horror still shouldn't read as a crisis. Revisit
+     with a context-aware exception (the off-switch is the interim escape hatch).
+   - **Raise-only → context-aware de-escalation.** Eventually a genuinely
+     calming image should be able to lower a raised tier — deferred until
+     picture interpretation is context-aware enough to trust that reading.
 2. **Villager images — WARD CHOSE: ingest with provenance (spec default, §5).**
    A registered villager's images are stored as room context, stamped with the
    room's `audienceTag` + `origin.speaker`; strangers' bytes are never stored.
