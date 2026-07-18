@@ -4792,7 +4792,6 @@ async function handleSignal(signal) {
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
-  try { import('./zai-vision.js').then(m => m.shutdownZaiVision()).catch(() => {}); } catch { /* never spawned */ }
   // Give the close handshakes a tiny window, then exit.
   setTimeout(() => process.exit(0), 250).unref();
 }

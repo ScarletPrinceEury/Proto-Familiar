@@ -35,21 +35,6 @@ test("resolveVisionCapable: 'yes'/'no' are the ward's word; auto is optimistic",
   assert.equal(await resolveVisionCapable({ provider: 'p', model: 'also-never' }, {}), true);
 });
 
-test('a z.ai-coding connection is NOT live-capable (chat cannot see) but IS chosen for describe', async () => {
-  // Live capability: coding chat models can't take image_url → false, so the
-  // materializer stands images in rather than sending them live.
-  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', visionCapable: 'yes' }, {}), false);
-  // Describe: resolveVisionConnection still picks the coding connection (its
-  // describe rides the coding-plan Vision MCP allotment).
-  const settings = {
-    connections: [{ id: 'coding', provider: 'zai-coding', model: 'glm-4.7', apiKey: 'k' }],
-    featureConnections: { vision: 'coding' },
-    primaryConnectionId: 'coding',
-  };
-  const conn = await resolveVisionConnection(settings);
-  assert.equal(conn?.provider, 'zai-coding');
-});
-
 test('findConnection matches by provider+model', () => {
   const settings = { connections: [
     { provider: 'nanogpt', model: 'a', visionCapable: 'no' },
