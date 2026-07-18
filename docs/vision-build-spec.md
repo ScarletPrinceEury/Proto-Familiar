@@ -11,42 +11,9 @@ can land later as new media *kinds* on the same spine, not as a rewrite.
 Those are out of scope (§14), though §11 pins the invariants a future
 continuous-sensing feature must honor so nothing built here has to be undone.
 
-Status: **VISION MILESTONE COMPLETE.** Pass 1 (0.9.0), Pass 2 (0.9.1),
-image→threat scoring (0.9.2), the Pass 2 tail — composer node-tagging +
-description→node graduation (0.9.3), and **Pass 3 — Discord image ingest
-(0.9.4)** are all shipped. Vision owned this MINOR (one milestone = one minor;
-Pass 1 landing was the `0.X.0`). Remaining are the two ward-flagged threat-
-scoring *revisits* (§15.1: horror/fiction context exception; context-aware
-de-escalation) — future work, deliberately deferred, not part of the main spec.
-
-**Pass 2 as shipped:** `describeAsset` (look-once-keep-forever, capability-aware
-`resolveVisionConnection`, injection-guard on the result before caching, fired
-on-demand + fire-and-forget from the chat path when a stand-in is emitted, and
-from memorization); `contentWithStandins` folded into memorization so an image-
-carrying turn is memorable; `view_image` + its capability/audience gates and the
-`drainPendingImages` same-turn recompose in both tool loops; and the **picture→
-node linking** (§6.5: `addAssetLink`/`removeAssetLink`/`assetsForNode`,
-`link_image_to_node`/`unlink_image_from_node` tools, the stand-in naming linked
-nodes). **The ward-side composer tag control (0.9.3)** — a 🏷 on each pending
-thumbnail opens a graph-node search (`GET /api/entity/graph/search`) and
-`POST /api/media/:id/link`s the chosen node; the chip shows the tag. **Description→
-node graduation (0.9.3)** — `graduateImageDescriptionToNode` appends a dated
-observation to the linked node's description (via the canonical `updateGraphNode`,
-content-deduped, ward-images only), fired from the link tool, the link endpoint,
-and describeAsset. Pass 2 is now complete bar the safety item below (shipped in
-0.9.2).
-
-**Pass 1 deviation worth recording — the capability probe (§3.1).** The spec
-described a synthetic one-time probe image. As built, an uncached `auto`
-connection is instead treated as **optimistically capable** and the *real turn
-serves as the probe*: a modality rejection triggers the mid-turn hard fallback
-(retry with stand-ins, cache `no`); a successful live-image turn caches `yes`.
-This is strictly better against the acceptance criteria — a synthetic probe
-would add an LLM call on the first image, breaking "**zero** additional LLM
-calls beyond the turn." No bundled test image ships.
-
-**Ward decision recorded (§15.1) — image→threat scoring is a YES**, landing in
-Pass 2 as its own confirmed safety-critical change (not Pass 1).
+Status: **spec — not yet built.** Target milestone: vision owns the next MINOR
+(one milestone = one minor; Pass 1 landing is the `0.X.0`, later passes bump
+patch).
 
 ---
 
@@ -393,64 +360,6 @@ assembly.
   a machine timestamp rendered by the existing `relative-time.js`/formatting
   helpers. The id in the stand-in is what makes `view_image` operable (§10).
 
-## 6.5. Picture → node linking (Pass 2 — ward-requested)
-
-An image can be **linked to graph nodes** it depicts — a photo of Milkyway the
-cat is tied to the `milkyway-x7` node — so the Familiar gains continuity across
-everything it has seen of a person, pet, place, or thing.
-
-**Honest scope first.** This is **not** pixel-level recognition (no vision
-embeddings, no "is this the same cat" from image data — we don't run that
-stack). It is **semantic continuity**: the *link* + the *description* let the
-Familiar reason from what it has actually seen and been told, which is the
-achievable and genuinely useful version.
-
-**The data model.** The asset meta (§2) gains an optional field:
-
-```json
-"links": [ { "nodeId": "milkyway-x7", "label": "Milkyway", "kind": "pet", "by": "ward|familiar" } ]
-```
-
-- `nodeId` references a Phylactery graph node. The **bytes stay local** to the
-  embodiment (§7 is undisturbed); the link is an embodiment-local annotation on
-  the asset meta, not a write into Phylactery's graph. (The *description*
-  graduating to the node — below — is the canonical, cross-embodiment trace.)
-- `media.js` gains `addAssetLink(id, {nodeId,label,kind,by})` /
-  `removeAssetLink(id, nodeId)` — atomic meta rewrites, deduped by `nodeId`,
-  never throwing.
-
-**Two tag paths (both required — discoverable AND operable):**
-
-1. **My human tags it** — a control on the composer thumbnail that searches the
-   graph (`search_graph_nodes`) and attaches the chosen node. One click, at
-   send time or after.
-2. **The Familiar tags it** — a `link_image_to_node(image_id, node_id)` chat
-   tool (and `unlink_image_from_node`). The node id is operable because it
-   **rides in on graph-recall results** — the same discipline as `mem_delete`
-   riding on recall ids. The describe pass (§6) MAY propose a link in its output
-   ("this looks like Milkyway — a cat my human has mentioned") which the
-   Familiar then confirms with the tool; it never fabricates a node id.
-
-**Where the link shows up (operability + legibility):**
-
-- **The stand-in names the node(s):** `[image milkyway-sill-x7: a grey tabby on
-  the windowsill — Milkyway (my human's cat), shared by my human, 7 Jul]`. Code-
-  built from the link labels on the meta; the model never composes it.
-- **Recall surfacing:** when a linked node is surfaced in graph context, the
-  Familiar knows images of it exist and can `view_image` them (§10) — so "show
-  me what Milkyway looks like" resolves to an image it can actually look at.
-- **Graduation:** the description graduates into Phylactery as a fact **attached
-  to the linked node** ("Milkyway is a grey tabby, favours the windowsill") —
-  routed through the canonical MCP like every other memory/graph write, never a
-  direct write. This is what makes recognition survive across embodiments and
-  outlast the local bytes.
-
-**Gating.** A link is only as visible as the asset: on a gated turn the
-audience gate (§3 step 1) still fail-closes, so a villager can never learn which
-ward-private nodes an image is tied to. Linking is a ward/Familiar capability;
-villager-shared images can carry `origin.speaker` provenance but the ward owns
-node associations.
-
 ## 7. Memory & continuity
 
 - **Memorization:** a small helper (`contentWithStandins(message)`, in
@@ -586,20 +495,10 @@ extension of this spine, honoring:
    off-switch. *This is the milestone `0.X.0` bump.*
 2. **Pass 2 — sight for everything else:** `describeAsset` + the `vision`
    feature key + injection-guard pass; `contentWithStandins` into
-   memorization + the loop prompts; `view_image` + its gates; **picture→node
-   linking (§6.5)**; and the ward-signed **image→threat scoring** (§8/§15.1 —
-   exact mechanism confirmed with the ward before it ships). Patch bumps.
-3. **Pass 3 — Discord (SHIPPED 0.9.4):** arrival-time ingest
-   (`ingestDiscordImages` in `discord-gateway.js`) via the media proxy's own
-   resize params (`discordResizeUrl`, long edge 1568), caps
-   (`MAX_IMAGES_PER_MESSAGE` + `discordMediaPerHour`, default 20, per-location
-   hourly), audience/provenance stamping (room `audienceTag` + `origin.speaker`;
-   ward always, registered villager yes, stranger never), observe-path
-   references (`observeMessage` ingests too), and the materializer wired into
-   `handleTurn`'s assembled `apiMessages` (once, riding every tool round) with
-   the room's visible-audience set threaded in fail-closed. A failed fetch
-   degrades to an `[image failed to load]` note, never blocks the turn. Both
-   history `.map()` blocks preserve `attachments` beside the string.
+   memorization + the loop prompts; `view_image` + its gates. Patch bumps.
+3. **Pass 3 — Discord:** arrival-time ingest via `proxy_url` resize, caps,
+   audience/provenance stamping, observe-path references, materializer wiring
+   in `callChatRaw` assembly. Patch bump.
 
 Each pass updates `docs/architecture.md` in the same commit (new module rows,
 the data-flow note at the materializer seam, the endpoints).
@@ -638,41 +537,14 @@ the data-flow note at the materializer seam, the endpoints).
 - Sending images *outward* (outbox/relay attachments) — text-only channels
   stay text-only this milestone.
 
-## 15. Ward decisions (ANSWERED — recorded during Pass 1 kickoff)
+## 15. Ward decisions (open — answer before or during Pass 1)
 
-1. **Threat signals from images — SHIPPED (0.9.2, ward-signed).** A shared
-   image can now move the threat tier. The confirmed mechanism
-   (`scoreImageDescriptionThreat` in `vision.js`): score the image's
-   **description** (the transcribed text + what the model saw — never the raw
-   model prose) with the ward's OWN `scoreMessage`, and feed the delta through
-   the existing `recordThreat` with `source:'vision'`. `crisis-signals.js` and
-   `threat-tracker.js` are unchanged — this is orchestration around them.
-   - **FULL weighting** (ward's word): an image-derived signal counts the same
-     as one the ward typed (`delta = level`, no damping).
-   - **RAISE-ONLY** (ward's word): `level > 0` only; an image never lowers the
-     tier.
-   - **Ward images only**: `audienceTag === 'ward-private'` — a villager's
-     shared bytes never move the ward's safety state.
-   - Fires fire-and-forget on the ward's own live turn, per image shared that
-     turn; the description is generated once (cached) if it isn't yet. Gated by
-     `visionThreatScoring` (default ON) + `PROTO_FAMILIAR_VISION_THREAT_DISABLED=1`,
-     and it also stands down under the threat detector's own off-switch.
-
-   **Two ward-flagged revisits (do NOT lose these):**
-   - **Full weighting → context for fictional violence.** Full weight will
-     false-positive for people who enjoy fictional violence healthily (horror
-     fans, dark-art lovers) — a horror still shouldn't read as a crisis. Revisit
-     with a context-aware exception (the off-switch is the interim escape hatch).
-   - **Raise-only → context-aware de-escalation.** Eventually a genuinely
-     calming image should be able to lower a raised tier — deferred until
-     picture interpretation is context-aware enough to trust that reading.
-2. **Villager images — WARD CHOSE: ingest with provenance (spec default, §5).**
-   A registered villager's images are stored as room context, stamped with the
-   room's `audienceTag` + `origin.speaker`; strangers' bytes are never stored.
-   Lands in Pass 3 (Discord).
-3. **Retention — WARD CHOSE: keep all + manual delete (spec default, §7).**
-   Nothing auto-deletes in v1; assets are content-addressed and inspectable via
-   `GET/DELETE /api/media`. Orphan sweep deferred.
-4. **`visionEnabled` default — WARD CHOSE: ON, inert until used (spec default,
-   §9).** Nothing happens until my human sends an image; the composer shows the
-   attach affordance, no background loop.
+1. **Threat signals from images:** default in this spec is NO scoring of image
+   content or descriptions (§8). Sign off on that default — or spec the
+   alternative as its own safety-critical change.
+2. **Villager images by default:** ingest-with-provenance as specced (§5), or
+   ward-DM-only until trust is established?
+3. **Retention:** unlimited keep + manual delete (specced), or a size-capped
+   store with oldest-orphan eviction?
+4. **`visionEnabled` default ON** (inert until used) — confirm, or ship
+   default OFF like the canonical-writer loops.

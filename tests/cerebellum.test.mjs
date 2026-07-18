@@ -222,16 +222,14 @@ test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => 
 
 test('composeActiveTools appends custom tool objects after the built-ins', () => {
   const custom = [{ type: 'function', function: { name: 'my_tool', description: 'x', parameters: {} } }];
-  // Opt in the web tools AND calendar write-back so the full built-in set is
-  // present; visionCapable so the capability-gated view_image is advertised too.
+  // Opt in the web tools AND calendar write-back so the full built-in set is present.
   const on = { webSearchEnabled: true, gcalWriteEnabled: true, gcalWriteCommand: 'x' };
-  const opts = { visionCapable: true };
-  const tools = composeActiveTools(custom, on, opts);
+  const tools = composeActiveTools(custom, on);
   assert.equal(tools.length, BUILTIN_TOOLS.length + 1);
   assert.equal(tools.at(-1).function.name, 'my_tool');
   // Non-arrays and junk entries are ignored, never thrown on.
-  assert.equal(composeActiveTools(undefined, on, opts).length, BUILTIN_TOOLS.length);
-  assert.equal(composeActiveTools([null, 'junk'], on, opts).length, BUILTIN_TOOLS.length);
+  assert.equal(composeActiveTools(undefined, on).length, BUILTIN_TOOLS.length);
+  assert.equal(composeActiveTools([null, 'junk'], on).length, BUILTIN_TOOLS.length);
 });
 
 test('composeActiveTools gates calendar write-back behind the opt-in', () => {

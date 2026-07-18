@@ -147,8 +147,6 @@ import {
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
-import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -468,75 +466,6 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     }
   }
 
-  // ── Vision materialization (vision build spec §3) ─────────────────
-  // The ONE seam where media references become provider content-parts. Applied
-  // once to the fully-assembled message array, so it rides every tool round
-  // automatically (the loop carries these messages forward). A request with no
-  // attachments is returned identical (materializeAttachments short-circuits),
-  // so a non-image turn is byte-for-byte what it is today. Degrades to
-  // stand-ins on a non-vision connection or over-budget; never throws into the
-  // chat path. Ward turns don't gate (audienceVisible null); a gated turn
-  // fail-closes on the room's visible-audience set.
-  const preVisionMessages = enrichedMessages;   // kept for the mid-turn stand-in retry
-  const visionGate = audienceTag && audienceTag !== 'ward-private' ? audienceVisible : null;
-  let imagesLiveThisTurn = 0;
-  let visionFellBack = false;
-  let visionCapableTurn = false;   // does THIS turn's connection see? (gates view_image)
-  // Re-materialize forcing stand-ins — the mid-turn hard fallback when a
-  // provider rejects the image modality despite an optimistic 'capable' verdict.
-  const fallbackToStandins = async () => {
-    try {
-      const s = readSettingsSync() || {};
-      const conn = findConnection(s, { provider, model }) || { provider, model };
-      const mat = await materializeAttachments(preVisionMessages, {
-        connection: { ...conn, visionCapable: 'no' }, settings: s, visibleAudiences: visionGate,
-      });
-      return mat.messages;
-    } catch { return preVisionMessages; }
-  };
-  if (!visionDisabled()) {
-    try {
-      const settingsForVision = readSettingsSync() || {};
-      const connForVision = findConnection(settingsForVision, { provider, model })
-        || { provider, model, visionCapable: 'auto' };
-      visionCapableTurn = await resolveVisionCapable(connForVision, settingsForVision);
-      const mat = await materializeAttachments(enrichedMessages, {
-        connection: connForVision,
-        settings: settingsForVision,
-        visibleAudiences: visionGate,
-      });
-      enrichedMessages = mat.messages;
-      imagesLiveThisTurn = mat.imagesLive;
-      if (mat.imagesLive || mat.imagesStoodIn) {
-        console.log(`[vision] materialized ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s)`);
-      }
-      // Fire-and-forget describe (§6): an undescribed asset stood in as text
-      // gets one look, once, so NEXT time it carries real words. Never blocks
-      // this turn; skips when there's no capable connection (stays null).
-      for (const id of (mat.stoodInUndescribed ?? [])) {
-        describeAsset(id, settingsForVision)
-          .then(r => { if (r?.ok !== false) console.log(`[vision] described ${id.slice(0, 8)} in the background`); })
-          .catch(() => {});
-      }
-      // Image→threat scoring (§15.1, ward-signed): the ward's OWN images shared
-      // THIS turn can raise the tier (full weight, raise-only). Fire-and-forget
-      // — the description is scored via the ward's own detector; never blocks
-      // the turn, never lowers the tier, never fires for a villager's image.
-      // Only on the ward's own live turn.
-      if (liveTurn && audienceTag === 'ward-private' && visionThreatScoringOn()) {
-        const turnImageIds = (Array.isArray(lastUser?.attachments) ? lastUser.attachments : [])
-          .map(a => a?.id).filter(Boolean);
-        for (const id of turnImageIds) {
-          scoreImageDescriptionThreat(id, settingsForVision)
-            .then(r => { if (r?.raised) console.log(`[vision] image ${String(id).slice(0, 8)} raised threat +${r.level} [${(r.signals ?? []).map(s => s.id).join(',')}]`); })
-            .catch(err => console.error('[vision] image threat scoring failed:', err?.message ?? err));
-        }
-      }
-    } catch (err) {
-      console.error('[vision] materialization failed (passing messages through):', err?.message ?? err);
-    }
-  }
-
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
@@ -563,10 +492,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         sticky: stickyModulesFor(sessionInfo?.sessionId),
       });
       surfacing = { selection, used: new Set() };
-      activeTools = composeActiveTools(customTools, sset, { modules: selection, visionCapable: visionCapableTurn });
+      activeTools = composeActiveTools(customTools, sset, { modules: selection });
       console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised`);
     } else {
-      activeTools = composeActiveTools(customTools, readSettingsSync(), { visionCapable: visionCapableTurn });
+      activeTools = composeActiveTools(customTools);
     }
     if (activeTools.length > 0) {
       payload.tools = activeTools;
@@ -600,7 +529,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const recomposeTools = () => {
       if (!surfacing || !toolCtx._requestedModules?.size) return undefined;
       const union = new Set([...surfacing.selection, ...toolCtx._requestedModules]);
-      return composeActiveTools(customTools, readSettingsSync(), { modules: union, visionCapable: visionCapableTurn });
+      return composeActiveTools(customTools, readSettingsSync(), { modules: union });
     };
     const tickSurfacing = (toolNamesUsed = []) => {
       if (!surfacing) return;
@@ -656,7 +585,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // ── Non-streaming loop ─────────────────────────────────────────
     if (!stream) {
       try {
-        const runLoop = (baseMessages) => runToolCallLoop({
+        const { data, toolRounds } = await runToolCallLoop({
           getTools: recomposeTools,
           callUpstream: async (msgs, roundTools) => {
             let r;
@@ -689,32 +618,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
               throw e;
             }
           },
-          baseMessages,
+          baseMessages: enrichedMessages,
           timeAnchor,
           toolCtx,
           signal: ac.signal,
         });
-        // Mid-turn hard fallback (§3.1): if the provider rejects the image
-        // modality despite an optimistic 'capable' verdict, retry ONCE with
-        // stand-ins and flip the capability cache — my human's turn still gets
-        // answered (degraded sight), never a dead turn.
-        let loopOutcome;
-        try {
-          loopOutcome = await runLoop(enrichedMessages);
-        } catch (err) {
-          if (!visionFellBack && imagesLiveThisTurn > 0 && isModalityError(err.status, err.body)) {
-            visionFellBack = true;
-            await cacheVisionCapability(provider, model, 'no');
-            console.warn(`[vision] ${provider}:${model} rejected image modality — retried with stand-ins; capability cached 'no'`);
-            loopOutcome = await runLoop(await fallbackToStandins());
-          } else { throw err; }
-        }
-        // The first successful live-image turn records capability (the "probe
-        // once" — the real turn is the probe, no synthetic image needed).
-        if (imagesLiveThisTurn > 0 && !visionFellBack) {
-          cacheVisionCapability(provider, model, 'yes').catch(() => {});
-        }
-        const { data, toolRounds } = loopOutcome;
         tickSurfacing();
     req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
@@ -800,18 +708,6 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const upCt = upstream.headers.get('content-type') || '';
       if (!upstream.ok || upCt.includes('application/json')) {
         const text = await upstream.text();
-        // Mid-turn hard fallback (§3.1): a modality rejection before any SSE
-        // has streamed — rebuild this round's messages as stand-ins, flip the
-        // capability cache, and retry the same round with degraded sight
-        // instead of erroring my human's turn.
-        if (!headersSent && !visionFellBack && imagesLiveThisTurn > 0 && isModalityError(upstream.status, text)) {
-          visionFellBack = true;
-          await cacheVisionCapability(provider, model, 'no');
-          console.warn(`[vision] ${provider}:${model} rejected image modality — retrying stream with stand-ins; capability cached 'no'`);
-          currentMsgs = await fallbackToStandins();
-          round--;   // re-run this round with the stand-in messages
-          continue;
-        }
         if (!headersSent) {
           res.status(upstream.status).setHeader('Content-Type', 'application/json');
           return res.send(text);
@@ -896,9 +792,6 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           ...currentMsgs,
           { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
           ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
-          // view_image (§10): place any images I asked to see again before my
-          // eyes on the next round (same drain helper as the non-streaming loop).
-          ...(await drainPendingImages(toolCtx)),
         ];
         continue;
       }
@@ -908,11 +801,6 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     }
 
     req.off('close', onClientClose);
-    // The first successful live-image stream records capability (the "probe
-    // once" — the real turn is the probe).
-    if (imagesLiveThisTurn > 0 && !visionFellBack) {
-      cacheVisionCapability(provider, model, 'yes').catch(() => {});
-    }
     if (!res.writableEnded) {
       res.write('data: [DONE]\n\n');
       res.end();
@@ -1457,92 +1345,6 @@ app.get('/api/discord-writes', async (_req, res) => {
   } catch {
     res.json([]);
   }
-});
-
-// ── Media (vision build spec §2) ──────────────────────────────────
-// Image bytes ride their OWN raw body parser (like /api/import-logs' json
-// override) so the global 4 MB JSON limit never sees base64 and image bytes
-// never touch JSON.parse. The browser downscales before upload (§4), so a
-// typical payload is well under 1 MB; the 12 MB limit is headroom.
-function visionDisabled() {
-  if (process.env.PROTO_FAMILIAR_VISION_DISABLED === '1') return true;
-  try { return readSettingsSync()?.visionEnabled === false; } catch { return false; }
-}
-
-// Image→threat scoring gate (§15.1, ward-signed). ON by default (the ward opted
-// in) whenever vision is on; its own hard off-switch so it can be silenced
-// without disabling sight. Follows the threat detector's own off-switch too —
-// if the ward silenced threat entirely, images don't reopen it.
-function visionThreatScoringOn() {
-  if (process.env.PROTO_FAMILIAR_VISION_THREAT_DISABLED === '1') return false;
-  if (process.env.PROTO_FAMILIAR_THREAT_DISABLED === '1') return false;
-  if (visionDisabled()) return false;
-  try { return readSettingsSync()?.visionThreatScoring !== false; } catch { return true; }
-}
-
-app.post('/api/media', express.raw({ type: 'image/*', limit: '12mb' }), async (req, res) => {
-  if (visionDisabled()) return res.status(403).json({ error: 'Vision is turned off right now.' });
-  const buffer = req.body;
-  if (!Buffer.isBuffer(buffer) || !buffer.length) {
-    return res.status(400).json({ error: 'No image bytes received (send raw image/* body).' });
-  }
-  const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
-  if (!IMAGE_MIME_EXT[mime]) {
-    return res.status(415).json({ error: `Unsupported image type "${mime || '(none)'}". Allowed: ${Object.keys(IMAGE_MIME_EXT).join(', ')}.` });
-  }
-  const q = req.query || {};
-  const meta = await saveAsset({
-    buffer,
-    mime,
-    label: typeof q.label === 'string' ? q.label : '',
-    audienceTag: 'ward-private',   // web-chat uploads are always the ward's own
-    origin: { surface: 'web', sessionId: typeof q.sessionId === 'string' ? q.sessionId : null, speaker: null },
-  });
-  if (meta?.ok === false) return res.status(400).json({ error: meta.error });
-  res.json(meta);
-});
-
-// Stream bytes for a UI thumbnail (accepts slug or sha). Behind the same
-// loopback/Tailscale gate as every endpoint.
-app.get('/api/media/:id', async (req, res) => {
-  const got = await getAsset(req.params.id);
-  if (got?.ok === false) return res.status(404).json({ error: 'Image not found.' });
-  res.setHeader('Content-Type', got.meta.mime);
-  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable'); // content-addressed → safe forever
-  res.send(got.buffer);
-});
-
-// Ward-facing inventory + removal.
-app.get('/api/media', async (req, res) => {
-  try {
-    const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 100));
-    res.json(await listAssets({ limit }));
-  } catch { res.json([]); }
-});
-
-app.delete('/api/media/:id', async (req, res) => {
-  const r = await deleteAsset(req.params.id);
-  if (r?.ok === false) return res.status(404).json(r);
-  res.json(r);
-});
-
-// Picture→node linking (§6.5): the ward tags an image to a graph node it
-// depicts (a photo of Milkyway → the Milkyway node). Ward-facing (behind the
-// loopback/Tailscale gate); the graph-node search endpoint above supplies the
-// node id. Graduates the description onto the node when both exist.
-app.post('/api/media/:id/link', async (req, res) => {
-  const { nodeId, label, kind } = req.body || {};
-  const r = await addAssetLink(req.params.id, { nodeId, label, kind, by: 'ward' });
-  if (r?.ok === false) return res.status(400).json(r);
-  graduateImageDescriptionToNode(req.params.id, String(nodeId || '').trim())
-    .catch(err => console.error('[vision] node graduation failed:', err?.message ?? err));
-  res.json(r);
-});
-
-app.delete('/api/media/:id/link/:nodeId', async (req, res) => {
-  const r = await removeAssetLink(req.params.id, req.params.nodeId);
-  if (r?.ok === false) return res.status(400).json(r);
-  res.json(r);
 });
 
 // Health check

@@ -20,9 +20,6 @@ sources:
   - id: cerebellum
     type: file
     path: cerebellum.js
-  - id: vision-js
-    type: file
-    path: vision.js
   - id: engagement-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
@@ -49,7 +46,7 @@ shipping any behavioral change (not a relocation, comment, or rename) to `crisis
 `threat-tracker.js`, `silence-triage-loop.js`, the triage/delivery/escalation logic in
 `cerebellum.js`, or the `[CARE CHECK]` assembly in `thalamus.js` [@claude-md].
 
-## Detection: crisis-signals.js and image-derived threat
+## Detection: crisis-signals.js
 
 `crisis-signals.js` is an auditable, pattern-based detector, not an LLM classifier — it
 returns `{ level, signals[] }` for a message across five tiers (severe / high / moderate /
@@ -64,8 +61,6 @@ the LLM is reserved for interpreting the pattern once assembled, not for tagging
 [@claude-md]. The patterns are tuned for high precision specifically on the SEVERE tier — the
 regression suite CLAUDE.md points to watches phrases like "cut me off" or "I want to die from
 embarrassment," which read as crisis language on a naive scan but are not [@architecture-doc].
-
-**Image-derived threat signals** (0.9.2-alpha, PR #219): The ward authorized shared images to raise threat tier through `scoreImageDescriptionThreat()` in `vision.js` [@vision-js]. The function scores the image's cached description (never raw model prose) using the same `scoreMessage()` that scores typed text, then feeds the resulting delta through the existing `recordThreat()` with `source:'vision'`. Three design constraints are ward-signed: (1) *full weighting* — an image-derived signal counts the same as a typed distress signal (no damping), (2) *raise-only* — images can only increase threat, never lower it, and (3) *ward-images-only* — only images tagged `audienceTag === 'ward-private'` move the ward's safety state, enforcing the no-covert-safety-move discipline so a villager's shared bytes never alter the ward's threat tracking [@vision-js]. The feature fires fire-and-forget on the ward's own live turn when `visionThreatScoringOn` is true (default enabled, gated by `PROTO_FAMILIAR_VISION_THREAT_DISABLED=1` and `PROTO_FAMILIAR_THREAT_DISABLED=1`) [@vision-js].
 
 ## Tracking: threat-tracker.js
 
@@ -144,12 +139,6 @@ ordinary defensive improvement [@claude-md]. That is why sign-off is scoped to *
 change specifically — a pure relocation with byte-identical behavior does not require it
 [@claude-md].
 
-## Image-derived threat: known limitations and deferred work
-
-The full-weighting design for image signals is known to produce false positives on fictional violence: horror film stills, dark artwork, and other visual content depicting serious distress in a fictional or artistic context will read as crisis to the pattern scorer. The interim escape hatch is the in-app settings switch ("Let a distressing image raise concern"), which the ward can toggle [@vision-js]. The real fix is context-aware image interpretation that can distinguish genuine distress from horror or dark art — deferred to a future pass when description quality can be trusted to carry that distinction [@vision-js].
-
-Symmetrically, the raise-only constraint prevents genuinely calming or positive images from lowering an elevated threat tier. The ward-authorized revisit is context-aware de-escalation: allowing a positive image to bring down a tier when interpretation is confident enough [@vision-js]. This is also deferred until description models can reliably tell a calming image from a stray positive photo.
-
 ## Related
 
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the incident and the
@@ -158,5 +147,3 @@ Symmetrically, the raise-only constraint prevents genuinely calming or positive 
   workers, and which loops defer to it under moderate+ threat.
 - [Unruh](unruh) — where threat level is stored and how it interacts with the rest of the
   temporal model.
-- [Vision and media input](vision-and-media) — where images are described and cached before
-  threat scoring consumes their descriptions.
