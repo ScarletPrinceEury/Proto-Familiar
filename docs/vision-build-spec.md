@@ -11,11 +11,13 @@ can land later as new media *kinds* on the same spine, not as a rewrite.
 Those are out of scope (§14), though §11 pins the invariants a future
 continuous-sensing feature must honor so nothing built here has to be undone.
 
-Status: **Pass 1 SHIPPED (0.9.0-alpha).** **Pass 2 SHIPPED (0.9.1-alpha)**
-except the ward-gated image→threat scoring (below) and the ward-side composer
-tag UI (Familiar-side linking shipped; a composer control for my human to tag is
-a small follow-up). Pass 3 (Discord) pending. Vision owns this MINOR (one
-milestone = one minor; Pass 1 landing is the `0.X.0`).
+Status: **VISION MILESTONE COMPLETE.** Pass 1 (0.9.0), Pass 2 (0.9.1),
+image→threat scoring (0.9.2), the Pass 2 tail — composer node-tagging +
+description→node graduation (0.9.3), and **Pass 3 — Discord image ingest
+(0.9.4)** are all shipped. Vision owned this MINOR (one milestone = one minor;
+Pass 1 landing was the `0.X.0`). Remaining are the two ward-flagged threat-
+scoring *revisits* (§15.1: horror/fiction context exception; context-aware
+de-escalation) — future work, deliberately deferred, not part of the main spec.
 
 **Pass 2 as shipped:** `describeAsset` (look-once-keep-forever, capability-aware
 `resolveVisionConnection`, injection-guard on the result before caching, fired
@@ -587,9 +589,17 @@ extension of this spine, honoring:
    memorization + the loop prompts; `view_image` + its gates; **picture→node
    linking (§6.5)**; and the ward-signed **image→threat scoring** (§8/§15.1 —
    exact mechanism confirmed with the ward before it ships). Patch bumps.
-3. **Pass 3 — Discord:** arrival-time ingest via `proxy_url` resize, caps,
-   audience/provenance stamping, observe-path references, materializer wiring
-   in `callChatRaw` assembly. Patch bump.
+3. **Pass 3 — Discord (SHIPPED 0.9.4):** arrival-time ingest
+   (`ingestDiscordImages` in `discord-gateway.js`) via the media proxy's own
+   resize params (`discordResizeUrl`, long edge 1568), caps
+   (`MAX_IMAGES_PER_MESSAGE` + `discordMediaPerHour`, default 20, per-location
+   hourly), audience/provenance stamping (room `audienceTag` + `origin.speaker`;
+   ward always, registered villager yes, stranger never), observe-path
+   references (`observeMessage` ingests too), and the materializer wired into
+   `handleTurn`'s assembled `apiMessages` (once, riding every tool round) with
+   the room's visible-audience set threaded in fail-closed. A failed fetch
+   degrades to an `[image failed to load]` note, never blocks the turn. Both
+   history `.map()` blocks preserve `attachments` beside the string.
 
 Each pass updates `docs/architecture.md` in the same commit (new module rows,
 the data-flow note at the materializer seam, the endpoints).

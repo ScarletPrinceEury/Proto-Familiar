@@ -4172,8 +4172,8 @@ export function discordWriteProvenance(ctx = {}) {
  *   - registered villager → relay + villagerToolNames(grants), macro-resolved.
  *   - stranger / neither → [] (no tools, unchanged from today).
  */
-export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools } = {}) {
-  if (isWard) return composeActiveTools(customTools, settings);
+export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools, visionCapable = false } = {}) {
+  if (isWard) return composeActiveTools(customTools, settings, { visionCapable });
   if (!isVillager) return [];
   const allow = villagerToolNames(grants);
   const picked = BUILTIN_TOOLS.filter(t => allow.has(t.function?.name));
