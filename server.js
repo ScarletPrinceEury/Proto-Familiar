@@ -113,7 +113,7 @@ import {
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
-  composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
+  composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS, toolRoundsPerTurn,
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
   deriveMemorySlug, parseMemoryKey,
@@ -665,6 +665,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     if (!stream) {
       try {
         const runLoop = (baseMessages) => runToolCallLoop({
+          // Live ward conversation → the ward-configurable round budget
+          // (background loops keep the tight MAX_TOOL_ROUNDS default).
+          maxRounds: toolRoundsPerTurn(readSettingsSync()),
           getTools: recomposeTools,
           callUpstream: async (msgs, roundTools, opts) => {
             // forceText (round-cap closing round): strip tools entirely so the
@@ -729,7 +732,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         if (imagesLiveThisTurn > 0 && !visionFellBack) {
           cacheVisionCapability(provider, model, 'yes').catch(() => {});
         }
-        const { data, toolRounds } = loopOutcome;
+        const { data, toolRounds, roundCapHit } = loopOutcome;
+        // Tell the client the round budget ran out mid-reach, so it can offer
+        // the ward a one-click "go on" (a fresh turn = a fresh budget).
+        if (roundCapHit) data._roundCapHit = true;
         tickSurfacing();
     req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
@@ -796,7 +802,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // pending — ONE extra round runs with tools stripped so the turn ends in
     // honest text instead of silence (mirrors runToolCallLoop's closing round).
     let forceTextRound = false;
-    for (let round = 0; round <= MAX_TOOL_ROUNDS + 1; round++) {
+    // Live ward conversation → the ward-configurable round budget.
+    const liveMaxRounds = toolRoundsPerTurn(readSettingsSync());
+    for (let round = 0; round <= liveMaxRounds + 1; round++) {
       if (clientGone() || ac.signal.aborted) break;
       const payloadMessages = timeAnchor
         ? [...currentMsgs, { role: 'system', content: timeAnchor }]
@@ -899,7 +907,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       }
 
       const toolCalls = Object.values(toolCallsAcc);
-      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < MAX_TOOL_ROUNDS && !forceTextRound) {
+      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < liveMaxRounds && !forceTextRound) {
         const timestamp = new Date().toISOString();
         const results = await Promise.all(toolCalls.map(async tc => ({
           tool_call_id: tc.id,
@@ -935,7 +943,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         forceTextRound = true;
         currentMsgs = [
           ...currentMsgs,
-          { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done.]" },
+          { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done. If they tell me to go on, I get a fresh budget and continue.]" },
         ];
         console.log('[tools] round cap reached with tools still pending — forcing a closing text round (stream)');
         continue;
@@ -952,6 +960,8 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       cacheVisionCapability(provider, model, 'yes').catch(() => {});
     }
     if (!res.writableEnded) {
+      // Round budget ran out mid-reach → the client offers a one-click "go on".
+      if (forceTextRound) res.write(`data: ${JSON.stringify({ _roundCapHit: true })}\n\n`);
       res.write('data: [DONE]\n\n');
       res.end();
     }

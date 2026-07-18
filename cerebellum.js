@@ -859,7 +859,22 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
  * Maximum tool-call rounds per user message before giving up.
  * Prevents infinite loops if a model repeatedly calls tools.
  */
+// The BACKGROUND budget: autonomous deliberations (noticing) and non-ward
+// Discord turns (villager/ambient) stay tightly bounded — that's what a round
+// cap is for. A LIVE conversation with my human is different: "check these six
+// files" legitimately needs six-plus reaches, so ward turns use the
+// ward-configurable budget below instead (ward decision, 0.9.8).
 export const MAX_TOOL_ROUNDS = 5;
+
+// Tool-round budget for a LIVE ward turn (web chat + ward Discord turns).
+// Ward-configurable via settings.toolRoundsPerTurn; clamped so a typo can't
+// make a turn unbounded. Default 12 — roomy for real multi-file/multi-step
+// asks, still a hard ceiling.
+export function toolRoundsPerTurn(settings = readSettingsSync()) {
+  const n = Number(settings?.toolRoundsPerTurn);
+  if (!Number.isFinite(n)) return 12;
+  return Math.max(3, Math.min(30, Math.round(n)));
+}
 
 // Validation shared by the HTTP routes (server.js) and the executors
 // below — one source of truth for what counts as a valid write.
@@ -4316,12 +4331,14 @@ export async function runToolCallLoop({
   // closing round with tools withheld (opts.forceText) and a plain first-person
   // note, so the turn ends in honest text: what was done, what wasn't.
   const finalChoice = data?.choices?.[0];
+  let roundCapHit = false;
   if (!signal?.aborted
       && finalChoice?.finish_reason === 'tool_calls'
       && Array.isArray(finalChoice?.message?.tool_calls) && finalChoice.message.tool_calls.length) {
+    roundCapHit = true;
     const closingMsgs = [
       ...currentMsgs,
-      { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done.]" },
+      { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done. If they tell me to go on, I get a fresh budget and continue.]" },
       ...(timeAnchor ? [{ role: 'system', content: timeAnchor }] : []),
     ];
     try {
@@ -4332,5 +4349,5 @@ export async function runToolCallLoop({
     }
   }
 
-  return { data, toolRounds };
+  return { data, toolRounds, roundCapHit };
 }

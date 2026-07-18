@@ -174,6 +174,7 @@ import {
   composeActiveTools,
   runToolCallLoop,
   MAX_TOOL_ROUNDS,
+  toolRoundsPerTurn,
   RELAY_TO_WARD_TOOL_NAME,
   RELAY_TO_WARD_TOOL,
 } from '../cerebellum.js';
@@ -372,6 +373,14 @@ test('runToolCallLoop: executes tools and feeds results into the next round', as
   assert.ok(Array.isArray(second.at(-2).tool_calls));
   assert.equal(second.at(-1).role, 'tool');
   assert.equal(second.at(-1).content, 'result of fake_tool');
+});
+
+test('toolRoundsPerTurn: default 12, clamped [3, 30], rounded', () => {
+  assert.equal(toolRoundsPerTurn({}), 12);
+  assert.equal(toolRoundsPerTurn({ toolRoundsPerTurn: 'garbage' }), 12);
+  assert.equal(toolRoundsPerTurn({ toolRoundsPerTurn: 1 }), 3);
+  assert.equal(toolRoundsPerTurn({ toolRoundsPerTurn: 999 }), 30);
+  assert.equal(toolRoundsPerTurn({ toolRoundsPerTurn: 15.6 }), 16);
 });
 
 test('runToolCallLoop: caps at maxRounds, then forces ONE closing text round', async () => {

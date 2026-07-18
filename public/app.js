@@ -184,6 +184,7 @@ const state = {
   messages:                [],     // { role, content, timestamp }[]
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
+  toolRoundsPerTurn: 12,     // live-turn tool-round budget (clamped 3–30 server-side)
   customTools:       '',     // JSON array string of user-defined tool definitions
   // ── Web search (opt-in; works in-box, no setup) ─────────────
   webSearchEnabled:    false,
@@ -387,7 +388,7 @@ const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
-  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
+  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'toolRoundsPerTurn',
   'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
@@ -1466,6 +1467,9 @@ let _pendingUserMsgTimestamp = null;
 // The live turn's image attachments (vision), carried into the new user turn
 // built by _buildApiMessagesInner. Cleared in buildApiMessages' finally.
 let _pendingAttachments = null;
+// Set when the server reports the tool-round budget ran out mid-reach
+// (_roundCapHit) — after the reply lands we offer a one-click "Go on".
+let _roundCapHitThisTurn = false;
 
 function elapsedBetweenUserMessages() {
   const stamps = [];
@@ -1975,6 +1979,35 @@ function appendErrorMessage(text) {
   scrollToBottom();
 }
 
+// ── "Go on" offer (tool-round budget ran out mid-reach) ───────────
+// Each conversation turn carries a fresh tool-round budget, so granting more
+// rounds IS just asking the Familiar to continue — this renders that as one
+// click. The sent message is a normal, visible user turn (honest history).
+function removeContinueRoundsOffer() {
+  document.getElementById('continue-rounds-offer')?.remove();
+}
+
+function offerContinueRounds() {
+  removeContinueRoundsOffer();
+  const wrap = document.createElement('div');
+  wrap.id = 'continue-rounds-offer';
+  wrap.className = 'continue-rounds-offer';
+  const note = document.createElement('span');
+  note.textContent = 'Tool rounds ran out mid-task.';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary';
+  btn.textContent = '▶ Go on — grant a fresh set of rounds';
+  btn.addEventListener('click', () => {
+    removeContinueRoundsOffer();
+    sendMessage('Go on — you have a fresh set of tool rounds. Pick up exactly where you left off.');
+  });
+  wrap.appendChild(note);
+  wrap.appendChild(btn);
+  $('messages').appendChild(wrap);
+  scrollToBottom();
+}
+
 /**
  * Render a tool-use block in the chat — shows each tool call and its result
  * in a collapsed <details> element.
@@ -2370,11 +2403,14 @@ async function sendMessage(userInput) {
   const sendStart = performance.now();
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
+    _roundCapHitThisTurn = false;
+    removeContinueRoundsOffer();   // a new turn supersedes any standing offer
     if (state.streaming) {
       await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     } else {
       await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     }
+    if (_roundCapHitThisTurn) offerContinueRounds();
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
     debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
@@ -2638,6 +2674,12 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
         lastThalamus = parsed._thalamus;
         continue;
       }
+      // The tool-round budget ran out mid-reach — offer a one-click "Go on"
+      // after the reply lands (a fresh turn carries a fresh budget).
+      if (parsed._roundCapHit) {
+        _roundCapHitThisTurn = true;
+        continue;
+      }
       // A mid-loop upstream failure on the server side - surface it as a
       // normal request error so the retry/fallback ladder handles it.
       if (parsed._loopError) throw new Error(parsed._loopError);
@@ -2816,6 +2858,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
     throw new Error(extractErrorText(data, `API error ${response.status}`));
   }
   if (data._thalamus) lastThalamus = data._thalamus;
+  if (data._roundCapHit) _roundCapHitThisTurn = true;
 
   // Server-side tool rounds: render each as a collapsible block and
   // record the same message shapes the old client-side loop produced.
@@ -3099,6 +3142,10 @@ function readSettingsFromUI() {
     const n = parseInt($('tool-sticky-turns').value, 10);
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
   }
+  if ($('tool-rounds-per-turn')) {
+    const n = parseInt($('tool-rounds-per-turn').value, 10);
+    state.toolRoundsPerTurn = Number.isInteger(n) && n >= 3 && n <= 30 ? n : 12;
+  }
   if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
   if ($('spine-states-toggle')) state.spineStatesEnabled = $('spine-states-toggle').checked;
   if ($('day-start-anchor')) {
@@ -3197,6 +3244,7 @@ function writeSettingsToUI() {
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
+  if ($('tool-rounds-per-turn')) setIfNotFocused($('tool-rounds-per-turn'), 'value', state.toolRoundsPerTurn ?? 12);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
   if ($('spine-states-toggle')) setIfNotFocused($('spine-states-toggle'), 'checked', state.spineStatesEnabled !== false);
   if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
@@ -4422,7 +4470,7 @@ function init() {
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
     'memory-sweep-toggle',
-    'tool-surfacing-toggle', 'tool-sticky-turns',
+    'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',

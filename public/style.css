@@ -1543,6 +1543,17 @@ button { cursor: pointer; font-family: var(--font); }
 /* Drag-over affordance on the chat pane */
 .chat-pane.drag-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
 
+/* "Go on" offer when the tool-round budget ran out mid-task */
+.continue-rounds-offer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 10px 44px;   /* aligns with message bodies (avatar width) */
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
 /* Per-connection vision capability control */
 .conn-vision {
   display: flex;

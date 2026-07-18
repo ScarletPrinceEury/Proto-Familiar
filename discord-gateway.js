@@ -39,7 +39,7 @@ import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConse
 import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
-import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
 import { extractContent } from './llm-call.js';
@@ -1948,6 +1948,10 @@ async function handleTurn(gw, msg, decision) {
         getTools:     () => discordTools,
         executeTool,
         toolCtx,
+        // My human's own turns get the ward-configurable round budget ("check
+        // these six files" needs six-plus reaches); villager/ambient turns
+        // keep the tight background default.
+        maxRounds: decision.isWard ? toolRoundsPerTurn(settings) : undefined,
       });
       rawReply = extractContent(data?.choices?.[0]?.message ?? {});
     } catch (err) {
