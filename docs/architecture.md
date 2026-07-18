@@ -251,7 +251,10 @@ lifecycle of the autonomous loops:
   `express.raw({type:'image/*'})` body parser, so image bytes never
   touch the global JSON limit), `GET /api/media/:id` (streams bytes for
   a thumbnail, slug or sha), `GET /api/media?limit=N` (inventory),
-  `DELETE /api/media/:id`. All refuse politely when vision is off.
+  `DELETE /api/media/:id`. `POST /api/media/:id/link` /
+  `DELETE /api/media/:id/link/:nodeId` (§6.5 — the ward tags an image to
+  a graph node; the link POST also fires description→node graduation).
+  All refuse politely when vision is off.
 - `POST /api/interest/engage` — fire-and-forget engagement bump.
 - `POST /api/session/handoff` — store session-end intent for the
   next session.

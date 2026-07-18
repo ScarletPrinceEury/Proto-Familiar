@@ -25,8 +25,14 @@ carrying turn is memorable; `view_image` + its capability/audience gates and the
 `drainPendingImages` same-turn recompose in both tool loops; and the **picture→
 node linking** (§6.5: `addAssetLink`/`removeAssetLink`/`assetsForNode`,
 `link_image_to_node`/`unlink_image_from_node` tools, the stand-in naming linked
-nodes). **Still to come:** the ward-side composer tag control, description→node
-graduation, and the two items below.
+nodes). **The ward-side composer tag control (0.9.3)** — a 🏷 on each pending
+thumbnail opens a graph-node search (`GET /api/entity/graph/search`) and
+`POST /api/media/:id/link`s the chosen node; the chip shows the tag. **Description→
+node graduation (0.9.3)** — `graduateImageDescriptionToNode` appends a dated
+observation to the linked node's description (via the canonical `updateGraphNode`,
+content-deduped, ward-images only), fired from the link tool, the link endpoint,
+and describeAsset. Pass 2 is now complete bar the safety item below (shipped in
+0.9.2).
 
 **Pass 1 deviation worth recording — the capability probe (§3.1).** The spec
 described a synthetic one-time probe image. As built, an uncached `auto`

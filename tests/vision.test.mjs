@@ -4,6 +4,7 @@ import {
   materializeAttachments, resolveVisionCapable, findConnection,
   isModalityError, DEFAULT_MAX_LIVE_IMAGES,
   describeAsset, resolveVisionConnection, scoreImageDescriptionThreat,
+  graduateImageDescriptionToNode,
 } from '../vision.js';
 import { saveAsset, deleteAsset, getAssetMeta, setAssetDescription } from '../media.js';
 
@@ -238,4 +239,41 @@ test('scoreImageDescriptionThreat: a villager image never moves the ward tier', 
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'not-ward-image');
   assert.equal(recorded.length, 0);
+});
+
+// ── Description → node graduation (§6.5 follow-up) ────────────────
+
+test('graduateImageDescriptionToNode appends a dated observation to the node', async () => {
+  const m = await mk('milkyway asleep');
+  await setAssetDescription(m.id, { text: 'a grey tabby asleep on the windowsill' });
+  let saved = null;
+  const r = await graduateImageDescriptionToNode(m.id, 'milkyway-x7', {
+    getNode: async () => ({ nodes: [{ id: 'milkyway-x7', label: 'Milkyway', description: 'My cat.' }] }),
+    updateNode: async ({ id, description }) => { saved = { id, description }; return { ok: true }; },
+  });
+  assert.equal(r.graduated, true);
+  assert.equal(saved.id, 'milkyway-x7');
+  assert.match(saved.description, /My cat\./);                                   // kept existing
+  assert.match(saved.description, /Seen in a photo .*grey tabby asleep/);        // appended
+});
+
+test('graduation is content-deduped — the same image never graduates twice', async () => {
+  const m = await mk('same cat');
+  await setAssetDescription(m.id, { text: 'a distinctive ginger cat' });
+  let calls = 0;
+  const opts = {
+    getNode: async () => ({ nodes: [{ id: 'n1', description: 'Prior.\n\nSeen in a photo (today): a distinctive ginger cat' }] }),
+    updateNode: async () => { calls++; return { ok: true }; },
+  };
+  const r = await graduateImageDescriptionToNode(m.id, 'n1', opts);
+  assert.equal(r.already, true);
+  assert.equal(calls, 0);   // already present → no write
+});
+
+test('graduation skips an undescribed or non-ward image', async () => {
+  const undesc = await mk('no words yet');
+  assert.equal((await graduateImageDescriptionToNode(undesc.id, 'n2', { getNode: async () => ({ nodes: [] }), updateNode: async () => ({ ok: true }) })).reason, 'no-description');
+  const villager = await mk('theirs', { audienceTag: 'room-3' });
+  await setAssetDescription(villager.id, { text: 'x' });
+  assert.equal((await graduateImageDescriptionToNode(villager.id, 'n3', { getNode: async () => ({ nodes: [] }), updateNode: async () => ({ ok: true }) })).reason, 'not-ward-image');
 });

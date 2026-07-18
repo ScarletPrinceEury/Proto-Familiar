@@ -2601,6 +2601,14 @@ export const TOOL_EXECUTORS = {
     if (!meta) return `I don't have an image with id ${img}.`;
     const r = await addAssetLink(img, { nodeId: node, label: label || node, by: 'familiar' });
     if (r?.ok === false) return `I couldn't link that image: ${r.error}.`;
+    // If the image already carries a description, graduate it onto the node so
+    // "what Milkyway looks like" becomes durable graph knowledge. Dynamic import
+    // keeps vision.js out of cerebellum's static graph (vision imports cerebellum).
+    if (meta.description?.text) {
+      import('./vision.js')
+        .then(v => v.graduateImageDescriptionToNode(img, node))
+        .catch(() => {});
+    }
     return quietOk(`Tied image ${meta.slugs?.[0] ?? meta.id} to ${label || node}.`);
   },
 

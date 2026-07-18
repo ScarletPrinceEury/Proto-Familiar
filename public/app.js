@@ -2230,10 +2230,94 @@ function renderAttachStrip() {
     rm.setAttribute('aria-label', 'Remove image');
     rm.textContent = '✕';
     rm.addEventListener('click', () => removePendingAttachment(a.id));
+    // Tag control (§6.5): tie this image to someone/something in the graph.
+    const tag = document.createElement('button');
+    tag.type = 'button';
+    tag.className = 'attach-chip-tag';
+    tag.setAttribute('aria-label', a.tagLabel ? `Tagged: ${a.tagLabel}. Change tag` : 'Tag this image to a person or thing');
+    tag.title = a.tagLabel ? `Tagged: ${a.tagLabel}` : 'Tag to a person/place/thing';
+    tag.textContent = '🏷';
+    tag.addEventListener('click', (e) => { e.stopPropagation(); openTagPicker(a, chip); });
     chip.appendChild(img);
     chip.appendChild(rm);
+    chip.appendChild(tag);
+    if (a.tagLabel) {
+      const badge = document.createElement('span');
+      badge.className = 'attach-chip-badge';
+      badge.textContent = a.tagLabel;
+      badge.title = `Tagged: ${a.tagLabel}`;
+      chip.appendChild(badge);
+    }
     strip.appendChild(chip);
   }
+}
+
+// A small search popover for tagging a pending image to a graph node.
+let _tagPickerEl = null;
+function closeTagPicker() { if (_tagPickerEl) { _tagPickerEl.remove(); _tagPickerEl = null; } }
+function openTagPicker(attachment, anchorChip) {
+  closeTagPicker();
+  const pop = document.createElement('div');
+  pop.className = 'tag-picker';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Search people, pets, places…';
+  input.setAttribute('aria-label', 'Search the graph to tag this image');
+  const results = document.createElement('div');
+  results.className = 'tag-picker-results';
+  pop.appendChild(input);
+  pop.appendChild(results);
+  document.body.appendChild(pop);
+  _tagPickerEl = pop;
+  // Position under the chip.
+  const r = anchorChip.getBoundingClientRect();
+  pop.style.left = `${Math.min(r.left, window.innerWidth - 260)}px`;
+  pop.style.top  = `${r.bottom + 4}px`;
+  input.focus();
+
+  let seq = 0, timer = null;
+  const runSearch = async () => {
+    const q = input.value.trim();
+    if (!q) { results.innerHTML = ''; return; }
+    const mine = ++seq;
+    try {
+      const data = await (await fetch(`/api/entity/graph/search?query=${encodeURIComponent(q)}&limit=8`)).json();
+      if (mine !== seq) return;   // a newer query superseded this one
+      // Search returns { results: [{ node:{id,label,type,description}, score }] };
+      // tolerate a bare-node shape too.
+      const raw = Array.isArray(data?.results) ? data.results : (Array.isArray(data?.nodes) ? data.nodes : []);
+      const nodes = raw.map(r => r?.node ?? r).filter(n => n && n.id);
+      results.innerHTML = '';
+      if (!nodes.length) { results.innerHTML = '<div class="tag-picker-empty">No matches. The Familiar can also tag it in chat.</div>'; return; }
+      for (const n of nodes) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'tag-picker-item';
+        item.textContent = `${n.label ?? n.id}${n.type ? ` · ${n.type}` : ''}`;
+        item.addEventListener('click', () => linkPendingToNode(attachment, n));
+        results.appendChild(item);
+      }
+    } catch { results.innerHTML = '<div class="tag-picker-empty">Couldn\'t reach the graph.</div>'; }
+  };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, 220); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTagPicker(); });
+  // Dismiss on outside click (next tick so this opening click doesn't close it).
+  setTimeout(() => {
+    const onDoc = (e) => { if (_tagPickerEl && !_tagPickerEl.contains(e.target)) { closeTagPicker(); document.removeEventListener('mousedown', onDoc); } };
+    document.addEventListener('mousedown', onDoc);
+  }, 0);
+}
+
+async function linkPendingToNode(attachment, node) {
+  try {
+    const res = await fetch(`/api/media/${encodeURIComponent(attachment.id)}/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId: node.id, label: node.label ?? node.id, kind: node.type ?? '' }),
+    });
+    if (res.ok) { attachment.tagLabel = node.label ?? node.id; renderAttachStrip(); }
+  } catch { /* non-blocking */ }
+  closeTagPicker();
 }
 
 async function sendMessage(userInput) {

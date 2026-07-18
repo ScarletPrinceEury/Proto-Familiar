@@ -148,7 +148,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
-import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, scoreImageDescriptionThreat } from './vision.js';
+import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -1523,6 +1523,25 @@ app.get('/api/media', async (req, res) => {
 app.delete('/api/media/:id', async (req, res) => {
   const r = await deleteAsset(req.params.id);
   if (r?.ok === false) return res.status(404).json(r);
+  res.json(r);
+});
+
+// Picture→node linking (§6.5): the ward tags an image to a graph node it
+// depicts (a photo of Milkyway → the Milkyway node). Ward-facing (behind the
+// loopback/Tailscale gate); the graph-node search endpoint above supplies the
+// node id. Graduates the description onto the node when both exist.
+app.post('/api/media/:id/link', async (req, res) => {
+  const { nodeId, label, kind } = req.body || {};
+  const r = await addAssetLink(req.params.id, { nodeId, label, kind, by: 'ward' });
+  if (r?.ok === false) return res.status(400).json(r);
+  graduateImageDescriptionToNode(req.params.id, String(nodeId || '').trim())
+    .catch(err => console.error('[vision] node graduation failed:', err?.message ?? err));
+  res.json(r);
+});
+
+app.delete('/api/media/:id/link/:nodeId', async (req, res) => {
+  const r = await removeAssetLink(req.params.id, req.params.nodeId);
+  if (r?.ok === false) return res.status(400).json(r);
   res.json(r);
 });
 

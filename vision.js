@@ -32,6 +32,8 @@ import { substituteMacros } from './macros.js';
 import { sanitizeExternal } from './injection-guard.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
+import { getGraphSubgraph, updateGraphNode } from './thalamus.js';
+import { relativeDay } from './relative-time.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CAP_FILE = path.join(__dirname, 'tomes', '.vision-capability.json');
@@ -310,9 +312,58 @@ export async function describeAsset(idOrSlug, settings = {}, { fetchFn = fetch }
       by: { provider: conn.provider, model: conn.model },
       at: new Date().toISOString(),
     });
+    // A description landing for an already-linked image graduates onto each
+    // linked node (§6.5). Fire-and-forget — never blocks describe, never throws.
+    for (const l of (Array.isArray(updated?.links) ? updated.links : [])) {
+      if (l?.nodeId) graduateImageDescriptionToNode(meta.id, l.nodeId).catch(() => {});
+    }
     return updated;   // the updated meta (or {ok:false} from the store)
   } catch (err) {
     return { ok: false, reason: `describe-failed: ${err?.message ?? err}` };
+  }
+}
+
+// ── Description → node graduation (§6.5) ──────────────────────────
+//
+// When a linked image has a description, the description graduates onto the
+// linked graph node — so "what Milkyway looks like" becomes durable, cross-
+// embodiment knowledge on the node itself, outliving the local bytes. Routed
+// through the canonical MCP (updateGraphNode), never a direct write. Appends a
+// dated observation to the node's description; content-deduped so the same
+// image never graduates onto the same node twice. Ward-private assets only
+// (the graph is the ward's). Best-effort — never throws into a caller.
+export async function graduateImageDescriptionToNode(assetId, nodeId, {
+  getNode = getGraphSubgraph, updateNode = updateGraphNode, now = Date.now(),
+} = {}) {
+  try {
+    const node = String(nodeId ?? '').trim();
+    if (!node) return { ok: false, reason: 'no-node' };
+    const meta = await getAssetMeta(assetId);
+    if (!meta) return { ok: false, reason: 'not-found' };
+    if (meta.audienceTag !== 'ward-private') return { ok: false, reason: 'not-ward-image' };
+    const desc = meta.description?.text;
+    if (!desc) return { ok: false, reason: 'no-description' };   // nothing to graduate yet
+
+    // Read the node's current description (via the subgraph — the node is among
+    // its own nodes).
+    let current = '';
+    try {
+      const sub = await getNode({ nodeId: node, depth: 1 });
+      const n = (Array.isArray(sub?.nodes) ? sub.nodes : []).find(x => x?.id === node);
+      current = typeof n?.description === 'string' ? n.description : '';
+    } catch { /* node unreadable → treat as empty, still append */ }
+
+    // Content dedup: the same image's words never graduate onto the node twice.
+    if (current.includes(desc)) return { ok: true, already: true };
+
+    const when = relativeDay(new Date(now).toISOString(), now) || new Date(now).toISOString().slice(0, 10);
+    const line = `Seen in a photo (${when}): ${desc}`;
+    const next = current ? `${current}\n\n${line}` : line;
+    const r = await updateNode({ id: node, description: next });
+    if (r?.ok === false) return { ok: false, reason: r.error };
+    return { ok: true, graduated: true };
+  } catch (err) {
+    return { ok: false, reason: `graduate-failed: ${err?.message ?? err}` };
   }
 }
 
