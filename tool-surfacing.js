@@ -45,6 +45,7 @@ export const TOOL_MODULES = {
   gcal_list_calendars: 'schedule-read', gcal_attribute_calendar: 'schedule-write',
   schedule_add_hold: 'schedule-write', schedule_availability: 'schedule-read',
   schedule_set_lead: 'schedule-write',   // per-event alert lead (Initiative Pass 5)
+  schedule_calibrate_link: 'schedule-write',   // grade a forecast after the fact (causal-chain fix)
 
   'memory-edit': undefined, // (namespace note only — real entries below)
   read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',
@@ -125,7 +126,10 @@ const TRIGGERS = {
     // Blocks that invite schedule ACTION travel with the write tools. The
     // stewardship agenda offers aging floaters a place → I need the write
     // tools to give them a time on the spot.
-    blocks: ['[Surface candidates', "[New on my human's calendar", '[My stewardship'],
+    blocks: ['[Surface candidates', "[New on my human's calendar", '[My stewardship',
+      // The projection cue + the hindsight questions both invite link work
+      // (schedule_link / schedule_calibrate_link) — the tools travel with them.
+      '[Coming up with nothing hanging off it yet]', 'Recently past, not yet examined'],
   },
   stewardship: {
     text: null,  // block-driven: the anchor-adjust tool travels with the agenda

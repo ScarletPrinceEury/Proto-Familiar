@@ -447,6 +447,53 @@ export function formatTemporalContext(payload) {
     blocks.push(['Consequence links — how my human\'s scheduled items bear on each other:', ...linkLines].join('\n'));
   }
 
+  // ── Recently past, unexamined (causal-chain fix, piece 2) ────────
+  // An event whose time just passed and that still carries un-graded
+  // forecasts is at the one moment a forecast can be checked against what
+  // actually happened — while my human can still remember the answer.
+  // Pure derivation, same class as the settled-links retirement above:
+  // events with when/end in [now − 72h, now] whose consequence edges are
+  // still unobserved, rendered as questions with the edge id so the
+  // answer is actionable (schedule_calibrate_link). Capped at 3 lines;
+  // a line drops when its edge is graded observed or the window closes.
+  const HINDSIGHT_MS = 72 * 3600 * 1000;
+  const isUngraded = (p) => p && typeof p === 'object'
+    && (p.valence || p.condition || p.certainty) && p.observed !== true;
+  const hindsightEdges = new Map();   // node id → its ungraded consequence edges
+  for (const e of edges) {
+    if (!e?.id || !isUngraded(e.payload)) continue;
+    for (const end of [e.src, e.dst]) {
+      if (!hindsightEdges.has(end)) hindsightEdges.set(end, []);
+      hindsightEdges.get(end).push(e);
+    }
+  }
+  const hindsightLines = [];
+  const seenHindsight = new Set();
+  for (const n of scheduleNodes) {
+    if (hindsightLines.length >= 3) break;
+    if (!n?.id || seenHindsight.has(n.id) || n.type !== 'event') continue;
+    seenHindsight.add(n.id);
+    const t = Date.parse(n.when ?? n.end ?? '');
+    if (!Number.isFinite(t) || t > nowForLinks || nowForLinks - t > HINDSIGHT_MS) continue;
+    const nodeEdges = hindsightEdges.get(n.id);
+    if (!nodeEdges?.length) continue;
+    const rel = relativeTime(n.when ?? n.end, nowForLinks) || formatLocalTime(n.when ?? n.end);
+    for (const e of nodeEdges) {
+      if (hindsightLines.length >= 3) break;
+      const a = nodeLabel.get(e.src) ?? e.src;
+      const b = nodeLabel.get(e.dst) ?? e.dst;
+      const res = n.resolution ? ` [${n.resolution}]` : '';
+      hindsightLines.push(`  ${n.label ?? n.id} was ${rel}${res} — I projected: ${a} → ${EDGE_VERB[e.kind] ?? e.kind} → ${b}${consequenceTag(e.payload)}. Did that follow? (edge: ${e.id})`);
+    }
+  }
+  if (hindsightLines.length) {
+    blocks.push([
+      'Recently past, not yet examined — forecasts whose moment has come:',
+      ...hindsightLines,
+      "  If I can tell how it actually went — or my human mentions it — I grade the forecast with schedule_calibrate_link (the edge id above): observed if it really happened, certainty up or down. If I don't know, asking is natural while it's still fresh.",
+    ].join('\n'));
+  }
+
   // Legend = ids the Familiar might act on. Two prunes keep it from ballooning:
   // resolved nodes (done — nothing to act on), and orphaned link endpoints — a
   // `linked` state/anchor (e.g. "guilt crash", "therapy discontinued") that

@@ -1,7 +1,26 @@
-# Causal-chain fix — build spec (draft for ward review)
+# Causal-chain fix — build spec
 
-**Status: DRAFT.** Nothing here is built. The ward reported the defect;
-this spec proposes the fix and marks the two decisions that are theirs.
+**Status: Pieces 1–3 SHIPPED (0.8.107). Piece 4 still awaits the ward's
+decision.** Deviations from the draft, made while building:
+
+- **Piece 1** reuses `gcal-projection.js`'s existing pacing regime
+  (state in `tomes/.gcal-projection-cue.json`: 3 turns / 48h aging, 3
+  per turn) instead of the drafted per-node `payload` cooldowns — one
+  pacing regime for both sources, no node-payload state. Candidates
+  come from the temporal briefing's window (reaches ~7 days ahead)
+  rather than a separate 14-day fetch — no new request; events further
+  out get their cue as they enter the window, still with days of
+  runway. The last-chance re-surface (decision 2) is built: one extra
+  look within 48h of the event. The cue rides chat turns; wiring it
+  into noticing deliberations is deferred until wanted.
+- **Piece 2** shipped per spec (72h window, question form, 3-line cap) —
+  plus a chat tool the draft missed: `schedule_calibrate_link`, because
+  edge ids were not actionable from chat at all (the reachability rule —
+  a question the Familiar can't record the answer to is theater).
+- **Piece 3** shipped: the reflection input's schedule fetch widened to
+  ward-local −7d..+2d (one call, same tick), and each graded edge now
+  carries its source node's `when` so the reflection can tell whether
+  the projected moment has actually arrived.
 
 **The defect (ward's bug-bucket, verbatim intent):** the causal machinery
 exists — consequence edges, projections, the calibration loop — but

@@ -3474,6 +3474,10 @@ function startAutonomousPondering() {
       return shouldReflectNow();
     },
     getReflectionInput: async () => {
+      const teNaive = (d) => {
+        const p2 = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+      };
       const outcomes = await getNewOutcomesSinceLastReflection();
       const id = await getIdentityAll().catch(() => ({}));
       const file = (id?.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
@@ -3502,7 +3506,17 @@ function startAutonomousPondering() {
       let consequenceEdges = [];
       let cooccurrences = [];
       try {
-        const win = await getScheduleWindow({});
+        // Hindsight window (causal-chain fix, piece 3): the default window
+        // reaches only hours back, so a chain whose event passed days ago
+        // vanished before reflection could grade it. Reflection reads a
+        // week back (+2 days forward) — same single call, wider range.
+        const wardNow = wardLocalNowISO(readSettingsSync()?.wardTimeZone);
+        const base = new Date(wardNow).getTime();
+        const isoAt = (ms) => teNaive(new Date(ms));
+        const win = await getScheduleWindow({
+          from_ts: isoAt(base - 7 * 24 * 3600_000),
+          to_ts:   isoAt(base + 2 * 24 * 3600_000),
+        });
         // Window nodes + linked endpoints (undated states, out-of-window
         // anchors) — without `linked` the grader saw unresolvable endpoint
         // ids and the calibration loop starved on its own projections.
@@ -3511,6 +3525,7 @@ function startAutonomousPondering() {
           ...(Array.isArray(win?.linked) ? win.linked : []),
         ];
         const labelById = new Map(nodes.map(n => [n.id, n.label]));
+        const whenById  = new Map(nodes.map(n => [n.id, n.when ?? n.when_ts ?? null]));
         const allEdges = Array.isArray(win?.edges) ? win.edges : [];
         consequenceEdges = allEdges
           .filter(ed => ed?.payload && (ed.payload.valence || ed.payload.condition) && ed.payload.observed !== true)
@@ -3519,6 +3534,7 @@ function startAutonomousPondering() {
             kind: ed.kind, valence: ed.payload.valence, condition: ed.payload.condition,
             horizon_hours: ed.payload.horizon_hours, severity: ed.payload.severity,
             certainty: ed.payload.certainty, note: ed.payload.note,
+            from_when: whenById.get(ed.src) ?? null,
           }));
         // co_occurs_with noticings, grouped by unordered endpoint pair so
         // reflection sees how often a pairing has come up (the signal for

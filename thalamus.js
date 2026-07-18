@@ -1461,7 +1461,7 @@ function wrapFile(filename, content, promptLabel) {
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
 import { buildStewardshipBlock } from './stewardship.js';
-import { nextProjectionCue } from './gcal-projection.js';
+import { nextProjectionCue, gatherProjectionCandidates } from './gcal-projection.js';
 import { weatherEnabled } from './weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
@@ -2018,17 +2018,23 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
-    // ── Google-Calendar projection cue (§4) ──────────────────────────────
-    // The one Familiar-facing effect of inbound sync: newly-synced
-    // appointments not yet thought-through get a gentle "think two moves
-    // ahead" cue. Rides this turn (no standalone request); the candidate
-    // list already arrived in temporalPayload.gcal_projection. Ward-private
-    // (it's the ward's calendar); only live turns advance the turn-aging so
-    // previews/handoff summaries don't burn an item's window.
+    // ── Projection cue (gcal §4, generalized by the causal-chain fix) ────
+    // Appointments not yet thought-through get a gentle "think two moves
+    // ahead" cue. Rides this turn (no standalone request). Candidates are
+    // gathered in code from TWO sources: Unruh's gcal_projection flags
+    // (fresh sync arrivals — the fast path) unioned with any bare upcoming
+    // event in the briefing window (hand-added or chat-created, unresolved,
+    // no consequence edges touching it, ≥6h of runway). Ward-private; only
+    // live turns advance the turn-aging so previews/handoff summaries don't
+    // burn an item's window.
     let gcalCueBlock = '';
     if (liveTurn && !staticOnly && !gated) {
       try {
-        const candidates = Array.isArray(temporalPayload?.gcal_projection) ? temporalPayload.gcal_projection : [];
+        const candidates = gatherProjectionCandidates({
+          window: temporalPayload?.schedule?.window,
+          edges: temporalPayload?.schedule?.edges,
+          gcalFlagged: temporalPayload?.gcal_projection,
+        });
         let weatherOn = false;
         try { weatherOn = weatherEnabled(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))); } catch { /* default off */ }
         gcalCueBlock = await nextProjectionCue({ candidates, advance: true, weatherOn });

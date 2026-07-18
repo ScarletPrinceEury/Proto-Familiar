@@ -630,3 +630,62 @@ test('no gcal legend note when nothing is gcal-sourced', () => {
   });
   assert.ok(!/Google Calendar/.test(out));
 });
+
+// ── Recently past, unexamined (causal-chain fix, piece 2) ─────────
+
+test('hindsight: a recently-past event with an ungraded forecast renders as a question with the edge id', () => {
+  const past = new Date(Date.now() - 6 * 3600_000).toISOString(); // 6h ago
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Dentist' }],
+      linked: [{ id: 'st', type: 'state', label: 'relief' }],
+      edges: [{ id: 'causes-x7', src: 'ev', dst: 'st', kind: 'causes',
+                payload: { condition: 'on_resolve', valence: 'help', certainty: 'medium' } }],
+    },
+  });
+  assert.match(out, /Recently past, not yet examined/);
+  assert.match(out, /Dentist was .* — I projected: Dentist → causes → relief/);
+  assert.match(out, /Did that follow\? \(edge: causes-x7\)/);
+  assert.match(out, /schedule_calibrate_link/);
+});
+
+test('hindsight: graded (observed) edges, old events, and future events are all excluded', () => {
+  const justPast = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const longPast = new Date(Date.now() - 80 * 3600_000).toISOString(); // outside 72h
+  const future   = new Date(Date.now() + 6 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'graded', type: 'event', when: justPast, label: 'Graded event' },
+        { id: 'old', type: 'event', when: longPast, label: 'Old event' },
+        { id: 'coming', type: 'event', when: future, label: 'Future event' },
+      ],
+      linked: [{ id: 'st', type: 'state', label: 'crash' }],
+      edges: [
+        { id: 'e1', src: 'graded', dst: 'st', kind: 'causes', payload: { valence: 'harm', observed: true } },
+        { id: 'e2', src: 'old', dst: 'st', kind: 'causes', payload: { valence: 'harm', certainty: 'low' } },
+        { id: 'e3', src: 'coming', dst: 'st', kind: 'causes', payload: { valence: 'harm', certainty: 'low' } },
+      ],
+    },
+  });
+  assert.ok(!/Recently past, not yet examined/.test(out), `no hindsight section expected, got:\n${out}`);
+});
+
+test('hindsight: a resolved recent event still gets its forecast checked (with its resolution shown), capped at 3 lines', () => {
+  const past = new Date(Date.now() - 3 * 3600_000).toISOString();
+  const mkEdge = (i) => ({ id: `e${i}`, src: 'ev', dst: `st${i}`, kind: 'causes',
+                           payload: { condition: 'on_resolve', valence: 'help', certainty: 'low' } });
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Therapy', resolution: 'done', updated_at: past }],
+      linked: [0, 1, 2, 3].map(i => ({ id: `st${i}`, type: 'state', label: `state ${i}` })),
+      edges: [0, 1, 2, 3].map(mkEdge),
+    },
+  });
+  assert.match(out, /Therapy was .* \[done\] — I projected/);
+  const lines = out.split('\n').filter(l => /Did that follow\?/.test(l));
+  assert.equal(lines.length, 3, 'capped at 3 question lines');
+});

@@ -2,6 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isConsentCommand,
+  buildConsentHomeView,
+  buildCategoryView,
+  buildMemoriesView,
+  buildPendingView,
+  CONSENT_CID,
   parseConsentCommand,
   buildConsentMenu,
   consentHelpText,
@@ -87,5 +92,62 @@ describe('consentHelpText', () => {
     const t = consentHelpText('I don\'t know "frobnicate".');
     assert.match(t, /frobnicate/);
     assert.match(t, /keep\|ask\|never/);
+  });
+});
+
+// ── Visual menu builders ──────────────────────────────────────────
+
+describe('buildConsentHomeView', () => {
+  const villager = { id: 'v-sam', name: 'Sam', remember: { health_info: false } };
+  it('renders settings in the embed, a category select, and the browse buttons', () => {
+    const v = buildConsentHomeView({ villager, memCount: 3, pendingCount: 2 });
+    assert.match(v.embeds[0].description, /health.*never/);
+    const select = v.components[0].components[0];
+    assert.equal(select.type, 3);
+    assert.equal(select.custom_id, `${CONSENT_CID}:cat`);
+    assert.ok(select.options.length >= 5);
+    assert.match(select.options.find(o => o.value === 'health_info').description, /never/);
+    const labels = v.components[1].components.map(b => b.label);
+    assert.ok(labels.some(l => l.includes('What I remember (3)')));
+    assert.ok(labels.some(l => l.includes('Waiting for review (2)')));
+  });
+  it('zero-count browse buttons are disabled, not hidden', () => {
+    const v = buildConsentHomeView({ villager, memCount: 0, pendingCount: 0 });
+    const [mem, pend] = v.components[1].components;
+    assert.equal(mem.disabled, true);
+    assert.equal(pend.disabled, true);
+  });
+});
+
+describe('buildCategoryView', () => {
+  it('three gate buttons carry the set custom_ids', () => {
+    const v = buildCategoryView({ villager: { id: 'v', name: 'K', remember: {} }, category: 'health_info' });
+    const ids = v.components[0].components.map(b => b.custom_id);
+    assert.deepEqual(ids, [
+      `${CONSENT_CID}:set:health_info:keep`,
+      `${CONSENT_CID}:set:health_info:ask`,
+      `${CONSENT_CID}:set:health_info:never`,
+    ]);
+  });
+});
+
+describe('buildMemoriesView', () => {
+  const memories = Array.from({ length: 15 }, (_, i) => ({ id: `m${i}`, brief: `fact ${i}` }));
+  it('paginates and disables ends', () => {
+    const first = buildMemoriesView({ memories, page: 0 });
+    assert.equal(first.components[0].components[0].disabled, true);   // no newer
+    assert.equal(first.components[0].components[1].disabled, false);  // older exists
+    const last = buildMemoriesView({ memories, page: 99 });           // clamps
+    assert.equal(last.components[0].components[1].disabled, true);
+    assert.match(last.embeds[0].footer.text, /Page 3 of 3/);
+  });
+});
+
+describe('buildPendingView', () => {
+  it('settle-all buttons carry counts and disable when empty', () => {
+    const v = buildPendingView({ pending: [{ id: 'p1', brief: 'x' }] });
+    assert.match(v.components[0].components[0].label, /Keep all \(1\)/);
+    const empty = buildPendingView({ pending: [] });
+    assert.equal(empty.components[0].components[0].disabled, true);
   });
 });

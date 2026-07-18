@@ -42,7 +42,11 @@ import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
-import { isConsentCommand, parseConsentCommand, buildConsentMenu, applyConsentSet, consentHelpText } from './villager-consent.js';
+import {
+  isConsentCommand, parseConsentCommand, buildConsentMenu, applyConsentSet, consentHelpText,
+  CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,
+} from './villager-consent.js';
+import { findVillagerByAlias } from './village.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
@@ -1067,6 +1071,23 @@ async function sendChannelMessage(token, channelId, content) {
   }
 }
 
+/** One message carrying embeds + interactive components (the consent menu). */
+async function sendComponentMessage(token, channelId, { content, embeds, components }) {
+  return discordRest(token, `/channels/${channelId}/messages`, {
+    method: 'POST',
+    body: { content, embeds, components },
+  });
+}
+
+/** Answer an interaction. type 7 = UPDATE_MESSAGE (morph the menu in place).
+ *  The {id}/{token} pair in the URL is the auth for this call. */
+async function respondToInteraction(token, interaction, { type = 7, data }) {
+  await discordRest(token, `/interactions/${interaction.id}/${interaction.token}/callback`, {
+    method: 'POST',
+    body: { type, data },
+  });
+}
+
 // Ward-only `/update` control from a Discord conversation — the chat-side
 // twin of the web UI's update button. `/update` reports status against the
 // repo/branch this install tracks (fork now, upstream later — updater.js keys
@@ -1163,59 +1184,169 @@ function resolveLocationGate(audienceInput, registry) {
  *  drift from the other or quietly skip a safety step. `priorMessages` are
  *  appended before my reply (the incoming user turn for a live turn; empty
  *  for a revisit, where there is no new incoming message). */
-// `!consent` handler: fetch what I hold about this villager, render the
-// menu or apply their change, reply in their DM. Changes are audit-logged
-// (discord-writes) and visible to my human in the Village UI — mutual
-// transparency, no covert state movement in either direction.
+// Shared consent state fetch: this villager's kept facts + their slice of
+// the pending queue + their fresh registry row. One implementation for the
+// text menu, the visual menu, and every interaction view.
+async function consentStateFor(villager) {
+  const [mem, pending, registry] = await Promise.all([
+    getMemoriesBySubject({ villagerId: villager.id }).catch(() => ({ items: [] })),
+    readConsentPending().catch(() => []),
+    getRegistry().catch(() => null),
+  ]);
+  return {
+    memories: mem.items ?? [],
+    pending:  (Array.isArray(pending) ? pending : []).filter(p => p.villagerId === villager.id),
+    fresh:    registry?.villagers?.find(x => x.id === villager.id) ?? villager,
+  };
+}
+
+// Apply a gate change AND settle the villager's pending items in those
+// categories (keep -> confirmed, never -> dropped, ask -> left queued) —
+// the original "ask" intent: the person the fact is about answers. Shared
+// by the text command and the menu buttons. Returns { text, settled }.
+async function applyConsentAndSettle({ villager, gate, categories, locationKey }) {
+  const text = await applyConsentSet({ villagerId: villager.id, gate, categories });
+  let settled = 0;
+  if (gate !== 'ask') {
+    try {
+      const pending = await readConsentPending().catch(() => []);
+      const mine = (Array.isArray(pending) ? pending : [])
+        .filter(p => p.villagerId === villager.id && categories.includes(p.category));
+      if (mine.length) {
+        const ids = mine.map(p => p.id);
+        if (gate === true) await confirmConsentMemories(ids);
+        else               await dropPendingMemories(ids);
+        await pruneConsentPending(ids);
+        settled = ids.length;
+      }
+    } catch (err) {
+      console.error('[discord] consent pending-sweep failed:', err?.message ?? err);
+    }
+  }
+  logDiscordWrite({
+    villager: villager.name, tool: 'consent_set', locationKey,
+    args: { gate: gate === true ? 'keep' : gate === false ? 'never' : 'ask', categories },
+  }).catch(() => { /* best-effort audit */ });
+  console.log(`[discord] consent: ${villager.name} set ${categories.join(',')} -> ${gate}${settled ? ` (settled ${settled} pending)` : ''}`);
+  return { text: settled ? `${text}\n(That also settled ${settled} waiting item${settled === 1 ? '' : 's'}: ${gate === true ? 'kept' : 'dropped'}.)` : text, settled };
+}
+
+// `!consent` in a villager's DM: send the VISUAL menu (embed + dropdown +
+// buttons — one message that morphs via interactions). Text subcommands
+// (`!consent keep health`) still work, and if the component send fails
+// (API change, permissions) the plain-text menu is the fallback — the
+// surface degrades, never disappears.
 async function handleConsentCommand(gw, { msg, decision }) {
   const v = decision.villager;
   try {
     const cmd = parseConsentCommand(msg.content) ?? { action: 'help' };
-    let reply;
-    if (cmd.action === 'menu') {
-      const [mem, pending, registry] = await Promise.all([
-        getMemoriesBySubject({ villagerId: v.id }).catch(() => ({ items: [] })),
-        readConsentPending().catch(() => []),
-        getRegistry().catch(() => null),
-      ]);
-      const mine  = (Array.isArray(pending) ? pending : []).filter(p => p.villagerId === v.id);
-      const fresh = registry?.villagers?.find(x => x.id === v.id) ?? v;
-      reply = buildConsentMenu({ villager: fresh, memories: mem.items ?? [], pending: mine });
-    } else if (cmd.action === 'set') {
-      reply = await applyConsentSet({ villagerId: v.id, gate: cmd.gate, categories: cmd.categories });
-      // Their answer also settles what's already WAITING about them in the
-      // affected categories: keep -> confirmed into memory, never -> dropped,
-      // ask -> stays queued. This is the original "ask" intent — the person
-      // the fact is about gets to answer, not only my human.
-      if (cmd.gate !== 'ask') {
-        try {
-          const pending = await readConsentPending().catch(() => []);
-          const mine = (Array.isArray(pending) ? pending : [])
-            .filter(p => p.villagerId === v.id && cmd.categories.includes(p.category));
-          if (mine.length) {
-            const ids = mine.map(p => p.id);
-            if (cmd.gate === true) await confirmConsentMemories(ids);
-            else                   await dropPendingMemories(ids);
-            await pruneConsentPending(ids);
-            reply += `\n(That also settled ${ids.length} waiting item${ids.length === 1 ? '' : 's'} about you: ${cmd.gate === true ? 'kept' : 'dropped'}.)`;
-          }
-        } catch (err) {
-          console.error('[discord] consent pending-sweep failed:', err?.message ?? err);
-        }
-      }
-      logDiscordWrite({
-        villager: v.name, tool: 'consent_set', locationKey: decision.locationKey,
-        args: { gate: cmd.gate === true ? 'keep' : cmd.gate === false ? 'never' : 'ask', categories: cmd.categories },
-      }).catch(() => { /* best-effort audit */ });
-      console.log(`[discord] consent: ${v.name} set ${cmd.categories.join(',')} -> ${cmd.gate}`);
-    } else {
-      reply = consentHelpText(cmd.error);
+    if (cmd.action === 'set') {
+      const { text } = await applyConsentAndSettle({ villager: v, gate: cmd.gate, categories: cmd.categories, locationKey: decision.locationKey });
+      await sendChannelMessage(gw.config.token, msg.channel_id, text);
+      return;
     }
-    await sendChannelMessage(gw.config.token, msg.channel_id, reply);
+    if (cmd.action === 'help') {
+      await sendChannelMessage(gw.config.token, msg.channel_id, consentHelpText(cmd.error));
+      return;
+    }
+    const { memories, pending, fresh } = await consentStateFor(v);
+    try {
+      const view = buildConsentHomeView({ villager: fresh, memCount: memories.length, pendingCount: pending.length });
+      await sendComponentMessage(gw.config.token, msg.channel_id, view);
+    } catch (err) {
+      console.error('[discord] component menu failed — falling back to text:', err?.message ?? err);
+      await sendChannelMessage(gw.config.token, msg.channel_id,
+        buildConsentMenu({ villager: fresh, memories, pending }));
+    }
   } catch (err) {
     console.error('[discord] consent command failed:', err?.message ?? err);
     await sendChannelMessage(gw.config.token, msg.channel_id,
       'Something went wrong opening your consent menu just now — it\'s been logged.').catch(() => {});
+  }
+}
+
+// A click/selection on the consent menu. Identity is re-resolved from the
+// INTERACTING user on every event — custom_ids carry only the action, so a
+// forwarded or aged message can never act as someone else. Unrecognized
+// users get the controls stripped.
+async function handleConsentInteraction(gw, d) {
+  const cid = d.data?.custom_id ?? '';
+  const userId = d.user?.id ?? d.member?.user?.id;
+  const respond = (data) => respondToInteraction(gw.config.token, d, { type: 7, data });
+  try {
+    const villager = userId ? await findVillagerByAlias({ platform: 'discord', id: userId }) : null;
+    if (!villager) {
+      await respond({ embeds: [{ description: 'This menu isn\'t yours to use.' }], components: [] });
+      return;
+    }
+    const parts = cid.split(':');   // pfconsent:<verb>[:...]
+    const verb = parts[1];
+    const locationKey = `discord:dm:${d.channel_id}`;
+
+    if (verb === 'done') {
+      await respond(buildDoneView({ villager }));
+      return;
+    }
+    if (verb === 'home') {
+      const { memories, pending, fresh } = await consentStateFor(villager);
+      await respond(buildConsentHomeView({ villager: fresh, memCount: memories.length, pendingCount: pending.length }));
+      return;
+    }
+    if (verb === 'cat') {
+      const category = d.data?.values?.[0];
+      const { fresh } = await consentStateFor(villager);
+      await respond(buildCategoryView({ villager: fresh, category }));
+      return;
+    }
+    if (verb === 'set') {
+      const [, , category, gateWord] = parts;
+      const gate = gateWord === 'keep' ? true : gateWord === 'never' ? false : 'ask';
+      const { settled } = await applyConsentAndSettle({ villager, gate, categories: [category], locationKey });
+      const { memories, pending, fresh } = await consentStateFor(villager);
+      await respond(buildConsentHomeView({
+        villager: fresh, memCount: memories.length, pendingCount: pending.length,
+        note: `✓ Saved — **${category.replace('_', ' ')}** is now **${gateWord}**${settled ? ` (settled ${settled} waiting item${settled === 1 ? '' : 's'})` : ''}.`,
+      }));
+      return;
+    }
+    if (verb === 'mem') {
+      const page = parseInt(parts[2] ?? '0', 10) || 0;
+      const { memories } = await consentStateFor(villager);
+      await respond(buildMemoriesView({ memories, page }));
+      return;
+    }
+    if (verb === 'pending') {
+      const { pending } = await consentStateFor(villager);
+      await respond(buildPendingView({ pending }));
+      return;
+    }
+    if (verb === 'pendall') {
+      const keep = parts[2] === 'keep';
+      const { pending } = await consentStateFor(villager);
+      const ids = pending.map(p => p.id);
+      if (ids.length) {
+        if (keep) await confirmConsentMemories(ids);
+        else      await dropPendingMemories(ids);
+        await pruneConsentPending(ids);
+        logDiscordWrite({
+          villager: villager.name, tool: keep ? 'consent_pending_keep_all' : 'consent_pending_drop_all',
+          locationKey, args: { count: ids.length },
+        }).catch(() => {});
+        console.log(`[discord] consent: ${villager.name} ${keep ? 'kept' : 'dropped'} ${ids.length} pending`);
+      }
+      const { memories, pending: left, fresh } = await consentStateFor(villager);
+      await respond(buildConsentHomeView({
+        villager: fresh, memCount: memories.length, pendingCount: left.length,
+        note: ids.length ? `✓ ${keep ? 'Kept' : 'Dropped'} ${ids.length} waiting item${ids.length === 1 ? '' : 's'}.` : '',
+      }));
+      return;
+    }
+    await respond({ embeds: [{ description: 'That control has expired — type `!consent` for a fresh menu.' }], components: [] });
+  } catch (err) {
+    console.error('[discord] consent interaction failed:', err?.message ?? err);
+    try {
+      await respondToInteraction(gw.config.token, d, { type: 7, data: { embeds: [{ description: 'Something went wrong — type `!consent` to try again.' }], components: [] } });
+    } catch { /* interaction already dead */ }
   }
 }
 
@@ -1823,6 +1954,19 @@ function onDispatch(t, d) {
     gw.status.connected = true;
     gw.reconnectAttempts = 0;
     console.log('[discord] gateway session resumed');
+    return;
+  }
+  if (t === 'INTERACTION_CREATE') {
+    // Component clicks on the consent menu (type 3 = MESSAGE_COMPONENT).
+    // Anything else — unknown namespace, other interaction types — is
+    // ignored; there is nothing else interactive to click. Wrapped like
+    // MESSAGE_CREATE: a bad interaction can never tear the gateway down.
+    if (d?.type === 3 && String(d?.data?.custom_id ?? '').startsWith(`${CONSENT_CID}:`)) {
+      (async () => {
+        try { await handleConsentInteraction(gw, d); }
+        catch (err) { console.error('[discord] interaction handler error:', err?.message ?? err); }
+      })();
+    }
     return;
   }
   if (t === 'MESSAGE_CREATE') {
