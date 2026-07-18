@@ -41,6 +41,18 @@ sources:
   - id: unruh-gcal
     type: file
     path: unruh/src/unruh/gcal.py
+  - id: gcal-projection
+    type: file
+    path: gcal-projection.js
+  - id: cerebellum
+    type: file
+    path: cerebellum.js
+  - id: server
+    type: file
+    path: server.js
+  - id: causal-chain-spec
+    type: file
+    path: docs/causal-chain-fix-build-spec.md
 ---
 
 # Unruh
@@ -197,6 +209,51 @@ violate [Proactivity over caution](../decisions/proactivity-over-caution)'s stan
 the Familiar may act: the judgment already happened, at write time, and firing is just
 follow-through [@fable-review-conversation]. This is a design lens on already-shipped behavior,
 not a code change.
+
+## The consequence-graph milestone (0.8.107): causal-chain fix
+
+Events can be related by consequence edges — "I predicted this would cause that," "I'm anxious
+about tomorrow so I'm prepping today" — but for months, those edges existed in the data layer
+without being visible when the Familiar most needed them: before writing a forecast (will my
+earlier effort matter?) and after making a forecast (did it play out?) [@unruh-design]. The
+defect and its three-part fix shipped in 0.8.107-alpha (PR #218):
+
+**Piece 1: Gathering projection candidates.** `gatherProjectionCandidates()` (in
+`gcal-projection.js`) unions Unruh's scheduled `gcal_projection` flags with *any* bare upcoming
+event in the briefing window that is unresolved, carries no consequence edges yet, and has at
+least 6 hours of runway (MIN_LEAD_MS = 6h) [@gcal-projection]. The `gcal_projection` flags
+come from the ward explicitly marking which calendar events matter for the Familiar's reasoning;
+the bare-event pass catches hand-added schedule nodes or chat-created events that lack those
+marks but deserve projection. The projection candidates are paced through the existing cue-state
+system (`tomes/.gcal-projection-cue.json`) rather than per-node payload cooldowns, so both
+sources share one pacing regime [@gcal-projection]. Items whose projection window has aged out
+get a single last-chance re-surface within 48 hours of their event (LAST_CHANCE_MS = 48h),
+ward-approved decision 2 — the only opportunity to mark them before they slip past [@gcal-projection].
+
+**Piece 2: Surfacing recently-past hindsight questions.** `temporal-format.js` renders a new
+"Recently past, not yet examined" block for events in the window [now − 72h, now] that carry
+ungraded consequence edges (edges where the `observed` field is not yet true, meaning the
+Familiar made a forecast but has not yet recorded whether it came true) [@temporal-format-js].
+This block surfaces the edges as hindsight questions the Familiar can answer: "I projected:
+[source] → [verb] → [destination]. Did that follow?" (edge: `edge-id`). The block is capped at
+3 lines to keep it scannable [@temporal-format-js]. Before this fix, consequence edge ids were not
+actionable from the chat at all — the design principle "a hindsight question whose answer can't
+be recorded is theater" [@temporal-format-js] made this gap a reachability bug.
+
+This is paired with a new tool: **`schedule_calibrate_link`** (in `cerebellum.js`), routed
+through the `schedule-write` module, allows the Familiar to grade a consequence edge inline
+from chat — recording `observed: true` if the forecast came true, or adjusting `certainty`
+up/down if the outcome was partially or surprisingly different [@cerebellum]. The tool is
+triggered by the cue + hindsight block markers in the temporal briefing.
+
+**Piece 3: Widening the reflection window.** `server.js`'s `getReflectionInput()` function
+widened the schedule-fetch window from the default centred-on-now (~24h) to ward-local
+−7d..+2d, since the grading moment always scrolled past the original window [@server].
+Each graded edge now carries `from_when` (the node's timestamp it was graded from), so future
+passes can distinguish edges graded fresh from those resolved long ago [@unruh-db].
+
+**Not shipped: Piece 4.** Elapsed stamping of past events was specified but not built; it awaits
+ward sign-off, per the spec's safety note [@causal-chain-spec].
 
 ## Design intent: plan review and baseline as a decaying process, not a snapshot
 
