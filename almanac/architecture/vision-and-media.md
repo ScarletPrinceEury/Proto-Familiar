@@ -8,6 +8,9 @@ sources:
   - id: vision-js
     type: file
     path: vision.js
+  - id: zai-vision-js
+    type: file
+    path: zai-vision.js
   - id: slug-ids-js
     type: file
     path: slug-ids.js
@@ -23,6 +26,9 @@ sources:
   - id: discord-gateway-js
     type: file
     path: discord-gateway.js
+  - id: providers-js
+    type: file
+    path: providers.js
 ---
 
 # Vision and Media Input
@@ -148,6 +154,22 @@ Images are saved through `saveAsset()` with `origin.surface='discord'`, `origin.
 
 **Import structure**: `discord-gateway.js` imports `saveAsset` + caps from `media.js` and `materializeAttachments` + `resolveVisionCapable` from `vision.js`. No cycle: `media.js` and `vision.js` do not import `discord-gateway.js`.
 
+## z.ai Coding Plan vision allotment (0.9.5-alpha, PR #220)
+
+The z.ai Coding Plan delivers vision through a separate, quota-isolated channel: a "Vision Understanding" MCP server (`@z_ai/mcp-server`, powered by GLM-4.6V) with its own 5-hour prompt resource pool, distinct from the coding-prompt allotment [@zai-vision-js]. The `zai-coding` provider connects to `https://api.z.ai/api/coding/paas/v4/chat/completions` [@providers-js].
+
+A `zai-coding` connection can DESCRIBE images via this allotment, even though its chat models (GLM-4.6, GLM-5.2) cannot see live `image_url` parts [@zai-vision-js]. The `describeAsset()` path checks `conn.provider === 'zai-coding'` and routes to `describeViaZaiVision()` instead of `callProviderChat` [@vision-js], using dynamic import to keep the MCP spawn out of vision.js's static graph [@vision-js].
+
+**The MCP client** (`zai-vision.js`) lazily spawns `@z_ai/mcp-server` as a stdio child (via StdioClientTransport, the same SDK Phylactery/Unruh use), keyed by API key (respawning on key change) with env `Z_AI_API_KEY` + `Z_AI_MODE=ZAI` [@zai-vision-js]. The server is installed on first use via `npx -y` and the spawn command is overridable via `PROTO_FAMILIAR_ZAI_MCP_COMMAND` (used by tests to avoid a real spawn) [@zai-vision-js]. The client discovers the `analyze_image` tool and its `inputSchema` at connect time, adapting the tool call to whatever parameter names the server uses — a `path` field → temp file on disk, a `url` field → data URL, a `base64` field → raw base64 — and filling a prompt-shaped parameter with the first-person describe prompt [@zai-vision-js].
+
+**Graceful**: any spawn/connect/call failure returns `{ok:false}`, leaving the image description null (retried later) and never breaking the chat turn [@zai-vision-js]. Off-switch: `PROTO_FAMILIAR_ZAI_VISION_DISABLED=1` [@zai-vision-js]. Shutdown is wired into `server.js` via dynamic import [@zai-vision-js].
+
+**Live capability**: `resolveVisionCapable()` returns `false` for `zai-coding` (the coding chat models cannot see images on the wire), so images always degrade to stand-ins in the live turn [@vision-js]. This is separate from describe-capability: `isDescribeCapable()` returns `true` for `zai-coding` because it can describe through the Vision MCP [@vision-js].
+
+**Net effect**: a ward on the Coding Plan assigns their `zai-coding` connection to the vision feature → every image is DESCRIBED via the coding vision allotment, then read as a text stand-in, on z.ai's quota rather than a separate pay-as-you-go vision key [@vision-js].
+
+**Unverified**: the real @z_ai/mcp-server spawn was NOT tested end-to-end (requires a coding key + network access) [@zai-vision-js]. Built defensively with runtime schema discovery and graceful degradation; the `analyze_image` param name/shape is the main unknown. All failures degrade to `description=null`, never breaking the chat path.
+
 ## Image descriptions feeding threat scoring
 
 Starting in 0.9.2-alpha (PR #219), image descriptions are also consumed by the safety spine: `scoreImageDescriptionThreat()` scores the description using the same crisis-signals pattern matcher that scores typed text, then feeds any positive delta through `recordThreat()` with `source:'vision'` [@vision-js]. The mechanism is orchestration around existing `crisis-signals.js` and `threat-tracker.js`; neither scorer nor tracker changed [@vision-js]. Three constraints are ward-signed: full weighting (image signals count the same as typed distress, no damping), raise-only (images can only increase threat, never lower it), and ward-images-only (only images marked `audienceTag === 'ward-private'` move threat, so villagers' shared bytes never alter the ward's safety state) [@vision-js].
@@ -156,13 +178,14 @@ The feature is known to false-positive on fictional violence (horror film stills
 
 ## Vision milestone status
 
-The vision milestone is feature-complete as of 0.9.4-alpha (PR #219):
+The vision milestone remains feature-complete as of 0.9.5-alpha (PR #220):
 
 - **Pass 1** (0.9.0): introductory vision spine
 - **Pass 2** (0.9.1): sight-for-everything + picture→node linking
 - **Pass 2 tail** (0.9.3): composer tag UI + node graduation
 - **Image threat scoring** (0.9.2): image descriptions consumed by the safety spine
 - **Pass 3** (0.9.4): Discord image ingest
+- **z.ai Coding Plan vision allotment** (0.9.5-alpha, PR #220): describe-only vision via z.ai's Vision MCP for the Coding Plan quota
 
 ## Deferred work
 
