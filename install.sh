@@ -96,8 +96,8 @@ fi
 if [ "$MODE" = "update" ]; then
   if [ -d "$SCRIPT_DIR/.git" ] && command -v git >/dev/null 2>&1; then
     say "Pulling latest Proto-Familiar (git pull --ff-only)..."
-    if ! ( cd "$SCRIPT_DIR" && git pull --ff-only ); then
-      warn "git pull --ff-only failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
+    if ! ( cd "$SCRIPT_DIR" && git pull --ff-only origin main ); then
+      warn "git pull --ff-only origin main failed (local changes, non-default branch, or no network). Continuing with current checkout — your work tree is unchanged."
     fi
   elif [ ! -d "$SCRIPT_DIR/.git" ] && [ "$PF_FROM_UPDATER" != "1" ]; then
     # No .git means this is a downloaded ZIP, not a clone — the installer
@@ -106,7 +106,7 @@ if [ "$MODE" = "update" ]; then
     warn "This folder is NOT a git checkout — it looks like a downloaded ZIP."
     warn "  install.sh can't pull updates here. To update, run ./update.sh —"
     warn "  it downloads the latest version and applies it, keeping your data."
-    warn "  (Or reinstall with: git clone https://github.com/ScarletPrinceEury/Proto-Familiar.git)"
+    warn "  (Or reinstall with: git clone -b main https://github.com/ActualBroeckchen/Familiar.git)"
   fi
 fi
 
@@ -364,6 +364,7 @@ else
   say "Branch:  (not a git checkout — downloaded ZIP; update with ./update.sh)"
 fi
 echo
+
 echo "  Launch:"
 case "$UNAME" in
   Darwin) echo "    - Double-click Proto-Familiar.command in Finder";;
