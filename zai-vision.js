@@ -201,9 +201,11 @@ export async function describeViaZaiVision({ apiKey, buffer, mime, prompt } = {}
       await fsp.writeFile(tmpPath, buffer);
       for (const k of Object.keys(args)) if (args[k] === '__PENDING__') args[k] = tmpPath;
     }
-    // Log the arg SHAPE (keys + which one carries the image, never the bytes) so
-    // a rejected call shows exactly what we sent vs. what the schema wanted.
-    console.log(`[zai-vision] calling ${_toolName} (image param: ${imageKey}=${needsFile ? 'file' : args[imageKey]?.slice?.(0, 12) + '…'}; keys: ${Object.keys(args).join(', ')})`);
+    // Log the arg SHAPE (keys + which representation carries the image, never
+    // any of the bytes) so a rejected call shows what we sent vs. what the
+    // schema wanted — without leaking a fragment of the image into the logs.
+    const imageRepr = needsFile ? 'file-path' : /^data:/.test(args[imageKey] ?? '') ? 'data-url' : 'base64';
+    console.log(`[zai-vision] calling ${_toolName} (image param: ${imageKey}=<${imageRepr}>; keys: ${Object.keys(args).join(', ')})`);
     let callTimer;
     let result;
     try {

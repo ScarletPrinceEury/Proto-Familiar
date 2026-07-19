@@ -398,7 +398,10 @@ export function buildStandin(meta, { now = Date.now() } = {}) {
   const linkPart = links.length ? ` — of ${links.map(l => l.label).join(', ')}` : '';
   const when = meta.receivedAt ? (relativeTime(meta.receivedAt, now) || '') : '';
   const whenPart = when ? `, ${when}` : '';
-  return `[image ${slug}${linkPart} — ${body} (${sharedByPhrase(meta)}${whenPart})]`;
+  // Delimiter after the id stays `: ` — the whole codebase (view_image's tool
+  // description, the "no longer available" forms, tool-surfacing) reads the
+  // marker as `[image <id>: …]`; only the BODY prose carries the reframing.
+  return `[image ${slug}: ${body}${linkPart} — ${sharedByPhrase(meta)}${whenPart}]`;
 }
 
 /**

@@ -117,7 +117,8 @@ test('buildStandin frames the description as my own past look', async () => {
   const undesc = await track(await saveAsset({ buffer: gif(2, 2), mime: 'image/gif', label: 'note' }));
   const s1 = buildStandin(undesc);
   // Undescribed stays honest — but as "I haven't looked", never file-metadata.
-  assert.match(s1, /^\[image note-[a-z0-9]{2} — I haven't looked at this one yet \(shared by my human/);
+  // Delimiter after the id stays `: ` (codebase-wide marker convention).
+  assert.match(s1, /^\[image note-[a-z0-9]{2}: I haven't looked at this one yet — shared by my human/);
 
   const described = await setAssetDescription(undesc.id, { text: 'a sticky note reading buy milk' });
   const s2 = buildStandin(described);
