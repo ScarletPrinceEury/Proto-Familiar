@@ -18,6 +18,41 @@ vision-capable turn).
 
 ---
 
+## 0.0 Inherited from the 0.9 vision post-mortem
+
+Browsing is the sharpest test yet of the vision post-mortem's rules
+(CLAUDE.md, "Lessons cut into law") — it adds a new tool-loop, new
+fire-and-forget enrichment (screenshot describes), a hard step budget, and a
+whole new surface. All three rules bind here, not as afterthoughts:
+
+- **RULE A — no parallel raw-call path.** Every LLM call this spec adds (the
+  action-planner turn, any page-summarisation call) routes through
+  `callProviderChat` / the shared turn machinery, inheriting the ≥4000 cap +
+  `extractContent`. A browser-specific raw fetch is the 0.9.7 Discord bug
+  waiting to happen on a thinking model.
+- **RULE C — a surface matrix, in the spec, before Pass 2.** web live turn /
+  web tool rounds / Discord ward / Discord villager+ambient / background
+  loops — each browser mechanism (a screenshot becoming a media asset, the
+  describe wiring, the action loop) gets a row marked wired-or-N/A. The
+  describe-wiring miss (0.9.6, web got it, Discord didn't) is *exactly* the
+  failure a screenshot-describe on one surface but not another would repeat.
+- **The blind-describe question is mandatory here** (0.9.6): a screenshot's
+  description must land *before* the planner reasons about the page, never
+  fire-and-forget after the plan is already composed. Any step that reads a
+  page and then decides the next action answers, in writing, *what is in
+  context at the moment the decision is made?*
+- **RULE B — a spent step budget is never silence.** When the action cap /
+  timeout / navigation-loop guard trips with the task unfinished, the
+  Familiar's own context must record that it stopped early and why (not an
+  empty return it confabulates into "done"), my human sees the partial
+  progress, and the log line fires. Mirror the 0.9.7 closing-text-round
+  pattern.
+- **A PIPELINE test per pass** — a full navigation turn through the real
+  assembly with a stubbed browser + stubbed provider, not only pure-function
+  guard/parse tests.
+
+---
+
 ## 0. What this builds on
 
 ### 0.1 The existing web stack (this spec extends it, never duplicates it)

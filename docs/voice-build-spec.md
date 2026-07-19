@@ -153,6 +153,35 @@ Endpoint (`POST /api/diagnostics/voice-bench` + a progress poll) sits behind
 the same localhost/Tailscale gate as everything; nothing runs unattended, no
 loop, nothing stored beyond the report file and (if kept) the models.
 
+### 0.6 Inherited from the 0.9 vision post-mortem
+
+Voice is a **new surface** in exactly the sense the vision post-mortem means
+it (CLAUDE.md, "Lessons cut into law"): it must route through the shared
+turn path — the materializer seam, the describe-once cache, the outgoing
+sanitizers, the per-surface round budgets, `extractContent` at every reply
+boundary — rather than growing its own parallel raw-call path through
+`call-engine.js`. A voice-specific `callProviderChat` bypass is exactly the
+mistake that starved Discord's turn path in 0.9.7.
+
+- **The build spec carries a surface matrix** (RULE C): web live turn / web
+  tool rounds / Discord ward / Discord villager+ambient / voice call /
+  background loops — each new mechanism this spec adds (barge-in, the
+  earcon, the compute governor's deferral) gets a row, marked wired-or-N/A,
+  before Pass 2 ships.
+- **A mandatory design question for every latency-driven shortcut:** *what
+  exists in context at the moment the reply starts being spoken?* The
+  blind-describe bug (0.9.6 — a reply composed before an image's description
+  landed) becomes a first-class question here because voice latency pushes
+  toward the same shortcut — fire off TTS on the first sentence while
+  something is still resolving in the background. §4.4's earcon-bridged
+  budget is the answer for enrichment; any *other* fire-and-forget added
+  later must answer the same question in writing, not by assumption.
+- **Budget exhaustion must be AUDIBLE** (RULE B, spoken form): a tool-round
+  cap, a tick timeout, a dropped context block — none of these may resolve
+  to dead air. The spoken equivalent of the closing text round is a short
+  spoken "I didn't get to that" before the call goes quiet, never silence
+  the human has to interpret as a hang or a crash.
+
 ---
 
 ## 1. The shape — voice is transcription at the edge; the core stays text

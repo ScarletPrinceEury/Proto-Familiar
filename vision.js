@@ -215,6 +215,17 @@ export async function materializeAttachments(apiMessages, {
       out.push({ ...stripAtt(msg), content: text });
     }
   }
+  // Legibility (0.9.9): the stand-in convention gets ONE explaining line
+  // whenever stand-ins are present — a convention the model was never told
+  // about is a capability it doesn't have (the discoverability rule). Injected
+  // HERE, in the shared seam, so every surface gets it without per-surface
+  // wiring. First person, server-injected → literal "my human".
+  if (imagesStoodIn > 0) {
+    out.push({
+      role: 'system',
+      content: '[The [image …] notes in this conversation are images that were shared with me. "What I saw when I looked" is exactly that — I looked at the image and those are my own words about it. I talk about these images naturally, from what I saw. One marked "I haven\'t looked at this one yet" is one I genuinely haven\'t seen.]',
+    });
+  }
   return { messages: out, imagesLive, imagesStoodIn, stoodInUndescribed };
 }
 
@@ -388,8 +399,16 @@ export async function ensureDescribed(messages, settings = {}, { fetchFn = fetch
       res = await Promise.race([p, new Promise(r => { timer = setTimeout(() => r('__timeout__'), perImageTimeoutMs); })]);
     } catch { res = null; }
     finally { clearTimeout(timer); }
-    if (res === '__timeout__') { p.catch(() => {}); }             // finish in the background
-    else if (res && res.ok !== false && res.description) described++;
+    if (res === '__timeout__') {
+      console.warn(`[vision] describe of ${String(id).slice(0, 8)} exceeded ${perImageTimeoutMs}ms — finishing in the background`);
+      p.catch(() => {});
+    } else if (res && res.ok !== false && res.description) {
+      described++;
+    } else if (res && res.ok === false) {
+      // Loud: a silent describe failure is exactly how "the Familiar answers
+      // blind and nobody knows why" happens.
+      console.warn(`[vision] describe of ${String(id).slice(0, 8)} FAILED: ${res.reason ?? 'unknown'}`);
+    }
   }
   return { described };
 }

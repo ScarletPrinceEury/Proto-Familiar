@@ -371,20 +371,25 @@ function sharedByPhrase(meta) {
 
 /**
  * The single code-built stand-in line for one asset. Uses the PREFERRED
- * (first) slug — the meaning-bearing one once a description has landed. The
- * description text (or an honest "not yet described" / "no vision connection
- * available to look"), the source, and a machine relative-time render.
+ * (first) slug — the meaning-bearing one once a description has landed.
+ *
+ * FRAMING IS LOAD-BEARING (0.9.9): a described stand-in must read as the
+ * Familiar's OWN PAST LOOK ("what I saw when I looked"), not as metadata about
+ * an inaccessible file. Without that framing the model reads the note as
+ * proof it CAN'T see and disclaims — the reported "still can't see the image"
+ * failure, with the description sitting right there in context. The
+ * undescribed forms stay honest ("I haven't looked at this one yet").
  */
 export function buildStandin(meta, { now = Date.now() } = {}) {
   if (!meta || !meta.id) return '';
   const slug = meta.slugs?.[0] ?? meta.id;
   let body;
   if (meta.description && typeof meta.description.text === 'string' && meta.description.text.trim()) {
-    body = meta.description.text.trim();
+    body = `what I saw when I looked: ${meta.description.text.trim()}`;
   } else if (meta.description === null) {
-    body = 'not yet described';
+    body = "I haven't looked at this one yet";
   } else {
-    body = 'no vision connection available to look';
+    body = 'I have no way to look at images right now';
   }
   // Named node links (picture→node, §6.5) ride in the stand-in so the Familiar
   // reads WHO/WHAT an image depicts — continuity across everything it's seen of
@@ -393,6 +398,9 @@ export function buildStandin(meta, { now = Date.now() } = {}) {
   const linkPart = links.length ? ` — of ${links.map(l => l.label).join(', ')}` : '';
   const when = meta.receivedAt ? (relativeTime(meta.receivedAt, now) || '') : '';
   const whenPart = when ? `, ${when}` : '';
+  // Delimiter after the id stays `: ` — the whole codebase (view_image's tool
+  // description, the "no longer available" forms, tool-surfacing) reads the
+  // marker as `[image <id>: …]`; only the BODY prose carries the reframing.
   return `[image ${slug}: ${body}${linkPart} — ${sharedByPhrase(meta)}${whenPart}]`;
 }
 

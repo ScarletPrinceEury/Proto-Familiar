@@ -113,14 +113,17 @@ test('a caption-derived slug is NOT churned when a description lands', async () 
   assert.equal(updated.slugs[0], first);   // kept — arrival slug was already meaningful
 });
 
-test('buildStandin renders id, description state, and source', async () => {
+test('buildStandin frames the description as my own past look', async () => {
   const undesc = await track(await saveAsset({ buffer: gif(2, 2), mime: 'image/gif', label: 'note' }));
   const s1 = buildStandin(undesc);
-  assert.match(s1, /^\[image note-[a-z0-9]{2}: not yet described — shared by my human/);
+  // Undescribed stays honest — but as "I haven't looked", never file-metadata.
+  // Delimiter after the id stays `: ` (codebase-wide marker convention).
+  assert.match(s1, /^\[image note-[a-z0-9]{2}: I haven't looked at this one yet — shared by my human/);
 
   const described = await setAssetDescription(undesc.id, { text: 'a sticky note reading buy milk' });
   const s2 = buildStandin(described);
-  assert.match(s2, /a sticky note reading buy milk/);
+  // The load-bearing framing: the description reads as the Familiar's own look.
+  assert.match(s2, /what I saw when I looked: a sticky note reading buy milk/);
 
   const villager = await track(await saveAsset({
     buffer: jpeg(6, 6), mime: 'image/jpeg', label: 'pic',
