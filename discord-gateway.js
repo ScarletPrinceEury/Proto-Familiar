@@ -35,13 +35,21 @@ import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { sessionSlugId } from './slug-ids.js';
 
-import { enrich, withLock, getScheduleWindow } from './thalamus.js';
+import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
-import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
+import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
+import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
+import { extractContent } from './llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';
-import { enqueueSessionByDay } from './memorization.js';
+import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
+import {
+  isConsentCommand, parseConsentCommand, buildConsentMenu, applyConsentSet, consentHelpText,
+  CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,
+} from './villager-consent.js';
+import { findVillagerByAlias } from './village.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
@@ -145,9 +153,11 @@ const REVISIT_MAX_DEFER = 2;           // may re-defer this many times total
 
 let revisitTimer = null;
 
-/** Parse a [later:…] token. Returns ms until the revisit, or null. */
+/** Parse a [later:…] token — whole-message OR leading ("[later:20m]
+ * because they might wrap up…" defers, trailing reasoning discarded).
+ * Returns ms until the revisit, or null. */
 export function parseDeferToken(text) {
-  const m = String(text ?? '').trim().match(/^\[later:([^\]]+)\]$/i);
+  const m = String(text ?? '').trim().match(/^\[later:([^\]]+)\]/i);
   if (!m) return null;
   const val = m[1].trim().toLowerCase();
   // Named buckets
@@ -295,6 +305,9 @@ async function fireRevisit(item) {
       return {
         role: m.role,
         content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+        // Media references ride beside content into the materializer (§5) so a
+        // past image message replays as a live image or a stand-in, not lost.
+        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
       };
     });
 
@@ -388,7 +401,7 @@ function ambientFor(locationKey) {
 }
 
 /** Record an inbound message timestamp for activity-rate tiering. */
-export function recordGuildActivity(locationKey, now = Date.now()) {
+function recordGuildActivity(locationKey, now = Date.now()) {
   const st = ambientFor(locationKey);
   st.recentTs.push(now);
   const cutoff = now - ACTIVITY_WINDOW_MS;
@@ -396,11 +409,10 @@ export function recordGuildActivity(locationKey, now = Date.now()) {
 }
 
 /** Stamp that an unprompted turn was just attempted (starts the cooldown). */
-export function markAmbientTurn(locationKey, now = Date.now()) {
+function markAmbientTurn(locationKey, now = Date.now()) {
   ambientFor(locationKey).lastTurnAt = now;
 }
 
-export function resetAmbientState() { ambientState.clear(); }
 
 /**
  * Settle window for active-mode reply batching, adapted to room pace. Waits a
@@ -793,6 +805,11 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
     lines.push(
       `If ${speakerName} says something {{user}} would want to know or act on, I pass it up to {{user}} myself rather than promising and leaving it — and within this person's clearance I can act here, not only talk.`,
     );
+    // Consent transparency: the person I'm talking with has their own say
+    // over what I keep about them, right here in this DM.
+    lines.push(
+      `${speakerName} has their own say over what I remember about them: typing \`!consent\` here shows them everything I hold about them and lets them change what I may keep (keep / ask first / never). If they wonder what I know about them, or seem uneasy about being remembered, I tell them about it.`,
+    );
   } else {
     const present = (participants ?? []).map(p => p.name).filter(Boolean).join(', ');
     lines.push(
@@ -875,13 +892,35 @@ function presenceBlock({ kind, locationLabel, speakerName, participants, setting
   return substituteMacros(lines.join('\n'), settings);
 }
 
-// An ambient reply where I chose to stay quiet. Matches [pass] / pass /
-// [silence] / silence (optionally bracketed) and nothing else. Bare words
-// like "nothing", "quiet", "skip" are valid chat replies and are NOT caught.
-const AMBIENT_ABSTAIN_RE = /^\s*[[(]?\s*(pass|silence)\s*[\])]?\s*[.!]?\s*$/i;
+// An ambient reply where I chose to stay quiet. Two forms count:
+//  - the whole message is the token: [pass] / pass / [silence] / silence
+//    (optionally bracketed) — bare words like "nothing", "quiet", "skip"
+//    are valid chat replies and are NOT caught;
+//  - the message STARTS with the bracketed token: "[pass] they're mid-
+//    conversation…" — the tag is the command and the trailing text is the
+//    model's private reasoning, never room content. Only the bracketed
+//    form leads (a bare leading "pass" could open a real sentence).
+const AMBIENT_ABSTAIN_RE         = /^\s*[[(]?\s*(pass|silence)\s*[\])]?\s*[.!]?\s*$/i;
+const AMBIENT_ABSTAIN_LEADING_RE = /^\s*[[(]\s*(pass|silence)\s*[\])]/i;
 export function isAmbientAbstain(text) {
   const t = (text ?? '').trim();
-  return t === '' || AMBIENT_ABSTAIN_RE.test(t);
+  return t === '' || AMBIENT_ABSTAIN_RE.test(t) || AMBIENT_ABSTAIN_LEADING_RE.test(t);
+}
+
+// Strip any LEADING silence/defer tokens off a reply. Used at delivery as
+// a last-resort guard: whatever path a reply took, a control tag must
+// never be posted into a room as text. Returns the remainder ('' when the
+// message was only tags — the caller should then skip the send).
+export function stripLeadingSilenceTags(text) {
+  let t = String(text ?? '');
+  for (;;) {
+    const next = t
+      .replace(AMBIENT_ABSTAIN_LEADING_RE, '')
+      .replace(/^\s*\[later:[^\]]+\]/i, '')
+      .replace(/^\s*[—–\-:,.]+\s*/, '');
+    if (next === t) return t.trim();
+    t = next;
+  }
 }
 
 // ── Conversation map (location key → session id), persisted ──────
@@ -977,6 +1016,14 @@ async function touchLocation(locationKey, sessionId) {
 // string wrapper for the no-tools path.
 // Exported so the noticing loop (Initiative Pass 4) can run its bounded
 // tool-call loop through the same provider call rather than duplicating it.
+// THINKING-model room (the 0.8.82 lesson, applied to the Discord turn path):
+// on a reasoning model (GLM/DeepSeek — the ward's coding plan runs one), the
+// chain-of-thought is billed against max_tokens. The old cap of 1024 got spent
+// reasoning, so content came back EMPTY (silent turns) or a tool call was cut
+// off mid-JSON (garbled/wrong-looking tool reaches). A generous cap is free
+// for non-thinking models — they stop when done.
+const DISCORD_MAX_TOKENS = 4000;
+
 export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
@@ -991,7 +1038,7 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
       messages,
       stream:      false,
       temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
-      max_tokens:  1024,
+      max_tokens:  DISCORD_MAX_TOKENS,
       ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
     }),
   });
@@ -1004,8 +1051,11 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
 
 async function callChat({ conn, messages, settings }) {
   const data = await callChatRaw({ conn, messages, settings });
-  const content = data.choices?.[0]?.message?.content ?? '';
-  if (!content.trim()) throw new Error('provider returned empty content');
+  // extractContent falls back to reasoning_content when a thinking model (or a
+  // proxy in front of one) leaves `content` empty — the answer is often THERE,
+  // just in the wrong field. Without this, real replies read as empty turns.
+  const content = extractContent(data.choices?.[0]?.message ?? {});
+  if (!content.trim()) throw new Error(`provider returned empty content (finish_reason=${data.choices?.[0]?.finish_reason ?? 'unknown'})`);
   return content;
 }
 
@@ -1036,6 +1086,23 @@ async function sendChannelMessage(token, channelId, content) {
       body: { content: chunk },
     });
   }
+}
+
+/** One message carrying embeds + interactive components (the consent menu). */
+async function sendComponentMessage(token, channelId, { content, embeds, components }) {
+  return discordRest(token, `/channels/${channelId}/messages`, {
+    method: 'POST',
+    body: { content, embeds, components },
+  });
+}
+
+/** Answer an interaction. type 7 = UPDATE_MESSAGE (morph the menu in place).
+ *  The {id}/{token} pair in the URL is the auth for this call. */
+async function respondToInteraction(token, interaction, { type = 7, data }) {
+  await discordRest(token, `/interactions/${interaction.id}/${interaction.token}/callback`, {
+    method: 'POST',
+    body: { type, data },
+  });
 }
 
 // Ward-only `/update` control from a Discord conversation — the chat-side
@@ -1134,6 +1201,172 @@ function resolveLocationGate(audienceInput, registry) {
  *  drift from the other or quietly skip a safety step. `priorMessages` are
  *  appended before my reply (the incoming user turn for a live turn; empty
  *  for a revisit, where there is no new incoming message). */
+// Shared consent state fetch: this villager's kept facts + their slice of
+// the pending queue + their fresh registry row. One implementation for the
+// text menu, the visual menu, and every interaction view.
+async function consentStateFor(villager) {
+  const [mem, pending, registry] = await Promise.all([
+    getMemoriesBySubject({ villagerId: villager.id }).catch(() => ({ items: [] })),
+    readConsentPending().catch(() => []),
+    getRegistry().catch(() => null),
+  ]);
+  return {
+    memories: mem.items ?? [],
+    pending:  (Array.isArray(pending) ? pending : []).filter(p => p.villagerId === villager.id),
+    fresh:    registry?.villagers?.find(x => x.id === villager.id) ?? villager,
+  };
+}
+
+// Apply a gate change AND settle the villager's pending items in those
+// categories (keep -> confirmed, never -> dropped, ask -> left queued) —
+// the original "ask" intent: the person the fact is about answers. Shared
+// by the text command and the menu buttons. Returns { text, settled }.
+async function applyConsentAndSettle({ villager, gate, categories, locationKey }) {
+  const text = await applyConsentSet({ villagerId: villager.id, gate, categories });
+  let settled = 0;
+  if (gate !== 'ask') {
+    try {
+      const pending = await readConsentPending().catch(() => []);
+      const mine = (Array.isArray(pending) ? pending : [])
+        .filter(p => p.villagerId === villager.id && categories.includes(p.category));
+      if (mine.length) {
+        const ids = mine.map(p => p.id);
+        if (gate === true) await confirmConsentMemories(ids);
+        else               await dropPendingMemories(ids);
+        await pruneConsentPending(ids);
+        settled = ids.length;
+      }
+    } catch (err) {
+      console.error('[discord] consent pending-sweep failed:', err?.message ?? err);
+    }
+  }
+  logDiscordWrite({
+    villager: villager.name, tool: 'consent_set', locationKey,
+    args: { gate: gate === true ? 'keep' : gate === false ? 'never' : 'ask', categories },
+  }).catch(() => { /* best-effort audit */ });
+  console.log(`[discord] consent: ${villager.name} set ${categories.join(',')} -> ${gate}${settled ? ` (settled ${settled} pending)` : ''}`);
+  return { text: settled ? `${text}\n(That also settled ${settled} waiting item${settled === 1 ? '' : 's'}: ${gate === true ? 'kept' : 'dropped'}.)` : text, settled };
+}
+
+// `!consent` in a villager's DM: send the VISUAL menu (embed + dropdown +
+// buttons — one message that morphs via interactions). Text subcommands
+// (`!consent keep health`) still work, and if the component send fails
+// (API change, permissions) the plain-text menu is the fallback — the
+// surface degrades, never disappears.
+async function handleConsentCommand(gw, { msg, decision }) {
+  const v = decision.villager;
+  try {
+    const cmd = parseConsentCommand(msg.content) ?? { action: 'help' };
+    if (cmd.action === 'set') {
+      const { text } = await applyConsentAndSettle({ villager: v, gate: cmd.gate, categories: cmd.categories, locationKey: decision.locationKey });
+      await sendChannelMessage(gw.config.token, msg.channel_id, text);
+      return;
+    }
+    if (cmd.action === 'help') {
+      await sendChannelMessage(gw.config.token, msg.channel_id, consentHelpText(cmd.error));
+      return;
+    }
+    const { memories, pending, fresh } = await consentStateFor(v);
+    try {
+      const view = buildConsentHomeView({ villager: fresh, memCount: memories.length, pendingCount: pending.length });
+      await sendComponentMessage(gw.config.token, msg.channel_id, view);
+    } catch (err) {
+      console.error('[discord] component menu failed — falling back to text:', err?.message ?? err);
+      await sendChannelMessage(gw.config.token, msg.channel_id,
+        buildConsentMenu({ villager: fresh, memories, pending }));
+    }
+  } catch (err) {
+    console.error('[discord] consent command failed:', err?.message ?? err);
+    await sendChannelMessage(gw.config.token, msg.channel_id,
+      'Something went wrong opening your consent menu just now — it\'s been logged.').catch(() => {});
+  }
+}
+
+// A click/selection on the consent menu. Identity is re-resolved from the
+// INTERACTING user on every event — custom_ids carry only the action, so a
+// forwarded or aged message can never act as someone else. Unrecognized
+// users get the controls stripped.
+async function handleConsentInteraction(gw, d) {
+  const cid = d.data?.custom_id ?? '';
+  const userId = d.user?.id ?? d.member?.user?.id;
+  const respond = (data) => respondToInteraction(gw.config.token, d, { type: 7, data });
+  try {
+    const villager = userId ? await findVillagerByAlias({ platform: 'discord', id: userId }) : null;
+    if (!villager) {
+      await respond({ embeds: [{ description: 'This menu isn\'t yours to use.' }], components: [] });
+      return;
+    }
+    const parts = cid.split(':');   // pfconsent:<verb>[:...]
+    const verb = parts[1];
+    const locationKey = `discord:dm:${d.channel_id}`;
+
+    if (verb === 'done') {
+      await respond(buildDoneView({ villager }));
+      return;
+    }
+    if (verb === 'home') {
+      const { memories, pending, fresh } = await consentStateFor(villager);
+      await respond(buildConsentHomeView({ villager: fresh, memCount: memories.length, pendingCount: pending.length }));
+      return;
+    }
+    if (verb === 'cat') {
+      const category = d.data?.values?.[0];
+      const { fresh } = await consentStateFor(villager);
+      await respond(buildCategoryView({ villager: fresh, category }));
+      return;
+    }
+    if (verb === 'set') {
+      const [, , category, gateWord] = parts;
+      const gate = gateWord === 'keep' ? true : gateWord === 'never' ? false : 'ask';
+      const { settled } = await applyConsentAndSettle({ villager, gate, categories: [category], locationKey });
+      const { memories, pending, fresh } = await consentStateFor(villager);
+      await respond(buildConsentHomeView({
+        villager: fresh, memCount: memories.length, pendingCount: pending.length,
+        note: `✓ Saved — **${category.replace('_', ' ')}** is now **${gateWord}**${settled ? ` (settled ${settled} waiting item${settled === 1 ? '' : 's'})` : ''}.`,
+      }));
+      return;
+    }
+    if (verb === 'mem') {
+      const page = parseInt(parts[2] ?? '0', 10) || 0;
+      const { memories } = await consentStateFor(villager);
+      await respond(buildMemoriesView({ memories, page }));
+      return;
+    }
+    if (verb === 'pending') {
+      const { pending } = await consentStateFor(villager);
+      await respond(buildPendingView({ pending }));
+      return;
+    }
+    if (verb === 'pendall') {
+      const keep = parts[2] === 'keep';
+      const { pending } = await consentStateFor(villager);
+      const ids = pending.map(p => p.id);
+      if (ids.length) {
+        if (keep) await confirmConsentMemories(ids);
+        else      await dropPendingMemories(ids);
+        await pruneConsentPending(ids);
+        logDiscordWrite({
+          villager: villager.name, tool: keep ? 'consent_pending_keep_all' : 'consent_pending_drop_all',
+          locationKey, args: { count: ids.length },
+        }).catch(() => {});
+        console.log(`[discord] consent: ${villager.name} ${keep ? 'kept' : 'dropped'} ${ids.length} pending`);
+      }
+      const { memories, pending: left, fresh } = await consentStateFor(villager);
+      await respond(buildConsentHomeView({
+        villager: fresh, memCount: memories.length, pendingCount: left.length,
+        note: ids.length ? `✓ ${keep ? 'Kept' : 'Dropped'} ${ids.length} waiting item${ids.length === 1 ? '' : 's'}.` : '',
+      }));
+      return;
+    }
+    await respond({ embeds: [{ description: 'That control has expired — type `!consent` for a fresh menu.' }], components: [] });
+  } catch (err) {
+    console.error('[discord] consent interaction failed:', err?.message ?? err);
+    try {
+      await respondToInteraction(gw.config.token, d, { type: 7, data: { embeds: [{ description: 'Something went wrong — type `!consent` to try again.' }], components: [] } });
+    } catch { /* interaction already dead */ }
+  }
+}
+
 async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [] }) {
   // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
   // fast-paths; every other room is filtered before I say anything.
@@ -1154,6 +1387,19 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
   }
 
   reply = stripLlmTimestamps(reply);
+  // Last-resort guard: a leading [pass]/[silence]/[later:…] is a control
+  // token, never room content — strip it whatever path led here. A reply
+  // that was ONLY tags means I chose silence; sending nothing is the
+  // faithful delivery of that choice.
+  const untagged = stripLeadingSilenceTags(reply);
+  if (untagged !== reply) {
+    console.log(`[discord] stripped leading control tag before delivery (audience=${audienceTag})`);
+    reply = untagged;
+  }
+  if (!reply) {
+    console.log(`[discord] reply was only control tags — nothing sent to ${locationKey}`);
+    return;
+  }
   await sendChannelMessage(gw.config.token, channelId, reply);
 
   // Persist the turn. Sessions land in logs/ exactly like web sessions
@@ -1266,6 +1512,119 @@ function enqueueTurn(locationKey, fn) {
 // what was said. Deliberately threat-neutral: observing never moves the
 // ward's last-activity clock or threat tier (that stays on the reply
 // path, out of the safety-critical surface).
+// ── Discord image ingest (vision build spec §5, Pass 3) ───────────
+// Discord CDN attachment URLs are ephemeral (signed, expiring), so image
+// attachments are fetched and stored AT ARRIVAL, not at read time. Bounded
+// fetch via the media proxy's own resize params (long edge 1568) — the same
+// downscale bound the browser applies, without adding an image library. Who
+// gets ingested: the ward always; a registered villager yes (room context,
+// stamped with the room's audienceTag + origin.speaker provenance); a stranger
+// never (their message text flows through the gate, but their bytes aren't
+// stored). Caps: MAX_IMAGES_PER_MESSAGE per message + a per-location hourly cap.
+const DISCORD_MEDIA_EDGE = 1568;
+const DISCORD_IMAGE_MIMES = new Set(Object.keys(IMAGE_MIME_EXT));
+
+function discordVisionOff() {
+  if (process.env.PROTO_FAMILIAR_VISION_DISABLED === '1') return true;
+  try { return readSettingsSync()?.visionEnabled === false; } catch { return false; }
+}
+
+export function clampDiscordMediaPerHour(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 20;
+  return Math.max(0, Math.min(200, Math.round(v)));
+}
+
+// Does a Discord attachment look like an image we ingest? By declared mime, or
+// (when Discord omits content_type) by the filename extension. Pure.
+export function isDiscordImageAttachment(att) {
+  const mime = String(att?.content_type || '').split(';')[0].trim();
+  if (DISCORD_IMAGE_MIMES.has(mime)) return true;
+  return /\.(jpe?g|png|webp|gif)$/i.test(att?.filename || '');
+}
+
+// The download URL for a Discord image, downscaled via the media proxy's own
+// resize params (long edge `edge`) when dimensions are known and exceed it.
+// Falls back to the plain proxy_url/url. Pure; returns '' when there's no url.
+export function discordResizeUrl(att, edge = DISCORD_MEDIA_EDGE) {
+  const base = att?.proxy_url || att?.url;
+  if (!base) return '';
+  const w = Number(att.width), h = Number(att.height);
+  if (att?.proxy_url && Number.isFinite(w) && Number.isFinite(h) && Math.max(w, h) > edge) {
+    try {
+      const scale = edge / Math.max(w, h);
+      const u = new URL(base);
+      u.searchParams.set('width', String(Math.max(1, Math.round(w * scale))));
+      u.searchParams.set('height', String(Math.max(1, Math.round(h * scale))));
+      return u.toString();
+    } catch { return base; }
+  }
+  return base;
+}
+
+// Per-location hourly ingest counter (in-memory; a restart resetting it is
+// harmless — the cap only guards a busy room from pumping the disk).
+const _discordMediaHourly = new Map();
+function discordMediaHourCount(locationKey) {
+  const now = Date.now();
+  const arr = (_discordMediaHourly.get(locationKey) ?? []).filter(t => now - t < 3600_000);
+  _discordMediaHourly.set(locationKey, arr);
+  return arr.length;
+}
+function noteDiscordMediaIngest(locationKey) {
+  const arr = _discordMediaHourly.get(locationKey) ?? [];
+  arr.push(Date.now());
+  _discordMediaHourly.set(locationKey, arr);
+}
+
+// Fetch one Discord image attachment, downscaled via the media proxy's resize
+// params, bounded by a timeout + MEDIA_MAX_BYTES. Returns {buffer, mime} or null.
+async function fetchDiscordImage(att, { timeoutMs = 8000 } = {}) {
+  try {
+    const url = discordResizeUrl(att);
+    if (!url) return null;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    let res;
+    try { res = await fetch(url, { signal: ac.signal }); }
+    finally { clearTimeout(timer); }
+    if (!res.ok) return null;
+    const mime = (res.headers.get('content-type') || att.content_type || '').split(';')[0].trim();
+    if (!IMAGE_MIME_EXT[mime]) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > MEDIA_MAX_BYTES) return null;
+    return { buffer: buf, mime };
+  } catch { return null; }
+}
+
+// Ingest a message's image attachments. Returns { attachments:[{id,kind,mime}],
+// failed:<count> }. Never throws — a failed fetch is a count, not an error.
+async function ingestDiscordImages(msg, decision, { audienceTag, sessionId }) {
+  if (discordVisionOff()) return { attachments: [], failed: 0 };
+  // Ward always; registered villager yes; stranger never.
+  if (!decision.isWard && !decision.villager) return { attachments: [], failed: 0 };
+  const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+  const images = atts.filter(isDiscordImageAttachment);
+  if (!images.length) return { attachments: [], failed: 0 };
+  const cap = clampDiscordMediaPerHour(readSettingsSync()?.discordMediaPerHour);
+  const out = [];
+  let failed = 0;
+  for (const a of images.slice(0, MAX_IMAGES_PER_MESSAGE)) {
+    if (discordMediaHourCount(decision.locationKey) >= cap) break;
+    const got = await fetchDiscordImage(a);
+    if (!got) { failed++; continue; }
+    const meta = await saveAsset({
+      buffer: got.buffer, mime: got.mime,
+      origin: { surface: 'discord', sessionId: sessionId ?? null, speaker: decision.isWard ? null : (decision.speakerName ?? null) },
+      audienceTag: audienceTag || 'ward-private',
+      label: a.filename || '',
+    });
+    if (meta?.id) { out.push({ id: meta.slugs?.[0] ?? meta.id, kind: 'image', mime: meta.mime }); noteDiscordMediaIngest(decision.locationKey); }
+    else failed++;
+  }
+  return { attachments: out, failed };
+}
+
 async function observeMessage(gw, msg, decision) {
   const registry = await getRegistry();
   const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
@@ -1293,7 +1652,12 @@ async function observeMessage(gw, msg, decision) {
     charName: readSettingsSync()?.charName, villagers: registry.villagers,
     isWard: decision.isWard, speakerName: decision.speakerName,
   });
-  const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
+  // Ingest image attachments at arrival (§5) — observing counts too, so when
+  // someone finally turns to me I can see what the room was looking at. A
+  // failed fetch degrades to a visible note, never blocks.
+  const { attachments: obsAttachments, failed: obsFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const failNote = obsFailed > 0 ? '\n[image failed to load]' : '';
+  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + failNote;
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
   const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
@@ -1301,7 +1665,7 @@ async function observeMessage(gw, msg, decision) {
   const msgNamedMe  = messageNamesBot(msg, gw.botUserId);
   session.messages = [
     ...(session.messages ?? []),
-    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+    { id: randomUUID(), role: 'user', content: userContent, timestamp: new Date().toISOString(), speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...(obsAttachments.length ? { attachments: obsAttachments } : {}) },
   ];
   session.audienceTag = audienceTag;
   session.updatedAt   = new Date().toISOString();
@@ -1358,6 +1722,24 @@ async function handleTurn(gw, msg, decision) {
     isWard: decision.isWard, speakerName: decision.speakerName,
   });
   const nowIso   = new Date().toISOString();
+
+  // Villager consent self-service: `!consent` in a villager's own DM is a
+  // CODE surface, not a chat turn — a consent menu must be exact, so no
+  // LLM is consulted and no session turn is recorded. (In the ward's DM
+  // the same command just points at the Village UI, where they already
+  // hold the full controls.)
+  if (isConsentCommand(msg.content)) {
+    if (decision.kind === 'villager-dm') {
+      await handleConsentCommand(gw, { msg, decision });
+      return;
+    }
+    if (decision.kind === 'ward-dm') {
+      await sendChannelMessage(gw.config.token, msg.channel_id,
+        'The consent menu is for villagers about themselves — your full controls live in the Village panel of the web app (People → remember settings).').catch(() => {});
+      return;
+    }
+    // In a guild room: ignore quietly (personal data never renders in a room).
+  }
 
   // Ward speech counts as ward activity wherever it happens — the
   // silence-triage clock and the threat detector follow my human, not
@@ -1460,20 +1842,58 @@ async function handleTurn(gw, msg, decision) {
       return {
         role: m.role,
         content: m.timestamp ? `[${formatMsgTime(m.timestamp)}] ${clean}` : clean,
+        // Media references ride beside content into the materializer (§5) so a
+        // past image message replays as a live image or a stand-in, not lost.
+        ...(Array.isArray(m.attachments) && m.attachments.length ? { attachments: m.attachments } : {}),
       };
     });
 
   // Non-ward speakers are name-prefixed so multi-party rooms stay
   // legible to me across turns. The ward's own words stay raw, same
   // as the web chat.
-  const userContent = decision.isWard ? content : `[${decision.speakerName}]: ${content}`;
+  // Ingest this message's image attachments at arrival (§5) — stored beside
+  // the content, materialized into provider image parts just before the call.
+  const { attachments: turnAttachments, failed: turnFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const turnFailNote = turnFailed > 0 ? '\n[image failed to load]' : '';
+  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + turnFailNote;
+  const turnAttField = turnAttachments.length ? { attachments: turnAttachments } : {};
 
-  const apiMessages = [
+  let apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
-    { role: 'user', content: userContent },
+    { role: 'user', content: userContent, ...turnAttField },
   ];
+
+  // Vision materialization (§3) — the same seam as the web path, applied once
+  // to the assembled array so it rides every tool round. Gated turn → the
+  // room's visible-audience set (fail-closed); ward → no gate. Degrades to
+  // stand-ins on a blind connection; never throws into the reply path.
+  let visionCapableTurn = false;
+  if (!discordVisionOff()) {
+    try {
+      visionCapableTurn = await resolveVisionCapable(conn, settings);
+      // Blind chat connection (text-only, or z.ai-coding describe-only) →
+      // describe the shared images NOW so their stand-ins carry a real
+      // description on THIS turn, not "not yet described". Bounded + timed.
+      if (!visionCapableTurn) {
+        const d = await ensureDescribed(apiMessages, settings);
+        if (d.described) console.log(`[discord] described ${d.described} image(s) before the turn`);
+      }
+      const mat = await materializeAttachments(apiMessages, {
+        connection: conn, settings,
+        visibleAudiences: audienceTag === 'ward-private' ? null : audienceVisible,
+      });
+      apiMessages = mat.messages;
+      if (mat.imagesLive || mat.imagesStoodIn) console.log(`[discord] vision: ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s) (audience=${audienceTag})`);
+      // Anything still undescribed (over the sync cap) gets a background look.
+      for (const id of (mat.stoodInUndescribed ?? [])) {
+        describeAsset(id, settings).catch(() => {});
+      }
+    } catch (err) {
+      console.error('[discord] vision materialize failed (passing through):', err?.message ?? err);
+    }
+  }
 
   // Discord clearance-gated tools (discord-tools-build-spec). The Familiar's
   // tools this turn follow the SPEAKER: ward alone → full web-chat parity; a
@@ -1484,7 +1904,7 @@ async function handleTurn(gw, msg, decision) {
     && settings.discordToolsEnabled !== false;
   const isVillager = !decision.isWard && !!decision.villager;
   const discordTools = toolsOn
-    ? composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings })
+    ? composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn })
     : [];
 
   let rawReply;
@@ -1518,13 +1938,22 @@ async function handleTurn(gw, msg, decision) {
       : executeToolCall;
     try {
       const { data } = await runToolCallLoop({
-        callUpstream: (msgs, roundTools) => callChatRaw({ conn, messages: msgs, settings, tools: roundTools ?? discordTools }),
+        // opts.forceText (round-cap closing round): call WITHOUT tools so the
+        // model must answer in text instead of ending the turn silent.
+        callUpstream: (msgs, roundTools, opts) => callChatRaw({
+          conn, messages: msgs, settings,
+          tools: opts?.forceText ? undefined : (roundTools ?? discordTools),
+        }),
         baseMessages: apiMessages,
         getTools:     () => discordTools,
         executeTool,
         toolCtx,
+        // My human's own turns get the ward-configurable round budget ("check
+        // these six files" needs six-plus reaches); villager/ambient turns
+        // keep the tight background default.
+        maxRounds: decision.isWard ? toolRoundsPerTurn(settings) : undefined,
       });
-      rawReply = data?.choices?.[0]?.message?.content ?? '';
+      rawReply = extractContent(data?.choices?.[0]?.message ?? {});
     } catch (err) {
       // A whole-loop failure (e.g. provider error) must never cost the person a
       // reply — fall back to a plain no-tools call.
@@ -1536,7 +1965,7 @@ async function handleTurn(gw, msg, decision) {
     if (!rawReply || !rawReply.trim()) {
       session.messages = [
         ...(session.messages ?? []),
-        { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+        { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
       ];
       session.audienceTag = audienceTag;
       session.updatedAt   = new Date().toISOString();
@@ -1558,13 +1987,15 @@ async function handleTurn(gw, msg, decision) {
   if (decision.ambient && isAmbientAbstain(rawReply)) {
     session.messages = [
       ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
     ];
     session.audienceTag = audienceTag;
     session.updatedAt   = new Date().toISOString();
     await writeSessionLog(session);
     await touchLocation(decision.locationKey, session.sessionId);
-    console.log(`[discord] ambient abstain in ${decision.locationKey} — stayed quiet`);
+    const reasoning = stripLeadingSilenceTags(rawReply);
+    console.log(`[discord] ambient abstain in ${decision.locationKey} — stayed quiet`
+      + (reasoning ? ` (reasoning: ${reasoning.slice(0, 80)})` : ''));
     return;
   }
 
@@ -1582,7 +2013,7 @@ async function handleTurn(gw, msg, decision) {
     Promise.resolve(recordWait('discord-defer')).catch(() => {});
     session.messages = [
       ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
     ];
     session.audienceTag = audienceTag;
     session.updatedAt   = new Date().toISOString();
@@ -1598,7 +2029,7 @@ async function handleTurn(gw, msg, decision) {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId: msg.channel_id, session, locationKey: decision.locationKey, regLoc,
     priorMessages: [
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe },
+      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
     ],
   });
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
@@ -1705,6 +2136,19 @@ function onDispatch(t, d) {
     gw.status.connected = true;
     gw.reconnectAttempts = 0;
     console.log('[discord] gateway session resumed');
+    return;
+  }
+  if (t === 'INTERACTION_CREATE') {
+    // Component clicks on the consent menu (type 3 = MESSAGE_COMPONENT).
+    // Anything else — unknown namespace, other interaction types — is
+    // ignored; there is nothing else interactive to click. Wrapped like
+    // MESSAGE_CREATE: a bad interaction can never tear the gateway down.
+    if (d?.type === 3 && String(d?.data?.custom_id ?? '').startsWith(`${CONSENT_CID}:`)) {
+      (async () => {
+        try { await handleConsentInteraction(gw, d); }
+        catch (err) { console.error('[discord] interaction handler error:', err?.message ?? err); }
+      })();
+    }
     return;
   }
   if (t === 'MESSAGE_CREATE') {

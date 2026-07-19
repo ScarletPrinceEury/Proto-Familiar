@@ -80,6 +80,35 @@ def _year_str(d: date) -> str:
     return d.strftime("%Y")
 
 
+def _parse_date_key(dk: str | None) -> date | None:
+    """The calendar date a row belongs to. date_key is a plain ISO date for
+    dailies/standalones, or a composite (`YYYY-MM-DD_slug`) for significant rows;
+    the leading 10 chars are the date either way. Bad/empty → None (skipped)."""
+    if not dk:
+        return None
+    try:
+        return date.fromisoformat(str(dk)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _get_entries_in_range(
+    conn: sqlite3.Connection, granularity: str, start_iso: str, end_iso: str,
+    exclude_pending: bool = False,
+) -> list[dict]:
+    """Rows of one tier whose date falls in [start_iso, end_iso] inclusive.
+    Range-based (not a `YYYY-MM` LIKE prefix) so a week that straddles a month
+    boundary — e.g. Mon Mar 30 … Sun Apr 5 — still collects all seven days."""
+    pending_clause = " AND consent_pending=0" if exclude_pending else ""
+    rows = conn.execute(
+        f"SELECT id, date_key, content FROM memories "
+        f"WHERE granularity=? AND kind='narrative'{pending_clause} "
+        f"AND substr(date_key,1,10) >= ? AND substr(date_key,1,10) <= ?",
+        (granularity, start_iso, end_iso),
+    ).fetchall()
+    return [{"id": r["id"], "date_key": r["date_key"], "content": r["content"] or ""} for r in rows]
+
+
 def _get_entries_for_period(
     conn: sqlite3.Connection, granularity: str, period_prefix: str,
     exclude_pending: bool = False,
@@ -117,10 +146,10 @@ def consolidate_to_weekly(
 ) -> dict[str, Any]:
     ref = reference_date or date.today() - timedelta(days=7)
     week_start = _week_start(ref)
-    period_prefix = week_start.isoformat()[:7]  # YYYY-MM to catch the week's days
+    week_end = week_start + timedelta(days=6)
 
-    entries = _get_entries_for_period(conn, "daily", period_prefix, exclude_pending=True)
-    entries = [e for e in entries if week_start.isoformat() <= e["date_key"] <= (week_start + timedelta(days=6)).isoformat()]
+    entries = _get_entries_in_range(
+        conn, "daily", week_start.isoformat(), week_end.isoformat(), exclude_pending=True)
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few daily entries"}
 
@@ -164,11 +193,94 @@ def consolidate_to_yearly(
     return {"ok": True, "dateKey": result.get("dateKey"), "sourceMonths": len(entries)}
 
 
+# ── Backlog sweep: which past periods still hold un-consolidated entries ──────
+# Consolidation used to roll up only the SINGLE most-recent period (last week,
+# last month, last year). That silently stranded any historical backlog — most
+# visibly a bulk import of months-old daily notes, which never fell inside the
+# "last week" window when the scheduler ran, so it sat at `daily` forever and
+# kept surfacing stale months-old entries in recall. These enumerators instead
+# find EVERY past period that still has enough un-consolidated source rows, so a
+# pass catches the whole backlog up, oldest-first, then keeps pace going forward.
+# The CURRENT (still-accumulating) period is always excluded — it isn't complete.
+
+def _distinct_past_weeks(conn: sqlite3.Connection) -> list[date]:
+    """Week-starts strictly before the current week that hold >=2 reviewed
+    (non-consent-pending) daily rows. Sorted oldest-first."""
+    current_week = _week_start(date.today())
+    counts: dict[date, int] = {}
+    for r in conn.execute(
+        "SELECT date_key FROM memories WHERE granularity='daily' AND kind='narrative' AND consent_pending=0"
+    ).fetchall():
+        d = _parse_date_key(r["date_key"])
+        if d is None:
+            continue
+        ws = _week_start(d)
+        if ws < current_week:
+            counts[ws] = counts.get(ws, 0) + 1
+    return sorted(w for w, n in counts.items() if n >= 2)
+
+
+def _existing_date_keys(conn: sqlite3.Connection, granularity: str) -> set[str]:
+    """The date_keys already present at a tier. Monthly/yearly don't prune their
+    sources (only weekly→daily does), so their enumerators use this to roll each
+    period exactly ONCE — without it, a past month with surviving weeklies would
+    be re-rolled every pass and its summary appended to endlessly."""
+    return {
+        str(r["date_key"])
+        for r in conn.execute(
+            "SELECT DISTINCT date_key FROM memories WHERE granularity=? AND kind='narrative'",
+            (granularity,),
+        ).fetchall()
+        if r["date_key"]
+    }
+
+
+def _distinct_past_months(conn: sqlite3.Connection) -> list[date]:
+    """First-of-month dates strictly before the current month that hold >=2
+    weekly rows (weeks grouped by the month of their Monday) and have NOT already
+    been rolled into a monthly. Oldest-first."""
+    current_month = date.today().replace(day=1)
+    already = _existing_date_keys(conn, "monthly")
+    counts: dict[date, int] = {}
+    for r in conn.execute(
+        "SELECT date_key FROM memories WHERE granularity='weekly' AND kind='narrative'"
+    ).fetchall():
+        d = _parse_date_key(r["date_key"])
+        if d is None:
+            continue
+        month_first = d.replace(day=1)
+        if month_first < current_month and month_first.isoformat() not in already:
+            counts[month_first] = counts.get(month_first, 0) + 1
+    return sorted(m for m, n in counts.items() if n >= 2)
+
+
+def _distinct_past_years(conn: sqlite3.Connection) -> list[date]:
+    """First-of-year dates strictly before the current year that hold >=2 monthly
+    rows and have NOT already been rolled into a yearly. Oldest-first."""
+    current_year = date.today().replace(month=1, day=1)
+    already = _existing_date_keys(conn, "yearly")
+    counts: dict[date, int] = {}
+    for r in conn.execute(
+        "SELECT date_key FROM memories WHERE granularity='monthly' AND kind='narrative'"
+    ).fetchall():
+        d = _parse_date_key(r["date_key"])
+        if d is None:
+            continue
+        year_first = d.replace(month=1, day=1)
+        if year_first < current_year and year_first.isoformat() not in already:
+            counts[year_first] = counts.get(year_first, 0) + 1
+    return sorted(y for y, n in counts.items() if n >= 2)
+
+
 def run_consolidation(
     granularity: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
-    """Run consolidation for the requested tier (or all tiers if None)."""
+    """Roll up every past period that still holds un-consolidated entries — not
+    just the most recent one — so a historical backlog catches up in full. Tiers
+    run in ladder order (weekly first) so a week rolled up this pass is available
+    to the monthly sweep in the same pass. Each period is guarded independently:
+    one failing LLM call or one bad week never aborts the rest of the sweep."""
     cfg = _llm_config()
     if not cfg:
         return {"ok": False, "error": "No LLM API key configured (PHYLACTERY_LLM_API_KEY or ENTITY_CORE_LLM_API_KEY)"}
@@ -177,18 +289,26 @@ def run_consolidation(
     if own_conn:
         conn = get_conn()
     try:
-        results = {}
+        results: dict[str, Any] = {}
         tiers = [granularity] if granularity else ["weekly", "monthly", "yearly"]
+        # (tier, period enumerator, per-period consolidator)
+        plan = {
+            "weekly":  (_distinct_past_weeks,  consolidate_to_weekly),
+            "monthly": (_distinct_past_months, consolidate_to_monthly),
+            "yearly":  (_distinct_past_years,  consolidate_to_yearly),
+        }
         for tier in tiers:
-            try:
-                if tier == "weekly":
-                    results["weekly"] = consolidate_to_weekly(conn, cfg)
-                elif tier == "monthly":
-                    results["monthly"] = consolidate_to_monthly(conn, cfg)
-                elif tier == "yearly":
-                    results["yearly"] = consolidate_to_yearly(conn, cfg)
-            except Exception as e:
-                results[tier] = {"ok": False, "error": str(e)}
+            if tier not in plan:
+                continue
+            enumerate_periods, consolidate_period = plan[tier]
+            periods = enumerate_periods(conn)
+            rolled = []
+            for period in periods:
+                try:
+                    rolled.append(consolidate_period(conn, cfg, reference_date=period))
+                except Exception as e:  # one bad period never aborts the sweep
+                    rolled.append({"ok": False, "error": str(e), "period": period.isoformat()})
+            results[tier] = {"periods": len(periods), "rolled": rolled}
         return {"ok": True, "results": results}
     finally:
         if own_conn:

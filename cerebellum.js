@@ -53,7 +53,7 @@ import {
   createGraphNode, createGraphEdge,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   addScheduleNode, updateScheduleNode, resolveScheduleNode, resolveScheduleOccurrence, deleteScheduleNode,
-  addScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
+  addScheduleEdge, updateScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
   templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds, convertMemoryIds,
   bumpInterest, setStandingInterest,
@@ -65,10 +65,11 @@ import {
   withLock,
 } from './thalamus.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
+import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { markIntentActedOn, snoozeIntent } from './recent-ponderings.js';
+import { markIntentActedOn, snoozeIntent, readPonderingByUid } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { readWeatherNowLine, weatherEnabled } from './weather-mirror.js';
 import { resolveLocation, getForecast, dayDatesFor } from './weather-service.js';
@@ -114,7 +115,7 @@ export function readSettingsSync() {
  * other's fields. Atomic .tmp+rename, so the file is never torn. Only the
  * keys in `patch` change; everything else is preserved.
  */
-export async function writeSettingsPatch(patch = {}) {
+async function writeSettingsPatch(patch = {}) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     return { ok: false, error: 'patch must be an object' };
   }
@@ -208,9 +209,9 @@ export function connectionForFeature(settings, feature) {
 const LOGS_DIR = path.join(__dirname, 'logs');
 mkdirSync(LOGS_DIR, { recursive: true });
 
-export const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
-export const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
-export const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
+const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
+const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
+const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
 
 // Shared JSONL event-log primitives — triage and warm reach-out both use
 // them, so decisions from either loop are auditable the same way.
@@ -298,7 +299,7 @@ const DISCORD_CONTENT_LIMIT = 1900; // hard API limit is 2000; leave headroom
 
 /** POST one message to a Discord webhook. The shared primitive under
  *  both the user's own push channel and trusted-contact delivery. */
-export async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
+async function sendDiscordWebhook(webhookUrl, content, fetchFn = fetch) {
   try {
     const resp = await fetchFn(webhookUrl, {
       method: 'POST',
@@ -858,7 +859,22 @@ The "message" field (to the human) must be 1–2 sentences. First person. Authen
  * Maximum tool-call rounds per user message before giving up.
  * Prevents infinite loops if a model repeatedly calls tools.
  */
+// The BACKGROUND budget: autonomous deliberations (noticing) and non-ward
+// Discord turns (villager/ambient) stay tightly bounded — that's what a round
+// cap is for. A LIVE conversation with my human is different: "check these six
+// files" legitimately needs six-plus reaches, so ward turns use the
+// ward-configurable budget below instead (ward decision, 0.9.8).
 export const MAX_TOOL_ROUNDS = 5;
+
+// Tool-round budget for a LIVE ward turn (web chat + ward Discord turns).
+// Ward-configurable via settings.toolRoundsPerTurn; clamped so a typo can't
+// make a turn unbounded. Default 12 — roomy for real multi-file/multi-step
+// asks, still a hard ceiling.
+export function toolRoundsPerTurn(settings = readSettingsSync()) {
+  const n = Number(settings?.toolRoundsPerTurn);
+  if (!Number.isFinite(n)) return 12;
+  return Math.max(3, Math.min(30, Math.round(n)));
+}
 
 // Validation shared by the HTTP routes (server.js) and the executors
 // below — one source of truth for what counts as a valid write.
@@ -1085,6 +1101,20 @@ export const BUILTIN_TOOLS = [
           index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
         },
         required: ['uid', 'index'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_pondering',
+      description: 'I bring one of my own recent thoughts fully to mind. My recent-thoughts block shows my latest thought in full and lists older ones one line each with an id; when one of those brief ones fits what my human is saying — or they ask what I have been thinking about — I read its full text with this before I speak to it, so I quote myself truly instead of half-remembering. The id comes from that list (shown as [id: …]).',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid: { type: 'string', description: 'The id of the thought to read in full, from the [id: …] in my recent-thoughts list.' },
+        },
+        required: ['uid'],
       },
     },
   },
@@ -1675,13 +1705,14 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'schedule_resolve',
-      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward". For recurring nodes (weekly cleaning, monthly bill, yearly birthday), passing the optional `occurrence_date` resolves ONLY that specific occurrence — the rest of the series stays alive. Without `occurrence_date`, the whole series is cancelled/done.',
+      description: 'I mark a task / event / reminder / state node terminal: "done" (completed), "cancelled" (no longer needed), or "carried_forward" (rolling unfinished into a future briefing — the "skipped laundry rolls into tomorrow" pattern). I find the id in my [Temporal Context] briefings. If {{user}} says "I did the thing", I use "done"; if they say "forget it" or "never mind" I can use "cancelled" but might first ask or even choose to push back on that to avoid enabling unhealthy behavior; if "didn\'t get to it today", "carried_forward". For a RECURRING node (weekly cleaning, monthly bill, yearly birthday) I almost always mean just ONE instance: I pass `occurrence_date` for that day and the rest of the series lives on. Resolving a recurring node WITHOUT `occurrence_date` would end every future occurrence, so I can\'t do it by accident — I have to pass `scope:"series"` to say I truly mean the whole series. If I forget, I get a reminder back rather than a cancelled series.',
       parameters: {
         type: 'object',
         properties: {
           id:         { type: 'string', description: 'Schedule node id, from the [schedule ids] legend in my [Temporal Context]. For a recurring occurrence, this is the anchor node\'s id.' },
           resolution: { type: 'string', enum: ['done', 'cancelled', 'carried_forward'], description: 'How the node ends.' },
-          occurrence_date: { type: 'string', description: 'Optional. For recurring nodes only. "YYYY-MM-DD" (local-TZ) date of the specific occurrence to resolve — e.g. resolve THIS Sunday\'s cleaning without affecting next Sunday. Omit to resolve the entire series.' },
+          occurrence_date: { type: 'string', description: 'Optional. For recurring nodes: "YYYY-MM-DD" (local-TZ) date of the ONE occurrence to resolve — e.g. this Sunday\'s cleaning without touching next Sunday. I take the exact date from my [Temporal Context], I don\'t compute it. This is the usual way to resolve a recurring item.' },
+          scope: { type: 'string', enum: ['series'], description: 'Optional. For recurring nodes only: pass "series" to deliberately end the ENTIRE series (every future occurrence), when my human really wants the whole recurring thing gone — not just one day. Omit for one-time nodes and for single occurrences (use occurrence_date for those).' },
         },
         required: ['id', 'resolution'],
       },
@@ -1728,6 +1759,23 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'schedule_calibrate_link',
+      description: 'I grade a consequence link I authored earlier, once reality has weighed in — this is how my forecasts get honest over time. When an event has passed and I learn what actually happened (the "Recently past, not yet examined" lines in my [Temporal Context] surface these, or {{user}} just tells me), I mark the projection observed if it truly came about, raise or lower its certainty, or note what I saw. It merges over the link\'s existing details, so a partial grade leaves the rest intact. I only call something observed when it actually happened — grading a guess as fact would poison what I learn from.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The consequence-link (edge) id — it rides on the "Recently past, not yet examined" lines in my [Temporal Context].' },
+          observed:  { type: 'boolean', description: 'true = the projected consequence actually happened. I never set this on a guess.' },
+          certainty: { type: 'string', enum: ['low', 'medium', 'high'], description: 'My recalibrated confidence in this link, after seeing how it went.' },
+          note: { type: 'string', description: 'A short note in my own words about what actually happened.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'schedule_export',
       description: 'I turn one of {{user}}\'s scheduled items into something they can drop straight into their own calendar — a downloadable `.ics` file and a one-click "add to Google" link. I reach for this when an appointment or plan lives in my sense of their day but not yet in the calendar app on their phone, or when {{user}} asks me to send them something for their calendar. I pass the node `id` from the [schedule ids] legend; Unruh builds the exact dates, file, and URL in code — I never type a calendar link or date myself, I just hand it over and say what it is. It works on ANY schedule item, including ones {{user}} added by hand, and it only reads — it never changes their calendar.',
       parameters: {
@@ -1736,6 +1784,51 @@ export const BUILTIN_TOOLS = [
           id: { type: 'string', description: 'The id of the schedule item to export, from the [schedule ids] legend in my [Temporal Context].' },
         },
         required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'view_image',
+      description: "I use this to look again at an image {{user}} or a villager shared earlier — one that aged out of what I can currently see, or that I only ever knew as a text stand-in. Every image stand-in in my context carries its id (the `[image <id>: …]` marker); I pass that id and the actual image is placed before my eyes on my very next step. I reach for it when the words about an image aren't enough and I need to actually look.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The image id — from the `[image <id>: …]` stand-in in my context.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'link_image_to_node',
+      description: "I use this to tie an image to someone or something in my knowledge graph — a photo of Milkyway to the Milkyway node, a picture of the garden to the garden node — so I build continuity across everything I've seen of a person, pet, place, or thing. Next time {{user}} shows me that grey tabby, I know it's Milkyway. The image id comes from an `[image <id>: …]` stand-in; the node id comes from the graph legend or a graph search (I look it up first if I don't already have it). I lean toward tagging what I recognise — a wrong tag is easy to remove.",
+      parameters: {
+        type: 'object',
+        properties: {
+          image_id: { type: 'string', description: 'The image id — from an `[image <id>: …]` stand-in in my context.' },
+          node_id:  { type: 'string', description: 'The graph node id this image depicts — from the graph legend or a search_graph_nodes result.' },
+          label:    { type: 'string', description: "The node's name (e.g. 'Milkyway'), so the image stand-in can read who/what it shows. From the same graph result." },
+        },
+        required: ['image_id', 'node_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'unlink_image_from_node',
+      description: 'I use this to undo an image→node link I got wrong — the image and the node both stay, only the association between them is removed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          image_id: { type: 'string', description: 'The image id.' },
+          node_id:  { type: 'string', description: 'The graph node id to unlink from it.' },
+        },
+        required: ['image_id', 'node_id'],
       },
     },
   },
@@ -2353,6 +2446,17 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to acknowledge intent: ${err.message}`; }
   },
 
+  read_pondering: async ({ uid }) => {
+    if (typeof uid !== 'string' || !uid.trim()) {
+      return 'To read a thought I need its id (shown as [id: …] in my recent-thoughts list).';
+    }
+    try {
+      const r = await readPonderingByUid({ uid: uid.trim() });
+      if (!r.ok) return `I couldn't bring that thought up: ${r.error}.`;
+      return `My earlier thought — "${r.title}":\n\n${r.content}`;
+    } catch (err) { return `I couldn't read that thought: ${err.message}`; }
+  },
+
   memory_confirm_consent: async ({ ids }) => {
     if (!Array.isArray(ids) || ids.length === 0) return 'ids must be a non-empty array of memory record IDs.';
     const result = await confirmConsentMemories(ids);
@@ -2478,6 +2582,61 @@ export const TOOL_EXECUTORS = {
       if (!res.ok) return `Failed to delete memory ${mid}: ${res.error}`;
       return quietOk(`Memory ${mid} deleted (snapshot saved — recoverable from the Knowledge editor).`);
     } catch (err) { return `Failed to delete memory by id: ${err.message}`; }
+  },
+
+  view_image: async ({ id } = {}, ctx = {}) => {
+    const key = String(id ?? '').trim();
+    if (!key) return "I need the image id — it's on the `[image <id>: …]` stand-in in my context.";
+    const meta = await getAssetMeta(key);
+    if (!meta) return `I don't have an image with id ${key} — it may have been removed.`;
+    // Audience gate (fail-closed): on a gated villager turn a ward-private image
+    // is never mine to place before my eyes. undefined = ward/web (no gate).
+    const audiences = discordReadAudiences(ctx);
+    if (audiences !== undefined && !audiences.includes(meta.audienceTag)) {
+      return "That image isn't mine to look at on this turn.";
+    }
+    // Stash for the tool loop to place the actual image before me next round
+    // (the same-turn recompose precedent). The "result" is the image, not prose.
+    ctx._pendingImages = Array.isArray(ctx._pendingImages) ? ctx._pendingImages : [];
+    ctx._pendingImages.push({ id: meta.id });
+    return quietOk(`Looking at ${meta.slugs?.[0] ?? meta.id} now.`);
+  },
+
+  link_image_to_node: async ({ image_id, node_id, label } = {}, ctx = {}) => {
+    // Node associations are the ward's own — never settable from a gated
+    // villager turn (a villager's shared image carries provenance, not the
+    // right to tie my human's people/places together).
+    if (discordReadAudiences(ctx) !== undefined) {
+      return "I only tie images to my human's people and places on their own turns.";
+    }
+    const img = String(image_id ?? '').trim();
+    const node = String(node_id ?? '').trim();
+    if (!img || !node) return 'I need both the image id and the graph node id to link them.';
+    const meta = await getAssetMeta(img);
+    if (!meta) return `I don't have an image with id ${img}.`;
+    const r = await addAssetLink(img, { nodeId: node, label: label || node, by: 'familiar' });
+    if (r?.ok === false) return `I couldn't link that image: ${r.error}.`;
+    // If the image already carries a description, graduate it onto the node so
+    // "what Milkyway looks like" becomes durable graph knowledge. Dynamic import
+    // keeps vision.js out of cerebellum's static graph (vision imports cerebellum).
+    if (meta.description?.text) {
+      import('./vision.js')
+        .then(v => v.graduateImageDescriptionToNode(img, node))
+        .catch(() => {});
+    }
+    return quietOk(`Tied image ${meta.slugs?.[0] ?? meta.id} to ${label || node}.`);
+  },
+
+  unlink_image_from_node: async ({ image_id, node_id } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) {
+      return "I only change image links on my human's own turns.";
+    }
+    const img = String(image_id ?? '').trim();
+    const node = String(node_id ?? '').trim();
+    if (!img || !node) return 'I need both the image id and the node id to unlink them.';
+    const r = await removeAssetLink(img, node);
+    if (r?.ok === false) return `I couldn't unlink that: ${r.error}.`;
+    return quietOk(`Removed the link between image ${img} and ${node}.`);
   },
 
   recall: async ({ query, limit } = {}, ctx = {}) => {
@@ -2942,21 +3101,28 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to add phase: ${err.message}`; }
   },
 
-  schedule_resolve: async ({ id, resolution, occurrence_date }) => {
+  schedule_resolve: async ({ id, resolution, occurrence_date, scope }) => {
     if (!resolution || typeof resolution !== 'string') return 'Failed to resolve: resolution (string) is required';
     try {
-      // If occurrence_date is supplied AND the node is recurring,
-      // resolve THIS occurrence only — keeps the rest of the series
-      // alive. Without occurrence_date, the whole node (or whole
-      // series for a recurring one) is resolved.
-      const data = occurrence_date
-        ? await resolveScheduleOccurrence({ id, occurrence_date, resolution })
-        : await resolveScheduleNode({ id, resolution });
+      // occurrence_date → resolve THIS occurrence only; the series stays alive.
+      if (occurrence_date) {
+        const data = await resolveScheduleOccurrence({ id, occurrence_date, resolution });
+        if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
+        if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
+        return quietOk(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`);
+      }
+      // No occurrence_date → whole-node resolve. For a recurring node this is
+      // fail-closed: Unruh refuses (recurring_needs_scope) unless I pass
+      // series=true, so I never end an entire series when my human meant one
+      // occurrence. scope:'series' is my deliberate opt-in to end the series.
+      const data = await resolveScheduleNode({ id, resolution, series: scope === 'series' });
+      if (data?.code === 'recurring_needs_scope') {
+        const name = data.label ? `"${data.label}"` : id;
+        return `${name} repeats, so marking it ${resolution} without saying which occurrence would end EVERY future one. If my human meant just this one, I pass occurrence_date="YYYY-MM-DD" — the exact date is in my [Temporal Context], I read it there rather than guess. To end the whole series on purpose, I pass scope="series".`;
+      }
       if (data?.ok === false) return `Failed to resolve: ${data.error ?? 'unknown error'}`;
       if (data?.updated === false) return `No schedule node with id ${id} — it may have been deleted or never existed.`;
-      return occurrence_date
-        ? quietOk(`Marked ${id}'s ${occurrence_date} occurrence as ${resolution}. The series continues.`)
-        : quietOk(`Marked ${id} as ${resolution}.`);
+      return quietOk(`Marked ${id} as ${resolution}.`);
     } catch (err) { return `Failed to resolve: ${err.message}`; }
   },
 
@@ -3004,6 +3170,25 @@ export const TOOL_EXECUTORS = {
       const tail = payload.valence ? ` (${payload.condition ?? 'unconditional'}, ${payload.valence}${payload.observed ? ', observed' : payload.certainty ? `, ${payload.certainty} certainty` : ''})` : '';
       return quietOk(`Linked ${s} ${k} ${stateLabel ? `[${stateLabel}]` : d}${tail}.`, { id: data.id });
     } catch (err) { return `I couldn't connect those items: ${err.message}`; }
+  },
+
+  schedule_calibrate_link: async ({ id, observed, certainty, note } = {}) => {
+    const eid = String(id ?? '').trim();
+    if (!eid) return 'I need the edge id — it rides on the "Recently past, not yet examined" lines in my [Temporal Context].';
+    const payload = {};
+    if (observed !== undefined) payload.observed = !!observed;
+    if (['low', 'medium', 'high'].includes(certainty)) payload.certainty = certainty;
+    if (note && String(note).trim()) payload.note = String(note).trim();
+    if (!Object.keys(payload).length) return 'I need at least one grading field — observed, certainty, or a note.';
+    try {
+      const data = await updateScheduleEdge({ id: eid, payload });
+      if (!data?.ok) return `I couldn't grade that link: ${data?.error ?? 'Unruh unavailable'}.`;
+      if (data.updated === false) return `There's no consequence link with id ${eid} — it may have been removed.`;
+      const parts = [];
+      if (payload.observed) parts.push('observed — it really happened');
+      if (payload.certainty) parts.push(`certainty → ${payload.certainty}`);
+      return quietOk(`Graded link ${eid}${parts.length ? ` (${parts.join(', ')})` : ''}.`);
+    } catch (err) { return `I couldn't grade that link: ${err.message}`; }
   },
 
   schedule_export: async ({ id } = {}) => {
@@ -3715,12 +3900,16 @@ export const TOOL_EXECUTORS = {
 // (keyless reference APIs / in-process scrape floor respectively); the
 // toggle still gates them because egress itself is the opt-in. A tool the
 // Familiar can't actually use should never appear in its tool list.
-export const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
+const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 
 // The weather tools only appear when weather is enabled (default-ON settings
 // toggle + the env off-switch) — a Familiar with no places saved still sees
 // them, and weather_today tells it kindly there's nowhere to check yet.
-export const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
+const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
+// Vision link tools (vision build spec §6.5) — need vision enabled but not a
+// capable turn (linking is by-id metadata); view_image is gated separately on
+// capability. Villager turns never see these (not in villagerToolNames).
+const VISION_LINK_TOOL_NAMES = new Set(['link_image_to_node', 'unlink_image_from_node']);
 
 export function webSearchEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_WEBSEARCH_DISABLED === '1') return false;
@@ -3732,7 +3921,7 @@ export function webSearchEnabled(settings = readSettingsSync()) {
 // command (and never under the hard off-switch). A tool the Familiar can't
 // actually use should never appear in its list — and one that changes the
 // real calendar shouldn't be offered before the ward has opted in.
-export const GCAL_WRITE_TOOL = 'schedule_push_to_google';
+const GCAL_WRITE_TOOL = 'schedule_push_to_google';
 
 export function gcalWriteEnabled(settings = readSettingsSync()) {
   if (process.env.PROTO_FAMILIAR_GCAL_DISABLED === '1') return false;
@@ -3753,7 +3942,7 @@ export function gcalWriteEnabled(settings = readSettingsSync()) {
 // intention tools + a few schedule READS the Familiar already holds. No
 // villager contact, no destructive ops, no ward-schedule writes here.
 
-export const REACH_OUT_TO_WARD_TOOL = {
+const REACH_OUT_TO_WARD_TOOL = {
   type: 'function',
   function: {
     name: 'reach_out_to_ward',
@@ -3768,7 +3957,7 @@ export const REACH_OUT_TO_WARD_TOOL = {
   },
 };
 
-export const SET_NEXT_CHECK_TOOL = {
+const SET_NEXT_CHECK_TOOL = {
   type: 'function',
   function: {
     name: 'set_next_check',
@@ -3786,7 +3975,7 @@ export const SET_NEXT_CHECK_TOOL = {
 // The existing (registry) tools the noticing turn may use: act on intentions
 // + a few reads. Names only — schemas pulled from BUILTIN_TOOLS, macro-
 // resolved, so their first-person descriptions stay consistent.
-export const NOTICING_REGISTRY_TOOL_NAMES = [
+const NOTICING_REGISTRY_TOOL_NAMES = [
   'intention_set', 'intention_list', 'intention_drop', 'intention_done', 'intention_mark_fired',
   'schedule_find', 'schedule_availability', 'schedule_export', 'schedule_set_lead', 'get_datetime',
   // The sky in reach for a due outside-tagged intention (W-B, read-only, cheap;
@@ -3822,11 +4011,20 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
   // it never widens them. No Set → today's full-registry behavior.
   const mods = opts.modules instanceof Set ? opts.modules : null;
   const inScope = (name) => !mods || TOOL_MODULES[name] === CORE || mods.has(TOOL_MODULES[name]);
+  // Vision tools (vision build spec §10): a lever I can't pull is worse than no
+  // lever. view_image only makes sense when THIS turn's model can actually see
+  // (opts.visionCapable), so it's hidden otherwise; the link tools need vision
+  // enabled but not a capable turn (linking is metadata by id). Both off when
+  // vision is disabled.
+  const visionOn = settings?.visionEnabled !== false && process.env.PROTO_FAMILIAR_VISION_DISABLED !== '1';
+  const visionCapableTurn = visionOn && opts.visionCapable === true;
   const tools = BUILTIN_TOOLS.filter(t =>
     inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
     (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)) &&
-    (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL));
+    (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL) &&
+    (visionCapableTurn || t.function?.name !== 'view_image') &&
+    (visionOn || !VISION_LINK_TOOL_NAMES.has(t.function?.name)));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {
       if (t && typeof t === 'object') tools.push(t);
@@ -3989,8 +4187,8 @@ export function discordWriteProvenance(ctx = {}) {
  *   - registered villager → relay + villagerToolNames(grants), macro-resolved.
  *   - stranger / neither → [] (no tools, unchanged from today).
  */
-export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools } = {}) {
-  if (isWard) return composeActiveTools(customTools, settings);
+export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools, visionCapable = false } = {}) {
+  if (isWard) return composeActiveTools(customTools, settings, { visionCapable });
   if (!isVillager) return [];
   const allow = villagerToolNames(grants);
   const picked = BUILTIN_TOOLS.filter(t => allow.has(t.function?.name));
@@ -4120,8 +4318,36 @@ export async function runToolCallLoop({
       ...currentMsgs,
       { role: 'assistant', content: message.content || null, tool_calls: toolCalls },
       ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
+      // view_image (§10): place any images the Familiar asked to see again
+      // before its eyes on the next round (a mid-loop context grow).
+      ...(await drainPendingImages(toolCtx)),
     ];
   }
 
-  return { data, toolRounds };
+  // Round-cap exhaustion: the model STILL wanted tools when the budget ran
+  // out. Without this, `data` is a tool_calls response with content:null — the
+  // caller renders silence, and the never-executed calls poison the model's
+  // sense of what it actually did (it later "remembers" acting). Force ONE
+  // closing round with tools withheld (opts.forceText) and a plain first-person
+  // note, so the turn ends in honest text: what was done, what wasn't.
+  const finalChoice = data?.choices?.[0];
+  let roundCapHit = false;
+  if (!signal?.aborted
+      && finalChoice?.finish_reason === 'tool_calls'
+      && Array.isArray(finalChoice?.message?.tool_calls) && finalChoice.message.tool_calls.length) {
+    roundCapHit = true;
+    const closingMsgs = [
+      ...currentMsgs,
+      { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done. If they tell me to go on, I get a fresh budget and continue.]" },
+      ...(timeAnchor ? [{ role: 'system', content: timeAnchor }] : []),
+    ];
+    try {
+      data = await callUpstream(closingMsgs, undefined, { forceText: true });
+      console.log('[tools] round cap reached with tools still pending — forced a closing text round');
+    } catch (err) {
+      console.warn('[tools] round-cap closing round failed (keeping tool_calls response):', err?.message ?? err);
+    }
+  }
+
+  return { data, toolRounds, roundCapHit };
 }

@@ -11,6 +11,28 @@ slug ids (`insert_with_slug_retry`); local-naive time; exact machine values
 in code; graceful degradation (off-switch in the same commit); ride existing
 requests / gate in code; no copy-paste of substantial logic.
 
+**Inherited from the 0.9 vision post-mortem** (CLAUDE.md, "Lessons cut into
+law"): trackers add LLM *judgment* (parsing a free-text entry into a
+tracker's fields, choosing which tracker a message means), so —
+
+- **RULE A** — any parse/classify call this spec adds goes through
+  `callProviderChat` (≥4000 cap + `extractContent`), never a bespoke raw
+  fetch. The "ride existing requests" convention above is the first line of
+  defence: a tracker entry parsed *inside* the chat turn that already
+  happened is preferred to a new standalone call — but if a standalone call
+  is unavoidable, it still inherits both guarantees.
+- **RULE B** — a tracker parse that fails, times out, or comes back empty is
+  a *visible* "I couldn't log that" to my human plus a first-person note in
+  my own context that the entry did NOT record — never a silent drop the
+  Familiar later claims it saved.
+- **RULE C** — the surface matrix: logging a tracker entry from web chat, from
+  a ward Discord DM, from a villager turn (gated), and from a background
+  reflection each gets a wired-or-N/A cell in the same pass, so one surface
+  isn't silently left unable to log.
+- **A PIPELINE test per pass** — at least one full turn (message → parse →
+  stored entry) through the real assembly with a stubbed provider, not only
+  pure-function schema/validation tests.
+
 ---
 
 ## 1. Unruh store (migration `000N_trackers.sql`, next free number)

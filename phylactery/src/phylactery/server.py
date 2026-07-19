@@ -436,6 +436,19 @@ def memory_list_consent_pending() -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_list_by_subject(villager_id: str, limit: int = 50) -> dict[str, Any]:
+    """I use this to list the kept memories where a specific villager is a
+    SUBJECT — what I actually hold about them. It backs the consent menu a
+    villager can open about themselves (transparency: a person may see what
+    I remember about them), and I can also reach for it when my human asks
+    "what do you know about X?". Thin projections only.
+    Returns { items: [{ id, category, brief, date }] }.
+    """
+    items = mem.list_by_subject(villager_id, limit=limit, conn=_c())
+    return {"items": items}
+
+
+@mcp.tool()
 def memory_health() -> dict[str, Any]:
     """I use this to check whether my memory's DEDUP is working — the semantic
     matcher that stops the same fact piling up in my human's consent queue. It

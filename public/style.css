@@ -17,9 +17,13 @@
   --border:          #383b55;
   --border-light:    #2f3248;
 
+  /* Text hierarchy. dim/muted are real text colors (hints, timestamps,
+     chips), so both must clear WCAG AA 4.5:1 against the LIGHTEST dark
+     surface (--surface-raise #252837): dim 5.6:1, muted 5.0:1. Don't
+     darken them back below that for looks — low-vision users read these. */
   --text:            #cdd6f4;
-  --text-dim:        #6c7186;
-  --text-muted:      #45475a;
+  --text-dim:        #9aa1bb;
+  --text-muted:      #8f96b0;
 
   --accent:          #89b4fa;
   --accent-hover:    #74a5f8;
@@ -52,9 +56,11 @@
   --border:          #d4d4e0;
   --border-light:    #e4e4ef;
 
+  /* Same AA rule as dark: dim/muted must clear 4.5:1 on white AND the
+     tinted surfaces (#f0f0f6 worst case): dim 5.9:1, muted 4.9:1. */
   --text:            #1e1e2e;
-  --text-dim:        #6c6c84;
-  --text-muted:      #b4b4c8;
+  --text-dim:        #5f5f78;
+  --text-muted:      #696982;
 
   --accent:          #1d6fce;
   --accent-hover:    #155db3;
@@ -62,9 +68,12 @@
 
   --user-bg:         #dbeafe;
   --assistant-bg:    #f7f7fb;
-  --error-color:     #d9534f;
+  /* error/success are used as TEXT (status lines, badges) — the classic
+     bootstrap values fail AA on light backgrounds (3.6:1 / 2.9:1), so
+     these are darkened variants that pass (4.8:1 / 5.3:1). */
+  --error-color:     #c13c38;
   --error-bg:        #fff0f0;
-  --success-color:   #28a745;
+  --success-color:   #1a7431;
   --warn-color:      #856404;
 
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.10);
@@ -91,6 +100,185 @@ body {
   color: var(--text);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ── Material Symbols (icons.js) ─────────────────────────────── */
+.ms-icon {
+  display: inline-block;
+  vertical-align: -0.2em;
+  fill: currentColor;
+  flex: none;
+}
+[data-ms-icon] { display: inline-flex; align-items: center; justify-content: center; }
+.sidebar-menu-icon .ms-icon { vertical-align: middle; color: var(--text-dim); }
+.sidebar-menu-row:hover .sidebar-menu-icon .ms-icon { color: var(--accent); }
+
+/* ── Village: people search + structured grant editor ────────── */
+.vl-search {
+  flex: 1 1 160px;
+  min-width: 120px;
+  max-width: 260px;
+  padding: 5px 9px;
+  font-size: 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.vl-count { font-size: 0.76rem; color: var(--text-dim); white-space: nowrap; }
+.vl-grant-known {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 2px 10px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.vl-grant-known:last-child { border-bottom: none; }
+.vl-grant-known-label { font-size: 0.84rem; color: var(--text); }
+.vl-grant-known-val {
+  font-size: 0.82rem;
+  padding: 4px 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  min-width: 0;
+}
+.vl-grant-known .field-hint,
+.vl-grant-known .hint-toggle { grid-column: 1 / -1; margin: 0; }
+.vl-grants-advanced { margin-top: 10px; }
+.vl-grants-advanced summary {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.vl-grants-advanced summary:hover { color: var(--text); }
+@media (max-width: 560px) {
+  .vl-grant-known { grid-template-columns: 1fr; }
+}
+
+/* ── Model browser (Connections modal) ───────────────────────── */
+.model-browser { margin-top: 6px; }
+.model-browser-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.model-filter {
+  flex: 1;
+  min-width: 140px;
+  padding: 5px 9px;
+  font-size: 0.82rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.model-browser-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 3px;
+}
+.model-pick {
+  width: 100%;
+  text-align: left;
+  padding: 6px 9px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-pick:hover { background: var(--surface-raise); border-color: var(--border); }
+.model-pick-current { border-color: var(--accent); color: var(--accent); }
+.model-none { padding: 8px; color: var(--text-dim); font-size: 0.82rem; }
+
+/* ── Disclosure hints (UX rule 1: one thing at a time) ───────── */
+/* enhanceHints() in app.js collapses every long .field-hint behind a
+   small ⓘ toggle, static and dynamically-rendered alike. Short hints
+   and .hint-keep (safety-relevant text) stay visible. */
+.hint-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.hint-toggle:hover { color: var(--accent); }
+.hint-toggle .hint-chev { transition: transform 0.15s; font-size: 0.6rem; }
+.hint-toggle[aria-expanded="true"] .hint-chev { transform: rotate(90deg); }
+.field-hint.hint-collapsed { display: none; }
+.field-hint.hint-open { display: block; }
+
+/* ── Base form controls ──────────────────────────────────────── */
+/* Element-level theming so EVERY text-like input, select, and textarea
+   is themed by default — component rules later in the file still win
+   where they specialise. Without this, any control outside a .field /
+   .ke-toolbar scope rendered white browser chrome (the recurring
+   "unthemed input" bug: model picker, toolbar numbers, moved contacts
+   fields, web-search numbers). Checkboxes/radios/ranges/files keep
+   native rendering. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+}
+
+/* ── Keyboard focus (WCAG 2.4.7) ─────────────────────────────── */
+/* One visible focus indicator for every interactive element, but only
+   for keyboard/programmatic focus (:focus-visible) — mouse clicks stay
+   clean. Individual controls may ALSO restyle borders on :focus; they
+   must never suppress this outline. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Inputs draw their focus as an accent border (below); double outlines
+   read as clutter, so keep the outline tight there. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 0;
+}
+
+/* ── Skip link (WCAG 2.4.1) ──────────────────────────────────── */
+/* Visually hidden until keyboard-focused, then a small pill under the
+   topbar so a keyboard user can jump past the sidebar to the chat. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 200;
+  padding: 8px 14px;
+  background: var(--surface-raise);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.skip-link:focus {
+  transform: none;
 }
 
 /* ── App shell ───────────────────────────────────────────────── */
@@ -145,6 +333,11 @@ body {
   letter-spacing: 0.03em;
   color: var(--text);
   user-select: none;
+  /* Never wrap to two lines on narrow phones — ellipsize instead. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .status-badge {
@@ -203,6 +396,92 @@ body {
   letter-spacing: 0.02em;
   user-select: text;
 }
+
+/* ── Sidebar master-detail navigation ────────────────────────── */
+/* Default state: the searchable menu is visible and every section is
+   hidden. Opening a section (aside.sidebar-nav-open + .nav-active on
+   the section) swaps to that one section with a back header. Section
+   markup is untouched — visibility only. */
+.sidebar-nav-search { padding: 12px 14px 6px; }
+.sidebar-nav-search input {
+  width: 100%;
+  padding: 7px 11px;
+  font-size: 0.88rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.sidebar-menu { display: flex; flex-direction: column; padding: 4px 8px 12px; }
+.sidebar-menu-group {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 14px 8px 4px;
+}
+.sidebar-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.sidebar-menu-row:hover { background: var(--surface-raise); }
+.sidebar-menu-icon { flex: none; width: 1.4em; text-align: center; }
+.sidebar-menu-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sidebar-menu-title { font-size: 0.9rem; font-weight: 600; }
+.sidebar-menu-desc {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-menu-chev { color: var(--text-dim); flex: none; }
+.sidebar-menu-empty { padding: 14px 10px; font-size: 0.84rem; color: var(--text-dim); }
+.sidebar-menu-advanced {
+  margin: 14px 8px 0;
+  padding: 8px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.sidebar-menu-advanced:hover { color: var(--text); border-color: var(--text-dim); }
+
+.sidebar-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 2;
+}
+.sidebar-detail-head.hidden { display: none; }
+.sidebar-back { font-size: 0.82rem; white-space: nowrap; }
+.sidebar-detail-title { font-weight: 700; font-size: 0.9rem; }
+
+/* Menu mode: all sections hidden. Detail mode: only the active one. */
+.sidebar .sidebar-section { display: none; }
+.sidebar.sidebar-nav-open .sidebar-section.nav-active { display: block; }
+/* Opened-as-a-page: the detail header names the section, so the
+   section's own label row is redundant; content always expanded. */
+.sidebar.sidebar-nav-open .sidebar-section.nav-active > .section-label { display: none; }
+.sidebar.sidebar-nav-open .sidebar-section.nav-active .section-content { display: block; }
 
 /* Sidebar sections */
 .sidebar-section {
@@ -291,8 +570,14 @@ body {
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
-  outline: none;
   border-color: var(--accent);
+}
+/* Suppress the outline only for non-keyboard focus — the global
+   :focus-visible indicator must survive (WCAG 2.4.7). */
+.field input:focus:not(:focus-visible),
+.field select:focus:not(:focus-visible),
+.field textarea:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .field textarea {
@@ -1094,8 +1379,10 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 #user-input:focus {
-  outline: none;
   border-color: var(--accent);
+}
+#user-input:focus:not(:focus-visible) {
+  outline: none;
 }
 
 #user-input::placeholder {
@@ -1120,6 +1407,163 @@ button { cursor: pointer; font-family: var(--font); }
 .btn-send:hover  { background: var(--accent-hover); }
 .btn-send:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-send svg { display: none; }
+
+/* ── Composer image attachments (vision) ─────────────────────────── */
+.btn-attach {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-raise);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-attach:hover { color: var(--accent); border-color: var(--accent); }
+
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px 0;
+}
+.attach-strip.hidden { display: none; }
+.attach-chip {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.attach-chip { width: 60px; }
+.attach-chip img { width: 60px; height: 60px; object-fit: cover; display: block; }
+.attach-chip-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-chip-tag {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 0.66rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-chip-badge {
+  display: block;
+  max-width: 60px;
+  margin-top: 2px;
+  font-size: 0.62rem;
+  line-height: 1.1;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* Graph-node tag picker (composer) */
+.tag-picker {
+  position: fixed;
+  z-index: 1000;
+  width: 240px;
+  background: var(--surface-raise);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  padding: 8px;
+}
+.tag-picker input {
+  width: 100%;
+  padding: 7px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.tag-picker-results { margin-top: 6px; max-height: 200px; overflow-y: auto; }
+.tag-picker-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+.tag-picker-item:hover { background: var(--surface); }
+.tag-picker-empty { padding: 8px 9px; font-size: 0.78rem; color: var(--text-muted); }
+
+/* Thumbnails rendered inside a chat message */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.msg-attachment-thumb {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+  display: block;
+}
+.msg-attachment-missing { color: var(--text-muted); font-size: 0.8rem; font-style: italic; }
+
+/* Drag-over affordance on the chat pane */
+.chat-pane.drag-over { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
+/* "Go on" offer when the tool-round budget ran out mid-task */
+.continue-rounds-offer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 10px 44px;   /* aligns with message bodies (avatar width) */
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+/* Per-connection vision capability control */
+.conn-vision {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.conn-vision select { font-size: 0.78rem; padding: 2px 6px; }
 
 /* ── Scrollbar ───────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -1151,7 +1595,11 @@ button { cursor: pointer; font-family: var(--font); }
     position: fixed;
     top: calc(var(--topbar-h) + env(safe-area-inset-top));
     left: 0;
-    bottom: 0;
+    /* Height from the VISUAL viewport (--app-h), not bottom:0 — the
+       layout viewport's bottom sits behind the soft keyboard on
+       iOS Safari / Firefox Android, which made the sidebar's lower
+       settings unreachable while typing in any of its inputs. */
+    height: calc(var(--app-h, 100dvh) - var(--topbar-h) - env(safe-area-inset-top));
     width: min(var(--sidebar-w), 100vw);
     /* Above the overlay (50) so its contents stay interactive while
        the dim layer covers everything else. */
@@ -1188,7 +1636,9 @@ button { cursor: pointer; font-family: var(--font); }
   /* Cap the auto-growing textarea so the conversation above always has
      room to scroll. autoResize() also enforces this dynamically. */
   #user-input {
-    max-height: 40dvh;
+    /* Capped against the VISUAL viewport too — 40dvh alone ignores the
+       soft keyboard, letting the composer outgrow the visible area. */
+    max-height: min(40dvh, calc(var(--app-h, 100dvh) * 0.4));
   }
 }
 /* NOTE: mobile modal / knowledge-editor / calendar overrides live at the
@@ -1690,14 +2140,65 @@ button { cursor: pointer; font-family: var(--font); }
 }
 
 /* ── Knowledge editor ──────────────────────────────────────── */
+/* Tab bars scroll horizontally instead of clipping (UX rule 2: nothing
+   hides offscreen without a cue). The wrapper (.ke-tabs-wrap, added by
+   initScrollableTabs in app.js) paints edge fades while more tabs exist
+   in that direction; the bar itself scrolls by touch, wheel, or keyboard
+   focus, and the active tab is auto-scrolled into view. */
+.ke-tabs-wrap {
+  position: relative;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
 .ke-tabs {
   display: flex;
   gap: 4px;
   padding: 0 14px;
-  border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;           /* the fades are the affordance */
 }
+.ke-tabs::-webkit-scrollbar { display: none; }
+/* Unwrapped bars (before initScrollableTabs runs) carry their own border;
+   wrapped ones defer to the wrapper's so the fades sit flush over it. */
+.ke-tabs { border-bottom: 1px solid var(--border); }
+.ke-tabs-wrap .ke-tabs { border-bottom: none; }
+.ke-tabs-wrap::before,
+.ke-tabs-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.ke-tabs-wrap::before {
+  left: 0;
+  background: linear-gradient(to right, var(--surface), transparent);
+}
+.ke-tabs-wrap::after {
+  right: 0;
+  background: linear-gradient(to left, var(--surface), transparent);
+}
+.ke-tabs-wrap.fade-left::before  { opacity: 1; }
+.ke-tabs-wrap.fade-right::after  { opacity: 1; }
+/* A subtle chevron riding the right fade — makes "there's more" explicit
+   rather than inferred from a gradient. */
+.ke-tabs-wrap.fade-right .ke-tabs-more {
+  position: absolute;
+  right: 2px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 2;
+}
+.ke-tabs-more { display: none; }
+.ke-tabs-wrap.fade-right .ke-tabs-more { display: block; }
 .ke-tab {
   background: none;
   border: none;
@@ -1707,11 +2208,18 @@ button { cursor: pointer; font-family: var(--font); }
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  white-space: nowrap;             /* a tab label never wraps mid-word */
+  flex-shrink: 0;
 }
 .ke-tab:hover { color: var(--text); }
 .ke-tab-active { color: var(--text); border-bottom-color: var(--accent); }
 
-.ke-body { padding: 0; display: flex; flex-direction: column; }
+/* flex:1 makes the body FILL fixed-height modals (resizable desktop,
+   100dvh phone sheets) — without it, canvas panes like the graph map
+   collapsed to a fallback height with a dead void below (the reported
+   phone bug). min-height:0 lets inner panes scroll instead of forcing
+   the modal taller. */
+.ke-body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .ke-pane { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .ke-pane-active { display: flex; }
 
@@ -2091,6 +2599,36 @@ button { cursor: pointer; font-family: var(--font); }
   pointer-events: none;
 }
 .ke-graph-legend.hidden { display: none; }
+.ke-graph-legend-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.ke-graph-legend-toggle:hover { color: var(--text); }
+.ke-graph-legend-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  /* A long type list must never eat the canvas — scroll inside itself. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.ke-graph-legend-rows.hidden { display: none; }
+
+/* Map hint: one version for mouse, a shorter one for touch; never wider
+   than the canvas leaves room for beside the zoom controls. */
+.ke-graph-hint .hint-touch { display: none; }
+@media (pointer: coarse) {
+  .ke-graph-hint .hint-mouse { display: none; }
+  .ke-graph-hint .hint-touch { display: inline; }
+  .ke-graph-hint { max-width: calc(100% - 70px); font-size: 0.68rem; }
+}
 
 .ke-graph-popover {
   position: absolute;
@@ -2106,6 +2644,28 @@ button { cursor: pointer; font-family: var(--font); }
   overflow-y: auto;
 }
 .ke-graph-popover.hidden { display: none; }
+/* Phone: the popover is a bottom sheet pinned to the viewport. It
+   ignores tap coordinates (JS adds this class instead of positioning),
+   tracks the soft keyboard via --app-h so the save button stays
+   reachable while typing, and scrolls internally. */
+.ke-graph-popover-sheet {
+  position: fixed;
+  /* The modal backdrop's backdrop-filter makes it the CONTAINING BLOCK
+     for fixed descendants (spec'd, all modern engines), and the mobile
+     backdrop already ends at the soft keyboard's top (--app-h). So
+     bottom:0 here means "rest on the keyboard" — do NOT add --kb-inset,
+     it double-counts against the shortened backdrop. */
+  left: 0; right: 0; bottom: 0;
+  top: auto;
+  width: 100%;
+  max-width: 100%;
+  max-height: calc(var(--app-h, 100dvh) * 0.72);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: none;
+  z-index: 90;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+.ke-graph-popover-sheet .ke-graph-popover-head { cursor: default; }
 .ke-graph-popover .field { margin-bottom: 8px; display: flex; flex-direction: column; gap: 3px; }
 .ke-graph-popover .field label { font-size: 0.72rem; color: var(--text-dim); }
 .ke-graph-popover .field input,
@@ -2805,14 +3365,25 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   .modal-backdrop {
     align-items: flex-end;
     padding: 0 0 env(safe-area-inset-bottom);
+    /* The backdrop's bottom edge must sit at the KEYBOARD's top, not the
+       layout viewport's bottom — otherwise the bottom-anchored sheet
+       (and its save buttons) hides behind the soft keyboard on browsers
+       where the keyboard only shrinks the visual viewport. */
+    height: var(--app-h, 100dvh);
+    bottom: auto;
   }
   .modal,
   .modal-wide {
     max-width: 100%;
     width: 100%;
-    max-height: 90vh;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
+    /* Full-height sheet: on a phone a modal IS the screen. --app-h is
+       the VISUAL viewport height (initMobileViewport) — it shrinks when
+       the soft keyboard opens, so the sheet and its scrollable body
+       shrink with it and the focused input stays visible above the
+       keyboard instead of buried behind it. dvh is the pre-JS fallback. */
+    height: var(--app-h, 100dvh);
+    max-height: var(--app-h, 100dvh);
+    border-radius: 0;
   }
   /* Drag-handle indicator at the top of every bottom-sheet modal */
   .modal-header {
@@ -2831,16 +3402,16 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
     background: var(--text-muted);
     opacity: 0.7;
   }
-  /* Resizable modals (KE, TE, Lore, Tome entries): go full-width
+  /* Resizable modals (KE, TE, Lore, Tome entries): go full-screen
      sheet, drop the resize handle (pointless on touch). */
   .modal-resizable {
     width: 100%;
-    height: 88vh;
+    height: var(--app-h, 100dvh);
+    max-height: var(--app-h, 100dvh);
     min-width: 0;
     min-height: 0;
     resize: none;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
+    border-radius: 0;
   }
 
   /* ── Knowledge-editor split: stack on mobile ─────────────── */
@@ -2881,18 +3452,12 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 }
 
 /* ── Responsive: landscape phones ────────────────────────────── */
-/* In landscape on a phone, viewport height shrinks dramatically.
-   Cap modals tighter so the header and footer remain reachable. */
+/* Modals are full-screen sheets on phones in both orientations (100dvh
+   tracks the real viewport), so no separate modal caps are needed here —
+   only the input area tightens so the conversation keeps room. */
 @media (max-width: 767px) and (orientation: landscape) {
-  .modal,
-  .modal-wide {
-    max-height: 80vh;
-  }
-  .modal-resizable {
-    height: 78vh;
-  }
   #user-input {
-    max-height: 25dvh;
+    max-height: min(25dvh, calc(var(--app-h, 100dvh) * 0.4));
   }
 }
 
@@ -3285,12 +3850,16 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 }
 .ws-opt input { margin-top: 3px; flex: none; }
 
-/* Web search modal — resizable */
-#websearch-modal .modal {
-  resize: both;
-  overflow: auto;
-  min-width: 340px;
-  min-height: 300px;
-  max-width: 95vw;
-  max-height: 92vh;
+/* Web search modal — resizable on desktop only; on phones the shared
+   full-screen sheet rules must win (this block is later in the cascade,
+   so it needs the media scope). */
+@media (min-width: 768px) {
+  #websearch-modal .modal {
+    resize: both;
+    overflow: auto;
+    min-width: 340px;
+    min-height: 300px;
+    max-width: 95vw;
+    max-height: 92vh;
+  }
 }

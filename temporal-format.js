@@ -66,10 +66,25 @@ function formatIntentionCondition(condition) {
   return parts.join(' and ');
 }
 
+// Salvage a wall-clock "HH:MM" out of a time string Date can't parse — a bare
+// "23:00:00", or a legacy UTC artifact like "T13:00:00+00:00" (an old
+// offset-stamped, date-less value from before the local-naive migration). The
+// offset is dropped on purpose: routine phases are the ward's local wall-clock,
+// so 13:00 is what they configured. Returns null if there's no HH:MM to find.
+function hhmmFromString(s) {
+  const m = String(s).match(/(?:^|T)(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return `${String(parseInt(m[1], 10)).padStart(2, '0')}:${m[2]}`;
+}
+
 function formatLocalTime(iso, opts = {}) {
   if (!iso) return '';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  if (Number.isNaN(d.getTime())) {
+    // Unparseable (a date-less "HH:MM:SS" or a mangled "T…+00:00" artifact).
+    // Salvage the wall-clock HH:MM so the rhythm never leaks a raw token.
+    return hhmmFromString(iso) || iso;
+  }
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   const hhmm = `${hh}:${mm}`;
@@ -157,22 +172,40 @@ export function formatTemporalContext(payload) {
   const phase = schedule.phase;
   const routine = Array.isArray(payload.routine) ? payload.routine : [];
   if (routine.length) {
+    // Minute-of-day for a phase's start/end, robust to the date-less/artifact
+    // time strings (falls back to the salvaged HH:MM). -1 when nothing parses.
+    const minsOfDay = (whenStr) => {
+      const d = new Date(whenStr);
+      if (!Number.isNaN(d.getTime())) return d.getHours() * 60 + d.getMinutes();
+      const hhmm = hhmmFromString(whenStr);
+      if (!hhmm) return -1;
+      const [h, m] = hhmm.split(':').map(Number);
+      return h * 60 + m;
+    };
+    const nowD = new Date();
+    const nowMins = nowD.getHours() * 60 + nowD.getMinutes();
+    const durMarker = (mins) => {
+      if (mins < 60) return `${mins}min`;
+      const h = Math.floor(mins / 60), m = mins % 60;
+      return m ? `${h}h ${m}min` : `${h}h`;
+    };
     const rhythm = routine
       .slice()
-      .map(p => {
-        const d = new Date(p.when || 0);
-        const mins = Number.isFinite(d.getTime())
-          ? d.getHours() * 60 + d.getMinutes()
-          : -1;
-        return { p, mins };
-      })
-      .sort((a, b) => a.mins - b.mins)
-      .map(({ p }) => {
+      .map(p => ({ p, startMins: minsOfDay(p.when), endMins: minsOfDay(p.end) }))
+      .sort((a, b) => a.startMins - b.startMins)
+      .map(({ p, startMins, endMins }) => {
         const start = formatLocalTime(p.when, { timeOnly: true });
         const end   = formatLocalTime(p.end,  { timeOnly: true });
-        const here  = phase && p.id === phase.id ? '  ← I am here' : '';
         const texture = p.payload?.texture ? ` — ${p.payload.texture}` : '';
-        return `  ${start}–${end}  ${p.label ?? p.id}${texture}${here}`;
+        // Where this phase sits relative to now, so passed and upcoming phases
+        // read as such instead of a flat list. The current phase (Unruh's own
+        // time-of-day computation) wins; otherwise start-of-day ordering decides.
+        let marker;
+        if (phase && p.id === phase.id) marker = '  ← I am here';
+        else if (startMins > nowMins) marker = `  · begins in ${durMarker(startMins - nowMins)}`;
+        else if (endMins >= 0 && endMins <= nowMins) marker = `  · ended ${durMarker(nowMins - endMins)} ago`;
+        else marker = '  · earlier today';
+        return `  ${start}–${end}  ${p.label ?? p.id}${texture}${marker}`;
       });
     blocks.push(["Today's rhythm:", ...rhythm].join('\n'));
   }
@@ -184,18 +217,48 @@ export function formatTemporalContext(payload) {
     // unresolved), open tasks (my human committed to these, no time
     // yet, not done), resolved (recently terminal — usually noise
     // but useful when the Familiar wants to acknowledge a finish).
+    const nowMs = Date.now();
+    const nowDate = new Date(nowMs);
+    // A cancelled item, or one resolved more than this long ago, is noise in the
+    // briefing — it surfaces only if my human brings it up. Keep "recently
+    // resolved" to GENUINELY recent finishes, never a future or days-old one.
+    const RESOLVE_RECENT_MS = 12 * 3600 * 1000;
+    const resolvedRecently = (item) => {
+      const ts = item.updated_at ? Date.parse(item.updated_at)
+               : item.when ? Date.parse(item.when) : NaN;
+      if (!Number.isFinite(ts)) return false;      // no signal → don't clutter
+      const age = nowMs - ts;
+      return age >= 0 && age <= RESOLVE_RECENT_MS; // recent PAST only
+    };
+    // Collapse exact duplicates (same label at the same time) — a Google-synced
+    // node next to a hand-added twin shouldn't render two or three times.
+    const seen = new Set();
+    const isDup = (item) => {
+      const key = `${(item.label ?? item.id ?? '').toLowerCase()}|${item.when ?? item.fires_at ?? ''}`;
+      if (seen.has(key)) return true;
+      seen.add(key);
+      return false;
+    };
+
     const upcoming  = [];
     const openTasks = [];
     const reminders = [];
     const resolved  = [];
+    const elapsed   = [];
     for (const item of window) {
-      // Skip the phase that's already shown as "Current phase" — no
-      // need to repeat it as a separate line.
-      if (item.type === 'phase' && phase && item.id === phase.id) continue;
-      // Other phases (past/future date stamps) — skip; they live in
-      // their own Routine surface, not the briefing.
+      // Phases live in "Today's rhythm", never repeated here.
       if (item.type === 'phase') continue;
-      if (item.resolution) { resolved.push(item); continue; }
+      if (item.resolution) {
+        // Cancelled leaves the briefing entirely; other resolutions show only
+        // while genuinely recent (and never a future occurrence).
+        if (item.resolution !== 'cancelled' && resolvedRecently(item) && !isDup(item)) resolved.push(item);
+        continue;
+      }
+      if (isDup(item)) continue;
+      // An elapsed-stamped event (piece 4) came and went without a word — it
+      // must never read as still coming, so it gets its own group instead of
+      // landing under "Coming days" with an "N days ago" time.
+      if (item.payload?.elapsed_at) { elapsed.push(item); continue; }
       if (item.type === 'reminder') { reminders.push(item); continue; }
       if (item.when || item.end) { upcoming.push(item); continue; }
       // type=='task' with no when_ts → open task on the radar.
@@ -205,9 +268,8 @@ export function formatTemporalContext(payload) {
     // Each timed item is rendered through relativeTime() so the
     // Familiar reads "tomorrow at 10am" / "yesterday at 4pm" / "in 30
     // minutes" rather than an ISO timestamp. Recomputed every turn
-    // against `nowMs`, which is the same moment used for "Now" at the
-    // top of dynamic — the model perceives a consistent present.
-    const nowMs = Date.now();
+    // against `nowMs` (defined above), the same moment used for "Now" at
+    // the top of dynamic — the model perceives a consistent present.
     const renderWhen = (whenIso) => {
       if (!whenIso) return '';
       const rel = relativeTime(whenIso, nowMs);
@@ -229,17 +291,33 @@ export function formatTemporalContext(payload) {
       const t = Array.isArray(item.payload?.obstacle_tags) ? item.payload.obstacle_tags.filter(Boolean) : [];
       return t.length ? ` ⟨${t.join(', ')}⟩` : '';
     };
-    if (upcoming.length) {
-      schedLines.push('Upcoming in this window:');
-      for (const item of upcoming) {
-        const when = renderWhen(item.when ?? item.fires_at ?? '');
-        const whenText = when ? `${when} — ` : '';
-        const type = item.type ? `[${item.type}] ` : '';
-        // 📅 marks an item the Google-Calendar sync manages (§5) — the
-        // Familiar can tell which fields aren't its to hand-edit; a shared
-        // calendar also names whose it is.
-        schedLines.push(`  ${whenText}${type}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}${obstacleSuffix(item)}`);
-      }
+    // Split what's still to come TODAY from future days, so a day-away event is
+    // never read as happening in the current phase/window. Each line still
+    // carries its own relative time ("tomorrow at 3:30pm", "in 6 days").
+    const isToday = (whenIso) => {
+      const d = new Date(whenIso);
+      if (Number.isNaN(d.getTime())) return false;
+      return d.getFullYear() === nowDate.getFullYear()
+        && d.getMonth() === nowDate.getMonth() && d.getDate() === nowDate.getDate();
+    };
+    const renderTimed = (item) => {
+      const when = renderWhen(item.when ?? item.fires_at ?? '');
+      const whenText = when ? `${when} — ` : '';
+      const type = item.type ? `[${item.type}] ` : '';
+      // 📅 marks an item the Google-Calendar sync manages (§5) — the Familiar
+      // can tell which fields aren't its to hand-edit; a shared calendar also
+      // names whose it is.
+      return `  ${whenText}${type}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}${obstacleSuffix(item)}`;
+    };
+    const laterToday = upcoming.filter(it => isToday(it.when ?? it.fires_at ?? ''));
+    const comingDays = upcoming.filter(it => !isToday(it.when ?? it.fires_at ?? ''));
+    if (laterToday.length) {
+      schedLines.push('Still to come today:');
+      for (const item of laterToday) schedLines.push(renderTimed(item));
+    }
+    if (comingDays.length) {
+      schedLines.push('Coming days:');
+      for (const item of comingDays) schedLines.push(renderTimed(item));
     }
     if (reminders.length) {
       schedLines.push('Reminders set to fire:');
@@ -267,8 +345,16 @@ export function formatTemporalContext(payload) {
         schedLines.push(`  - ${item.label ?? item.id ?? ''}${ageTag}${obstacleSuffix(item)}`);
       }
     }
+    if (elapsed.length) {
+      schedLines.push("Past events with no word on how they went — still open, not forgotten:");
+      for (const item of elapsed) {
+        const when = renderWhen(item.when ?? item.fires_at ?? '');
+        const whenText = when ? `${when} — ` : '';
+        schedLines.push(`  ${whenText}${item.label ?? item.id ?? ''}${gcalMarkerFor(item)}`);
+      }
+    }
     if (resolved.length) {
-      schedLines.push('Recently resolved in this window:');
+      schedLines.push('Just wrapped up (recent):');
       for (const item of resolved) {
         const when = renderWhen(item.when ?? item.fires_at ?? '');
         const whenText = when ? `${when} — ` : '';
@@ -327,11 +413,42 @@ export function formatTemporalContext(payload) {
   const nodeLabel = new Map();
   for (const n of scheduleNodes) { if (n?.id) nodeLabel.set(n.id, n.label ?? n.id); }
   const edges = Array.isArray(schedule.edges) ? schedule.edges : [];
+
+  // Retire SETTLED consequence links so the map stays a picture of live pressure,
+  // not history. A node is settled when it's resolved, or it's a dated event
+  // whose time is well past (>24h) — its predicted futures are decided, not
+  // pending. We then close over `requires` edges: a whole prerequisite chain
+  // hanging off a settled node is settled too (the therapy-paperwork clutter — a
+  // dozen "requires"/"on-lapse" links for an appointment that was two weeks ago,
+  // which linger because nothing auto-resolves a past event). Pure derivation:
+  // it hides stale links from the briefing, it never deletes an edge or a node.
+  const STALE_PAST_MS = 24 * 3600 * 1000;
+  const nowForLinks = Date.now();
+  const settled = new Set();
+  for (const n of scheduleNodes) {
+    if (!n?.id) continue;
+    const ms = n.when ? Date.parse(n.when) : NaN;
+    if (n.resolution || (Number.isFinite(ms) && ms < nowForLinks - STALE_PAST_MS)) settled.add(n.id);
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const e of edges) {
+      if (e.kind !== 'requires') continue;
+      if (settled.has(e.src) && !settled.has(e.dst)) { settled.add(e.dst); grew = true; }
+      if (settled.has(e.dst) && !settled.has(e.src)) { settled.add(e.src); grew = true; }
+    }
+  }
+
   const linkLines = [];
+  const linkedRefIds = new Set();   // node ids that survive in a VISIBLE link
   for (const e of edges) {
     const a = nodeLabel.get(e.src);
     const b = nodeLabel.get(e.dst);
     if (!a || !b) continue;
+    if (settled.has(e.src) || settled.has(e.dst)) continue;   // history, not live pressure
+    linkedRefIds.add(e.src);
+    linkedRefIds.add(e.dst);
     const tag = consequenceTag(e.payload);
     if (e.kind === 'co_occurs_with') {
       linkLines.push(`  ${a} — co-occurs — ${b}${tag || ' [noticed]'}`);
@@ -343,12 +460,71 @@ export function formatTemporalContext(payload) {
     blocks.push(['Consequence links — how my human\'s scheduled items bear on each other:', ...linkLines].join('\n'));
   }
 
+  // ── Recently past, unexamined (causal-chain fix, piece 2) ────────
+  // An event whose time just passed and that still carries un-graded
+  // forecasts is at the one moment a forecast can be checked against what
+  // actually happened — while my human can still remember the answer.
+  // Pure derivation, same class as the settled-links retirement above:
+  // events with when/end in [now − 72h, now] whose consequence edges are
+  // still unobserved, rendered as questions with the edge id so the
+  // answer is actionable (schedule_calibrate_link). Capped at 3 lines;
+  // a line drops when its edge is graded observed or the window closes.
+  const HINDSIGHT_MS = 72 * 3600 * 1000;
+  const isUngraded = (p) => p && typeof p === 'object'
+    && (p.valence || p.condition || p.certainty) && p.observed !== true;
+  const hindsightEdges = new Map();   // node id → its ungraded consequence edges
+  for (const e of edges) {
+    if (!e?.id || !isUngraded(e.payload)) continue;
+    for (const end of [e.src, e.dst]) {
+      if (!hindsightEdges.has(end)) hindsightEdges.set(end, []);
+      hindsightEdges.get(end).push(e);
+    }
+  }
+  const hindsightLines = [];
+  const seenHindsight = new Set();
+  for (const n of scheduleNodes) {
+    if (hindsightLines.length >= 3) break;
+    if (!n?.id || seenHindsight.has(n.id) || n.type !== 'event') continue;
+    seenHindsight.add(n.id);
+    const t = Date.parse(n.when ?? n.end ?? '');
+    if (!Number.isFinite(t) || t > nowForLinks || nowForLinks - t > HINDSIGHT_MS) continue;
+    const nodeEdges = hindsightEdges.get(n.id);
+    if (!nodeEdges?.length) continue;
+    const rel = relativeTime(n.when ?? n.end, nowForLinks) || formatLocalTime(n.when ?? n.end);
+    for (const e of nodeEdges) {
+      if (hindsightLines.length >= 3) break;
+      const a = nodeLabel.get(e.src) ?? e.src;
+      const b = nodeLabel.get(e.dst) ?? e.dst;
+      const res = n.resolution ? ` [${n.resolution}]` : (n.payload?.elapsed_at ? ' [never marked done]' : '');
+      hindsightLines.push(`  ${n.label ?? n.id} was ${rel}${res} — I projected: ${a} → ${EDGE_VERB[e.kind] ?? e.kind} → ${b}${consequenceTag(e.payload)}. Did that follow? (edge: ${e.id})`);
+    }
+  }
+  if (hindsightLines.length) {
+    blocks.push([
+      'Recently past, not yet examined — forecasts whose moment has come:',
+      ...hindsightLines,
+      "  If I can tell how it actually went — or my human mentions it — I grade the forecast with schedule_calibrate_link (the edge id above): observed if it really happened, certainty up or down. If I don't know, asking is natural while it's still fresh.",
+    ].join('\n'));
+  }
+
+  // Legend = ids the Familiar might act on. Two prunes keep it from ballooning:
+  // resolved nodes (done — nothing to act on), and orphaned link endpoints — a
+  // `linked` state/anchor (e.g. "guilt crash", "therapy discontinued") that
+  // Unruh sends only to complete an edge, but whose every edge was just retired
+  // as settled. Those states were the bulk of the oversized legend. Live
+  // schedule items (routine + window) always stay, addressable by id.
+  const routineIds = new Set((Array.isArray(payload.routine) ? payload.routine : []).map(n => n?.id).filter(Boolean));
+  const windowIds  = new Set((Array.isArray(schedule.window) ? schedule.window : []).map(n => n?.id).filter(Boolean));
   const idLegend = [];
   const seenScheduleIds = new Set();
   let anyGcal = false;
   for (const n of scheduleNodes) {
     if (!n?.id || seenScheduleIds.has(n.id)) continue;
     seenScheduleIds.add(n.id);
+    if (n.resolution) continue;   // resolved → not an action surface
+    // A pure link endpoint (in `linked`, not part of the live schedule) with no
+    // surviving visible link is orphaned — drop it.
+    if (!routineIds.has(n.id) && !windowIds.has(n.id) && !linkedRefIds.has(n.id)) continue;
     if (n.payload?.source === 'gcal') anyGcal = true;
     idLegend.push(`  ${n.label ?? n.id} [${n.type ?? 'task'}]${gcalMarkerFor(n)} = ${n.id}`);
   }
@@ -374,11 +550,15 @@ export function formatTemporalContext(payload) {
       for (const v of standing) interestLines.push(`  ${v.label ?? v}`);
     }
     if (live.length) {
-      interestLines.push('Live interests (by weight):');
-      for (const i of live) {
-        const w = typeof i.weight === 'number' ? ` [${i.weight.toFixed(2)}]` : '';
-        interestLines.push(`  ${i.label ?? i.id}${w}`);
-      }
+      // These feed the pondering loop — they're what I keep being drawn to think
+      // about, character not task. The raw engagement WEIGHT is machinery, not
+      // something I need in my working context: I show the top few as plain
+      // labels (heaviest first), no numbers, so the surface stays light.
+      interestLines.push('Lately I keep being drawn to think about:');
+      const topLive = [...live]
+        .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
+        .slice(0, 6);
+      for (const i of topLive) interestLines.push(`  ${i.label ?? i.id}`);
     }
     blocks.push(interestLines.join('\n'));
   }

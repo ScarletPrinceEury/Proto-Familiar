@@ -115,6 +115,7 @@ ward-contact signal and the honesty rule that gates it.
 
 ## Related
 
+- [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
   silence-triage sits on top of.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — why these loops default

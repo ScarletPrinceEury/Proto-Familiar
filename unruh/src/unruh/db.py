@@ -20,7 +20,7 @@ import os
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -264,6 +264,7 @@ def get_conn(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     run_migrations(conn)
     migrate_timestamps_to_local(conn)
+    heal_malformed_schedule_times(conn)
     return conn
 
 
@@ -361,4 +362,78 @@ def migrate_timestamps_to_local(conn: sqlite3.Connection) -> int:
     if updated:
         import sys
         print(f"[unruh] local-time migration: normalised {updated} schedule timestamp(s) to local", file=sys.stderr)
+    return updated
+
+
+_TIME_ONLY = re.compile(r"^T?(\d{1,2}):(\d{2})(?::(\d{2}))?")
+
+
+def _salvage_time(value: str, ref_date: str) -> str | None:
+    """Pull a wall-clock time out of a date-less/mangled string and put it on
+    ref_date as a clean local-naive datetime. Handles "23:00:00", the legacy
+    UTC artifact "T13:00:00+00:00" (offset dropped — routine phases are the
+    ward's local wall-clock), etc. None if there's no valid HH:MM to find."""
+    m = _TIME_ONLY.match(value.strip())
+    if not m:
+        return None
+    hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
+    if hh > 23 or mm > 59 or ss > 59:
+        return None
+    return f"{ref_date}T{hh:02d}:{mm:02d}:{ss:02d}"
+
+
+def heal_malformed_schedule_times(conn: sqlite3.Connection) -> int:
+    """Repair schedule when_ts/end_ts that the one-time UTC migration couldn't —
+    chiefly legacy DATE-LESS, offset-stamped phase times like "T13:00:00+00:00"
+    that `datetime.fromisoformat` (and so `to_local_naive`) can't parse, which
+    leaked raw into the temporal briefing. Also normalises any straggler
+    offset-bearing value the flag-gated migration missed (a row created after
+    the flag was set).
+
+    Runs on EVERY connect and is idempotent by construction: it only rewrites a
+    value that actually changes (a clean local-naive timestamp normalises to
+    itself), so a healed row is never touched again and there's no flag to set
+    prematurely — which is exactly the trap that let these artifacts survive the
+    one-time migration. Cheap: schedule nodes number in the dozens.
+
+    Firing-neutral: it makes stored times MORE correct (the local-naive form the
+    whole system already compares in), never changes which items fire or when in
+    a way the design didn't already intend."""
+    try:
+        rows = conn.execute(
+            "SELECT id, when_ts, end_ts, created_at FROM nodes "
+            "WHERE layer='schedule' AND (when_ts IS NOT NULL OR end_ts IS NOT NULL)"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+    updated = 0
+    for r in rows:
+        ref_date = (r["created_at"] or "")[:10]
+        if len(ref_date) != 10:
+            ref_date = date.today().isoformat()
+        new_vals = {}
+        changed = False
+        for col in ("when_ts", "end_ts"):
+            v = r[col]
+            if not v:
+                new_vals[col] = v
+                continue
+            try:
+                datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                normalized = to_local_naive(str(v))       # offset → local; naive unchanged
+            except (TypeError, ValueError):
+                normalized = _salvage_time(str(v), ref_date) or v  # date-less artifact
+            new_vals[col] = normalized
+            if normalized != v:
+                changed = True
+        if changed:
+            conn.execute(
+                "UPDATE nodes SET when_ts=?, end_ts=? WHERE id=?",
+                (new_vals["when_ts"], new_vals["end_ts"], r["id"]),
+            )
+            updated += 1
+    if updated:
+        conn.commit()
+        import sys
+        print(f"[unruh] healed {updated} malformed schedule timestamp(s) to local-naive", file=sys.stderr)
     return updated

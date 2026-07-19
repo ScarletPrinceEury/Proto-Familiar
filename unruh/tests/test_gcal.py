@@ -646,3 +646,46 @@ def test_hand_authored_recurring_routine_never_cancelled_by_gcal_reconcile(conn)
     }
     r = gcal.gcal_ingest(conn, events=[ev], reconcile_deletes=True)
     assert routine_id not in r["removed"], "Hand-authored recurring routine must never be cancelled"
+
+
+def test_adopts_hand_added_twin_instead_of_duplicating(conn):
+    # Root-cause fix for the "one 📅 twin + one plain twin" duplicates: a
+    # hand-added event (no gcal_uid) that also exists on Google must be ADOPTED
+    # by the sync, not shadowed by a second node.
+    hid = sched.add_node(conn, type="event", label="HEART", when="2026-07-05T15:00:00")
+    state_id = sched.add_node(conn, type="state", label="joy", when="2026-07-05T16:00:00")
+    sched.add_edge(conn, src=hid, dst=state_id, kind="causes",
+                   payload={"valence": "help", "condition": "on_resolve"})
+
+    r = gcal.gcal_ingest(
+        conn,
+        events=[{"uid": "g-heart@google.com", "summary": "HEART", "start": "2026-07-05T15:00:00"}],
+        reconcile_deletes=False,
+    )
+
+    # Exactly ONE live node with that label+time — the ward's, now sync-managed.
+    rows = conn.execute(
+        "SELECT id, payload_json FROM nodes WHERE label='HEART' AND resolution IS NULL"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["id"] == hid
+    payload = json.loads(rows[0]["payload_json"])
+    assert payload["source"] == "gcal"
+    assert payload["gcal_uid"] == "g-heart@google.com"
+    # Adoption is a merge, not a delete: the consequence edge survives.
+    assert conn.execute("SELECT COUNT(*) n FROM edges WHERE src_id=?", (hid,)).fetchone()["n"] == 1
+    # Counted as an update (it existed), never as a new insert.
+    assert hid in r["updated"] and hid not in r["new"]
+
+
+def test_distinct_time_is_not_adopted(conn):
+    # A same-title event at a DIFFERENT time is a distinct item — never merged.
+    sched.add_node(conn, type="event", label="HEART", when="2026-07-05T15:00:00")
+    r = gcal.gcal_ingest(
+        conn,
+        events=[{"uid": "g2@google.com", "summary": "HEART", "start": "2026-07-06T15:00:00"}],
+        reconcile_deletes=False,
+    )
+    assert len(r["new"]) == 1  # a genuinely new node, not an adoption
+    live = conn.execute("SELECT COUNT(*) n FROM nodes WHERE label='HEART' AND resolution IS NULL").fetchone()
+    assert live["n"] == 2

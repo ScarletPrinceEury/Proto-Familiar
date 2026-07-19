@@ -140,16 +140,6 @@ export function withLock(key, fn) {
   return run;
 }
 
-/** Locked read of a tome JSON file. Returns null on missing/corrupt. */
-export async function readTomeFile(filePath) {
-  return withLock(filePath, async () => {
-    try {
-      const raw = await fsp.readFile(filePath, 'utf8');
-      return JSON.parse(raw);
-    } catch { return null; }
-  });
-}
-
 /**
  * Atomically write a tome JSON file under the per-file lock. Use this
  * for whole-file creates / replacements. For read-modify-write, use
@@ -714,13 +704,13 @@ export async function updateScheduleNode({ id, label, when, end, payload }) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
-export async function resolveScheduleNode({ id, resolution }) {
+export async function resolveScheduleNode({ id, resolution, series = false }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({
       name: 'schedule_resolve',
-      arguments: { id, resolution },
+      arguments: { id, resolution, series },
     });
     return parseToolText(r, { ok: true });
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
@@ -807,6 +797,24 @@ export async function updateScheduleEdge({ id, payload }) {
     const r = await unruhClient.callTool({
       name: 'schedule_update_edge',
       arguments: { id, payload },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
+ * Stamp payload.elapsed_at on one-off events past their time by more
+ * than `hours` with no resolution (causal-chain fix piece 4, ward-
+ * signed). Observation, not resolution — nothing is hidden. Called by
+ * the reminders scheduler on a slow cadence; idempotent in Unruh.
+ */
+export async function stampElapsedEvents({ hours = 24 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'schedule_stamp_elapsed',
+      arguments: { hours },
     });
     return parseToolText(r, { ok: true });
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
@@ -1471,7 +1479,7 @@ function wrapFile(filename, content, promptLabel) {
 // from temporal-format.js directly.
 import { formatTemporalContext } from './temporal-format.js';
 import { buildStewardshipBlock } from './stewardship.js';
-import { nextProjectionCue } from './gcal-projection.js';
+import { nextProjectionCue, gatherProjectionCandidates } from './gcal-projection.js';
 import { weatherEnabled } from './weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './recurrence.js';
@@ -2001,7 +2009,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // sessions — ponderings are per-embodiment thoughts, not public data.
     const ponderings = (staticOnly || gated)
       ? []
-      : await getRecentPonderings().catch(err => {
+      // Fetch a few more than we render in full: the newest shows in full and
+      // the rest become a one-line index the Familiar can expand via read_pondering.
+      : await getRecentPonderings({ limit: 6 }).catch(err => {
           console.error('[thalamus] getRecentPonderings failed:', err?.message ?? err);
           return [];
         });
@@ -2026,17 +2036,23 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
-    // ── Google-Calendar projection cue (§4) ──────────────────────────────
-    // The one Familiar-facing effect of inbound sync: newly-synced
-    // appointments not yet thought-through get a gentle "think two moves
-    // ahead" cue. Rides this turn (no standalone request); the candidate
-    // list already arrived in temporalPayload.gcal_projection. Ward-private
-    // (it's the ward's calendar); only live turns advance the turn-aging so
-    // previews/handoff summaries don't burn an item's window.
+    // ── Projection cue (gcal §4, generalized by the causal-chain fix) ────
+    // Appointments not yet thought-through get a gentle "think two moves
+    // ahead" cue. Rides this turn (no standalone request). Candidates are
+    // gathered in code from TWO sources: Unruh's gcal_projection flags
+    // (fresh sync arrivals — the fast path) unioned with any bare upcoming
+    // event in the briefing window (hand-added or chat-created, unresolved,
+    // no consequence edges touching it, ≥6h of runway). Ward-private; only
+    // live turns advance the turn-aging so previews/handoff summaries don't
+    // burn an item's window.
     let gcalCueBlock = '';
     if (liveTurn && !staticOnly && !gated) {
       try {
-        const candidates = Array.isArray(temporalPayload?.gcal_projection) ? temporalPayload.gcal_projection : [];
+        const candidates = gatherProjectionCandidates({
+          window: temporalPayload?.schedule?.window,
+          edges: temporalPayload?.schedule?.edges,
+          gcalFlagged: temporalPayload?.gcal_projection,
+        });
         let weatherOn = false;
         try { weatherOn = weatherEnabled(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))); } catch { /* default off */ }
         gcalCueBlock = await nextProjectionCue({ candidates, advance: true, weatherOn });
@@ -2586,7 +2602,7 @@ let _gradCache = { at: 0, items: [] };
  * TTL-cached. Best-effort: returns [] if Phylactery is unavailable.
  * @returns {Promise<Array<{id,filename,memoryId,summary,createdAt}>>}
  */
-export async function listPendingGraduations({ force = false } = {}) {
+async function listPendingGraduations({ force = false } = {}) {
   const now = Date.now();
   if (!force && now - _gradCache.at < GRADUATION_TTL_MS) return _gradCache.items;
   try {
@@ -2696,6 +2712,23 @@ export async function getStandingConsent() {
     console.warn('[thalamus] getStandingConsent failed (degraded):', err?.message ?? err);
     return {};
   });
+}
+
+/**
+ * Kept memories where a villager is a subject — thin projections. Backs
+ * the villager consent menu (a person may see what the Familiar holds
+ * about them). Degrades to an empty list when Phylactery is down.
+ */
+export async function getMemoriesBySubject({ villagerId, limit = 50 }) {
+  await startThalamus();
+  if (!phylacteryClient) return { ok: false, items: [] };
+  try {
+    const r = await phylacteryClient.callTool({
+      name: 'memory_list_by_subject',
+      arguments: { villager_id: villagerId, limit },
+    });
+    return parseToolText(r, { ok: true, items: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
 }
 
 export async function setStandingConsent(category, until, window) {

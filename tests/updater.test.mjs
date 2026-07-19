@@ -2,7 +2,10 @@
 // exercise the check/apply logic without a real remote.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkForUpdate, applyUpdate, repoSlug, getRepoInfo } from '../updater.js';
+import { checkForUpdate, applyUpdate, applyDownloadUpdate, cmpVersions, packageRepo, repoSlug, getRepoInfo } from '../updater.js';
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 afterEach(() => { delete process.env.PROTO_FAMILIAR_UPDATE_DISABLED; });
 
@@ -116,4 +119,98 @@ test('applyUpdate: dirty tree → refuses, never merges', async () => {
   assert.equal(r.ok, false);
   assert.match(r.error, /local changes present/);
   assert.ok(!git.calls.includes('merge --ff-only origin/main'));
+});
+
+// ── Download-install path (no .git — the macOS/Windows default) ───────────────
+
+// A git runner that behaves like "no repository here", so getRepoInfo falls back
+// to the package.json `repository` field (download mode).
+const noGit = async () => { throw new Error('not a git repository'); };
+
+test('cmpVersions compares on the numeric core, ignoring the -alpha suffix', () => {
+  assert.equal(cmpVersions('0.9.0-alpha', '0.8.90-alpha'), 1);
+  assert.equal(cmpVersions('0.8.90-alpha', '0.9.0-alpha'), -1);
+  assert.equal(cmpVersions('1.2.3', '1.2.3-alpha'), 0);
+  assert.equal(cmpVersions('0.8.9', '0.8.10'), -1); // numeric, not lexical
+});
+
+test('packageRepo reads the repository field baked into package.json', () => {
+  const pr = packageRepo();
+  assert.ok(pr, 'expected a repository in package.json');
+  assert.equal(pr.repo, 'ScarletPrinceEury/Proto-Familiar');
+  assert.equal(pr.branch, 'main');
+});
+
+test('getRepoInfo: no git → download mode from package.json', async () => {
+  const info = await getRepoInfo({ git: noGit });
+  assert.equal(info.mode, 'download');
+  assert.equal(info.repo, 'ScarletPrinceEury/Proto-Familiar');
+  assert.equal(info.owner, 'ScarletPrinceEury');
+  assert.equal(info.name, 'Proto-Familiar');
+});
+
+test('checkForUpdate download mode: remote newer → update available', async () => {
+  const httpFetch = async () => ({ ok: true, text: async () => JSON.stringify({ version: '99.0.0' }) });
+  const r = await checkForUpdate({ git: noGit, httpFetch });
+  assert.equal(r.ok, true);
+  assert.equal(r.mode, 'download');
+  assert.equal(r.updateAvailable, true);
+  assert.equal(r.remote.version, '99.0.0');
+  assert.equal(r.dirty, false);
+});
+
+test('checkForUpdate download mode: remote same/older → no update', async () => {
+  const httpFetch = async () => ({ ok: true, text: async () => JSON.stringify({ version: '0.0.1' }) });
+  const r = await checkForUpdate({ git: noGit, httpFetch });
+  assert.equal(r.ok, true);
+  assert.equal(r.updateAvailable, false);
+});
+
+test('checkForUpdate download mode: network failure → ok:false, current intact', async () => {
+  const httpFetch = async () => { throw new Error('offline'); };
+  const r = await checkForUpdate({ git: noGit, httpFetch });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /couldn't reach/);
+  assert.ok(r.current.version);
+});
+
+test('applyDownloadUpdate: lays the archive over the install, keeps user data', async () => {
+  // A temp "install" with a pre-existing gitignored user-data file the update
+  // must not touch, plus an old code file the update should overwrite.
+  const installDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pf-install-'));
+  await fsp.writeFile(path.join(installDir, 'settings.json'), '{"userName":"keep me"}');
+  await fsp.writeFile(path.join(installDir, 'server.js'), 'OLD');
+
+  // Injected download/extract: the "download" is a no-op path; "extract" writes a
+  // fresh checkout (new server.js + a brand-new file + the required package.json).
+  const download = async (_info, _fetch, tmpDir) => path.join(tmpDir, 'x.tar.gz');
+  const extract = async (_tarPath, destDir) => {
+    await fsp.writeFile(path.join(destDir, 'package.json'), JSON.stringify({ version: '99.0.0' }));
+    await fsp.writeFile(path.join(destDir, 'server.js'), 'NEW');
+    await fsp.writeFile(path.join(destDir, 'brand-new.js'), 'hello');
+  };
+
+  const info = { owner: 'o', name: 'n', repo: 'o/n', branch: 'main' };
+  const r = await applyDownloadUpdate(info, { httpFetch: async () => ({}), download, extract, installDir });
+
+  assert.equal(r.ok, true);
+  assert.equal(r.restartRequired, true);
+  assert.equal(await fsp.readFile(path.join(installDir, 'server.js'), 'utf8'), 'NEW');      // overwritten
+  assert.equal(await fsp.readFile(path.join(installDir, 'brand-new.js'), 'utf8'), 'hello'); // added
+  assert.equal(await fsp.readFile(path.join(installDir, 'settings.json'), 'utf8'), '{"userName":"keep me"}'); // untouched
+
+  await fsp.rm(installDir, { recursive: true, force: true });
+});
+
+test('applyDownloadUpdate: junk archive (no package.json) → refuses, no smear', async () => {
+  const installDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pf-install-'));
+  await fsp.writeFile(path.join(installDir, 'server.js'), 'OLD');
+  const download = async (_i, _f, tmpDir) => path.join(tmpDir, 'x.tar.gz');
+  const extract = async (_t, destDir) => { await fsp.writeFile(path.join(destDir, 'random.txt'), 'junk'); };
+  const r = await applyDownloadUpdate({ owner: 'o', name: 'n', repo: 'o/n', branch: 'main' },
+    { httpFetch: async () => ({}), download, extract, installDir });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /did not look like/);
+  assert.equal(await fsp.readFile(path.join(installDir, 'server.js'), 'utf8'), 'OLD'); // not smeared
+  await fsp.rm(installDir, { recursive: true, force: true });
 });

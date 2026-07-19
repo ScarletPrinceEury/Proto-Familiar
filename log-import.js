@@ -105,7 +105,7 @@ export function parseTimestampedText(raw, { selfNames = [] } = {}) {
 // user_name, character_name}), then messages {name, is_user, is_system,
 // send_date, mes, swipes…}. is_user gives the role; send_date is ISO; mes is the
 // active swipe. System lines are skipped.
-export function parseSillyTavern(raw) {
+function parseSillyTavern(raw) {
   const lines = String(raw).split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return null;
   const out = [];
@@ -137,7 +137,7 @@ export function parseSillyTavern(raw) {
 // `message:{ role, content:[{type:"text",text}|…], timestamp }`. Outer event has
 // a clean ISO `timestamp`. Non-text content parts (tool calls, thinking) and
 // non-message events (runtime-context, snapshots) are skipped.
-export function parseOpenClaw(raw) {
+function parseOpenClaw(raw) {
   const lines = String(raw).split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return null;
   const out = [];
@@ -171,9 +171,26 @@ export function parseOpenClaw(raw) {
 // the turn it's in, and bold headings inside a message (**CHAPTER 1**, a bolded
 // title with no colon) are never mistaken for speakers. A non-You/ChatGPT
 // standalone header maps to the system role with its speaker preserved.
-const GPT_HEADER = /^\*\*([A-Za-z][\w .-]{0,40}?):\*\*\s*$/;
+//
+// Two header shapes appear in the wild and both must be recognised:
+//   • bold markdown — `**You:**` / `**ChatGPT:**` (older copy/share export)
+//   • "said" plain  — `You said:` / `ChatGPT said:` (the CURRENT web-UI copy —
+//     no bold, the word "said" before the colon). Missing this is why a modern
+//     ChatGPT copy/paste imported as "unrecognised".
+const GPT_HEADER_MD   = /^\*\*([A-Za-z][\w .-]{0,40}?):\*\*\s*$/;
+const GPT_HEADER_SAID = /^\s*(You|ChatGPT)\s+said:\s*$/i;
 const GPT_SEP    = /^\s*\*\s\*\s\*\s*$/;   // the "* * *" turn separator
-export function parseChatGPT(raw) {
+
+// The speaker named by a standalone header line, or null if the line isn't one.
+function gptHeaderSpeaker(line) {
+  const md = line.match(GPT_HEADER_MD);
+  if (md) return md[1].trim();
+  const said = line.match(GPT_HEADER_SAID);
+  if (said) return said[1].toLowerCase() === 'you' ? 'You' : 'ChatGPT';
+  return null;
+}
+
+function parseChatGPT(raw) {
   const out = [];
   let cur = null;
   let sawYou = false, sawGpt = false;
@@ -185,10 +202,9 @@ export function parseChatGPT(raw) {
     cur = null;
   };
   for (const line of String(raw).split(/\r?\n/)) {
-    const h = line.match(GPT_HEADER);
-    if (h) {
+    const speaker = gptHeaderSpeaker(line);
+    if (speaker) {
       flush();
-      const speaker = h[1].trim();
       const low = speaker.toLowerCase();
       if (low === 'you') sawYou = true;
       else if (low === 'chatgpt') sawGpt = true;
@@ -216,7 +232,7 @@ const PARSERS = [
   parseTimestampedText,
 ];
 
-export const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'ChatGPT (copy/share export)', 'timestamped text'];
+const SUPPORTED_FORMATS = ['Proto-Familiar JSON', 'SillyTavern (.jsonl)', 'OpenClaw (.jsonl)', 'ChatGPT (copy/share export)', 'timestamped text'];
 
 /**
  * Parse `raw` into normalized messages. Returns { ok, messages, format } or
@@ -226,6 +242,10 @@ export function parseImport(raw, opts = {}) {
   if (typeof raw !== 'string' || !raw.trim()) {
     return { ok: false, error: 'Nothing to import (empty content).' };
   }
+  // Strip a leading UTF-8 BOM. Editors on macOS/Windows often add one when a log
+  // is re-saved, and it breaks JSON.parse (the first line of a .jsonl) and the
+  // very-first header regex alike — so a valid export reads as "unrecognised".
+  raw = raw.replace(/^﻿/, '');
   for (const parser of PARSERS) {
     let r = null;
     try { r = parser(raw, opts); } catch { r = null; }

@@ -100,6 +100,12 @@
       return `hsla(${hue}, ${sat}%, ${lt}%, ${alpha})`;
     }
 
+    // The legend collapses to a small "Legend" chip on narrow screens —
+    // expanded it covered most of a phone-sized canvas (the reported
+    // mobile bug). Desktop keeps it open. The choice sticks for the
+    // pane's lifetime once the user toggles it.
+    let legendOpen = null;   // null = follow the width default
+    function legendDefaultOpen() { return window.innerWidth > 767; }
     function buildLegend() {
       assignColors();
       if (!legendEl) return;
@@ -118,8 +124,16 @@
           rows.push(`<div class="ke-graph-legend-row"><span class="ke-graph-legend-swatch" style="background:hsl(${state.colors.edge.get(t)},75%,55%)"></span>${esc(t)}</div>`);
         }
       }
-      legendEl.innerHTML = rows.join('');
-      legendEl.classList.toggle('hidden', !rows.length);
+      if (!rows.length) { legendEl.innerHTML = ''; legendEl.classList.add('hidden'); return; }
+      const open = legendOpen ?? legendDefaultOpen();
+      legendEl.innerHTML =
+        `<button type="button" class="ke-graph-legend-toggle" aria-expanded="${open}">Legend <span aria-hidden="true">${open ? '▾' : '▸'}</span></button>`
+        + `<div class="ke-graph-legend-rows${open ? '' : ' hidden'}">${rows.join('')}</div>`;
+      legendEl.classList.remove('hidden');
+      legendEl.querySelector('.ke-graph-legend-toggle').addEventListener('click', () => {
+        legendOpen = !(legendOpen ?? legendDefaultOpen());
+        buildLegend();
+      });
     }
 
     // ── Layout (Fruchterman-Reingold) ───────────────────────────────

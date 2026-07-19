@@ -4,6 +4,11 @@ package-lock.json
 *.log
 npm-debug.log*
 logs/
+# Media store (vision build spec §2) — image bytes + meta, local per embodiment.
+media/
+# Vision capability cache (provider:model → yes/no) — advisory, rebuildable.
+tomes/.vision-capability.json
+tomes/.vision-capability.json.tmp
 tomes/.memorization-queue.json
 tomes/.memorization-queue.json.tmp
 # Threat-tracker state (step 4b) — local, decaying scalar; never committed.

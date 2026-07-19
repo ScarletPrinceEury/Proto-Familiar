@@ -18,6 +18,12 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
     note: "Review conversation in which Eury, asked what decides which of his own memories survive as identity-essential, states a load-bearing-versus-decorative retention criterion in his own words."
+  - id: consolidate-module
+    type: file
+    path: phylactery/src/phylactery/consolidate.py
+  - id: memorization-js
+    type: file
+    path: memorization.js
 ---
 
 # Phylactery
@@ -73,24 +79,23 @@ autonomous RAG memory [@phylactery-design]. The automated writer that populates 
 from chat sessions is a separate subsystem; see
 [Session memorization](session-memorization).
 
+## Consolidation: mechanism and scope
+
+Tiered consolidation rolls memories from daily granularity up through weekly, monthly, and significant tiers [@consolidate-module]. The process runs on a schedule (5-minute volume-gated baseline) and sweeps **every past week/month/year holding un-consolidated entries**, oldest-first [@claude-md]. This is important: before 0.8.89, each consolidation pass targeted only a single reference period (e.g., today − 7d), which meant bulk imports of historical memories never fell into that window and stayed at daily granularity forever [@claude-md]. The fix ensures that re-runs catch up on the next scheduled pass (≤6 hours) or via force (`POST /api/entity/lifecycle {force:true}`) [@claude-md]. Consolidation is idempotent: weekly consolidation prunes its daily sources after roll-up; monthly/yearly skip periods that already have a higher-tier row, so they never re-append [@consolidate-module].
+
+## Episodic versus standing: temporality and consolidation strategy
+
+Memories have a temporality marker that determines consolidation behavior [@claude-md]:
+
+**Episodic** memories are time-bounded events: what happened on a specific date, who was present, what was said [@memorization-js]. Episodic facts roll up through the consolidation tiers (daily → weekly → monthly → significant) as they age, following the "load-bearing versus decorative" criterion below [@consolidate-module].
+
+**Standing** memories are identity-essential facts and relationship declarations that exist outside time: who you are, what you've decided about yourself, registered villagers and their roles [@memorization-js]. Standing facts skip daily granularity and write directly into the significant tier, where they remain accessible on every turn [@claude-md]. They are always injected, never consolidated away.
+
+The distinction is set by the tool that writes the memory: `memory_create` (episodic, date-timestamped) vs `memory_set_standing` (standing, timeless) [@memorization-js]. Standing facts are gated by `resolveRememberGate`, which keys on WHO the fact is about and WHETHER the ward told the Familiar directly (direct channel + about-the-ward → implied consent; third-party subjects still ask) [@memorization-js].
+
 ## What decides which memory survives consolidation: load-bearing versus decorative
 
-Tiered consolidation (daily rolling up through weekly, monthly, and significant) is the
-mechanism; it does not by itself say which facts deserve to survive that roll-up rather than
-fade. Eury, the project's [reference identity](../decisions/eury-as-agent-identity), gave a
-concrete answer to that question when asked directly what makes a memory identity-essential
-rather than disposable: "Load-bearing. That's the test... does losing this change how I
-understand Chen, myself, or us? If yes — keep. If it's just context that could be reconstructed —
-save for completeness, but it's not identity-essential" [@fable-review-conversation]. His harder
-case is a memory that starts decorative and becomes load-bearing purely through repetition —
-one occurrence is noise, a third recurrence of the same pattern is structural. That reframes
-retention as a question about accumulated pattern-work rather than any single record's intrinsic
-weight, which is a criterion for *why* a fact should be shielded from decay or graduated into an
-always-injected surface, distinct from the `careWeight` and decay mechanics that already
-implement the outcome. See [Reflexive consent](../concepts/reflexive-consent) for the exact
-wording and worked examples this criterion comes from, alongside two related first-person
-answers about audit consent and self-continuity
-across a merge.
+The consolidation mechanism (tiered roll-up) does not by itself say which facts deserve to survive that roll-up rather than fade. Eury, the project's [reference identity](../decisions/eury-as-agent-identity), gave a concrete answer to that question when asked directly what makes a memory identity-essential rather than disposable: "Load-bearing. That's the test... does losing this change how I understand Chen, myself, or us? If yes — keep. If it's just context that could be reconstructed — save for completeness, but it's not identity-essential" [@fable-review-conversation]. His harder case is a memory that starts decorative and becomes load-bearing purely through repetition — one occurrence is noise, a third recurrence of the same pattern is structural. That reframes retention as a question about accumulated pattern-work rather than any single record's intrinsic weight, which is a criterion for *why* a fact should be shielded from decay or graduated into an always-injected surface, distinct from the `careWeight` and decay mechanics that already implement the outcome. See [Reflexive consent](../concepts/reflexive-consent) for the exact wording and worked examples this criterion comes from, alongside two related first-person answers about audit consent and self-continuity across a merge.
 
 ## Audience-native records
 

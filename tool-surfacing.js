@@ -45,6 +45,7 @@ export const TOOL_MODULES = {
   gcal_list_calendars: 'schedule-read', gcal_attribute_calendar: 'schedule-write',
   schedule_add_hold: 'schedule-write', schedule_availability: 'schedule-read',
   schedule_set_lead: 'schedule-write',   // per-event alert lead (Initiative Pass 5)
+  schedule_calibrate_link: 'schedule-write',   // grade a forecast after the fact (causal-chain fix)
 
   'memory-edit': undefined, // (namespace note only — real entries below)
   read_memory: 'memory-edit', read_memory_by_id: 'memory-edit',
@@ -72,6 +73,11 @@ export const TOOL_MODULES = {
   acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
   graduation_acknowledge: 'acks',
+  // Reading my own recent thought in full — the expand path for the pondering
+  // index, which renders on every ward turn, so the tool must always be reachable
+  // (like recall). Ward-only: it's absent from the villager allowlist, so a
+  // villager can never read my private ponderings through it.
+  read_pondering: 'core',
 
   list_files: 'files', read_file: 'files',
 
@@ -86,6 +92,10 @@ export const TOOL_MODULES = {
   intention_drop: 'intentions', intention_done: 'intentions',
   intention_mark_fired: 'intentions',
   intention_set_rounds_visibility: 'intentions',
+
+  // vision (vision build spec §6.5/§10) — looking again at an image + tying it
+  // to a graph node. Surfaced whenever an image stand-in is in context.
+  view_image: 'media', link_image_to_node: 'media', unlink_image_from_node: 'media',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 
@@ -106,7 +116,8 @@ export const MODULE_INDEX =
   'files (list/read my own folder), ' +
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
-  'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private)';
+  'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private), ' +
+  'media (look again at an image shared earlier, tie an image to someone/something in my graph)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
 // A module surfaces when its regex matches the turn text (user message +
@@ -120,7 +131,10 @@ const TRIGGERS = {
     // Blocks that invite schedule ACTION travel with the write tools. The
     // stewardship agenda offers aging floaters a place → I need the write
     // tools to give them a time on the spot.
-    blocks: ['[Surface candidates', "[New on my human's calendar", '[My stewardship'],
+    blocks: ['[Surface candidates', "[New on my human's calendar", '[My stewardship',
+      // The projection cue + the hindsight questions both invite link work
+      // (schedule_link / schedule_calibrate_link) — the tools travel with them.
+      '[Coming up with nothing hanging off it yet]', 'Recently past, not yet examined'],
   },
   stewardship: {
     text: null,  // block-driven: the anchor-adjust tool travels with the agenda
@@ -175,6 +189,13 @@ const TRIGGERS = {
     // The due-intentions block travels with the tools so a payoff turn can act
     // on what's come due (mark fired / complete / adjust).
     blocks: ['[Intentions coming due]'],
+  },
+  media: {
+    // Surfaced by look-again / recognition language, OR whenever an image
+    // stand-in is in context (the `[image <id>: …]` marker) — that's exactly
+    // when view_image / link_image_to_node become reachable and useful.
+    text: /\b(look again|see (it|that|the (photo|picture|image))|which (photo|picture|image)|the (photo|picture|image) (of|I sent|you sent)|recognise|recognize|is (that|this) (the same|my)|tag (the|this) (photo|picture|image)|whose (photo|picture))\b/i,
+    blocks: ['[image '],
   },
 };
 

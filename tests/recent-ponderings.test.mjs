@@ -6,7 +6,7 @@ import { promises as fsp, mkdtempSync, rmSync } from 'fs';
 import { randomUUID } from 'crypto';
 
 import { ponderOnce, PONDERINGS_TOME_NAME } from '../pondering.js';
-import { getRecentPonderings, formatPonderingsForPrompt } from '../recent-ponderings.js';
+import { getRecentPonderings, formatPonderingsForPrompt, readPonderingByUid } from '../recent-ponderings.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ponder-recent-'));
@@ -135,15 +135,38 @@ test('formatPonderingsForPrompt frames the entries as the Familiar\'s own real t
   const out = formatPonderingsForPrompt([
     { uid: 'a', title: 'x', content: 'y', created_at: '2026-05-30T10:00:00.000Z' },
   ]);
-  assert.match(out, /my own real, private thoughts/i);
-  assert.match(out, /I never invent/i);
-  assert.match(out, /I never force a reference/i);
+  assert.match(out, /my own real thoughts/i);
+  assert.match(out, /never inventing one/i);
+  assert.match(out, /never forcing it/i);
 });
 
-test('formatPonderingsForPrompt handles multiple entries cleanly', () => {
+test('formatPonderingsForPrompt renders only the latest in full; the rest are a one-line index', () => {
   const out = formatPonderingsForPrompt([
-    { uid: 'a', title: 't1', content: 'c1', created_at: '2026-05-30T10:00:00.000Z' },
-    { uid: 'b', title: 't2', content: 'c2', created_at: '2026-05-29T10:00:00.000Z' },
+    { uid: 'a', title: 't1', content: 'c1-full', created_at: '2026-05-30T10:00:00.000Z' },
+    { uid: 'b', title: 't2', content: 'c2-full', created_at: '2026-05-29T10:00:00.000Z' },
   ]);
-  assert.match(out, /t1[\s\S]*c1[\s\S]*t2[\s\S]*c2/);
+  // Latest thought in full…
+  assert.match(out, /t1[\s\S]*c1-full/);
+  // …older ones indexed by title + id, with the expand hint — NOT dumped in full.
+  assert.match(out, /t2.*\[id: b\]/);
+  assert.equal(out.includes('c2-full'), false);
+  assert.match(out, /read_pondering/);
+});
+
+test('readPonderingByUid returns the full text by id, and errors cleanly on a miss', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    await seedTome(dir, [
+      { uid: 'p1', title: 'On loyalty', content: 'the full text of the thought', created_at: '2026-05-30T10:00:00.000Z' },
+    ]);
+    const hit = await readPonderingByUid({ uid: 'p1', tomesDir: dir });
+    assert.equal(hit.ok, true);
+    assert.equal(hit.title, 'On loyalty');
+    assert.equal(hit.content, 'the full text of the thought');
+
+    const miss = await readPonderingByUid({ uid: 'nope', tomesDir: dir });
+    assert.equal(miss.ok, false);
+    const bad = await readPonderingByUid({ tomesDir: dir });
+    assert.equal(bad.ok, false);
+  } finally { cleanup(); }
 });

@@ -67,11 +67,16 @@ export function computeAvailability(nodes = [], { nowMs = Date.now(), days = 7 }
 
   for (const n of nodes) {
     if (!isBusyNode(n)) continue;
-    const s = dateAndMinutes(startOf(n));
+    const raw = startOf(n);
+    // A date-only start ("2026-07-06", ≤10 chars) is an all-day item — it has
+    // no minutes to parse, only a day to occupy. Handle it BEFORE the
+    // minute-parse so it can't fall through as unparseable.
+    const allDay = !!(n.payload?.all_day) || raw.length <= 10;
+    const s = dateAndMinutes(raw)
+      ?? (allDay && raw.length >= 10 ? { date: raw.slice(0, 10), minutes: 0 } : null);
     if (!s) continue;
     const row = byDate.get(s.date);
     if (!row) continue;                       // outside the window
-    const allDay = !!(n.payload?.all_day) || (startOf(n).length <= 10);
     const e = dateAndMinutes(endOf(n));
     const startMin = allDay ? 0 : s.minutes;
     // Same-day end only; a multi-day item marks its start day's remaining parts.

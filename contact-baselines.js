@@ -59,8 +59,8 @@ const DAY_MS = 24 * 60 * 60_000;
 // needs at least MIN_SAMPLES observed gaps and the data must span at least
 // MIN_SPAN_DAYS before any baseline is reported.
 export const WINDOW_MS      = 28 * DAY_MS;
-export const COALESCE_MS    = 3 * 60 * 60_000;   // 3h — one contact "episode"
-export const MIN_SAMPLES    = 4;                 // gaps per class before it counts
+const COALESCE_MS    = 3 * 60 * 60_000;   // 3h — one contact "episode"
+const MIN_SAMPLES    = 4;                 // gaps per class before it counts
 export const MIN_SPAN_DAYS  = 14;
 const CACHE_REFRESH_MS      = 3 * 60 * 60_000;   // recompute at most every ~3h
 

@@ -59,6 +59,28 @@ SCHEDULE_EDGE_KINDS = {
 }
 RESOLUTIONS = {"done", "cancelled", "carried_forward", "fired", "missed"}
 
+
+class RecurringSeriesError(Exception):
+    """Raised when resolve() is asked to terminate a RECURRING node's own
+    resolution column — which ends the WHOLE series — without an explicit
+    opt-in (series=True).
+
+    This is a fail-closed guard, not a real error: resolving a recurring
+    anchor is a rare, destructive act (it cancels every future occurrence),
+    yet it was previously the silent default of an ambiguous call. When my
+    human says "cancel this week's wash day" the intended target is one
+    occurrence (resolve_occurrence), not the series. Refusing here forces the
+    caller to say which it meant instead of guessing the destructive one.
+    """
+
+    def __init__(self, id: str, label: str | None = None):
+        self.id = id
+        self.label = label
+        super().__init__(
+            f"node {id} is a recurring series; pass occurrence_date to resolve "
+            f"one occurrence, or series=True to end the whole series"
+        )
+
 # ── Consequence metadata (rides in an edge's payload_json) ──────────────
 # A consequence is an edge (usually 'causes' or 'co_occurs_with') carrying
 # some of these. All optional — a bare structural edge carries none. See
@@ -241,6 +263,7 @@ def resolve(
     *,
     id: str,
     resolution: str,
+    series: bool = False,
 ) -> bool:
     """Transition a task/event/state to a terminal resolution.
 
@@ -248,9 +271,12 @@ def resolve(
     id exists (caller can decide whether to treat that as an error).
 
     For recurring nodes this resolves the WHOLE SERIES (the anchor's
-    own resolution column). To resolve a single occurrence of a
-    recurring node, use resolve_occurrence() instead — it writes into
-    payload.resolutions and leaves the series alive.
+    own resolution column) — a rare, destructive act. So it is
+    fail-closed: a recurring node raises RecurringSeriesError unless
+    the caller passes series=True to opt in deliberately. To resolve a
+    single occurrence instead, use resolve_occurrence() — it writes into
+    payload.resolutions and leaves the series alive. (One-time nodes are
+    unaffected; series has no meaning for them.)
     """
     if resolution not in RESOLUTIONS:
         raise ValueError(f"unknown resolution {resolution!r}; expected one of {sorted(RESOLUTIONS)}")
@@ -263,12 +289,17 @@ def resolve(
     # build spec. Stored in payload (no migration); harmless on instant
     # nodes (no window → no fraction).
     row = conn.execute(
-        "SELECT when_ts, end_ts, payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
+        "SELECT label, when_ts, end_ts, payload_json FROM nodes WHERE id = ? AND layer = 'schedule'",
         (id,),
     ).fetchone()
     if row is None:
         return False
     payload = json.loads(row["payload_json"] or "{}")
+    # Fail-closed guard: never silently end a whole recurring series from an
+    # ambiguous call. The common "cancel this week's X" means one occurrence
+    # (resolve_occurrence); ending the series is the deliberate exception.
+    if payload.get("recurrence") and not series:
+        raise RecurringSeriesError(id, label=row["label"])
     payload["acted_at"] = ts
     frac = _window_fraction(row["when_ts"], row["end_ts"], ts)
     if frac is not None:
@@ -468,6 +499,54 @@ def mark_alerted(
         (json.dumps(payload), ts, id),
     )
     return True
+
+
+def stamp_elapsed(
+    conn: sqlite3.Connection,
+    *,
+    hours: float = 24.0,
+    now: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Stamp `payload.elapsed_at` on one-off events whose time has been
+    past for more than `hours` — measured from end_ts when the event has
+    one, else when_ts — and that never got a resolution. (Causal-chain
+    fix piece 4, ward-signed: threshold ward-configurable, default 24h
+    after event end.)
+
+    An OBSERVATION, not a resolution: the node stays unresolved, every
+    schedule tool still works on it, nothing is hidden. The stamp only
+    lets derivations distinguish "past, never followed up" from
+    "upcoming"/"pending". Recurring anchors (payload.recurrence) and
+    need-windows (payload.need) are excluded — their pasts are tracked
+    per-occurrence (payload.resolutions / the needs ledger), and an
+    anchor's own when_ts is just the first occurrence. Idempotent: an
+    already-stamped node is never re-stamped.
+    """
+    hours = max(1.0, min(720.0, float(hours)))
+    now_dt = datetime.fromisoformat(now) if now else datetime.now()
+    cutoff = (now_dt - timedelta(hours=hours)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """SELECT id, label, payload_json FROM nodes
+            WHERE layer = 'schedule' AND type = 'event' AND resolution IS NULL
+              AND COALESCE(end_ts, when_ts) IS NOT NULL
+              AND COALESCE(end_ts, when_ts) < ?
+            LIMIT ?""",
+        (cutoff, limit),
+    ).fetchall()
+    ts = now_iso()
+    stamped: list[dict[str, Any]] = []
+    for r in rows:
+        payload = json.loads(r["payload_json"] or "{}")
+        if payload.get("elapsed_at") or payload.get("recurrence") or payload.get("need"):
+            continue
+        payload["elapsed_at"] = ts
+        conn.execute(
+            "UPDATE nodes SET payload_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(payload), ts, r["id"]),
+        )
+        stamped.append({"id": r["id"], "label": r["label"]})
+    return {"stamped": stamped, "count": len(stamped)}
 
 
 def set_lead(

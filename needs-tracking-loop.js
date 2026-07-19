@@ -32,7 +32,7 @@ let _started  = false;
 let _interval = null;
 let _active   = null;
 
-export function needsTrackingHardDisabled() {
+function needsTrackingHardDisabled() {
   return process.env.PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED === '1';
 }
 

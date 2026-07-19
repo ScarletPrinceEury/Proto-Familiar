@@ -204,3 +204,35 @@ Behavioral changes (not relocations, comments, or renames) to `crisis-signals.js
 `cerebellum.js`, or the `[CARE CHECK]` assembly in `thalamus.js` require asking the human
 before shipping [@claude-md]. See [Proactivity over caution](../decisions/proactivity-over-caution)
 and [Safety spine](../architecture/safety-spine) for why.
+
+## Test discipline: assert, not narrate
+
+A test file must contain assertions. A passing test that is mostly prose narration
+("this function works because…"), even when correct in intent, is a smell: it is brittle,
+gives false confidence, and rots into dead code. The 0.9.0 full-codebase audit (shipped as
+0.9.0-alpha, PR #211) caught a date-handling bug in the availability calculator because the
+covering test was an AI debugging monologue asserting nothing—just describing what *should*
+happen instead of verifying what *does*. Test the actual wire shape, not a convenient
+stand-in: if the code must handle bare date strings like `2026-07-06`, the test must exercise
+exactly that shape, not a convenience substitute.
+
+## Guards on shared primitives demand full-suite audit
+
+A guard (a fail-closed check that blocks some input or behavior) applied to a function used
+by many callers is easy to introduce and easy to break downstream. The 0.8.99 recurring-series
+guard was tested in isolation and passed; when only the schedule/server subset of the full
+Unruh test suite was run at merge time, gcal's internal cancel logic broke silently. Lesson:
+when a guard ships on a shared primitive, the same commit must audit every internal caller of
+that primitive in the full test suite. A subset run (schedule-specific, server-specific) is
+not sufficient. Run the full suite before claiming the guard is safe. This pattern was exposed
+by the 0.9.0 full-codebase audit (PR #211).
+
+## Accessibility is a contract, not a "nice to have"
+
+Proto-Familiar ships with [WCAG 2.0 AA](https://www.w3.org/WAI/WCAG21/quickref/) as an
+explicit requirement. The 0.9.0 full-codebase audit found and fixed: pinch-zoom disabled
+(no interaction mode for touch users), keyboard focus invisible on buttons (no focus indicators
+for keyboard users), and text-muted foreground at ~2:1 contrast (text readability). Contrast
+ratios are documented inline in `style.css` with precise values so future changes can be
+verified without manual testing. The conventions are recorded in `CLAUDE.md` with "hold the
+WCAG line" as the operating principle.

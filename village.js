@@ -64,8 +64,8 @@ export const CATEGORY_STRANGERS = 'strangers';
 // A hard per-location cooldown (activeCooldownSec) floors how often I
 // take an unprompted turn at all, so active presence never runs away
 // with the token budget. The V5 rate limit is the second backstop.
-export const LOCATION_MODES = ['strict', 'lurk', 'active'];
-export const ACTIVE_STRATEGIES = ['llm', 'tiers'];
+const LOCATION_MODES = ['strict', 'lurk', 'active'];
+const ACTIVE_STRATEGIES = ['llm', 'tiers'];
 export const DEFAULT_LOCATION_MODE = 'strict';
 export const DEFAULT_ACTIVE_STRATEGY = 'llm';
 export const DEFAULT_ACTIVE_COOLDOWN_SEC = 60;
@@ -472,7 +472,7 @@ export async function deleteCategory({ id, reassignTo }, { filePath = DEFAULT_VI
 
 // ── Villager field helpers ─────────────────────────────────────────
 
-export const RELATION_TO_FAMILIAR_VALUES = [
+const RELATION_TO_FAMILIAR_VALUES = [
   'unaware', 'warm', 'neutral', 'tolerates-for-ward', 'wary-of-ai', 'hostile',
 ];
 
@@ -524,6 +524,25 @@ function sanitizeDisclosure(raw) {
     if (typeof v === 'string' && v.trim()) out[cat] = v.trim();
   }
   return Object.keys(out).length ? out : null;
+}
+
+// Merge per-category remember gates into ONE villager's map — the narrow
+// setter behind the Discord consent menu (a villager updating their OWN
+// settings). Values per REMEMBER_CATEGORIES: true (keep) | 'ask' | false
+// (never). Unknown categories are ignored; other villager fields are
+// untouched.
+export async function setVillagerRemember(villagerId, patch, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  return mutate(filePath, (reg) => {
+    const v = reg.villagers.find(x => x.id === villagerId);
+    if (!v) throw new Error(`unknown villager: ${villagerId}`);
+    const rem = { ...(v.remember ?? {}) };
+    for (const [cat, val] of Object.entries(patch ?? {})) {
+      if (!REMEMBER_CATEGORIES.includes(cat)) continue;
+      if (val === true || val === false || val === 'ask') rem[cat] = val;
+    }
+    if (Object.keys(rem).length) v.remember = rem;
+    return { villager: v };
+  });
 }
 
 // ── Villager CRUD ─────────────────────────────────────────────────

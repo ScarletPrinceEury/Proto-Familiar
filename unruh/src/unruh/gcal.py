@@ -212,6 +212,44 @@ def projection_candidates(
     return [{"id": r["id"], "label": r["label"], "when": r["when_ts"]} for r in rows]
 
 
+def _adopt_hand_added_twin(conn: sqlite3.Connection, ev: dict[str, Any]) -> str | None:
+    """When the sync is about to CREATE a Google event the ward already
+    hand-added — same title AND exact time, but no gcal_uid — adopt that
+    existing node instead of making a parallel one. This is the root cause of
+    the "one 📅 twin + one plain twin" duplicates: a hand-added node has no
+    gcal_uid, so the uid-keyed reconcile never recognises it and creates a
+    second node.
+
+    Adoption is a MERGE, not a delete: the node keeps its id and its consequence
+    edges, and just gains the sync payload (source='gcal', the uid, …), so from
+    the next sync on it's the one managed node for that event. Match is strict
+    (exact label + exact local-naive time, unresolved, not already gcal), so two
+    genuinely-distinct items can't be conflated. Returns the adopted id or None.
+    """
+    label = ev.get("summary") or "(untitled)"
+    when_local = to_local_naive(ev.get("start")) if ev.get("start") else None
+    if not when_local:
+        return None
+    row = conn.execute(
+        """SELECT id, payload_json FROM nodes
+            WHERE layer='schedule' AND resolution IS NULL
+              AND label = ? AND when_ts = ?
+              AND COALESCE(json_extract(payload_json, '$.source'), '') != 'gcal'
+            ORDER BY created_at ASC LIMIT 1""",
+        (label, when_local),
+    ).fetchone()
+    if not row:
+        return None
+    merged = json.loads(row["payload_json"] or "{}")
+    merged.update(_sync_payload(ev))
+    merged["needs_projection"] = True  # cue clears itself if it already has edges
+    sched.update_node(
+        conn, id=row["id"], label=label,
+        when=ev.get("start"), end=ev.get("end"), payload=merged,
+    )
+    return row["id"]
+
+
 def gcal_ingest(
     conn: sqlite3.Connection,
     *,
@@ -282,7 +320,10 @@ def gcal_ingest(
     # cancel every non-keeper so the ward's schedule shows each Google
     # event exactly once again.
     for did in duplicate_ids:
-        sched.resolve(conn, id=did, resolution="cancelled")
+        # series=True: mechanical reconcile against Google's snapshot — for a
+        # duplicated recurring anchor the WHOLE duplicate is the mistake, so
+        # whole-node semantics are correct (the keeper carries the series).
+        sched.resolve(conn, id=did, resolution="cancelled", series=True)
         removed_ids.append(did)
 
     for ev in events:
@@ -300,6 +341,13 @@ def gcal_ingest(
         if node is None:
             if cancelled:
                 continue  # never-seen + already cancelled → nothing to do
+            # Before creating, adopt a hand-added twin (same title+time) if one
+            # exists, so the ward's own entry and the Google event don't live on
+            # as duplicates. Adoption keeps the node + its edges (§dedup).
+            adopted = _adopt_hand_added_twin(conn, ev)
+            if adopted is not None:
+                updated_ids.append(adopted)
+                continue
             payload = _sync_payload(ev)
             payload["needs_projection"] = True  # first insert only (§1.2)
             try:
@@ -313,7 +361,10 @@ def gcal_ingest(
             continue
 
         if cancelled:
-            sched.resolve(conn, id=node["id"], resolution="cancelled")
+            # series=True: Google says this event is cancelled. Google owns a
+            # synced series, so a cancelled recurring anchor means the whole
+            # series ended on Google's side — whole-node resolve is correct.
+            sched.resolve(conn, id=node["id"], resolution="cancelled", series=True)
             removed_ids.append(node["id"])
             continue
 
@@ -353,7 +404,10 @@ def gcal_ingest(
             when_local = to_local_naive(node["when_ts"]) if node["when_ts"] else None
             if when_local and when_local < now_local:
                 continue  # past / aged-out occurrence → not a deletion
-            sched.resolve(conn, id=node["id"], resolution="cancelled")
+            # series=True: deletion reconcile — the event vanished from
+            # Google's confirmed snapshot, so the synced node (series and
+            # all, for a recurring anchor Google owns) goes with it.
+            sched.resolve(conn, id=node["id"], resolution="cancelled", series=True)
             removed_ids.append(node["id"])
 
     return {

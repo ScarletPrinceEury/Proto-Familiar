@@ -19,8 +19,10 @@ setlocal EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "PID_FILE=%SCRIPT_DIR%\.proto-familiar.pid"
-set "PORT=8742"
-if not "%PROTO_FAMILIAR_PORT%"=="" set "PORT=%PROTO_FAMILIAR_PORT%"
+REM PORT matches what start.bat and server.js read; PROTO_FAMILIAR_PORT is
+REM kept as a legacy fallback (checked first so an explicit PORT wins).
+if "%PORT%"=="" if not "%PROTO_FAMILIAR_PORT%"=="" set "PORT=%PROTO_FAMILIAR_PORT%"
+if "%PORT%"=="" set "PORT=8742"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$pidFile = '%PID_FILE%'; $port = [int]'%PORT%'; $killed = $false;" ^

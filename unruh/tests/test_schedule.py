@@ -283,6 +283,60 @@ class TestResolve:
         p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()["payload_json"])
         assert abs(p["window_fraction"] - 0.25) < 0.02
 
+    def test_recurring_resolve_is_fail_closed_without_series(self, conn):
+        # A recurring node's own resolution ends the WHOLE series — that is
+        # never the silent default of an ambiguous call. resolve() must raise
+        # and leave the anchor untouched, so a "cancel this week's wash day"
+        # can't wipe out every future Sunday.
+        t = sched.add_node(
+            conn, type="task", label="Wash Day",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        with pytest.raises(sched.RecurringSeriesError) as exc:
+            sched.resolve(conn, id=t, resolution="cancelled")
+        assert exc.value.id == t
+        assert exc.value.label == "Wash Day"
+        # Anchor is still unresolved — the series survived.
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] is None
+
+    def test_recurring_resolve_with_series_true_ends_the_series(self, conn):
+        # The deliberate opt-in: series=True is how the whole series is
+        # intentionally cancelled.
+        t = sched.add_node(
+            conn, type="task", label="Bin Day",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        updated = sched.resolve(conn, id=t, resolution="cancelled", series=True)
+        assert updated is True
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] == "cancelled"
+
+    def test_one_time_node_resolves_without_series_flag(self, conn):
+        # The guard only fires for recurring nodes — a plain task still
+        # resolves on the default (series=False) path.
+        t = sched.add_node(conn, type="task", label="pay rent")
+        assert sched.resolve(conn, id=t, resolution="done") is True
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] == "done"
+
+    def test_recurring_single_occurrence_still_resolves(self, conn):
+        # The intended common path is untouched: resolving ONE occurrence
+        # writes into payload.resolutions and never trips the series guard.
+        import json
+        t = sched.add_node(
+            conn, type="task", label="weekly cleaning",
+            payload={"recurrence": {"freq": "weekly"}},
+        )
+        assert sched.resolve_occurrence(
+            conn, id=t, occurrence_date="2026-07-19", resolution="done",
+        ) is True
+        p = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (t,)).fetchone()["payload_json"])
+        assert p["resolutions"]["2026-07-19"] == "done"
+        # Series anchor itself remains unresolved.
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (t,)).fetchone()
+        assert row["resolution"] is None
+
 
 # ── Update / delete (M9b) ─────────────────────────────────────────────
 
@@ -523,6 +577,57 @@ class TestMarkAlerted:
 
     def test_unknown_id_returns_false(self, conn):
         assert sched.mark_alerted(conn, id="nope", kind="weather") is False
+
+
+class TestStampElapsed:
+    """Causal-chain fix piece 4 (ward-signed): payload.elapsed_at on one-off
+    events past their end by more than `hours`, resolution untouched."""
+
+    def _payload(self, conn, nid):
+        import json
+        row = conn.execute("SELECT payload_json FROM nodes WHERE id=?", (nid,)).fetchone()
+        return json.loads(row["payload_json"] or "{}")
+
+    def test_stamps_past_unresolved_event_and_keeps_it_unresolved(self, conn):
+        e = sched.add_node(conn, type="event", label="Dentist", when="2026-07-15T14:00:00")
+        out = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:01")
+        assert out["count"] == 1 and out["stamped"][0]["id"] == e
+        assert self._payload(conn, e)["elapsed_at"]
+        row = conn.execute("SELECT resolution FROM nodes WHERE id=?", (e,)).fetchone()
+        assert row["resolution"] is None   # observation, never a resolution
+
+    def test_threshold_measured_from_end_when_present(self, conn):
+        # Started 30h ago but ended only 2h ago → NOT elapsed at 24h.
+        sched.add_node(conn, type="event", label="Retreat",
+                       when="2026-07-16T08:00:00", end="2026-07-17T12:00:00")
+        out = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:00")
+        assert out["count"] == 0
+
+    def test_leaves_future_recent_resolved_recurring_and_needs_alone(self, conn):
+        sched.add_node(conn, type="event", label="Future", when="2099-01-01T10:00:00")
+        sched.add_node(conn, type="event", label="Recent", when="2026-07-17T10:00:00")
+        done = sched.add_node(conn, type="event", label="Done", when="2026-07-01T10:00:00")
+        sched.resolve(conn, id=done, resolution="done")
+        sched.add_node(conn, type="event", label="Weekly",
+                       when="2026-01-05T10:00:00",
+                       payload={"recurrence": {"freq": "weekly"}})
+        sched.add_node(conn, type="task", label="Meds",
+                       when="2026-07-01T09:00:00", end="2026-07-01T11:00:00",
+                       payload={"need": True})
+        out = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:00")
+        assert out["count"] == 0
+
+    def test_idempotent(self, conn):
+        sched.add_node(conn, type="event", label="Old", when="2026-07-10T10:00:00")
+        first = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T14:00:00")
+        second = sched.stamp_elapsed(conn, hours=24, now="2026-07-17T15:00:00")
+        assert first["count"] == 1 and second["count"] == 0
+
+    def test_hours_clamped(self, conn):
+        # hours=0 clamps to 1h, so a 30min-past event is NOT stamped.
+        sched.add_node(conn, type="event", label="Just now", when="2026-07-17T13:30:00")
+        out = sched.stamp_elapsed(conn, hours=0, now="2026-07-17T14:00:00")
+        assert out["count"] == 0
 
 
 # ── Reads ─────────────────────────────────────────────────────────────

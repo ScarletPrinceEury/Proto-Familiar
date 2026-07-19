@@ -33,11 +33,3 @@ def embed_texts(texts: Sequence[str]) -> list[bytes]:
 
 def embed_text(text: str) -> bytes:
     return embed_texts([text])[0]
-
-
-def pack_vec(floats: list[float]) -> bytes:
-    return struct.pack(f"{DIMS}f", *floats)
-
-
-def unpack_vec(blob: bytes) -> list[float]:
-    return list(struct.unpack(f"{DIMS}f", blob))

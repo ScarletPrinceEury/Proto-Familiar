@@ -2,6 +2,9 @@
 title: Session Memorization
 topics: [architecture, memorization]
 sources:
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
   - id: memorization-js
     type: file
     path: memorization.js
@@ -117,11 +120,19 @@ Clear, `beforeunload`) because the enqueue call itself has to survive the page u
 `memorization.js` has grown two capabilities beyond the original session/topic queue: a
 day-anchored path (`enqueueSessionByDay`, using `day-segments.js` to slice a session by local
 calendar date and `memory-coverage.js` to ingest only the un-memorized tail of each day so
-re-runs don't duplicate facts) and a consent gate (`gateForCategory`/`resolveRememberGate`,
-which resolves a per-category `true`/`false`/`ask` decision against the ward's and any
-matched villagers' remember maps before a fact is written, tracking `ask` outcomes in
-`.consent-pending.json` for `thalamus.js` to surface) [@memorization-js]. Both extend the same
-queue and retry mechanics described above rather than replacing them.
+re-runs don't duplicate facts) and a source-aware consent gate (`resolveRememberGate`,
+which resolves a per-category `true`/`false`/`ask` decision based on WHO a fact is about and
+WHETHER the ward told the Familiar directly) [@memorization-js].
+
+The consent gate (`resolveRememberGate`) is source-aware and takes `{direct, hasNamedSubjects}` as inputs [@memorization-js]:
+
+- **Direct channel + fact about the ward** (ward DM or web chat with `audienceTag==='ward-private'`, and the memory is about the ward themselves) → **implied consent: kept without asking** [@claude-md]. The ward told the Familiar on purpose. This only fills the UNSET default; an explicit ward `ask`/`false` in the remember map still wins (explicit settings override implied consent).
+- **Third-party subjects** (a registered villager subject, OR a named-but-unregistered person → `hasNamedSubjects`) → **asks for sensitive categories in any channel** [@claude-md]. A stranger's sensitive fact is never swept in without asking.
+- **Indirect channels** (group room, shared surface) → **still asks** [@claude-md]. Even ward-private content surfaced indirectly needs explicit consent.
+
+This design killed the confusing flood of date-less consent asks for things the ward said directly. Rationale: memories are what the Familiar *experienced*; being told something directly IS the consent. The `[PENDING MEMORY CONSENT]` block now carries each item's `date` + `reason` (`shared-room`/`third-party`) so asks are explained and time-anchored [@claude-md]. Outcomes are tracked in `.consent-pending.json` for `thalamus.js` to surface.
+
+Both paths (day-anchored segmentation and consent gating) extend the same queue and retry mechanics described above rather than replacing them.
 
 ## Related
 

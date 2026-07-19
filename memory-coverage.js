@@ -26,7 +26,7 @@ import { segmentByDay } from './day-segments.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOMES_DIR = path.join(__dirname, 'tomes');
 export const DEFAULT_LOGS_DIR = path.join(__dirname, 'logs');
-export const DEFAULT_LEDGER_FILE = path.join(TOMES_DIR, '.memory-coverage.json');
+const DEFAULT_LEDGER_FILE = path.join(TOMES_DIR, '.memory-coverage.json');
 const LEDGER_VERSION = 1;
 
 mkdirSync(TOMES_DIR, { recursive: true });

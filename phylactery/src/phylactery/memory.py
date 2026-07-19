@@ -1090,6 +1090,38 @@ def ids_to_slugs(conn: sqlite3.Connection | None = None) -> dict:
             conn.close()
 
 
+def list_by_subject(villager_id: str, limit: int = 50,
+                    conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Kept memories where the given villager is a SUBJECT — thin
+    projections (id, category, brief, date), newest first.
+
+    Backs the villager consent menu: a person may see what I hold about
+    them. Matching is on the exact quoted id inside subjects_json (ids are
+    slugs — no quote characters), so a substring id can't false-match.
+    Consent-pending rows are excluded here; they surface separately as
+    "planned" items.
+    """
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, category, content, date_key, created_at FROM memories "
+            "WHERE kind='narrative' AND consent_pending=0 AND subjects_json LIKE ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (f'%"{villager_id}"%', int(limit)),
+        ).fetchall()
+        return [{
+            "id": r["id"],
+            "category": r["category"],
+            "brief": (r["content"] or "")[:160],
+            "date": r["date_key"],
+        } for r in rows]
+    finally:
+        if own_conn:
+            conn.close()
+
+
 # ── Consent flow (Pillar C) ───────────────────────────────────────────────────
 
 def list_consent_pending(conn: sqlite3.Connection | None = None) -> list[dict]:

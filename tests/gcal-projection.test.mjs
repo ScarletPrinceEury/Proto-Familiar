@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  selectCueItems, buildCueBlock, MAX_TURNS, MAX_PER_TURN, MAX_WINDOW_MS,
+  selectCueItems, buildCueBlock, gatherProjectionCandidates,
+  MAX_TURNS, MAX_PER_TURN, MAX_WINDOW_MS, MIN_LEAD_MS, LAST_CHANCE_MS,
 } from '../gcal-projection.js';
 
 const cand = (id, label = id) => ({ id, label, when: new Date(Date.now() + 3 * 3600_000).toISOString() });
@@ -49,7 +50,7 @@ test('only surfaced items advance their turn count', () => {
 
 test('buildCueBlock: first-person, literal "my human", no bias language', () => {
   const block = buildCueBlock([{ id: 'x1', label: 'Dentist', when: new Date(Date.now() + 3 * 3600_000).toISOString() }]);
-  assert.match(block, /my human's calendar/);
+  assert.match(block, /my human's schedule/);
   assert.match(block, /Dentist/);
   assert.match(block, /\[id: x1\]/);
   assert.match(block, /schedule_link/);
@@ -61,4 +62,89 @@ test('buildCueBlock: first-person, literal "my human", no bias language', () => 
 test('buildCueBlock empty for no items', () => {
   assert.equal(buildCueBlock([]), '');
   assert.equal(buildCueBlock(null), '');
+});
+
+// ── gatherProjectionCandidates (causal-chain fix, piece 1) ────────
+
+test('gather: a bare upcoming event with runway is a candidate, any source', () => {
+  const now = Date.now();
+  const when = new Date(now + 2 * MIN_LEAD_MS).toISOString();
+  const out = gatherProjectionCandidates({
+    window: [{ id: 'ev1', type: 'event', label: 'Dentist', when }],
+    edges: [], gcalFlagged: [], now,
+  });
+  assert.deepEqual(out.map(c => c.id), ['ev1']);
+});
+
+test('gather: excludes events already touched by an edge, resolved ones, non-events, and short-runway ones', () => {
+  const now = Date.now();
+  const far = new Date(now + 2 * MIN_LEAD_MS).toISOString();
+  const near = new Date(now + MIN_LEAD_MS / 2).toISOString();
+  const out = gatherProjectionCandidates({
+    window: [
+      { id: 'linked-ev', type: 'event', label: 'Has edge', when: far },
+      { id: 'done-ev', type: 'event', label: 'Done', when: far, resolution: 'done' },
+      { id: 'a-task', type: 'task', label: 'Not an event', when: far },
+      { id: 'soon-ev', type: 'event', label: 'Too soon', when: near },
+      { id: 'ok-ev', type: 'event', label: 'Fine', when: far },
+    ],
+    edges: [{ id: 'e1', src: 'linked-ev', dst: 'somewhere', kind: 'causes' }],
+    gcalFlagged: [], now,
+  });
+  assert.deepEqual(out.map(c => c.id), ['ok-ev']);
+});
+
+test('gather: unions gcal-flagged with window candidates, deduped by id', () => {
+  const now = Date.now();
+  const far = new Date(now + 2 * MIN_LEAD_MS).toISOString();
+  const out = gatherProjectionCandidates({
+    window: [
+      { id: 'both', type: 'event', label: 'In both', when: far },
+      { id: 'window-only', type: 'event', label: 'Hand-added', when: far },
+    ],
+    edges: [],
+    gcalFlagged: [
+      { id: 'both', label: 'In both', when: far },
+      { id: 'gcal-only', label: 'Fresh sync', when: far },
+    ],
+    now,
+  });
+  const ids = out.map(c => c.id).sort();
+  assert.deepEqual(ids, ['both', 'gcal-only', 'window-only']);
+});
+
+test('gather: tolerates missing/garbage inputs', () => {
+  assert.deepEqual(gatherProjectionCandidates({}), []);
+  assert.deepEqual(gatherProjectionCandidates({ window: null, edges: null, gcalFlagged: null }), []);
+  assert.deepEqual(
+    gatherProjectionCandidates({ window: [{ type: 'event' }, null], edges: [null], gcalFlagged: [{}] }),
+    []);
+});
+
+// ── Last-chance pass (causal-chain fix) ───────────────────────────
+
+test('last chance: an aged-out item re-surfaces once when the event is near', () => {
+  const now = Date.now();
+  const soon = new Date(now + LAST_CHANCE_MS / 2).toISOString();
+  const c = { id: 'lc', label: 'Nearly here', when: soon };
+  const state = { lc: { firstSeenTs: now - MAX_WINDOW_MS - 1, turnsShown: MAX_TURNS } };
+  const first = selectCueItems({ candidates: [c], state, now });
+  assert.equal(first.items.length, 1, 'aged-out + near → one more look');
+  assert.equal(first.nextState.lc.lastChanceShown, true);
+  // Second pass: the one shot is spent.
+  const second = selectCueItems({ candidates: [c], state: first.nextState, now });
+  assert.equal(second.items.length, 0, 'last chance fires exactly once');
+});
+
+test('last chance: does NOT fire for an aged-out item still far out or already past', () => {
+  const now = Date.now();
+  const state = { far: { firstSeenTs: 0, turnsShown: MAX_TURNS }, past: { firstSeenTs: 0, turnsShown: MAX_TURNS } };
+  const r = selectCueItems({
+    candidates: [
+      { id: 'far', label: 'Far', when: new Date(now + LAST_CHANCE_MS * 2).toISOString() },
+      { id: 'past', label: 'Past', when: new Date(now - 3600_000).toISOString() },
+    ],
+    state, now,
+  });
+  assert.equal(r.items.length, 0);
 });

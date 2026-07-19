@@ -184,6 +184,7 @@ const state = {
   messages:                [],     // { role, content, timestamp }[]
   // ── Tool calling ──────────────────────────────────────────
   toolsEnabled:      true,   // whether to send tools array with each request
+  toolRoundsPerTurn: 12,     // live-turn tool-round budget (clamped 3–30 server-side)
   customTools:       '',     // JSON array string of user-defined tool definitions
   // ── Web search (opt-in; works in-box, no setup) ─────────────
   webSearchEnabled:    false,
@@ -302,6 +303,10 @@ const state = {
   // node starts (synced or hand-added). Default ON — the timeblindness net.
   eventAlertsEnabled:      true,
   eventAlertLeadMinutes:   60,    // clamped 5–1440 server-side
+  // Elapsed stamping (causal-chain piece 4): hours past an event's end
+  // before it's noted as "came and went without a word". Observation only —
+  // nothing is auto-resolved or hidden. Clamped 1–720 server-side.
+  elapsedStampHours:       24,
   // Source: 'link' (out-of-the-box iCal URL) or an authenticated CLI the
   // ward already trusts ('gogcli' full Workspace / 'gcalcli' calendar-only).
   gcalSource:              'link',
@@ -350,6 +355,17 @@ const state = {
   // connectionForFeature(). Synced so the server-side loops can honour it.
   featureConnections: {},
 
+  // Vision (image input, vision build spec). Default ON but inert until an
+  // image is actually sent. visionMaxLiveImages bounds how many recent images
+  // ride live per request (older ones degrade to text stand-ins server-side).
+  visionEnabled: true,
+  visionMaxLiveImages: 4,
+  // Image→threat scoring (ward-signed, §15.1): a distressing image I share can
+  // raise my Familiar's concern, same as if I'd typed it. Raise-only for now.
+  visionThreatScoring: true,
+  // Transient (never synced/saved): images picked in the composer, awaiting send.
+  pendingAttachments: [],
+
   // Session audience (Village Support V2).
   // Tracks who is physically present during this session so the Familiar
   // can reference them and (in V3) gate knowledge appropriately.
@@ -372,7 +388,7 @@ const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
-  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns',
+  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'toolRoundsPerTurn',
   'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
@@ -386,17 +402,18 @@ const SERVER_SYNCED_KEYS = [
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
-  'memorySweepEnabled',
+  'memorySweepEnabled', 'uiShowAdvanced',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
-  'eventAlertsEnabled', 'eventAlertLeadMinutes',
+  'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
   'gcalSource', 'gcalCliCommand', 'gcalCliFormat',
   'gcalWriteEnabled', 'gcalWriteCommand',
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
+  'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -492,6 +509,7 @@ const FEATURE_CONNECTIONS = [
   { key: 'triage',         label: 'Crisis triage (safety check-ins)' },
   { key: 'reachout',       label: 'Warm reach-outs' },
   { key: 'tomeGraduation', label: 'Tome graduation' },
+  { key: 'vision',         label: 'Describing images (vision)' },
   // Session-handoff summaries are generated client-side on the chat connection,
   // so they already follow whatever you're chatting on — no separate routing.
 ];
@@ -1298,6 +1316,27 @@ function renderConnectionsList() {
       `<div class="conn-name">${esc(conn.name)}${primaryBadge}${fallbackBadge}${entityBadge}</div>` +
       `<div class="conn-meta">${esc(conn.provider)} / ${esc(conn.model || '—')}</div>`;
 
+    // Vision capability tri-state (spec §3.1): the ward's explicit word, or
+    // Auto (the first image sent settles it). Stored on the connection object,
+    // which already syncs. Model names don't reliably encode modality, so this
+    // is how the ward can pin it when they know.
+    const visRow = document.createElement('div');
+    visRow.className = 'conn-vision';
+    const vcur = conn.visionCapable === 'yes' || conn.visionCapable === 'no' ? conn.visionCapable : 'auto';
+    const vId = `conn-vision-${conn.id}`;
+    visRow.innerHTML =
+      `<label for="${vId}">Can see images?</label>` +
+      `<select id="${vId}" class="ke-select">` +
+      `<option value="auto"${vcur === 'auto' ? ' selected' : ''}>Auto</option>` +
+      `<option value="yes"${vcur === 'yes' ? ' selected' : ''}>Yes</option>` +
+      `<option value="no"${vcur === 'no' ? ' selected' : ''}>No</option>` +
+      `</select>`;
+    visRow.querySelector('select').addEventListener('change', (e) => {
+      const c = state.connections.find(x => x.id === conn.id);
+      if (c) { c.visionCapable = e.target.value; saveSettings(); }
+    });
+    info.appendChild(visRow);
+
     // Actions column
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
@@ -1425,6 +1464,12 @@ function formatDuration(ms) {
 // lands), and without this the macro would compare the two prior
 // user messages and miss "user just returned after being away."
 let _pendingUserMsgTimestamp = null;
+// The live turn's image attachments (vision), carried into the new user turn
+// built by _buildApiMessagesInner. Cleared in buildApiMessages' finally.
+let _pendingAttachments = null;
+// Set when the server reports the tool-round budget ran out mid-reach
+// (_roundCapHit) — after the reply lands we offer a one-click "Go on".
+let _roundCapHitThisTurn = false;
 
 function elapsedBetweenUserMessages() {
   const stamps = [];
@@ -1566,15 +1611,20 @@ function stampContent(content, ts) {
   return tag ? `${tag} ${cleaned}` : cleaned;
 }
 
-function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
+function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp, attachments }) {
   if (role === 'tool')      return { role, tool_call_id, content };
   // Each historical user/assistant message carries its own timestamp
   // in state.messages — prepended to the API-bound content here (NOT
   // to the stored state) so the Familiar perceives WHEN each turn
   // happened across the whole conversation, not just the current one.
   const stamped = stampContent(content, timestamp);
-  if (tool_calls)           return { role, content: stamped ?? null, tool_calls };
-  return { role, content: stamped };
+  // Media references ride BESIDE content as an optional sibling field (spec
+  // §1) — never inside the string. The server-side materializer is the only
+  // seam that turns them into provider image parts; stampContent above still
+  // only ever sees the string, so timestamp hygiene is untouched.
+  const atts = Array.isArray(attachments) && attachments.length ? { attachments } : {};
+  if (tool_calls)           return { role, content: stamped ?? null, tool_calls, ...atts };
+  return { role, content: stamped, ...atts };
 }
 
 /**
@@ -1588,12 +1638,14 @@ function toApiMessage({ role, content, tool_calls, tool_call_id, timestamp }) {
  *   [user: userInput]            ← new turn
  *   [user: postHistoryPrompt]    ← optional, injected last
  */
-function buildApiMessages(userInput, pendingUserMsgTimestamp = null) {
+function buildApiMessages(userInput, pendingUserMsgTimestamp = null, pendingAttachments = null) {
   _pendingUserMsgTimestamp = pendingUserMsgTimestamp;
+  _pendingAttachments = Array.isArray(pendingAttachments) && pendingAttachments.length ? pendingAttachments : null;
   try {
   return _buildApiMessagesInner(userInput);
   } finally {
   _pendingUserMsgTimestamp = null;
+  _pendingAttachments = null;
   }
 }
 
@@ -1655,7 +1707,11 @@ function _buildApiMessagesInner(userInput) {
   // captured at send time (also used by the elapsedTime macro), so
   // it's marked the same way as history. The stamp lives only on
   // this temporary API message — state.messages keeps clean content.
-  msgs.push({ role: 'user', content: stampContent(userInput, _pendingUserMsgTimestamp) });
+  msgs.push({
+    role: 'user',
+    content: stampContent(userInput, _pendingUserMsgTimestamp),
+    ...(_pendingAttachments ? { attachments: _pendingAttachments } : {}),
+  });
 
   // ── Post-history prompt ───────────────────────────────────────
   // Role is user-configurable (default 'system'). The chat path always
@@ -1790,13 +1846,39 @@ function setStatus(type) {
   // type: '' | 'ok' | 'busy' | 'err'
   const badge = $('status-badge');
   badge.className = 'status-badge' + (type ? ' ' + type : '');
+  // The dot's color is not the only carrier of state (WCAG 1.4.1):
+  // name the state for screen readers and colorblind users hovering.
+  const label = { ok: 'Connected', busy: 'Working…', err: 'Connection error' }[type] || 'Idle';
+  badge.title = label;
+  badge.setAttribute('aria-label', label);
 }
 
 /**
  * Create and return a message DOM element.
  * Returns { el, bubble } so callers can update the bubble during streaming.
  */
-function createMessageEl(role, htmlContent, timestamp) {
+// A thumbnail row for a message's image attachments (vision). Each thumb
+// streams from GET /api/media/:id and opens full-size in a new tab. Returns
+// null when there's nothing to show.
+function attachmentRow(attachments) {
+  const atts = Array.isArray(attachments) ? attachments.filter(a => a && a.id) : [];
+  if (!atts.length) return null;
+  const row = document.createElement('div');
+  row.className = 'msg-attachments';
+  for (const a of atts) {
+    const img = document.createElement('img');
+    img.className = 'msg-attachment-thumb';
+    img.src = `/api/media/${encodeURIComponent(a.id)}`;
+    img.alt = 'shared image';
+    img.loading = 'lazy';
+    img.addEventListener('click', () => window.open(`/api/media/${encodeURIComponent(a.id)}`, '_blank', 'noopener'));
+    img.addEventListener('error', () => { img.replaceWith(Object.assign(document.createElement('span'), { className: 'msg-attachment-missing', textContent: '[image no longer available]' })); });
+    row.appendChild(img);
+  }
+  return row;
+}
+
+function createMessageEl(role, htmlContent, timestamp, attachments = null) {
   const el = document.createElement('div');
   el.className = `message ${role}`;
 
@@ -1852,6 +1934,8 @@ function createMessageEl(role, htmlContent, timestamp) {
     timeEl.title = new Date(timestamp).toLocaleString();
   }
 
+  const attRow = attachmentRow(attachments);
+  if (attRow) body.appendChild(attRow);   // thumbnails above the bubble text
   body.appendChild(bubble);
   body.appendChild(actions);
   body.appendChild(timeEl);
@@ -1873,9 +1957,9 @@ function wireCopyButton(btn, getText) {
   });
 }
 
-function appendUserMessage(text, timestamp) {
-  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp);
-  wireCopyButton(copyBtn, () => text);
+function appendUserMessage(text, timestamp, attachments = null) {
+  const { el, copyBtn } = createMessageEl('user', esc(text).replace(/\n/g, '<br>'), timestamp, attachments);
+  wireCopyButton(copyBtn, () => text);   // copy is text only (never the image)
   // Index will be assigned by refreshTopicGutter after state.messages is updated
   el.dataset.msgIndex = String(state.messages.length); // optimistic: will be corrected
   $('messages').appendChild(el);
@@ -1892,6 +1976,35 @@ function appendAssistantShell(timestamp) {
 function appendErrorMessage(text) {
   const { el } = createMessageEl('error', `⚠ ${esc(text)}`);
   $('messages').appendChild(el);
+  scrollToBottom();
+}
+
+// ── "Go on" offer (tool-round budget ran out mid-reach) ───────────
+// Each conversation turn carries a fresh tool-round budget, so granting more
+// rounds IS just asking the Familiar to continue — this renders that as one
+// click. The sent message is a normal, visible user turn (honest history).
+function removeContinueRoundsOffer() {
+  document.getElementById('continue-rounds-offer')?.remove();
+}
+
+function offerContinueRounds() {
+  removeContinueRoundsOffer();
+  const wrap = document.createElement('div');
+  wrap.id = 'continue-rounds-offer';
+  wrap.className = 'continue-rounds-offer';
+  const note = document.createElement('span');
+  note.textContent = 'Tool rounds ran out mid-task.';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-secondary';
+  btn.textContent = '▶ Go on — grant a fresh set of rounds';
+  btn.addEventListener('click', () => {
+    removeContinueRoundsOffer();
+    sendMessage('Go on — you have a fresh set of tool rounds. Pick up exactly where you left off.');
+  });
+  wrap.appendChild(note);
+  wrap.appendChild(btn);
+  $('messages').appendChild(wrap);
   scrollToBottom();
 }
 
@@ -1996,7 +2109,7 @@ function renderAllMessages() {
     const html = msg.role === 'user'
       ? esc(displayContent).replace(/\n/g, '<br>')
       : renderMarkdown(displayContent);
-    const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp);
+    const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
@@ -2042,9 +2155,211 @@ function extractErrorText(payload, fallback) {
   return String(e) || fallback;
 }
 
+// ── Composer image attachments (vision) ──────────────────────────
+const VISION_MAX_PER_MESSAGE = 4;      // mirrors media.js MAX_IMAGES_PER_MESSAGE
+const VISION_DOWNSCALE_EDGE  = 1568;   // long-edge cap before upload (spec §4)
+
+function visionActive() {
+  return state.visionEnabled !== false;
+}
+
+// Canvas re-encode: bound the long edge and re-compress before upload, so the
+// raw camera photo never leaves the browser (spec §4). Animated GIFs are sent
+// as-is (a canvas re-encode would flatten them); PNGs keep PNG to preserve
+// transparency; everything else becomes JPEG q≈0.85.
+function downscaleImage(file) {
+  return new Promise((resolve) => {
+    if (file.type === 'image/gif') { resolve({ blob: file, mime: 'image/gif' }); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const { width, height } = img;
+      const scale = Math.min(1, VISION_DOWNSCALE_EDGE / Math.max(width, height));
+      const w = Math.max(1, Math.round(width * scale));
+      const h = Math.max(1, Math.round(height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const keepPng = file.type === 'image/png';
+      const mime = keepPng ? 'image/png' : 'image/jpeg';
+      canvas.toBlob(
+        (blob) => resolve(blob ? { blob, mime } : { blob: file, mime: file.type }),
+        mime, keepPng ? undefined : 0.85,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve({ blob: file, mime: file.type || 'image/jpeg' }); };
+    img.src = url;
+  });
+}
+
+async function uploadImage(file) {
+  const { blob, mime } = await downscaleImage(file);
+  const label = (file.name && !/^(image|clipboard)\.?\w*$/i.test(file.name)) ? file.name : '';
+  const qs = new URLSearchParams();
+  if (label) qs.set('label', label);
+  if (state.sessionId) qs.set('sessionId', state.sessionId);
+  const res = await fetch(`/api/media${qs.toString() ? `?${qs}` : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': mime },
+    body: blob,
+  });
+  if (!res.ok) {
+    let msg = `upload failed (${res.status})`;
+    try { msg = (await res.json())?.error || msg; } catch { /* keep */ }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+async function addPendingImages(fileList) {
+  if (!visionActive()) return;
+  state.pendingAttachments ||= [];
+  const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+  for (const file of files) {
+    if (state.pendingAttachments.length >= VISION_MAX_PER_MESSAGE) {
+      appendErrorMessage(`I can hold up to ${VISION_MAX_PER_MESSAGE} images per message.`);
+      break;
+    }
+    try {
+      const meta = await uploadImage(file);
+      if (meta?.id) {
+        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id });
+        renderAttachStrip();
+      }
+    } catch (err) {
+      appendErrorMessage(`Couldn't attach that image: ${err.message}`);
+    }
+  }
+}
+
+function removePendingAttachment(id) {
+  state.pendingAttachments = (state.pendingAttachments || []).filter(a => a.id !== id);
+  renderAttachStrip();
+}
+
+function clearPendingAttachments() {
+  state.pendingAttachments = [];
+  renderAttachStrip();
+}
+
+function renderAttachStrip() {
+  const strip = $('attach-strip');
+  if (!strip) return;
+  const atts = state.pendingAttachments || [];
+  strip.innerHTML = '';
+  if (!atts.length) { strip.classList.add('hidden'); return; }
+  strip.classList.remove('hidden');
+  for (const a of atts) {
+    const chip = document.createElement('div');
+    chip.className = 'attach-chip';
+    const img = document.createElement('img');
+    img.src = `/api/media/${encodeURIComponent(a.id)}`;
+    img.alt = 'pending image';
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'attach-chip-remove';
+    rm.setAttribute('aria-label', 'Remove image');
+    rm.textContent = '✕';
+    rm.addEventListener('click', () => removePendingAttachment(a.id));
+    // Tag control (§6.5): tie this image to someone/something in the graph.
+    const tag = document.createElement('button');
+    tag.type = 'button';
+    tag.className = 'attach-chip-tag';
+    tag.setAttribute('aria-label', a.tagLabel ? `Tagged: ${a.tagLabel}. Change tag` : 'Tag this image to a person or thing');
+    tag.title = a.tagLabel ? `Tagged: ${a.tagLabel}` : 'Tag to a person/place/thing';
+    tag.textContent = '🏷';
+    tag.addEventListener('click', (e) => { e.stopPropagation(); openTagPicker(a, chip); });
+    chip.appendChild(img);
+    chip.appendChild(rm);
+    chip.appendChild(tag);
+    if (a.tagLabel) {
+      const badge = document.createElement('span');
+      badge.className = 'attach-chip-badge';
+      badge.textContent = a.tagLabel;
+      badge.title = `Tagged: ${a.tagLabel}`;
+      chip.appendChild(badge);
+    }
+    strip.appendChild(chip);
+  }
+}
+
+// A small search popover for tagging a pending image to a graph node.
+let _tagPickerEl = null;
+function closeTagPicker() { if (_tagPickerEl) { _tagPickerEl.remove(); _tagPickerEl = null; } }
+function openTagPicker(attachment, anchorChip) {
+  closeTagPicker();
+  const pop = document.createElement('div');
+  pop.className = 'tag-picker';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Search people, pets, places…';
+  input.setAttribute('aria-label', 'Search the graph to tag this image');
+  const results = document.createElement('div');
+  results.className = 'tag-picker-results';
+  pop.appendChild(input);
+  pop.appendChild(results);
+  document.body.appendChild(pop);
+  _tagPickerEl = pop;
+  // Position under the chip.
+  const r = anchorChip.getBoundingClientRect();
+  pop.style.left = `${Math.min(r.left, window.innerWidth - 260)}px`;
+  pop.style.top  = `${r.bottom + 4}px`;
+  input.focus();
+
+  let seq = 0, timer = null;
+  const runSearch = async () => {
+    const q = input.value.trim();
+    if (!q) { results.innerHTML = ''; return; }
+    const mine = ++seq;
+    try {
+      const data = await (await fetch(`/api/entity/graph/search?query=${encodeURIComponent(q)}&limit=8`)).json();
+      if (mine !== seq) return;   // a newer query superseded this one
+      // Search returns { results: [{ node:{id,label,type,description}, score }] };
+      // tolerate a bare-node shape too.
+      const raw = Array.isArray(data?.results) ? data.results : (Array.isArray(data?.nodes) ? data.nodes : []);
+      const nodes = raw.map(r => r?.node ?? r).filter(n => n && n.id);
+      results.innerHTML = '';
+      if (!nodes.length) { results.innerHTML = '<div class="tag-picker-empty">No matches. The Familiar can also tag it in chat.</div>'; return; }
+      for (const n of nodes) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'tag-picker-item';
+        item.textContent = `${n.label ?? n.id}${n.type ? ` · ${n.type}` : ''}`;
+        item.addEventListener('click', () => linkPendingToNode(attachment, n));
+        results.appendChild(item);
+      }
+    } catch { results.innerHTML = '<div class="tag-picker-empty">Couldn\'t reach the graph.</div>'; }
+  };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, 220); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTagPicker(); });
+  // Dismiss on outside click (next tick so this opening click doesn't close it).
+  setTimeout(() => {
+    const onDoc = (e) => { if (_tagPickerEl && !_tagPickerEl.contains(e.target)) { closeTagPicker(); document.removeEventListener('mousedown', onDoc); } };
+    document.addEventListener('mousedown', onDoc);
+  }, 0);
+}
+
+async function linkPendingToNode(attachment, node) {
+  try {
+    const res = await fetch(`/api/media/${encodeURIComponent(attachment.id)}/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId: node.id, label: node.label ?? node.id, kind: node.type ?? '' }),
+    });
+    if (res.ok) { attachment.tagLabel = node.label ?? node.id; renderAttachStrip(); }
+  } catch { /* non-blocking */ }
+  closeTagPicker();
+}
+
 async function sendMessage(userInput) {
   userInput = userInput.trim();
-  if (!userInput) return;
+  // Snapshot the pending images (vision) and clear the composer strip — an
+  // image-only turn (empty text) is allowed, so only bail when there's neither.
+  const attachments = (state.pendingAttachments || []).filter(a => a && a.id);
+  if (!userInput && !attachments.length) return;
+  clearPendingAttachments();
 
   if (!state.apiKey.trim()) {
     appendErrorMessage('Enter your API key in the Settings panel first.');
@@ -2075,12 +2390,12 @@ async function sendMessage(userInput) {
   resetSessionTimeout();
 
   const userTimestamp = now;
-  const apiMessages   = buildApiMessages(userInput, userTimestamp);
+  const apiMessages   = buildApiMessages(userInput, userTimestamp, attachments);
   lastSentMessages    = apiMessages;
   lastThalamus = null; // wait for the live answer to populate this
 
   // Optimistic UI
-  appendUserMessage(userInput, userTimestamp);
+  appendUserMessage(userInput, userTimestamp, attachments);
   setInputLocked(true);
   setTyping(true);
   setStatus('busy');
@@ -2088,11 +2403,14 @@ async function sendMessage(userInput) {
   const sendStart = performance.now();
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
+    _roundCapHitThisTurn = false;
+    removeContinueRoundsOffer();   // a new turn supersedes any standing offer
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
+      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt);
+      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     }
+    if (_roundCapHitThisTurn) offerContinueRounds();
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
     debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
@@ -2356,6 +2674,12 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
         lastThalamus = parsed._thalamus;
         continue;
       }
+      // The tool-round budget ran out mid-reach — offer a one-click "Go on"
+      // after the reply lands (a fresh turn carries a fresh budget).
+      if (parsed._roundCapHit) {
+        _roundCapHitThisTurn = true;
+        continue;
+      }
       // A mid-loop upstream failure on the server side - surface it as a
       // normal request error so the retry/fallback ladder handles it.
       if (parsed._loopError) throw new Error(parsed._loopError);
@@ -2408,7 +2732,7 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
   return { content: fullContent, pendingMsgs, finalShell: shell };
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null) {
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -2478,7 +2802,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp: ts,            id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -2534,6 +2858,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
     throw new Error(extractErrorText(data, `API error ${response.status}`));
   }
   if (data._thalamus) lastThalamus = data._thalamus;
+  if (data._roundCapHit) _roundCapHitThisTurn = true;
 
   // Server-side tool rounds: render each as a collapsible block and
   // record the same message shapes the old client-side loop produced.
@@ -2559,7 +2884,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
   return { content: message?.content ?? '', pendingMsgs, timestamp: roundTs };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt) {
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null) {
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -2619,7 +2944,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId() });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp,                id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -2771,9 +3096,19 @@ function readSettingsFromUI() {
   }
   if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
   if ($('weather-toggle')) state.weatherEnabled = $('weather-toggle').checked;
+  if ($('vision-enabled-toggle')) {
+    const was = state.visionEnabled !== false;
+    state.visionEnabled = $('vision-enabled-toggle').checked;
+    if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
+  }
+  if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
+  }
+  if ($('elapsed-stamp-hours')) {
+    const n = parseInt($('elapsed-stamp-hours').value, 10);
+    state.elapsedStampHours = Number.isInteger(n) && n >= 1 && n <= 720 ? n : 24;
   }
   if ($('gcal-source')) state.gcalSource = ['link', 'google', 'gogcli', 'gcalcli'].includes($('gcal-source').value) ? $('gcal-source').value : 'link';
   if ($('gcal-cli-command')) state.gcalCliCommand = $('gcal-cli-command').value.trim();
@@ -2806,6 +3141,10 @@ function readSettingsFromUI() {
   if ($('tool-sticky-turns')) {
     const n = parseInt($('tool-sticky-turns').value, 10);
     state.toolStickyTurns = Number.isInteger(n) && n >= 0 && n <= 10 ? n : 2;
+  }
+  if ($('tool-rounds-per-turn')) {
+    const n = parseInt($('tool-rounds-per-turn').value, 10);
+    state.toolRoundsPerTurn = Number.isInteger(n) && n >= 3 && n <= 30 ? n : 12;
   }
   if ($('stewardship-toggle')) state.stewardshipEnabled = $('stewardship-toggle').checked;
   if ($('spine-states-toggle')) state.spineStatesEnabled = $('spine-states-toggle').checked;
@@ -2905,6 +3244,7 @@ function writeSettingsToUI() {
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
+  if ($('tool-rounds-per-turn')) setIfNotFocused($('tool-rounds-per-turn'), 'value', state.toolRoundsPerTurn ?? 12);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
   if ($('spine-states-toggle')) setIfNotFocused($('spine-states-toggle'), 'checked', state.spineStatesEnabled !== false);
   if ($('day-start-anchor')) setIfNotFocused($('day-start-anchor'), 'value', state.dayStartAnchor ?? '09:00');
@@ -2918,8 +3258,11 @@ function writeSettingsToUI() {
   if ($('gcal-interval')) setIfNotFocused($('gcal-interval'), 'value', state.gcalSyncIntervalMinutes ?? 60);
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
+  if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
+  if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
+  if ($('elapsed-stamp-hours')) setIfNotFocused($('elapsed-stamp-hours'), 'value', state.elapsedStampHours ?? 24);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
   if ($('gcal-cli-command')) setIfNotFocused($('gcal-cli-command'), 'value', state.gcalCliCommand ?? '');
   if ($('gcal-cli-format')) setIfNotFocused($('gcal-cli-format'), 'value', state.gcalCliFormat ?? 'ics');
@@ -2974,6 +3317,187 @@ function refreshModelSuggestions(provider) {
     opt.value = m;
     dl.appendChild(opt);
   }
+  // Provider changed → any fetched model list belongs to the old one.
+  resetModelBrowser();
+}
+
+// ── Visible model browser ────────────────────────────────────────
+// "Show available models" fetches the provider's real model list via
+// the server proxy (POST /api/models) and renders it as a clickable,
+// filterable list — the options exist where the ward can SEE them, not
+// only behind type-to-discover (docs/ui-ux-guidelines.md). Falls back
+// to the curated per-provider suggestions when the live fetch fails.
+let _modelBrowserModels = null;
+function resetModelBrowser() {
+  _modelBrowserModels = null;
+  const list = $('model-browser-list'), filter = $('model-filter'), status = $('model-browser-status');
+  if (!list) return;
+  list.classList.add('hidden'); list.innerHTML = '';
+  filter.classList.add('hidden'); filter.value = '';
+  status.style.display = 'none';
+  const btn = $('model-browse-btn');
+  if (btn) { btn.textContent = 'Show available models'; btn.disabled = false; }
+}
+function renderModelBrowser() {
+  const list = $('model-browser-list');
+  const q = ($('model-filter')?.value ?? '').trim().toLowerCase();
+  const models = (_modelBrowserModels ?? []).filter(id => !q || id.toLowerCase().includes(q));
+  list.innerHTML = models.length
+    ? models.map(id => `<li><button type="button" class="model-pick${id === $('model-input').value ? ' model-pick-current' : ''}" data-model="${teEscapeHtml(id)}">${teEscapeHtml(id)}</button></li>`).join('')
+    : `<li class="model-none">Nothing matches “${teEscapeHtml(q)}”.</li>`;
+  list.classList.remove('hidden');
+  list.querySelectorAll('.model-pick').forEach(btn => btn.addEventListener('click', () => {
+    $('model-input').value = btn.dataset.model;
+    $('model-input').dispatchEvent(new Event('change'));
+    renderModelBrowser();   // move the "current" highlight
+  }));
+}
+async function browseModels() {
+  const btn = $('model-browse-btn'), status = $('model-browser-status'), filter = $('model-filter');
+  const provider = $('provider-select').value;
+  const apiKey = $('api-key').value.trim();
+  btn.disabled = true; btn.textContent = 'Fetching…';
+  status.style.display = 'none';
+  let out = null;
+  if (apiKey) {
+    try {
+      const r = await fetch('/api/models', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, apiKey }),
+      });
+      out = await r.json().catch(() => null);
+    } catch { /* fall through to curated list */ }
+  }
+  if (out?.ok && Array.isArray(out.models) && out.models.length) {
+    _modelBrowserModels = out.models.map(m => m.id);
+    status.textContent = `${_modelBrowserModels.length} models your key can use — click one to select it.`;
+  } else {
+    _modelBrowserModels = [...(PROVIDER_MODELS[provider] ?? [])];
+    status.textContent = apiKey
+      ? `Couldn't fetch the live list (${out?.error ?? 'no response'}) — showing known ${provider} models instead.`
+      : 'Add your API key to fetch the live list — showing known models for this provider.';
+  }
+  status.style.display = '';
+  filter.classList.toggle('hidden', _modelBrowserModels.length <= 8);
+  btn.textContent = 'Refresh model list';
+  btn.disabled = false;
+  renderModelBrowser();
+}
+
+// ── Sidebar navigation (master-detail) ───────────────────────────
+// The settings sidebar shows ONE thing at a time: a searchable menu of
+// sections, or a single opened section with a back button — instead of
+// ten dense sections stacked into a wall (docs/ui-ux-guidelines.md
+// rule 1). The section markup/ids are untouched, so every existing
+// field binding keeps working; only visibility is orchestrated here.
+const SIDEBAR_NAV = [
+  { group: 'Start here', items: [
+    { id: 'section-connection', icon: 'cable',        title: 'Connection',       desc: 'Provider, API key, model' },
+    { id: 'section-chat',       icon: 'chat',         title: 'Chat',             desc: 'History, sounds, sessions' },
+  ]},
+  { group: 'Your Familiar', items: [
+    { id: 'section-knowledge',  icon: 'psychology',   title: 'Knowledge',        desc: 'Memories, identity, graph' },
+    { id: 'section-temporal',   icon: 'schedule',     title: 'Temporal',         desc: 'Schedule, interests, automation' },
+    { id: 'section-tomes',      icon: 'menu_book',    title: 'Tomes',            desc: 'Topic notes injected by keyword' },
+  ]},
+  { group: 'People & channels', items: [
+    // Trusted contacts live in the Village modal (they're people) and the
+    // ward's own webhook in the Discord section — the keywords keep
+    // settings search finding them at their new homes.
+    { id: 'section-village',    icon: 'holiday_village', title: 'Village',       desc: 'People, circles, trusted contacts',
+      keywords: 'trusted contacts crisis outreach webhook villager category grants' },
+    { id: 'section-discord',    icon: 'forum',        title: 'Discord presence', desc: 'The bot & your notifications',
+      keywords: 'webhook push notifications', onOpen: () => { try { refreshDiscordStatus(); } catch {} } },
+  ]},
+  { group: 'Advanced', advanced: true, items: [
+    { id: 'section-tools',      icon: 'handyman',     title: 'Tools',            desc: 'Tool use & custom tools' },
+    { id: 'section-debug',      icon: 'monitor_heart', title: 'Diagnostics',     desc: 'Debug info & prompt logs' },
+  ]},
+];
+const SIDEBAR_LAST_KEY = 'pf-sidebar-open-section';
+
+function sidebarNavItems() { return SIDEBAR_NAV.flatMap(g => g.items); }
+
+function openSidebarSection(id, { focusBack = true } = {}) {
+  const item = sidebarNavItems().find(i => i.id === id);
+  const section = document.getElementById(id);
+  if (!item || !section) return;
+  document.getElementById('sidebar').classList.add('sidebar-nav-open');
+  document.querySelectorAll('.sidebar-section').forEach(s => s.classList.toggle('nav-active', s.id === id));
+  // A section opened as its own page is always expanded.
+  section.classList.remove('collapsed');
+  section.querySelector('.collapse-toggle')?.setAttribute('aria-expanded', 'true');
+  $('sidebar-nav').classList.add('hidden');
+  $('sidebar-detail-head').classList.remove('hidden');
+  $('sidebar-detail-title').textContent = item.title;
+  try { localStorage.setItem(SIDEBAR_LAST_KEY, id); } catch {}
+  item.onOpen?.();
+  // Keyboard/SR users land on the back control, not lost mid-page —
+  // except on the silent restore at page load, which must not steal
+  // focus from the chat input.
+  if (focusBack) $('sidebar-back').focus({ preventScroll: true });
+  document.getElementById('sidebar').scrollTop = 0;
+}
+
+function closeSidebarSection() {
+  document.getElementById('sidebar').classList.remove('sidebar-nav-open');
+  document.querySelectorAll('.sidebar-section').forEach(s => s.classList.remove('nav-active'));
+  $('sidebar-nav').classList.remove('hidden');
+  $('sidebar-detail-head').classList.add('hidden');
+  try { localStorage.removeItem(SIDEBAR_LAST_KEY); } catch {}
+  document.getElementById('sidebar').scrollTop = 0;
+}
+
+function renderSidebarMenu() {
+  const menu = $('sidebar-menu');
+  const q = ($('settings-search')?.value ?? '').trim().toLowerCase();
+  const showAdvanced = state.uiShowAdvanced === true || !!q; // searching sees everything
+  const html = [];
+  for (const g of SIDEBAR_NAV) {
+    if (g.advanced && !showAdvanced) continue;
+    const items = g.items.filter(i => {
+      if (!q) return true;
+      if (`${i.title} ${i.desc} ${i.keywords ?? ''}`.toLowerCase().includes(q)) return true;
+      // Deep search: match against the section's actual labels/hints, so
+      // "quiet hours" finds the section that holds it.
+      return (document.getElementById(i.id)?.textContent ?? '').toLowerCase().includes(q);
+    });
+    if (!items.length) continue;
+    html.push(`<div class="sidebar-menu-group">${teEscapeHtml(g.group)}</div>`);
+    for (const i of items) {
+      html.push(`<button type="button" class="sidebar-menu-row" data-section="${i.id}">
+        <span class="sidebar-menu-icon" aria-hidden="true">${msIcon(i.icon, { size: '20' })}</span>
+        <span class="sidebar-menu-text">
+          <span class="sidebar-menu-title">${teEscapeHtml(i.title)}</span>
+          <span class="sidebar-menu-desc">${teEscapeHtml(i.desc)}</span>
+        </span>
+        <span class="sidebar-menu-chev" aria-hidden="true">›</span>
+      </button>`);
+    }
+  }
+  if (!html.length) html.push(`<p class="sidebar-menu-empty">Nothing matches “${teEscapeHtml(q)}”.</p>`);
+  // The advanced toggle lives at the menu bottom — advanced sections are
+  // hidden until asked for (first-run essentials mode), not gone.
+  html.push(`<button type="button" class="sidebar-menu-advanced" id="sidebar-advanced-toggle">${state.uiShowAdvanced ? 'Hide advanced settings' : 'Show advanced settings…'}</button>`);
+  menu.innerHTML = html.join('');
+  menu.querySelectorAll('.sidebar-menu-row').forEach(btn =>
+    btn.addEventListener('click', () => openSidebarSection(btn.dataset.section)));
+  $('sidebar-advanced-toggle')?.addEventListener('click', () => {
+    state.uiShowAdvanced = !state.uiShowAdvanced;
+    saveSettings();
+    renderSidebarMenu();
+  });
+}
+
+function initSidebarNav() {
+  renderSidebarMenu();
+  $('sidebar-back')?.addEventListener('click', closeSidebarSection);
+  $('settings-search')?.addEventListener('input', renderSidebarMenu);
+  // Restore the last-open section so a reload doesn't lose your place.
+  try {
+    const last = localStorage.getItem(SIDEBAR_LAST_KEY);
+    if (last && document.getElementById(last)) openSidebarSection(last, { focusBack: false });
+  } catch {}
 }
 
 // ── Collapsible sections ─────────────────────────────────────────
@@ -3946,15 +4470,15 @@ function init() {
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
     'memory-sweep-toggle',
-    'tool-surfacing-toggle', 'tool-sticky-turns',
+    'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
     'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
-    'event-alerts-toggle', 'event-alerts-lead',
-    'weather-toggle',
+    'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
+    'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -3986,6 +4510,9 @@ function init() {
   // auto-fill the API key field from any saved connection using the same
   // provider, so a user with multiple saved keys per provider doesn't have
   // to retype the bearer token when switching providers.
+  $('model-browse-btn')?.addEventListener('click', browseModels);
+  $('model-filter')?.addEventListener('input', renderModelBrowser);
+
   $('provider-select').addEventListener('change', e => {
     const prov  = e.target.value;
     const input = $('model-input');
@@ -4072,6 +4599,43 @@ function init() {
   $('user-input').addEventListener('input', function() {
     autoResize(this);
   });
+
+  // ── Composer image attachments (vision) ────────────────────────
+  // Attach button → hidden picker; paste and drag-drop route to the same
+  // upload path. The affordance is hidden entirely when vision is off.
+  const attachBtn = $('attach-btn');
+  const imageInput = $('image-input');
+  const applyAttachVisibility = () => { if (attachBtn) attachBtn.style.display = visionActive() ? '' : 'none'; };
+  applyAttachVisibility();
+  window.addEventListener('vision-enabled-changed', applyAttachVisibility);
+  if (attachBtn && imageInput) {
+    attachBtn.addEventListener('click', () => imageInput.click());
+    imageInput.addEventListener('change', async () => {
+      await addPendingImages(imageInput.files);
+      imageInput.value = '';   // allow re-picking the same file
+    });
+  }
+  $('user-input')?.addEventListener('paste', (e) => {
+    if (!visionActive()) return;
+    const items = Array.from(e.clipboardData?.items || []).filter(it => it.type?.startsWith('image/'));
+    if (!items.length) return;
+    e.preventDefault();
+    addPendingImages(items.map(it => it.getAsFile()).filter(Boolean));
+  });
+  // Drag-and-drop onto the chat pane.
+  const dropZone = document.querySelector('.chat-pane') || $('messages');
+  if (dropZone) {
+    ['dragover', 'dragenter'].forEach(ev => dropZone.addEventListener(ev, (e) => {
+      if (!visionActive()) return;
+      if (Array.from(e.dataTransfer?.types || []).includes('Files')) { e.preventDefault(); dropZone.classList.add('drag-over'); }
+    }));
+    ['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, () => dropZone.classList.remove('drag-over')));
+    dropZone.addEventListener('drop', (e) => {
+      if (!visionActive()) return;
+      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith('image/'));
+      if (files.length) { e.preventDefault(); addPendingImages(files); }
+    });
+  }
 
   // Test chime — plays regardless of the toggle (it's an explicit request),
   // and doubles as the gesture that unlocks the AudioContext.
@@ -4228,6 +4792,8 @@ function init() {
     });
     $('vl-people-refresh').addEventListener('click', () => vlLoadPeople());
     $('vl-people-add').addEventListener('click', vlStartNewPerson);
+    // Live filter over the cached registry — no refetch per keystroke.
+    $('vl-people-search')?.addEventListener('input', () => { if (_vlReg) vlRenderPeopleGrid(_vlReg); });
     $('vl-cat-refresh').addEventListener('click', () => vlLoadCategories());
     $('vl-cat-add').addEventListener('click', vlStartNewCategory);
     $('vl-loc-refresh').addEventListener('click', () => vlLoadLocations());
@@ -4247,6 +4813,7 @@ function init() {
     $('te-pond-refresh').addEventListener('click',   teLoadPonderings);
     $('te-pond-limit').addEventListener('change',    teLoadPonderings);
     $('te-sched-refresh').addEventListener('click',  teReloadScheduleView);
+    $('te-sched-search')?.addEventListener('input',  teRenderScheduleList);
     $('te-sched-hours').addEventListener('change',   teLoadSchedule);
     $('te-sched-add').addEventListener('click',      () => teToggleScheduleForm(true));
     $('te-sched-form-cancel').addEventListener('click', () => teToggleScheduleForm(false));
@@ -4267,6 +4834,7 @@ function init() {
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-mem-search')?.addEventListener('input', keRenderMemories);
   $('ke-cov-refresh')?.addEventListener('click', keLoadCoverage);
   $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
   $('ke-cov-next')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, 1);  keRenderCalendar(); } });
@@ -4469,8 +5037,128 @@ function init() {
   // ── Touch gesture: swipe down on modal header to dismiss ─────
   initModalSwipeDismiss();
 
+  // ── Overwhelm-reduction primitives (docs/ui-ux-guidelines.md) ─
+  initScrollableTabs();
+  initHintDisclosure();
+  initMsIcons();
+  initSidebarNav();
+
   // ── Focus input ──────────────────────────────────────────────
   $('user-input').focus();
+}
+
+// ── Scrollable tab bars ─────────────────────────────────────────
+// Every .ke-tabs row can hold more tabs than fit its width (the
+// Knowledge editor has 9+, and modals are user-resizable), so each bar
+// scrolls horizontally inside a wrapper that paints edge fades + a
+// chevron while more tabs exist in that direction (UX rule 2 in
+// docs/ui-ux-guidelines.md: nothing hides offscreen without a cue).
+// The active tab is auto-scrolled into view on every tab switch.
+function initScrollableTabs() {
+  const wrap = (bar) => {
+    if (bar.closest('.ke-tabs-wrap')) return;
+    const w = document.createElement('div');
+    w.className = 'ke-tabs-wrap';
+    bar.parentNode.insertBefore(w, bar);
+    w.appendChild(bar);
+    const more = document.createElement('span');
+    more.className = 'ke-tabs-more';
+    more.setAttribute('aria-hidden', 'true');
+    more.textContent = '›';
+    w.appendChild(more);
+    const update = () => {
+      const canLeft  = bar.scrollLeft > 2;
+      const canRight = bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 2;
+      w.classList.toggle('fade-left', canLeft);
+      w.classList.toggle('fade-right', canRight);
+    };
+    bar.addEventListener('scroll', update, { passive: true });
+    new ResizeObserver(update).observe(bar);
+    // Vertical wheel scrolls the bar horizontally — desktop mice have no
+    // horizontal wheel, and a clipped bar they can't reach is the bug
+    // this component exists to fix.
+    bar.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && bar.scrollWidth > bar.clientWidth) {
+        bar.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+    }, { passive: false });
+    update();
+  };
+  document.querySelectorAll('.ke-tabs').forEach(wrap);
+  // Tab switches (any pane, any modal) re-scroll the active tab into view.
+  // Registered once even though initScrollableTabs re-runs for dynamically
+  // added bars.
+  if (!initScrollableTabs._clickBound) {
+    initScrollableTabs._clickBound = true;
+    document.addEventListener('click', (e) => {
+      const tab = e.target.closest('.ke-tab');
+      if (tab) tab.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    });
+  }
+}
+
+// ── Hint disclosure ─────────────────────────────────────────────
+// Long explanation text is the sidebar's biggest source of visual
+// overwhelm. Every .field-hint over the length threshold collapses
+// behind a small "ⓘ what's this?" toggle — statically present hints AND
+// ones re-rendered by pane code, via a MutationObserver, so the ~130
+// render sites don't each need touching. Short hints stay visible
+// (a one-liner is information, not clutter); .hint-keep opts out
+// entirely (safety-relevant text stays readable at all times).
+const HINT_COLLAPSE_MIN_CHARS = 90;
+function enhanceHint(el) {
+  if (el.dataset.hintEnhanced || el.classList.contains('hint-keep')) return;
+  if (el.style.display === 'none') return;                // status hints shown later
+  const text = (el.textContent || '').trim();
+  if (text.length < HINT_COLLAPSE_MIN_CHARS) return;      // short = leave visible
+  if (el.closest('.hint-toggle')) return;
+  el.dataset.hintEnhanced = '1';
+  const id = 'hint-' + Math.random().toString(36).slice(2, 8);
+  el.id = el.id || id;
+  el.classList.add('hint-collapsed');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'hint-toggle';
+  btn.setAttribute('aria-expanded', 'false');
+  btn.setAttribute('aria-controls', el.id);
+  btn.innerHTML = '<span class="hint-chev" aria-hidden="true">▸</span> what’s this?';
+  btn.addEventListener('click', () => {
+    const open = el.classList.toggle('hint-open');
+    el.classList.toggle('hint-collapsed', !open);
+    btn.setAttribute('aria-expanded', String(open));
+  });
+  el.parentNode.insertBefore(btn, el);
+}
+function initHintDisclosure() {
+  document.querySelectorAll('.field-hint').forEach(enhanceHint);
+  const mo = new MutationObserver((muts) => {
+    for (const m of muts) {
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.classList?.contains('field-hint')) enhanceHint(n);
+        n.querySelectorAll?.('.field-hint').forEach(enhanceHint);
+        if (n.classList?.contains('ke-tabs')) initScrollableTabs();
+        if (n.dataset?.msIcon) applyMsIcon(n);
+        n.querySelectorAll?.('[data-ms-icon]').forEach(applyMsIcon);
+      }
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+}
+
+// ── Material Symbols rendering ──────────────────────────────────
+// Declarative: any element carrying data-ms-icon gets the inline SVG
+// from icons.js (vendored paths — fully offline). Static markup is
+// swept at init; dynamically rendered panes ride the same observer as
+// the hint disclosure above.
+function applyMsIcon(el) {
+  if (el.dataset.msDone) return;
+  el.dataset.msDone = '1';
+  el.innerHTML = msIcon(el.dataset.msIcon, { size: el.dataset.msSize || '1.1em' });
+}
+function initMsIcons() {
+  document.querySelectorAll('[data-ms-icon]').forEach(applyMsIcon);
 }
 
 // ── Mobile viewport: keyboard inset + scroll preservation ──────
@@ -4502,6 +5190,20 @@ function initMobileViewport() {
   } else {
     root.style.setProperty('--kb-inset', '0px');
   }
+
+  // When the soft keyboard opens over a modal or the map popover, nudge
+  // the focused control into the middle of the (now shorter) scrollable
+  // area once the viewport settles — browsers don't reliably do this
+  // for inputs inside nested scroll containers (the reported "typing
+  // under the keyboard" bug).
+  document.addEventListener('focusin', (e) => {
+    if (window.innerWidth > 767) return;
+    const scrollable = e.target.closest?.('.modal-body, .ke-graph-popover, .sidebar');
+    if (!scrollable) return;
+    setTimeout(() => {
+      try { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* older engines */ }
+    }, 250);
+  });
 
   // Keep the conversation anchored as the composer grows / shrinks.
   const scroller = $('messages-scroller');
@@ -5788,7 +6490,8 @@ async function refreshTomesList() {
         <div class="lorebook-entry-actions">
           <button class="btn-ghost tome-open-btn" data-id="${esc(tome.id)}" title="View entries">Open</button>
           <button class="btn-ghost tome-toggle-btn" data-id="${esc(tome.id)}" title="${tome.enabled ? 'Disable tome' : 'Enable tome'}">${tome.enabled ? 'Enabled' : 'Disabled'}</button>
-          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome">✕</button>
+          <button class="btn-ghost tome-grad-btn" data-id="${esc(tome.id)}" title="${tome.graduationExempt ? 'Graduation skips this tome. Click to allow it again.' : 'Tome Graduation may move durable facts out of this tome. Click to protect it.'}">${tome.graduationExempt ? '🛡 Protected' : 'Graduatable'}</button>
+          <button class="btn-ghost lore-delete-btn" data-id="${esc(tome.id)}" title="Delete tome" aria-label="Delete tome">${msIcon('delete')}</button>
         </div>
       </div>
       ${tome.description ? `<div class="lorebook-entry-content">${esc(tome.description)}</div>` : ''}
@@ -5796,8 +6499,24 @@ async function refreshTomesList() {
     `;
     div.querySelector('.tome-open-btn').addEventListener('click', () => openTomeEntriesModal(tome.id));
     div.querySelector('.tome-toggle-btn').addEventListener('click', () => toggleTomeEnabled(tome.id));
+    div.querySelector('.tome-grad-btn').addEventListener('click', () => toggleTomeGraduation(tome.id));
     div.querySelector('.lore-delete-btn').addEventListener('click', () => deleteTome(tome.id));
     container.appendChild(div);
+  }
+}
+
+async function toggleTomeGraduation(tomeId) {
+  const tome = state.tomeRegistry.find(t => t.id === tomeId);
+  if (!tome) return;
+  try {
+    await fetch(`/api/tomes/${tomeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graduationExempt: !tome.graduationExempt }),
+    });
+    await refreshTomesList();
+  } catch (err) {
+    console.error('toggle tome graduation failed', err);
   }
 }
 
@@ -6002,6 +6721,13 @@ async function buildDiagnosticReport() {
   catch { add('timezone',    '?'); }
 
   section('Proto-Familiar');
+  // The running server version — the first thing to check when a fix "isn't
+  // working": an install that can't self-update is often simply on old code.
+  try {
+    const vr = await fetch('/api/version', { cache: 'no-store' });
+    const vd = vr.ok ? await vr.json() : null;
+    add('app version',       vd?.version ?? '(endpoint present but no version)');
+  } catch { add('app version', '(unreachable / old build without /api/version)'); }
   add('url',                 location.href);
   add('provider',            state.provider ?? '?');
   add('model',               state.model ?? '?');
@@ -6294,6 +7020,7 @@ async function keReadServerError(res) {
 }
 
 // ── Memories tab ────────────────────────────────────────────────────────
+let _keMemCache = [];   // last-fetched memories; the search filters this, no refetch
 async function keLoadMemories() {
   const list = $('ke-mem-list');
   list.innerHTML = '<p class="logs-loading">Loading…</p>';
@@ -6302,26 +7029,45 @@ async function keLoadMemories() {
     const res = await fetch('/api/entity/memories' + (granularity ? `?granularity=${encodeURIComponent(granularity)}` : ''));
     if (!res.ok) throw new Error(await keReadServerError(res));
     const data = await res.json();
-    const memories = data.memories ?? [];
-    if (!memories.length) { list.innerHTML = '<p class="logs-empty">No memories found.</p>'; return; }
-    list.innerHTML = '';
-    for (const m of memories) {
-      const row = document.createElement('div');
-      row.className = 'ke-row';
-      const audienceBadge = (m.audience && m.audience !== 'ward-private')
-        ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
-      const cwBadge = m.care_weight
-        ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
-      // A me/ward register memory is a standing truth, not a passing moment — badge it.
-      const registerBadge = (m.register === 'me' || m.register === 'ward')
-        ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
-      row.innerHTML = `
-        <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
-        <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
-      row.addEventListener('click', () => keOpenMemory(m));
-      list.appendChild(row);
-    }
+    _keMemCache = data.memories ?? [];
+    keRenderMemories();
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
+}
+
+// Render the cached memories through the live search filter — a memory
+// archive grows for years, so the list ships with search from the start
+// (docs/ui-ux-guidelines.md rule 4). Matches preview text, date, id,
+// granularity, register, and audience tag.
+function keRenderMemories() {
+  const list = $('ke-mem-list');
+  const countEl = $('ke-mem-count');
+  const q = ($('ke-mem-search')?.value ?? '').trim().toLowerCase();
+  const memories = _keMemCache.filter(m => !q ||
+    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''}`
+      .toLowerCase().includes(q));
+  if (countEl) {
+    countEl.textContent = !_keMemCache.length ? ''
+      : q ? `${memories.length} of ${_keMemCache.length}` : `${_keMemCache.length}`;
+  }
+  if (!_keMemCache.length) { list.innerHTML = '<p class="logs-empty">No memories found.</p>'; return; }
+  if (!memories.length) { list.innerHTML = `<p class="logs-empty">Nothing matches “${esc(q)}”.</p>`; return; }
+  list.innerHTML = '';
+  for (const m of memories) {
+    const row = document.createElement('div');
+    row.className = 'ke-row';
+    const audienceBadge = (m.audience && m.audience !== 'ward-private')
+      ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
+    const cwBadge = m.care_weight
+      ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
+    // A me/ward register memory is a standing truth, not a passing moment — badge it.
+    const registerBadge = (m.register === 'me' || m.register === 'ward')
+      ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
+    row.innerHTML = `
+      <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
+      <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
+    row.addEventListener('click', () => keOpenMemory(m));
+    list.appendChild(row);
+  }
 }
 
 // Audience <option> list shared by the memory + graph-node editors: "just us"
@@ -6999,8 +7745,8 @@ function keGraphEdgeRowHTML(ownerId, e, sg) {
   const w          = typeof e.weight === 'number' ? e.weight.toFixed(2) : '0.50';
   return `<div class="ke-edge-row" data-edge-id="${esc(e.id)}">
     <span class="ke-edge-text">${dir} ${esc(t)} <span class="ke-edge-weight-display">[${esc(w)}]</span> ${dir} <strong>${esc(otherLabel)}</strong></span>
-    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit">✎</button>
-    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete">✕</button>
+    <button class="btn-ghost ke-edge-edit-btn"            type="button" title="Edit" aria-label="Edit link">${msIcon('edit')}</button>
+    <button class="btn-ghost ke-danger ke-edge-del-btn"   type="button" title="Delete" aria-label="Delete link">${msIcon('delete')}</button>
   </div>`;
 }
 
@@ -7151,6 +7897,11 @@ async function keGraphCreateNewNode() {
 let _kePopoverNodeId = null;
 let _kePopoverDragged = false;
 
+// On phones the node-edit popover is a fixed bottom sheet (CSS
+// .ke-graph-popover-sheet) — coordinate positioning next to the tapped
+// node is meaningless on a 390px screen and ran offscreen (reported).
+function popoverAsSheet() { return window.innerWidth <= 767; }
+
 function keGraphClosePopover() {
   const pop = $('ke-graph-popover');
   if (pop) pop.classList.add('hidden');
@@ -7164,6 +7915,7 @@ function keGraphInitPopoverDrag(pop) {
   const head = pop.querySelector('.ke-graph-popover-head');
   if (!head) return;
   head.addEventListener('mousedown', e => {
+    if (popoverAsSheet()) return;    // sheets don't drag
     // Don't start a drag from the ✕ button.
     if (e.target.closest('.ke-graph-popover-close')) return;
     e.preventDefault();
@@ -7193,6 +7945,12 @@ function keGraphInitPopoverDrag(pop) {
 }
 
 function keGraphPositionPopover(pop, clientX, clientY) {
+  if (popoverAsSheet()) {
+    pop.classList.add('ke-graph-popover-sheet');
+    pop.style.left = ''; pop.style.top = '';
+    return;
+  }
+  pop.classList.remove('ke-graph-popover-sheet');
   const map = $('ke-graph-map');
   const r   = map.getBoundingClientRect();
   pop.style.left = `${(clientX - r.left) + 14}px`;
@@ -8020,37 +8778,48 @@ function teEscapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// ── Local <-> UTC conversion helpers for the temporal editor ────────
+// ── Time helpers for the temporal editor ───────────────────────────
 //
-// All Unruh storage is ISO-8601 UTC. The browser UI takes / shows
-// times in the user's local timezone. These helpers bridge the two
-// so a phase set to "10pm" really fires at 10pm by the user's clock,
-// not at 22:00 UTC.
+// Unruh's time model is LOCAL-NAIVE (0.7.84): every stored timestamp is
+// the ward's wall clock with no offset, and the browser IS the ward's
+// clock. So the UI sends plain local-naive strings and does NO timezone
+// math — a phase set to "10pm" is stored as T22:00:00 and fires at 10pm.
+// (These helpers used to convert to UTC with a Z suffix; that only
+// worked because a server-side seam converted it straight back, and it
+// silently broke whenever the ward zone wasn't configured. Naive parse
+// in `new Date(...)` is LOCAL per spec, so display needs no conversion
+// either — and legacy offset-bearing rows still render correctly.)
 
-// "HH:MM" in user's LOCAL time, today's local date → ISO UTC string.
-function teLocalTimeTodayToIsoUtc(hhmm) {
+// "HH:MM" on today's local date → local-naive "YYYY-MM-DDTHH:MM:00".
+function teLocalTimeToday(hhmm) {
   if (!/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
   const [hh, mm] = hhmm.split(':').map(Number);
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   const now = new Date();
-  const local = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
-  return local.toISOString();
+  const pad = n => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(hh)}:${pad(mm)}:00`;
 }
 
-// <input type="datetime-local"> value ("YYYY-MM-DDTHH:MM"), which the
-// browser hands back as user's LOCAL wall-clock time with no offset →
-// ISO UTC string. Returns null on empty/invalid input.
-function teDatetimeLocalToIsoUtc(value) {
+// Date object → local-naive "YYYY-MM-DDTHH:MM:SS" on the browser's clock.
+// Used for query-window bounds so they compare against Unruh's local-naive
+// storage without an offset shift (a Z-suffixed bound reads hours off).
+function teNaiveFromDate(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// <input type="datetime-local"> value ("YYYY-MM-DDTHH:MM") — already the
+// ward's local wall clock with no offset → local-naive with seconds.
+// Returns null on empty/invalid input.
+function teDatetimeLocalToNaive(value) {
   if (!value || typeof value !== 'string') return null;
-  // new Date("YYYY-MM-DDTHH:MM") parses as LOCAL time per spec.
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  if (Number.isNaN(new Date(value).getTime())) return null;
+  return value.length === 16 ? `${value}:00` : value;
 }
 
-// ISO UTC → local "HH:MM" for display in the routine list.
-function teIsoUtcToLocalHhMm(iso) {
+// Stored timestamp → local "HH:MM" for display in the routine list.
+function teIsoToLocalHhMm(iso) {
   if (!iso) return '?';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '?';
@@ -8059,9 +8828,9 @@ function teIsoUtcToLocalHhMm(iso) {
   return `${hh}:${mm}`;
 }
 
-// ISO UTC → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local input
-// from an existing schedule node.
-function teIsoUtcToDatetimeLocal(iso) {
+// Stored timestamp → "YYYY-MM-DDTHH:MM" for pre-filling a datetime-local
+// input from an existing schedule node.
+function teIsoToDatetimeLocal(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
@@ -8069,10 +8838,10 @@ function teIsoUtcToDatetimeLocal(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// ISO UTC → friendly local datetime string for list rows ("today 22:00",
+// Stored timestamp → friendly local datetime string for list rows ("today 22:00",
 // "tomorrow 09:30", "Mon 10:00", "May 30 14:00"). Keeps the timezone
 // implicit (the user's own) — no offset noise.
-function teIsoUtcToLocalFriendly(iso) {
+function teIsoToLocalFriendly(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -8363,32 +9132,57 @@ async function teDeletePondering(uid) {
 
 // ── Schedule tab (M9b) ────────────────────────────────────────────
 
+let _teSchedCache = [];   // last-fetched window nodes; search filters this, no refetch
 async function teLoadSchedule() {
   const list = $('te-sched-list');
   if (!list) return;
   list.innerHTML = '<p class="logs-empty">Loading…</p>';
   const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
   const now   = new Date();
-  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();   // half-window behind
-  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  const from  = teNaiveFromDate(new Date(now.getTime() - hours * 30 * 60_000));   // half-window behind
+  const to    = teNaiveFromDate(new Date(now.getTime() + hours * 30 * 60_000));
   try {
     const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     if (data.ok === false) throw new Error(data.error || 'unruh unavailable');
-    const nodes = (data.nodes || [])
+    _teSchedCache = (data.nodes || [])
       .filter(n => n.type !== 'phase')             // Routine tab handles phases
       .sort((a, b) => (a.when || '').localeCompare(b.when || ''));
-    if (!nodes.length) {
-      list.innerHTML = '<p class="logs-empty">Nothing scheduled in this window. Use "+ Add" above to create an event or task.</p>';
-      return;
-    }
+    teRenderScheduleList();
+  } catch (err) {
+    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+  }
+}
+
+// Render the cached window through the live search filter (matches
+// label, type, id, and resolution — docs/ui-ux-guidelines.md rule 4).
+function teRenderScheduleList() {
+  const list = $('te-sched-list');
+  if (!list) return;
+  const countEl = $('te-sched-count');
+  const q = ($('te-sched-search')?.value ?? '').trim().toLowerCase();
+  const nodes = _teSchedCache.filter(n => !q ||
+    `${n.label ?? ''} ${n.type ?? ''} ${n.id ?? ''} ${n.resolution ?? ''}`.toLowerCase().includes(q));
+  if (countEl) {
+    countEl.textContent = !_teSchedCache.length ? ''
+      : q ? `${nodes.length} of ${_teSchedCache.length}` : `${_teSchedCache.length}`;
+  }
+  if (!_teSchedCache.length) {
+    list.innerHTML = '<p class="logs-empty">Nothing scheduled in this window. Use "+ Add" above to create an event or task.</p>';
+    return;
+  }
+  if (!nodes.length) {
+    list.innerHTML = `<p class="logs-empty">Nothing matches “${teEscapeHtml(q)}” in this window.</p>`;
+    return;
+  }
+  try {
     list.innerHTML = nodes.map(n => {
       const id    = teEscapeHtml(n.id);
       const label = teEscapeHtml(n.label);
       const type  = teEscapeHtml(n.type);
-      const when  = n.when ? `<span style="font-size: 0.85em; opacity: 0.8">${teEscapeHtml(teIsoUtcToLocalFriendly(n.when))}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
-      const end   = n.end  ? `<span style="font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(teIsoUtcToLocalFriendly(n.end))}</span>` : '';
+      const when  = n.when ? `<span style="font-size: 0.85em; opacity: 0.8">${teEscapeHtml(teIsoToLocalFriendly(n.when))}</span>` : '<span style="opacity: 0.5; font-size: 0.85em">open</span>';
+      const end   = n.end  ? `<span style="font-size: 0.85em; opacity: 0.7"> → ${teEscapeHtml(teIsoToLocalFriendly(n.end))}</span>` : '';
       const resolution = n.resolution
         ? `<span style="font-size: 0.85em; opacity: 0.7; padding: 1px 6px; border: 1px solid var(--border-subtle, #2a2a2a); border-radius: 3px">${teEscapeHtml(n.resolution)}</span>`
         : '';
@@ -8420,7 +9214,7 @@ async function teLoadSchedule() {
           <strong style="flex: 1">${label}${recurringTag}</strong>
           ${resolution}
           ${resolveBtns}
-          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)">🗑</button>
+          <button class="btn-ghost te-sched-delete" data-id="${id}" style="font-size: 0.8em; padding: 2px 8px" title="Permanently delete (cascades to edges)" aria-label="Permanently delete schedule item">${msIcon('delete')}</button>
         </div>
         <div style="margin-top: 2px">${when}${end}</div>
       </div>`;
@@ -8436,7 +9230,7 @@ async function teLoadSchedule() {
       btn.addEventListener('click', () => teDeleteSchedule(btn.dataset.id));
     });
   } catch (err) {
-    list.innerHTML = `<p class="logs-empty">Failed to load: ${teEscapeHtml(err.message)}</p>`;
+    list.innerHTML = `<p class="logs-empty">Failed to render: ${teEscapeHtml(err.message)}</p>`;
   }
 }
 
@@ -8452,11 +9246,29 @@ async function teResolveSchedule(id, resolution, occurrenceDate = null) {
     const body = occurrenceDate
       ? { occurrence_date: occurrenceDate, resolution }
       : { resolution };
-    const r = await fetch(url, {
+    let r = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body),
     }).then(r => r.json());
+    // Recurring anchor resolved without a specific date: the server
+    // refuses to silently end the whole series. Ask which was meant —
+    // one occurrence is the usual case (use that occurrence's own
+    // button); confirming here means ending every future occurrence.
+    if (r && r.ok === false && r.code === 'recurring_needs_scope') {
+      const name = r.label ? `"${r.label}"` : 'This item';
+      const endSeries = confirm(
+        `${name} repeats. Marking it ${resolution} here ends the ENTIRE series — every future occurrence.\n\n` +
+        `To ${resolution} just one date instead, use that occurrence's own button in the list.\n\n` +
+        `End the whole series now?`
+      );
+      if (!endSeries) return;
+      r = await fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ resolution, series: true }),
+      }).then(r => r.json());
+    }
     if (!r.ok) throw new Error(r.error || 'resolve failed');
     teReloadScheduleView();
   } catch (err) {
@@ -8563,7 +9375,7 @@ function teScheduleMapInstance() {
     },
     tooltipNodeHTML: n => {
       const time = n.when
-        ? teIsoUtcToLocalFriendly(n.when) + (n.end ? ' → ' + teIsoUtcToLocalFriendly(n.end) : '')
+        ? teIsoToLocalFriendly(n.when) + (n.end ? ' → ' + teIsoToLocalFriendly(n.end) : '')
         : 'no time set';
       return `<div class="ke-graph-tooltip-title">${teEscapeHtml(n.label ?? n.id)}</div>
         <div class="ke-graph-tooltip-sub">${teEscapeHtml(n.type ?? 'task')}${n.resolution ? ' · ' + teEscapeHtml(n.resolution) : ''}</div>
@@ -8590,8 +9402,8 @@ async function teLoadScheduleMap() {
   status.classList.remove('hidden');
   const hours = Math.max(1, parseInt($('te-sched-hours')?.value, 10) || 48);
   const now   = new Date();
-  const from  = new Date(now.getTime() - hours * 30 * 60_000).toISOString();
-  const to    = new Date(now.getTime() + hours * 30 * 60_000).toISOString();
+  const from  = teNaiveFromDate(new Date(now.getTime() - hours * 30 * 60_000));
+  const to    = teNaiveFromDate(new Date(now.getTime() + hours * 30 * 60_000));
   try {
     const r = await fetch(`/api/temporal/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=500`);
     if (gen !== _teSchedMapGen) return;
@@ -8631,6 +9443,12 @@ function teSchedClosePopover() {
 }
 
 function teSchedPositionPopover(pop, clientX, clientY) {
+  if (popoverAsSheet()) {
+    pop.classList.add('ke-graph-popover-sheet');
+    pop.style.left = ''; pop.style.top = '';
+    return;
+  }
+  pop.classList.remove('ke-graph-popover-sheet');
   const r = $('te-sched-map').getBoundingClientRect();
   pop.style.left = `${(clientX - r.left) + 14}px`;
   pop.style.top  = `${(clientY - r.top)  + 14}px`;
@@ -8677,13 +9495,13 @@ function teSchedOpenPopover(node, clientX, clientY) {
     const tag = tBits.length ? ` <span class="te-edge-tag">[${teEscapeHtml(tBits.join(' · '))}]</span>` : '';
     return `<div class="ke-edge-row" data-edge-id="${teEscapeHtml(e.id)}">
       <span class="ke-edge-text">${arrow} ${teEscapeHtml(e.type)} ${arrow} <strong>${teEscapeHtml(other?.label ?? otherId)}</strong>${tag}</span>
-      <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link">✕</button>
+      <button class="btn-ghost ke-danger te-edge-del" type="button" title="Remove link" aria-label="Remove link">${msIcon('close')}</button>
     </div>`;
   }).join('');
   const kindOptions   = TE_EDGE_KINDS.map(k => `<option value="${k}">${k}</option>`).join('');
   const targetOptions = others.map(n => `<option value="${teEscapeHtml(n.id)}">${teEscapeHtml(n.label ?? n.id)}</option>`).join('');
   const time = node.when
-    ? teIsoUtcToLocalFriendly(node.when) + (node.end ? ' → ' + teIsoUtcToLocalFriendly(node.end) : '')
+    ? teIsoToLocalFriendly(node.when) + (node.end ? ' → ' + teIsoToLocalFriendly(node.end) : '')
     : 'no time set';
 
   pop.innerHTML = `
@@ -8813,8 +9631,8 @@ async function teLoadCalendar() {
   const gridStart = teCalendarGridStart(year, month);
   const gridEnd = new Date(gridStart);
   gridEnd.setDate(gridEnd.getDate() + 6 * 7); // 6 weeks
-  const fromIso = gridStart.toISOString();
-  const toIso   = new Date(gridEnd.getTime() - 1).toISOString();
+  const fromIso = teNaiveFromDate(gridStart);
+  const toIso   = teNaiveFromDate(new Date(gridEnd.getTime() - 1));
 
   let nodes = [];
   try {
@@ -8862,7 +9680,7 @@ async function teLoadCalendar() {
       const cls = [`te-cal-event`, `type-${teEscapeHtml(ev.type || 'event')}`];
       if (ev.__occurrence_of) cls.push('recurring');
       if (ev.resolution)      cls.push('resolved');
-      const time = ev.when ? teEscapeHtml(teIsoUtcToLocalHhMm(ev.when)) : '';
+      const time = ev.when ? teEscapeHtml(teIsoToLocalHhMm(ev.when)) : '';
       return `<div class="${cls.join(' ')}" title="${teEscapeHtml(ev.label || '')}${time ? ' · ' + time : ''}">${time ? `${time} ` : ''}${teEscapeHtml(ev.label || '')}</div>`;
     }).join('');
     const more = events.length > 3 ? `<div class="te-cal-more">+${events.length - 3} more</div>` : '';
@@ -8897,7 +9715,7 @@ function teOpenCalendarCreate(dateKey) {
   teSetScheduleView('list');
   teToggleScheduleForm(true);
   // Pre-fill the datetime-local input with the chosen day at 9am
-  // local. teDatetimeLocalToIsoUtc handles the conversion when the
+  // local. teDatetimeLocalToNaive handles the conversion when the
   // user saves.
   const whenInput = $('te-sched-when');
   if (whenInput && dateKey) {
@@ -8962,8 +9780,8 @@ async function teSaveScheduleNode() {
   // right wall-clock no matter where the server's TZ is.
   const whenLocal = $('te-sched-when').value;
   const endLocal  = $('te-sched-end').value;
-  const when = teDatetimeLocalToIsoUtc(whenLocal);
-  const end  = teDatetimeLocalToIsoUtc(endLocal);
+  const when = teDatetimeLocalToNaive(whenLocal);
+  const end  = teDatetimeLocalToNaive(endLocal);
   if (!label) { alert('Label is required.'); return; }
   // Reminders MUST have a fire time — the Python layer would reject
   // the create otherwise, but failing fast here is friendlier.
@@ -9063,8 +9881,8 @@ async function teLoadRoutine() {
       // Show time-of-day in the USER'S local TZ (storage is UTC).
       // Slicing the raw ISO string would print UTC hours and lie to
       // anyone not in UTC.
-      const whenT   = teEscapeHtml(teIsoUtcToLocalHhMm(p.when));
-      const endT    = teEscapeHtml(teIsoUtcToLocalHhMm(p.end));
+      const whenT   = teEscapeHtml(teIsoToLocalHhMm(p.when));
+      const endT    = teEscapeHtml(teIsoToLocalHhMm(p.end));
       return `
       <div data-phase-id="${id}" style="padding: 10px 12px; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
         <div style="display: flex; gap: 8px; align-items: baseline">
@@ -9132,15 +9950,15 @@ async function teEditPhase(id, phase) {
   // Display existing times in user's LOCAL TZ so what they see is what
   // they're editing (the storage is UTC, but the user thinks in their
   // own clock).
-  const whenT = prompt('Start time (HH:MM, 24-hour, your local time):', teIsoUtcToLocalHhMm(phase.when));
+  const whenT = prompt('Start time (HH:MM, 24-hour, your local time):', teIsoToLocalHhMm(phase.when));
   if (whenT == null) return;
-  const endT  = prompt('End time (HH:MM, 24-hour, your local time):',   teIsoUtcToLocalHhMm(phase.end));
+  const endT  = prompt('End time (HH:MM, 24-hour, your local time):',   teIsoToLocalHhMm(phase.end));
   if (endT  == null) return;
   const texture = prompt('Texture (short description of what the Familiar is like in this phase):', phase.payload?.texture ?? '');
   if (texture == null) return;
 
-  const when = teLocalTimeTodayToIsoUtc(whenT.trim());
-  const end  = teLocalTimeTodayToIsoUtc(endT.trim());
+  const when = teLocalTimeToday(whenT.trim());
+  const end  = teLocalTimeToday(endT.trim());
   if (!when || !end) { alert('Times must be HH:MM (e.g. 09:30) — entered in your local time.'); return; }
 
   try {
@@ -9186,8 +10004,8 @@ async function teSavePhase() {
   // compares only the HH:MM:SS portion when deciding which phase is
   // active right now. We still stamp today's date for ordering /
   // audit purposes.
-  const when = teLocalTimeTodayToIsoUtc(startT);
-  const end  = teLocalTimeTodayToIsoUtc(endT);
+  const when = teLocalTimeToday(startT);
+  const end  = teLocalTimeToday(endT);
   if (!when || !end) { alert('Could not parse the times. Use HH:MM (the picker should fill this).'); return; }
   try {
     const r = await fetch('/api/temporal/schedule', {
@@ -9479,16 +10297,6 @@ async function acknowledgeOutboxItem(id) {
   }
 }
 
-// HTML-escape for the few remaining places that still build innerHTML
-// from outbox-adjacent strings (trusted-contacts list rendering, etc).
-// Kept with its historical name so the call sites below don't have to
-// move when we eventually phase the banner UI out completely.
-function escapeOutboxText(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 function startOutboxPolling() {
   if (_outboxPollTimer) return;
   fetchOutbox();
@@ -9506,15 +10314,15 @@ function renderTrustedContacts() {
     return;
   }
   list.innerHTML = contacts.map((c, i) => {
-    const name    = escapeOutboxText(c.name ?? '?');
-    const channel = escapeOutboxText(c.channel ?? '?');
+    const name    = teEscapeHtml(c.name ?? '?');
+    const channel = teEscapeHtml(c.channel ?? '?');
     const hint    = c.webhook ? `${c.webhook.slice(0, 32)}…` : '(no webhook)';
     return `
       <div style="display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border-subtle, #2a2a2a)">
         <strong style="flex: 1">${name}</strong>
         <span style="font-size: 0.85em; opacity: 0.7">${channel}</span>
-        <code style="font-size: 0.75em; opacity: 0.55">${escapeOutboxText(hint)}</code>
-        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact">🗑</button>
+        <code style="font-size: 0.75em; opacity: 0.55">${teEscapeHtml(hint)}</code>
+        <button class="btn-ghost contact-remove" data-idx="${i}" style="font-size: 0.8em; padding: 2px 8px" title="Remove this contact" aria-label="Remove this contact">${msIcon('delete')}</button>
       </div>`;
   }).join('');
   list.querySelectorAll('.contact-remove').forEach(btn => {
@@ -9552,7 +10360,7 @@ function removeTrustedContact(idx) {
 
 const VL_STRANGERS = 'strangers';
 const VL_EMERGENCY = 'emergency-contacts';
-const VL_TABS      = ['people', 'categories', 'locations'];
+const VL_TABS      = ['people', 'categories', 'locations', 'contacts'];
 
 const VL_REL_FAM_LABELS = {
   unaware:             'Unaware of the Familiar',
@@ -9593,6 +10401,7 @@ function vlSwitchTab(tab) {
   if (tab === 'people')     vlLoadPeople();
   if (tab === 'categories') vlLoadCategories();
   if (tab === 'locations')  vlLoadLocations();
+  if (tab === 'contacts')   renderTrustedContacts();
 }
 
 async function vlFetch(force = false) {
@@ -9667,7 +10476,7 @@ function vlRenderKnocks(knocks) {
           <select class="vl-knock-target" aria-label="Register as">${options}</select>
           <button class="btn-secondary vl-knock-bind" type="button">Register</button>
           <button class="btn-ghost vl-knock-me" type="button" title="This is my own Discord account">This is me</button>
-          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)">×</button>
+          <button class="btn-ghost vl-knock-x" type="button" title="Dismiss (they can knock again — nothing is blocked)" aria-label="Dismiss knock">${msIcon('close')}</button>
         </div>
       </div>`;
     }).join('');
@@ -9742,12 +10551,35 @@ async function vlClaimKnockAsWard(k) {
 
 function vlRenderPeopleGrid(reg) {
   const grid = $('vl-people-grid');
+  const countEl = $('vl-people-count');
   if (!reg.villagers.length) {
     grid.innerHTML = '<p class="vl-chip-dim" style="grid-column:1/-1;padding:12px">No villagers yet. Click "+ Add person".</p>';
+    if (countEl) countEl.textContent = '';
     return;
   }
   const catMap = new Map(reg.categories.map(c => [c.id, c]));
-  grid.innerHTML = reg.villagers.map(v => {
+  // Search + stable name sort: a village grows past what a wall of cards
+  // can carry (docs/ui-ux-guidelines.md rule 4 — lists must scale).
+  // Matches name, platform aliases, and category names.
+  const q = ($('vl-people-search')?.value ?? '').trim().toLowerCase();
+  const villagers = reg.villagers
+    .filter(v => {
+      if (!q) return true;
+      if ((v.name ?? '').toLowerCase().includes(q)) return true;
+      if ((v.aliases ?? []).some(a => `${a.platform ?? ''} ${a.id ?? ''} ${a.name ?? ''}`.toLowerCase().includes(q))) return true;
+      return (v.categoryIds ?? []).some(cid => (catMap.get(cid)?.name ?? '').toLowerCase().includes(q));
+    })
+    .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+  if (countEl) {
+    countEl.textContent = q
+      ? `${villagers.length} of ${reg.villagers.length}`
+      : `${reg.villagers.length} ${reg.villagers.length === 1 ? 'person' : 'people'}`;
+  }
+  if (!villagers.length) {
+    grid.innerHTML = `<p class="vl-chip-dim" style="grid-column:1/-1;padding:12px">No one matches “${esc(q)}”.</p>`;
+    return;
+  }
+  grid.innerHTML = villagers.map(v => {
     const chips = (v.categoryIds ?? []).map(cid => {
       const c = catMap.get(cid);
       return c ? `<span class="vl-chip${c.builtin ? ' vl-chip-green' : ''}">${esc(c.name)}</span>` : '';
@@ -9940,7 +10772,7 @@ function vlAliasRowHtml(i, platform, id, handle) {
     <input type="text" placeholder="platform" value="${esc(platform)}" class="vl-alias-plat">
     <input type="text" placeholder="stable id" value="${esc(id)}" class="vl-alias-id">
     <input type="text" placeholder="handle" value="${esc(handle)}" class="vl-alias-hdl">
-    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" style="padding:2px 7px">×</button>
+    <button class="btn-ghost vl-alias-rm" type="button" title="Remove" aria-label="Remove alias" style="padding:2px 7px">${msIcon('close')}</button>
   </div>`;
 }
 
@@ -10061,13 +10893,66 @@ function vlStartNewCategory() {
   vlOpenDetail('vl-cat-detail');
 }
 
+// Every permission a category can carry, with plain-language options —
+// visible up front instead of a free-text key/value guessing game
+// (docs/ui-ux-guidelines.md). Values mirror audience.js GRANT_LADDERS
+// (false is "off" and omitted on save; absent ≡ denied) plus the
+// identity-gate booleans from MARKER_GRANT_MAP.
+const VL_KNOWN_GRANTS = [
+  { key: 'schedule', label: 'Schedule', options: [
+      { v: false,          t: 'Off — nothing about their time' },
+      { v: 'coarse',       t: 'Free/busy only — day-parts, never what fills them' },
+      { v: 'full',         t: 'Full — can also see what’s on' },
+    ],
+    hint: 'Lets people here coordinate time. "Free/busy" shares whether a morning/afternoon/evening is open; "Full" also names the items.' },
+  { key: 'memories', label: 'Memories', options: [
+      { v: false,    t: 'Off — no memory recall about them' },
+      { v: 'shared', t: 'Shared only — things said in rooms they were in' },
+      { v: true,     t: 'Broad — non-private memories may surface' },
+    ],
+    hint: 'How much remembered context the Familiar may draw on when talking with them. Ward-private memories never surface regardless.' },
+  { key: 'contacts', label: 'Contacts', options: [
+      { v: false,          t: 'Off — contact info stays hidden' },
+      { v: 'care-visible', t: 'Care-visible — reachable in a crisis' },
+      { v: true,           t: 'Full — normal contact visibility' },
+    ],
+    hint: '"Care-visible" means the Familiar may reach them when checking on you seriously matters, without day-to-day visibility.' },
+  { key: 'identitySensitive', label: 'Sensitive identity notes', bool: true,
+    hint: 'Identity sections marked sensitive become visible to this category.' },
+  { key: 'health', label: 'Health context', bool: true,
+    hint: 'Identity sections about health become visible to this category.' },
+  { key: 'location', label: 'Location context', bool: true,
+    hint: 'Identity sections about where you are/live become visible to this category.' },
+];
+
+function vlKnownGrantRow(def, current, disabled) {
+  const d = disabled ? ' disabled' : '';
+  const cur = current === undefined || current === null ? false : current;
+  const opts = def.bool
+    ? [{ v: false, t: 'Off' }, { v: true, t: 'On' }]
+    : def.options;
+  const optHtml = opts.map(o =>
+    `<option value="${esc(String(o.v))}"${String(o.v) === String(cur) ? ' selected' : ''}>${esc(o.t)}</option>`).join('');
+  return `<div class="vl-grant-known" data-grant-key="${esc(def.key)}">
+    <div class="vl-grant-known-label">${esc(def.label)}</div>
+    <select class="vl-grant-known-val"${d} aria-label="${esc(def.label)} permission">${optHtml}</select>
+    <p class="field-hint">${esc(def.hint)}</p>
+  </div>`;
+}
+
 function vlRenderCatDetail(cat) {
   const detail = $('vl-cat-detail');
   const isNew    = !cat;
   const isLocked = cat?.id === VL_STRANGERS;
   const isBuiltin = cat?.builtin && !isNew;
 
-  const grantRows = Object.entries(cat?.grants ?? {}).map(([k, v], i) =>
+  const grants = cat?.grants ?? {};
+  const knownKeys = new Set(VL_KNOWN_GRANTS.map(g => g.key));
+  const knownRows = VL_KNOWN_GRANTS.map(def => vlKnownGrantRow(def, grants[def.key], isLocked)).join('');
+  // Unknown/custom keys (forward-compat, hand-added) keep the free-form
+  // editor — but tucked behind an "Advanced" disclosure, not up front.
+  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k));
+  const customRows = customEntries.map(([k, v], i) =>
     vlGrantRowHtml(i, k, typeof v === 'string' ? 'str' : 'bool', typeof v === 'string' ? v : (v ? 'true' : 'false'), isLocked)
   ).join('');
 
@@ -10079,10 +10964,13 @@ function vlRenderCatDetail(cat) {
       <input type="text" id="vl-c-name" value="${isNew ? '' : esc(cat.name)}" placeholder="e.g. Close Friends" style="width:100%"${isBuiltin ? ' disabled' : ''}>
     </div>
     <div>
-      <div class="vl-field-label">Grants <span class="field-hint">(what this category lets someone know or see)</span></div>
-      <div class="field-hint" style="margin-bottom:4px">Known grant: <code>schedule</code> (string) = <code>coarse</code> or <code>full</code> — lets people in this category coordinate ${esc(state.userName || 'my human')}'s time. <em>coarse</em> shares only free/busy day-parts (never what fills them); <em>full</em> also names what's on. Add a person to this category to permit them.</div>
-      <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${grantRows}</div>
-      ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Grant</button></div>` : ''}
+      <div class="vl-field-label">What people in this category may know or see</div>
+      <div id="vl-c-grants-known">${knownRows}</div>
+      <details class="vl-grants-advanced"${customEntries.length ? ' open' : ''}>
+        <summary>Advanced: custom grants</summary>
+        <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${customRows}</div>
+        ${!isLocked ? `<div class="vl-add-row"><button class="btn-ghost" id="vl-c-grant-add" type="button" style="font-size:0.8rem">+ Custom grant</button></div>` : ''}
+      </details>
     </div>
     ${!isLocked ? `
     <div class="vl-actions">
@@ -10094,7 +10982,7 @@ function vlRenderCatDetail(cat) {
   `;
 
   if (!isLocked) {
-    $('vl-c-grant-add').addEventListener('click', () => {
+    $('vl-c-grant-add')?.addEventListener('click', () => {
       const container = $('vl-c-grants');
       const i = container.querySelectorAll('.vl-grant-row').length;
       const div = document.createElement('div');
@@ -10121,12 +11009,22 @@ function vlGrantRowHtml(i, key, type, val, disabled) {
       <option value="str"${type === 'str' ? ' selected' : ''}>string</option>
     </select>
     <input type="text" placeholder="true / value" value="${esc(val)}" class="vl-grant-val"${d}>
-    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" style="padding:2px 7px">×</button>` : '<span></span>'}
+    ${!disabled ? `<button class="btn-ghost vl-grant-rm" type="button" title="Remove" aria-label="Remove grant" style="padding:2px 7px">${msIcon('close')}</button>` : '<span></span>'}
   </div>`;
 }
 
 function vlReadGrants() {
   const grants = {};
+  // Structured known grants: "false" selections are omitted entirely —
+  // absent ≡ denied in audience.js, and an explicit false would read as
+  // a grant row in every list view.
+  document.querySelectorAll('#vl-c-grants-known .vl-grant-known').forEach(row => {
+    const key = row.dataset.grantKey;
+    const raw = row.querySelector('.vl-grant-known-val')?.value;
+    if (!key || raw === undefined || raw === 'false') return;
+    grants[key] = raw === 'true' ? true : raw;
+  });
+  // Advanced free-form rows (custom keys) keep the old shape.
   document.querySelectorAll('#vl-c-grants .vl-grant-row').forEach(row => {
     const key = row.querySelector('.vl-grant-key')?.value.trim();
     const type = row.querySelector('.vl-grant-type')?.value;
@@ -10231,7 +11129,7 @@ function vlRenderLocationKnocks(knocks) {
         </div>
         <div class="vl-knock-actions">
           <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
-          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)">×</button>
+          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">${msIcon('close')}</button>
         </div>
       </div>`;
     }).join('');

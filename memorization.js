@@ -110,8 +110,8 @@ const MAX_ATTEMPTS    = 5;
 const BACKOFF_MS      = [5_000, 30_000, 120_000, 600_000, 1_800_000]; // 5s, 30s, 2m, 10m, 30m
 const TICK_MS         = 5_000;
 const ACK_TTL_MS      = 24 * 60 * 60 * 1000; // prune acknowledged terminal jobs after a day
-export const SESSION_MEMORIES_TOME_NAME = 'Session Memories';
-export const SESSION_MEMORIES_TOME_DESC = 'Auto-generated entries from past conversations. Created on first session memorization.';
+const SESSION_MEMORIES_TOME_NAME = 'Session Memories';
+const SESSION_MEMORIES_TOME_DESC = 'Auto-generated entries from past conversations. Created on first session memorization.';
 // Aliases kept for the module-local code below.
 const TOME_NAME        = SESSION_MEMORIES_TOME_NAME;
 const TOME_DESCRIPTION = SESSION_MEMORIES_TOME_DESC;
@@ -171,12 +171,43 @@ import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { segmentByDay, dayDelta } from './day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
+import { contentWithStandins, getAssetMeta } from './media.js';
+
+// Vision (§7): fold image stand-ins into a slice's transcript so an image-
+// carrying message is memorable — an image-only message (empty text, one
+// attachment) becomes eligible because the stand-in gives it text, and every
+// image message gains legibility. Any undescribed asset gets one look first
+// (describeAsset via dynamic import — keeps vision.js out of the static
+// import cycle memorization↔cerebellum; memorization is background, so a
+// describe call here is fine and means the memory reads the image, not "not
+// yet described"). Returns the messages unchanged when none carry attachments.
+async function foldImageStandins(messages, settings) {
+  const list = Array.isArray(messages) ? messages : [];
+  if (!list.some(m => Array.isArray(m?.attachments) && m.attachments.length)) return list;
+  let describeAsset = null;
+  try { ({ describeAsset } = await import('./vision.js')); } catch { /* describe optional */ }
+  const out = [];
+  for (const m of list) {
+    if (!Array.isArray(m?.attachments) || !m.attachments.length) { out.push(m); continue; }
+    if (describeAsset) {
+      for (const a of m.attachments) {
+        try {
+          const meta = await getAssetMeta(a?.id);
+          if (meta && meta.description === null) await describeAsset(a.id, settings);
+        } catch { /* best effort */ }
+      }
+    }
+    out.push({ ...m, content: await contentWithStandins(m) });
+  }
+  return out;
+}
 
 export function findOrCreateSessionMemoriesTome() {
   return findOrCreateTomeByName(TOMES_DIR, TOME_NAME, {
     name:        TOME_NAME,
     description: TOME_DESCRIPTION,
     enabled:     true,
+    graduationExempt: true,   // runtime store — graduation never eats it
     entries:     {},
   });
 }
@@ -439,7 +470,7 @@ async function callProvider({ provider, apiKey, model, prompt }) {
  * produced four whole entries and one cut-off one keeps the four. Shared by
  * both the topic and fact parsers so the counter lives in exactly one place.
  */
-export function salvageArrayField(raw, key) {
+function salvageArrayField(raw, key) {
   const text = String(raw);
   const keyAt = text.indexOf(`"${key}"`);
   if (keyAt < 0) return [];
@@ -579,7 +610,7 @@ export function parseRelations(raw, finishReason = null) {
 
 // ── Consent-pending helpers ───────────────────────────────────────
 
-async function readConsentPending() {
+export async function readConsentPending() {
   try {
     const raw = await fsp.readFile(CONSENT_PENDING_FILE, 'utf8');
     const data = JSON.parse(raw);
@@ -643,9 +674,11 @@ async function processJob(job) {
     } catch { /* no legend this job */ }
   }
 
+  // Fold image stand-ins into the slice so image-carrying turns are memorable.
+  const visionMessages = await foldImageStandins(job.messages, readSettingsSync());
   const prompt = promptFn === buildPrompt
-    ? buildPrompt(job.messages, job.topicLabel ?? null, wardName, scheduleLegend)
-    : promptFn(job.messages, job.topicLabel ?? null, wardName);
+    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend)
+    : promptFn(visionMessages, job.topicLabel ?? null, wardName);
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });

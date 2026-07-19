@@ -39,7 +39,7 @@ import {
   addScheduleEdge, updateScheduleEdge, deleteScheduleEdge, listPhases, listRecurring,
   exportSchedule,
   getHandoff, markHandoffConsumed,
-  getDueReminders, getRemindersHealth, markEventAlerted,
+  getDueReminders, getRemindersHealth, markEventAlerted, stampElapsedEvents,
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
@@ -50,8 +50,8 @@ import { scoreMessage } from './crisis-signals.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
-import { startNoticingLoop } from './noticing-loop.js';
-import { buildNoticingPrompt, AGING_INTENT_MS } from './noticing.js';
+import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown } from './noticing-loop.js';
+import { buildNoticingPrompt, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './noticing.js';
 import { getContactBaseline, weekdayClass } from './contact-baselines.js';
 import { getWaitStreak, recordWait, recordProactive } from './wait-streak.js';
 import {
@@ -73,7 +73,7 @@ import { startRemindersLoop, stopRemindersLoop } from './reminders-loop.js';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
   selectDueWeatherAlerts, formatWeatherAlert,
-  clampLeadMinutes, ALERT_GRACE_MS, MAX_LEAD_MS,
+  clampLeadMinutes, clampElapsedStampHours, ALERT_GRACE_MS, MAX_LEAD_MS,
 } from './event-alerts.js';
 import { startGcalSyncLoop, stopGcalSyncLoop, resetGcalSyncCadence } from './gcal-sync-loop.js';
 import { recordSyncOutcome, readSyncStatus } from './gcal-sync-status.js';
@@ -113,7 +113,7 @@ import {
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
-  composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS,
+  composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS, toolRoundsPerTurn,
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
   deriveMemorySlug, parseMemoryKey,
@@ -147,6 +147,8 @@ import {
   initVillageSync, bootSync as villageBootSync,
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
+import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
+import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
@@ -247,6 +249,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS } from './providers.js';
+import { listProviderModels } from './provider-models.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -465,6 +468,83 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     }
   }
 
+  // ── Vision materialization (vision build spec §3) ─────────────────
+  // The ONE seam where media references become provider content-parts. Applied
+  // once to the fully-assembled message array, so it rides every tool round
+  // automatically (the loop carries these messages forward). A request with no
+  // attachments is returned identical (materializeAttachments short-circuits),
+  // so a non-image turn is byte-for-byte what it is today. Degrades to
+  // stand-ins on a non-vision connection or over-budget; never throws into the
+  // chat path. Ward turns don't gate (audienceVisible null); a gated turn
+  // fail-closes on the room's visible-audience set.
+  const preVisionMessages = enrichedMessages;   // kept for the mid-turn stand-in retry
+  const visionGate = audienceTag && audienceTag !== 'ward-private' ? audienceVisible : null;
+  let imagesLiveThisTurn = 0;
+  let visionFellBack = false;
+  let visionCapableTurn = false;   // does THIS turn's connection see? (gates view_image)
+  // Re-materialize forcing stand-ins — the mid-turn hard fallback when a
+  // provider rejects the image modality despite an optimistic 'capable' verdict.
+  const fallbackToStandins = async () => {
+    try {
+      const s = readSettingsSync() || {};
+      const conn = findConnection(s, { provider, model }) || { provider, model };
+      const mat = await materializeAttachments(preVisionMessages, {
+        connection: { ...conn, visionCapable: 'no' }, settings: s, visibleAudiences: visionGate,
+      });
+      return mat.messages;
+    } catch { return preVisionMessages; }
+  };
+  if (!visionDisabled()) {
+    try {
+      const settingsForVision = readSettingsSync() || {};
+      const connForVision = findConnection(settingsForVision, { provider, model })
+        || { provider, model, visionCapable: 'auto' };
+      visionCapableTurn = await resolveVisionCapable(connForVision, settingsForVision);
+      // If the chat model can't see live (text-only, or a z.ai-coding describe-
+      // only connection), describe the shared images NOW — synchronously —
+      // so their stand-ins carry a real description on THIS turn instead of
+      // "not yet described". Bounded + timed, so it never hangs the turn.
+      if (!visionCapableTurn) {
+        const d = await ensureDescribed(enrichedMessages, settingsForVision);
+        if (d.described) console.log(`[vision] described ${d.described} image(s) before the turn`);
+      }
+      const mat = await materializeAttachments(enrichedMessages, {
+        connection: connForVision,
+        settings: settingsForVision,
+        visibleAudiences: visionGate,
+      });
+      enrichedMessages = mat.messages;
+      imagesLiveThisTurn = mat.imagesLive;
+      if (mat.imagesLive || mat.imagesStoodIn) {
+        console.log(`[vision] materialized ${mat.imagesLive} live + ${mat.imagesStoodIn} stand-in image(s)`);
+      }
+      // Anything still undescribed (over the sync cap, or a live-connection's
+      // over-budget older image) gets a background look so NEXT time it carries
+      // real words. Never blocks this turn.
+      for (const id of (mat.stoodInUndescribed ?? [])) {
+        describeAsset(id, settingsForVision)
+          .then(r => { if (r?.ok !== false) console.log(`[vision] described ${id.slice(0, 8)} in the background`); })
+          .catch(() => {});
+      }
+      // Image→threat scoring (§15.1, ward-signed): the ward's OWN images shared
+      // THIS turn can raise the tier (full weight, raise-only). Fire-and-forget
+      // — the description is scored via the ward's own detector; never blocks
+      // the turn, never lowers the tier, never fires for a villager's image.
+      // Only on the ward's own live turn (enrichMode 'full').
+      if (enrichMode === 'full' && audienceTag === 'ward-private' && visionThreatScoringOn()) {
+        const turnImageIds = (Array.isArray(lastUser?.attachments) ? lastUser.attachments : [])
+          .map(a => a?.id).filter(Boolean);
+        for (const id of turnImageIds) {
+          scoreImageDescriptionThreat(id, settingsForVision)
+            .then(r => { if (r?.raised) console.log(`[vision] image ${String(id).slice(0, 8)} raised threat +${r.level} [${(r.signals ?? []).map(s => s.id).join(',')}]`); })
+            .catch(err => console.error('[vision] image threat scoring failed:', err?.message ?? err));
+        }
+      }
+    } catch (err) {
+      console.error('[vision] materialization failed (passing messages through):', err?.message ?? err);
+    }
+  }
+
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
@@ -491,10 +571,10 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         sticky: stickyModulesFor(sessionInfo?.sessionId),
       });
       surfacing = { selection, used: new Set() };
-      activeTools = composeActiveTools(customTools, sset, { modules: selection });
+      activeTools = composeActiveTools(customTools, sset, { modules: selection, visionCapable: visionCapableTurn });
       console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised`);
     } else {
-      activeTools = composeActiveTools(customTools);
+      activeTools = composeActiveTools(customTools, readSettingsSync(), { visionCapable: visionCapableTurn });
     }
     if (activeTools.length > 0) {
       payload.tools = activeTools;
@@ -528,7 +608,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const recomposeTools = () => {
       if (!surfacing || !toolCtx._requestedModules?.size) return undefined;
       const union = new Set([...surfacing.selection, ...toolCtx._requestedModules]);
-      return composeActiveTools(customTools, readSettingsSync(), { modules: union });
+      return composeActiveTools(customTools, readSettingsSync(), { modules: union, visionCapable: visionCapableTurn });
     };
     const tickSurfacing = (toolNamesUsed = []) => {
       if (!surfacing) return;
@@ -584,15 +664,25 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // ── Non-streaming loop ─────────────────────────────────────────
     if (!stream) {
       try {
-        const { data, toolRounds } = await runToolCallLoop({
+        const runLoop = (baseMessages) => runToolCallLoop({
+          // Live ward conversation → the ward-configurable round budget
+          // (background loops keep the tight MAX_TOOL_ROUNDS default).
+          maxRounds: toolRoundsPerTurn(readSettingsSync()),
           getTools: recomposeTools,
-          callUpstream: async (msgs, roundTools) => {
+          callUpstream: async (msgs, roundTools, opts) => {
+            // forceText (round-cap closing round): strip tools entirely so the
+            // model must answer in text — a silent tool-hungry turn is worse
+            // than a bounded answer.
+            const { tools: _pt, tool_choice: _ptc, ...basePayload } = payload;
+            const body = opts?.forceText
+              ? { ...basePayload, messages: msgs, stream: false }
+              : { ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false };
             let r;
             try {
               r = await fetch(upstreamUrl, {
                 method:  'POST',
                 headers: authHeaders,
-                body:    JSON.stringify({ ...payload, messages: msgs, ...(roundTools ? { tools: roundTools } : {}), stream: false }),
+                body:    JSON.stringify(body),
                 signal:  ac.signal,
               });
             } catch (err) {
@@ -617,11 +707,35 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
               throw e;
             }
           },
-          baseMessages: enrichedMessages,
+          baseMessages,
           timeAnchor,
           toolCtx,
           signal: ac.signal,
         });
+        // Mid-turn hard fallback (§3.1): if the provider rejects the image
+        // modality despite an optimistic 'capable' verdict, retry ONCE with
+        // stand-ins and flip the capability cache — my human's turn still gets
+        // answered (degraded sight), never a dead turn.
+        let loopOutcome;
+        try {
+          loopOutcome = await runLoop(enrichedMessages);
+        } catch (err) {
+          if (!visionFellBack && imagesLiveThisTurn > 0 && isModalityError(err.status, err.body)) {
+            visionFellBack = true;
+            await cacheVisionCapability(provider, model, 'no');
+            console.warn(`[vision] ${provider}:${model} rejected image modality — retried with stand-ins; capability cached 'no'`);
+            loopOutcome = await runLoop(await fallbackToStandins());
+          } else { throw err; }
+        }
+        // The first successful live-image turn records capability (the "probe
+        // once" — the real turn is the probe, no synthetic image needed).
+        if (imagesLiveThisTurn > 0 && !visionFellBack) {
+          cacheVisionCapability(provider, model, 'yes').catch(() => {});
+        }
+        const { data, toolRounds, roundCapHit } = loopOutcome;
+        // Tell the client the round budget ran out mid-reach, so it can offer
+        // the ward a one-click "go on" (a fresh turn = a fresh budget).
+        if (roundCapHit) data._roundCapHit = true;
         tickSurfacing();
     req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
@@ -684,18 +798,29 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     // Stop wasting upstream tokens if the browser goes away mid-loop.
     const clientGone = () => res.writableEnded || res.destroyed;
 
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    // forceTextRound: set when the round cap was reached with tools still
+    // pending — ONE extra round runs with tools stripped so the turn ends in
+    // honest text instead of silence (mirrors runToolCallLoop's closing round).
+    let forceTextRound = false;
+    // Live ward conversation → the ward-configurable round budget.
+    const liveMaxRounds = toolRoundsPerTurn(readSettingsSync());
+    for (let round = 0; round <= liveMaxRounds + 1; round++) {
       if (clientGone() || ac.signal.aborted) break;
       const payloadMessages = timeAnchor
         ? [...currentMsgs, { role: 'system', content: timeAnchor }]
         : currentMsgs;
+
+      const { tools: _st, tool_choice: _stc, ...streamBase } = payload;
+      const roundBody = forceTextRound
+        ? { ...streamBase, messages: payloadMessages, stream: true }
+        : { ...payload, messages: payloadMessages, stream: true };
 
       let upstream;
       try {
         upstream = await fetch(upstreamUrl, {
           method:  'POST',
           headers: authHeaders,
-          body:    JSON.stringify({ ...payload, messages: payloadMessages, stream: true }),
+          body:    JSON.stringify(roundBody),
           signal:  ac.signal,
         });
       } catch (err) {
@@ -707,6 +832,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const upCt = upstream.headers.get('content-type') || '';
       if (!upstream.ok || upCt.includes('application/json')) {
         const text = await upstream.text();
+        // Mid-turn hard fallback (§3.1): a modality rejection before any SSE
+        // has streamed — rebuild this round's messages as stand-ins, flip the
+        // capability cache, and retry the same round with degraded sight
+        // instead of erroring my human's turn.
+        if (!headersSent && !visionFellBack && imagesLiveThisTurn > 0 && isModalityError(upstream.status, text)) {
+          visionFellBack = true;
+          await cacheVisionCapability(provider, model, 'no');
+          console.warn(`[vision] ${provider}:${model} rejected image modality — retrying stream with stand-ins; capability cached 'no'`);
+          currentMsgs = await fallbackToStandins();
+          round--;   // re-run this round with the stand-in messages
+          continue;
+        }
         if (!headersSent) {
           res.status(upstream.status).setHeader('Content-Type', 'application/json');
           return res.send(text);
@@ -770,7 +907,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       }
 
       const toolCalls = Object.values(toolCallsAcc);
-      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < MAX_TOOL_ROUNDS) {
+      if (finishReason === 'tool_calls' && toolCalls.length > 0 && round < liveMaxRounds && !forceTextRound) {
         const timestamp = new Date().toISOString();
         const results = await Promise.all(toolCalls.map(async tc => ({
           tool_call_id: tc.id,
@@ -791,7 +928,24 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           ...currentMsgs,
           { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
           ...results.map(r => ({ role: 'tool', tool_call_id: r.tool_call_id, content: r.content })),
+          // view_image (§10): place any images I asked to see again before my
+          // eyes on the next round (same drain helper as the non-streaming loop).
+          ...(await drainPendingImages(toolCtx)),
         ];
+        continue;
+      }
+
+      // Round-cap exhaustion with tools still pending: force ONE closing text
+      // round (tools stripped) so the turn ends in honest words instead of
+      // silence — and so the model is TOLD its last requested calls did not
+      // run, rather than half-remembering them as done.
+      if (finishReason === 'tool_calls' && toolCalls.length > 0 && !forceTextRound) {
+        forceTextRound = true;
+        currentMsgs = [
+          ...currentMsgs,
+          { role: 'system', content: "[My tool budget for this turn is spent — the calls I just requested did NOT run. I answer my human now with what I actually have, and I say plainly which checks or changes I didn't get to, rather than presenting them as done. If they tell me to go on, I get a fresh budget and continue.]" },
+        ];
+        console.log('[tools] round cap reached with tools still pending — forcing a closing text round (stream)');
         continue;
       }
 
@@ -800,7 +954,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     }
 
     req.off('close', onClientClose);
+    // The first successful live-image stream records capability (the "probe
+    // once" — the real turn is the probe).
+    if (imagesLiveThisTurn > 0 && !visionFellBack) {
+      cacheVisionCapability(provider, model, 'yes').catch(() => {});
+    }
     if (!res.writableEnded) {
+      // Round budget ran out mid-reach → the client offers a one-click "go on".
+      if (forceTextRound) res.write(`data: ${JSON.stringify({ _roundCapHit: true })}\n\n`);
       res.write('data: [DONE]\n\n');
       res.end();
     }
@@ -1346,6 +1507,92 @@ app.get('/api/discord-writes', async (_req, res) => {
   }
 });
 
+// ── Media (vision build spec §2) ──────────────────────────────────
+// Image bytes ride their OWN raw body parser (like /api/import-logs' json
+// override) so the global 4 MB JSON limit never sees base64 and image bytes
+// never touch JSON.parse. The browser downscales before upload (§4), so a
+// typical payload is well under 1 MB; the 12 MB limit is headroom.
+function visionDisabled() {
+  if (process.env.PROTO_FAMILIAR_VISION_DISABLED === '1') return true;
+  try { return readSettingsSync()?.visionEnabled === false; } catch { return false; }
+}
+
+// Image→threat scoring gate (§15.1, ward-signed). ON by default (the ward opted
+// in) whenever vision is on; its own hard off-switch so it can be silenced
+// without disabling sight. Follows the threat detector's own off-switch too —
+// if the ward silenced threat entirely, images don't reopen it.
+function visionThreatScoringOn() {
+  if (process.env.PROTO_FAMILIAR_VISION_THREAT_DISABLED === '1') return false;
+  if (process.env.PROTO_FAMILIAR_THREAT_DISABLED === '1') return false;
+  if (visionDisabled()) return false;
+  try { return readSettingsSync()?.visionThreatScoring !== false; } catch { return true; }
+}
+
+app.post('/api/media', express.raw({ type: 'image/*', limit: '12mb' }), async (req, res) => {
+  if (visionDisabled()) return res.status(403).json({ error: 'Vision is turned off right now.' });
+  const buffer = req.body;
+  if (!Buffer.isBuffer(buffer) || !buffer.length) {
+    return res.status(400).json({ error: 'No image bytes received (send raw image/* body).' });
+  }
+  const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
+  if (!IMAGE_MIME_EXT[mime]) {
+    return res.status(415).json({ error: `Unsupported image type "${mime || '(none)'}". Allowed: ${Object.keys(IMAGE_MIME_EXT).join(', ')}.` });
+  }
+  const q = req.query || {};
+  const meta = await saveAsset({
+    buffer,
+    mime,
+    label: typeof q.label === 'string' ? q.label : '',
+    audienceTag: 'ward-private',   // web-chat uploads are always the ward's own
+    origin: { surface: 'web', sessionId: typeof q.sessionId === 'string' ? q.sessionId : null, speaker: null },
+  });
+  if (meta?.ok === false) return res.status(400).json({ error: meta.error });
+  res.json(meta);
+});
+
+// Stream bytes for a UI thumbnail (accepts slug or sha). Behind the same
+// loopback/Tailscale gate as every endpoint.
+app.get('/api/media/:id', async (req, res) => {
+  const got = await getAsset(req.params.id);
+  if (got?.ok === false) return res.status(404).json({ error: 'Image not found.' });
+  res.setHeader('Content-Type', got.meta.mime);
+  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable'); // content-addressed → safe forever
+  res.send(got.buffer);
+});
+
+// Ward-facing inventory + removal.
+app.get('/api/media', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 100));
+    res.json(await listAssets({ limit }));
+  } catch { res.json([]); }
+});
+
+app.delete('/api/media/:id', async (req, res) => {
+  const r = await deleteAsset(req.params.id);
+  if (r?.ok === false) return res.status(404).json(r);
+  res.json(r);
+});
+
+// Picture→node linking (§6.5): the ward tags an image to a graph node it
+// depicts (a photo of Milkyway → the Milkyway node). Ward-facing (behind the
+// loopback/Tailscale gate); the graph-node search endpoint above supplies the
+// node id. Graduates the description onto the node when both exist.
+app.post('/api/media/:id/link', async (req, res) => {
+  const { nodeId, label, kind } = req.body || {};
+  const r = await addAssetLink(req.params.id, { nodeId, label, kind, by: 'ward' });
+  if (r?.ok === false) return res.status(400).json(r);
+  graduateImageDescriptionToNode(req.params.id, String(nodeId || '').trim())
+    .catch(err => console.error('[vision] node graduation failed:', err?.message ?? err));
+  res.json(r);
+});
+
+app.delete('/api/media/:id/link/:nodeId', async (req, res) => {
+  const r = await removeAssetLink(req.params.id, req.params.nodeId);
+  if (r?.ok === false) return res.status(400).json(r);
+  res.json(r);
+});
+
 // Health check
 app.get('/api/health',  (_req, res) => res.json({ ok: true, version: PKG_VERSION }));
 app.get('/api/version', (_req, res) => res.json({ version: PKG_VERSION }));
@@ -1379,6 +1626,19 @@ app.post('/api/update-apply', async (_req, res) => {
     if (r.ok) _updateStatus = { ..._updateStatus, updateAvailable: false, behind: 0, applied: true, appliedVersion: r.version, checkedAt: Date.now() };
     res.json(r);
   } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
+});
+
+// ── Provider model listing ──────────────────────────────────────
+// Backs the Connections modal's visible model browser: proxies the
+// provider's own GET /models so the ward can SEE what their key can
+// use instead of guessing model names (docs/ui-ux-guidelines.md).
+// POST (not GET) because the API key rides in the body, never a URL.
+app.post('/api/models', async (req, res) => {
+  const { provider, apiKey } = req.body ?? {};
+  if (!provider || typeof provider !== 'string') return badRequest(res, 'provider (string) is required');
+  if (!apiKey || typeof apiKey !== 'string') return badRequest(res, 'apiKey (string) is required');
+  try { res.json(await listProviderModels({ provider, apiKey })); }
+  catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
 });
 
 // ── Tome endpoints ──────────────────────────────────────────────
@@ -1449,9 +1709,9 @@ app.get('/api/tomes', async (_req, res) => {
       if (!isTomeFile(f)) continue;
       try {
         const raw = await fsp.readFile(path.join(TOMES_DIR, f), 'utf8');
-        const { id, name, description, enabled, entries } = JSON.parse(raw);
+        const { id, name, description, enabled, entries, graduationExempt } = JSON.parse(raw);
         if (!id) continue; // not a tome (no id) — skip rather than poison the registry
-        tomes.push({ id, name, description, enabled, entryCount: Object.keys(entries ?? {}).length });
+        tomes.push({ id, name, description, enabled, graduationExempt: graduationExempt === true, entryCount: Object.keys(entries ?? {}).length });
       } catch { /* skip corrupt */ }
     }
     tomes.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
@@ -1547,6 +1807,7 @@ app.patch('/api/tomes/:id', async (req, res) => {
       if (req.body.name !== undefined) tome.name = String(req.body.name).trim() || tome.name;
       if (req.body.description !== undefined) tome.description = String(req.body.description ?? '').trim();
       if (req.body.enabled !== undefined) tome.enabled = !!req.body.enabled;
+      if (req.body.graduationExempt !== undefined) tome.graduationExempt = !!req.body.graduationExempt;
     });
     res.json({ ok: true });
   } catch (err) {
@@ -2520,11 +2781,14 @@ app.put('/api/settings', async (req, res) => {
   // lock here makes the prior-vs-next diff consistent against the
   // file each PUT actually replaces.
   let priorCreds = { id: null, apiKey: '', provider: '', model: '' };
+  let priorNoticingEnabled;
   try {
     await withLock(SETTINGS_FILE, async () => {
       try {
         const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-        priorCreds = phylacteryCredsSnapshot(JSON.parse(raw));
+        const prior = JSON.parse(raw);
+        priorCreds = phylacteryCredsSnapshot(prior);
+        priorNoticingEnabled = prior?.noticingEnabled;
       } catch { /* no prior settings — first write */ }
       const tmp = SETTINGS_FILE + '.tmp';
       await fsp.writeFile(tmp, serialised, 'utf8');
@@ -2542,6 +2806,15 @@ app.put('/api/settings', async (req, res) => {
   if (!phylacteryCredsEqual(priorCreds, nextCreds)) {
     console.log('[server] Phylactery API-key designation changed — respawning');
     reconnectPhylactery().catch(err => console.error('[server] reconnectPhylactery failed:', err.message));
+  }
+
+  // Re-enabling noticing (or leaving it on through a settings save) clears
+  // the loop's self-set cooldown, so a ward who just flipped the toggle sees
+  // the Familiar look around within a tick instead of waiting out a stale
+  // "next check in 6h" from before the change. Cheap and safe: the loop's
+  // own gates (wake conditions, threat register) still decide what happens.
+  if (settings.noticingEnabled !== false && priorNoticingEnabled === false) {
+    resetNoticingCooldown();
   }
 
   return res.json({ ok: true });
@@ -2854,9 +3127,12 @@ app.patch('/api/temporal/schedule/:id', async (req, res) => {
 });
 
 app.post('/api/temporal/schedule/:id/resolve', async (req, res) => {
-  const { resolution } = req.body ?? {};
+  const { resolution, series } = req.body ?? {};
   if (!resolution || typeof resolution !== 'string') return badRequest(res, 'resolution (string) is required');
-  try { res.json(await resolveScheduleNode({ id: req.params.id, resolution })); }
+  // series:true is the deliberate opt-in to end a whole recurring series.
+  // Without it, resolving a recurring anchor returns {ok:false,
+  // code:'recurring_needs_scope'} so the UI can ask which the ward meant.
+  try { res.json(await resolveScheduleNode({ id: req.params.id, resolution, series: series === true })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3444,6 +3720,10 @@ function startAutonomousPondering() {
       return shouldReflectNow();
     },
     getReflectionInput: async () => {
+      const teNaive = (d) => {
+        const p2 = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+      };
       const outcomes = await getNewOutcomesSinceLastReflection();
       const id = await getIdentityAll().catch(() => ({}));
       const file = (id?.custom ?? []).find(f => f.filename === 'what_lapses_cost.md');
@@ -3472,7 +3752,17 @@ function startAutonomousPondering() {
       let consequenceEdges = [];
       let cooccurrences = [];
       try {
-        const win = await getScheduleWindow({});
+        // Hindsight window (causal-chain fix, piece 3): the default window
+        // reaches only hours back, so a chain whose event passed days ago
+        // vanished before reflection could grade it. Reflection reads a
+        // week back (+2 days forward) — same single call, wider range.
+        const wardNow = wardLocalNowISO(readSettingsSync()?.wardTimeZone);
+        const base = new Date(wardNow).getTime();
+        const isoAt = (ms) => teNaive(new Date(ms));
+        const win = await getScheduleWindow({
+          from_ts: isoAt(base - 7 * 24 * 3600_000),
+          to_ts:   isoAt(base + 2 * 24 * 3600_000),
+        });
         // Window nodes + linked endpoints (undated states, out-of-window
         // anchors) — without `linked` the grader saw unresolvable endpoint
         // ids and the calibration loop starved on its own projections.
@@ -3481,6 +3771,7 @@ function startAutonomousPondering() {
           ...(Array.isArray(win?.linked) ? win.linked : []),
         ];
         const labelById = new Map(nodes.map(n => [n.id, n.label]));
+        const whenById  = new Map(nodes.map(n => [n.id, n.when ?? n.when_ts ?? null]));
         const allEdges = Array.isArray(win?.edges) ? win.edges : [];
         consequenceEdges = allEdges
           .filter(ed => ed?.payload && (ed.payload.valence || ed.payload.condition) && ed.payload.observed !== true)
@@ -3489,6 +3780,7 @@ function startAutonomousPondering() {
             kind: ed.kind, valence: ed.payload.valence, condition: ed.payload.condition,
             horizon_hours: ed.payload.horizon_hours, severity: ed.payload.severity,
             certainty: ed.payload.certainty, note: ed.payload.note,
+            from_when: whenById.get(ed.src) ?? null,
           }));
         // co_occurs_with noticings, grouped by unordered endpoint pair so
         // reflection sees how often a pairing has come up (the signal for
@@ -3718,7 +4010,10 @@ function startRemindersScheduler() {
       return Array.isArray(r.reminders) ? r.reminders : [];
     },
     fireReminder: async ({ id }) => {
-      const r = await resolveScheduleNode({ id, resolution: 'fired' });
+      // series:true keeps the historical whole-node fire semantics — the
+      // recurring-series guard on resolve() is for the ambiguous LLM/UI
+      // cancel, not for the scheduler marking a due reminder fired.
+      const r = await resolveScheduleNode({ id, resolution: 'fired', series: true });
       if (!r.ok) throw new Error(r.error || 'resolve failed');
     },
     // Event lead-time alerts (the timeblindness surface): unresolved
@@ -3766,10 +4061,35 @@ function startRemindersScheduler() {
       // (ride existing requests, gate in code). Fire-and-forget — never
       // blocks the reminders path.
       refreshWeatherIfDue().catch(err => console.error('[weather]', err?.message ?? err));
+      // Elapsed stamping rides here too, self-gated to an hourly cadence.
+      stampElapsedIfDue().catch(err => console.error('[elapsed-stamp]', err?.message ?? err));
     },
     onError: (err) => console.error('[reminders]', err?.message ?? err),
   });
   console.log('[reminders] Scheduler ENABLED (incl. event lead-time alerts; PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1 to silence those). Hard-disable with PROTO_FAMILIAR_REMINDERS_DISABLED=1.');
+}
+
+// ── Elapsed stamping (causal-chain fix piece 4, ward-signed) ──────
+// A slow pure-code pass: one-off events past their end by more than the
+// ward-configurable threshold (elapsedStampHours, default 24h) with no
+// resolution get payload.elapsed_at stamped in Unruh. An observation,
+// not a resolution — nothing is hidden or auto-resolved; the stamp only
+// lets derivations tell "past, never followed up" from "still coming".
+// Rides the reminders tick, gated in code to an hourly cadence; the
+// stamping itself is idempotent Unruh-side. Hard off-switch:
+// PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1.
+const ELAPSED_STAMP_INTERVAL_MS = 60 * 60_000;
+let _lastElapsedStampMs = 0;
+async function stampElapsedIfDue() {
+  if (process.env.PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED === '1') return;
+  const nowMs = Date.now();
+  if (nowMs - _lastElapsedStampMs < ELAPSED_STAMP_INTERVAL_MS) return;
+  _lastElapsedStampMs = nowMs;
+  const hours = clampElapsedStampHours(readSettingsSync()?.elapsedStampHours);
+  const r = await stampElapsedEvents({ hours });
+  if (r?.ok && r.count > 0) {
+    console.log(`[elapsed-stamp] marked ${r.count} past unresolved event(s) as elapsed (>${hours}h past): ${r.stamped?.map(s => s.label ?? s.id).join(', ')}`);
+  }
 }
 
 // ── Weather refresh (Weather sense, W-A) ─────────────────────────
@@ -4294,6 +4614,9 @@ async function gatherNoticingWakeInputs() {
   const contactGapMs = lastAct?.ms ? Math.max(0, nowMs - lastAct.ms) : null;
   const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
   const edges = Array.isArray(win?.edges) ? win.edges : [];
+  // Edge endpoints outside the time window (undated states, PAST events that
+  // carry consequence edges — a two-week-old therapy appointment rides here).
+  const linked = Array.isArray(win?.linked) ? win.linked : [];
   // Read-only readiness detection — fresh flaggedAt so we NEVER consume the
   // stewardship loop's own cooldown state; noticing only *notices* the gap.
   const readiness = selectReadiness({ items: nodes, edges, nowMs, wardTimeZone: tz, leadHours, flaggedAt: {}, max: 2 });
@@ -4306,6 +4629,28 @@ async function gatherNoticingWakeInputs() {
   const agingTells = (Array.isArray(tells) ? tells : []).filter(t => t.kind === 'tell');
   const agingIntents = [...untriggered, ...agingTells].slice(0, 3);
 
+  // Aging floating tasks — my human's, no time set, unresolved, drifting past
+  // the aging threshold. Floating tasks ride in `nodes` regardless of the time
+  // window (get_window UNIONs them), so this catches the "28-day task nobody
+  // surfaced" case. Capped for legibility.
+  const agingTasks = nodes.filter(n =>
+    n?.type === 'task' && !n.when && !n.resolution
+    && n.created_at && (nowMs - Date.parse(n.created_at) > AGING_TASK_MS)
+  ).slice(0, 3);
+
+  // Overdue events — an appointment whose time has passed and I never recorded
+  // how it went. Recently-past ones are in `nodes`; older edge-bearing ones (the
+  // therapy 2 weeks ago) ride in `linked`. Scoping to what's reachable naturally
+  // limits this to events that MATTER (carry consequences), not every past speck.
+  const seenOverdue = new Set();
+  const overdueEvents = [...nodes, ...linked].filter(n => {
+    if (n?.type !== 'event' || n.resolution || !n.id || seenOverdue.has(n.id)) return false;
+    const t = Date.parse(n.end || n.when || '');
+    if (!Number.isFinite(t) || t >= nowMs - OVERDUE_EVENT_GRACE_MS) return false;
+    seenOverdue.add(n.id);
+    return true;
+  }).slice(0, 3);
+
   return {
     dueIntentions: Array.isArray(dueRes?.due) ? dueRes.due : [],
     // Live signals for the condition code-gate. contactGapMs is wired;
@@ -4316,6 +4661,8 @@ async function gatherNoticingWakeInputs() {
     contactGapMs,
     readiness,
     agingIntents,
+    agingTasks,
+    overdueEvents,
     weekdayClass: weekdayClass(nowMs, tz),
   };
 }
@@ -4489,9 +4836,11 @@ async function handleSignal(signal) {
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
   try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
+  try { await stopNoticingLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
   try { shutdownPhylactery(); } catch { /* already disconnected */ }
   try { shutdownUnruh(); } catch { /* already disconnected */ }
+  try { import('./zai-vision.js').then(m => m.shutdownZaiVision()).catch(() => {}); } catch { /* never spawned */ }
   // Give the close handshakes a tiny window, then exit.
   setTimeout(() => process.exit(0), 250).unref();
 }

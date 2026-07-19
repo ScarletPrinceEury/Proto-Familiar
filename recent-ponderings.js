@@ -133,29 +133,57 @@ export async function deletePondering({ uid, tomesDir = DEFAULT_TOMES_DIR }) {
 export function formatPonderingsForPrompt(entries) {
   if (!entries || entries.length === 0) return '';
 
-  const lines = [
-    'Things I have been quietly thinking about on my own, recently:',
-    '',
-  ];
-  // Render each pondering with relative-time framing — recomputed per
-  // turn so a thought from this morning reads as "this morning" right
-  // now and "yesterday morning" tomorrow.
+  // Only the MOST RECENT thought renders in full — it's the one most likely
+  // still live for me, and three full ponderings every turn was a lot of
+  // context for little payoff. The rest become a one-line index I can expand
+  // on demand with read_pondering(uid) — the same shape memory recall uses.
   const now = Date.now();
-  for (const e of entries) {
-    const rel = relativeTime(e.created_at, now);
-    lines.push(`— ${rel || e.created_at} · "${e.title}"`);
-    lines.push(e.content);
+  const [latest, ...rest] = entries;
+  const lines = ['Things I have been quietly thinking about on my own, recently:', ''];
+
+  const relLatest = relativeTime(latest.created_at, now);
+  lines.push(`— ${relLatest || latest.created_at} · "${latest.title}"`);
+  lines.push(latest.content);
+
+  if (rest.length) {
     lines.push('');
+    lines.push('Other recent thoughts, one line each — I pull any up in full with read_pondering(uid) when it fits, or when my human asks what I\'ve been thinking about:');
+    for (const e of rest) {
+      const rel = relativeTime(e.created_at, now);
+      lines.push(`  · ${rel || e.created_at} · "${e.title}"  [id: ${e.uid}]`);
+    }
   }
+
+  lines.push('');
   lines.push(
-    'These are my own real, private thoughts — written by me, in my own voice, ' +
-    'during quiet moments when no one was talking to me. I may reference them ' +
-    'naturally if they fit what my human is talking about ("I was actually thinking ' +
-    'about this last night…"). I never invent a thought I didn\'t actually have. ' +
-    'I never force a reference where it doesn\'t fit. If nothing here is relevant ' +
-    'to this conversation, I just let them sit — they don\'t need to be mentioned.'
+    'These are my own real thoughts, written by me in quiet moments. I mention one ' +
+    'if it fits what my human is saying ("I was chewing on this last night…") — never ' +
+    'forcing it, never inventing one. If none fit, I let them sit.'
   );
   return lines.join('\n');
+}
+
+/**
+ * Read one pondering's full text by uid — the expand path behind the index the
+ * prompt block shows. Returns { ok, uid, title, content, created_at, topic } or
+ * { ok:false, error }. Never throws in the happy path; degrades cleanly.
+ */
+export async function readPonderingByUid({ uid, tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  if (!uid || typeof uid !== 'string') return { ok: false, error: 'uid required' };
+  const targetFile = await findPonderingsTomeFile(tomesDir);
+  if (!targetFile) return { ok: false, error: 'no ponderings recorded yet' };
+  let tome;
+  try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+  catch { return { ok: false, error: 'ponderings tome unreadable' }; }
+  const e = tome?.entries?.[uid];
+  if (!e || !(e.content ?? '').trim()) return { ok: false, error: 'no pondering with that id' };
+  return {
+    ok: true, uid,
+    title:      e.comment ?? '',
+    content:    e.content,
+    created_at: e.created_at ?? null,
+    topic:      e.topic_pondered ?? null,
+  };
 }
 
 // ── Deferred intents (Pillar B of the autonomous-routing fix) ────────────

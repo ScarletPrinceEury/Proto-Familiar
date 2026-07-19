@@ -1,6 +1,6 @@
 ---
 title: Proactivity Over Caution
-topics: [decisions, safety]
+topics: [decisions, safety, armature]
 sources:
   - id: claude-md
     type: file

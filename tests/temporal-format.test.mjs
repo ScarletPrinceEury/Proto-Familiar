@@ -107,19 +107,32 @@ test('renders standing values without weights', () => {
   assert.doesNotMatch(out, /\[\d/);
 });
 
-test('renders live interests with weight to 2dp', () => {
+test('renders live interests as plain labels (no numeric weight), heaviest first', () => {
   const out = formatTemporalContext({
     interests: {
       standing: [],
       live: [
-        { label: 'owl feather aerodynamics', weight: 0.7432 },
         { label: 'biomimetic engineering', weight: 0.31 },
+        { label: 'owl feather aerodynamics', weight: 0.7432 },
       ],
     },
   });
-  assert.match(out, /Live interests \(by weight\):/);
-  assert.match(out, /owl feather aerodynamics \[0\.74\]/);
-  assert.match(out, /biomimetic engineering \[0\.31\]/);
+  assert.match(out, /Lately I keep being drawn to think about:/);
+  // Labels present, weights gone.
+  assert.match(out, /owl feather aerodynamics/);
+  assert.match(out, /biomimetic engineering/);
+  assert.equal(/\[0\.\d\d\]/.test(out), false);
+  // Sorted by weight desc regardless of input order.
+  assert.ok(out.indexOf('owl feather') < out.indexOf('biomimetic'));
+});
+
+test('live interests are capped so the surface stays light', () => {
+  const live = Array.from({ length: 12 }, (_, n) => ({ label: `topic-${n}`, weight: 1 - n * 0.05 }));
+  const out = formatTemporalContext({ interests: { standing: [], live } });
+  const shown = (out.match(/topic-\d+/g) || []).length;
+  assert.ok(shown <= 6, `expected at most 6 interests shown, got ${shown}`);
+  assert.match(out, /topic-0/);            // the heaviest is kept
+  assert.equal(out.includes('topic-11'), false); // the lightest is trimmed
 });
 
 test('falls back to id when label missing', () => {
@@ -216,15 +229,18 @@ test('no [schedule ids] legend when there are no schedule nodes', () => {
   assert.doesNotMatch(out, /\[schedule ids/);
 });
 
+// A live (future) time so consequence-link fixtures aren't retired as settled.
+const SOON_ISO = new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString();
+
 test('renders a Consequence links section with the consequence tag', () => {
   const out = formatTemporalContext({
     schedule: {
       phase: null,
       window: [
         { id: 'tk-1', type: 'task',  label: 'skip dinner' },
-        { id: 'st-1', type: 'state', label: 'crash', when: '2026-06-22T20:00:00Z' },
+        { id: 'st-1', type: 'state', label: 'crash' },            // undated state
         { id: 'tk-2', type: 'task',  label: 'prep' },
-        { id: 'ev-1', type: 'event', label: 'interview', when: '2026-06-23T10:00:00Z' },
+        { id: 'ev-1', type: 'event', label: 'interview', when: SOON_ISO },
       ],
       edges: [
         { id: 'e1', src: 'tk-1', dst: 'st-1', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse', horizon_hours: 4, severity: 'high', certainty: 'high' } },
@@ -238,21 +254,19 @@ test('renders a Consequence links section with the consequence tag', () => {
 });
 
 test('edges resolve endpoints from schedule.linked (the visibility regression)', () => {
-  // The rot case: the consequence state is NOT a window node (undated, or
-  // scrolled out) and the src is a recurring anchor stamped months ago —
-  // both arrive via `linked`. The edge must still render, and the linked
-  // endpoints must appear in the [schedule ids] legend so I can act on them.
+  // The rot case: the consequence state is NOT a window node (undated) and the
+  // src is a recurring anchor whose next occurrence is live — both via `linked`.
   const out = formatTemporalContext({
     schedule: {
       phase: null,
       window: [
-        { id: 'tk-9', type: 'task', label: 'today thing', when: '2026-07-07T15:00:00Z' },
+        { id: 'tk-9', type: 'task', label: 'today thing', when: SOON_ISO },
       ],
       edges: [
         { id: 'e1', src: 'dinner-x7', dst: 'crash-q2', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse' } },
       ],
       linked: [
-        { id: 'dinner-x7', type: 'event', label: 'dinner', when: '2026-01-02T18:00:00Z' },
+        { id: 'dinner-x7', type: 'event', label: 'dinner', when: SOON_ISO },
         { id: 'crash-q2',  type: 'state', label: 'crash' },
       ],
     },
@@ -266,10 +280,57 @@ test('co_occurs_with renders undirected with [noticed] when untagged', () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
       { id: 'a', type: 'task',  label: 'errands' },
-      { id: 'b', type: 'state', label: 'low stretch', when: '2026-06-22T20:00:00Z' },
+      { id: 'b', type: 'state', label: 'low stretch' },   // undated
     ], edges: [{ id: 'e', src: 'a', dst: 'b', kind: 'co_occurs_with' }] },
   });
   assert.match(out, /errands — co-occurs — low stretch \[noticed\]/);
+});
+
+test('settled consequence links (past anchor + its requires-chain) are retired', () => {
+  // A therapy appointment two weeks ago, its paperwork prerequisites, and the
+  // on-lapse cost state. All of it is history — none should render as live
+  // pressure, and the orphaned cost state should drop from the id legend.
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'therapy-x', type: 'event', label: 'Therapy 2nd session', when: twoWeeksAgo },
+        { id: 'email-x',   type: 'task',  label: 'Email the form' },   // floating prereq
+      ],
+      edges: [
+        { id: 'e1', src: 'therapy-x', dst: 'email-x', kind: 'requires' },
+        { id: 'e2', src: 'email-x', dst: 'discont-x', kind: 'causes', payload: { valence: 'harm', condition: 'on_lapse' } },
+      ],
+      linked: [{ id: 'discont-x', type: 'state', label: 'therapy discontinued' }],
+    },
+  });
+  // Every link touching the past therapy (directly or via the requires chain) is gone.
+  assert.equal(/therapy discontinued/.test(out), false);
+  assert.equal(/Email the form → causes/.test(out), false);
+  assert.equal(/requires → Email the form/.test(out), false);
+  // The orphaned cost state is dropped from the legend too.
+  assert.equal(out.includes('discont-x'), false);
+});
+
+test('a live link is kept even when a DIFFERENT link is settled', () => {
+  const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'old-ev', type: 'event', label: 'Old thing', when: twoWeeksAgo },
+        { id: 'live-ev', type: 'event', label: 'Live thing', when: SOON_ISO },
+        { id: 's1', type: 'state', label: 'good streak' },
+      ],
+      edges: [
+        { id: 'e1', src: 'old-ev', dst: 's1', kind: 'causes', payload: { condition: 'on_resolve' } },
+        { id: 'e2', src: 'live-ev', dst: 's1', kind: 'causes', payload: { condition: 'on_resolve', valence: 'help' } },
+      ],
+    },
+  });
+  assert.match(out, /Live thing → causes → good streak/);   // live link kept
+  assert.equal(/Old thing → causes/.test(out), false);      // settled link gone
 });
 
 test('renders a Needs today block from payload.needs, sorted with missed/open first', () => {
@@ -328,7 +389,7 @@ test('open tasks show how long they have floated (created_at age)', () => {
   assert.match(out, /file the housing form \(floating 12d — no time set\)/);
 });
 
-test('upcoming items grouped under their own header with type tag', () => {
+test('today\'s timed items grouped under "Still to come today" with type tag', () => {
   const t = new Date(); t.setHours(15, 0, 0, 0);
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
@@ -336,9 +397,20 @@ test('upcoming items grouped under their own header with type tag', () => {
       { type: 'task',  when: t.toISOString(), label: 'reply to Sam' },
     ]},
   });
-  assert.match(out, /Upcoming in this window:/);
+  assert.match(out, /Still to come today:/);
   assert.match(out, /\[event\] dentist/);
   assert.match(out, /\[task\] reply to Sam/);
+});
+
+test('future-day timed items go under "Coming days", not the today header', () => {
+  const soon = new Date(Date.now() + 3 * 24 * 3600 * 1000); soon.setHours(15, 0, 0, 0);
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: soon.toISOString(), label: 'far-event' },
+    ]},
+  });
+  assert.match(out, /Coming days:[\s\S]*far-event/);
+  assert.equal(/Still to come today:/.test(out), false);
 });
 
 test('reminders get their own "set to fire" header', () => {
@@ -352,17 +424,61 @@ test('reminders get their own "set to fire" header', () => {
   assert.match(out, /take meds/);
 });
 
-test('resolved items grouped under "Recently resolved" header (not mixed with upcoming)', () => {
+test('a RECENTLY-resolved item shows under its own header, apart from upcoming', () => {
   const t = new Date(); t.setHours(15, 0, 0, 0);
-  const t2 = new Date(); t2.setHours(11, 0, 0, 0);
+  const justNow = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // resolved 1h ago
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
-      { type: 'task', when: t.toISOString(),  label: 'upcoming-thing' },
-      { type: 'task', when: t2.toISOString(), label: 'past-thing', resolution: 'done' },
+      { type: 'task', when: t.toISOString(), label: 'upcoming-thing' },
+      { type: 'task', when: t.toISOString(), label: 'past-thing', resolution: 'done', updated_at: justNow },
     ]},
   });
-  assert.match(out, /Upcoming in this window:[\s\S]*upcoming-thing/);
-  assert.match(out, /Recently resolved in this window:[\s\S]*past-thing \[done\]/);
+  assert.match(out, /Still to come today:[\s\S]*upcoming-thing/);
+  assert.match(out, /Just wrapped up \(recent\):[\s\S]*past-thing \[done\]/);
+});
+
+test('a CANCELLED item is dropped from the briefing entirely', () => {
+  const justNow = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: justNow, label: 'therapy-cancelled', resolution: 'cancelled', updated_at: justNow },
+    ]},
+  });
+  assert.equal(out.includes('therapy-cancelled'), false);
+  assert.equal(/Just wrapped up/.test(out), false);
+});
+
+test('a resolution older than the recent window is not shown', () => {
+  const old = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString(); // 30h ago
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'task', when: old, label: 'done-yesterday', resolution: 'done', updated_at: old },
+    ]},
+  });
+  assert.equal(out.includes('done-yesterday'), false);
+});
+
+test('a future-dated resolution (e.g. a cancelled future occurrence) is not shown', () => {
+  const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: future, label: 'future-done', resolution: 'done' },
+    ]},
+  });
+  assert.equal(out.includes('future-done'), false);
+});
+
+test('exact duplicates (same label + time) render once, not two or three times', () => {
+  const t = new Date(); t.setHours(15, 0, 0, 0);
+  const iso = t.toISOString();
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [
+      { type: 'event', when: iso, label: 'HEART' },
+      { type: 'event', when: iso, label: 'HEART' },
+      { type: 'event', when: iso, label: 'HEART' },
+    ]},
+  });
+  assert.equal((out.match(/HEART/g) || []).length, 1);
 });
 
 test('past-date phase rows in schedule.window do NOT pollute the schedule sections', () => {
@@ -415,6 +531,33 @@ test("today's rhythm: current phase is marked '← I am here'", () => {
   assert.equal(/afternoon work.*← I am here/.test(out), false);
 });
 
+test("today's rhythm marks non-current phases as past or upcoming", () => {
+  const out = formatTemporalContext({
+    schedule: { phase: { id: 'p2', label: 'now-phase', when: '2026-03-14T10:00:00', end: '2026-03-14T13:00:00' }, window: [] },
+    routine: [
+      { id: 'p1', label: 'first-phase', when: '2026-03-14T06:00:00', end: '2026-03-14T09:00:00' },
+      { id: 'p2', label: 'now-phase',   when: '2026-03-14T10:00:00', end: '2026-03-14T13:00:00' },
+      { id: 'p3', label: 'last-phase',  when: '2026-03-14T20:00:00', end: '2026-03-14T22:00:00' },
+    ],
+  });
+  assert.match(out, /now-phase.*← I am here/);
+  // The non-current phases carry a relative marker rather than a bare line.
+  assert.match(out, /first-phase\s+·\s+(begins in|ended|earlier)/);
+  assert.match(out, /last-phase\s+·\s+(begins in|ended|earlier)/);
+});
+
+test("today's rhythm salvages HH:MM from a legacy UTC-artifact phase time", () => {
+  // Old, date-less, offset-stamped values ("T13:00:00+00:00") must not leak raw.
+  const out = formatTemporalContext({
+    schedule: { phase: null, window: [] },
+    routine: [
+      { id: 'x', label: 'artifact-phase', when: 'T13:00:00+00:00', end: 'T18:00:00+00:00' },
+    ],
+  });
+  assert.match(out, /13:00–18:00\s+artifact-phase/);
+  assert.equal(out.includes('T13:00:00+00:00'), false);
+});
+
 test("today's rhythm: phases sorted by local time-of-day, not by stored date", () => {
   const out = formatTemporalContext({
     schedule: { phase: null, window: [] },
@@ -431,11 +574,11 @@ test("today's rhythm: phases sorted by local time-of-day, not by stored date", (
   assert.ok(iEarly < iNoon && iNoon < iLate, `order should be early→noon→late, got ${iEarly}/${iNoon}/${iLate}`);
 });
 
-test('renders resolution badge on resolved items', () => {
-  const t = new Date(); t.setHours(15, 0, 0, 0);
+test('renders resolution badge on a recently-resolved item', () => {
+  const justNow = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1h ago
   const out = formatTemporalContext({
     schedule: { phase: null, window: [
-      { when: t.toISOString(), label: 'laundry', resolution: 'done' },
+      { when: justNow, label: 'laundry', resolution: 'done', updated_at: justNow },
     ]},
   });
   assert.match(out, /laundry \[done\]/);
@@ -486,4 +629,93 @@ test('no gcal legend note when nothing is gcal-sourced', () => {
     schedule: { phase: null, window: [{ id: 'l1', type: 'event', when: future, label: 'Local only' }] },
   });
   assert.ok(!/Google Calendar/.test(out));
+});
+
+// ── Recently past, unexamined (causal-chain fix, piece 2) ─────────
+
+test('hindsight: a recently-past event with an ungraded forecast renders as a question with the edge id', () => {
+  const past = new Date(Date.now() - 6 * 3600_000).toISOString(); // 6h ago
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Dentist' }],
+      linked: [{ id: 'st', type: 'state', label: 'relief' }],
+      edges: [{ id: 'causes-x7', src: 'ev', dst: 'st', kind: 'causes',
+                payload: { condition: 'on_resolve', valence: 'help', certainty: 'medium' } }],
+    },
+  });
+  assert.match(out, /Recently past, not yet examined/);
+  assert.match(out, /Dentist was .* — I projected: Dentist → causes → relief/);
+  assert.match(out, /Did that follow\? \(edge: causes-x7\)/);
+  assert.match(out, /schedule_calibrate_link/);
+});
+
+test('hindsight: graded (observed) edges, old events, and future events are all excluded', () => {
+  const justPast = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const longPast = new Date(Date.now() - 80 * 3600_000).toISOString(); // outside 72h
+  const future   = new Date(Date.now() + 6 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [
+        { id: 'graded', type: 'event', when: justPast, label: 'Graded event' },
+        { id: 'old', type: 'event', when: longPast, label: 'Old event' },
+        { id: 'coming', type: 'event', when: future, label: 'Future event' },
+      ],
+      linked: [{ id: 'st', type: 'state', label: 'crash' }],
+      edges: [
+        { id: 'e1', src: 'graded', dst: 'st', kind: 'causes', payload: { valence: 'harm', observed: true } },
+        { id: 'e2', src: 'old', dst: 'st', kind: 'causes', payload: { valence: 'harm', certainty: 'low' } },
+        { id: 'e3', src: 'coming', dst: 'st', kind: 'causes', payload: { valence: 'harm', certainty: 'low' } },
+      ],
+    },
+  });
+  assert.ok(!/Recently past, not yet examined/.test(out), `no hindsight section expected, got:\n${out}`);
+});
+
+test('hindsight: a resolved recent event still gets its forecast checked (with its resolution shown), capped at 3 lines', () => {
+  const past = new Date(Date.now() - 3 * 3600_000).toISOString();
+  const mkEdge = (i) => ({ id: `e${i}`, src: 'ev', dst: `st${i}`, kind: 'causes',
+                           payload: { condition: 'on_resolve', valence: 'help', certainty: 'low' } });
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Therapy', resolution: 'done', updated_at: past }],
+      linked: [0, 1, 2, 3].map(i => ({ id: `st${i}`, type: 'state', label: `state ${i}` })),
+      edges: [0, 1, 2, 3].map(mkEdge),
+    },
+  });
+  assert.match(out, /Therapy was .* \[done\] — I projected/);
+  const lines = out.split('\n').filter(l => /Did that follow\?/.test(l));
+  assert.equal(lines.length, 3, 'capped at 3 question lines');
+});
+
+// ── Elapsed-stamped events (causal-chain fix, piece 4 display) ────
+
+test('an elapsed-stamped event renders in its own group, never under Coming days', () => {
+  const past = new Date(Date.now() - 8 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Missed appointment',
+                 payload: { elapsed_at: past } }],
+    },
+  });
+  assert.match(out, /Past events with no word on how they went[\s\S]*Missed appointment/);
+  assert.ok(!/Coming days:[\s\S]*Missed appointment/.test(out), 'must not read as still coming');
+});
+
+test('hindsight line tags an elapsed-stamped unresolved event as never marked done', () => {
+  const past = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const out = formatTemporalContext({
+    schedule: {
+      phase: null,
+      window: [{ id: 'ev', type: 'event', when: past, label: 'Dentist',
+                 payload: { elapsed_at: past } }],
+      linked: [{ id: 'st', type: 'state', label: 'relief' }],
+      edges: [{ id: 'e1', src: 'ev', dst: 'st', kind: 'causes',
+                payload: { valence: 'help', certainty: 'medium' } }],
+    },
+  });
+  assert.match(out, /Dentist was .* \[never marked done\] — I projected/);
 });

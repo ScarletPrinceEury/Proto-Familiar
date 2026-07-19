@@ -132,6 +132,43 @@ test('ChatGPT copy/share export: headers, separators, inline system note', () =>
   assert.ok(r.messages.every(m => m.timestamp === null));
 });
 
+test('ChatGPT current web-copy format ("You said:" / "ChatGPT said:")', () => {
+  // The modern ChatGPT UI "copy" produces plain (non-bold) "said:" headers.
+  // Missing this shape is why a fresh ChatGPT copy imported as "unrecognised".
+  const raw = [
+    'You said:', 'what is the capital of France?', '',
+    'ChatGPT said:', 'The capital of France is Paris.', '',
+    'You said:', 'thanks!', '',
+    'ChatGPT said:', 'You are welcome.',
+  ].join('\n');
+  const r = parseImport(raw);
+  assert.equal(r.ok, true);
+  assert.equal(r.format, 'ChatGPT');
+  assert.equal(r.messages.length, 4);
+  assert.deepEqual(r.messages.map(m => m.role), ['user', 'assistant', 'user', 'assistant']);
+  assert.equal(r.messages[0].content, 'what is the capital of France?');
+  assert.equal(r.messages[1].content, 'The capital of France is Paris.');
+});
+
+test('ChatGPT: a leading UTF-8 BOM does not break recognition', () => {
+  // Editors on macOS/Windows sometimes prepend a BOM when re-saving a log.
+  const raw = '﻿' + ['You said:', 'hi', '', 'ChatGPT said:', 'hello'].join('\n');
+  const r = parseImport(raw);
+  assert.equal(r.ok, true);
+  assert.equal(r.format, 'ChatGPT');
+  assert.equal(r.messages.length, 2);
+});
+
+test('ChatGPT: "said:" prose mid-sentence is not a false turn boundary', () => {
+  // Only a WHOLE-line "You said:" / "ChatGPT said:" counts. An inline mention
+  // ("...and then ChatGPT said: hi") must stay inside its message.
+  const raw = ['You said:', 'earlier ChatGPT said: something', 'more', '', 'ChatGPT said:', 'ok'].join('\n');
+  const r = parseImport(raw);
+  assert.equal(r.ok, true);
+  assert.equal(r.messages.length, 2);
+  assert.equal(r.messages[0].content, 'earlier ChatGPT said: something\nmore');
+});
+
 test('ChatGPT: a standalone non-You/ChatGPT header maps to system', () => {
   const raw = ['**You:**', '', 'hi', '', '* * *', '', '**ChatGPT:**', '', 'hello', '', '* * *', '', '**System:**', '', 'a note'].join('\n');
   const r = parseImport(raw);

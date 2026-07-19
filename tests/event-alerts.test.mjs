@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   selectDueEventAlerts, formatEventAlert, alertWindowBounds,
   clampLeadMinutes, ALERT_GRACE_MS, DEFAULT_LEAD_MINUTES,
+  clampElapsedStampHours, DEFAULT_ELAPSED_STAMP_HOURS,
   effectiveLeadMs,
 } from '../event-alerts.js';
 import { runOneReminderTick } from '../reminders-loop.js';
@@ -148,4 +149,15 @@ test('reminder tick: alerts enqueue then mark, and a failed mark retries next ti
   assert.equal(marked.length, 1);
   // The re-enqueue reuses the same originId — the outbox dedups it.
   assert.equal(enq[1].originId, enq[0].originId);
+});
+
+// ── Elapsed-stamp threshold clamp (causal-chain fix piece 4) ──────
+
+test('clampElapsedStampHours: default 24, clamped to [1, 720], rounded', () => {
+  assert.equal(clampElapsedStampHours(undefined), DEFAULT_ELAPSED_STAMP_HOURS);
+  assert.equal(clampElapsedStampHours('nonsense'), DEFAULT_ELAPSED_STAMP_HOURS);
+  assert.equal(clampElapsedStampHours(0), 1);
+  assert.equal(clampElapsedStampHours(100000), 720);
+  assert.equal(clampElapsedStampHours(48.4), 48);
+  assert.equal(clampElapsedStampHours(24), 24);
 });
