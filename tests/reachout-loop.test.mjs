@@ -106,6 +106,34 @@ test('ward knock: dedup reports rate_limited, not acted', async () => {
   assert.equal(r.reason, 'rate_limited');
 });
 
+// ── Ward-active gate (Bug 3) ────────────────────────────────────────
+
+test('ward-active: a ward knock is suppressed while my human is actively here', async () => {
+  let sends = 0;
+  const r = await runOneReachoutTick(deps({
+    // Active: last message 2 min ago (< the 10-min threshold).
+    getLastActivity: async () => ({ ts: new Date().toISOString(), ms: Date.now() - 2 * 60_000 }),
+    decideReachout: async () => ({ action: 'reach_out', target: 'ward', message: 'thinking of you' }),
+    deliverWardKnock: async () => { sends++; return { ok: true }; },
+  }));
+  assert.equal(r.acted, false);
+  assert.equal(r.reason, 'ward_active');
+  assert.equal(sends, 0, 'no banner fires over an active conversation');
+});
+
+test('ward-active: a warm villager reach is NOT gated by the ward being present', async () => {
+  const sent = [];
+  const r = await runOneReachoutTick(deps({
+    getLastActivity: async () => ({ ts: new Date().toISOString(), ms: Date.now() - 2 * 60_000 }),
+    getWarmVillagers: async () => [{ id: 'v1', name: 'Chen', discordId: '111' }],
+    decideReachout: async () => ({ action: 'reach_out', target: 'villager', villagerId: 'v1', message: 'hey Chen!' }),
+    deliverVillagerReach: async (a) => { sent.push(a); return { ok: true }; },
+  }));
+  assert.equal(r.acted, true);
+  assert.equal(r.reason, 'reached_villager');
+  assert.equal(sent[0].villager.id, 'v1');
+});
+
 // ── Villager reach ──────────────────────────────────────────────────
 
 test('villager reach: delivers to a warm villager named by id', async () => {
