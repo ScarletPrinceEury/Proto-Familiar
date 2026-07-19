@@ -11,6 +11,18 @@ test('pickAnalyzeTool prefers analyze_image, else a general image tool', () => {
   assert.equal(pickAnalyzeTool([]), null);
 });
 
+test("buildAnalyzeArgs: z.ai's real image_source schema takes a file path (the -32602 regression)", () => {
+  // The real @z_ai/mcp-server analyze_image: { image_source: path|url, prompt }.
+  // `image_source` matches neither "path" nor "url" — the old guesser sent NO
+  // image arg, which the server rejected with -32602 Invalid params.
+  const schema = { properties: { image_source: {}, prompt: {} } };
+  const { args, needsFile, imageKey } = buildAnalyzeArgs(schema, { filePath: '/tmp/x.png', dataUrl: 'data:image/png;base64,AAAA', base64: 'AAAA', prompt: 'describe it' });
+  assert.equal(imageKey, 'image_source');
+  assert.equal(args.image_source, '/tmp/x.png');   // a real path — never left empty
+  assert.equal(args.prompt, 'describe it');
+  assert.equal(needsFile, true);
+});
+
 test('buildAnalyzeArgs: a path-shaped schema takes the file path (needsFile)', () => {
   const schema = { properties: { image_path: {}, prompt: {} } };
   const { args, needsFile, imageKey } = buildAnalyzeArgs(schema, { filePath: '/tmp/x.png', dataUrl: 'data:...', base64: 'AAAA', prompt: 'describe it' });

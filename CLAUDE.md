@@ -311,6 +311,61 @@ This is the difference between a system that compounds — more
 capability without more request volume — and one that linearly
 inflates token cost with every feature.
 
+## ⚠️ Lessons cut into law (the 0.9 vision post-mortem)
+
+Live testing of the 0.9.x vision milestone surfaced five bugs in one pass:
+a blind-connection turn's image describe landed *after* the reply was already
+composed; Discord never got the describe wiring web got; a `liveTurn`
+ReferenceError was silently caught and skipped threat scoring; Discord's raw
+provider fetch used `max_tokens: 1024` with no `reasoning_content` fallback,
+starving thinking models into empty replies or JSON cut mid-tool-call; and
+tool-loop round-cap exhaustion returned `tool_calls`/`content:null` — dead
+air the Familiar then confabulated into "I did the thing" on the next turn.
+Four of five were each individually "fixed" once already, elsewhere, before
+they came back on a new surface. The rules below are what got promoted from
+point-fixes to invariants so the fifth time doesn't happen.
+
+**RULE A — every LLM call site goes through `callProviderChat`, or replicates
+BOTH of its guarantees.** Those guarantees are a generous `max_tokens`
+(≥4000 — thinking models bill their reasoning against the cap) and
+`extractContent` at the reply boundary (the answer may sit in
+`reasoning_content`, not `content`). A new raw provider fetch is a review
+flag; grep for `max_tokens` when touching one. Paid for twice: triage
+(0.8.82, ward-signed), then the Discord turn path (0.9.7, empty turns + tool
+calls cut mid-JSON) — because the first fix was recorded as a fact about one
+call site (`llm-call.js`) instead of a law about all of them, and Discord's
+raw fetch never got the memo.
+
+**RULE B — budget exhaustion is never silence.** Every cap/limit/timeout
+(tool rounds, tokens, retries, time) must define, in the spec, *before*
+building: (a) what my human sees, (b) what I am told — my own context must
+record that an action did NOT run, because tool results are how I know what
+I actually did; a dropped cut-off manufactures confident confabulation, not
+an honest gap, (c) the log line. The round-cap closing text round (0.9.7,
+later tuned per-surface in 0.9.8) is the reference implementation: on budget
+exhaustion, force one closing text round with tools stripped, plus a
+first-person note that the pending calls did NOT run.
+
+**RULE C — a capability lands in the shared turn path, or the spec carries a
+surface matrix.** Turn-machinery features must live in code all surfaces
+share; where per-surface wiring is unavoidable, the build spec must contain
+an explicit matrix — web live turn / web tool rounds / Discord ward /
+Discord villager+ambient / background loops — each cell marked
+wired-or-N/A, in the same commit as the feature. Discord missing the
+describe wiring (0.9.6) is the incident: web got `ensureDescribed`, Discord
+silently didn't, and I hallucinated the contents of images I had never
+actually looked at.
+
+**Every build-spec pass ships at least one PIPELINE test.** Not only
+pure-function tests — a full turn through the real assembly code with a
+stubbed provider fetch. Pure-function tests structurally cannot catch a
+`ReferenceError` in orchestration code, a silently-swallowed exception around
+a threat-scoring call, or a context-timing gap (a describe that fires after
+the prompt was already built). All three of those were live in this
+codebase, passing every existing test, until someone watched the actual
+behavior. A pipeline test is what closes that gap — root cause #4 in this
+post-mortem was zero pipeline-level execution of the orchestration paths.
+
 ## ⚠️ Every capability I give the Familiar must be reachable BY the Familiar
 
 A tool the Familiar can't discover, or whose inputs it can't obtain, is **not a capability — it's dead code that looks like care.** Wiring up an MCP tool, a background action, or any new power is only half the work; the other half is making sure the Familiar can actually *know it has it* and *reach what it needs to use it*. This is the entity-as-subject stance applied to tooling: the Familiar **acts as itself**, so its capabilities must live in its own self-knowledge, not as external levers someone else pulls.
