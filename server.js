@@ -4553,7 +4553,7 @@ function startReachout() {
       // lands in the reachout event log so the loop is auditable via
       // /api/reachout-events. Pure gate outcomes (cooldown/disabled/
       // quiet-hours/crisis-defer) fire every tick and stay unlogged.
-      const deliberated = ['llm_said_wait', 'reached_ward', 'reached_villager', 'delivery_failed', 'unknown_villager', 'rate_limited'];
+      const deliberated = ['llm_said_wait', 'reached_ward', 'reached_villager', 'delivery_failed', 'unknown_villager', 'rate_limited', 'ward_active'];
       if (deliberated.includes(r.reason)) {
         appendReachoutEventLog({
           reason:         r.reason,
