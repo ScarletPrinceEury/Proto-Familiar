@@ -1641,6 +1641,241 @@ app.post('/api/models', async (req, res) => {
   catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
 });
 
+// ── OpenAI/SillyTavern compatibility endpoints ───────────────
+// Accept OpenAI-style routes so external clients (including SillyTavern)
+// can use Proto-Familiar as a drop-in base URL.
+
+function bearerTokenFromReq(req) {
+  const auth = String(req.get('authorization') || '');
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || '';
+}
+
+function resolveCompatConnection(req, body = {}) {
+  const s = readSettingsSync() || {};
+  const primary = primaryConnectionFrom(s);
+  const providerFromBody = (typeof body.provider === 'string' && PROVIDER_URLS[body.provider])
+    ? body.provider
+    : '';
+  const provider = providerFromBody || primary?.provider || s.provider || 'nanogpt';
+  const apiKeyFromBody = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+  const apiKey = bearerTokenFromReq(req) || apiKeyFromBody || primary?.apiKey || s.apiKey || '';
+  const modelFromBody = typeof body.model === 'string' ? body.model.trim() : '';
+  const model = modelFromBody || primary?.model || s.model || '';
+  return { provider, apiKey, model };
+}
+
+function completionPromptToMessages(prompt) {
+  if (typeof prompt === 'string' && prompt.trim()) {
+    return [{ role: 'user', content: prompt }];
+  }
+  if (Array.isArray(prompt)) {
+    const joined = prompt
+      .map(p => (typeof p === 'string' ? p : ''))
+      .filter(Boolean)
+      .join('\n\n');
+    if (joined.trim()) return [{ role: 'user', content: joined }];
+  }
+  return null;
+}
+
+async function proxyChatViaApiChat(req, res, body) {
+  let upstream;
+  try {
+    upstream = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+  }
+
+  const ct = upstream.headers.get('content-type') || 'application/json';
+  res.status(upstream.status);
+  res.setHeader('Content-Type', ct);
+  if (!body.stream || !upstream.body) {
+    const text = await upstream.text();
+    return res.send(text);
+  }
+
+  // Stream passthrough for /v1/chat/completions.
+  const reader = upstream.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+  } catch { /* passthrough interrupted */ }
+  return res.end();
+}
+
+app.post('/v1/chat/completions', async (req, res) => {
+  const body = req.body || {};
+  const { provider, apiKey, model } = resolveCompatConnection(req, body);
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : completionPromptToMessages(body.prompt);
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return badRequest(res, 'messages (array) or prompt (string/array) is required');
+  }
+  if (!PROVIDER_URLS[provider]) return badRequest(res, `Unknown provider: ${provider}`);
+  if (!apiKey) return badRequest(res, 'API key is required (Bearer token or saved connection key).');
+  if (!model) return badRequest(res, 'Model is required (request body or saved connection model).');
+
+  const payload = {
+    provider,
+    apiKey,
+    model,
+    messages,
+    stream: !!body.stream,
+    enrich: false,
+  };
+  if (typeof body.temperature === 'number') payload.temperature = body.temperature;
+  if (typeof body.max_tokens === 'number') payload.max_tokens = body.max_tokens;
+  if (Array.isArray(body.tools)) payload.tools = body.tools;
+  if (body.tool_choice !== undefined) payload.tool_choice = body.tool_choice;
+
+  return proxyChatViaApiChat(req, res, payload);
+});
+
+app.post('/v1/completions', async (req, res) => {
+  const body = req.body || {};
+  const { provider, apiKey, model } = resolveCompatConnection(req, body);
+  const messages = completionPromptToMessages(body.prompt);
+  if (!messages) return badRequest(res, 'prompt (string/array) is required');
+  if (!PROVIDER_URLS[provider]) return badRequest(res, `Unknown provider: ${provider}`);
+  if (!apiKey) return badRequest(res, 'API key is required (Bearer token or saved connection key).');
+  if (!model) return badRequest(res, 'Model is required (request body or saved connection model).');
+
+  // Streaming text-completions are translated from chat SSE deltas.
+  if (body.stream) {
+    let upstream;
+    try {
+      upstream = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, apiKey, model, messages, stream: true, enrich: false }),
+      });
+    } catch (err) {
+      return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+    }
+
+    if (!upstream.ok || (upstream.headers.get('content-type') || '').includes('application/json')) {
+      const text = await upstream.text();
+      return res.status(upstream.status).type('application/json').send(text);
+    }
+
+    const completionId = `cmpl-${randomUUID()}`;
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') {
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
+          }
+          let evt;
+          try { evt = JSON.parse(raw); } catch { continue; }
+          const delta = evt?.choices?.[0]?.delta?.content;
+          const finishReason = evt?.choices?.[0]?.finish_reason ?? null;
+          if (typeof delta !== 'string' && finishReason == null) continue;
+          const out = {
+            id: completionId,
+            object: 'text_completion',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{
+              text: typeof delta === 'string' ? delta : '',
+              index: 0,
+              logprobs: null,
+              finish_reason: finishReason,
+            }],
+          };
+          res.write(`data: ${JSON.stringify(out)}\n\n`);
+        }
+      }
+    } catch { /* interrupted stream */ }
+    return res.end();
+  }
+
+  // Non-stream text completion translates one chat completion response.
+  let upstream;
+  try {
+    upstream = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider,
+        apiKey,
+        model,
+        messages,
+        stream: false,
+        enrich: false,
+        ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+        ...(typeof body.max_tokens === 'number' ? { max_tokens: body.max_tokens } : {}),
+      }),
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+  }
+  const text = await upstream.text();
+  if (!upstream.ok) {
+    return res.status(upstream.status).type('application/json').send(text);
+  }
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch { return res.status(502).json({ error: 'Upstream /api/chat returned non-JSON.' }); }
+  const answer = parsed?.choices?.[0]?.message?.content ?? '';
+  const finishReason = parsed?.choices?.[0]?.finish_reason ?? 'stop';
+  return res.json({
+    id: parsed?.id || `cmpl-${randomUUID()}`,
+    object: 'text_completion',
+    created: parsed?.created || Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ text: answer, index: 0, logprobs: null, finish_reason: finishReason }],
+    ...(parsed?.usage ? { usage: parsed.usage } : {}),
+  });
+});
+
+async function compatModelsHandler(req, res) {
+  const body = req.body || {};
+  const { provider, apiKey } = resolveCompatConnection(req, body);
+  if (!PROVIDER_URLS[provider]) return badRequest(res, `Unknown provider: ${provider}`);
+  if (!apiKey) return badRequest(res, 'API key is required (Bearer token or saved connection key).');
+
+  const listed = await listProviderModels({ provider, apiKey });
+  if (!listed?.ok) return res.status(502).json({ error: listed?.error || 'failed to list models' });
+  return res.json({
+    object: 'list',
+    data: (listed.models || []).map(m => ({
+      id: m.id,
+      object: 'model',
+      created: 0,
+      owned_by: 'proto-familiar',
+    })),
+  });
+}
+
+app.get('/v1/models', compatModelsHandler);
+app.post('/v1/models', compatModelsHandler);
+app.get('/v1/model', compatModelsHandler);
+
 // ── Tome endpoints ──────────────────────────────────────────────
 const TOMES_DIR = path.join(__dirname, 'tomes');
 mkdirSync(TOMES_DIR, { recursive: true });

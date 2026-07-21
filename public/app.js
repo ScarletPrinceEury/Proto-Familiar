@@ -210,6 +210,7 @@ const state = {
   topics:            [],         // session-level; stored under pf_topics_{sessionId}
   // ── Saved connections (primary + fallbacks) ─────────────
   connections:             [],   // [{ id, name, provider, apiKey, model }]
+  providerApiKeys:         {},   // { [provider]: apiKey } remembered per provider
   primaryConnectionId:     null, // id of the active/primary connection
   fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
   maxEmptyRetries:         2,    // retries per connection when response is empty
@@ -396,6 +397,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
+  'providerApiKeys',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
@@ -880,6 +882,9 @@ function loadPersisted() {
   } catch { /* corrupt */ }
   // Normalize connection-related fields after restore from disk
   if (!Array.isArray(state.connections))           state.connections = [];
+  if (!state.providerApiKeys || typeof state.providerApiKeys !== 'object' || Array.isArray(state.providerApiKeys)) {
+    state.providerApiKeys = {};
+  }
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   if (typeof state.maxEmptyRetries !== 'number')   state.maxEmptyRetries = 2;
   if (typeof state.thalamusDynamicDepth !== 'number'
@@ -1027,6 +1032,9 @@ async function syncSettingsFromServer() {
     pushSettingsToServer(); // persist the renamed field immediately
   }
   if (!Array.isArray(state.connections))           state.connections = [];
+  if (!state.providerApiKeys || typeof state.providerApiKeys !== 'object' || Array.isArray(state.providerApiKeys)) {
+    state.providerApiKeys = {};
+  }
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   migrateLegacyConnection();
 
@@ -1178,11 +1186,23 @@ function getConnectionSequence() {
 
 /** Most recent apiKey saved against the given provider, or empty string. */
 function findKeyForProvider(provider) {
+  const remembered = state.providerApiKeys?.[provider];
+  if (typeof remembered === 'string' && remembered.trim()) return remembered;
   for (let i = state.connections.length - 1; i >= 0; i--) {
     const c = state.connections[i];
     if (c.provider === provider && (c.apiKey ?? '').trim()) return c.apiKey;
   }
   return '';
+}
+
+function rememberProviderApiKey(provider, apiKey) {
+  const p = typeof provider === 'string' ? provider.trim() : '';
+  const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!p || !key) return;
+  if (!state.providerApiKeys || typeof state.providerApiKeys !== 'object' || Array.isArray(state.providerApiKeys)) {
+    state.providerApiKeys = {};
+  }
+  state.providerApiKeys[p] = key;
 }
 
 /** Push the current Connection-section fields into the primary connection. */
@@ -1228,6 +1248,17 @@ function deleteConnection(id) {
   }
   saveSettings();
   renderConnectionsList();
+}
+
+function renameConnection(id, name) {
+  const conn = state.connections.find(c => c.id === id);
+  if (!conn) return false;
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) return false;
+  conn.name = trimmed.slice(0, 64);
+  saveSettings();
+  renderConnectionsList();
+  return true;
 }
 
 function setPrimaryConnection(id) {
@@ -1341,6 +1372,27 @@ function renderConnectionsList() {
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
 
+    const renameRow = document.createElement('div');
+    renameRow.className = 'conn-rename-row hidden';
+    const renameInput = document.createElement('input');
+    renameInput.type = 'text';
+    renameInput.className = 'conn-rename-input';
+    renameInput.maxLength = 64;
+    renameInput.value = conn.name || '';
+    renameInput.setAttribute('aria-label', `New name for connection "${conn.name}"`);
+    const renameSaveBtn = document.createElement('button');
+    renameSaveBtn.type = 'button';
+    renameSaveBtn.textContent = 'Save';
+    renameSaveBtn.className = 'conn-rename-save';
+    const renameCancelBtn = document.createElement('button');
+    renameCancelBtn.type = 'button';
+    renameCancelBtn.textContent = 'Cancel';
+    renameCancelBtn.className = 'conn-rename-cancel';
+    renameRow.appendChild(renameInput);
+    renameRow.appendChild(renameSaveBtn);
+    renameRow.appendChild(renameCancelBtn);
+    info.appendChild(renameRow);
+
     // a11y note: each action button gets both `title` (sighted hover
     // tooltip) and `aria-label` (screen-reader announcement) because
     // the visible textContent is a symbol (✓ / + / ▲ / ▼ / ✕) that
@@ -1348,6 +1400,7 @@ function renderConnectionsList() {
     // aria-pressed so assistive tech can convey on/off state.
     const fbBtn = document.createElement('button');
     fbBtn.type = 'button';
+    fbBtn.className = 'conn-btn conn-fallback-btn';
     fbBtn.textContent = isFallback ? '✓ fallback' : '+ fallback';
     fbBtn.title = isPrimary ? 'Primary connection cannot also be a fallback' : 'Toggle fallback';
     fbBtn.setAttribute('aria-label', `${isFallback ? 'Remove' : 'Add'} "${conn.name}" as fallback`);
@@ -1363,6 +1416,7 @@ function renderConnectionsList() {
     // connection regardless of how the chat path uses it.
     const ecBtn = document.createElement('button');
     ecBtn.type = 'button';
+    ecBtn.className = 'conn-btn conn-phylactery-btn';
     ecBtn.textContent = isEntityCore ? '✓ Phylactery' : '+ Phylactery';
     ecBtn.title = isEntityCore
       ? 'Currently the API key source for Phylactery (click to clear)'
@@ -1377,12 +1431,14 @@ function renderConnectionsList() {
     if (isFallback) {
       const upBtn = document.createElement('button');
       upBtn.type = 'button'; upBtn.textContent = '▲';
+      upBtn.className = 'conn-btn conn-order-btn';
       upBtn.title = 'Try earlier in fallback order';
       upBtn.setAttribute('aria-label', `Move "${conn.name}" earlier in fallback order`);
       upBtn.disabled = fbIdx === 0;
       upBtn.addEventListener('click', () => moveFallback(conn.id, -1));
       const dnBtn = document.createElement('button');
       dnBtn.type = 'button'; dnBtn.textContent = '▼';
+      dnBtn.className = 'conn-btn conn-order-btn';
       dnBtn.title = 'Try later in fallback order';
       dnBtn.setAttribute('aria-label', `Move "${conn.name}" later in fallback order`);
       dnBtn.disabled = fbIdx === state.fallbackConnectionIds.length - 1;
@@ -1391,14 +1447,51 @@ function renderConnectionsList() {
       actions.appendChild(dnBtn);
     }
 
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button'; renameBtn.textContent = 'Rename';
+    renameBtn.className = 'conn-btn conn-rename-btn';
+    renameBtn.title = 'Rename connection';
+    renameBtn.setAttribute('aria-label', `Rename connection "${conn.name}"`);
+    renameBtn.addEventListener('click', () => {
+      renameInput.value = conn.name || '';
+      renameRow.classList.remove('hidden');
+      renameInput.focus();
+      renameInput.select();
+    });
+    actions.appendChild(renameBtn);
+
     const delBtn = document.createElement('button');
-    delBtn.type = 'button'; delBtn.textContent = '✕';
+    delBtn.type = 'button'; delBtn.textContent = 'Delete';
+    delBtn.className = 'conn-btn conn-delete-btn';
     delBtn.title = 'Delete connection';
     delBtn.setAttribute('aria-label', `Delete connection "${conn.name}"`);
     delBtn.addEventListener('click', () => {
       if (confirm(`Delete connection "${conn.name}"?`)) deleteConnection(conn.id);
     });
     actions.appendChild(delBtn);
+
+    const commitRename = () => {
+      const ok = renameConnection(conn.id, renameInput.value);
+      if (!ok) {
+        alert('Connection name cannot be empty.');
+        renameInput.focus();
+      }
+    };
+    renameSaveBtn.addEventListener('click', commitRename);
+    renameCancelBtn.addEventListener('click', () => {
+      renameRow.classList.add('hidden');
+      renameInput.value = conn.name || '';
+    });
+    renameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitRename();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        renameRow.classList.add('hidden');
+        renameInput.value = conn.name || '';
+      }
+    });
 
     li.appendChild(role);
     li.appendChild(info);
@@ -3061,6 +3154,7 @@ function exportChat() {
 function readSettingsFromUI() {
   state.provider          = $('provider-select').value;
   state.apiKey            = $('api-key').value;
+  rememberProviderApiKey(state.provider, state.apiKey);
   state.model             = $('model-input').value.trim();
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
@@ -4527,6 +4621,7 @@ function init() {
     if (savedKey && (!keyInput.value.trim() || keyInput.value !== savedKey)) {
       keyInput.value = savedKey;
       state.apiKey   = savedKey;
+      rememberProviderApiKey(prov, savedKey);
       if (hint) hint.style.display = '';
     } else if (hint) {
       hint.style.display = 'none';
@@ -4540,6 +4635,7 @@ function init() {
   const apiKeyEl = $('api-key');
   if (apiKeyEl) {
     apiKeyEl.addEventListener('input', () => {
+      rememberProviderApiKey($('provider-select')?.value || state.provider, apiKeyEl.value);
       const hint = $('api-key-autofill-hint');
       if (hint) hint.style.display = 'none';
     });

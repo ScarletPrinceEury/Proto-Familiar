@@ -1310,25 +1310,53 @@ button { cursor: pointer; font-family: var(--font); }
 .connection-item .conn-actions {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  min-width: 98px;
 }
 .connection-item .conn-actions button {
   font-size: 0.72rem;
-  padding: 2px 6px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
+  padding: 5px 7px;
+  background: var(--surface-raise);
+  border: 1px solid var(--border-light);
+  color: var(--text);
   border-radius: 4px;
   cursor: pointer;
-  line-height: 1;
+  line-height: 1.15;
+  text-align: center;
 }
 .connection-item .conn-actions button:hover {
   color: var(--text);
-  border-color: var(--text-muted);
+  border-color: var(--accent);
+  background: var(--accent-dim);
 }
 .connection-item .conn-actions button:disabled {
-  opacity: 0.3;
+  opacity: 0.45;
   cursor: not-allowed;
+}
+.connection-item .conn-actions .conn-delete-btn {
+  border-color: color-mix(in srgb, var(--error-color) 55%, var(--border-light));
+  color: var(--error-color);
+}
+.connection-item .conn-actions .conn-delete-btn:hover {
+  border-color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 12%, var(--surface-raise));
+}
+.conn-rename-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  margin-top: 5px;
+}
+.conn-rename-input {
+  min-width: 0;
+  padding: 5px 7px;
+  font-size: 0.8rem;
+}
+.conn-rename-save,
+.conn-rename-cancel {
+  padding: 5px 7px;
+  font-size: 0.74rem;
+  white-space: nowrap;
 }
 .connection-save-row {
   display: flex;
@@ -1338,6 +1366,16 @@ button { cursor: pointer; font-family: var(--font); }
 }
 .connection-save-row input { flex: 1; min-width: 0; }
 .connection-save-row button { flex-shrink: 0; }
+#save-connection-btn {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+#save-connection-btn:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--accent-dim));
+  color: var(--text);
+}
 
 /* ── Input bar ───────────────────────────────────────────────── */
 /* Sits as the last flex child of .chat-pane; the keyboard lift is

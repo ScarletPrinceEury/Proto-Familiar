@@ -247,6 +247,12 @@ lifecycle of the autonomous loops:
   server also runs the multi-round tool-call loop here, executing via
   cerebellum and emitting `_toolRound` SSE events / a `_toolRounds`
   response array — see "Data flow" below.
+- OpenAI/SillyTavern compatibility: `POST /v1/chat/completions`,
+  `POST /v1/completions`, `GET/POST /v1/models`, and `GET /v1/model`
+  are accepted as aliases. They resolve provider/key/model from
+  request body + Bearer token + saved primary connection, then route
+  through `/api/chat` with `enrich:false` so external clients get
+  plain OpenAI-shape traffic without Proto-Familiar `_thalamus` extras.
 - `POST /api/debug-prompt` — offline preview (no upstream call).
 - **Media (vision build spec §2):** `POST /api/media` (its OWN
   `express.raw({type:'image/*'})` body parser, so image bytes never

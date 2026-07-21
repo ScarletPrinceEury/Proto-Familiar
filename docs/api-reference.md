@@ -17,6 +17,9 @@ index names what each does and the architecture doc section that owns it.
 | `GET /api/health` | Liveness + version + peer (Phylactery/Unruh) status |
 | `GET /api/version` | App version (read once at boot from `package.json`) |
 | `POST /api/chat` | The chat turn (detailed below) |
+| `POST /v1/chat/completions` | OpenAI-compatible chat endpoint (SillyTavern-compatible) routed through `/api/chat` with `enrich:false` |
+| `POST /v1/completions` | OpenAI-compatible text completions endpoint (prompt translated to chat turn; streaming and non-streaming) |
+| `GET/POST /v1/models` · `GET /v1/model` | OpenAI-compatible model-list endpoints (SillyTavern-compatible) |
 | `POST /api/guide-chat` | The Connections modal's setup-guide mini chat |
 | `POST /api/models` | Proxy the provider's own model list (backs the visible model browser) |
 | `GET/PUT /api/settings` | Central settings store (`settings.json`) |
