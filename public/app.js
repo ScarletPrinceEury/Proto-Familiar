@@ -1158,6 +1158,24 @@ function getPrimaryConnection() {
   return state.connections.find(c => c.id === state.primaryConnectionId) || null;
 }
 
+// The always-visible topbar chip showing which connection chat is on. Name is
+// the label; provider/model rides in the tooltip. Falls back to the loose
+// provider/model fields when no saved connection exists yet (first-run).
+function renderActiveConnectionChip() {
+  const label = $('active-connection-label');
+  const chip  = $('active-connection-chip');
+  if (!label || !chip) return;
+  const conn = getPrimaryConnection();
+  const name  = conn?.name || conn?.model || state.model || '';
+  const model = conn?.model || state.model || '';
+  const prov  = conn?.provider || state.provider || '';
+  label.textContent = name || 'No connection';
+  chip.title = name
+    ? `Active connection: ${name}${model ? ` (${prov ? prov + ' / ' : ''}${model})` : ''} — click to change`
+    : 'No connection set — click to configure';
+  chip.classList.toggle('conn-chip-empty', !name);
+}
+
 /**
  * Returns the ordered list of usable connections for a request: primary first,
  * then each enabled fallback. Falls back to a synthetic connection built from
@@ -1316,6 +1334,10 @@ function moveFallback(id, delta) {
 }
 
 function renderConnectionsList() {
+  // Keep the always-visible topbar chip in sync on every connection change
+  // (add/remove/rename/set-primary all route through here). Runs even when the
+  // Connections modal itself isn't mounted.
+  renderActiveConnectionChip();
   const ul = $('connections-list');
   if (!ul) return;
   ul.innerHTML = '';
@@ -4534,6 +4556,10 @@ function init() {
 
   // Connections modal (provider/key/model editor + saved connections + per-feature routing).
   $('connections-btn')?.addEventListener('click', openConnectionsModal);
+  // The always-visible topbar chip opens the same Connections modal.
+  $('active-connection-chip')?.addEventListener('click', openConnectionsModal);
+  // Chat section → jump straight to the Knowledge editor's Sessions tab.
+  $('open-sessions-btn')?.addEventListener('click', openKnowledgeModalOnSessions);
   $('connections-modal-close')?.addEventListener('click', closeConnectionsModal);
   $('connections-modal')?.addEventListener('click', e => { if (e.target === $('connections-modal')) closeConnectionsModal(); });
 
@@ -7031,6 +7057,13 @@ function openKnowledgeModal() {
   keGraphClosePopover();
   keSwitchTab('memories');
 }
+// Same modal, opened straight on the Sessions tab (Chat sidebar shortcut).
+function openKnowledgeModalOnSessions() {
+  $('knowledge-modal').classList.remove('hidden');
+  bindResizableModal('knowledge-modal-inner', 'pf-knowledge-modal-size');
+  keGraphClosePopover();
+  keSwitchTab('sessions');
+}
 function closeKnowledgeModal() {
   $('knowledge-modal').classList.add('hidden');
   keGraphClosePopover();
@@ -7117,10 +7150,24 @@ async function keReadServerError(res) {
 
 // ── Memories tab ────────────────────────────────────────────────────────
 let _keMemCache = [];   // last-fetched memories; the search filters this, no refetch
+let _keAudCats  = [];   // Village categories, for id→label on the audience badge
+
+// A memory's `audience` is a Village category id (or 'ward-private'); the badge
+// must show the human LABEL, never the raw id/UUID. Falls back to the id only
+// for a since-deleted circle (so it's still greppable), tagged as unknown.
+function keAudienceLabel(id) {
+  if (!id || id === 'ward-private') return '';
+  const cat = _keAudCats.find(c => c.id === id);
+  return cat ? cat.name : `${id.slice(0, 8)}… (unknown circle)`;
+}
+
 async function keLoadMemories() {
   const list = $('ke-mem-list');
   list.innerHTML = '<p class="logs-loading">Loading…</p>';
   const granularity = $('ke-mem-granularity').value || undefined;
+  // Refresh the Village categories so audience ids resolve to labels (best
+  // effort — a failure just falls back to the id, never blocks the list).
+  try { _keAudCats = (await vlFetch())?.categories ?? _keAudCats; } catch { /* keep last */ }
   try {
     const res = await fetch('/api/entity/memories' + (granularity ? `?granularity=${encodeURIComponent(granularity)}` : ''));
     if (!res.ok) throw new Error(await keReadServerError(res));
@@ -7139,7 +7186,7 @@ function keRenderMemories() {
   const countEl = $('ke-mem-count');
   const q = ($('ke-mem-search')?.value ?? '').trim().toLowerCase();
   const memories = _keMemCache.filter(m => !q ||
-    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''}`
+    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''} ${keAudienceLabel(m.audience)}`
       .toLowerCase().includes(q));
   if (countEl) {
     countEl.textContent = !_keMemCache.length ? ''
@@ -7152,7 +7199,7 @@ function keRenderMemories() {
     const row = document.createElement('div');
     row.className = 'ke-row';
     const audienceBadge = (m.audience && m.audience !== 'ward-private')
-      ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
+      ? `<span class="ke-badge ke-badge-audience" title="Visible to: ${esc(keAudienceLabel(m.audience))}">${esc(keAudienceLabel(m.audience))}</span>` : '';
     const cwBadge = m.care_weight
       ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
     // A me/ward register memory is a standing truth, not a passing moment — badge it.

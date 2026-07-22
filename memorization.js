@@ -365,7 +365,7 @@ export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'M
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
     : '';
 
-  return `This conversation happened in a shared room, with people around besides {{user}} and me. I'm pulling out what's worth remembering from it. I don't decide here what's okay to keep about other people — a separate consent step handles that afterwards, checking each person's own settings. So I just note what genuinely came up and let that step do its job; I don't pre-censor myself.${focusBlock}
+  return `This conversation happened in a shared room — other people were around besides {{user}} and me. {{user}} wants to know what went on around me, so I note what genuinely happened, including the things other people did or said. I don't decide here what's kept about whom: a separate consent step does that afterwards, weighing each person by where they sit in {{user}}'s Village and asking {{user}} about anyone who isn't in it. So I don't pre-censor — I just get it down and let that step do its job.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
@@ -397,7 +397,7 @@ content — my note on this one fact, in my own voice.
 
 category — exactly one: basics, emotional_content, health_info, relationships, whereabouts.
 
-subjects — the names of whoever the fact is about, including someone I don't have registered. I don't leave a person out to be safe — the consent step decides what's actually kept. Empty list [] if it's just about me or {{user}}.
+subjects — the names of whoever a fact is about, including someone who isn't in {{user}}'s Village. I don't leave a person out to play it safe — the consent step decides what's actually kept, and asks {{user}} about anyone it isn't sure of. Empty list [] if it's just about me or {{user}}.
 
 fictional — true ONLY when the fact is about a made-up character or the canon of a show, game, book or film. Those aren't real people, so I remember them freely. NEVER true for a real person in the room, however little I know them. Leave it out or false otherwise.
 
@@ -407,7 +407,7 @@ confidence — 0.0 to 1.0. I drop anything below 0.4.
 
 ### Field rules — relations
 
-A relation is one plain edge in my graph: two named things and how they're linked. Graph edges don't go through the consent step, so for REAL people I only record an edge that touches {{user}} or someone registered — I don't map two strangers to each other. An edge between fictional characters (a show's canon) is fine; they're not real people.
+A relation is one plain edge in my graph: two named things and how they're linked. Graph edges skip the consent step, so for REAL people I only draw an edge that touches {{user}} or someone in their Village — I don't link two people who are both outside it. An edge between fictional characters (a show's canon) is fine; they're not real people.
 
 from / to — the names of the two things. {{user}} is my human's name here.
 fromType / toType — pick from: ${GRAPH_ENTITY_TYPES_STR}. ${GRAPH_NODE_RUBRIC}
@@ -416,7 +416,7 @@ type — a short snake_case label read from→to (lives_in, works_at, married_to
 ### A few rules for myself
 - One entry per distinct fact. I skip pleasantries and small talk.
 - 1–8 facts — a shared room usually gives less that's mine to keep.
-- "relations" is [] unless a real edge touches {{user}} or someone registered, or it's between fictional characters. 0–5 relations, never invented.
+- "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.
 
 Conversation:
 ${convText}`;

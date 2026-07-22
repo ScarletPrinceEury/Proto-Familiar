@@ -28,6 +28,12 @@
           <span data-ms-icon="menu" data-ms-size="20"></span>
         </button>
         <h1 class="app-title">Proto-Familiar</h1>
+        <!-- Active connection: always visible atop the chat; click to change. -->
+        <button id="active-connection-chip" class="conn-chip" type="button"
+                aria-label="Active connection — click to change" title="Active connection — click to change">
+          <span data-ms-icon="cable" data-ms-size="15"></span>
+          <span id="active-connection-label" class="conn-chip-label">—</span>
+        </button>
       </div>
       <div class="topbar-right">
         <span id="status-badge" class="status-badge" title="Connection status">●</span>
@@ -153,9 +159,10 @@
         <div class="sidebar-section" id="section-chat">
           <h3 class="section-label">Chat</h3>
           <div class="action-row">
+            <button id="open-sessions-btn" class="btn-secondary"><span data-ms-icon="history" data-ms-size="18"></span> Saved sessions…</button>
             <button id="clear-chat-btn" class="btn-danger">✕ Clear history</button>
           </div>
-          <p class="field-hint">Saved sessions, export, and memorize-now now live in the Knowledge editor's <strong>Sessions</strong> tab.</p>
+          <p class="field-hint">Saved sessions, export, and memorize-now open in the Knowledge editor's <strong>Sessions</strong> tab.</p>
           <div class="field-row" style="margin-top:8px">
             <label for="notif-sound-toggle">Notification sounds</label>
             <input type="checkbox" id="notif-sound-toggle" checked>

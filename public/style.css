@@ -350,6 +350,38 @@ textarea:focus-visible {
 .status-badge.busy { color: var(--warn-color); }
 .status-badge.err  { color: var(--error-color); }
 
+/* Active-connection chip — always-visible, atop the chat; opens Connections. */
+.conn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 30vw;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.conn-chip:hover { color: var(--text); border-color: var(--accent, var(--text-muted)); }
+.conn-chip-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font-weight: 600;
+}
+.conn-chip-empty { color: var(--warn-color); border-color: var(--warn-color); }
+/* On narrow phones the title + chip compete for space — let the chip shrink
+   further and drop its icon so the name still shows. */
+@media (max-width: 560px) {
+  .conn-chip { max-width: 40vw; padding: 3px 7px; }
+  .conn-chip [data-ms-icon] { display: none; }
+}
+
 /* ── App body (sidebar + chat) ───────────────────────────────── */
 .app-body {
   display: flex;
