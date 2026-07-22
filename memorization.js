@@ -293,8 +293,11 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 ### Field rules — facts
 
 content — my private, first-person note about this single fact. Concrete and specific. No vague generalities.
-  Example good: "Alice mentioned she's dealing with job-hunt fatigue and feeling stuck."
+  When the fact is about ME, I write it in the first person — "I offered to help", "I said I'd remind them" — NEVER by my own name in the third person ("Eury said…"), even if the transcript addresses me or refers to me by name. When it's about my human, I name them or say "my human". A fact about someone else is about them, by name.
+  Example good (me):   "I promised my human I'd remind them about the dentist on Tuesday."
+  Example good (them): "Alice mentioned she's dealing with job-hunt fatigue and feeling stuck."
   Example bad:  "We talked about various life topics."
+  Example bad:  "Eury agreed to help." (third person about myself — I write "I agreed to help.")
 
 category — pick exactly one from this list:
   basics            — name, pronoun, role, occupation, basic biographical fact
@@ -385,7 +388,8 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 
 ### Field rules — facts
 
-content — what I observed about MY HUMAN or myself. Skip anything that's primarily about an unnamed/unregistered third party.
+content — what I observed about MY HUMAN or myself, in the first person. Skip anything that's primarily about an unnamed/unregistered third party.
+  When the fact is about ME I write "I …", never by my own name in the third person ("Eury said…"), even if someone in the room addressed me by name. When it's about my human, I name them or say "my human".
   Keep: my human's mood, things they said, experiences they had, commitments they made, topics that engaged them.
   Skip: biographical details about strangers, things strangers said that aren't about my human, relationship history between third parties.
 
