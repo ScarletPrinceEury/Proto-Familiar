@@ -89,9 +89,57 @@ function normalizeLocationMode(l) {
 // rename, adjust grants, or delete them freely. Stable IDs make seeding
 // idempotent across upgrades.
 
-const CAT_CLOSE_FRIENDS = '00000000-0000-4000-8001-000000000001';
-const CAT_ACQUAINTANCES  = '00000000-0000-4000-8001-000000000002';
-const CAT_CARE_NETWORK   = '00000000-0000-4000-8001-000000000003';
+// Category ids are readable slugs (the mandatory slug-id rule — a category id
+// rides in memory audiences, villager assignments, and surfaces the model can
+// read, so it must be greppable, not a UUID). The old deterministic-UUID seeds
+// are migrated to these on load; see migrateCategoryIds.
+const CAT_CLOSE_FRIENDS = 'close-friends';
+const CAT_ACQUAINTANCES  = 'acquaintances';
+const CAT_CARE_NETWORK   = 'care-network';
+
+// Old seed ids (pre-slug) → their slug, for the one-time load-time migration.
+const LEGACY_SEED_CATEGORY_IDS = {
+  '00000000-0000-4000-8001-000000000001': CAT_CLOSE_FRIENDS,
+  '00000000-0000-4000-8001-000000000002': CAT_ACQUAINTANCES,
+  '00000000-0000-4000-8001-000000000003': CAT_CARE_NETWORK,
+};
+
+const _UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A short readable slug from a category name ("Close Friends" → "close-friends").
+function slugifyCategoryName(name) {
+  return String(name || '').toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'circle';
+}
+
+/**
+ * Build the old-id → new-slug map for a registry's categories (idempotent).
+ * A UUID-shaped category id is remapped: a known legacy seed → its slug; any
+ * other UUID (a ward-created randomUUID category) → a unique slug from its name.
+ * Ids that are already slugs are left untouched. Pure. Returns a Map (empty when
+ * nothing needs migrating).
+ */
+export function migrateCategoryIds(rawCategories = []) {
+  const map = new Map();
+  // Reserve the builtin + seed slugs and any id already slug-shaped, so a
+  // name-derived slug can't collide with them.
+  const taken = new Set([CATEGORY_EMERGENCY, CATEGORY_STRANGERS, CAT_CLOSE_FRIENDS, CAT_ACQUAINTANCES, CAT_CARE_NETWORK]);
+  for (const c of rawCategories) {
+    if (c && typeof c.id === 'string' && !_UUID_RE.test(c.id)) taken.add(c.id);
+  }
+  for (const c of rawCategories) {
+    if (!c || typeof c.id !== 'string' || !_UUID_RE.test(c.id)) continue; // already a slug (or junk)
+    let slug = LEGACY_SEED_CATEGORY_IDS[c.id];
+    if (!slug) {
+      const base = slugifyCategoryName(c.name);
+      slug = base;
+      for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+    }
+    map.set(c.id, slug);
+    taken.add(slug);
+  }
+  return map;
+}
 
 const DEFAULT_CATEGORY_SEEDS = [
   {
@@ -201,14 +249,22 @@ export function normalizeRegistry(raw) {
   const reg = (raw && typeof raw === 'object') ? raw : {};
   const categories = Array.isArray(reg.categories) ? reg.categories : [];
 
+  // Slug-id migration (idempotent): rewrite any UUID category id to a readable
+  // slug, and carry the remap into every reference below (villager categoryIds,
+  // location assignedCategoryId). A registry already on slugs yields an empty
+  // map and this is a no-op.
+  const idMap = migrateCategoryIds(categories);
+  const remap = (id) => idMap.get(id) ?? id;
+
   const byId = new Map();
   for (const c of categories) {
     if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !c.id.trim()) continue;
     if (typeof c.name !== 'string' || !c.name.trim()) continue;
-    byId.set(c.id, {
-      id: c.id,
+    const cid = remap(c.id);
+    byId.set(cid, {
+      id: cid,
       name: c.name.trim(),
-      builtin: c.id === CATEGORY_EMERGENCY || c.id === CATEGORY_STRANGERS,
+      builtin: cid === CATEGORY_EMERGENCY || cid === CATEGORY_STRANGERS,
       grants: sanitizeGrants(c.grants),
     });
   }
@@ -238,7 +294,7 @@ export function normalizeRegistry(raw) {
         // Accepts both categoryIds[] (new) and legacy categoryId scalar.
         // Dangling / empty → [strangers]. Narrow, never widen.
         categoryIds: normalizeCategoryIds(
-          v.categoryIds ?? (v.categoryId ? [v.categoryId] : []),
+          (v.categoryIds ?? (v.categoryId ? [v.categoryId] : [])).map(remap),
           byId,
         ),
         aliases: sanitizeAliases(v.aliases),
@@ -269,8 +325,9 @@ export function normalizeRegistry(raw) {
     .map(l => ({
       key: l.key.trim(),
       label: typeof l.label === 'string' ? l.label : l.key.trim(),
-      // Unassigned or dangling → strangers ceiling (the floor).
-      assignedCategoryId: byId.has(l.assignedCategoryId) ? l.assignedCategoryId : CATEGORY_STRANGERS,
+      // Unassigned or dangling → strangers ceiling (the floor). Remap first so
+      // a pre-slug UUID assignment carries over to the migrated category id.
+      assignedCategoryId: byId.has(remap(l.assignedCategoryId)) ? remap(l.assignedCategoryId) : CATEGORY_STRANGERS,
       ...normalizeLocationMode(l),
       // readBots: opt-in to seeing other bots/Familiars in this room.
       // Off by default — the loop guard. Independent of presence mode.
@@ -427,7 +484,12 @@ export async function upsertCategory({ id, name, grants }, { filePath = DEFAULT_
       return existing;
     }
     if (typeof name !== 'string' || !name.trim()) throw new Error('name (string) is required');
-    const cat = { id: randomUUID(), name: name.trim(), builtin: false, grants: sanitizeGrants(grants) };
+    // Readable slug id (the mandatory slug rule), unique within the registry.
+    const taken = new Set(reg.categories.map(c => c.id));
+    const base = slugifyCategoryName(name);
+    let slug = base;
+    for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+    const cat = { id: slug, name: name.trim(), builtin: false, grants: sanitizeGrants(grants) };
     reg.categories.push(cat);
     return cat;
   });
