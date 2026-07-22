@@ -16,6 +16,7 @@ import {
 import {
   getUnactedIntents,
   markIntentActedOn,
+  dropIntent,
   formatDeferredIntentsBlock,
 } from '../recent-ponderings.js';
 
@@ -654,6 +655,39 @@ test('markIntentActedOn: returns error on unknown uid or out-of-range index', as
     const badIdx = await markIntentActedOn({ uid: r.uid, index: 99, tomesDir: dir });
     assert.equal(badIdx.ok, false);
     assert.ok(badIdx.error);
+  } finally { cleanup(); }
+});
+
+test('dropIntent: discards without acting — leaves the queue, stamps disposition', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const r = await ponderOnce({
+      topic: 't', provider: 'nanogpt', apiKey: 'k', model: 'm',
+      callLLM: async () => JSON.stringify({
+        title: 'x', content: 'c',
+        wants_to_save: [{ kind: 'tell', summary: 'ask how Schmidt went' }],
+      }),
+      tomesDir: dir,
+    });
+
+    const dropped = await dropIntent({ uid: r.uid, index: 0, reason: 'already answered in chat', tomesDir: dir });
+    assert.equal(dropped.ok, true);
+
+    // Gone from the pending queue (both delivery surfaces read getUnactedIntents).
+    const intents = await getUnactedIntents({ tomesDir: dir });
+    assert.equal(intents.length, 0);
+
+    // …but recorded as a DISCARD, not a delivery (acknowledge-≠-acting).
+    const tome = JSON.parse(await fsp.readFile(r.tomeFile, 'utf8'));
+    const item = tome.entries[r.uid].wants_to_save[0];
+    assert.equal(item.acted_on, true);
+    assert.equal(item.disposition, 'dropped');
+    assert.equal(item.dropped_reason, 'already answered in chat');
+
+    // Idempotent: dropping again reports it's already gone.
+    const again = await dropIntent({ uid: r.uid, index: 0, tomesDir: dir });
+    assert.equal(again.ok, true);
+    assert.equal(again.alreadyGone, true);
   } finally { cleanup(); }
 });
 
