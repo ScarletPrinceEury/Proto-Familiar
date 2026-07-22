@@ -64,6 +64,22 @@ test('resolveRememberGate: villager with no remember map uses category defaults'
   assert.equal(resolveRememberGate('health_info', [v], null), 'ask');
 });
 
+// ── Fictional characters: no real-world privacy → kept freely ────────────────
+
+test('resolveRememberGate: a fictional-flagged fact is kept freely, bypassing every gate', () => {
+  // A named third party normally asks; a ward "false" normally blocks.
+  assert.equal(resolveRememberGate('health_info', [], null, null, { hasNamedSubjects: true }), 'ask');
+  // fictional wins over both the third-party ask and an explicit ward false.
+  assert.equal(resolveRememberGate('health_info', [], null, null, { hasNamedSubjects: true, fictional: true }), 'true');
+  const wardBlocks = { relationships: false };
+  assert.equal(resolveRememberGate('relationships', [], wardBlocks, null, { fictional: true }), 'true');
+});
+
+test('resolveRememberGate: fictional defaults false — real people are unaffected', () => {
+  // No fictional flag → a named third party still asks (unchanged behaviour).
+  assert.equal(resolveRememberGate('health_info', [], null, null, { hasNamedSubjects: true }), 'ask');
+});
+
 // ── Standing mutual consent: clears `ask`, never overrides `false` ───────────
 
 test('resolveRememberGate: standing consent (both agreed) clears the ask gate', () => {

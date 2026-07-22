@@ -1421,8 +1421,8 @@ app.get('/api/noticing-events', async (_req, res) => {
   catch { res.json([]); }
 });
 
-// "Eury's rounds" (Initiative Pass 3): the ward-facing view of the Familiar's
-// standing rounds, honouring the Familiar's own visibility choice. A private
+// The Familiar's rounds (Initiative Pass 3): the ward-facing view of the
+// Familiar's standing rounds, honouring the Familiar's own visibility choice. A private
 // round is COUNTED (hidden_count) but its contents withheld — existence is
 // never hidden (no covert cognition), only what a private round is.
 app.get('/api/rounds', async (_req, res) => {
@@ -2698,7 +2698,7 @@ app.get('/api/entity/graph/nodes', async (req, res) => {
 });
 
 // Text search across graph nodes — backs the find_graph_node LLM tool so
-// the Familiar can resolve a name ("Eury", "Chen") to a graph id without
+// the Familiar can resolve a name ("Chen", "Milkyway") to a graph id without
 // loading the full node list.
 app.get('/api/entity/graph/search', async (req, res) => {
   const { q, type, limit } = req.query;

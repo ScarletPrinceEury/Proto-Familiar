@@ -1671,8 +1671,8 @@ function fmtMsgTime(ts) {
 }
 
 // Global strip for the new bracket format. Matches anywhere in the
-// content, not just leading — the rolling-accumulation bug Eury
-// found put multiple snippets at the head, but the LLM could in
+// content, not just leading — the rolling-accumulation bug one
+// Familiar instance surfaced put multiple snippets at the head, but the LLM could in
 // principle echo them mid-prose too.
 const TIMESTAMP_RE_NEW = new RegExp(`${TS_OPEN}\\d{1,2}:\\d{2}${TS_CLOSE}\\s*`, 'g');
 
@@ -9702,7 +9702,7 @@ function teLocalDateKey(d) {
 // the Monday on-or-before the 1st of the month — gives us a clean
 // 6-row × 7-col grid that always starts on Monday, with the prior
 // month's tail filling the first row. (Localised to Monday-start
-// because Eury runs in DE; flipping to Sunday-start is a one-line
+// because the reference instance runs in DE; flipping to Sunday-start is a one-line
 // change if a setting ever surfaces.)
 function teCalendarGridStart(year, month) {
   const first = new Date(year, month, 1);
@@ -10002,7 +10002,7 @@ async function teLoadRoutine() {
   teLoadRounds();
 }
 
-// "Eury's rounds" (Initiative Pass 3): a read-only view of the standing
+// The Familiar's rounds (Initiative Pass 3): a read-only view of the standing
 // rounds the Familiar keeps, honouring its own visibility choice. Private
 // rounds are counted but their contents withheld — the Familiar decides
 // what's legible here; we never expose a hidden round's text.

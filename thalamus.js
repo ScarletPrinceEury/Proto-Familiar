@@ -1804,7 +1804,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       const edgeNodeIds = new Set();
       const lines = [];
       // Track id ↔ label for the in-prompt legend so the Familiar can resolve
-      // "Eury protects Chen" to the underlying graph IDs without a tool call.
+      // "{{char}} protects Chen" to the underlying graph IDs without a tool call.
       const idLegendNodes = new Map(); // id → label
       const idLegendEdges = [];        // { id, fromLabel, rel, toLabel }
 
