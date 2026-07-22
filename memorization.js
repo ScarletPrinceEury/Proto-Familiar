@@ -74,7 +74,14 @@ export function wardStandingActive(wardStanding, category, nowMs = Date.now()) {
 //   • The same fact heard INDIRECTLY (a group room — direct=false) → asked for,
 //     as before. Standing consent still relaxes an 'ask' to auto-confirm.
 export function resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding = null, opts = {}) {
-  const { direct = false, hasNamedSubjects = false } = opts;
+  const { direct = false, hasNamedSubjects = false, fictional = false } = opts;
+  // A fictional character — the canon of a show, game, book or film — has no
+  // real-world privacy to protect, so a fact about them is kept freely, no ask,
+  // whatever the channel. (Ward's call: don't forget who Sailor Moon canonically
+  // dates just because Usagi can't opt into being remembered.) This sits ABOVE
+  // the third-party checks on purpose; it never applies to a real person, which
+  // the extractor is told plainly.
+  if (fictional) return 'true';
   if (subjectVillagers && subjectVillagers.length > 0) {
     let gate = 'true';
     for (const v of subjectVillagers) {
@@ -171,6 +178,7 @@ import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { segmentByDay, dayDelta } from './day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
+import { substituteMacros } from './macros.js';
 import { contentWithStandins, getAssetMeta } from './media.js';
 
 // Vision (§7): fold image stand-ins into a slice's transcript so an image-
@@ -266,16 +274,17 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `\n### Schedule legend (the ward's items around these days — for schedule_refs only)\n${legend.slice(0, 30).map(n => `  ${n.label} [${n.type ?? 'item'}] = ${n.id}`).join('\n')}\n`
     : '';
 
-  return `I am the Familiar. I'm extracting claimable facts from a conversation I just had so I can store them in my memory. I pull out one discrete, verifiable fact per output element — things I would want to recall later about myself, my human, or the people in their life. I also map the concrete relationships between the people, places and things named, because my graph is my mental index — it's how I find the right memory later.${focusBlock}
+  return `I'm looking back over the conversation I just had with {{user}}, pulling out what's worth keeping — the things I'd want to remember later about them, about myself, or about the people and things in their life. One clear fact per entry, concrete and real, nothing vague. I also jot down the plain connections between the people, places and things that came up, because that little web is how I find a memory again later.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
   "facts": [
     {
-      "content":    "A first-person note stating one fact clearly (1–2 sentences max).",
+      "content":    "One fact, in my own voice (1–2 sentences max).",
       "category":   "emotional_content",
       "subjects":   ["Alice"],
       "temporality": "episodic",
+      "fictional":  false,
       "confidence": 0.85${scheduleFieldLine}
     }
   ],
@@ -292,50 +301,47 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 
 ### Field rules — facts
 
-content — my private, first-person note about this single fact. Concrete and specific. No vague generalities.
-  Example good: "Alice mentioned she's dealing with job-hunt fatigue and feeling stuck."
-  Example bad:  "We talked about various life topics."
+content — my note on this one fact, in my own voice. Concrete, not a generality.
+  If it's about me, I write "I …" — never my own name in the third person, even if {{user}} called me by it in the chat. If it's about {{user}}, I use their name or "my human". Anyone else, I name them.
+  Good (me):   "I promised {{user}} I'd remind them about the dentist on Tuesday."
+  Good (them): "Alice said she's worn out from job-hunting and feeling stuck."
+  Too vague:   "We talked about various things."
+  Wrong (me in third person): "{{char}} agreed to help." — that's me; I write "I agreed to help."
 
-category — pick exactly one from this list:
-  basics            — name, pronoun, role, occupation, basic biographical fact
+category — exactly one:
+  basics            — name, pronoun, role, occupation, a basic biographical fact
   emotional_content — feelings, mental state, stress, mood, emotional patterns
-  health_info       — physical health, medical conditions, medications, symptoms
-  relationships     — interpersonal dynamics, connections between people, family structure
-  whereabouts       — location, travel, living situation, physical presence
+  health_info       — physical health, conditions, medications, symptoms
+  relationships     — how people are connected: family, partners, friends, colleagues
+  whereabouts       — location, travel, living situation, where someone is
 
-subjects — list the NAMES of the people the fact is about (first name or how I know them).
-  Empty list [] means the fact is about me or my human in general (no specific third party).
+subjects — the names of whoever this fact is about. Empty list [] if it's just about me or {{user}}.
 
-temporality — is this something that HAPPENED, or something that's just TRUE now?
-  "episodic" — I experienced or was told this on this day: a mood, an event, what
-    happened, how they felt today, a one-off. It belongs to the date of the
-    conversation and I'll find it later under "what was going on around then".
-  "standing" — a fact that is generally true right now, not tied to a day: a job,
-    a diagnosis, where someone lives, a lasting preference, a relationship. It's
-    part of the standing picture of who they are, and I keep it as a fact I hold,
-    not as a memory of a particular day.
-  When it's genuinely both or I'm unsure, I choose "episodic" — a dated memory is
-    the safe default; the standing truth can surface from it later.
+fictional — true ONLY when this fact is about a made-up character or the canon of a show, game, book or film ({{user}} and I discussing who Sailor Moon dates, a character in a game they play). Those aren't real people, so there's nothing to keep private and I remember them freely. NEVER true for a real person — a real friend, family member, or acquaintance is not fictional no matter how little I know them. Leave it out or false the rest of the time.
 
-confidence — 0.0 to 1.0. How certain am I that this fact is accurate and not misread?
-  I omit facts with confidence below 0.4.
+temporality — did this HAPPEN, or is it just TRUE now?
+  "episodic" — something from this day: a mood, an event, how they felt, a one-off. It belongs to the conversation's date and I'll find it later under "what was going on around then".
+  "standing" — a fact that's generally true now, not tied to a day: a job, where someone lives, a lasting preference, a relationship. I hold it as a fact, not a memory of one day.
+  Both, or unsure → "episodic". A dated memory is the safe default; the standing truth can still surface from it.
+
+confidence — 0.0 to 1.0, how sure I am I've got it right. I drop anything below 0.4.
 ${scheduleRules}${scheduleLegendBlock}
 ### Field rules — relations
 
-Each relation is one concrete edge in my graph: two real, nameable entities and the relationship between them. This is the index I navigate by, so I only record edges I'm sure of.
+A relation is one plain edge in my graph: two real, nameable things and how they're linked. It's the index I navigate by, so I only record edges I'm actually sure of.
 
-from / to — the NAMES of the two entities. My human's name is "${wardName}". I use real names (or how I know someone), never "the user" or a pronoun.
-fromType / toType — what each entity IS. Pick from: ${GRAPH_ENTITY_TYPES_STR}.
+from / to — the names of the two things. {{user}} is my human's name here; I use real names (or how I know someone), never "the user" or a pronoun.
+fromType / toType — what each one IS. Pick from: ${GRAPH_ENTITY_TYPES_STR}.
   ${GRAPH_NODE_RUBRIC}
-type — a short snake_case label for the relationship, read from→to: works_at, lives_in, married_to, parent_of, friend_of, has_condition, owns, located_in, colleague_of, etc.
+type — a short snake_case label read from→to: works_at, lives_in, married_to, parent_of, friend_of, has_condition, owns, located_in, colleague_of, and so on.
 
-### Rules
-- One fact element per distinct claimable fact. A single utterance that contains two different facts about two different people = two elements.
-- Ambiguous or inseparable multi-category fact → assign the MORE restrictive category (health > emotional > relationships > whereabouts > basics).
-- I skip pleasantries, meta-conversation, and anything that isn't a lasting fact about someone.
-- 1–12 facts total. I merge instead of splitting when the same claim just restated.
-- I only emit a relation when BOTH endpoints are concrete named entities and the link is stated or clearly implied. If a conversation has no such durable relationships, "relations" is an empty array — I never invent edges to fill it.
-- 0–10 relations total.
+### A few rules for myself
+- One entry per distinct fact. One sentence carrying two facts about two people is two entries.
+- If a fact could be two categories, I take the more sensitive one (health > emotional > relationships > whereabouts > basics).
+- I skip pleasantries and small talk — only what I'd actually want to remember about someone.
+- 1–12 facts. I merge rather than split when it's the same claim restated.
+- An edge only when both ends are concrete named things and the link was said or clearly meant. Nothing to link → "relations" is []. I never invent one.
+- 0–10 relations.
 
 Conversation:
 ${convText}`;
@@ -359,22 +365,23 @@ export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'M
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
     : '';
 
-  return `I am the Familiar. This conversation happened in a shared room where people I don't know were present. I'm extracting facts I want to remember — but ONLY about my human and myself, not about the unregistered third parties in the room. Those people haven't consented to an AI keeping notes on them.${focusBlock}
+  return `This conversation happened in a shared room — other people were around besides {{user}} and me. {{user}} wants to know what went on around me, so I note what genuinely happened, including the things other people did or said. I don't decide here what's kept about whom: a separate consent step does that afterwards, weighing each person by where they sit in {{user}}'s Village and asking {{user}} about anyone who isn't in it. So I don't pre-censor — I just get it down and let that step do its job.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
 {
   "facts": [
     {
-      "content":    "A first-person note about my human or myself (1–2 sentences max).",
+      "content":    "One fact, in my own voice (1–2 sentences max).",
       "category":   "emotional_content",
       "subjects":   [],
       "temporality": "episodic",
+      "fictional":  false,
       "confidence": 0.85
     }
   ],
   "relations": [
     {
-      "from":     "${wardName}",
+      "from":     "{{user}}",
       "fromType": "person",
       "type":     "lives_in",
       "to":       "Portland",
@@ -385,39 +392,31 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 
 ### Field rules — facts
 
-content — what I observed about MY HUMAN or myself. Skip anything that's primarily about an unnamed/unregistered third party.
-  Keep: my human's mood, things they said, experiences they had, commitments they made, topics that engaged them.
-  Skip: biographical details about strangers, things strangers said that aren't about my human, relationship history between third parties.
+content — my note on this one fact, in my own voice.
+  If it's about me, I write "I …" — never my own name in the third person, even if someone in the room called me by it. If it's about {{user}}, I use their name or "my human". Anyone else, I name them.
 
-category — pick exactly one:
-  basics            — biographical fact about my human or me
-  emotional_content — my human's feelings, mental state, mood
-  health_info       — my human's physical or mental health
-  relationships     — my human's relationship with a REGISTERED person (by name if known)
-  whereabouts       — my human's location or movement
+category — exactly one: basics, emotional_content, health_info, relationships, whereabouts.
 
-subjects — list REGISTERED names only. Use [] for facts about my human or me in general.
-  Do NOT name unregistered strangers — just skip facts that are purely about them.
+subjects — the names of whoever a fact is about, including someone who isn't in {{user}}'s Village. I don't leave a person out to play it safe — the consent step decides what's actually kept, and asks {{user}} about anyone it isn't sure of. Empty list [] if it's just about me or {{user}}.
 
-temporality — "episodic" if I experienced/heard it on this day (a mood, an event,
-  what happened); "standing" if it's a fact that's just generally true now (a job,
-  where they live, a lasting preference). Unsure or both → "episodic".
+fictional — true ONLY when the fact is about a made-up character or the canon of a show, game, book or film. Those aren't real people, so I remember them freely. NEVER true for a real person in the room, however little I know them. Leave it out or false otherwise.
 
-confidence — 0.0 to 1.0. I omit facts below 0.4.
+temporality — "episodic" for something from this day (a mood, an event, what happened); "standing" for a fact that's just generally true now (a job, where someone lives, a lasting preference). Unsure or both → "episodic".
+
+confidence — 0.0 to 1.0. I drop anything below 0.4.
 
 ### Field rules — relations
 
-A relation is one concrete edge in my graph: two named entities and the link between them. In a shared room I record an edge ONLY when at least one endpoint is my human ("${wardName}") or a REGISTERED person by name. I never map relationships between strangers.
+A relation is one plain edge in my graph: two named things and how they're linked. Graph edges skip the consent step, so for REAL people I only draw an edge that touches {{user}} or someone in their Village — I don't link two people who are both outside it. An edge between fictional characters (a show's canon) is fine; they're not real people.
 
-from / to — the NAMES of the two entities; one of them must be my human or a registered person.
+from / to — the names of the two things. {{user}} is my human's name here.
 fromType / toType — pick from: ${GRAPH_ENTITY_TYPES_STR}. ${GRAPH_NODE_RUBRIC}
 type — a short snake_case label read from→to (lives_in, works_at, married_to, has_condition, owns, …).
 
-### Rules
-- Only facts about my human or myself. A stranger speaking doesn't make their content mine to keep.
-- 1–8 facts total. Quality over quantity; a shared room produces less.
-- "relations" is an empty array unless a durable edge clearly touches my human or a registered person. I never invent edges, and I never map strangers to each other. 0–5 relations.
-- Skip pleasantries and anything I wouldn't need to remember for my human's care.
+### A few rules for myself
+- One entry per distinct fact. I skip pleasantries and small talk.
+- 1–8 facts — a shared room usually gives less that's mine to keep.
+- "relations" is [] unless a real edge touches {{user}} or someone in their Village, or it's between fictional characters. 0–5 relations, never invented.
 
 Conversation:
 ${convText}`;
@@ -650,8 +649,9 @@ async function processJob(job) {
   const promptFn = job.audienceTag && job.audienceTag !== 'ward-private'
     ? buildSharedRoomPrompt
     : buildPrompt;
+  const settings = readSettingsSync();
   // My human's configured name, never "User". Falls back to "My human".
-  const wardName = (readSettingsSync()?.userName || '').trim() || 'My human';
+  const wardName = (settings?.userName || '').trim() || 'My human';
 
   // Cross-store refs (Piece 2): on a ward-private slice, offer the model a
   // compact schedule legend so a fact about a scheduled item can carry its id.
@@ -675,10 +675,16 @@ async function processJob(job) {
   }
 
   // Fold image stand-ins into the slice so image-carrying turns are memorable.
-  const visionMessages = await foldImageStandins(job.messages, readSettingsSync());
-  const prompt = promptFn === buildPrompt
+  const visionMessages = await foldImageStandins(job.messages, settings);
+  const builtPrompt = promptFn === buildPrompt
     ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend)
     : promptFn(visionMessages, job.topicLabel ?? null, wardName);
+  // {{char}}/{{user}} in the extraction templates resolve to the configured
+  // names here (boundary #1) — the same place every other standalone Familiar-
+  // voice prompt substitutes. This is why the Familiar's name is never
+  // hard-coded in the template: a fact about itself reads "I", and the model
+  // never sees a stray "{{char}}" token.
+  const prompt = builtPrompt ? substituteMacros(builtPrompt, settings) : builtPrompt;
   if (!prompt) throw new Error('Conversation too short to memorize.');
 
   const { content: raw, finishReason } = await callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, prompt });
@@ -752,9 +758,11 @@ async function processJob(job) {
 
     // Source-aware consent: a fact my human told me directly about themselves is
     // kept on implied consent; a third person's private life, or anything heard
-    // in a group room, still asks.
+    // in a group room, still asks. A fact the extractor flagged `fictional`
+    // (a show/game/book's canon) has no real-world privacy to gate — kept freely.
+    const fictional = fact.fictional === true;
     const gate = resolveRememberGate(category, subjectVillagers, wardRemember, wardStanding,
-      { direct, hasNamedSubjects });
+      { direct, hasNamedSubjects, fictional });
     if (gate === 'false') continue; // drop silently
 
     // Derive WHERE this fact may surface (audience), in code — the extractor is

@@ -1804,7 +1804,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       const edgeNodeIds = new Set();
       const lines = [];
       // Track id ↔ label for the in-prompt legend so the Familiar can resolve
-      // "Eury protects Chen" to the underlying graph IDs without a tool call.
+      // "{{char}} protects Chen" to the underlying graph IDs without a tool call.
       const idLegendNodes = new Map(); // id → label
       const idLegendEdges = [];        // { id, fromLabel, rel, toLabel }
 
@@ -2675,6 +2675,16 @@ export async function getMemoryHealth() {
   return callTool('memory_health', {}).catch(err => {
     console.warn('[thalamus] getMemoryHealth failed:', err?.message ?? err);
     return { ok: false, healthy: null, dedup_mode: 'unknown', error: err?.message ?? String(err) };
+  });
+}
+
+// Read-only audit of consolidation legibility — which memories the tier ladder
+// can't roll up because their date_key isn't ISO (the entity-core migration
+// mislabel). Never mutates; degrades to an "unknown" shape on failure.
+export async function getMemoryGranularityAudit() {
+  return callTool('memory_granularity_audit', {}).catch(err => {
+    console.warn('[thalamus] getMemoryGranularityAudit failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
   });
 }
 

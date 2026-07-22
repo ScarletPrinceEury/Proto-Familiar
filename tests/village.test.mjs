@@ -11,6 +11,7 @@ import {
   findVillagerByAlias, migrateTrustedContacts,
   seedDefaultCategories,
   initVillageSync, bootSync,
+  migrateCategoryIds,
   CATEGORY_EMERGENCY, CATEGORY_STRANGERS,
 } from '../village.js';
 
@@ -473,4 +474,53 @@ test('bootSync: pull failure leaves mirror authoritative (never throws)', async 
   initVillageSync({ pull: async () => { throw new Error('Phylactery down'); } });
   const reg = await bootSync({ filePath });
   assert.equal(reg.villagers[0].name, 'Chen');
+});
+
+// ── Category-id slug migration (readable ids, not UUIDs) ─────────────
+
+test('migrateCategoryIds: legacy seed UUIDs → their slugs; ward UUIDs → name slugs; slugs untouched', () => {
+  const map = migrateCategoryIds([
+    { id: '00000000-0000-4000-8001-000000000001', name: 'Close Friends' },
+    { id: '00000000-0000-4000-8001-000000000003', name: 'Care Network' },
+    { id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', name: 'Book Club' },
+    { id: 'strangers', name: 'Strangers' },                 // already a slug → kept
+  ]);
+  assert.equal(map.get('00000000-0000-4000-8001-000000000001'), 'close-friends');
+  assert.equal(map.get('00000000-0000-4000-8001-000000000003'), 'care-network');
+  assert.equal(map.get('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'), 'book-club');
+  assert.equal(map.has('strangers'), false);                // slug ids are not remapped
+});
+
+test('migrateCategoryIds: name-slug collisions get a numeric suffix', () => {
+  const map = migrateCategoryIds([
+    { id: '11111111-1111-4111-8111-111111111111', name: 'Family' },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'Family' },
+  ]);
+  const slugs = [...map.values()];
+  assert.deepEqual(slugs, ['family', 'family-2']);
+});
+
+test('normalizeRegistry migrates UUID category ids across every reference', () => {
+  const reg = normalizeRegistry({
+    categories: [
+      { id: '00000000-0000-4000-8001-000000000001', name: 'Close Friends', grants: { health: true } },
+    ],
+    villagers: [
+      { id: 'v1', name: 'Chen', categoryIds: ['00000000-0000-4000-8001-000000000001'] },
+    ],
+    locations: [
+      { key: 'guild:1/chan:2', label: 'Lounge', assignedCategoryId: '00000000-0000-4000-8001-000000000001' },
+    ],
+  });
+  assert.ok(reg.categories.some(c => c.id === 'close-friends'));
+  assert.ok(!reg.categories.some(c => /^0{8}-/.test(c.id)));
+  assert.deepEqual(reg.villagers[0].categoryIds, ['close-friends']);
+  assert.equal(reg.locations[0].assignedCategoryId, 'close-friends');
+});
+
+test('upsertCategory mints a readable slug id, not a UUID', async () => {
+  const cat = await upsertCategory({ name: 'Work Friends', grants: {} }, { filePath });
+  assert.equal(cat.id, 'work-friends');
+  const cat2 = await upsertCategory({ name: 'Work Friends', grants: {} }, { filePath });
+  assert.equal(cat2.id, 'work-friends-2');   // collision → suffix
 });

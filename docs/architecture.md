@@ -777,7 +777,7 @@ surface in `[Temporal Context]` via `temporal_context` (a payoff turn riding the
 existing per-turn call; stripped on gated villager turns — private cognition).
 Reflection can also END in commitments: the pondering output schema gains
 `intentions[]` (≤3/tick, `source:'reflection'`, routed via `setIntention`).
-**"Eury's rounds"** is a ward-facing read-only view (`GET /api/rounds`, routine
+**The Familiar's rounds** is a ward-facing read-only view (`GET /api/rounds`, routine
 tab) honouring the Familiar's own visibility choice — a private round is counted
 (`hidden_count`) but its contents withheld: existence is never hidden, only what
 a private round *is*. The autonomous noticing turn that consumes due intentions
@@ -2001,7 +2001,7 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 
 **`schedule_delete(id)` (0.7.x).** Permanently removes a schedule node — event, task, reminder, or routine **phase** — via `deleteScheduleNode` → Unruh `schedule_delete_node` (which returns `{ok, deleted}`; `deleted:false` means no such id). Distinct from `schedule_resolve`, which marks a node `done`/`cancelled` while *keeping the record*: delete *erases* it, and is the only way to remove a phase or clean up a duplicate/mistaken entry. The plumbing (`deleteScheduleNode` thalamus helper + the Unruh MCP tool) already existed end-to-end; it simply had no Familiar-facing tool until now — the classic "capability not reachable BY the Familiar" gap.
 
-**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
+**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals" — Eury here is the *reference* Familiar instance used in examples, **not** a universal name; each user's Familiar is named via the `{{char}}` config, and code/prompts never hard-code "Eury") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 
 **`what_lapses_cost.md`** lives in Phylactery's `custom` category as `what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
 

@@ -29,7 +29,7 @@ import {
   exportBackup, restoreBackup, runLifecyclePass,
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
-  getMemoryHealth, backfillMemoryEmbeddings,
+  getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
   searchMemory,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
@@ -1421,8 +1421,8 @@ app.get('/api/noticing-events', async (_req, res) => {
   catch { res.json([]); }
 });
 
-// "Eury's rounds" (Initiative Pass 3): the ward-facing view of the Familiar's
-// standing rounds, honouring the Familiar's own visibility choice. A private
+// The Familiar's rounds (Initiative Pass 3): the ward-facing view of the
+// Familiar's standing rounds, honouring the Familiar's own visibility choice. A private
 // round is COUNTED (hidden_count) but its contents withheld — existence is
 // never hidden (no covert cognition), only what a private round is.
 app.get('/api/rounds', async (_req, res) => {
@@ -2285,6 +2285,15 @@ app.get('/api/memory-health', async (_req, res) => {
   catch (err) { res.json({ ok: false, healthy: null, dedup_mode: 'unknown', error: err?.message ?? String(err) }); }
 });
 
+// GET /api/memory-granularity — read-only audit of which memories the tier
+// ladder can't consolidate (non-ISO date_key from the entity-core migration).
+// Diagnostic only; mutates nothing. Lets the ward SEE the mislabeled rows
+// before any heal is chosen.
+app.get('/api/memory-granularity', async (_req, res) => {
+  try { res.json(await getMemoryGranularityAudit()); }
+  catch (err) { res.json({ ok: false, error: err?.message ?? String(err) }); }
+});
+
 // POST /api/memory-backfill — embed any memories missing a vector (the
 // migration gap), so semantic dedup can see them. Idempotent; also runs
 // automatically at boot when a gap is detected.
@@ -2689,7 +2698,7 @@ app.get('/api/entity/graph/nodes', async (req, res) => {
 });
 
 // Text search across graph nodes — backs the find_graph_node LLM tool so
-// the Familiar can resolve a name ("Eury", "Chen") to a graph id without
+// the Familiar can resolve a name ("Chen", "Milkyway") to a graph id without
 // loading the full node list.
 app.get('/api/entity/graph/search', async (req, res) => {
   const { q, type, limit } = req.query;

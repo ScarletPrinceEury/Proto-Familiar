@@ -69,7 +69,7 @@ import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from 
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { markIntentActedOn, snoozeIntent, readPonderingByUid } from './recent-ponderings.js';
+import { markIntentActedOn, snoozeIntent, dropIntent, getUnactedIntents, readPonderingByUid } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { readWeatherNowLine, weatherEnabled } from './weather-mirror.js';
 import { resolveLocation, getForecast, dayDatesFor } from './weather-service.js';
@@ -1076,13 +1076,21 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'list_deferred_intents',
+      description: 'I use this to look at my OWN pending queue of deferred intents — the things I noted in my free time that I still mean to file or say to my human. The [Deferred intents from my free time] block only appears when the system surfaces it; this lets me inspect the queue myself, any time, so I can audit it: catch one that\'s already been answered in our conversation and drop it, remember a tell I meant to bring up, or just see what\'s outstanding. Each item comes back with its uid + index, which I then pass to acknowledge_deferred_intent, snooze_deferred_intent, or drop_deferred_intent. Takes no arguments.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'snooze_deferred_intent',
       description: 'I call this when my human asks me to come back to a deferred intent later. It snoozes the intent so it stops appearing for now and automatically resurfaces after the given number of minutes. I do not call this on my own initiative — only when my human explicitly asks to defer.',
       parameters: {
         type: 'object',
         properties: {
-          uid:     { type: 'string', description: 'UUID of the pondering entry (shown in the deferred-intents block).' },
-          index:   { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+          uid:     { type: 'string', description: 'Entry uid for the intent — from the deferred-intents block or from list_deferred_intents.' },
+          index:   { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array — from the block or from list_deferred_intents.' },
           minutes: { type: 'number', description: 'How long to snooze in minutes. Default 60. Max 10080 (one week).' },
         },
         required: ['uid', 'index'],
@@ -1092,13 +1100,29 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'acknowledge_deferred_intent',
-      description: 'I call this after I have filed a deferred intent from my free time — one that appeared in the [Deferred intents from my free time] block — using save_to_tome, save_memory, or update_identity. It marks the intent as acted on so it stops appearing in my working context. I call this once per intent, right after the filing tool call.',
+      name: 'drop_deferred_intent',
+      description: 'I use this to let go of a deferred intent WITHOUT acting on it — one that\'s gone stale, that my human and I already covered in conversation, or that I no longer want to carry. This is NOT acknowledge_deferred_intent: dropping means I discarded it, not that I filed or said it. Filing/saying it is acknowledge; getting to it later is snooze; letting it go for good is drop. I can find the uid + index from list_deferred_intents or the deferred-intents block.',
       parameters: {
         type: 'object',
         properties: {
-          uid:   { type: 'string', description: 'UUID of the pondering entry that carried the intent (shown in the deferred-intents block).' },
-          index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+          uid:    { type: 'string', description: 'Entry uid for the intent — from list_deferred_intents or the deferred-intents block.' },
+          index:  { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array.' },
+          reason: { type: 'string', description: 'A short note on why I\'m letting it go (e.g. "already answered in chat", "no longer true") — recorded with the drop, optional.' },
+        },
+        required: ['uid', 'index'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'acknowledge_deferred_intent',
+      description: 'I call this after I have filed a deferred intent from my free time — one that appeared in the [Deferred intents from my free time] block or that I found via list_deferred_intents — using save_to_tome, save_memory, or update_identity, or after I have actually SAID a "tell" to my human. It marks the intent as acted on so it stops appearing in my working context. I call this once per intent, right after the filing tool call or after saying the thing — never as a substitute for doing it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid:   { type: 'string', description: 'Entry uid that carried the intent — from the deferred-intents block or from list_deferred_intents.' },
+          index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array — from the block or from list_deferred_intents.' },
         },
         required: ['uid', 'index'],
       },
@@ -2410,6 +2434,33 @@ export const TOOL_EXECUTORS = {
       const result = await appendIdentity({ category, filename, content: content.trim() });
       return result.ok ? quietOk('Identity file updated.') : `Identity update failed: ${result.error ?? 'unknown error'}`;
     } catch (err) { return `Failed to update identity: ${err.message}`; }
+  },
+
+  list_deferred_intents: async () => {
+    try {
+      const intents = await getUnactedIntents({ limit: 25 });
+      if (!intents.length) return quietOk('My deferred-intents queue is empty — nothing pending to file or say.');
+      const now = Date.now();
+      const lines = intents.map(t => {
+        const age = Number.isFinite(t.created_ms) ? (relativeTime(new Date(t.created_ms).toISOString(), now) || '') : '';
+        const agePart = age ? ` · noted ${age}` : '';
+        return `- [${t.kind}] ${t.summary}${agePart}  (uid=${t.uid}, index=${t.index})`;
+      });
+      return `My pending deferred intents (${intents.length}):\n${lines.join('\n')}\n\nI act on one with save_to_tome/save_memory/update_identity then acknowledge_deferred_intent, or say a "tell" then acknowledge; I snooze_deferred_intent to get to it later, or drop_deferred_intent to let a stale one go.`;
+    } catch (err) { return `I couldn't read my deferred-intents queue: ${err.message}`; }
+  },
+
+  drop_deferred_intent: async ({ uid, index, reason = '' }) => {
+    if (typeof uid !== 'string' || !INTENT_UID_RE.test(uid)) return 'Failed to drop intent: uid must be a valid entry uid.';
+    const idx = Number(index);
+    if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+      return 'Failed to drop intent: index must be a non-negative integer.';
+    }
+    try {
+      const data = await dropIntent({ uid, index: idx, reason });
+      if (data.alreadyGone) return 'That intent was already acted on or dropped — nothing to let go of.';
+      return data.ok ? quietOk('Deferred intent let go — I won\'t carry that one anymore.') : `Drop failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) { return `Failed to drop intent: ${err.message}`; }
   },
 
   snooze_deferred_intent: async ({ uid, index, minutes = 60 }) => {

@@ -25,10 +25,13 @@ test('buildSharedRoomPrompt: returns null for too-short conversation', () => {
 
 // ── Content direction ──────────────────────────────────────────────
 
-test('buildSharedRoomPrompt: instructs to focus on the ward, not strangers', () => {
+test('buildSharedRoomPrompt: names the shared-room setting and defers to the consent step', () => {
   const p = buildSharedRoomPrompt(MESSAGES);
   assert.match(p, /my human/i);
-  assert.match(p, /stranger|unregistered|consent/i);
+  // No longer pre-censors strangers — it extracts freely and lets the separate
+  // consent step decide what's kept about other people.
+  assert.match(p, /consent step/i);
+  assert.match(p, /shared room/i);
 });
 
 test('buildSharedRoomPrompt: does NOT contain the full-detail category list', () => {
@@ -51,10 +54,29 @@ test('buildSharedRoomPrompt: includes topicLabel when provided', () => {
 
 // ── Prompt isolation — ward-private vs shared ──────────────────────
 
-test('buildSharedRoomPrompt differs from buildPrompt (stricter instructions)', async () => {
+test('buildSharedRoomPrompt differs from buildPrompt (shared-room framing)', async () => {
   const sharedPrompt = buildSharedRoomPrompt(MESSAGES);
-  // The shared-room variant must contain the key restriction phrase.
-  assert.match(sharedPrompt, /haven't consented/i);
+  const wardPrompt = buildPrompt(MESSAGES);
+  // The shared-room variant is the one that names the room + the consent step.
+  assert.match(sharedPrompt, /shared room/i);
+  assert.doesNotMatch(wardPrompt, /shared room/i);
+});
+
+test('both prompts author names as macros and forbid third-person self-reference', () => {
+  for (const p of [buildPrompt(MESSAGES), buildSharedRoomPrompt(MESSAGES)]) {
+    assert.match(p, /\{\{user\}\}/);        // {{user}}, resolved at the call site
+    assert.doesNotMatch(p, /\bEury\b/);     // never a hard-coded instance name
+    assert.match(p, /third person/i);       // the first-person self rule
+  }
+  // The ward prompt's bad-example uses the {{char}} macro, not a literal name.
+  assert.match(buildPrompt(MESSAGES), /\{\{char\}\} agreed to help/);
+});
+
+test('both prompts carry the fictional-character allowance', () => {
+  for (const p of [buildPrompt(MESSAGES), buildSharedRoomPrompt(MESSAGES)]) {
+    assert.match(p, /fictional/);
+    assert.match(p, /Sailor Moon|show, game, book/i);
+  }
 });
 
 // ── Transcript labelling — never "User" (first-person convention) ──

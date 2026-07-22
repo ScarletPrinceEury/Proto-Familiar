@@ -320,7 +320,7 @@ def set_rounds_visibility(conn: sqlite3.Connection, *, value: str) -> dict[str, 
 
 
 def rounds_for_ward(conn: sqlite3.Connection) -> dict[str, Any]:
-    """The ward-facing "Eury's rounds" view. Standing rounds (active,
+    """The ward-facing "the Familiar's rounds" view. Standing rounds (active,
     recurring, phase-bound), respecting the Familiar's visibility choice:
     the GLOBAL default, overridable per-intention. A round the Familiar has
     made private is counted (its EXISTENCE is never hidden — no covert

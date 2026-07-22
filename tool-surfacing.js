@@ -71,6 +71,7 @@ export const TOOL_MODULES = {
   weather_today: 'weather', set_current_location: 'weather',
 
   acknowledge_deferred_intent: 'acks', snooze_deferred_intent: 'acks',
+  list_deferred_intents: 'acks', drop_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
   graduation_acknowledge: 'acks',
   // Reading my own recent thought in full — the expand path for the pondering
@@ -112,7 +113,7 @@ export const MODULE_INDEX =
   'village (the people around my human: lookup/upsert, relay, Discord DM), ' +
   'web (search, read pages, look up facts), ' +
   'weather (the sky over my human\'s day today/tomorrow, and moving between their saved places), ' +
-  'acks (file deferred intents, confirm/drop memory consent, graduation notices), ' +
+  'acks (inspect/file/snooze/drop my own pending deferred intents & tells, confirm/drop memory consent, graduation notices), ' +
   'files (list/read my own folder), ' +
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
@@ -170,7 +171,13 @@ const TRIGGERS = {
     blocks: ["[New on my human's calendar", '[My stewardship'],
   },
   acks: {
-    text: null,  // block-driven only: the notice and its tools travel together
+    // Block-driven (the notice + its tools travel together) AND text-driven:
+    // language about my OWN pending queue surfaces list/drop/acknowledge so I
+    // can audit it on demand — the block only appears when the system decides
+    // to, so I need a way to reach the queue myself (the "reachable BY the
+    // Familiar" rule). Generous by design: a false surface costs a few hundred
+    // tokens once; a miss, one request_tools round.
+    text: /\b(deferred intents?|pending (tells?|intents?)|my tells?\b|things? I (meant|wanted) to (tell|say|bring up)|already (told|said|answered|covered) (that|it|you)|audit (my|the) (tells?|intents?|queue))\b/i,
     blocks: ['[Deferred intents from my free time]', '[PENDING MEMORY CONSENT', '[GRADUATION NOTICE'],
   },
   files: {
