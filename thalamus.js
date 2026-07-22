@@ -2678,6 +2678,16 @@ export async function getMemoryHealth() {
   });
 }
 
+// Read-only audit of consolidation legibility — which memories the tier ladder
+// can't roll up because their date_key isn't ISO (the entity-core migration
+// mislabel). Never mutates; degrades to an "unknown" shape on failure.
+export async function getMemoryGranularityAudit() {
+  return callTool('memory_granularity_audit', {}).catch(err => {
+    console.warn('[thalamus] getMemoryGranularityAudit failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
 // Embed memories that never got a vector (the migration gap) so semantic dedup
 // can see them. Idempotent; degrades to a no-op result on any failure.
 export async function backfillMemoryEmbeddings({ limit = null } = {}) {

@@ -460,6 +460,18 @@ def memory_health() -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_granularity_audit() -> dict[str, Any]:
+    """I use this to see which of my memories the consolidation ladder can't
+    reach — rows whose date_key isn't a plain ISO date, so they silently never
+    roll up (daily→weekly→…). It reports my granularity spread, how many rows
+    per tier have an unreadable date_key, how many came from the old entity-core
+    migration, and a few samples. Read-only — it changes nothing, it just shows
+    me where memories are stranded. Returns {by_granularity, unparseable_date_key,
+    migrated_from_entity_core, samples}."""
+    return consol.granularity_audit(conn=_c())
+
+
+@mcp.tool()
 def memory_backfill_embeddings(limit: int | None = None) -> dict[str, Any]:
     """I use this to embed any of my memories that never got a vector — usually
     the ones carried over from before Phylactery (the migration imported them

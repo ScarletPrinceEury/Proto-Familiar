@@ -92,6 +92,58 @@ def _parse_date_key(dk: str | None) -> date | None:
         return None
 
 
+def granularity_audit(conn: sqlite3.Connection | None = None, *, sample_limit: int = 8) -> dict[str, Any]:
+    """Read-only audit of consolidation legibility — surfaces the rows the tier
+    ladder can't see, so a heal is chosen from real data, not a guess.
+
+    A narrative memory only ever consolidates if its date_key parses as ISO
+    (the ladder does substr(date_key,1,10) + date.fromisoformat). A migrated row
+    that kept a non-ISO stem — e.g. 'weekly-05-23-2025' or an mm-dd-yyyy
+    filename — silently never enters any sweep. This reports the granularity
+    spread, how many rows per tier carry an UNPARSEABLE date_key, how many came
+    from the entity-core migration, and a few concrete samples. Never raises,
+    never mutates."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        by_gran: dict[str, int] = {}
+        non_iso: dict[str, int] = {}
+        migrated: dict[str, int] = {}
+        samples: list[dict[str, Any]] = []
+        rows = conn.execute(
+            "SELECT id, granularity, date_key, source_json, content FROM memories WHERE kind='narrative'"
+        ).fetchall()
+        for r in rows:
+            g = r["granularity"] or "(none)"
+            by_gran[g] = by_gran.get(g, 0) + 1
+            src = r["source_json"] or ""
+            is_migrated = "migration:entity-core" in src
+            if is_migrated:
+                migrated[g] = migrated.get(g, 0) + 1
+            if _parse_date_key(r["date_key"]) is None:
+                non_iso[g] = non_iso.get(g, 0) + 1
+                if len(samples) < sample_limit:
+                    samples.append({
+                        "id": r["id"], "granularity": g, "date_key": r["date_key"],
+                        "migrated": is_migrated, "excerpt": (r["content"] or "")[:120],
+                    })
+        return {
+            "ok": True,
+            "narrative_rows": sum(by_gran.values()),
+            "by_granularity": by_gran,
+            "unparseable_date_key": {"total": sum(non_iso.values()), "by_granularity": non_iso},
+            "migrated_from_entity_core": migrated,
+            "samples": samples,
+            "note": ("Rows under 'unparseable_date_key' never enter any consolidation sweep — "
+                     "their date_key isn't ISO YYYY-MM-DD. Migrated 'weekly' rows that are "
+                     "really single days are the suspected mislabel."),
+        }
+    finally:
+        if own:
+            conn.close()
+
+
 def _get_entries_in_range(
     conn: sqlite3.Connection, granularity: str, start_iso: str, end_iso: str,
     exclude_pending: bool = False,

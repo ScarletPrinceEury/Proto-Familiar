@@ -29,7 +29,7 @@ import {
   exportBackup, restoreBackup, runLifecyclePass,
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
-  getMemoryHealth, backfillMemoryEmbeddings,
+  getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
   searchMemory,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
@@ -2283,6 +2283,15 @@ app.get('/api/memory-coverage', async (_req, res) => {
 app.get('/api/memory-health', async (_req, res) => {
   try { res.json(await getMemoryHealth()); }
   catch (err) { res.json({ ok: false, healthy: null, dedup_mode: 'unknown', error: err?.message ?? String(err) }); }
+});
+
+// GET /api/memory-granularity — read-only audit of which memories the tier
+// ladder can't consolidate (non-ISO date_key from the entity-core migration).
+// Diagnostic only; mutates nothing. Lets the ward SEE the mislabeled rows
+// before any heal is chosen.
+app.get('/api/memory-granularity', async (_req, res) => {
+  try { res.json(await getMemoryGranularityAudit()); }
+  catch (err) { res.json({ ok: false, error: err?.message ?? String(err) }); }
 });
 
 // POST /api/memory-backfill — embed any memories missing a vector (the

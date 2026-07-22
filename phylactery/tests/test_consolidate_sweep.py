@@ -129,3 +129,28 @@ def test_monthly_rolls_once_not_re_appended_each_pass():
     assert first["results"]["monthly"]["periods"] == 1
     assert second["results"]["monthly"]["periods"] == 0  # already done — not re-rolled
     assert len(_rows_at(c, "monthly")) == 1
+
+
+def test_granularity_audit_flags_unparseable_migrated_rows():
+    # A read-only audit must surface rows the tier ladder can't see: their
+    # date_key isn't ISO, so consolidation's date.fromisoformat(...) skips them.
+    c = _conn()
+    with patch("phylactery.embed.embed_text", _distinct_embedder()):
+        # Two healthy dailies (ISO date_key) — distinct vectors so dedup keeps both.
+        memory.create("good one", "daily", standalone=True, date_key="2025-05-01", conn=c)
+        memory.create("good two", "daily", standalone=True, date_key="2025-05-02", conn=c)
+    # A migrated 'weekly' row with a raw, non-ISO stem (the reported mislabel).
+    c.execute(
+        "INSERT INTO memories(id, kind, register, granularity, date_key, content, "
+        "audience, source_json, created_at, updated_at) VALUES "
+        "('m-bad','narrative','episodic','weekly','weekly-05-23-2025','a single day', "
+        "'ward-private','{\"author\":\"migration:entity-core\",\"originalId\":\"ec-memory:weekly/weekly-05-23-2025\"}','t','t')"
+    )
+    audit = consolidate.granularity_audit(conn=c)
+    assert audit["ok"] is True
+    assert audit["unparseable_date_key"]["total"] == 1
+    assert audit["unparseable_date_key"]["by_granularity"].get("weekly") == 1
+    assert audit["migrated_from_entity_core"].get("weekly") == 1
+    assert any(s["date_key"] == "weekly-05-23-2025" and s["migrated"] for s in audit["samples"])
+    # The two healthy dailies parse fine and are NOT flagged.
+    assert audit["by_granularity"].get("daily") == 2
