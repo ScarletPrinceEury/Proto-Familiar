@@ -114,14 +114,49 @@ Why this is correct and why the two open sub-questions resolve for free:
   content-gated (not ward-private), third-party facts stay coarse-gated, and the
   per-fact `ward-private` override.
 
-## Migration — DECISION NEEDED (recommend: no auto-migration)
+## Migration — the Familiar re-tags existing facts, with judgment (ward direction)
 
-Existing ward-self memories are tagged coarse `ward-private`. Auto-retagging them
-to the sentinel would RETROACTIVELY expose previously-private facts to villagers
-per the topic grants — a surprising, possibly harmful widening. **Recommendation:
-do NOT auto-migrate.** The change applies to NEWLY memorized facts only; existing
-ward-private facts stay private. Offer the ward an explicit, opt-in bulk re-tag
-later (or per-fact via the memory manager). Confirm this stance before building.
+Existing ward-self memories are all tagged coarse `ward-private` (the old model's
+only option), and carry only a coarse `content_tag` derived from their category
+by the Phase-3 backfill. Two BAD options bracket the right one: leaving them
+stranded forever (too conservative — the whole feature never reaches the ward's
+existing history), or a MECHANICAL blanket re-tag (dangerous — blind widening of
+every private fact by rule). **The right option: the Familiar re-tags them with
+judgment**, because it holds the context each fact needs and "which circle should
+know this about my ward" is a per-fact judgment, not a script — and the same pass
+can correct the `content_tag` (full context sets the real one; a fact the backfill
+filed `general` may truly be `medical:sensitive`).
+
+This is DISCLOSURE — the single narrow cost-category the proactivity rules tell
+the Familiar to be genuinely careful about. So the pass is bounded by three
+guardrails, non-negotiable:
+
+1. **Conservative / fail-safe default.** Unsure → the fact STAYS `ward-private`.
+   The Familiar only content-gates a fact when it's genuinely confident the ward
+   would want the granting circle(s) to be able to know it. Erring toward privacy
+   is the safe direction.
+2. **Ward-visible and revertible.** Re-tagging the ward's private data is never
+   silent. Reuse the existing pattern the system already has for the Familiar
+   moving the ward's private data — a `[GRADUATION NOTICE]`-style block + the
+   consent-queue flow: the Familiar surfaces, in its own voice, what it has
+   opened (or proposes to open) about the ward and to which circles, non-blocking,
+   with easy per-fact revert to `ward-private`.
+   - **Sensitive content** (medical / mental-health / sexuality / gender /
+     finances / legal / substance) → **propose and wait for ward approval**
+     before any widening (mirror the memory-consent ask-gate).
+   - **Ordinary content** → may auto-open with a notify + easy revert.
+   - The ward can also just say *"open my medical to Care Network"* and the
+     Familiar applies it in bulk.
+3. **Rides existing requests, gated in code.** A batched lifecycle/graduation-
+   style pass (code selects candidates: `audience == ward-private`, no
+   third-party subject), ONE batched LLM judgment per batch — never a per-fact
+   LLM call. Own off-switch; never touches the chat path.
+
+Fail-closed still holds after re-tag: a content-gated fact only reaches a circle
+whose topic grants permit its `content_tag`; nothing a circle isn't granted
+surfaces. **Decision point for the ward:** confirm the sensitive-content ⇒
+propose-and-approve vs ordinary-content ⇒ auto-open-and-notify split above, or
+choose propose-and-approve for ALL widenings.
 
 ## Out of scope
 - **Graph nodes/edges** keep the coarse gate only (no `content_tag` — CLAUDE.md).
@@ -147,11 +182,18 @@ subagents — do the same here)
 - Python `content_gate`/`memory.search` test: a sentinel-audience row with a
   `content_tag` surfaces to a room whose `topic_grants` permit it and is hidden
   otherwise.
+- Re-tag pass: candidate selection is code-gated to `audience == ward-private`
+  with no third-party subject (never selects a third-party or shared-room fact);
+  the conservative default keeps a fact `ward-private` when the judgment is
+  absent/unsure; a sensitive-content widening routes to the propose-and-approve
+  path, not an immediate write. (Stub the batched LLM judgment.)
 
 ## Definition of done
 - All three suites green; the pipeline test present and passing.
 - Docs updated in the same commits as code.
-- No ward-self fact is disclosed to a villager who lacks the topic grant; no
-  existing ward-private fact is retroactively widened (migration stance honored).
+- No ward-self fact is disclosed to a villager who lacks the topic grant.
+- The re-tag pass never widens a fact without the Familiar's conservative
+  judgment; sensitive content is never opened without ward approval; every
+  widening is ward-visible and per-fact revertible.
 - Patch-level version bump (ward decision on prior passes: no minor).
 - Anything that would widen disclosure beyond this spec is a stop-and-ask.
