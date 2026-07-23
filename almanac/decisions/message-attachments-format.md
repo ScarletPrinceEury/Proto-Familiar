@@ -46,5 +46,5 @@ This is called a "load-bearing decision" because every future vision-related cha
 
 ## Related
 
-- [Vision and media](../architecture/vision-and-media) — how the materialization seam works and how multimodal context flows through the system.
+- [Vision and media](../architecture/vision-and-media) — the dual of this decision: how attachments become LLM-visible at the materialization seam, and how modality fallback works when vision is unavailable.
 - [Session memorization](../architecture/session-memorization) — where attachment metadata is preserved when sessions turn into lasting memories.
