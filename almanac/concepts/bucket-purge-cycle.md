@@ -1,6 +1,6 @@
 ---
 title: Bucket-Purge Cycle
-topics: [concepts, development-rhythm]
+topics: [development-rhythm]
 sources:
   - id: village-support-conversation
     type: conversation

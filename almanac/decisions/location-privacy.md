@@ -1,6 +1,6 @@
 ---
 title: Location Privacy
-topics: [decisions]
+topics: [decisions, weather]
 sources:
   - id: weather-build-spec
     type: file
@@ -32,6 +32,11 @@ Any weather-adjacent feature in the future must work through the same boundary:
 
 - The model cannot compute a local time for a place without already knowing the place's timezone.
 - The model cannot compare two places by distance or relative position.
-- Weather and schedule features cannot reason about travel between places without the travel being logged as an explicit event node in Unruh's schedule.
+- Weather and schedule features cannot reason about travel between places without the travel being logged as an explicit event node in [Unruh](../architecture/unruh)'s schedule.
 
 This is a stability gain. The Familiar's geographic context is as minimal as the model's need for weather allows. If the model's capabilities expand or weather sense grows to shared surfaces (Session W-B), the location data stays where it is — no refactoring of Phylactery, no audit trail of location spillover.
+
+## Related
+
+- [Weather](../architecture/weather) — the autonomous loop that consumes weather sense via the location-privacy boundary.
+- [Unruh](../architecture/unruh) — the temporal-context specialist that holds schedule and location references.
