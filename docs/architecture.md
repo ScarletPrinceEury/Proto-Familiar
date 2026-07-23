@@ -1402,10 +1402,21 @@ filter below scopes it node-by-node. This replaced a gate on a `graph` grant tha
 in *every* non-ward session (memory still worked, so the symptom was "graph stopped
 enriching but memory didn't"). The per-node tags now do the real privacy gating, so
 the coarse grant was both unsatisfiable and redundant. `audience.js` `visibleAudiences
-(roomTag, registry)` computes the SET of audience tags a room may see — every
-Village category whose `permissionScore` ≤ the room's, which excludes
-`ward-private` (it isn't a category and outscores all) and any
-more-trusted-than-the-room category. `server.js`/`discord-gateway.js` compute
+(sessionAudience, registry)` computes the SET of audience tags a room may see by
+circle **MEMBERSHIP**, not a scalar trust score (audit 2026-07: the score model
+let two circles with equal `permissionScore`, e.g. "Family" and "Work", see each
+other's records — trust is not a total order). The set is the INTERSECTION of
+every participant's membership set (`categoryIds ∪ {strangers}`, unknown → just
+`strangers`), intersected with the location's set (`{assignedCategory, strangers}`
+assigned, `{strangers}` unassigned) — a record tagged circle X surfaces iff
+**everyone present is a member of X**. `strangers` is always in the intersection
+(everyone is a stranger), so strangers-tagged records stay visible everywhere
+gated; `ward-private` is never a category → never in the set; a deleted/unknown
+category id is in no membership set → excluded (fail-closed). `audienceTagFor`
+tags a room with the most-trusted circle everyone SHARES (permissionScore's only
+surviving role: ranking the shared circles), so a memory written in a room
+round-trips (its tag is in that room's set by construction).
+`server.js`/`discord-gateway.js` compute
 this set and pass it into `enrich({ audiences })`, which forwards it to
 `memory_search` / `graph_node_search` / `graph_subgraph`. Phylactery's
 `audience_in_sql(audiences)` turns it into `audience IN (…)` (None → `1=1` for a
@@ -2158,7 +2169,7 @@ that is the contract talking — update all seams together or stop.
 |---|---|---|---|
 | Memorization | 5s tick | `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` | Drains queue of session-memorization jobs |
 | Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry |
-| Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired; same tick runs event lead-time alerts (`PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1` to silence those alone) |
+| Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired; same tick runs event lead-time alerts (`PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1` to silence those alone), the weather refresh (self-gated to a 6h cadence; `PROTO_FAMILIAR_WEATHER_DISABLED=1`), and elapsed-stamping of long-past unresolved events (self-gated hourly; `PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1`) — both ride this tick rather than spinning their own loops |
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
 | Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |
 | Tome graduation | 30min tick (opt-in, default OFF) | Settings "Graduate tome knowledge" + `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1` | Drains durable facts stranded in tomes → identity/memory/graph (relational facts resolve-or-create + dedup); confirmed route before tidy; consent-gated ward memory |

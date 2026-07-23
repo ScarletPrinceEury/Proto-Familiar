@@ -907,6 +907,26 @@ export function isAmbientAbstain(text) {
   return t === '' || AMBIENT_ABSTAIN_RE.test(t) || AMBIENT_ABSTAIN_LEADING_RE.test(t);
 }
 
+// Reconstruct the conversation a completed tool loop actually had — the base
+// messages plus, for each round, the assistant's tool_calls message and the
+// tool-result messages — then append a first-person nudge to answer in words.
+// Used by the ward dead-air guard: when my human's own tool turn ends with no
+// closing text, a plain no-tools call over THIS replay makes the model speak
+// while still seeing what it just did (rather than answering blind over the
+// bare base messages). Pure — the tool_call_id threading is the part worth
+// pinning (a mis-thread would make the provider reject the closing call).
+export function wardClosingReplayMessages(baseMessages, toolRounds = []) {
+  const replay = [...(Array.isArray(baseMessages) ? baseMessages : [])];
+  for (const r of (Array.isArray(toolRounds) ? toolRounds : [])) {
+    replay.push({ role: 'assistant', content: r?.content || null, tool_calls: r?.toolCalls });
+    for (const res of (r?.results ?? [])) {
+      replay.push({ role: 'tool', tool_call_id: res?.tool_call_id, content: res?.content });
+    }
+  }
+  replay.push({ role: 'system', content: "[I've finished using my tools for this turn. Now I answer my human directly in words — what I found, what I did, or what I couldn't get to — rather than ending in silence.]" });
+  return replay;
+}
+
 // Strip any LEADING silence/defer tokens off a reply. Used at delivery as
 // a last-resort guard: whatever path a reply took, a control tag must
 // never be posted into a room as text. Returns the remainder ('' when the
@@ -1189,9 +1209,12 @@ function resolveLocationGate(audienceInput, registry) {
   return {
     audienceGrants,
     audienceTag,
-    // The room's allowed audience-tag set for the recall gate (Pillar E). null
-    // for a ward DM (ward-private → sees all); a filtered set for any shared room.
-    audienceVisible: visibleAudiences(audienceTag, registry),
+    // The room's allowed audience-tag set for the recall gate (Pillar E) —
+    // circle MEMBERSHIP: the circles everyone present shares. Derived from the
+    // session audience (participants + location), not the room tag alone, so a
+    // ward DM (null audienceInput → sees all) and any shared room both compute
+    // it the same way the write-time tag does.
+    audienceVisible: visibleAudiences(audienceInput, registry),
     // The room's per-topic content-tag grants (content-gating Phase 4). Derived
     // together with audienceVisible so the coarse floor and the fine content
     // gate can never drift between the live and deferred-revisit paths.
@@ -1942,8 +1965,9 @@ async function handleTurn(gw, msg, decision) {
           return executeToolCall(name, argsJson, tctx);
         }
       : executeToolCall;
+    let turnRounds = [];
     try {
-      const { data } = await runToolCallLoop({
+      const { data, toolRounds } = await runToolCallLoop({
         // opts.forceText (round-cap closing round): call WITHOUT tools so the
         // model must answer in text instead of ending the turn silent.
         callUpstream: (msgs, roundTools, opts) => callChatRaw({
@@ -1960,14 +1984,30 @@ async function handleTurn(gw, msg, decision) {
         maxRounds: decision.isWard ? toolRoundsPerTurn(settings) : undefined,
       });
       rawReply = extractContent(data?.choices?.[0]?.message ?? {});
+      turnRounds = Array.isArray(toolRounds) ? toolRounds : [];
     } catch (err) {
       // A whole-loop failure (e.g. provider error) must never cost the person a
       // reply — fall back to a plain no-tools call.
       console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
       rawReply = await callChat({ conn, messages: apiMessages, settings }).catch(() => '');
     }
-    // A tool chain can end with no closing text — don't send an empty message;
-    // accumulate the turn and stay quiet, like an abstain.
+    // A tool chain can end with no closing text. For a villager/ambient turn
+    // that's a fine "abstain" — stay quiet. But for MY HUMAN's own direct turn,
+    // silence after a tool chain is the dead-air failure RULE B exists to
+    // prevent (they asked; tools ran; no words came back). Force ONE closing
+    // text round — replaying the tool rounds so the model sees what it actually
+    // did, then a plain no-tools call so it MUST answer in words. Only if that
+    // is still empty do we fall through to the quiet path.
+    if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient && turnRounds.length) {
+      try {
+        const replay = wardClosingReplayMessages(apiMessages, turnRounds);
+        rawReply = await callChat({ conn, messages: replay, settings }).catch(() => '');
+        if (rawReply && rawReply.trim()) console.log(`[discord] ward tool turn had no closing text — forced a closing text round in ${decision.locationKey}`);
+      } catch (err) {
+        console.warn('[discord] ward closing-text round failed:', err?.message ?? err);
+      }
+    }
+    // Still nothing to say — accumulate the turn and stay quiet, like an abstain.
     if (!rawReply || !rawReply.trim()) {
       session.messages = [
         ...(session.messages ?? []),

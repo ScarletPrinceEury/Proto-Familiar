@@ -251,57 +251,100 @@ function representativeCategory(villager, categoryMap) {
 }
 
 export function audienceTagFor(sessionAudience, registry) {
-  if (!sessionAudience) return AUDIENCE_TAG_WARD_PRIVATE;
-  const { location = null, participants = [] } = sessionAudience;
-  if (!participants.length && !location) return AUDIENCE_TAG_WARD_PRIVATE;
+  const set = roomCircleSet(sessionAudience, registry);
+  if (set == null) return AUDIENCE_TAG_WARD_PRIVATE;
 
+  // The room's tag is the most-trusted circle EVERYONE present shares — the
+  // narrowest visibility that still round-trips (a memory written here is
+  // readable back here, because its tag is in this room's shared-circle set by
+  // construction; a room with a stranger falls to 'strangers', the broadest
+  // tag). permissionScore's ONLY surviving role in the read/tag gate: ranking
+  // the SHARED circles against each other, deterministic tie-break by id.
   const categoryMap = new Map((registry?.categories ?? []).map(c => [c.id, c]));
-
-  // Scan present users → the category that represents each one's access.
-  const candidates = (participants ?? []).map(p =>
-    representativeCategory(resolveParticipant(p, registry), categoryMap),
-  );
-
-  // The location ceiling joins as one more candidate (only ever lowers).
-  if (location) {
-    const loc = (registry?.locations ?? []).find(l => l.key === location);
-    const catId = loc?.assignedCategoryId;
-    candidates.push(catId && categoryMap.has(catId) ? catId : CATEGORY_STRANGERS);
-  }
-
-  if (!candidates.length) return AUDIENCE_TAG_WARD_PRIVATE;
-
-  // Lowest permission level in the room wins (most restrictive).
-  let tag = candidates[0];
-  let min = permissionScore(categoryMap.get(tag)?.grants);
-  for (const id of candidates.slice(1)) {
+  let tag = CATEGORY_STRANGERS;
+  let best = -1;
+  for (const id of [...set].sort()) {
     const s = permissionScore(categoryMap.get(id)?.grants);
-    if (s < min) { min = s; tag = id; }
+    if (s > best) { best = s; tag = id; }
   }
   return tag;
 }
 
 /**
- * The set of audience tags a room may SEE on stored records (Pillar E recall
- * gate). A record tagged with category X surfaces in room R iff R is at least as
- * trusted as X — i.e. permissionScore(R) >= permissionScore(X). So the room sees
- * every category whose score is ≤ the room's, which naturally EXCLUDES
- * 'ward-private' (it isn't a category and outscores every category) and any
- * category more trusted than the room.
+ * The set of circle (category) ids that EVERY participant in the room belongs
+ * to — the Villager/Group-Chat membership mechanism extended to record
+ * visibility. This is the single source of truth both `visibleAudiences` (the
+ * read gate) and `audienceTagFor` (the write-time tag) derive from, so the two
+ * halves can never disagree about who a room is.
  *
- * @returns {string[]|null} the allowed audience-tag set, or null for a
- *   ward-private room (= no filtering, the ward sees everything). A record
- *   tagged with a deleted/unknown category id is absent from the set → excluded
+ * A villager's membership set is `categoryIds ∪ {strangers}` (everyone is at
+ * least a stranger; a villager with no categories → strangers only). An
+ * unresolved/unknown participant → `{strangers}`. Dangling ids that name no
+ * live category are dropped (fail-closed). The location joins as one more
+ * membership set: `{assignedCategory, strangers}` for an assigned location,
+ * `{strangers}` for an unassigned one — a public channel's full readership
+ * isn't enumerable from who has spoken, so it's only ever provably strangers
+ * plus the circle the ward assigned it.
+ *
+ * The room's set is the INTERSECTION of all those membership sets: a circle is
+ * in it only if every participant (and the location) belongs to that circle.
+ * `strangers` is in every membership set, so the intersection is never empty
+ * for a gated room — strangers-tagged records stay visible everywhere gated.
+ *
+ * @returns {Set<string>|null} the shared-circle set, or null for a ward-private
+ *   session (no participants + no location → no gating).
+ */
+function roomCircleSet(sessionAudience, registry) {
+  if (!sessionAudience) return null;
+  const { location = null, participants = [] } = sessionAudience;
+  if (!participants.length && !location) return null;
+
+  const categoryMap = new Map((registry?.categories ?? []).map(c => [c.id, c]));
+  const live = (id) => (id && categoryMap.has(id)) ? id : null;
+
+  const memberSets = (participants ?? []).map(p => {
+    const v = resolveParticipant(p, registry);
+    const ids = (v?.categoryIds?.length ? v.categoryIds : []).map(live).filter(Boolean);
+    return new Set([...ids, CATEGORY_STRANGERS]);
+  });
+
+  if (location) {
+    const loc = (registry?.locations ?? []).find(l => l.key === location);
+    const catId = live(loc?.assignedCategoryId);
+    memberSets.push(new Set(catId ? [catId, CATEGORY_STRANGERS] : [CATEGORY_STRANGERS]));
+  }
+
+  if (!memberSets.length) return null;
+
+  let inter = memberSets[0];
+  for (let i = 1; i < memberSets.length; i++) {
+    inter = new Set([...inter].filter(x => memberSets[i].has(x)));
+  }
+  return inter;
+}
+
+/**
+ * The set of audience tags a room may SEE on stored records (Pillar E recall
+ * gate). MEMBERSHIP, not a scalar trust score: a record tagged with circle X
+ * surfaces in a room iff every person present is a member of X (X is in the
+ * room's shared-circle set). Two circles with identical grants no longer see
+ * each other's records — trust is not a total order, so a Family DM never
+ * surfaces a Work-tagged record even at equal permission scores.
+ *
+ * Takes the session audience (participants + location), not a bare tag, because
+ * membership can only be computed from who is actually present.
+ *
+ * @param {object|null} sessionAudience { location, participants } or null
+ * @param {object} registry normalized village registry
+ * @returns {string[]|null} the allowed audience-tag set (always includes
+ *   'strangers' for a gated room; never includes 'ward-private'), or null for a
+ *   ward-private session (no filtering, the ward sees everything). A record
+ *   tagged with a deleted/unknown category id is in no membership set → excluded
  *   (fail-closed).
  */
-export function visibleAudiences(roomTag, registry) {
-  if (!roomTag || roomTag === AUDIENCE_TAG_WARD_PRIVATE) return null; // ward sees all
-  const categories = registry?.categories ?? [];
-  const categoryMap = new Map(categories.map(c => [c.id, c]));
-  const roomScore = permissionScore(categoryMap.get(roomTag)?.grants);
-  return categories
-    .filter(c => permissionScore(c.grants) <= roomScore)
-    .map(c => c.id);
+export function visibleAudiences(sessionAudience, registry) {
+  const set = roomCircleSet(sessionAudience, registry);
+  return set ? [...set] : null;
 }
 
 /**
@@ -338,6 +381,15 @@ export function topicGrantsForRoom(effectiveGrants, roomTag) {
 // decision): a subject villager's EXPLICIT `disclosure[category]` may raise OR
 // lower the audience; without an explicit preference the default is
 // session-bounded (never auto-widened from the villager's category).
+//
+// NOTE (audit follow-up): the tighten/widen ordering below still uses
+// permissionScore-as-restrictiveness (audienceScore/mostRestrictive). The READ
+// gate moved to circle membership (visibleAudiences/audienceTagFor); this write
+// side picks "narrower of the session tag and a disclosure preference," where
+// narrower is a per-circle comparison that a scalar approximates adequately for
+// choosing between two *specific* tags (not for a room-visibility total order,
+// which was the bug). Left as-is deliberately; a full membership-based
+// tighten/widen is a candidate for the same treatment in a later pass.
 
 const SENSITIVE_CATEGORIES = new Set(['health_info', 'emotional_content']);
 

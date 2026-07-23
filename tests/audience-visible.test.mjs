@@ -2,55 +2,67 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { visibleAudiences, topicGrantsForRoom, AUDIENCE_TAG_WARD_PRIVATE } from '../audience.js';
 
-// Categories with ascending trust (by permissionScore of their grants):
-//   strangers (0) < friends (1, memories:'shared') < family (3, memories:true + graph:true)
+// Membership-model registry (audit fix): 'family' and 'work' carry IDENTICAL
+// grants (both memories:true) — the whole point is that equal permissionScore
+// no longer means "same circle." A villager's membership set is
+// categoryIds ∪ {strangers}; the room's visible set is the INTERSECTION of
+// every present participant's (and the location's) membership set.
 const registry = {
   categories: [
     { id: 'strangers', grants: {} },
-    { id: 'friends',   grants: { memories: 'shared' } },
-    { id: 'family',    grants: { memories: true, graph: true } },
+    { id: 'family',    grants: { memories: true } },
+    { id: 'work',      grants: { memories: true } },   // same score as family, different circle
+    { id: 'close',     grants: { memories: true, contacts: true } },
   ],
+  villagers: [
+    { id: 'mom-id',  name: 'Mom',  categoryIds: ['family'], aliases: [] },
+    { id: 'boss-id', name: 'Boss', categoryIds: ['work'], aliases: [] },
+    { id: 'sib-id',  name: 'Sib',  categoryIds: ['family', 'close'], aliases: [] },
+  ],
+  locations: [],
 };
 
-test('ward-private room → null (no filter, ward sees everything)', () => {
-  assert.equal(visibleAudiences(AUDIENCE_TAG_WARD_PRIVATE, registry), null);
+test('ward-private: null audience, or empty participants + no location → null', () => {
   assert.equal(visibleAudiences(null, registry), null);
+  assert.equal(visibleAudiences({ participants: [], location: null }, registry), null);
 });
 
-test('a room sees its own tag + every less-trusted category, never ward-private', () => {
-  const friends = visibleAudiences('friends', registry);
-  assert.deepEqual(friends.sort(), ['friends', 'strangers']); // not family
-  assert.ok(!friends.includes('ward-private'));               // ward-private is never a category
-
-  const family = visibleAudiences('family', registry);
-  assert.deepEqual(family.sort(), ['family', 'friends', 'strangers']); // sees all below it
-
-  const strangers = visibleAudiences('strangers', registry);
-  assert.deepEqual(strangers, ['strangers']);                 // only its own floor
+test('family DM (single participant) → their circle + strangers', () => {
+  const set = visibleAudiences({ participants: [{ id: 'mom-id', name: 'Mom' }] }, registry);
+  assert.deepEqual(set.sort(), ['family', 'strangers']);
 });
 
-test('a record tagged with a deleted/unknown category is absent from the set (fail-closed)', () => {
-  // 'ghost' isn't in the registry, so no room's visible set contains it →
-  // `audience IN (set)` excludes it.
-  for (const tag of ['friends', 'family', 'strangers']) {
-    assert.ok(!visibleAudiences(tag, registry).includes('ghost'));
-  }
+test('family + work in the same room → ONLY strangers, even though both score equally (the audit fix)', () => {
+  // Mom ∈ {family, strangers}, Boss ∈ {work, strangers}. Under the old scalar
+  // trust model these tied and could see each other; under membership the
+  // intersection of their sets is just {strangers} — two circles with equal
+  // permissionScore are still mutually isolated unless they actually share a
+  // category. This is the exact bug this rewrite fixes.
+  const set = visibleAudiences(
+    { participants: [{ id: 'mom-id', name: 'Mom' }, { id: 'boss-id', name: 'Boss' }] },
+    registry,
+  );
+  assert.deepEqual(set.sort(), ['strangers']);
 });
 
-// Content-gating (Phase 2): a nested `topics` grant must NOT perturb the coarse
-// permissionScore-based visibility (topic gating is a separate axis, Phase 4).
-test('a topics grant does not change coarse visibleAudiences scoring', () => {
-  const withTopics = {
-    categories: [
-      { id: 'strangers', grants: {} },
-      { id: 'friends',   grants: { memories: 'shared', topics: { medical: 'sensitive', general: 'open' } } },
-      { id: 'family',    grants: { memories: true, graph: true, topics: { general: 'sensitive' } } },
-    ],
+test('Sib DM (multi-circle villager) → both their circles + strangers', () => {
+  const set = visibleAudiences({ participants: [{ id: 'sib-id', name: 'Sib' }] }, registry);
+  assert.deepEqual(set.sort(), ['close', 'family', 'strangers']);
+});
+
+test('a stranger present → only strangers', () => {
+  const set = visibleAudiences({ participants: [{ name: 'Nobody' }] }, registry);
+  assert.deepEqual(set, ['strangers']);
+});
+
+test('a villager whose categoryIds include a deleted/unknown category → that id is absent (fail-closed)', () => {
+  const withGhost = {
+    ...registry,
+    villagers: [...registry.villagers, { id: 'ghost-owner', name: 'GhostOwner', categoryIds: ['family', 'ghost'], aliases: [] }],
   };
-  // Identical to the topic-less registry above.
-  assert.deepEqual(visibleAudiences('friends', withTopics).sort(), ['friends', 'strangers']);
-  assert.deepEqual(visibleAudiences('family', withTopics).sort(), ['family', 'friends', 'strangers']);
-  assert.deepEqual(visibleAudiences('strangers', withTopics), ['strangers']);
+  const set = visibleAudiences({ participants: [{ id: 'ghost-owner', name: 'GhostOwner' }] }, withGhost);
+  assert.ok(!set.includes('ghost'));
+  assert.deepEqual(set.sort(), ['family', 'strangers']);
 });
 
 // ── topicGrantsForRoom (content-gating Phase 4 recall gate) ─────────

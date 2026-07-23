@@ -479,11 +479,15 @@ describe('audienceTagFor', () => {
     assert.equal(audienceTagFor({ location: null, participants: [{ id: 'v-bob' }] }, reg), 'cat-acquaint');
   });
 
-  it('multiple participants → the LOWEST permission level present', () => {
-    // friend + acquaintance → acquaintance (the more restrictive of the two).
+  it('participants in different circles share only strangers → strangers', () => {
+    // Alice ∈ {cat-friends, strangers}, Bob ∈ {cat-acquaint, strangers} — under
+    // membership semantics they share only 'strangers', regardless of either
+    // category's permissionScore. This is NOT "the more restrictive category
+    // wins" (that was the old scalar-trust behavior) — it's that the two
+    // circles never overlap at all.
     assert.equal(
       audienceTagFor({ location: null, participants: [{ id: 'v-alice' }, { id: 'v-bob' }] }, reg),
-      'cat-acquaint',
+      'strangers',
     );
   });
 

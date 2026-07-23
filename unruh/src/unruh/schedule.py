@@ -767,6 +767,16 @@ def get_window(
     doc commits to keeping the graph small, but cap from the start
     to bound prompt-token risk before M5+ adds volume.
     """
+    # Normalise caller-supplied bounds to the LOCAL-naive form stored when_ts is
+    # compared against (the exact-values rule at the read boundary). A Node
+    # caller that passes a UTC `…Z`/offset-bearing bound (the pre-fix noticing
+    # wake-input and triage candidate-task scans did) would otherwise
+    # string-compare an offset-shifted value against local-naive when_ts and
+    # slide the window by the UTC offset on a cross-zone server. to_local_naive
+    # converts an offset bound to local and leaves an already-naive bound
+    # unchanged; TZ (set to the ward's zone at spawn) governs the conversion.
+    from_ts = to_local_naive(from_ts) if from_ts else from_ts
+    to_ts   = to_local_naive(to_ts) if to_ts else to_ts
     if not from_ts or not to_ts:
         now = datetime.now()  # local-naive — matches stored when_ts
         if not from_ts: from_ts = (now - timedelta(hours=DEFAULT_WINDOW_HOURS / 2)).isoformat(timespec="seconds")
