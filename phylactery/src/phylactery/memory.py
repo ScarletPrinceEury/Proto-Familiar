@@ -19,6 +19,7 @@ from typing import Any
 from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now_iso
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
+from phylactery.content_gate import memory_visible_to_grants
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
 
@@ -107,6 +108,7 @@ def _row_to_list_item(row: sqlite3.Row) -> dict:
         "title": head,
         "content": content,
         "audience": row["audience"] or "ward-private",
+        "content_tag": (row["content_tag"] if "content_tag" in row.keys() else None) or "",
         "care_weight": row["care_weight"],
     }
 
@@ -142,33 +144,43 @@ def search(
     query: str,
     max_results: int = 5,
     audiences=None,
+    topic_grants=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     # audiences: the room's allowed audience-tag set (None = ward sees all),
-    # computed JS-side by visibleAudiences(). The recall gate (Pillar E).
+    # computed JS-side by visibleAudiences() — the coarse provenance/ward-private
+    # floor (Pillar E). topic_grants: the room's per-topic grant map (Phase 4
+    # content gate) — None = ward/unscoped (no content filter). Both compose:
+    # a memory surfaces only if it clears the audience floor AND its content_tag
+    # is visible to the room's topic grants. Fail-closed at both.
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
+    gating = isinstance(topic_grants, dict)
     try:
         aud_clause, aud_params = audience_in_sql(audiences)
         try:
             from phylactery.embed import embed_text
             q_vec = embed_text(query)
-            # KNN via sqlite-vec.
+            # KNN via sqlite-vec. Overfetch more when content-gating so the
+            # per-row topic filter still leaves enough to return.
+            k = max_results * (4 if gating else 2)
             rows = conn.execute(f"""
                 SELECT m.id, m.granularity, m.register, m.date_key, m.content, m.audience,
-                       m.care_weight, m.last_recalled_at, m.source_json,
+                       m.content_tag, m.care_weight, m.last_recalled_at, m.source_json,
                        v.distance
                 FROM memory_vecs v
                 JOIN memories m ON m.id = v.memory_id
                 WHERE v.embedding MATCH ? AND k = ?
                   AND {aud_clause}
                 ORDER BY v.distance
-            """, [q_vec, max_results * 2] + aud_params).fetchall()
+            """, [q_vec, k] + aud_params).fetchall()
             # Convert distance → similarity, apply retrieval-decay, re-sort.
             # score = similarity × decay_weight (down-rank only; never a filter cutoff).
             scored = []
             for r in rows:
+                if gating and not memory_visible_to_grants(r["content_tag"], topic_grants):
+                    continue  # content-tag gate: not shared with this room
                 dist = r["distance"] if "distance" in r.keys() else 0.0
                 similarity = max(0.0, 1.0 - dist / 2.0)
                 dw = _decay_weight(r["last_recalled_at"], r["care_weight"])
@@ -186,13 +198,17 @@ def search(
             results = scored[:max_results]
         except Exception:
             # Vector search unavailable (fastembed/sqlite-vec not ready) — degrade to recency.
+            # Overfetch when gating so the post-filter still leaves enough.
+            k = max_results * (4 if gating else 1)
             rows = conn.execute(f"""
-                SELECT id, granularity, register, date_key, content FROM memories
+                SELECT id, granularity, register, date_key, content, content_tag FROM memories
                 WHERE kind='narrative' AND {aud_clause}
                 ORDER BY updated_at DESC LIMIT ?
-            """, aud_params + [max_results]).fetchall()
+            """, aud_params + [k]).fetchall()
             results = [{"id": r["id"], "granularity": r["granularity"], "register": r["register"],
-                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": 0.5} for r in rows]
+                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": 0.5}
+                       for r in rows
+                       if not gating or memory_visible_to_grants(r["content_tag"], topic_grants)][:max_results]
 
         # Pillar H: recall tracking. Pure observability — bumps recall_count
         # and last_recalled_at for everything actually surfaced, so the
@@ -232,17 +248,20 @@ def by_timerange(
     to_date: str,
     limit: int = 12,
     audiences=None,
+    topic_grants=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     """Recall memories anchored to a span of DAYS — 'what was happening around
     then' — the temporal counterpart to semantic search (temporal-bridges
     Piece 3). Compares on the calendar-date prefix so date_slug keys
     ('2026-07-02_foo') fall in range by their day. Audience-gated exactly like
-    search (Pillar E). Newest day first. No embedding call — an indexed read.
+    search: the coarse `audiences` floor AND the Phase 4 content-tag gate
+    (`topic_grants`). Newest day first. No embedding call — an indexed read.
     `from_date`/`to_date` are inclusive YYYY-MM-DD bounds."""
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
+    gating = isinstance(topic_grants, dict)
     try:
         lo = str(from_date)[:10]
         hi = str(to_date)[:10]
@@ -250,17 +269,22 @@ def by_timerange(
             lo, hi = hi, lo
         aud_clause, aud_params = audience_in_sql(audiences)
         k = max(1, min(50, int(limit or 12)))
+        # Overfetch when content-gating so the per-row topic filter still leaves
+        # enough rows to satisfy the limit.
+        fetch = k * 4 if gating else k
         rows = conn.execute(f"""
-            SELECT id, granularity, register, date_key, content, source_json
+            SELECT id, granularity, register, date_key, content, content_tag, source_json
               FROM memories
              WHERE kind='narrative'
                AND substr(date_key,1,10) BETWEEN ? AND ?
                AND {aud_clause}
              ORDER BY date_key DESC, updated_at DESC
              LIMIT ?
-        """, [lo, hi] + aud_params + [k]).fetchall()
+        """, [lo, hi] + aud_params + [fetch]).fetchall()
         results = []
         for r in rows:
+            if gating and not memory_visible_to_grants(r["content_tag"], topic_grants):
+                continue  # content-tag gate: not shared with this room
             item = {
                 "id": r["id"], "granularity": r["granularity"], "register": r["register"],
                 "date": r["date_key"], "excerpt": (r["content"] or "")[:300],
@@ -272,6 +296,8 @@ def by_timerange(
             if refs:
                 item["schedule_refs"] = refs
             results.append(item)
+            if len(results) >= k:
+                break
         return {"results": results, "from": lo, "to": hi}
     finally:
         if own_conn:
@@ -417,6 +443,36 @@ def remap_audiences(conn: sqlite3.Connection | None = None, id_map: dict | None 
             conn.close()
 
 
+def backfill_content_tags(conn: sqlite3.Connection | None = None, limit: int | None = None) -> dict:
+    """Set `content_tag` on narrative memories that don't have one yet (rows from
+    before Phase 3), deriving it from the stored `category` via category_to_tag.
+    Idempotent — a second run finds none. Runs in the background at boot when a
+    gap is seen (mirrors the embedding backfill). Never raises."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        q = ("SELECT id, category FROM memories "
+             "WHERE kind='narrative' AND (content_tag IS NULL OR content_tag='')")
+        if isinstance(limit, int) and limit > 0:
+            q += f" LIMIT {int(limit)}"
+        rows = conn.execute(q).fetchall()
+        n = 0
+        for r in rows:
+            conn.execute("UPDATE memories SET content_tag=? WHERE id=?",
+                         (category_to_tag(r["category"]), r["id"]))
+            n += 1
+        conn.commit()
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS c FROM memories "
+            "WHERE kind='narrative' AND (content_tag IS NULL OR content_tag='')"
+        ).fetchone()["c"]
+        return {"ok": True, "tagged": n, "remaining": remaining}
+    finally:
+        if own:
+            conn.close()
+
+
 def _find_lexical_duplicate(conn: sqlite3.Connection, content: str, audience: str,
                             standalone_only: bool = False, *,
                             ignore_audience: bool = False, limit: int = 300):
@@ -553,6 +609,29 @@ def _dedup_merge(conn, content, audience, consent_pending, now, source,
     return {"ok": True, "id": dup_id, "merged": True}
 
 
+# Content-gating (Phase 3): the legacy content `category` → a "topic:level" tag,
+# mirroring content-tags.js `categoryToTag` (the Node side is the source of
+# truth; kept in sync by hand like the graph-vocab duplication). Used as the
+# fall-back when the extractor didn't supply an explicit tag, and by the
+# backfill for pre-tag rows.
+_CATEGORY_TO_TOPIC = {
+    "basics": "general",
+    "emotional_content": "mental-health",
+    "health_info": "medical",
+    "relationships": "relationships",
+    "whereabouts": "location",
+}
+_TAG_SENSITIVE_CATEGORIES = {"emotional_content", "health_info"}
+
+
+def category_to_tag(category: str | None) -> str:
+    """A `"topic:level"` content tag for a legacy content category. Fail-safe:
+    an unknown/None category → `general:open`."""
+    topic = _CATEGORY_TO_TOPIC.get(category or "", "general")
+    level = "sensitive" if category in _TAG_SENSITIVE_CATEGORIES else "open"
+    return f"{topic}:{level}"
+
+
 def create(
     content: str,
     granularity: str,
@@ -563,6 +642,7 @@ def create(
     subjects: list[str] | None = None,
     care_weight: str | None = None,
     category: str | None = None,
+    content_tag: str | None = None,
     consent_pending: bool = False,
     confidence: float = 1.0,
     standalone: bool = False,
@@ -649,16 +729,20 @@ def create(
             # id rides out in recall / the consent block / graduation, so the
             # Familiar repeats a legible, greppable id instead of ~16 tokens of
             # meaningless hex. Legacy hex ids stay valid (ids are opaque TEXT).
+            # Content tag: the extractor's explicit tag, else derived from the
+            # category (never left NULL on a fresh fact, so the Phase 4 gate
+            # always has a value to reason about).
+            tag = (content_tag or "").strip() or category_to_tag(category)
             insert_sql = """
                 INSERT INTO memories(id,kind,register,granularity,date_key,slug,content,
-                    audience,subjects_json,care_weight,category,consent_pending,
+                    audience,subjects_json,care_weight,category,content_tag,consent_pending,
                     confidence,source_json,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """
             rec_id = insert_with_slug_retry(
                 conn, insert_sql,
                 lambda cid: (cid, "narrative", register, granularity, dk, slug,
-                             content, audience, subj_json, care_weight, category,
+                             content, audience, subj_json, care_weight, category, tag,
                              1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
                              source, now, now),
                 label=content, kind="mem",
@@ -685,12 +769,12 @@ def list_memories(
     try:
         if granularity:
             rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (granularity, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         return [_row_to_list_item(r) for r in rows]
@@ -832,7 +916,7 @@ def read_memory_by_id(
         conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, granularity, register, date_key, slug, content, audience, care_weight "
+            "SELECT id, granularity, register, date_key, slug, content, audience, content_tag, care_weight "
             "FROM memories WHERE id=? AND kind='narrative'",
             (mem_id,),
         ).fetchone()
@@ -847,6 +931,7 @@ def read_memory_by_id(
             "slug": row["slug"],
             "content": row["content"] or "",
             "audience": row["audience"] or "ward-private",
+            "content_tag": row["content_tag"] or "",
             "care_weight": row["care_weight"],
         }
     finally:
@@ -859,6 +944,7 @@ def update_memory_by_id(
     new_content: str | None = None,
     audience: str | None = None,
     care_weight: str | None = None,
+    content_tag: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
@@ -878,6 +964,13 @@ def update_memory_by_id(
         if audience is not None:
             sets.append("audience=?")
             params.append(audience)
+        if content_tag is not None:
+            # The ward's edit is authoritative but still normalised in code (the
+            # exact-values rule): an unrecognised value is stored as-is only if
+            # blank-cleared, else canonicalised to a real topic:level below via
+            # the caller. Here we just persist the string the endpoint validated.
+            sets.append("content_tag=?")
+            params.append(content_tag if content_tag != "" else None)
         if care_weight is not None:
             sets.append("care_weight=?")
             params.append(care_weight if care_weight != "" else None)

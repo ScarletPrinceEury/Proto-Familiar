@@ -1574,7 +1574,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null, topicGrants = null } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -1628,8 +1628,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         : mcpClient.callTool({
             name: 'memory_search',
             // audiences = the room's allowed audience-tag set (Pillar E recall
-            // gate). null/omitted = ward-private room → no filter (sees all).
-            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}) },
+            // gate, the coarse floor). topic_grants = the room's per-topic
+            // content grants (Phase 4 fine gate). null/omitted on both = ward-
+            // private room → no filter (sees all). They compose: a memory
+            // surfaces only if it clears the coarse floor AND its content_tag.
+            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}), ...(topicGrants ? { topic_grants: topicGrants } : {}) },
           }),
       (staticOnly || !doGraph) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: graph)'))
         : mcpClient.callTool({
@@ -2493,7 +2496,7 @@ export function parseMemoryCreateResult(text) {
   return { id: s.match(/id=([\w-]+)/)?.[1] ?? null, merged: /merged/i.test(s) };
 }
 
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, contentTag, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2501,6 +2504,10 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
     if (slug) args.slug = slug;
     if (category) args.category = category;
+    // The content tag (topic:level) drives recall gating; memorization computes
+    // it in code (never trusts the model's raw value), so pass it straight
+    // through. Omitted → Phylactery derives one from the category, fail-closed.
+    if (contentTag) args.content_tag = contentTag;
     if (standalone) args.standalone = true;
     // Standing facts (memorization's temporality='standing') land on a non-
     // episodic register — 'ward' for a standing truth about my human — so they're
@@ -2562,17 +2569,19 @@ export async function dropPendingMemories(ids) {
 // (unscoped). An empty array → nothing surfaces ('0=1' server-side). Passing it
 // is how a gated (non-ward) Discord turn keeps ward-private memory out of a tool
 // result.
-export async function searchMemory({ query, maxResults = 5, audiences } = {}) {
+export async function searchMemory({ query, maxResults = 5, audiences, topicGrants } = {}) {
   return callTool('memory_search', {
     query, instanceId: 'proto-familiar', maxResults,
     ...(audiences !== undefined ? { audiences } : {}),
+    ...(topicGrants ? { topic_grants: topicGrants } : {}),
   });
 }
 
-export async function memByTimerange({ fromDate, toDate, limit = 12, audiences } = {}) {
+export async function memByTimerange({ fromDate, toDate, limit = 12, audiences, topicGrants } = {}) {
   return callTool('memory_by_timerange', {
     fromDate, toDate, limit, instanceId: 'proto-familiar',
     ...(audiences !== undefined ? { audiences } : {}),
+    ...(topicGrants ? { topic_grants: topicGrants } : {}),
   });
 }
 
@@ -2696,6 +2705,16 @@ export async function getMemoryGranularityAudit() {
   return callTool('memory_granularity_audit', {}).catch(err => {
     console.warn('[thalamus] getMemoryGranularityAudit failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+// Give pre-Phase-3 memories a content_tag derived from their category, so the
+// content-based recall gate has a value to reason about. Idempotent; degrades
+// to a no-op result on failure.
+export async function backfillContentTags({ limit = null } = {}) {
+  return callTool('memory_backfill_content_tags', limit != null ? { limit } : {}).catch(err => {
+    console.warn('[thalamus] backfillContentTags failed:', err?.message ?? err);
+    return { ok: false, tagged: 0, error: err?.message ?? String(err) };
   });
 }
 
@@ -2868,7 +2887,7 @@ export async function moveMemoryDate({ id, date }) {
   }
 }
 
-export async function updateMemoryById({ id, content, audience, careWeight }) {
+export async function updateMemoryById({ id, content, audience, careWeight, contentTag }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2876,6 +2895,7 @@ export async function updateMemoryById({ id, content, audience, careWeight }) {
       ...(content   !== undefined ? { content }   : {}),
       ...(audience  !== undefined ? { audience }  : {}),
       ...(careWeight !== undefined ? { careWeight } : {}),
+      ...(contentTag !== undefined ? { content_tag: contentTag } : {}),
     };
     const result = await callTool('memory_update_by_id', args);
     console.log(`[thalamus] updateMemoryById ${id}`);

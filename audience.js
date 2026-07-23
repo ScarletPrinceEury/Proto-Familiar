@@ -9,7 +9,7 @@
 // Sign-off: 2026-06-11 (human-approved V3 gate semantics)
 
 import { CATEGORY_STRANGERS } from './village.js';
-import { unionTopicGrants, intersectTopicGrants } from './content-tags.js';
+import { unionTopicGrants, intersectTopicGrants, sanitizeTopicGrants } from './content-tags.js';
 
 // ── Sentinel ──────────────────────────────────────────────────────
 // WARD_PRIVATE is returned when no audience is set — today's behavior,
@@ -302,6 +302,32 @@ export function visibleAudiences(roomTag, registry) {
   return categories
     .filter(c => permissionScore(c.grants) <= roomScore)
     .map(c => c.id);
+}
+
+/**
+ * The room's per-topic content-tag grant map (content-gating Phase 4 recall
+ * gate). The COMPANION to `visibleAudiences`: they are always derived and
+ * passed together so the two halves of the gate can't drift (the exact failure
+ * class the ward flagged — one half built as if the other didn't exist).
+ *
+ * `visibleAudiences` is the coarse provenance/ward-private floor (which category
+ * tiers a room may see); this is the fine per-topic sensitivity gate (what
+ * CONTENT within those a room may see). A memory surfaces only if it clears
+ * both.
+ *
+ * @param {object} effectiveGrants  the room's effective grants from
+ *   `resolveAudience()` (already unioned within each villager's tiers and
+ *   intersected across the room's participants — its `.topics` is the room's
+ *   effective per-topic map).
+ * @param {string} roomTag          the room's audience tag (from `audienceTagFor`).
+ * @returns {object|null} the sanitized per-topic grant map, or null for a
+ *   ward-private room (= no content filter, the ward sees everything). A villager
+ *   room with no topic grants → `{}` (fail-closed: nothing surfaces by content).
+ */
+export function topicGrantsForRoom(effectiveGrants, roomTag) {
+  if (!roomTag || roomTag === AUDIENCE_TAG_WARD_PRIVATE) return null; // ward sees all
+  const topics = (effectiveGrants && typeof effectiveGrants === 'object') ? effectiveGrants.topics : null;
+  return sanitizeTopicGrants(topics); // fail-closed: unknown/absent topics dropped → not visible
 }
 
 // ── Write-time audience derivation (Phase 2) ──────────────────────

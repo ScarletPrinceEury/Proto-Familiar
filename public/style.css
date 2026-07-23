@@ -2409,6 +2409,10 @@ button { cursor: pointer; font-family: var(--font); }
 .ke-badge-cw-high   { background: #3a1c1c; color: #f5a07a; }
 .ke-badge-cw-low    { background: var(--surface); color: var(--text-dim); }
 .ke-badge-register  { background: #2a234a; color: #c4b5f5; }
+/* Content tag (Phase 5): open = calm/teal, sensitive = warm/amber. Both pairs
+   tuned ≥4.5:1 on their backgrounds per the WCAG line held across the UI. */
+.ke-badge-tag-open      { background: #16302c; color: #7fd6c0; }
+.ke-badge-tag-sensitive { background: #37281a; color: #f0b878; }
 
 /* ── Coverage calendar ─────────────────────────────────────────── */
 .ke-cov-month { font-weight: 600; min-width: 9em; text-align: center; }

@@ -1423,6 +1423,27 @@ path; recall now routes through `audience_in_sql`, which doesn't.) The outgoing
 filter (Pillar D) remains the send-side backstop; together they are the two gates
 the design intended. See `docs/audience-gating-build-spec.md`.
 
+**Content-tag layer (content-gating Phase 4, 0.9.23).** The `audiences` set above
+is the *coarse* floor (ward-private + provenance ceiling); a *fine* per-topic
+gate now composes on top of it for MEMORIES. Each memory carries a `content_tag`
+(`topic:level`, e.g. `medical:sensitive` — Phase 3); each Village tier grants a
+per-topic level map (`grants.topics`, Phase 2). `audience.js`
+`topicGrantsForRoom(effectiveGrants, roomTag)` — the companion to
+`visibleAudiences`, derived together at every seam so the two halves can't drift —
+returns the room's most-permissive-per-topic map (`null` for a ward room, `{}`
+fail-closed for a villager room with no topics). It rides `enrich({ topicGrants })`
+→ `memory_search`, and the standalone `searchMemory`/`memByTimerange` wrappers
+(threaded from the Discord tool ctx via `cerebellum.discordReadTopicGrants`, the
+fail-closed companion to `discordReadAudiences`). Phylactery's `memory.search` /
+`memory.by_timerange` take `topic_grants` and post-filter each row through
+`content_gate.memory_visible_to_grants` (the Python mirror of `content-tags.js`),
+overfetching so the drop still fills the limit. **Visible ⟺ clears the coarse
+floor AND the content gate.** Fail-closed: no tag → `general:sensitive`; unknown
+topic / absent grant → hidden. Graph nodes/edges keep the coarse `audiences` gate
+only (no `content_tag`). Ward-context recall (pondering, tome-graduation dedup,
+the ward's own endpoints) omits `topic_grants` → ward sees all, unchanged. See
+`docs/content-gating-build-spec.md` §Phase 4.
+
 ### Pillar H — lifecycle: consolidation scheduler, hygiene, graduation, backup
 
 **Consolidation scheduler** (`scheduler.py`) — Phylactery's own internal

@@ -30,7 +30,7 @@ import {
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
   getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
-  remapCategoryAudiences,
+  remapCategoryAudiences, backfillContentTags,
   searchMemory,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
@@ -148,7 +148,8 @@ import {
   initVillageSync, bootSync as villageBootSync,
   pendingCategoryAudienceRemap,
 } from './village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
+import { normalizeTag } from './content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
@@ -377,12 +378,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   let audienceGrants  = WARD_PRIVATE;
   let audienceTag     = 'ward-private';
   let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
+  let audienceTopics  = null; // the room's per-topic content grants (null = ward sees all)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
       audienceGrants  = resolveAudience(sessionAudience, registry);
       audienceTag     = audienceTagFor(sessionAudience, registry);
-      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate
+      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate (coarse floor)
+      audienceTopics  = topicGrantsForRoom(audienceGrants, audienceTag); // Phase 4 content gate (fine)
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
@@ -394,7 +397,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
@@ -2577,15 +2580,32 @@ app.get('/api/entity/memories/by-id/:id', async (req, res) => {
 app.put('/api/entity/memories/by-id/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const { content, audience, careWeight } = req.body;
+  const { content, audience, careWeight, contentTag } = req.body;
   if (content !== undefined && (typeof content !== 'string' || !content.trim())) return badRequest(res, 'content must be a non-empty string');
   if (content !== undefined && content.length > 16384)                          return badRequest(res, 'content exceeds 16 KB limit');
   if (audience !== undefined && typeof audience !== 'string')                    return badRequest(res, 'audience must be string');
+  // The content tag is a machine value: the ward's edit is canonicalised in code
+  // (the exact-values rule). '' clears it (→ fail-closed general:sensitive at
+  // recall); a recognised topic[:level] is normalised to canonical "topic:level";
+  // anything unrecognised is rejected rather than stored as junk.
+  let contentTagArg;
+  if (contentTag !== undefined) {
+    if (typeof contentTag !== 'string') return badRequest(res, 'contentTag must be string');
+    const trimmed = contentTag.trim();
+    if (trimmed === '') {
+      contentTagArg = '';
+    } else {
+      const norm = normalizeTag(trimmed);
+      if (!norm) return badRequest(res, 'contentTag must be a known topic (optionally :open/:sensitive)');
+      contentTagArg = `${norm.topic}:${norm.level}`;
+    }
+  }
   const result = await updateMemoryById({
     id,
     ...(content   !== undefined ? { content: content.trim() } : {}),
     ...(audience  !== undefined ? { audience }                : {}),
     ...(careWeight !== undefined ? { careWeight }             : {}),
+    ...(contentTagArg !== undefined ? { contentTag: contentTagArg } : {}),
   });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result ?? { ok: true });
@@ -3872,6 +3892,13 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // done); always carries the fixed legacy-seed map so it heals even if the raw
   // registry has already been slugged. Fire-and-forget — a Phylactery hiccup
   // just retries next boot.
+  // Content-gating Phase 3: give pre-tag memories a content_tag derived from
+  // their category, so the recall gate (Phase 4) always has a value. Idempotent;
+  // fire-and-forget, retries next boot on a Phylactery hiccup.
+  backfillContentTags().then(r => {
+    if (r?.ok && r.tagged) console.log(`[memory] content-tag backfill: tagged ${r.tagged}, ${r.remaining ?? 0} remaining`);
+    else if (r && !r.ok) console.warn(`[memory] content-tag backfill skipped: ${r.error ?? 'unknown'}`);
+  }).catch(() => {});
   Promise.resolve(_pendingAudienceRemap ?? pendingCategoryAudienceRemap()).then(map => {
     if (!map || !Object.keys(map).length) return;
     return remapCategoryAudiences(map).then(r => {
