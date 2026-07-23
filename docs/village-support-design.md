@@ -729,16 +729,22 @@ the gate.
    (`tomes/.village-location-knocks.json`) so the Locations tab can offer
    one-click registration. Same privacy/cap discipline as the people
    knock list; saving a location auto-settles its knock.
-10. **Room audience tag (0.5.5-alpha).** Every Discord session is stamped
-   with `audienceTag` — a durable label of the room's audience computed
-   by `audience.audienceTagFor()`: scan the present users, resolve each
-   against the registry, and take the **lowest permission level in the
-   room** (a room is only as private as its least-trusted occupant; one
-   stranger floors it to `strangers`). A multi-category villager is
-   represented by their most-permissive category; the location's assigned
-   category joins the comparison as one more candidate, so the ceiling can
-   only ever *lower* the tag (a guild channel's silent/future readers are
-   covered by the ceiling, not by who has spoken). Ward DMs → the
+10. **Room audience tag (0.5.5-alpha; membership rework audit 2026-07).**
+   Every Discord session is stamped with `audienceTag` — a durable label of
+   the room's audience computed by `audience.audienceTagFor()`. As of the
+   membership rework, both the tag and the recall gate (`visibleAudiences`)
+   derive from **circle MEMBERSHIP**, not a scalar trust score: the room's
+   shared-circle set is the INTERSECTION of every participant's membership
+   set (`categoryIds ∪ {strangers}`; unknown user → just `{strangers}`),
+   intersected with the location's set (`{assignedCategory, strangers}` when
+   assigned, `{strangers}` unassigned — the ceiling can still only *lower*).
+   A record tagged circle X surfaces iff **everyone present is a member of
+   X**; two circles with equal grants no longer see each other's records (the
+   audit bug — trust is not a total order). The tag itself is the
+   most-trusted circle *everyone shares* (`permissionScore` survives only as
+   the tie-break among shared circles), so one stranger present collapses the
+   room to `strangers` and a memory written in a room always round-trips
+   (its tag is in that room's visible set by construction). Ward DMs → the
    `ward-private` sentinel — the only tag the future memorization sweep
    will treat as safe to route into Phylactery; every shared-room tag is
    quarantined to the local Session Memories tome. The scan uses the

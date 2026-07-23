@@ -263,11 +263,18 @@ import { withLock, writeTomeFile, modifyTomeFile } from './thalamus.js';
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
 const _chatRateCounts = new Map();
+const _RATE_MAP_SWEEP_AT = 1000; // prune expired entries once the map grows past this
 function chatRateLimit(req, res, next) {
   const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
   const now = Date.now();
   const WINDOW_MS = 60_000;
   const MAX_REQ   = 20;
+  // Bounded memory: many distinct client IPs (behind Tailscale) would otherwise
+  // accrete forever. Sweep expired windows only when the map has actually grown
+  // — O(n) at most once per 1000 new IPs, never per request on the common path.
+  if (_chatRateCounts.size > _RATE_MAP_SWEEP_AT) {
+    for (const [k, v] of _chatRateCounts) if (now > v.resetAt) _chatRateCounts.delete(k);
+  }
   const entry = _chatRateCounts.get(ip) ?? { count: 0, resetAt: now + WINDOW_MS };
   if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + WINDOW_MS; }
   entry.count++;
@@ -384,7 +391,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       const registry = await getVillageRegistry();
       audienceGrants  = resolveAudience(sessionAudience, registry);
       audienceTag     = audienceTagFor(sessionAudience, registry);
-      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate (coarse floor)
+      // Pillar E recall gate — circle MEMBERSHIP: the set of circles everyone
+      // present shares (needs the session audience, not just the room tag).
+      audienceVisible = visibleAudiences(sessionAudience, registry);
       audienceTopics  = topicGrantsForRoom(audienceGrants, audienceTag); // Phase 4 content gate (fine)
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
@@ -4896,8 +4905,12 @@ async function gatherNoticingWakeInputs() {
   const tz = s?.wardTimeZone || null;
   const nowMs = Date.now();
   const leadHours = Number.isFinite(Number(s?.readinessLeadHours)) ? Number(s.readinessLeadHours) : 48;
-  const winFrom = new Date(nowMs - 12 * 3600_000).toISOString();
-  const winTo   = new Date(nowMs + leadHours * 3600_000).toISOString();
+  // Ward-local-naive window bounds (not UTC toISOString) — get_window compares
+  // these against ward-local-naive when_ts, so a UTC bound on a cross-zone
+  // server slid the noticing window by the offset. wardLocalNowISO takes the
+  // instant as its 2nd arg, so it renders any shifted moment in the ward's zone.
+  const winFrom = wardLocalNowISO(tz, nowMs - 12 * 3600_000);
+  const winTo   = wardLocalNowISO(tz, nowMs + leadHours * 3600_000);
 
   const [dueRes, baseline, lastAct, win, allIntents, tells] = await Promise.all([
     getDueIntentions({ now: wardLocalNowISO(tz) }).catch(() => ({ due: [] })),

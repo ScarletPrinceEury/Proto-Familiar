@@ -78,7 +78,7 @@ import { flagDistress } from './threat-tracker.js';
 import { resetTriageCooldown } from './silence-triage-loop.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
-import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
+import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
 import { rekeyCueState } from './gcal-projection.js';
@@ -691,8 +691,12 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     // I already have temporal_context loaded as part of enrich() in
     // many call sites, but triage is async + standalone here, so
     // fetch a fresh window directly. Cheap — no LLM call.
-    const fromIso = new Date(Date.now() - 24 * 3600_000).toISOString();
-    const toIso   = new Date(Date.now() + 7 * 24 * 3600_000).toISOString();
+    // Ward-local-naive bounds (not UTC toISOString) — get_window compares
+    // against ward-local-naive when_ts, so a UTC bound slid this candidate-task
+    // window by the offset on a cross-zone server (audit fix).
+    const tz = s?.wardTimeZone || null;
+    const fromIso = wardLocalNowISO(tz, nowMs - 24 * 3600_000);
+    const toIso   = wardLocalNowISO(tz, nowMs + 7 * 24 * 3600_000);
     const win = await getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] }));
     const nodes = Array.isArray(win) ? win : (Array.isArray(win?.nodes) ? win.nodes : []);
     const openItems = nodes

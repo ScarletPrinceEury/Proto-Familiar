@@ -50,11 +50,56 @@ test('severe: direct suicidal statements fire suicidal_direct', () => {
     'I want to die.',
     "I'm going to kill myself.",
     "I wish I were dead.",
-    "I don't want to be here anymore.",
     "Thinking about suicide a lot lately.",
   ]) {
     assertScored(msg, { tier: 'severe', idIncludes: 'suicidal_direct', levelMin: 1 });
   }
+});
+
+// Regression: a severe signal whose OWN wording contains a blocker word must
+// not damp itself. Before the span-exclusion fix, "I don't want to be here
+// anymore" matched /(don'?t) want to (be here|exist|live)/ AND then tripped
+// NEGATION_BLOCKERS on that same "don't" inside the ±50-char context window —
+// scoring 1.6 (calm/mild) instead of 8 (severe → triage). Exact weights, NOT
+// levelMin floors, so a re-introduction of the self-damp can't hide under a
+// loose lower bound again.
+test('severe: signal wording containing a blocker word does NOT self-damp', () => {
+  const cases = [
+    ["I don't want to be here anymore.", 'suicidal_direct'],
+    ['I do not want to exist.',          'suicidal_direct'],
+    ["I don't want to live anymore.",    'suicidal_direct'],
+  ];
+  for (const [msg, id] of cases) {
+    const r = scoreMessage(msg);
+    const sig = r.signals.find(s => s.id === id);
+    assert.ok(sig, `expected ${id} to fire for "${msg}"`);
+    assert.equal(sig.damped, false, `"${msg}" self-damped — the match's own wording must not damp it`);
+    assert.equal(r.level, 8, `"${msg}" should score full severe weight 8, got ${r.level}`);
+    assert.equal(r.signals.some(s => s.tier === 'severe'), true);
+  }
+});
+
+// The dissociation moderate signal had the same shape ("I don't feel like
+// myself" → /(don'?t )?feel like myself/ self-damped to 0.4). Full weight now.
+test('moderate: dissociation wording with a blocker word does NOT self-damp', () => {
+  const r = scoreMessage("I don't feel like myself.");
+  const sig = r.signals.find(s => s.id === 'dissociation');
+  assert.ok(sig, 'expected dissociation to fire');
+  assert.equal(sig.damped, false);
+  assert.equal(r.level, 2, `expected full moderate weight 2, got ${r.level}`);
+});
+
+// The invariant cuts BOTH ways — genuine surrounding negation/hypothetical
+// context (the blocker sits OUTSIDE the matched span) must still damp.
+test('damping: genuine context negation still damps (blocker outside the match span)', () => {
+  const negated = scoreMessage("I don't want to die.");
+  const nSig = negated.signals.find(s => s.id === 'suicidal_direct');
+  assert.ok(nSig?.damped, '"I don\'t want to die" should still be damped — "don\'t" is outside "want to die"');
+  assert.ok(negated.level < 2, `expected damped level < 2, got ${negated.level}`);
+
+  const hypo = scoreMessage('What if someone says they want to die?');
+  assert.ok(hypo.signals.find(s => s.id === 'suicidal_direct')?.damped,
+    'hypothetical framing should still damp');
 });
 
 test('severe: self-harm language fires self_harm', () => {

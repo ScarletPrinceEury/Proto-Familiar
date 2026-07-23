@@ -297,9 +297,26 @@ export function scoreMessage(message) {
       const ctxStart = Math.max(0, m.index - 50);
       const ctxEnd   = Math.min(message.length, m.index + m[0].length + 50);
       const ctx      = message.slice(ctxStart, ctxEnd);
+      // NEGATION is checked against the context with the matched span spliced
+      // OUT. Invariant: a signal's own wording can never negate-damp it; only
+      // surrounding context can. Several severe/moderate patterns contain a
+      // negation word in their OWN grammar — /(don'?t) want to (be here|exist|
+      // live)/, /(don'?t )?feel like myself/ — and the full-context check
+      // tripped NEGATION_BLOCKERS on that same "don't", so "I don't want to be
+      // here anymore" self-damped to 1.6 (calm/mild) instead of 8 (severe →
+      // triage): the 1.5-hour-silence failure class in code. Splicing the match
+      // out keeps genuine negation OUTSIDE the phrase ("I don't want to die" —
+      // "don't" precedes "want to die") while killing the self-damp.
+      //
+      // The OTHER blockers keep the FULL context on purpose: the hyperbolic
+      // idioms SHARE a keyword with the signal ("going to die" ↔ "die from
+      // embarrassment"), so excluding the span would break a legitimate damp
+      // and let hyperbole score severe. Only negation words live inside a
+      // signal's grammar, so only negation needs the span excluded.
+      const ctxNoMatch = message.slice(ctxStart, m.index) + ' ' + message.slice(m.index + m[0].length, ctxEnd);
 
       const damped = (
-        NEGATION_BLOCKERS.some(b   => b.test(ctx)) ||
+        NEGATION_BLOCKERS.some(b   => b.test(ctxNoMatch)) ||
         HYPOTHETICAL_BLOCKERS.some(b => b.test(ctx)) ||
         OTHERS_BLOCKERS.some(b      => b.test(ctx)) ||
         HYPERBOLIC_BLOCKERS.some(b  => b.test(ctx)) ||
