@@ -119,6 +119,24 @@ function slugifyCategoryName(name) {
  * Ids that are already slugs are left untouched. Pure. Returns a Map (empty when
  * nothing needs migrating).
  */
+/**
+ * The full old-id → new-slug map to hand Phylactery so it can remap the
+ * `audience` stored on memories / graph nodes / edges (the category id lives in
+ * two stores; the registry migration only fixes the Node mirror). ALWAYS
+ * includes the fixed legacy-seed map so the seed remap runs idempotently every
+ * boot regardless of registry state; unions in any ward-created UUID → slug from
+ * the raw file (present until the first write persists slugs). Reads the RAW
+ * file (pre-normalize) on purpose — the UUIDs must still be visible to map them.
+ */
+export async function pendingCategoryAudienceRemap({ filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  let derived = {};
+  try {
+    const raw = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+    derived = Object.fromEntries(migrateCategoryIds(Array.isArray(raw?.categories) ? raw.categories : []));
+  } catch { /* no file / bad json → seed map only */ }
+  return { ...LEGACY_SEED_CATEGORY_IDS, ...derived };
+}
+
 export function migrateCategoryIds(rawCategories = []) {
   const map = new Map();
   // Reserve the builtin + seed slugs and any id already slug-shaped, so a

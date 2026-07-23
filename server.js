@@ -30,6 +30,7 @@ import {
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
   getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
+  remapCategoryAudiences,
   searchMemory,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
@@ -145,6 +146,7 @@ import {
   upsertLocation as upsertVillageLocation, deleteLocation as deleteVillageLocation,
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
+  pendingCategoryAudienceRemap,
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
@@ -3722,6 +3724,11 @@ app.delete('/api/village/locations', async (req, res) => {
 const VILLAGE_PULL_TIMEOUT_MS = 8_000;
 const VILLAGE_RESYNC_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000];
 
+// Category-slug audience remap map, captured from the RAW registry during
+// village sync (before slugs are persisted) and applied to Phylactery once it's
+// up. Module-scoped because capture and apply live in different boot functions.
+let _pendingAudienceRemap = null;
+
 async function startVillageSync() {
   // Tracks whether the most recent canonical pull actually REACHED Phylactery
   // (vs. timing out). A reached pull that simply found no village data yet is
@@ -3756,6 +3763,12 @@ async function startVillageSync() {
     },
   });
   try {
+    // Capture the category-slug audience remap map from the RAW registry BEFORE
+    // villageBootSync can persist slugs over the UUIDs — otherwise a ward-created
+    // category's old UUID would already be gone and its memories couldn't be
+    // re-pointed. Seeds are covered by the fixed map regardless; this preserves
+    // the ward-created mappings too. Applied to Phylactery further down, once it's up.
+    _pendingAudienceRemap = await pendingCategoryAudienceRemap().catch(() => null);
     await villageBootSync();
     const { added } = await seedDefaultCategories();
     if (added > 0) console.log(`[village] seeded ${added} default category/categories`);
@@ -3851,6 +3864,21 @@ const httpServer = app.listen(PORT, HOST, async () => {
         }).catch(() => {});
       }
     }
+  }).catch(() => {});
+  // Complete the Village category-slug migration in Phylactery: the registry
+  // mirror slugs its own ids on read, but memories / graph nodes+edges store the
+  // category id as their `audience`, so an old-UUID audience would fall
+  // fail-closed to ward-only until remapped. Idempotent (matches nothing once
+  // done); always carries the fixed legacy-seed map so it heals even if the raw
+  // registry has already been slugged. Fire-and-forget — a Phylactery hiccup
+  // just retries next boot.
+  Promise.resolve(_pendingAudienceRemap ?? pendingCategoryAudienceRemap()).then(map => {
+    if (!map || !Object.keys(map).length) return;
+    return remapCategoryAudiences(map).then(r => {
+      const moved = (r?.memories ?? 0) + (r?.nodes ?? 0) + (r?.edges ?? 0);
+      if (r?.ok && moved) console.log(`[village] category-slug audience remap: ${r.memories} memor(ies), ${r.nodes} node(s), ${r.edges} edge(s) re-pointed to slug ids`);
+      else if (r && !r.ok) console.warn(`[village] category-slug audience remap skipped: ${r.error ?? 'unknown'}`);
+    });
   }).catch(() => {});
   // Self-update check: prime the indicator at boot, then re-check on a slow
   // background cadence so a ward with the UI open sees a new version appear

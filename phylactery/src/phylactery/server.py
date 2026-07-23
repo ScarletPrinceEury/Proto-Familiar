@@ -460,6 +460,16 @@ def memory_health() -> dict[str, Any]:
 
 
 @mcp.tool()
+def remap_category_audiences(id_map: dict) -> dict[str, Any]:
+    """I use this after my human's Village category ids change from UUIDs to
+    readable slugs: it rewrites the stored `audience` on my memories, graph nodes
+    and edges from each OLD id to its NEW slug, so a memory keeps surfacing to the
+    right circle instead of quietly falling to just-us. Idempotent — a second run
+    changes nothing. `id_map` is {old_id: new_slug}."""
+    return mem.remap_audiences(_c(), id_map)
+
+
+@mcp.tool()
 def memory_granularity_audit() -> dict[str, Any]:
     """I use this to see which of my memories the consolidation ladder can't
     reach — rows whose date_key isn't a plain ISO date, so they silently never

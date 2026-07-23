@@ -2678,6 +2678,17 @@ export async function getMemoryHealth() {
   });
 }
 
+// Remap stored category-id audiences (memories + graph) after the Village
+// category-slug migration, per an old→new id map. Idempotent; a failure just
+// leaves the affected records fail-closed (ward-only) until the next boot.
+export async function remapCategoryAudiences(idMap) {
+  if (!idMap || typeof idMap !== 'object' || !Object.keys(idMap).length) return { ok: true, memories: 0, nodes: 0, edges: 0 };
+  return callTool('remap_category_audiences', { id_map: idMap }).catch(err => {
+    console.warn('[thalamus] remapCategoryAudiences failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
 // Read-only audit of consolidation legibility — which memories the tier ladder
 // can't roll up because their date_key isn't ISO (the entity-core migration
 // mislabel). Never mutates; degrades to an "unknown" shape on failure.
