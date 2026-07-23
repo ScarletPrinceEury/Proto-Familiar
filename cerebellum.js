@@ -2158,6 +2158,34 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'disclosure_acknowledge',
+      description: "I call this once I've told my human (or judged no mention is needed) about the formerly-private facts I opened to my content-sharing rules — the items in the [DISCLOSURE NOTICE] block. It settles those notices so I don't keep re-raising them. The facts stay opened; this only marks that I've surfaced them.",
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: { type: 'array', items: { type: 'string' }, description: 'Disclosure notice ids (from the [DISCLOSURE NOTICE] block) I have now surfaced.' },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'keep_memory_private',
+      description: "I call this when my human wants one of the facts I opened kept strictly between us again. It sets that memory's audience back to ward-private, so no one in their Village can see it regardless of content rules, and settles its disclosure notice. I reach for it the moment they say to keep something private.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The memory id to set back to strictly private (from the [DISCLOSURE NOTICE] block, or a recall/list result).' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_files',
       description: "I list what's in my own folder — the Proto-Familiar files that make me up. I use this to find my way around when I want to look something up on purpose: which Tomes exist, what session logs are there, where a doc lives. I pass a folder path relative to my root (e.g. \"tomes\" or \"logs\"), or nothing for the top level. It's read-only and fenced to my own folder; my human's secrets (settings, keys) are never shown. I only do this in a private moment with {{user}} — my files hold our history, not for other rooms.",
       parameters: {
@@ -2533,6 +2561,28 @@ export const TOOL_EXECUTORS = {
     const result = await acknowledgeGraduations(ids);
     const n = result?.acknowledged ?? ids.length;
     return quietOk(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
+  },
+
+  // ── Disclosure notices (ward-disclosure spec, Phase B) ─────────────
+  // I've told my human which of their formerly-private facts I opened to my
+  // content rules; these settle those notices. acknowledge = I mentioned it (or
+  // judged it needs no mention), leave it opened. keep_memory_private = my human
+  // wants it strictly between us again — revert its audience to ward-private.
+  disclosure_acknowledge: async ({ ids } = {}) => {
+    const arr = Array.isArray(ids) ? ids : (ids ? [ids] : []);
+    if (!arr.length) return 'ids must be a non-empty array of disclosure notice ids.';
+    const { clearDisclosureNotice } = await import('./content-regate.js');
+    for (const id of arr) { await clearDisclosureNotice(id).catch(() => {}); }
+    return quietOk(`Marked ${arr.length} disclosure notice(s) as surfaced.`);
+  },
+
+  keep_memory_private: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'I need the id of the memory to keep private.';
+    const r = await updateMemoryById({ id, audience: 'ward-private' });
+    if (r?.ok === false) return `I couldn't set that back to private: ${r.error ?? 'update failed'}.`;
+    const { clearDisclosureNotice } = await import('./content-regate.js');
+    await clearDisclosureNotice(id).catch(() => {});
+    return quietOk('Kept between us — I set that memory back to strictly private.');
   },
 
   // ── Knowledge-editing executors ────────────────────────────────────

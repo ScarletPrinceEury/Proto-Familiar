@@ -2325,6 +2325,30 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Disclosure notice (ward-disclosure spec, Phase B — ward-visible + revert) ─
+    // When my re-tag pass opens one of my human's own previously-private facts to
+    // be governed by content rules, I tell them, in my own voice, so nothing gets
+    // opened behind their back and they can pull any of it back. Ward-private
+    // turns only; best-effort.
+    let disclosureBlock = '';
+    if (!staticOnly && !gated) {
+      try {
+        const { readDisclosureNotices } = await import('./content-regate.js');
+        const notices = await readDisclosureNotices();
+        if (Array.isArray(notices) && notices.length > 0) {
+          const lines = [
+            `[DISCLOSURE NOTICE — reviewing my own private notes, I opened ${notices.length} fact(s) about my human so they're now governed by my content-sharing rules (only the people they've trusted with each topic could ever see them; the rest stays as it was). Nothing is forced — this is mine to raise in my own voice when a natural moment opens, and any of it reverts to strictly-private on their word. Never the thing I lead with.]`,
+            'Opened:',
+            ...notices.map((n, i) => `  ${i + 1}. ${n.brief ?? ''} [${n.topic ?? 'general:sensitive'}]${n.date ? ` (${n.date})` : ''}  [id: ${n.id}]`),
+            'When I have mentioned these (or judged they need no mention), I call disclosure_acknowledge with the id(s). If my human wants any kept strictly between us, I call keep_memory_private with the id.',
+          ];
+          disclosureBlock = lines.join('\n');
+        }
+      } catch {
+        /* best-effort — no disclosure block on error */
+      }
+    }
+
     const dynamicSections = [];
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
@@ -2334,6 +2358,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
+    if (disclosureBlock)        dynamicSections.push(disclosureBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (stewardshipBlock)       dynamicSections.push(stewardshipBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
@@ -2759,6 +2784,24 @@ export async function getStandingConsent() {
  * the villager consent menu (a person may see what the Familiar holds
  * about them). Degrades to an empty list when Phylactery is down.
  */
+/**
+ * Ward-about-self memories still tagged coarse 'ward-private' — the input to the
+ * Familiar-curated content-gating re-tag pass (ward-disclosure build spec, Phase
+ * B). Facts with a third-party subject are never returned. Degrades to an empty
+ * list when Phylactery is down.
+ */
+export async function listContentGateCandidates({ limit = 40 } = {}) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, items: [] };
+  try {
+    const r = await mcpClient.callTool({
+      name: 'memory_list_content_gate_candidates',
+      arguments: { limit },
+    });
+    return parseToolText(r, { ok: true, items: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
+}
+
 export async function getMemoriesBySubject({ villagerId, limit = 50 }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, items: [] };

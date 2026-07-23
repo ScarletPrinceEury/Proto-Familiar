@@ -217,6 +217,16 @@ export function resolveAudience(sessionAudience, registry) {
 // guards what leaves, completing the loop.
 export const AUDIENCE_TAG_WARD_PRIVATE = 'ward-private';
 
+// Coarse-audience sentinel for a fact ABOUT THE WARD whose visibility is
+// governed by the fine content gate (content_tag × each circle's per-topic
+// grants), not by a circle membership. It PASSES the coarse membership floor in
+// every gated room (added to visibleAudiences below, like strangers is) and
+// defers entirely to the content gate: a villager sees the fact only if their
+// circle grants its content topic, and if NO circle grants it the fact reaches
+// no one (fail-closed → effectively ward-private). Distinct from 'ward-private'
+// (hard private, the ward's per-fact override) and from a circle id.
+export const AUDIENCE_TAG_WARD_OPEN = 'ward-content-gated';
+
 // Permission score for a grant set: higher = more access. Used only to
 // rank categories against each other so the room can be tagged with its
 // least-permissive occupant. Scalar grants score by ladder position;
@@ -344,7 +354,11 @@ function roomCircleSet(sessionAudience, registry) {
  */
 export function visibleAudiences(sessionAudience, registry) {
   const set = roomCircleSet(sessionAudience, registry);
-  return set ? [...set] : null;
+  // The ward-content-gated sentinel is admitted to EVERY gated room's coarse
+  // set (like strangers) so a ward-about-self content-gated fact clears the
+  // membership floor and its real visibility is decided by the content gate.
+  // A ward session (null) still returns null = unscoped (sees all).
+  return set ? [...set, AUDIENCE_TAG_WARD_OPEN] : null;
 }
 
 /**
@@ -421,15 +435,28 @@ function mostRestrictive(tags, categoryMap) {
  */
 export function deriveMemoryAudience({ category, subjects = [], sessionTag = AUDIENCE_TAG_WARD_PRIVATE, registry } = {}) {
   const categoryMap = new Map((registry?.categories ?? []).map(c => [c.id, c]));
-  // Session-bounded default, tightened by the fact's sensitivity floor.
+
+  // ── Fact about the WARD themselves (no third-party subject) ──
+  if (!subjects.length) {
+    // In a ward-private session it's CONTENT-GATED: the content_tag + each
+    // circle's per-topic grants decide who may ever see it (a villager sees it
+    // only if their circle grants its topic; no circle granted → nobody, so
+    // still effectively private). The ward can override any specific memory to
+    // hard 'ward-private' via the memory manager. The old SENSITIVE_CATEGORIES
+    // → ward-private floor is intentionally GONE here: sensitivity now rides the
+    // content_tag, not the coarse tag (health_info → medical:sensitive, etc.).
+    // In a SHARED room the fact stays session-bounded — that room already saw it.
+    if (!sessionTag || sessionTag === AUDIENCE_TAG_WARD_PRIVATE) return AUDIENCE_TAG_WARD_OPEN;
+    return sessionTag;
+  }
+
+  // ── Fact about a THIRD PARTY (subjects present) — UNCHANGED ──
+  // Third-party privacy + provenance stay on the coarse circle gate, with the
+  // sensitivity floor. Session-bounded default, tightened by the fact's
+  // sensitivity floor; an explicit per-subject disclosure preference may widen
+  // or tighten; the narrowest across all named subjects wins.
   const floor = SENSITIVE_CATEGORIES.has(category) ? AUDIENCE_TAG_WARD_PRIVATE : null;
   const sessionDefault = floor ? mostRestrictive([sessionTag, floor], categoryMap) : (sessionTag || AUDIENCE_TAG_WARD_PRIVATE);
-
-  if (!subjects.length) return sessionDefault; // a fact about the ward themselves — never auto-widened
-
-  // Per subject: an explicit disclosure preference widens or tightens; otherwise
-  // the session-bounded default (no auto-widen from their category). The narrowest
-  // across all named subjects wins — everyone must be OK with the room.
   const levels = subjects.map(v => {
     const explicit = v?.disclosure?.[category];
     if (explicit && (explicit === AUDIENCE_TAG_WARD_PRIVATE || categoryMap.has(explicit))) return explicit;

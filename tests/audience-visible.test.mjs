@@ -27,32 +27,34 @@ test('ward-private: null audience, or empty participants + no location → null'
   assert.equal(visibleAudiences({ participants: [], location: null }, registry), null);
 });
 
-test('family DM (single participant) → their circle + strangers', () => {
+test('family DM (single participant) → their circle + strangers + the ward-content-gated sentinel', () => {
   const set = visibleAudiences({ participants: [{ id: 'mom-id', name: 'Mom' }] }, registry);
-  assert.deepEqual(set.sort(), ['family', 'strangers']);
+  assert.deepEqual(set.sort(), ['family', 'strangers', 'ward-content-gated']);
 });
 
-test('family + work in the same room → ONLY strangers, even though both score equally (the audit fix)', () => {
+test('family + work in the same room → ONLY strangers (+ the sentinel), even though both score equally (the audit fix)', () => {
   // Mom ∈ {family, strangers}, Boss ∈ {work, strangers}. Under the old scalar
   // trust model these tied and could see each other; under membership the
   // intersection of their sets is just {strangers} — two circles with equal
   // permissionScore are still mutually isolated unless they actually share a
-  // category. This is the exact bug this rewrite fixes.
+  // category. This is the exact bug this rewrite fixes. Every gated room also
+  // carries AUDIENCE_TAG_WARD_OPEN so a ward-about-self content-gated fact can
+  // clear the coarse floor (the fine content gate decides its real visibility).
   const set = visibleAudiences(
     { participants: [{ id: 'mom-id', name: 'Mom' }, { id: 'boss-id', name: 'Boss' }] },
     registry,
   );
-  assert.deepEqual(set.sort(), ['strangers']);
+  assert.deepEqual(set.sort(), ['strangers', 'ward-content-gated']);
 });
 
-test('Sib DM (multi-circle villager) → both their circles + strangers', () => {
+test('Sib DM (multi-circle villager) → both their circles + strangers + the sentinel', () => {
   const set = visibleAudiences({ participants: [{ id: 'sib-id', name: 'Sib' }] }, registry);
-  assert.deepEqual(set.sort(), ['close', 'family', 'strangers']);
+  assert.deepEqual(set.sort(), ['close', 'family', 'strangers', 'ward-content-gated']);
 });
 
-test('a stranger present → only strangers', () => {
+test('a stranger present → only strangers + the sentinel', () => {
   const set = visibleAudiences({ participants: [{ name: 'Nobody' }] }, registry);
-  assert.deepEqual(set, ['strangers']);
+  assert.deepEqual(set.sort(), ['strangers', 'ward-content-gated']);
 });
 
 test('a villager whose categoryIds include a deleted/unknown category → that id is absent (fail-closed)', () => {
@@ -62,7 +64,7 @@ test('a villager whose categoryIds include a deleted/unknown category → that i
   };
   const set = visibleAudiences({ participants: [{ id: 'ghost-owner', name: 'GhostOwner' }] }, withGhost);
   assert.ok(!set.includes('ghost'));
-  assert.deepEqual(set.sort(), ['family', 'strangers']);
+  assert.deepEqual(set.sort(), ['family', 'strangers', 'ward-content-gated']);
 });
 
 // ── topicGrantsForRoom (content-gating Phase 4 recall gate) ─────────
