@@ -108,6 +108,7 @@ def _row_to_list_item(row: sqlite3.Row) -> dict:
         "title": head,
         "content": content,
         "audience": row["audience"] or "ward-private",
+        "content_tag": (row["content_tag"] if "content_tag" in row.keys() else None) or "",
         "care_weight": row["care_weight"],
     }
 
@@ -768,12 +769,12 @@ def list_memories(
     try:
         if granularity:
             rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE granularity=? AND kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (granularity, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id,granularity,register,date_key,content,audience,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
+                "SELECT id,granularity,register,date_key,content,audience,content_tag,care_weight FROM memories WHERE kind='narrative' ORDER BY date_key DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
         return [_row_to_list_item(r) for r in rows]
@@ -915,7 +916,7 @@ def read_memory_by_id(
         conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, granularity, register, date_key, slug, content, audience, care_weight "
+            "SELECT id, granularity, register, date_key, slug, content, audience, content_tag, care_weight "
             "FROM memories WHERE id=? AND kind='narrative'",
             (mem_id,),
         ).fetchone()
@@ -930,6 +931,7 @@ def read_memory_by_id(
             "slug": row["slug"],
             "content": row["content"] or "",
             "audience": row["audience"] or "ward-private",
+            "content_tag": row["content_tag"] or "",
             "care_weight": row["care_weight"],
         }
     finally:
@@ -942,6 +944,7 @@ def update_memory_by_id(
     new_content: str | None = None,
     audience: str | None = None,
     care_weight: str | None = None,
+    content_tag: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     own_conn = conn is None
@@ -961,6 +964,13 @@ def update_memory_by_id(
         if audience is not None:
             sets.append("audience=?")
             params.append(audience)
+        if content_tag is not None:
+            # The ward's edit is authoritative but still normalised in code (the
+            # exact-values rule): an unrecognised value is stored as-is only if
+            # blank-cleared, else canonicalised to a real topic:level below via
+            # the caller. Here we just persist the string the endpoint validated.
+            sets.append("content_tag=?")
+            params.append(content_tag if content_tag != "" else None)
         if care_weight is not None:
             sets.append("care_weight=?")
             params.append(care_weight if care_weight != "" else None)

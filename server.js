@@ -149,6 +149,7 @@ import {
   pendingCategoryAudienceRemap,
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
+import { normalizeTag } from './content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
@@ -2579,15 +2580,32 @@ app.get('/api/entity/memories/by-id/:id', async (req, res) => {
 app.put('/api/entity/memories/by-id/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const { content, audience, careWeight } = req.body;
+  const { content, audience, careWeight, contentTag } = req.body;
   if (content !== undefined && (typeof content !== 'string' || !content.trim())) return badRequest(res, 'content must be a non-empty string');
   if (content !== undefined && content.length > 16384)                          return badRequest(res, 'content exceeds 16 KB limit');
   if (audience !== undefined && typeof audience !== 'string')                    return badRequest(res, 'audience must be string');
+  // The content tag is a machine value: the ward's edit is canonicalised in code
+  // (the exact-values rule). '' clears it (→ fail-closed general:sensitive at
+  // recall); a recognised topic[:level] is normalised to canonical "topic:level";
+  // anything unrecognised is rejected rather than stored as junk.
+  let contentTagArg;
+  if (contentTag !== undefined) {
+    if (typeof contentTag !== 'string') return badRequest(res, 'contentTag must be string');
+    const trimmed = contentTag.trim();
+    if (trimmed === '') {
+      contentTagArg = '';
+    } else {
+      const norm = normalizeTag(trimmed);
+      if (!norm) return badRequest(res, 'contentTag must be a known topic (optionally :open/:sensitive)');
+      contentTagArg = `${norm.topic}:${norm.level}`;
+    }
+  }
   const result = await updateMemoryById({
     id,
     ...(content   !== undefined ? { content: content.trim() } : {}),
     ...(audience  !== undefined ? { audience }                : {}),
     ...(careWeight !== undefined ? { careWeight }             : {}),
+    ...(contentTagArg !== undefined ? { contentTag: contentTagArg } : {}),
   });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result ?? { ok: true });

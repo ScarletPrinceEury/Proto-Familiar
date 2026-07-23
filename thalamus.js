@@ -2887,7 +2887,7 @@ export async function moveMemoryDate({ id, date }) {
   }
 }
 
-export async function updateMemoryById({ id, content, audience, careWeight }) {
+export async function updateMemoryById({ id, content, audience, careWeight, contentTag }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2895,6 +2895,7 @@ export async function updateMemoryById({ id, content, audience, careWeight }) {
       ...(content   !== undefined ? { content }   : {}),
       ...(audience  !== undefined ? { audience }  : {}),
       ...(careWeight !== undefined ? { careWeight } : {}),
+      ...(contentTag !== undefined ? { content_tag: contentTag } : {}),
     };
     const result = await callTool('memory_update_by_id', args);
     console.log(`[thalamus] updateMemoryById ${id}`);

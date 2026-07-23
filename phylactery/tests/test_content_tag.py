@@ -82,3 +82,20 @@ def test_backfill_tags_null_rows_from_category_and_is_idempotent():
 
     r2 = memory.backfill_content_tags(c)
     assert r2 == {"ok": True, "tagged": 0, "remaining": 0}
+
+
+def test_update_by_id_sets_and_clears_content_tag():
+    c = _conn()
+    c.execute("INSERT INTO memories(id,kind,category,content_tag,content,created_at,updated_at) "
+              "VALUES('m1','narrative','basics','general:open','x','t','t')")
+    c.commit()
+    # Re-tag (the ward's edit through the manager UI).
+    memory.update_memory_by_id("m1", content_tag="sexuality:sensitive", conn=c)
+    assert _tag_of(c, "m1") == "sexuality:sensitive"
+    # Clearing (empty string) → NULL → fails closed to general:sensitive at recall.
+    memory.update_memory_by_id("m1", content_tag="", conn=c)
+    assert _tag_of(c, "m1") is None
+    # Omitting content_tag leaves whatever is there untouched.
+    memory.update_memory_by_id("m1", content_tag="medical:open", conn=c)
+    memory.update_memory_by_id("m1", new_content="y", conn=c)
+    assert _tag_of(c, "m1") == "medical:open"

@@ -7161,6 +7161,23 @@ function keAudienceLabel(id) {
   return cat ? cat.name : `${id.slice(0, 8)}… (unknown circle)`;
 }
 
+// A memory's content_tag ("topic:level") is the Phase 4 recall gate — it decides
+// which Villagers may see this fact BY CONTENT, per topic. Show it as a friendly
+// badge (topic label · level). An empty tag falls back to general:sensitive at
+// recall (ward-only in practice), so it renders as a muted "untagged" hint.
+function keContentTagParts(tag) {
+  const t = String(tag ?? '').trim();
+  if (!t) return null;
+  const [topic, level] = t.split(':');
+  const label = (VL_CONTENT_TOPICS.find(x => x.key === topic)?.label) ?? topic;
+  return { topic, level: level === 'open' ? 'open' : 'sensitive', label };
+}
+function keContentTagBadge(tag) {
+  const p = keContentTagParts(tag);
+  if (!p) return '';
+  return `<span class="ke-badge ke-badge-tag ke-badge-tag-${esc(p.level)}" title="Content: ${esc(p.label)} · ${esc(p.level)} — gates which Villagers may see this, by topic">${esc(p.label)} · ${esc(p.level)}</span>`;
+}
+
 async function keLoadMemories() {
   const list = $('ke-mem-list');
   list.innerHTML = '<p class="logs-loading">Loading…</p>';
@@ -7186,7 +7203,7 @@ function keRenderMemories() {
   const countEl = $('ke-mem-count');
   const q = ($('ke-mem-search')?.value ?? '').trim().toLowerCase();
   const memories = _keMemCache.filter(m => !q ||
-    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''} ${keAudienceLabel(m.audience)}`
+    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''} ${keAudienceLabel(m.audience)} ${m.content_tag ?? ''} ${keContentTagParts(m.content_tag)?.label ?? ''}`
       .toLowerCase().includes(q));
   if (countEl) {
     countEl.textContent = !_keMemCache.length ? ''
@@ -7205,8 +7222,9 @@ function keRenderMemories() {
     // A me/ward register memory is a standing truth, not a passing moment — badge it.
     const registerBadge = (m.register === 'me' || m.register === 'ward')
       ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
+    const tagBadge = keContentTagBadge(m.content_tag);
     row.innerHTML = `
-      <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
+      <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${tagBadge}${cwBadge}</div>
       <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
     row.addEventListener('click', () => keOpenMemory(m));
     list.appendChild(row);
@@ -7231,6 +7249,26 @@ function keAudienceOptionsHTML(current, categories) {
   return opts.join('');
 }
 
+// The content-tag editor: a topic <select> + a level <select>, populated from the
+// memory's current "topic:level". "— untagged" clears it (→ general:sensitive at
+// recall). The server canonicalises/validates whatever is sent (the exact-values
+// rule); this is just the ward-facing surface for the Phase 4 gate.
+function keContentTagEditorHTML(currentTag) {
+  const p = keContentTagParts(currentTag);
+  const curTopic = p?.topic ?? '';
+  const curLevel = p?.level ?? 'sensitive';
+  const topicOpts = [`<option value=""${curTopic ? '' : ' selected'}>— untagged (ward-only)</option>`];
+  for (const t of VL_CONTENT_TOPICS) {
+    topicOpts.push(`<option value="${esc(t.key)}"${curTopic === t.key ? ' selected' : ''}>${esc(t.label)}</option>`);
+  }
+  const levelOpts = ['open', 'sensitive']
+    .map(l => `<option value="${l}"${curLevel === l ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <label class="ke-meta-label" for="ke-mem-tag-topic">Content</label>
+    <select id="ke-mem-tag-topic" class="ke-select">${topicOpts.join('')}</select>
+    <select id="ke-mem-tag-level" class="ke-select" aria-label="Content sensitivity level">${levelOpts}</select>`;
+}
+
 // A memory is addressed by its unique id — granularity+date can't single out a
 // standalone per-fact row, because a whole day's extracted facts share one date.
 // `m` is the list row (carries id, granularity, key=date).
@@ -7247,6 +7285,7 @@ async function keOpenMemory(m) {
     const granularity = data.granularity ?? m.granularity ?? '';
     const date       = data.date        ?? m.key ?? '';
     const audience   = data.audience    ?? 'ward-private';
+    const contentTag = data.content_tag ?? '';
     const careWeight = data.care_weight ?? '';
     const register   = data.register    ?? 'episodic';
     const registerNote = (register === 'me' || register === 'ward')
@@ -7277,6 +7316,9 @@ async function keOpenMemory(m) {
         </select>
       </div>
       <div class="ke-meta-row">
+        ${keContentTagEditorHTML(contentTag)}
+      </div>
+      <div class="ke-meta-row">
         <label class="ke-meta-label" for="ke-mem-movedate">Filed under</label>
         <input type="date" id="ke-mem-movedate" class="ke-select" value="${esc(dayValue)}">
         <button id="ke-mem-move" class="btn-secondary">Move to this day</button>
@@ -7291,9 +7333,13 @@ async function keOpenMemory(m) {
       const body = $('ke-mem-content').value;
       const aud = $('ke-mem-audience').value;
       const cw  = $('ke-mem-care-weight').value;
+      // Compose the content tag from the two selects; empty topic clears it.
+      const tagTopic = $('ke-mem-tag-topic').value;
+      const tagLevel = $('ke-mem-tag-level').value || 'sensitive';
+      const contentTag = tagTopic ? `${tagTopic}:${tagLevel}` : '';
       const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, audience: aud, careWeight: cw || '' }),
+        body: JSON.stringify({ content: body, audience: aud, careWeight: cw || '', contentTag }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();

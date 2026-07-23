@@ -1,6 +1,6 @@
 # Content-based memory gating — build spec
 
-**Status: Phases 1–4 shipped; Phase 5 (memory-manager badge) pending.**
+**Status: Phases 1–5 shipped — content-gating COMPLETE.**
 
 **What this builds:** memories gated by **content**, not by a single audience
 circle. Today a memory carries one `audience` (a Village category id), so a
@@ -158,11 +158,21 @@ Tests: `test_content_gate_recall.py` (recall-path pipeline through the real
 store — visible/invisible, ward-private floor, empty-grants, untagged), plus the
 `topicGrantsForRoom` and `discordReadTopicGrants` fail-closed unit tests.
 
-## Phase 5 — memory-manager UI
+## Phase 5 — memory-manager UI (DONE, 0.9.24)
 
 - The memory manager (`public/app.js` KE Memories tab) shows the content tag as
-  a badge (topic + level) and lets the ward edit it, same pattern as the
-  audience badge fix (0.9.15). Search matches the tag.
+  a badge (topic label · level, `keContentTagBadge`) beside the audience badge;
+  the list search matches both the raw tag and the friendly topic label.
+- The detail editor gains a topic `<select>` + level `<select>`
+  (`keContentTagEditorHTML`) populated from the memory's current tag; "—
+  untagged" clears it (→ `general:sensitive` at recall). The `PUT
+  /api/entity/memories/by-id/:id` endpoint accepts `contentTag`, **canonicalises
+  it in code** (`normalizeTag` → `topic:level`, `''` clears, unrecognised
+  rejected — the exact-values rule) and threads it through `updateMemoryById` →
+  `memory_update_by_id` → `update_memory_by_id`.
+- Projections carry it: `list_memories` and `read_memory_by_id` now return
+  `content_tag`. Badge colors (open = teal, sensitive = amber) tuned ≥4.5:1 per
+  the WCAG line.
 
 ## Invariants (privacy-critical — hold these)
 

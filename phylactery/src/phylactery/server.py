@@ -300,14 +300,17 @@ def memory_update_by_id(
     content: Optional[str] = None,
     audience: Optional[str] = None,
     careWeight: Optional[str] = None,
+    content_tag: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to correct or re-tag one specific memory by its id — the reliable
     handle when many facts share a day. content rewrites the text; audience sets who
-    may see it; careWeight is 'high'/'low' or '' to clear. Auto-snapshots first.
+    may see it; careWeight is 'high'/'low' or '' to clear; content_tag is the
+    "topic:level" content gate ('' to clear). Auto-snapshots first.
     """
     result = mem.update_memory_by_id(
-        id, new_content=content, audience=audience, care_weight=careWeight, conn=_c()
+        id, new_content=content, audience=audience, care_weight=careWeight,
+        content_tag=content_tag, conn=_c()
     )
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
