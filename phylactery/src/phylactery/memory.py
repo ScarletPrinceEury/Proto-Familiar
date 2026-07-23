@@ -783,6 +783,47 @@ def list_memories(
             conn.close()
 
 
+def list_content_gate_candidates(
+    limit: int = 40,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict]:
+    """Ward-about-self memories still tagged coarse 'ward-private' — the input to
+    the Familiar-curated content-gating re-tag pass (ward-disclosure build spec,
+    Phase B). Selects ONLY facts with NO third-party subject (subjects_json is
+    the empty list), so the pass can never touch a fact about someone else — a
+    third-party fact stays on the coarse circle gate, always. Narrative rows
+    only, newest first. Returns id + content + current content_tag + category so
+    the Familiar can judge each with full context (and correct a coarse
+    backfill-derived content_tag while it's there)."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, date_key, granularity, register, content, content_tag, category "
+            "FROM memories "
+            "WHERE kind='narrative' AND audience='ward-private' "
+            "AND (subjects_json IS NULL OR subjects_json='' OR subjects_json='[]') "
+            "ORDER BY date_key DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "date": r["date_key"],
+                "granularity": r["granularity"],
+                "register": r["register"],
+                "content": r["content"],
+                "content_tag": (r["content_tag"] if "content_tag" in r.keys() else "") or "",
+                "category": (r["category"] if "category" in r.keys() else "") or "",
+            }
+            for r in rows
+        ]
+    finally:
+        if own_conn:
+            conn.close()
+
+
 def read_memory(
     granularity: str,
     date_key: str,

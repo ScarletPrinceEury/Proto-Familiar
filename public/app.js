@@ -269,6 +269,7 @@ const state = {
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
+  contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
@@ -405,7 +406,7 @@ const SERVER_SYNCED_KEYS = [
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'uiShowAdvanced',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
@@ -3197,6 +3198,7 @@ function readSettingsFromUI() {
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
+  if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
@@ -3355,6 +3357,7 @@ function writeSettingsToUI() {
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
+  if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
@@ -7157,6 +7160,9 @@ let _keAudCats  = [];   // Village categories, for id→label on the audience ba
 // for a since-deleted circle (so it's still greppable), tagged as unknown.
 function keAudienceLabel(id) {
   if (!id || id === 'ward-private') return '';
+  // The content-gated sentinel: a fact about the ward whose visibility is
+  // decided by its content tag × each circle's per-topic grants (not a circle).
+  if (id === 'ward-content-gated') return 'by content rules';
   const cat = _keAudCats.find(c => c.id === id);
   return cat ? cat.name : `${id.slice(0, 8)}… (unknown circle)`;
 }
@@ -7239,11 +7245,17 @@ function keRenderMemories() {
 function keAudienceOptionsHTML(current, categories) {
   const cur  = current ?? 'ward-private';
   const cats = categories ?? [];
-  const opts = [`<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>ward-private (just us)</option>`];
+  // Three understandable states: strictly private, governed by content rules
+  // (the content tag + each circle's per-topic grants decide), or shared to a
+  // specific circle.
+  const opts = [
+    `<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>ward-private (just us)</option>`,
+    `<option value="ward-content-gated"${cur === 'ward-content-gated' ? ' selected' : ''}>by content rules (per topic grants)</option>`,
+  ];
   for (const c of cats) {
     opts.push(`<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`);
   }
-  if (cur !== 'ward-private' && !cats.some(c => c.id === cur)) {
+  if (cur !== 'ward-private' && cur !== 'ward-content-gated' && !cats.some(c => c.id === cur)) {
     opts.push(`<option value="${esc(cur)}" selected>${esc(cur)} (unknown circle)</option>`);
   }
   return opts.join('');

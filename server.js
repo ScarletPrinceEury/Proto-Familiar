@@ -96,6 +96,7 @@ import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } fro
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
 import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
+import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
@@ -4883,6 +4884,13 @@ function startReachout() {
   // off-switch: PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1.
   startTomeGraduationLoop();
 
+  // Content-gating re-tag (ward-disclosure spec, Phase B). OPT-IN (default OFF):
+  // the Familiar reviews my human's EXISTING ward-private facts and, with
+  // judgment, opens the ones that can be governed by content rules (keeping the
+  // rest private) — every opening ward-visible + revertible. Hard off-switch:
+  // PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1.
+  startContentRegateLoop();
+
   // Needs-tracking (Pass 2). Opt-in (default OFF): marks a recurring
   // need-window's occurrence `missed` once its window elapses unresolved,
   // building the needs-fulfilment ledger. Stands down at moderate+ threat;
@@ -5144,6 +5152,7 @@ async function handleSignal(signal) {
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
+  try { await stopContentRegateLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
   try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
   try { await stopNoticingLoop(); } catch { /* already stopped */ }

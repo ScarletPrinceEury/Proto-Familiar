@@ -74,6 +74,7 @@ export const TOOL_MODULES = {
   list_deferred_intents: 'acks', drop_deferred_intent: 'acks',
   memory_confirm_consent: 'acks', memory_drop_pending: 'acks',
   graduation_acknowledge: 'acks',
+  disclosure_acknowledge: 'acks', keep_memory_private: 'acks',
   // Reading my own recent thought in full — the expand path for the pondering
   // index, which renders on every ward turn, so the tool must always be reachable
   // (like recall). Ward-only: it's absent from the villager allowlist, so a

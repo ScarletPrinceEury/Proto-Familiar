@@ -1,5 +1,12 @@
 # Build spec: ward self-disclosure governed by content tags (per-circle, per-topic)
 
+> **Implementation status (0.9.29–0.9.30):** Phase A (the gate — new ward-self
+> facts content-gated) shipped 0.9.29. Phase B (the Familiar-curated re-tag pass
+> for existing facts) + Phase C (the memory-manager three-state audience editor)
+> shipped 0.9.30. Migration guardrails implemented as the ward directed:
+> conservative auto-open with ward-visible notice + per-fact revert (no
+> propose-and-approve gate). The prose below is the design of record.
+
 Instruction sheet for the implementing agent. Read `CLAUDE.md` in full first,
 especially the content-gating section and the ward-sign-off rules — **this is
 the single most sensitive privacy path in the system.** It changes the DEFAULT

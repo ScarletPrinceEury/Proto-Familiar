@@ -461,6 +461,18 @@ def memory_list_by_subject(villager_id: str, limit: int = 50) -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_list_content_gate_candidates(limit: int = 40) -> dict[str, Any]:
+    """List my ward-about-self memories still tagged coarse 'ward-private' — the
+    input to my content-gating re-tag pass, where I decide (with full context)
+    which of my own facts about my human should be governed by content rules vs
+    kept strictly private. Only facts with NO third-party subject are returned,
+    so this can never touch something about someone else. Returns
+    { items: [{ id, date, content, content_tag, category }] }."""
+    items = mem.list_content_gate_candidates(limit=limit, conn=_c())
+    return {"items": items}
+
+
+@mcp.tool()
 def memory_health() -> dict[str, Any]:
     """I use this to check whether my memory's DEDUP is working — the semantic
     matcher that stops the same fact piling up in my human's consent queue. It
