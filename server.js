@@ -741,8 +741,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // Tell the client the round budget ran out mid-reach, so it can offer
         // the ward a one-click "go on" (a fresh turn = a fresh budget).
         if (roundCapHit) data._roundCapHit = true;
-        tickSurfacing();
-    req.off('close', onClientClose);
+        req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
         // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
@@ -770,7 +769,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';
           tickSurfacing((toolRounds ?? []).flatMap(r => (r.toolCalls ?? []).map(tc => tc.function?.name)));
-        if (enriched.surfacedBookmarks?.length > 0) {
+          if (enriched.surfacedBookmarks?.length > 0) {
             reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
               .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
           }
@@ -3265,7 +3264,6 @@ app.get('/api/gcal/calendars', async (_req, res) => {
 app.post('/api/gcal/google/credentials', async (req, res) => {
   const creds = parseCredentials(req.body?.credentials);
   if (!creds) return res.status(400).json({ error: 'that doesn\'t look like a Google credentials.json (no client_id found)' });
-  const store = (await readGoogleToken()) || {};
   // New client → drop any stale token; the ward will re-Allow.
   await writeGoogleToken({ client_id: creds.clientId, client_secret: creds.clientSecret });
   res.json(googlePublicStatus(await readGoogleToken()));
