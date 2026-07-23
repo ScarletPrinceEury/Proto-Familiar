@@ -11094,7 +11094,12 @@ function vlRenderCatDetail(cat) {
   const knownRows = VL_KNOWN_GRANTS.map(def => vlKnownGrantRow(def, grants[def.key], isLocked)).join('');
   // Unknown/custom keys (forward-compat, hand-added) keep the free-form
   // editor — but tucked behind an "Advanced" disclosure, not up front.
-  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k));
+  // `topics` (the content-gating per-topic map) is a nested object, NOT a
+  // free-form grant — it must never render as a raw row (would show
+  // "[object Object]" and, worse, vlReadGrants would re-serialize it to a
+  // string and destroy the map). Its own editor arrives in Phase 2b; for now
+  // it round-trips untouched (the server preserves it on a topic-less save).
+  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k) && k !== 'topics');
   const customRows = customEntries.map(([k, v], i) =>
     vlGrantRowHtml(i, k, typeof v === 'string' ? 'str' : 'bool', typeof v === 'string' ? v : (v ? 'true' : 'false'), isLocked)
   ).join('');

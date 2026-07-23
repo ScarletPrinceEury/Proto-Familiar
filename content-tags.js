@@ -117,6 +117,22 @@ export function unionTopicGrants(tierGrantsList = []) {
 }
 
 /**
+ * Intersect two per-topic grant maps — the MIN level per topic, and only topics
+ * present in BOTH (a room with multiple participants: everyone must be granted).
+ * Absent/`none` on either side drops the topic. Pure.
+ */
+export function intersectTopicGrants(a, b) {
+  const out = {};
+  const am = a || {}, bm = b || {};
+  for (const topic of Object.keys(am)) {
+    if (!_TOPIC_SET.has(topic) || !(topic in bm)) continue;
+    const lvl = levelRank(am[topic]) <= levelRank(bm[topic]) ? am[topic] : bm[topic];
+    if (levelRank(lvl) > 0) out[topic] = lvl;
+  }
+  return out;
+}
+
+/**
  * The whole gate for one memory + one villager (their tiers' unioned grants):
  * visible when the villager's most-permissive tier grants the memory's topic at
  * or above its level. A memory with no recognised tag is treated as
@@ -126,6 +142,24 @@ export function unionTopicGrants(tierGrantsList = []) {
 export function memoryVisibleToVillager(memoryTag, unionedGrants) {
   const t = normalizeTag(memoryTag) || { topic: 'general', level: 'sensitive' };
   return topicVisibleToGrants(unionedGrants, t.topic, t.level);
+}
+
+// ── Tier topic-grant sanitation (Phase 2) ────────────────────────────────────
+
+/**
+ * Validate a tier's per-topic grant map: keep only recognised topics with a
+ * real level (`open`/`sensitive`); drop everything else (unknown topic, `none`,
+ * junk). Returns a fresh clean map. Pure. The Village grants object carries this
+ * under `grants.topics`; `none`/absent means the tier sees that topic not at all.
+ */
+export function sanitizeTopicGrants(raw) {
+  const out = {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [topic, level] of Object.entries(raw)) {
+      if (_TOPIC_SET.has(topic) && (level === 'open' || level === 'sensitive')) out[topic] = level;
+    }
+  }
+  return out;
 }
 
 // ── Legacy bridge ───────────────────────────────────────────────────────────

@@ -49,21 +49,31 @@ below builds on.
 
 ## Phase 2 — tier grants gain the per-topic axis
 
-- Extend the Village category `grants` with a `topics` map (or fold topics into
-  the existing grant object — keep it one object, sanitized in
-  `village.js:sanitizeGrants`). Values validated to `open`/`sensitive` (absent
-  = `none`).
-- **Migration of existing tier grants** (in `normalizeRegistry`, alongside the
-  category-slug migration): derive an initial `topics` map from today's coarse
-  grants so nothing silently loses access — e.g. a tier with `health:true` →
-  `{ medical: 'sensitive', 'mental-health': 'sensitive' }`; `identityBasic` →
-  `{ general: 'open' }`; `identitySensitive` → bump `general` to `sensitive`;
-  `memories:'shared'|true` → `general:open`. Conservative, never widens beyond
-  the coarse grant's intent.
-- **Category-editor UI** (`public/app.js`, Connections/Village pane): per-topic
-  level selectors (none/open/sensitive) grouped sensibly, following
-  `docs/ui-ux-guidelines.md` (progressive disclosure — collapse the long topic
-  list behind the shared ⓘ pattern; the common topics visible by default).
+**Phase 2a (data model + migration + connected surfaces): DONE (0.9.19).**
+- Village category `grants` carries a nested `topics` map (`{topic: open|sensitive}`),
+  the ONE nested object `village.js:sanitizeGrants` preserves (validated via
+  `content-tags.sanitizeTopicGrants`); everything else still stripped to primitives.
+- **Migration** (`normalizeRegistry`, `deriveTopicGrantsFromCoarse`, first-time
+  only — never overwrites a ward edit): `identitySensitive` → every topic at
+  `sensitive` (the old "everything except address" — visibility-preserving, the
+  ward narrows it later); `health` → `medical`/`mental-health` sensitive;
+  `memories`/`identityBasic` → `general:open`; `location` → `location:open`.
+- **Connected surfaces closed in the same pass** (this is where a naïve version
+  breaks): `permissionScore` already ignores a nested object (adds 0, verified);
+  `grantUnion`/`grantIntersection` special-case `topics` (deep union/intersect
+  per topic — a boolean collapse would both destroy the map AND, as a bare
+  `true`, inflate `permissionScore` → shift `audienceTagFor`); `upsertCategory`
+  preserves `topics` across a topic-less save (the legacy editor doesn't send
+  them); and the category-editor UI excludes `topics` from its free-form rows so
+  it can't render/re-serialize it into a string. Tests cover each.
+
+**Phase 2b (UI) — PENDING:** per-topic level selectors in the category editor
+(`public/app.js`, Village pane), following `docs/ui-ux-guidelines.md`
+(progressive disclosure — the long topic list behind the shared ⓘ pattern,
+common topics visible by default). Until it ships, topic grants round-trip
+untouched (server preserves them). Note for 2b: an explicit "clear all topics"
+needs a sentinel (an empty `topics:{}` is dropped by sanitize and would
+re-derive) — decide at build time.
 
 ## Phase 3 — extraction tags each fact
 

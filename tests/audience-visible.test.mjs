@@ -36,3 +36,19 @@ test('a record tagged with a deleted/unknown category is absent from the set (fa
     assert.ok(!visibleAudiences(tag, registry).includes('ghost'));
   }
 });
+
+// Content-gating (Phase 2): a nested `topics` grant must NOT perturb the coarse
+// permissionScore-based visibility (topic gating is a separate axis, Phase 4).
+test('a topics grant does not change coarse visibleAudiences scoring', () => {
+  const withTopics = {
+    categories: [
+      { id: 'strangers', grants: {} },
+      { id: 'friends',   grants: { memories: 'shared', topics: { medical: 'sensitive', general: 'open' } } },
+      { id: 'family',    grants: { memories: true, graph: true, topics: { general: 'sensitive' } } },
+    ],
+  };
+  // Identical to the topic-less registry above.
+  assert.deepEqual(visibleAudiences('friends', withTopics).sort(), ['friends', 'strangers']);
+  assert.deepEqual(visibleAudiences('family', withTopics).sort(), ['family', 'friends', 'strangers']);
+  assert.deepEqual(visibleAudiences('strangers', withTopics), ['strangers']);
+});
