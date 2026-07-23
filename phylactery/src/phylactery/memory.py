@@ -417,6 +417,36 @@ def remap_audiences(conn: sqlite3.Connection | None = None, id_map: dict | None 
             conn.close()
 
 
+def backfill_content_tags(conn: sqlite3.Connection | None = None, limit: int | None = None) -> dict:
+    """Set `content_tag` on narrative memories that don't have one yet (rows from
+    before Phase 3), deriving it from the stored `category` via category_to_tag.
+    Idempotent — a second run finds none. Runs in the background at boot when a
+    gap is seen (mirrors the embedding backfill). Never raises."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        q = ("SELECT id, category FROM memories "
+             "WHERE kind='narrative' AND (content_tag IS NULL OR content_tag='')")
+        if isinstance(limit, int) and limit > 0:
+            q += f" LIMIT {int(limit)}"
+        rows = conn.execute(q).fetchall()
+        n = 0
+        for r in rows:
+            conn.execute("UPDATE memories SET content_tag=? WHERE id=?",
+                         (category_to_tag(r["category"]), r["id"]))
+            n += 1
+        conn.commit()
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS c FROM memories "
+            "WHERE kind='narrative' AND (content_tag IS NULL OR content_tag='')"
+        ).fetchone()["c"]
+        return {"ok": True, "tagged": n, "remaining": remaining}
+    finally:
+        if own:
+            conn.close()
+
+
 def _find_lexical_duplicate(conn: sqlite3.Connection, content: str, audience: str,
                             standalone_only: bool = False, *,
                             ignore_audience: bool = False, limit: int = 300):
@@ -553,6 +583,29 @@ def _dedup_merge(conn, content, audience, consent_pending, now, source,
     return {"ok": True, "id": dup_id, "merged": True}
 
 
+# Content-gating (Phase 3): the legacy content `category` → a "topic:level" tag,
+# mirroring content-tags.js `categoryToTag` (the Node side is the source of
+# truth; kept in sync by hand like the graph-vocab duplication). Used as the
+# fall-back when the extractor didn't supply an explicit tag, and by the
+# backfill for pre-tag rows.
+_CATEGORY_TO_TOPIC = {
+    "basics": "general",
+    "emotional_content": "mental-health",
+    "health_info": "medical",
+    "relationships": "relationships",
+    "whereabouts": "location",
+}
+_TAG_SENSITIVE_CATEGORIES = {"emotional_content", "health_info"}
+
+
+def category_to_tag(category: str | None) -> str:
+    """A `"topic:level"` content tag for a legacy content category. Fail-safe:
+    an unknown/None category → `general:open`."""
+    topic = _CATEGORY_TO_TOPIC.get(category or "", "general")
+    level = "sensitive" if category in _TAG_SENSITIVE_CATEGORIES else "open"
+    return f"{topic}:{level}"
+
+
 def create(
     content: str,
     granularity: str,
@@ -563,6 +616,7 @@ def create(
     subjects: list[str] | None = None,
     care_weight: str | None = None,
     category: str | None = None,
+    content_tag: str | None = None,
     consent_pending: bool = False,
     confidence: float = 1.0,
     standalone: bool = False,
@@ -649,16 +703,20 @@ def create(
             # id rides out in recall / the consent block / graduation, so the
             # Familiar repeats a legible, greppable id instead of ~16 tokens of
             # meaningless hex. Legacy hex ids stay valid (ids are opaque TEXT).
+            # Content tag: the extractor's explicit tag, else derived from the
+            # category (never left NULL on a fresh fact, so the Phase 4 gate
+            # always has a value to reason about).
+            tag = (content_tag or "").strip() or category_to_tag(category)
             insert_sql = """
                 INSERT INTO memories(id,kind,register,granularity,date_key,slug,content,
-                    audience,subjects_json,care_weight,category,consent_pending,
+                    audience,subjects_json,care_weight,category,content_tag,consent_pending,
                     confidence,source_json,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """
             rec_id = insert_with_slug_retry(
                 conn, insert_sql,
                 lambda cid: (cid, "narrative", register, granularity, dk, slug,
-                             content, audience, subj_json, care_weight, category,
+                             content, audience, subj_json, care_weight, category, tag,
                              1 if consent_pending else 0, max(0.0, min(1.0, confidence)),
                              source, now, now),
                 label=content, kind="mem",

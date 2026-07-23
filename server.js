@@ -30,7 +30,7 @@ import {
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
   getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
-  remapCategoryAudiences,
+  remapCategoryAudiences, backfillContentTags,
   searchMemory,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
@@ -3872,6 +3872,13 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // done); always carries the fixed legacy-seed map so it heals even if the raw
   // registry has already been slugged. Fire-and-forget — a Phylactery hiccup
   // just retries next boot.
+  // Content-gating Phase 3: give pre-tag memories a content_tag derived from
+  // their category, so the recall gate (Phase 4) always has a value. Idempotent;
+  // fire-and-forget, retries next boot on a Phylactery hiccup.
+  backfillContentTags().then(r => {
+    if (r?.ok && r.tagged) console.log(`[memory] content-tag backfill: tagged ${r.tagged}, ${r.remaining ?? 0} remaining`);
+    else if (r && !r.ok) console.warn(`[memory] content-tag backfill skipped: ${r.error ?? 'unknown'}`);
+  }).catch(() => {});
   Promise.resolve(_pendingAudienceRemap ?? pendingCategoryAudienceRemap()).then(map => {
     if (!map || !Object.keys(map).length) return;
     return remapCategoryAudiences(map).then(r => {

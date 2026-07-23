@@ -482,6 +482,15 @@ def memory_granularity_audit() -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_backfill_content_tags(limit: int | None = None) -> dict[str, Any]:
+    """I use this to give my older memories a content tag (topic + sensitivity)
+    derived from their category, so the content-based sharing gate can reason
+    about who may see each one. Idempotent — runs in the background at boot and
+    does nothing once every memory is tagged. Returns {tagged, remaining}."""
+    return mem.backfill_content_tags(_c(), limit)
+
+
+@mcp.tool()
 def memory_backfill_embeddings(limit: int | None = None) -> dict[str, Any]:
     """I use this to embed any of my memories that never got a vector — usually
     the ones carried over from before Phylactery (the migration imported them

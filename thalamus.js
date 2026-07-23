@@ -2699,6 +2699,16 @@ export async function getMemoryGranularityAudit() {
   });
 }
 
+// Give pre-Phase-3 memories a content_tag derived from their category, so the
+// content-based recall gate has a value to reason about. Idempotent; degrades
+// to a no-op result on failure.
+export async function backfillContentTags({ limit = null } = {}) {
+  return callTool('memory_backfill_content_tags', limit != null ? { limit } : {}).catch(err => {
+    console.warn('[thalamus] backfillContentTags failed:', err?.message ?? err);
+    return { ok: false, tagged: 0, error: err?.message ?? String(err) };
+  });
+}
+
 // Embed memories that never got a vector (the migration gap) so semantic dedup
 // can see them. Idempotent; degrades to a no-op result on any failure.
 export async function backfillMemoryEmbeddings({ limit = null } = {}) {
