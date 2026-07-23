@@ -79,3 +79,7 @@ topics:
     title: Vision
     description: Multimodal image input, media storage, and modality fallback
     parents: [architecture]
+  - slug: content-gating
+    title: Content Gating
+    description: Per-topic sensitivity tags on memories and per-tier topic grants, layered on top of Village's audience circles
+    parents: [architecture, phylactery]
