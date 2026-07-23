@@ -117,6 +117,25 @@ function calendarDayDelta(targetMs, nowMs) {
 }
 
 /**
+ * Whole-week delta between two instants, by ISO week (Monday-start), in local
+ * calendar terms. This is what "this / next / last <weekday>" actually depend
+ * on — those words name a weekday by WHICH WEEK it falls in relative to now,
+ * not by raw day-distance. A raw-distance model mislabels the Saturday before
+ * last as "last Saturday" (it's −12 days but two Saturdays back) and a Monday
+ * that's next week as "this Monday" (it's only +4 days but a different week).
+ * Returns a signed integer: 0 = same week as now, +1 = next week, −1 = last week.
+ * DST-safe (rounds over the ~1h a week boundary can shift).
+ */
+function mondayOf(ms) {
+  const d = new Date(ms);
+  const dow = (d.getDay() + 6) % 7;                                   // 0=Mon … 6=Sun
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow).getTime();
+}
+function isoWeekDelta(targetMs, nowMs) {
+  return Math.round((mondayOf(targetMs) - mondayOf(nowMs)) / (7 * DAY));
+}
+
+/**
  * Directional interval phrase — "in 3 months" / "a year ago". Wraps
  * plainInterval() with the right preposition so a relative phrase can
  * always sit alongside an absolute date, even far out where the
@@ -229,20 +248,28 @@ export function relativeTime(target, now = Date.now()) {
   // below — the day-count precision is a future-scheduling need.
   if (dayDelta >= 2) {
     const wd = WEEKDAY[new Date(t).getDay()];
-    if (dayDelta <= 6)  return `this ${wd} at ${clock} (in ${dayDelta} days)`;
-    if (dayDelta <= 13) return `next ${wd} at ${clock} (in ${dayDelta} days)`;
-    // Past a weekday's reach a bare name is ambiguous ("which Thursday?"),
-    // so lead with the absolute date (with year when it's not this year).
-    // The interval coarsens with distance — exact days to 3 weeks, then
-    // weeks, then months — see futureInterval.
+    // "this / next <weekday>" name the weekday by WHICH WEEK it's in, not by
+    // day-distance — a Monday that's +4 days but in next week is "next Monday",
+    // never "this Monday". Beyond next week a bare name is ambiguous ("which
+    // Thursday?"), so lead with the absolute date. "(in N days)" always rides
+    // alongside as the precise figure the model never has to compute.
+    const wk = isoWeekDelta(t, n);
+    if (wk === 0) return `this ${wd} at ${clock} (in ${dayDelta} days)`;
+    if (wk === 1) return `next ${wd} at ${clock} (in ${dayDelta} days)`;
     const withYear = new Date(t).getFullYear() !== new Date(n).getFullYear();
     return `${dayAndDate(t, { withYear })} at ${clock} (${futureInterval(t, n, dayDelta)})`;
   }
 
-  // ── Past, ≥2 calendar days back (phrasing unchanged) ─────────────
-  // "last Monday at 2pm" / "2 weeks ago" / "Tuesday, June 4 (a year ago)".
-  if (dayDelta >= -13 && dayDelta <= -2) {
-    return `last ${WEEKDAY[new Date(t).getDay()]} at ${clock}`;
+  // ── Past, ≥2 calendar days back ──────────────────────────────────
+  // Week-relative, same as the future side: "last <weekday>" is strictly LAST
+  // WEEK's occurrence (the Saturday before last is "2 weeks ago", never "last
+  // Saturday"); a past day earlier THIS week is "this past <weekday>". Anything
+  // further back falls through to "N weeks ago" / an absolute date below.
+  if (dayDelta <= -2) {
+    const wd = WEEKDAY[new Date(t).getDay()];
+    const wk = isoWeekDelta(t, n);
+    if (wk === 0)  return `this past ${wd} at ${clock}`;
+    if (wk === -1) return `last ${wd} at ${clock}`;
   }
 
   // Weeks
@@ -297,14 +324,24 @@ export function relativeDay(targetDateStr, now = Date.now()) {
   // here; memory/date strings have no time component.
   if (dayDelta >= 2) {
     const wd = WEEKDAY[new Date(t).getDay()];
-    if (dayDelta <= 6)  return `this ${wd} (in ${dayDelta} days)`;
-    if (dayDelta <= 13) return `next ${wd} (in ${dayDelta} days)`;
+    // Week-relative naming (see relativeTime): a weekday is "this"/"next" by
+    // which WEEK it falls in, not by day-distance. Beyond next week → absolute.
+    const wk = isoWeekDelta(t, n);
+    if (wk === 0) return `this ${wd} (in ${dayDelta} days)`;
+    if (wk === 1) return `next ${wd} (in ${dayDelta} days)`;
     const withYear = new Date(t).getFullYear() !== new Date(n).getFullYear();
     return `${dayAndDate(t, { withYear })} (${futureInterval(t, n, dayDelta)})`;
   }
 
-  // Past ≥2 days: phrasing unchanged.
-  if (dayDelta >= -13 && dayDelta <= -2) return `last ${WEEKDAY[new Date(t).getDay()]}`;
+  // Past ≥2 days: "last <weekday>" is strictly last WEEK's occurrence; a day
+  // earlier this week is "this past <weekday>"; further back falls through to
+  // "N weeks ago" / an absolute date below.
+  if (dayDelta <= -2) {
+    const wd = WEEKDAY[new Date(t).getDay()];
+    const wk = isoWeekDelta(t, n);
+    if (wk === 0)  return `this past ${wd}`;
+    if (wk === -1) return `last ${wd}`;
+  }
 
   const weekDelta = Math.round(dayDelta / 7);
   if (Math.abs(weekDelta) <= 4) {

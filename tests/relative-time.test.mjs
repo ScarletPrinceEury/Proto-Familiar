@@ -69,11 +69,15 @@ test('relativeTime: past ±2..6 days → "last X" with weekday (unchanged)', () 
   assert.equal(relativeTime(lastSaturday, NOW), 'last Saturday at 2pm');
 });
 
-test('relativeTime: future 2..6 days → "this X at <clock> (in N days)"', () => {
-  // Mon Jun 8 is 4 days ahead (this Monday). The exact day count rides
-  // alongside so the model never has to compute the distance itself.
-  const thisMonday = new Date(2026, 5, 8, 10, 0).getTime();
-  assert.equal(relativeTime(thisMonday, NOW), 'this Monday at 10am (in 4 days)');
+test('relativeTime: future weekday named by WEEK — "this X" same week, "next X" next week', () => {
+  // NOW = Thu Jun 4 2026 (ISO week Mon Jun 1 – Sun Jun 7).
+  // Sat Jun 6 is +2 days, SAME week → "this Saturday".
+  const thisSaturday = new Date(2026, 5, 6, 10, 0).getTime();
+  assert.equal(relativeTime(thisSaturday, NOW), 'this Saturday at 10am (in 2 days)');
+  // Mon Jun 8 is +4 days but NEXT week → "next Monday", never "this Monday"
+  // (the reported bug: a raw ≤6-day range called any near-future day "this X").
+  const nextMonday = new Date(2026, 5, 8, 10, 0).getTime();
+  assert.equal(relativeTime(nextMonday, NOW), 'next Monday at 10am (in 4 days)');
 });
 
 test('relativeTime: future 7..13 days → "next X at <clock> (in N days)"', () => {
@@ -125,9 +129,15 @@ test('relativeDay: today / yesterday / tomorrow', () => {
   assert.equal(relativeDay('2026-06-05', NOW), 'tomorrow');
 });
 
-test('relativeDay: past weekday phrasing unchanged; future carries a day count', () => {
-  assert.equal(relativeDay('2026-05-30', NOW), 'last Saturday');
-  assert.equal(relativeDay('2026-06-08', NOW), 'this Monday (in 4 days)');
+test('relativeDay: weekday named by WEEK (not raw day-distance)', () => {
+  // NOW = Thu Jun 4 2026 (ISO week Mon Jun 1 – Sun Jun 7).
+  assert.equal(relativeDay('2026-05-30', NOW), 'last Saturday');            // wDelta -1 (last week)
+  assert.equal(relativeDay('2026-06-02', NOW), 'this past Tuesday');        // wDelta 0, earlier this week
+  assert.equal(relativeDay('2026-06-06', NOW), 'this Saturday (in 2 days)'); // wDelta 0, later this week
+  assert.equal(relativeDay('2026-06-08', NOW), 'next Monday (in 4 days)');   // wDelta +1, NOT "this Monday"
+  // The reported regression: the Saturday BEFORE last (12 days back) must NOT
+  // read as "last Saturday" — that's two Saturdays ago.
+  assert.equal(relativeDay('2026-05-23', NOW), '2 weeks ago');
 });
 
 test('relativeDay: past weeks unchanged; future ≤3 weeks → absolute date + exact day count', () => {
