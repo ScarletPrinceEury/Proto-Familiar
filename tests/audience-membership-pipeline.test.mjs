@@ -32,21 +32,21 @@ function gatedCtx(sessionAudience) {
   return { discord: true, wardPrivate: false, audiences };
 }
 
-test('family DM: discordReadAudiences scopes to family + strangers', () => {
+test('family DM: discordReadAudiences scopes to family + strangers + the ward-content-gated sentinel', () => {
   const ctx = gatedCtx({ participants: [{ id: 'mom-id', name: 'Mom' }] });
-  assert.deepEqual(discordReadAudiences(ctx).sort(), ['family', 'strangers']);
+  assert.deepEqual(discordReadAudiences(ctx).sort(), ['family', 'strangers', 'ward-content-gated']);
 });
 
-test('mixed family+work room: discordReadAudiences scopes to strangers only (the audit fix, pinned at the seam)', () => {
+test('mixed family+work room: discordReadAudiences scopes to strangers + the sentinel only (the audit fix, pinned at the seam)', () => {
   const ctx = gatedCtx({
     participants: [{ id: 'mom-id', name: 'Mom' }, { id: 'boss-id', name: 'Boss' }],
   });
-  assert.deepEqual(discordReadAudiences(ctx).sort(), ['strangers']);
+  assert.deepEqual(discordReadAudiences(ctx).sort(), ['strangers', 'ward-content-gated']);
 });
 
-test('stranger room: discordReadAudiences scopes to strangers only', () => {
+test('stranger room: discordReadAudiences scopes to strangers + the sentinel only', () => {
   const ctx = gatedCtx({ participants: [{ name: 'Nobody' }] });
-  assert.deepEqual(discordReadAudiences(ctx).sort(), ['strangers']);
+  assert.deepEqual(discordReadAudiences(ctx).sort(), ['strangers', 'ward-content-gated']);
 });
 
 test('ward path: discord:false, wardPrivate:true → discordReadAudiences is unscoped (undefined, ward sees all)', () => {
