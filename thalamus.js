@@ -2493,7 +2493,7 @@ export function parseMemoryCreateResult(text) {
   return { id: s.match(/id=([\w-]+)/)?.[1] ?? null, merged: /merged/i.test(s) };
 }
 
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, contentTag, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2501,6 +2501,10 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
     if (slug) args.slug = slug;
     if (category) args.category = category;
+    // The content tag (topic:level) drives recall gating; memorization computes
+    // it in code (never trusts the model's raw value), so pass it straight
+    // through. Omitted → Phylactery derives one from the category, fail-closed.
+    if (contentTag) args.content_tag = contentTag;
     if (standalone) args.standalone = true;
     // Standing facts (memorization's temporality='standing') land on a non-
     // episodic register — 'ward' for a standing truth about my human — so they're

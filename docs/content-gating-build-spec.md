@@ -1,6 +1,7 @@
 # Content-based memory gating — build spec
 
-**Status: Phase 1 shipped (`content-tags.js` + tests); Phases 2–5 pending.**
+**Status: Phases 1–3 shipped; Phases 4–5 pending (4 is the privacy-critical
+recall-gating switch).**
 
 **What this builds:** memories gated by **content**, not by a single audience
 circle. Today a memory carries one `audience` (a Village category id), so a
@@ -79,21 +80,39 @@ of re-deriving.
 
 ## Phase 3 — extraction tags each fact
 
-- Extraction prompts (`memorization.js` `buildPrompt` / `buildSharedRoomPrompt`)
-  gain a `contentTag` field per fact: the model picks the topic + level. First
-  person, natural voice (the 0.9.14 rewrite style). Keep the existing
-  `category` for now (back-compat + the consent gate still uses it); the tag is
-  additional. Fail-closed: an omitted/invalid tag → `categoryToTag(category)`
-  in code, never trusted blank.
-- Store the tag on the memory (Phylactery `memories` — a `content_tag` column,
-  or fold into existing metadata). `memory.create` passthrough.
-- **Migration of existing memories**: backfill `content_tag` from the stored
-  `category` via `categoryToTag` (a Phylactery migration, idempotent, like the
-  embedding backfill). This is also where the **category-slug `audience` remap**
-  deferred from 0.9.16 lands — or the `audience` field is retired in favour of
-  the tag (decide at build time: the tag + tier grants may fully replace the
-  single-audience field; keep `audience` only if a non-topic gate still needs
-  it, e.g. ward-private).
+**Phase 3a (storage layer): DONE (0.9.21).**
+- Phylactery migration `0005_content_tag.sql` adds a nullable `content_tag TEXT`
+  column + index. `memory.create` accepts an optional `content_tag` and derives
+  one from `category` (Python `category_to_tag`, mirroring `content-tags.js`)
+  when the caller omits it — fail-closed (unknown/empty → the category's mapping).
+- `backfill_content_tags(conn, limit)` tags pre-existing NULL rows from their
+  `category`, idempotently → `memory_backfill_content_tags` MCP tool +
+  `backfillContentTags` thalamus wrapper, auto-run once at boot in `server.js`.
+- 13 hand-built Python test fixtures patched with `content_tag TEXT`; new
+  `test_content_tag.py` (mapping / create-derives / explicit-wins / idempotent).
+
+**Phase 3b (extraction tagging): DONE (0.9.22).**
+- Both extraction prompts (`memorization.js` `buildPrompt` /
+  `buildSharedRoomPrompt`) gain a shared `content_tag` field (`CONTENT_TAG_JSON_LINE`
+  + `CONTENT_TAG_FIELD_RULE`, defined once so the two prompts never drift): the
+  model picks `topic:level`, first-person voice, framed as SEPARATE from
+  `category` (how-filed vs who-sees-it). The full `CONTENT_TOPICS` vocabulary is
+  interpolated so the prompt and the gate speak one language.
+- `processJob` validates the model's tag in CODE — `normalizeTag(fact.content_tag)
+  || categoryToTag(category)` → `"topic:level"` — so a missing/junk tag falls back
+  to the category derivation (the exact-values rule; a mis-tag gates tighter,
+  never leaks). Threaded `contentTag` → `createMemoryFull` → `args.content_tag`
+  → the `memory_create` MCP tool (new `content_tag` param) → `memory.create`.
+  All optional/back-compat: other `createMemoryFull` callers (tome-graduation)
+  omit it and Phylactery derives from category, protected by the ward-private
+  floor.
+- Test: `memorization-v7.test.mjs` asserts both prompts carry the field, the
+  topic vocabulary, both levels, and the "separate from category" framing.
+
+**Still open in Phase 3:** the **category-slug `audience` remap** (0.9.18,
+`remapCategoryAudiences`) already landed separately; the single-`audience` field
+is retained as the ward-private floor (Phase 4 keeps it as the hard gate above
+the tag), not retired.
 
 ## Phase 4 — recall gating uses the tag
 

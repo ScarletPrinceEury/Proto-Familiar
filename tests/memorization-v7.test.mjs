@@ -79,6 +79,23 @@ test('both prompts carry the fictional-character allowance', () => {
   }
 });
 
+// ── Content tag (Phase 3b — the recall-gating axis) ────────────────
+
+test('both prompts ask for a content_tag with the topic vocabulary and levels', () => {
+  for (const p of [buildPrompt(MESSAGES), buildSharedRoomPrompt(MESSAGES)]) {
+    assert.match(p, /content_tag/);
+    // A representative spread of the fixed topic list must appear.
+    assert.match(p, /medical/);
+    assert.match(p, /sexuality/);
+    assert.match(p, /contact-info/);
+    // Both sensitivity levels are named.
+    assert.match(p, /\bopen\b/);
+    assert.match(p, /\bsensitive\b/);
+    // It's framed as separate from category (who-sees-it vs how-filed).
+    assert.match(p, /separate from category/i);
+  }
+});
+
 // ── Transcript labelling — never "User" (first-person convention) ──
 
 test('buildPrompt: never labels my human as "User" in the transcript', () => {

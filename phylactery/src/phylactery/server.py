@@ -183,6 +183,7 @@ def memory_create(
     standalone: Optional[bool] = None,
     register: Optional[str] = None,
     source_meta: Optional[dict] = None,
+    content_tag: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to store a new memory about my human or our world. I reach for it
@@ -197,6 +198,9 @@ def memory_create(
     register is the axis separate from granularity: episodic (default, a lived
     moment), me (a standing truth about myself), or ward (a standing truth about
     my human) — the recalled-when-relevant home for identity-grade facts.
+    content_tag is "topic:level" (e.g. medical:sensitive) and decides which of
+    my human's Villagers may ever see this fact; omitted → derived from category,
+    fail-closed.
     """
     result = mem.create(
         content, granularity, date_key=date, slug=slug,
@@ -209,6 +213,7 @@ def memory_create(
         standalone=bool(standalone),
         register=register or "episodic",
         source_meta=source_meta if isinstance(source_meta, dict) else None,
+        content_tag=content_tag,
         conn=_c(),
     )
     if not result.get("ok"):

@@ -175,6 +175,7 @@ import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMa
 import { getRegistry, standingConsentActive } from './village.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from './audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
+import { CONTENT_TOPICS, normalizeTag, categoryToTag } from './content-tags.js';
 import { segmentByDay, dayDelta } from './day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
 import { readSettingsSync } from './cerebellum.js';
@@ -243,6 +244,19 @@ function formatTranscript(readable, wardLabel, { sharedRoom = false } = {}) {
     .join('\n\n');
 }
 
+// The content-tag field, shared by both extraction prompts (private + shared
+// room) so the two never drift. It's a "topic:level" tag that decides, later,
+// which of my human's Villagers may ever see this fact — a separate axis from
+// `category` (how I file it): a fact can be a plain "basics" note and still be
+// deeply private. Code validates whatever I put here against the fixed topic
+// list and falls back to a safe default, so a wrong tag never leaks anything.
+const CONTENT_TAG_JSON_LINE = `,\n      "content_tag": "medical:sensitive"`;
+const CONTENT_TAG_FIELD_RULE = `
+content_tag — what this fact is ABOUT and how private it feels, as "topic:level". This is what later decides which of my human's people are ever allowed to see it, so I think about who I'd be comfortable knowing this.
+  topic — one of: ${CONTENT_TOPICS.join(', ')}. ("general" is the catch-all for ordinary things that aren't one of the others.)
+  level — "open" or "sensitive". "sensitive" is anything my human would only want shared with people they really trust on that subject; "open" is the everyday version. Unsure → "sensitive".
+  It's separate from category: category is how I file the fact, content_tag is who gets to see it. E.g. "my human came out to me" → "sexuality:sensitive"; "my human works at a bakery" → "work:open"; "we talked about their new medication" → "medical:sensitive"; "they like oat milk" → "general:open".`;
+
 export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = []) {
   const readable = messages.filter(m => {
     if (m.role === 'tool') return false;
@@ -285,7 +299,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "subjects":   ["Alice"],
       "temporality": "episodic",
       "fictional":  false,
-      "confidence": 0.85${scheduleFieldLine}
+      "confidence": 0.85${CONTENT_TAG_JSON_LINE}${scheduleFieldLine}
     }
   ],
   "relations": [
@@ -318,6 +332,7 @@ category — exactly one:
 subjects — the names of whoever this fact is about. Empty list [] if it's just about me or {{user}}.
 
 fictional — true ONLY when this fact is about a made-up character or the canon of a show, game, book or film ({{user}} and I discussing who Sailor Moon dates, a character in a game they play). Those aren't real people, so there's nothing to keep private and I remember them freely. NEVER true for a real person — a real friend, family member, or acquaintance is not fictional no matter how little I know them. Leave it out or false the rest of the time.
+${CONTENT_TAG_FIELD_RULE}
 
 temporality — did this HAPPEN, or is it just TRUE now?
   "episodic" — something from this day: a mood, an event, how they felt, a one-off. It belongs to the conversation's date and I'll find it later under "what was going on around then".
@@ -376,7 +391,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "subjects":   [],
       "temporality": "episodic",
       "fictional":  false,
-      "confidence": 0.85
+      "confidence": 0.85${CONTENT_TAG_JSON_LINE}
     }
   ],
   "relations": [
@@ -400,6 +415,7 @@ category — exactly one: basics, emotional_content, health_info, relationships,
 subjects — the names of whoever a fact is about, including someone who isn't in {{user}}'s Village. I don't leave a person out to play it safe — the consent step decides what's actually kept, and asks {{user}} about anyone it isn't sure of. Empty list [] if it's just about me or {{user}}.
 
 fictional — true ONLY when the fact is about a made-up character or the canon of a show, game, book or film. Those aren't real people, so I remember them freely. NEVER true for a real person in the room, however little I know them. Leave it out or false otherwise.
+${CONTENT_TAG_FIELD_RULE}
 
 temporality — "episodic" for something from this day (a mood, an event, what happened); "standing" for a fact that's just generally true now (a job, where someone lives, a lasting preference). Unsure or both → "episodic".
 
@@ -765,6 +781,14 @@ async function processJob(job) {
       { direct, hasNamedSubjects, fictional });
     if (gate === 'false') continue; // drop silently
 
+    // Content tag (the recall-gating axis). The model suggests a "topic:level";
+    // code is the source of truth for the exact value — I validate it against
+    // the fixed vocabulary and, on anything missing or unrecognised, fall back
+    // to deriving one from the category (the exact-values rule: a mis-tagged
+    // fact must gate TIGHTER, never leak). Stored as "topic:level".
+    const norm = normalizeTag(fact.content_tag) || categoryToTag(category);
+    const contentTag = `${norm.topic}:${norm.level}`;
+
     // Derive WHERE this fact may surface (audience), in code — the extractor is
     // never asked for it. Widen+tighten: a subject's explicit disclosure pref can
     // raise/lower it; otherwise it's bounded by the session tag + sensitivity.
@@ -800,6 +824,7 @@ async function processJob(job) {
       audience: factAudience,
       subjects: subjectIds,
       category,
+      contentTag,
       consent_pending: gate === 'ask',
       confidence,
       slug,
