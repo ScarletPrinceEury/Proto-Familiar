@@ -596,3 +596,12 @@ test('upsertCategory: an explicit topics map replaces', async () => {
   const after = (await getRegistry({ filePath })).categories.find(c => c.id === cat.id);
   assert.deepEqual(after.grants.topics, { medical: 'open' });
 });
+
+test('upsertCategory: an explicit empty topics map persists (clear-all is not re-derived)', async () => {
+  const cat = await upsertCategory({ name: 'Friends', grants: { identitySensitive: true } }, { filePath });
+  // The ward sets every topic to Hidden → topics: {}. It must STICK, not
+  // re-seed from identitySensitive on the next read.
+  await upsertCategory({ id: cat.id, grants: { identitySensitive: true, topics: {} } }, { filePath });
+  const after = (await getRegistry({ filePath })).categories.find(c => c.id === cat.id);
+  assert.deepEqual(after.grants.topics, {});
+});

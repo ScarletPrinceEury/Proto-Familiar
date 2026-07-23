@@ -241,11 +241,13 @@ function sanitizeGrants(grants) {
   if (grants && typeof grants === 'object' && !Array.isArray(grants)) {
     for (const [k, v] of Object.entries(grants)) {
       // `topics` is the content-gating per-topic level map (Phase 2) — the one
-      // nested object we keep, validated to {topic: open|sensitive}. Empty is
-      // dropped (re-derivable). Every OTHER nested value is still stripped.
+      // nested object we keep, validated to {topic: open|sensitive}. An explicit
+      // topics OBJECT is kept even when empty: {} means "the ward set every
+      // topic to hidden", which must persist (not re-derive from coarse grants).
+      // A non-object topics value is ignored. Every OTHER nested value is still
+      // stripped to keep grants primitive.
       if (k === 'topics') {
-        const t = sanitizeTopicGrants(v);
-        if (Object.keys(t).length) out.topics = t;
+        if (v && typeof v === 'object' && !Array.isArray(v)) out.topics = sanitizeTopicGrants(v);
       } else if (typeof v === 'boolean' || typeof v === 'string') {
         out[k] = v;
       }

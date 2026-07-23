@@ -67,13 +67,15 @@ below builds on.
   them); and the category-editor UI excludes `topics` from its free-form rows so
   it can't render/re-serialize it into a string. Tests cover each.
 
-**Phase 2b (UI) — PENDING:** per-topic level selectors in the category editor
-(`public/app.js`, Village pane), following `docs/ui-ux-guidelines.md`
-(progressive disclosure — the long topic list behind the shared ⓘ pattern,
-common topics visible by default). Until it ships, topic grants round-trip
-untouched (server preserves them). Note for 2b: an explicit "clear all topics"
-needs a sentinel (an empty `topics:{}` is dropped by sanitize and would
-re-derive) — decide at build time.
+**Phase 2b (UI): DONE (0.9.20).** A collapsed-by-default "Content topics"
+section in the category editor (`public/app.js`, Village pane) — one
+None/Open/Sensitive select per topic. Rendered only for an EXISTING category
+(a new one omits `topics` so the migration seeds it from coarse grants; the
+ward then refines it). `vlReadGrants` emits an explicit `topics` map when the
+section is present. The clear-all sentinel was resolved: `sanitizeGrants` now
+keeps an explicit `topics` OBJECT even when empty (`{}` = "every topic hidden"),
+so the migration's `topics === undefined` guard skips it and it persists instead
+of re-deriving.
 
 ## Phase 3 — extraction tags each fact
 

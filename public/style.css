@@ -155,8 +155,30 @@ body {
   padding: 4px 0;
 }
 .vl-grants-advanced summary:hover { color: var(--text); }
+/* Content-topic grants (Phase 2b): a compact label + level select per topic. */
+#vl-c-topics { display: flex; flex-direction: column; margin-top: 4px; }
+.vl-topic-row {
+  display: grid;
+  grid-template-columns: 1fr 130px;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.vl-topic-row:last-child { border-bottom: none; }
+.vl-topic-label { font-size: 0.83rem; color: var(--text); }
+.vl-topic-val {
+  font-size: 0.82rem;
+  padding: 4px 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  min-width: 0;
+}
 @media (max-width: 560px) {
   .vl-grant-known { grid-template-columns: 1fr; }
+  .vl-topic-row { grid-template-columns: 1fr; }
 }
 
 /* ── Model browser (Connections modal) ───────────────────────── */
