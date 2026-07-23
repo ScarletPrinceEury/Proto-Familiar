@@ -19,6 +19,7 @@ from typing import Any
 from phylactery.db import get_conn, insert_with_slug_retry, new_id, slug_id, now_iso
 from phylactery.snapshot import auto_snapshot
 from phylactery.audience import audience_filter_sql, audience_in_sql, WARD_PRIVATE
+from phylactery.content_gate import memory_visible_to_grants
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly", "yearly", "significant"}
 
@@ -142,33 +143,43 @@ def search(
     query: str,
     max_results: int = 5,
     audiences=None,
+    topic_grants=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     # audiences: the room's allowed audience-tag set (None = ward sees all),
-    # computed JS-side by visibleAudiences(). The recall gate (Pillar E).
+    # computed JS-side by visibleAudiences() — the coarse provenance/ward-private
+    # floor (Pillar E). topic_grants: the room's per-topic grant map (Phase 4
+    # content gate) — None = ward/unscoped (no content filter). Both compose:
+    # a memory surfaces only if it clears the audience floor AND its content_tag
+    # is visible to the room's topic grants. Fail-closed at both.
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
+    gating = isinstance(topic_grants, dict)
     try:
         aud_clause, aud_params = audience_in_sql(audiences)
         try:
             from phylactery.embed import embed_text
             q_vec = embed_text(query)
-            # KNN via sqlite-vec.
+            # KNN via sqlite-vec. Overfetch more when content-gating so the
+            # per-row topic filter still leaves enough to return.
+            k = max_results * (4 if gating else 2)
             rows = conn.execute(f"""
                 SELECT m.id, m.granularity, m.register, m.date_key, m.content, m.audience,
-                       m.care_weight, m.last_recalled_at, m.source_json,
+                       m.content_tag, m.care_weight, m.last_recalled_at, m.source_json,
                        v.distance
                 FROM memory_vecs v
                 JOIN memories m ON m.id = v.memory_id
                 WHERE v.embedding MATCH ? AND k = ?
                   AND {aud_clause}
                 ORDER BY v.distance
-            """, [q_vec, max_results * 2] + aud_params).fetchall()
+            """, [q_vec, k] + aud_params).fetchall()
             # Convert distance → similarity, apply retrieval-decay, re-sort.
             # score = similarity × decay_weight (down-rank only; never a filter cutoff).
             scored = []
             for r in rows:
+                if gating and not memory_visible_to_grants(r["content_tag"], topic_grants):
+                    continue  # content-tag gate: not shared with this room
                 dist = r["distance"] if "distance" in r.keys() else 0.0
                 similarity = max(0.0, 1.0 - dist / 2.0)
                 dw = _decay_weight(r["last_recalled_at"], r["care_weight"])
@@ -186,13 +197,17 @@ def search(
             results = scored[:max_results]
         except Exception:
             # Vector search unavailable (fastembed/sqlite-vec not ready) — degrade to recency.
+            # Overfetch when gating so the post-filter still leaves enough.
+            k = max_results * (4 if gating else 1)
             rows = conn.execute(f"""
-                SELECT id, granularity, register, date_key, content FROM memories
+                SELECT id, granularity, register, date_key, content, content_tag FROM memories
                 WHERE kind='narrative' AND {aud_clause}
                 ORDER BY updated_at DESC LIMIT ?
-            """, aud_params + [max_results]).fetchall()
+            """, aud_params + [k]).fetchall()
             results = [{"id": r["id"], "granularity": r["granularity"], "register": r["register"],
-                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": 0.5} for r in rows]
+                        "date": r["date_key"], "excerpt": (r["content"] or "")[:300], "score": 0.5}
+                       for r in rows
+                       if not gating or memory_visible_to_grants(r["content_tag"], topic_grants)][:max_results]
 
         # Pillar H: recall tracking. Pure observability — bumps recall_count
         # and last_recalled_at for everything actually surfaced, so the
@@ -232,17 +247,20 @@ def by_timerange(
     to_date: str,
     limit: int = 12,
     audiences=None,
+    topic_grants=None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     """Recall memories anchored to a span of DAYS — 'what was happening around
     then' — the temporal counterpart to semantic search (temporal-bridges
     Piece 3). Compares on the calendar-date prefix so date_slug keys
     ('2026-07-02_foo') fall in range by their day. Audience-gated exactly like
-    search (Pillar E). Newest day first. No embedding call — an indexed read.
+    search: the coarse `audiences` floor AND the Phase 4 content-tag gate
+    (`topic_grants`). Newest day first. No embedding call — an indexed read.
     `from_date`/`to_date` are inclusive YYYY-MM-DD bounds."""
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
+    gating = isinstance(topic_grants, dict)
     try:
         lo = str(from_date)[:10]
         hi = str(to_date)[:10]
@@ -250,17 +268,22 @@ def by_timerange(
             lo, hi = hi, lo
         aud_clause, aud_params = audience_in_sql(audiences)
         k = max(1, min(50, int(limit or 12)))
+        # Overfetch when content-gating so the per-row topic filter still leaves
+        # enough rows to satisfy the limit.
+        fetch = k * 4 if gating else k
         rows = conn.execute(f"""
-            SELECT id, granularity, register, date_key, content, source_json
+            SELECT id, granularity, register, date_key, content, content_tag, source_json
               FROM memories
              WHERE kind='narrative'
                AND substr(date_key,1,10) BETWEEN ? AND ?
                AND {aud_clause}
              ORDER BY date_key DESC, updated_at DESC
              LIMIT ?
-        """, [lo, hi] + aud_params + [k]).fetchall()
+        """, [lo, hi] + aud_params + [fetch]).fetchall()
         results = []
         for r in rows:
+            if gating and not memory_visible_to_grants(r["content_tag"], topic_grants):
+                continue  # content-tag gate: not shared with this room
             item = {
                 "id": r["id"], "granularity": r["granularity"], "register": r["register"],
                 "date": r["date_key"], "excerpt": (r["content"] or "")[:300],
@@ -272,6 +295,8 @@ def by_timerange(
             if refs:
                 item["schedule_refs"] = refs
             results.append(item)
+            if len(results) >= k:
+                break
         return {"results": results, "from": lo, "to": hi}
     finally:
         if own_conn:

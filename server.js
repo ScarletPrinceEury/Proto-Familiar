@@ -148,7 +148,7 @@ import {
   initVillageSync, bootSync as villageBootSync,
   pendingCategoryAudienceRemap,
 } from './village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
@@ -377,12 +377,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   let audienceGrants  = WARD_PRIVATE;
   let audienceTag     = 'ward-private';
   let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
+  let audienceTopics  = null; // the room's per-topic content grants (null = ward sees all)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
       audienceGrants  = resolveAudience(sessionAudience, registry);
       audienceTag     = audienceTagFor(sessionAudience, registry);
-      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate
+      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate (coarse floor)
+      audienceTopics  = topicGrantsForRoom(audienceGrants, audienceTag); // Phase 4 content gate (fine)
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
@@ -394,7 +396,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 

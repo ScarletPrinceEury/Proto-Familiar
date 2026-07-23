@@ -2697,8 +2697,9 @@ export const TOOL_EXECUTORS = {
     // Scope recall to what this turn may see (never ward-private on a gated
     // villager turn; unscoped for ward/web). One decision, in discordReadAudiences.
     const audiences = discordReadAudiences(ctx);
+    const topicGrants = discordReadTopicGrants(ctx);
     try {
-      const res   = await searchMemory({ query: q, maxResults: n, audiences });
+      const res   = await searchMemory({ query: q, maxResults: n, audiences, topicGrants });
       const items = Array.isArray(res?.results) ? res.results : [];
       if (items.length === 0) return `I searched my memory for "${q}" and found nothing close — this looks new to me.`;
       const lines = items.map((r, i) => {
@@ -2727,8 +2728,9 @@ export const TOOL_EXECUTORS = {
     const to2 = /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : f;
     const n = Math.min(50, Math.max(1, parseInt(limit, 10) || 12));
     const audiences = discordReadAudiences(ctx);
+    const topicGrants = discordReadTopicGrants(ctx);
     try {
-      const res   = await memByTimerange({ fromDate: f, toDate: to2, limit: n, audiences });
+      const res   = await memByTimerange({ fromDate: f, toDate: to2, limit: n, audiences, topicGrants });
       const items = Array.isArray(res?.results) ? res.results : [];
       const span  = f === to2 ? f : `${f} – ${to2}`;
       if (items.length === 0) return `I looked back over ${span} and I'm not holding anything from those days — either it was quiet, or nothing got kept.`;
@@ -4211,6 +4213,18 @@ export function discordReadAudiences(ctx = {}) {
   const gated = ctx?.discord === true && ctx?.wardPrivate === false;
   if (!gated) return undefined;
   return Array.isArray(ctx.audiences) ? ctx.audiences : [];
+}
+
+// The content-tag gate's companion to discordReadAudiences (content-gating
+// Phase 4): the room's per-topic grant map for a gated Discord READ. The two
+// are always read together so the coarse floor and the fine content gate can't
+// drift. Ward/web → undefined (unscoped, sees all). A gated non-ward turn → the
+// room's topic-grant map, FAIL-CLOSED to `{}` (→ nothing surfaces by content)
+// if it's somehow absent, mirroring the audiences fail-closed to [].
+export function discordReadTopicGrants(ctx = {}) {
+  const gated = ctx?.discord === true && ctx?.wardPrivate === false;
+  if (!gated) return undefined;
+  return (ctx.topicGrants && typeof ctx.topicGrants === 'object') ? ctx.topicGrants : {};
 }
 
 // Provenance + audience clamp for a WRITE a villager caused by acting through me

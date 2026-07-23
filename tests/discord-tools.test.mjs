@@ -4,6 +4,7 @@ import {
   villagerToolNames,
   composeDiscordTools,
   discordReadAudiences,
+  discordReadTopicGrants,
   discordWriteProvenance,
   RELAY_TO_WARD_TOOL_NAME,
   RELAY_TO_WARD_TOOL,
@@ -265,6 +266,28 @@ test('discordReadAudiences: gated turn, audiences non-array (string) → [] (fai
 
 test('discordReadAudiences: no argument → undefined (unscoped default)', () => {
   assert.equal(discordReadAudiences(), undefined);
+});
+
+// ── discordReadTopicGrants: content-gate companion (fail-closed) ──────
+
+test('discordReadTopicGrants: ward/web (no discord flag) → undefined (unscoped)', () => {
+  assert.equal(discordReadTopicGrants({}), undefined);
+  assert.equal(discordReadTopicGrants(), undefined);
+});
+
+test('discordReadTopicGrants: ward DM on discord → undefined (unscoped, ward sees all)', () => {
+  assert.equal(discordReadTopicGrants({ discord: true, wardPrivate: true }), undefined);
+});
+
+test('discordReadTopicGrants: gated turn with a topic map → returns that same map', () => {
+  const grants = { medical: 'open', general: 'sensitive' };
+  assert.deepEqual(discordReadTopicGrants({ discord: true, wardPrivate: false, topicGrants: grants }), grants);
+});
+
+test('discordReadTopicGrants: gated turn, missing/invalid grants → {} (fail-closed, NOT undefined)', () => {
+  assert.deepEqual(discordReadTopicGrants({ discord: true, wardPrivate: false }), {});
+  assert.deepEqual(discordReadTopicGrants({ discord: true, wardPrivate: false, topicGrants: null }), {});
+  assert.deepEqual(discordReadTopicGrants({ discord: true, wardPrivate: false, topicGrants: 'oops' }), {});
 });
 
 // ── Pass 2: Write tools, provenance, audit logging ──────────────────────

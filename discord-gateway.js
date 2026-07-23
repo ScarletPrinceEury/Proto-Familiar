@@ -38,7 +38,7 @@ import { sessionSlugId } from './slug-ids.js';
 import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences } from './audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
@@ -282,9 +282,9 @@ async function fireRevisit(item) {
   // SHARED room, so it must never carry ward-private context. The gate is
   // resolved from the room + accumulated participants, identical to handleTurn.
   const audienceInput = { location: item.locationKey, participants: session.participants };
-  const { audienceGrants, audienceTag, audienceVisible } = resolveLocationGate(audienceInput, registry);
+  const { audienceGrants, audienceTag, audienceVisible, audienceTopics } = resolveLocationGate(audienceInput, registry);
 
-  const enriched = await enrich('', { audience: audienceGrants, audiences: audienceVisible, liveTurn: false })
+  const enriched = await enrich('', { audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, liveTurn: false })
     .catch(() => ({ static: '', dynamic: '' }));
 
   const directedAt = carriedExchange(session.messages);
@@ -1185,12 +1185,17 @@ function audienceInputFor(decision, participants) {
  *  between them. */
 function resolveLocationGate(audienceInput, registry) {
   const audienceTag = audienceTagFor(audienceInput, registry);
+  const audienceGrants = audienceInput === null ? null : resolveAudience(audienceInput, registry);
   return {
-    audienceGrants:  audienceInput === null ? null : resolveAudience(audienceInput, registry),
+    audienceGrants,
     audienceTag,
     // The room's allowed audience-tag set for the recall gate (Pillar E). null
     // for a ward DM (ward-private → sees all); a filtered set for any shared room.
     audienceVisible: visibleAudiences(audienceTag, registry),
+    // The room's per-topic content-tag grants (content-gating Phase 4). Derived
+    // together with audienceVisible so the coarse floor and the fine content
+    // gate can never drift between the live and deferred-revisit paths.
+    audienceTopics: topicGrantsForRoom(audienceGrants, audienceTag),
   };
 }
 
@@ -1792,9 +1797,9 @@ async function handleTurn(gw, msg, decision) {
   // the session so the memorization sweep can route ward-private content
   // into Phylactery while quarantining shared-room content to the tome.
   const audienceInput = audienceInputFor(decision, session.participants);
-  const { audienceGrants, audienceTag, audienceVisible } = resolveLocationGate(audienceInput, registry);
+  const { audienceGrants, audienceTag, audienceVisible, audienceTopics } = resolveLocationGate(audienceInput, registry);
 
-  const enriched = await enrich(content, { audience: audienceGrants, audiences: audienceVisible, liveTurn: false })
+  const enriched = await enrich(content, { audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, liveTurn: false })
     .catch(err => {
       console.error('[discord] enrich failed (degrading to bare turn):', err?.message ?? err);
       return { static: '', dynamic: '' };
@@ -1918,6 +1923,7 @@ async function handleTurn(gw, msg, decision) {
       wardPrivate: audienceTag === 'ward-private',
       audienceTag,
       audiences:   audienceVisible,
+      topicGrants: audienceTopics,
       grants:      audienceGrants ?? {},
       apiKey:      conn.apiKey,
       viaVillager: isVillager

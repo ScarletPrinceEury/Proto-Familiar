@@ -1574,7 +1574,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null, topicGrants = null } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -1628,8 +1628,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         : mcpClient.callTool({
             name: 'memory_search',
             // audiences = the room's allowed audience-tag set (Pillar E recall
-            // gate). null/omitted = ward-private room → no filter (sees all).
-            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}) },
+            // gate, the coarse floor). topic_grants = the room's per-topic
+            // content grants (Phase 4 fine gate). null/omitted on both = ward-
+            // private room → no filter (sees all). They compose: a memory
+            // surfaces only if it clears the coarse floor AND its content_tag.
+            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}), ...(topicGrants ? { topic_grants: topicGrants } : {}) },
           }),
       (staticOnly || !doGraph) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: graph)'))
         : mcpClient.callTool({
@@ -2566,17 +2569,19 @@ export async function dropPendingMemories(ids) {
 // (unscoped). An empty array → nothing surfaces ('0=1' server-side). Passing it
 // is how a gated (non-ward) Discord turn keeps ward-private memory out of a tool
 // result.
-export async function searchMemory({ query, maxResults = 5, audiences } = {}) {
+export async function searchMemory({ query, maxResults = 5, audiences, topicGrants } = {}) {
   return callTool('memory_search', {
     query, instanceId: 'proto-familiar', maxResults,
     ...(audiences !== undefined ? { audiences } : {}),
+    ...(topicGrants ? { topic_grants: topicGrants } : {}),
   });
 }
 
-export async function memByTimerange({ fromDate, toDate, limit = 12, audiences } = {}) {
+export async function memByTimerange({ fromDate, toDate, limit = 12, audiences, topicGrants } = {}) {
   return callTool('memory_by_timerange', {
     fromDate, toDate, limit, instanceId: 'proto-familiar',
     ...(audiences !== undefined ? { audiences } : {}),
+    ...(topicGrants ? { topic_grants: topicGrants } : {}),
   });
 }
 

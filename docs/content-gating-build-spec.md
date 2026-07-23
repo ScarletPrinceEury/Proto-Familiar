@@ -1,7 +1,6 @@
 # Content-based memory gating — build spec
 
-**Status: Phases 1–3 shipped; Phases 4–5 pending (4 is the privacy-critical
-recall-gating switch).**
+**Status: Phases 1–4 shipped; Phase 5 (memory-manager badge) pending.**
 
 **What this builds:** memories gated by **content**, not by a single audience
 circle. Today a memory carries one `audience` (a Village category id), so a
@@ -114,17 +113,50 @@ of re-deriving.
 is retained as the ward-private floor (Phase 4 keeps it as the hard gate above
 the tag), not retired.
 
-## Phase 4 — recall gating uses the tag
+## Phase 4 — recall gating uses the tag (DONE, 0.9.23)
 
-- Replace the single-`audience` filter at recall with
-  `memoryVisibleToVillager(memory.content_tag, unionTopicGrants(roomTiers))`.
-  The seam is wherever memories are scoped to a room/villager today
-  (`audience.js` + the Phylactery recall audience filter + the Discord
-  audience-scoped recall). **Fail-closed everywhere**: no tag or no matching
-  grant → not shown to a villager (ward-private turns are unaffected — the ward
-  sees everything).
-- Keep `ward-private` as the hard floor: a ward-private memory (no third-party
-  subject) never surfaces to any villager regardless of tag.
+The gate is **layered, not a replacement** — the two axes compose deliberately
+(the ward's "two halves built as if the other didn't exist" concern answered by
+making them one decision):
+
+1. **Coarse floor** (`audiences` = `visibleAudiences`, unchanged): the room's
+   ward-private + provenance ceiling — a memory made in a higher-trust context
+   never surfaces in a lower one, and `ward-private` is excluded for every
+   villager room. This is the hard floor.
+2. **Fine content gate** (new): among what clears the floor, a memory surfaces
+   only if `memory_visible_to_grants(content_tag, roomTopicGrants)` — the room's
+   most-permissive-per-topic map (unioned within each villager's tiers,
+   intersected across the room's participants). This is the per-topic control
+   the single-audience ladder couldn't express.
+
+**The seams, all wired in one pass (so the two halves can't drift):**
+- `content-tags.js` / `content_gate.py` — the pure gate (JS + its Python mirror,
+  the gate must run where the query runs; same cross-language pattern as
+  `category_to_tag`/`slug_id`).
+- `audience.js` `topicGrantsForRoom(effectiveGrants, roomTag)` — the COMPANION
+  to `visibleAudiences`, derived together at every seam. Ward room → `null` (no
+  content filter). Villager room with no topics → `{}` (fail-closed, nothing by
+  content).
+- Phylactery `memory.search` / `memory.by_timerange` take a `topic_grants` param
+  and post-filter each row (overfetching so the per-row drop still fills the
+  limit); the `memory_search`/`memory_by_timerange` MCP tools pass it through.
+- Node recall path: `enrich` threads `topicGrants` into `memory_search`;
+  `searchMemory`/`memByTimerange` wrappers take it; `server.js` `/api/chat` and
+  `discord-gateway.js` `resolveLocationGate` derive `audienceTopics` alongside
+  `audienceVisible`; the Discord tool ctx carries `topicGrants` and
+  `cerebellum.discordReadTopicGrants(ctx)` (fail-closed to `{}`) is the
+  companion to `discordReadAudiences`.
+- **Ward-context recall stays unscoped** (pondering/reflection loop, tome-
+  graduation dedup, the ward's own API endpoints) — the Familiar's own memory,
+  `topicGrants` omitted → ward sees all, unchanged.
+- **Graph nodes/edges keep the coarse audience gate** (they carry no
+  `content_tag`) — `graph_node_search`/`graph_subgraph` are unchanged.
+
+**Fail-closed everywhere**: no tag → `general:sensitive`; unknown topic/absent
+grant → not shown; a villager room with an empty topic map → nothing by content.
+Tests: `test_content_gate_recall.py` (recall-path pipeline through the real
+store — visible/invisible, ward-private floor, empty-grants, untagged), plus the
+`topicGrantsForRoom` and `discordReadTopicGrants` fail-closed unit tests.
 
 ## Phase 5 — memory-manager UI
 

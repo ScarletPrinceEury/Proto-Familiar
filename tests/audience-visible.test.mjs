@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleAudiences, AUDIENCE_TAG_WARD_PRIVATE } from '../audience.js';
+import { visibleAudiences, topicGrantsForRoom, AUDIENCE_TAG_WARD_PRIVATE } from '../audience.js';
 
 // Categories with ascending trust (by permissionScore of their grants):
 //   strangers (0) < friends (1, memories:'shared') < family (3, memories:true + graph:true)
@@ -51,4 +51,22 @@ test('a topics grant does not change coarse visibleAudiences scoring', () => {
   assert.deepEqual(visibleAudiences('friends', withTopics).sort(), ['friends', 'strangers']);
   assert.deepEqual(visibleAudiences('family', withTopics).sort(), ['family', 'friends', 'strangers']);
   assert.deepEqual(visibleAudiences('strangers', withTopics), ['strangers']);
+});
+
+// ── topicGrantsForRoom (content-gating Phase 4 recall gate) ─────────
+
+test('topicGrantsForRoom: ward-private room → null (ward sees all, no content filter)', () => {
+  assert.equal(topicGrantsForRoom({ topics: { medical: 'open' } }, AUDIENCE_TAG_WARD_PRIVATE), null);
+  assert.equal(topicGrantsForRoom({}, null), null);
+});
+
+test('topicGrantsForRoom: a villager room returns its sanitized per-topic map', () => {
+  const grants = { memories: 'shared', topics: { medical: 'open', general: 'sensitive', bogus: 'open', legal: 'nonsense' } };
+  // Unknown topic (bogus) and bad level (legal:nonsense) are dropped; valid kept.
+  assert.deepEqual(topicGrantsForRoom(grants, 'friends'), { medical: 'open', general: 'sensitive' });
+});
+
+test('topicGrantsForRoom: a villager room with no topics map → {} (fail-closed, nothing by content)', () => {
+  assert.deepEqual(topicGrantsForRoom({ memories: 'shared' }, 'friends'), {});
+  assert.deepEqual(topicGrantsForRoom(null, 'strangers'), {});
 });

@@ -334,16 +334,18 @@ def memory_search(
     maxResults: Optional[int] = None,
     instanceId: Optional[str] = None,
     audiences: Optional[list[str]] = None,
+    topic_grants: Optional[dict] = None,
 ) -> dict[str, Any]:
     """I use this to search my memories by meaning. I reach for it when I'm trying to
     recall something relevant to a topic or question — it does semantic RAG search and
     falls back to recency. Returns thin projections with ids and scores.
     `audiences` is the room's allowed audience-tag set (omit for a ward-private
-    room → I see everything); the recall gate keeps shared-room recall to what
-    that room is cleared for.
+    room → I see everything); `topic_grants` is the room's per-topic content-tag
+    grant map (omit for ward). Together they keep shared-room recall to what that
+    room is cleared for — by provenance AND by content sensitivity.
     """
     k = max(1, min(20, int(maxResults or 5)))
-    return mem.search(query, max_results=k, audiences=audiences, conn=_c())
+    return mem.search(query, max_results=k, audiences=audiences, topic_grants=topic_grants, conn=_c())
 
 
 @mcp.tool()
@@ -353,15 +355,17 @@ def memory_by_timerange(
     limit: Optional[int] = None,
     instanceId: Optional[str] = None,
     audiences: Optional[list[str]] = None,
+    topic_grants: Optional[dict] = None,
 ) -> dict[str, Any]:
     """I use this to remember what was happening in my human's life around a span
     of days — not by topic, but by WHEN. I reach for it to relate a moment in time
     to what I actually kept from those days (e.g. what surrounded a hard stretch or
     an appointment). `fromDate`/`toDate` are inclusive YYYY-MM-DD bounds; results
-    come newest day first. `audiences` is the room's allowed set (omit for a
-    ward-private room). Returns thin projections with ids I can then read in full.
+    come newest day first. `audiences` is the room's allowed set and `topic_grants`
+    the room's per-topic content grants (both omitted for a ward-private room).
+    Returns thin projections with ids I can then read in full.
     """
-    return mem.by_timerange(fromDate, toDate, limit=int(limit or 12), audiences=audiences, conn=_c())
+    return mem.by_timerange(fromDate, toDate, limit=int(limit or 12), audiences=audiences, topic_grants=topic_grants, conn=_c())
 
 
 @mcp.tool()
