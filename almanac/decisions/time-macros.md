@@ -1,6 +1,6 @@
 ---
 title: "Elapsed-Time Macros Read Stored History, Not Date.now()"
-topics: [decisions]
+topics: [decisions, reference, temporal-assurance]
 sources:
   - id: app-js
     type: file
