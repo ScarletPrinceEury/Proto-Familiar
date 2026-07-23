@@ -10,6 +10,47 @@ import { relativeTime, relativeDay, clockTime, dayAndDate, plainInterval, buildT
 
 const NOW = new Date(2026, 5, 4, 14, 30, 0).getTime(); // Thu Jun 4 2026, 14:30 local
 
+// ── Property test: weekday naming is universally week-correct ──────────
+// Guards against the reported bug re-appearing for SOME weekdays but not
+// others (it was raw day-distance, which is weekday-asymmetric). The
+// invariant: any "this/next/last/this past <weekday>" phrase must name the
+// target's real weekday, agree with the ISO-week delta (this=0, next=+1,
+// last=-1, this past=0), never appear ≥2 weeks out, and any "(in N days)" must
+// equal the true calendar delta. Swept across every weekday-of-"now" (a full
+// year, so month boundaries + both DST transitions) × a wide offset range.
+const _WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const _DAY = 86400000;
+function _mondayOf(ms) { const d = new Date(ms); const dow = (d.getDay() + 6) % 7; return new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow).getTime(); }
+function _isoWk(t, n) { return Math.round((_mondayOf(t) - _mondayOf(n)) / (7 * _DAY)); }
+function _calDelta(t, n) { const a = new Date(t), b = new Date(n); return Math.round((new Date(a.getFullYear(), a.getMonth(), a.getDate()) - new Date(b.getFullYear(), b.getMonth(), b.getDate())) / _DAY); }
+
+function _assertWeekdayInvariant(out, tgtMs, nowMs, label) {
+  const named = out.match(/^(this past|this|next|last) (\w+day)\b/);
+  if (named) {
+    const [, rel, wd] = named;
+    assert.equal(wd, _WD[new Date(tgtMs).getDay()], `${label}: named wrong weekday in "${out}"`);
+    const wk = _isoWk(tgtMs, nowMs);
+    const want = { 'this': 0, 'next': 1, 'last': -1, 'this past': 0 }[rel];
+    assert.equal(wk, want, `${label}: "${out}" but ISO week delta is ${wk}`);
+    assert.ok(Math.abs(wk) <= 1, `${label}: weekday-named at |wk|=${wk} (ambiguous) in "${out}"`);
+  }
+  const inN = out.match(/\(in (\d+) days\)/);
+  if (inN) assert.equal(Number(inN[1]), _calDelta(tgtMs, nowMs), `${label}: "(in N days)" wrong in "${out}"`);
+}
+
+test('relativeDay/relativeTime: weekday naming is week-correct for EVERY weekday-of-now (property sweep)', () => {
+  for (let d0 = 0; d0 < 365; d0++) {
+    const now = new Date(2026, 0, 1, 12, 0, 0).getTime() + d0 * _DAY;
+    for (let off = -45; off <= 45; off++) {
+      const tDate = new Date(now + off * _DAY);
+      const ds = `${tDate.getFullYear()}-${String(tDate.getMonth() + 1).padStart(2, '0')}-${String(tDate.getDate()).padStart(2, '0')}`;
+      const dayMs = new Date(tDate.getFullYear(), tDate.getMonth(), tDate.getDate(), 12).getTime();
+      _assertWeekdayInvariant(relativeDay(ds, now), dayMs, now, `relativeDay ${ds}`);
+      _assertWeekdayInvariant(relativeTime(now + off * _DAY + 3 * 3600000, now), now + off * _DAY + 3 * 3600000, now, `relativeTime off=${off}`);
+    }
+  }
+});
+
 // ── clockTime ──────────────────────────────────────────────────────
 
 test('clockTime: 12-hour with am/pm; whole hours drop :00', () => {
@@ -69,11 +110,15 @@ test('relativeTime: past ±2..6 days → "last X" with weekday (unchanged)', () 
   assert.equal(relativeTime(lastSaturday, NOW), 'last Saturday at 2pm');
 });
 
-test('relativeTime: future 2..6 days → "this X at <clock> (in N days)"', () => {
-  // Mon Jun 8 is 4 days ahead (this Monday). The exact day count rides
-  // alongside so the model never has to compute the distance itself.
-  const thisMonday = new Date(2026, 5, 8, 10, 0).getTime();
-  assert.equal(relativeTime(thisMonday, NOW), 'this Monday at 10am (in 4 days)');
+test('relativeTime: future weekday named by WEEK — "this X" same week, "next X" next week', () => {
+  // NOW = Thu Jun 4 2026 (ISO week Mon Jun 1 – Sun Jun 7).
+  // Sat Jun 6 is +2 days, SAME week → "this Saturday".
+  const thisSaturday = new Date(2026, 5, 6, 10, 0).getTime();
+  assert.equal(relativeTime(thisSaturday, NOW), 'this Saturday at 10am (in 2 days)');
+  // Mon Jun 8 is +4 days but NEXT week → "next Monday", never "this Monday"
+  // (the reported bug: a raw ≤6-day range called any near-future day "this X").
+  const nextMonday = new Date(2026, 5, 8, 10, 0).getTime();
+  assert.equal(relativeTime(nextMonday, NOW), 'next Monday at 10am (in 4 days)');
 });
 
 test('relativeTime: future 7..13 days → "next X at <clock> (in N days)"', () => {
@@ -125,9 +170,15 @@ test('relativeDay: today / yesterday / tomorrow', () => {
   assert.equal(relativeDay('2026-06-05', NOW), 'tomorrow');
 });
 
-test('relativeDay: past weekday phrasing unchanged; future carries a day count', () => {
-  assert.equal(relativeDay('2026-05-30', NOW), 'last Saturday');
-  assert.equal(relativeDay('2026-06-08', NOW), 'this Monday (in 4 days)');
+test('relativeDay: weekday named by WEEK (not raw day-distance)', () => {
+  // NOW = Thu Jun 4 2026 (ISO week Mon Jun 1 – Sun Jun 7).
+  assert.equal(relativeDay('2026-05-30', NOW), 'last Saturday');            // wDelta -1 (last week)
+  assert.equal(relativeDay('2026-06-02', NOW), 'this past Tuesday');        // wDelta 0, earlier this week
+  assert.equal(relativeDay('2026-06-06', NOW), 'this Saturday (in 2 days)'); // wDelta 0, later this week
+  assert.equal(relativeDay('2026-06-08', NOW), 'next Monday (in 4 days)');   // wDelta +1, NOT "this Monday"
+  // The reported regression: the Saturday BEFORE last (12 days back) must NOT
+  // read as "last Saturday" — that's two Saturdays ago.
+  assert.equal(relativeDay('2026-05-23', NOW), '2 weeks ago');
 });
 
 test('relativeDay: past weeks unchanged; future ≤3 weeks → absolute date + exact day count', () => {
