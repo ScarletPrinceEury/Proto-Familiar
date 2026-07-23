@@ -388,6 +388,35 @@ def vector_health(conn: sqlite3.Connection | None = None) -> dict:
             conn.close()
 
 
+def remap_audiences(conn: sqlite3.Connection | None = None, id_map: dict | None = None) -> dict:
+    """Rewrite stored category-id `audience` values after the Village
+    category-slug migration (Node side): a memory / graph node / graph edge whose
+    audience is an OLD category id becomes its NEW slug.
+
+    Only rows whose audience is a key in `id_map` are touched — 'ward-private' and
+    anything already on a slug are left alone — so this is idempotent (a second
+    run matches nothing). Fail-safe: an empty/malformed map is a no-op, and a
+    same-value entry (old == new) is skipped. Never raises."""
+    own = conn is None
+    if own:
+        conn = get_conn()
+    try:
+        if not isinstance(id_map, dict) or not id_map:
+            return {"ok": True, "memories": 0, "nodes": 0, "edges": 0}
+        mem = nodes = edges = 0
+        for old, new in id_map.items():
+            if not old or not new or old == new:
+                continue
+            mem   += conn.execute("UPDATE memories    SET audience=? WHERE audience=?", (new, old)).rowcount
+            nodes += conn.execute("UPDATE graph_nodes SET audience=? WHERE audience=?", (new, old)).rowcount
+            edges += conn.execute("UPDATE graph_edges SET audience=? WHERE audience=?", (new, old)).rowcount
+        conn.commit()
+        return {"ok": True, "memories": mem, "nodes": nodes, "edges": edges}
+    finally:
+        if own:
+            conn.close()
+
+
 def _find_lexical_duplicate(conn: sqlite3.Connection, content: str, audience: str,
                             standalone_only: bool = False, *,
                             ignore_audience: bool = False, limit: int = 300):

@@ -11068,6 +11068,41 @@ const VL_KNOWN_GRANTS = [
     hint: 'Identity sections about where you are/live become visible to this category.' },
 ];
 
+// Content-gating topics (Phase 2b) — mirror content-tags.js CONTENT_TOPICS.
+// Kept as a UI-local list (app.js is a browser script, can't import the Node
+// module); the server validates against the canonical set on save.
+const VL_CONTENT_TOPICS = [
+  { key: 'general',       label: 'Everyday life' },
+  { key: 'medical',       label: 'Physical health' },
+  { key: 'mental-health', label: 'Mental health' },
+  { key: 'sexuality',     label: 'Sexuality' },
+  { key: 'gender',        label: 'Gender identity' },
+  { key: 'family',        label: 'Family' },
+  { key: 'relationships', label: 'Relationships' },
+  { key: 'finances',      label: 'Finances' },
+  { key: 'legal',         label: 'Legal matters' },
+  { key: 'substance',     label: 'Substance use' },
+  { key: 'religion',      label: 'Religion & faith' },
+  { key: 'politics',      label: 'Politics' },
+  { key: 'work',          label: 'Work' },
+  { key: 'location',      label: 'Whereabouts' },
+  { key: 'contact-info',  label: 'Contact info' },
+];
+
+function vlTopicRow(key, label, current, disabled) {
+  const d = disabled ? ' disabled' : '';
+  const cur = (current === 'open' || current === 'sensitive') ? current : 'none';
+  const opts = [
+    { v: 'none',      t: 'Hidden' },
+    { v: 'open',      t: 'Open' },
+    { v: 'sensitive', t: 'Sensitive too' },
+  ].map(o => `<option value="${o.v}"${o.v === cur ? ' selected' : ''}>${esc(o.t)}</option>`).join('');
+  return `<div class="vl-topic-row" data-topic="${esc(key)}">
+    <span class="vl-topic-label">${esc(label)}</span>
+    <select class="vl-topic-val"${d} aria-label="${esc(label)} — how much of this topic this circle sees">${opts}</select>
+  </div>`;
+}
+
 function vlKnownGrantRow(def, current, disabled) {
   const d = disabled ? ' disabled' : '';
   const cur = current === undefined || current === null ? false : current;
@@ -11094,7 +11129,12 @@ function vlRenderCatDetail(cat) {
   const knownRows = VL_KNOWN_GRANTS.map(def => vlKnownGrantRow(def, grants[def.key], isLocked)).join('');
   // Unknown/custom keys (forward-compat, hand-added) keep the free-form
   // editor — but tucked behind an "Advanced" disclosure, not up front.
-  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k));
+  // `topics` (the content-gating per-topic map) is a nested object, NOT a
+  // free-form grant — it must never render as a raw row (would show
+  // "[object Object]" and, worse, vlReadGrants would re-serialize it to a
+  // string and destroy the map). Its own editor arrives in Phase 2b; for now
+  // it round-trips untouched (the server preserves it on a topic-less save).
+  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k) && k !== 'topics');
   const customRows = customEntries.map(([k, v], i) =>
     vlGrantRowHtml(i, k, typeof v === 'string' ? 'str' : 'bool', typeof v === 'string' ? v : (v ? 'true' : 'false'), isLocked)
   ).join('');
@@ -11109,6 +11149,12 @@ function vlRenderCatDetail(cat) {
     <div>
       <div class="vl-field-label">What people in this category may know or see</div>
       <div id="vl-c-grants-known">${knownRows}</div>
+      ${(!isNew && !isLocked) ? `
+      <details class="vl-grants-advanced vl-topics-section">
+        <summary>Content topics — which kinds of memory this circle may see</summary>
+        <p class="field-hint">Every memory is tagged by topic. This circle sees a topic's memories only up to the level you allow: <strong>Open</strong> for everyday mentions, <strong>Sensitive too</strong> for the deeper ones, <strong>Hidden</strong> for none. (New topic-based gating — takes effect as memories get tagged.)</p>
+        <div id="vl-c-topics">${VL_CONTENT_TOPICS.map(t => vlTopicRow(t.key, t.label, grants.topics?.[t.key], isLocked)).join('')}</div>
+      </details>` : ''}
       <details class="vl-grants-advanced"${customEntries.length ? ' open' : ''}>
         <summary>Advanced: custom grants</summary>
         <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${customRows}</div>
@@ -11175,6 +11221,21 @@ function vlReadGrants() {
     if (!key) return;
     grants[key] = type === 'str' ? val : (val.toLowerCase() !== 'false' && val !== '0');
   });
+  // Content-topic grants (Phase 2b): rendered only for an EXISTING category's
+  // editor — a new category has none, so we omit `topics` entirely and let the
+  // server seed it from the coarse grants. When the section IS present we emit
+  // an explicit map (even empty) so "set every topic to Hidden" persists rather
+  // than re-deriving.
+  const topicSection = document.getElementById('vl-c-topics');
+  if (topicSection) {
+    const topics = {};
+    topicSection.querySelectorAll('.vl-topic-row').forEach(row => {
+      const key = row.dataset.topic;
+      const val = row.querySelector('.vl-topic-val')?.value;
+      if (key && (val === 'open' || val === 'sensitive')) topics[key] = val;
+    });
+    grants.topics = topics;
+  }
   return grants;
 }
 

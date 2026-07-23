@@ -9,6 +9,7 @@
 // Sign-off: 2026-06-11 (human-approved V3 gate semantics)
 
 import { CATEGORY_STRANGERS } from './village.js';
+import { unionTopicGrants, intersectTopicGrants } from './content-tags.js';
 
 // ── Sentinel ──────────────────────────────────────────────────────
 // WARD_PRIVATE is returned when no audience is set — today's behavior,
@@ -61,6 +62,14 @@ export function grantUnion(g1, g2) {
   const out = {};
   const allKeys = new Set([...Object.keys(g1 ?? {}), ...Object.keys(g2 ?? {})]);
   for (const k of allKeys) {
+    // `topics` is the nested content-gating map — union it per-topic (most
+    // permissive), NEVER collapse it to a boolean (that both destroys the map
+    // and, as a bare `true`, would inflate permissionScore).
+    if (k === 'topics') {
+      const t = unionTopicGrants([(g1 ?? {}).topics, (g2 ?? {}).topics]);
+      if (Object.keys(t).length) out.topics = t;
+      continue;
+    }
     const v1 = (g1 ?? {})[k];
     const v2 = (g2 ?? {})[k];
     const ladder = GRANT_LADDERS[k];
@@ -83,6 +92,13 @@ export function grantIntersection(g1, g2) {
   const out = {};
   const allKeys = new Set([...Object.keys(g1 ?? {}), ...Object.keys(g2 ?? {})]);
   for (const k of allKeys) {
+    // `topics` intersects per-topic (min level, only topics both sides grant) —
+    // never collapsed to a boolean (see grantUnion).
+    if (k === 'topics') {
+      const t = intersectTopicGrants((g1 ?? {}).topics, (g2 ?? {}).topics);
+      if (Object.keys(t).length) out.topics = t;
+      continue;
+    }
     const v1 = (g1 ?? {})[k];
     const v2 = (g2 ?? {})[k];
     const ladder = GRANT_LADDERS[k];

@@ -27,6 +27,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { withLock } from './thalamus.js';
+import { CONTENT_TOPICS, sanitizeTopicGrants } from './content-tags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_VILLAGE_PATH = path.join(__dirname, 'village.json');
@@ -119,6 +120,24 @@ function slugifyCategoryName(name) {
  * Ids that are already slugs are left untouched. Pure. Returns a Map (empty when
  * nothing needs migrating).
  */
+/**
+ * The full old-id → new-slug map to hand Phylactery so it can remap the
+ * `audience` stored on memories / graph nodes / edges (the category id lives in
+ * two stores; the registry migration only fixes the Node mirror). ALWAYS
+ * includes the fixed legacy-seed map so the seed remap runs idempotently every
+ * boot regardless of registry state; unions in any ward-created UUID → slug from
+ * the raw file (present until the first write persists slugs). Reads the RAW
+ * file (pre-normalize) on purpose — the UUIDs must still be visible to map them.
+ */
+export async function pendingCategoryAudienceRemap({ filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  let derived = {};
+  try {
+    const raw = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+    derived = Object.fromEntries(migrateCategoryIds(Array.isArray(raw?.categories) ? raw.categories : []));
+  } catch { /* no file / bad json → seed map only */ }
+  return { ...LEGACY_SEED_CATEGORY_IDS, ...derived };
+}
+
 export function migrateCategoryIds(rawCategories = []) {
   const map = new Map();
   // Reserve the builtin + seed slugs and any id already slug-shaped, so a
@@ -221,10 +240,40 @@ function sanitizeGrants(grants) {
   const out = {};
   if (grants && typeof grants === 'object' && !Array.isArray(grants)) {
     for (const [k, v] of Object.entries(grants)) {
-      if (typeof v === 'boolean' || typeof v === 'string') out[k] = v;
+      // `topics` is the content-gating per-topic level map (Phase 2) — the one
+      // nested object we keep, validated to {topic: open|sensitive}. An explicit
+      // topics OBJECT is kept even when empty: {} means "the ward set every
+      // topic to hidden", which must persist (not re-derive from coarse grants).
+      // A non-object topics value is ignored. Every OTHER nested value is still
+      // stripped to keep grants primitive.
+      if (k === 'topics') {
+        if (v && typeof v === 'object' && !Array.isArray(v)) out.topics = sanitizeTopicGrants(v);
+      } else if (typeof v === 'boolean' || typeof v === 'string') {
+        out[k] = v;
+      }
     }
   }
   return out;
+}
+
+// Migration seed for the content-gating per-topic grants (Phase 2): derive an
+// initial {topic: level} map from a tier's COARSE grants so nothing silently
+// loses access when topic-gating (Phase 4) turns on. Conservative but
+// visibility-preserving: a tier that saw "everything sensitive" keeps every
+// topic at sensitive (the ward narrows it deliberately later in the editor).
+// Runs only when a tier has no `topics` yet, so it never overwrites a ward edit.
+function deriveTopicGrantsFromCoarse(coarse = {}) {
+  const has = (k) => coarse[k] === true || (typeof coarse[k] === 'string' && coarse[k].length > 0);
+  const t = {};
+  // Can this tier see memory content at all? → the everyday baseline.
+  if (has('memories') || has('identityBasic')) t.general = 'open';
+  // "Everything except address" (the old broad sensitive grant) → every topic.
+  if (has('identitySensitive')) for (const topic of CONTENT_TOPICS) t[topic] = 'sensitive';
+  // A dedicated health grant → the medical topics specifically.
+  if (has('health')) { t.medical = 'sensitive'; t['mental-health'] = 'sensitive'; }
+  // A location grant → the location topic.
+  if (has('location')) t.location = t.location || 'open';
+  return t;
 }
 
 function normalizeCategoryIds(raw, byId) {
@@ -261,11 +310,20 @@ export function normalizeRegistry(raw) {
     if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !c.id.trim()) continue;
     if (typeof c.name !== 'string' || !c.name.trim()) continue;
     const cid = remap(c.id);
+    const grants = sanitizeGrants(c.grants);
+    // Content-gating migration (Phase 2): seed per-topic grants from the coarse
+    // grants the FIRST time only (topics absent). Never overwrites a ward edit
+    // (once topics is set + persisted, sanitizeGrants preserves it → present →
+    // skipped). Strangers stay {} (forced below) → sees nothing.
+    if (grants.topics === undefined) {
+      const derived = deriveTopicGrantsFromCoarse(grants);
+      if (Object.keys(derived).length) grants.topics = derived;
+    }
     byId.set(cid, {
       id: cid,
       name: c.name.trim(),
       builtin: cid === CATEGORY_EMERGENCY || cid === CATEGORY_STRANGERS,
-      grants: sanitizeGrants(c.grants),
+      grants,
     });
   }
   // Builtins always exist; strangers' grants are locked to the floor.
@@ -471,16 +529,25 @@ export async function findVillagerByAlias({ platform, id }, { filePath = DEFAULT
 export async function upsertCategory({ id, name, grants }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     if (id === CATEGORY_STRANGERS) throw new Error('the Strangers category is locked — it is the floor');
+    // Preserve the tier's content-topic grants across a save that OMITS `topics`
+    // — the legacy grant editor (vlReadGrants) doesn't send them yet, and a
+    // topic-less PATCH must not wipe them. An explicit `topics` key (the future
+    // topic editor) still replaces. Applied to both builtin + custom updates.
+    const withTopics = (incoming, existing) => {
+      const next = sanitizeGrants(incoming);
+      if (incoming && !('topics' in incoming) && existing?.topics) next.topics = existing.topics;
+      return next;
+    };
     if (id) {
       const existing = reg.categories.find(c => c.id === id);
       if (!existing) throw new Error(`unknown category: ${id}`);
       if (existing.builtin) {
         // Builtin: grants may widen/narrow, identity may not.
-        existing.grants = sanitizeGrants(grants ?? existing.grants);
+        existing.grants = withTopics(grants ?? existing.grants, existing.grants);
         return existing;
       }
       if (typeof name === 'string' && name.trim()) existing.name = name.trim();
-      if (grants !== undefined) existing.grants = sanitizeGrants(grants);
+      if (grants !== undefined) existing.grants = withTopics(grants, existing.grants);
       return existing;
     }
     if (typeof name !== 'string' || !name.trim()) throw new Error('name (string) is required');

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   normalizeTag, topicVisibleToGrants, unionTopicGrants,
   memoryVisibleToVillager, categoryToTag, levelRank,
-  isTopic, isLevel,
+  isTopic, isLevel, sanitizeTopicGrants,
 } from '../content-tags.js';
 
 test('normalizeTag: accepts colon/hyphen strings and objects; unknown topic → null', () => {
@@ -71,4 +71,14 @@ test('helpers: levelRank ordering + validators', () => {
   assert.equal(isTopic('bogus'), false);
   assert.equal(isLevel('open'), true);
   assert.equal(isLevel('meh'), false);
+});
+
+test('sanitizeTopicGrants: keeps valid topic→level, drops unknown topics/levels/junk', () => {
+  assert.deepEqual(
+    sanitizeTopicGrants({ medical: 'sensitive', general: 'open', unicorns: 'open', family: 'none', legal: 'bogus' }),
+    { medical: 'sensitive', general: 'open' },
+  );
+  assert.deepEqual(sanitizeTopicGrants(null), {});
+  assert.deepEqual(sanitizeTopicGrants('nope'), {});
+  assert.deepEqual(sanitizeTopicGrants(['medical']), {});
 });
