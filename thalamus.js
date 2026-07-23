@@ -2761,9 +2761,9 @@ export async function getStandingConsent() {
  */
 export async function getMemoriesBySubject({ villagerId, limit = 50 }) {
   await startThalamus();
-  if (!phylacteryClient) return { ok: false, items: [] };
+  if (!mcpClient) return { ok: false, items: [] };
   try {
-    const r = await phylacteryClient.callTool({
+    const r = await mcpClient.callTool({
       name: 'memory_list_by_subject',
       arguments: { villager_id: villagerId, limit },
     });
