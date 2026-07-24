@@ -852,6 +852,55 @@ class TestLocalTime:
         # Idempotent: a second run touches nothing (flag is set).
         assert migrate_timestamps_to_local(conn) == 0
 
+    def test_get_window_normalizes_utc_bounds_to_local(self, conn, monkeypatch):
+        """Regression test: get_window normalizes caller-supplied UTC bounds
+        through to_local_naive before string-comparing against stored local-naive
+        when_ts. BEFORE the fix, a UTC-Z bound would be compared as-is against
+        naive local times, sliding the window by the UTC offset on a cross-zone
+        server. After the fix, both UTC and naive-local queries return the same
+        event."""
+        from unruh import db
+
+        # Set the ward zone to PDT (UTC-7) and clear the cached zone.
+        monkeypatch.setenv("TZ", "America/Los_Angeles")
+        db._ZONE_CACHE.clear()
+
+        # Verify the zone loaded correctly.
+        zone = db._local_zone()
+        assert zone is not None, "Failed to load America/Los_Angeles zone"
+
+        # Add an event at local 2026-07-24T14:00:00.
+        nid = sched.add_node(
+            conn, type="event", label="PDT event", when="2026-07-24T14:00:00"
+        )
+
+        # Query with naive local bounds covering that day.
+        result_naive = sched.get_window(
+            conn,
+            from_ts="2026-07-24T00:00:00",
+            to_ts="2026-07-24T23:59:59",
+        )
+        naive_nodes = [n for n in result_naive["nodes"] if n["id"] == nid]
+        assert (
+            len(naive_nodes) == 1
+        ), f"Expected 1 node in naive query, got {len(naive_nodes)}"
+
+        # Query with UTC Z bounds covering the SAME local day.
+        # PDT = UTC-7, so local 00:00 = 07:00Z, local 23:59 = 06:59Z (next day).
+        result_utc = sched.get_window(
+            conn,
+            from_ts="2026-07-24T07:00:00Z",
+            to_ts="2026-07-25T06:59:00Z",
+        )
+        utc_nodes = [n for n in result_utc["nodes"] if n["id"] == nid]
+        assert (
+            len(utc_nodes) == 1
+        ), f"Expected 1 node in UTC-Z query, got {len(utc_nodes)}"
+
+        # Both queries return the same event (same count and same node).
+        assert naive_nodes[0]["id"] == utc_nodes[0]["id"]
+        assert naive_nodes[0]["label"] == utc_nodes[0]["label"]
+
 
 # ── Readable slug ids + schedule search (0.8.x id overhaul) ────────────
 

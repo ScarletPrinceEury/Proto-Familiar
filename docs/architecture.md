@@ -111,6 +111,8 @@ ponderings injection, care-check framing) and as background loops
 ├── silence-triage-loop.js   Autonomous singleton loop; LLM-deliberated proactive check-ins
 ├── reachout-loop.js         Autonomous singleton loop; warm non-crisis outreach (companionship). Stands down at moderate+ threat (triage owns distress); quiet-hours + cooldown gated
 ├── tome-graduation-loop.js  Autonomous singleton loop (Phase 4, opt-in/default-OFF); drains durable facts stranded in tomes into Phylactery (identity + memory + graph; relational facts resolve-or-create nodes + dedup edges). Pure logic in tome-graduation.js. Code-gated candidates → one batched LLM judgment (Phase-3 rubric; leans toward graduating — consolidation back-end prunes over-gathering) → route via thalamus wrappers (ward memory consent-gated) → tidy only after confirmed route (delete/pointer). Off-switch PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1; distinct from Pillar H (identity→RAG); per-tome opt-out `graduationExempt` (0.8.106): ward-toggleable in the Tomes modal, stamped on runtime tomes at creation, exposed via GET/PATCH /api/tomes — the name-exclusion list stays as belt-and-suspenders
+├── content-regate-loop.js   Autonomous singleton loop (ward-disclosure Phase B, opt-in/default-OFF); the Familiar reviews EXISTING ward-private ward-self memories and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the coarse backfill `content_tag`) while keeping the rest private. Pure logic in content-regate.js. Conservative (parser fails closed to keep); code-selects candidates (memory_list_content_gate_candidates — ward-private + no third-party subject only, never touches a third-party fact); reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` (enrich(), ward-visible) settled by `disclosure_acknowledge` / reverted by `keep_memory_private`. Off-switch PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1 + "Review my private notes for content-sharing" toggle
+├── content-regate.js        Pure Phase-B logic: selectBatch / parseRetagDecision (fail-closed) / summarizeCircles / buildRetagPrompt + injectable runOneRetagTick; reviewed-tracker (tomes/.content-regate-reviewed.json) + disclosure notices (tomes/.disclosure-notices.json)
 ├── needs-tracking-loop.js   Autonomous singleton loop (Pass 2, opt-in/default-OFF); marks a recurring need-window's occurrence `missed` once its [when,end] elapses unresolved (builds the needs-fulfilment ledger). Pure selection in needs-tracking.js. Stands down at moderate+ threat (never competes with triage); only the LAPSE is made factual — projected consequence edges are untouched. Off-switch PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1
 ├── needs-tracking.js        Pure Pass-2 logic: isNeedWindow / selectMissedOccurrences / summarizeNeedsForDay (the live "Needs today" view)
 ├── gcal-sync-loop.js        Autonomous singleton loop (0.8, opt-in/default-OFF); ward-configurable cadence (hourly default). Each due tick: fetch the iCal feed (gcal-source.js) → Unruh gcal_ingest (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Fetch/parse failure degrades silently and NEVER reconciles deletions. Off-switch PROTO_FAMILIAR_GCAL_DISABLED=1 + "Google Calendar sync" toggle
@@ -247,6 +249,12 @@ lifecycle of the autonomous loops:
   server also runs the multi-round tool-call loop here, executing via
   cerebellum and emitting `_toolRound` SSE events / a `_toolRounds`
   response array — see "Data flow" below.
+- OpenAI/SillyTavern compatibility: `POST /v1/chat/completions`,
+  `POST /v1/completions`, `GET/POST /v1/models`, and `GET /v1/model`
+  are accepted as aliases. They resolve provider/key/model from
+  request body + Bearer token + saved primary connection, then route
+  through `/api/chat` with `enrich:false` so external clients get
+  plain OpenAI-shape traffic without Proto-Familiar `_thalamus` extras.
 - `POST /api/debug-prompt` — offline preview (no upstream call).
 - **Media (vision build spec §2):** `POST /api/media` (its OWN
   `express.raw({type:'image/*'})` body parser, so image bytes never
@@ -771,7 +779,7 @@ surface in `[Temporal Context]` via `temporal_context` (a payoff turn riding the
 existing per-turn call; stripped on gated villager turns — private cognition).
 Reflection can also END in commitments: the pondering output schema gains
 `intentions[]` (≤3/tick, `source:'reflection'`, routed via `setIntention`).
-**"Eury's rounds"** is a ward-facing read-only view (`GET /api/rounds`, routine
+**The Familiar's rounds** is a ward-facing read-only view (`GET /api/rounds`, routine
 tab) honouring the Familiar's own visibility choice — a private round is counted
 (`hidden_count`) but its contents withheld: existence is never hidden, only what
 a private round *is*. The autonomous noticing turn that consumes due intentions
@@ -1396,10 +1404,21 @@ filter below scopes it node-by-node. This replaced a gate on a `graph` grant tha
 in *every* non-ward session (memory still worked, so the symptom was "graph stopped
 enriching but memory didn't"). The per-node tags now do the real privacy gating, so
 the coarse grant was both unsatisfiable and redundant. `audience.js` `visibleAudiences
-(roomTag, registry)` computes the SET of audience tags a room may see — every
-Village category whose `permissionScore` ≤ the room's, which excludes
-`ward-private` (it isn't a category and outscores all) and any
-more-trusted-than-the-room category. `server.js`/`discord-gateway.js` compute
+(sessionAudience, registry)` computes the SET of audience tags a room may see by
+circle **MEMBERSHIP**, not a scalar trust score (audit 2026-07: the score model
+let two circles with equal `permissionScore`, e.g. "Family" and "Work", see each
+other's records — trust is not a total order). The set is the INTERSECTION of
+every participant's membership set (`categoryIds ∪ {strangers}`, unknown → just
+`strangers`), intersected with the location's set (`{assignedCategory, strangers}`
+assigned, `{strangers}` unassigned) — a record tagged circle X surfaces iff
+**everyone present is a member of X**. `strangers` is always in the intersection
+(everyone is a stranger), so strangers-tagged records stay visible everywhere
+gated; `ward-private` is never a category → never in the set; a deleted/unknown
+category id is in no membership set → excluded (fail-closed). `audienceTagFor`
+tags a room with the most-trusted circle everyone SHARES (permissionScore's only
+surviving role: ranking the shared circles), so a memory written in a room
+round-trips (its tag is in that room's set by construction).
+`server.js`/`discord-gateway.js` compute
 this set and pass it into `enrich({ audiences })`, which forwards it to
 `memory_search` / `graph_node_search` / `graph_subgraph`. Phylactery's
 `audience_in_sql(audiences)` turns it into `audience IN (…)` (None → `1=1` for a
@@ -1416,6 +1435,27 @@ kept `ward-private` in the non-ward `IN`-list — a second leak — left for the
 path; recall now routes through `audience_in_sql`, which doesn't.) The outgoing
 filter (Pillar D) remains the send-side backstop; together they are the two gates
 the design intended. See `docs/audience-gating-build-spec.md`.
+
+**Content-tag layer (content-gating Phase 4, 0.9.23).** The `audiences` set above
+is the *coarse* floor (ward-private + provenance ceiling); a *fine* per-topic
+gate now composes on top of it for MEMORIES. Each memory carries a `content_tag`
+(`topic:level`, e.g. `medical:sensitive` — Phase 3); each Village tier grants a
+per-topic level map (`grants.topics`, Phase 2). `audience.js`
+`topicGrantsForRoom(effectiveGrants, roomTag)` — the companion to
+`visibleAudiences`, derived together at every seam so the two halves can't drift —
+returns the room's most-permissive-per-topic map (`null` for a ward room, `{}`
+fail-closed for a villager room with no topics). It rides `enrich({ topicGrants })`
+→ `memory_search`, and the standalone `searchMemory`/`memByTimerange` wrappers
+(threaded from the Discord tool ctx via `cerebellum.discordReadTopicGrants`, the
+fail-closed companion to `discordReadAudiences`). Phylactery's `memory.search` /
+`memory.by_timerange` take `topic_grants` and post-filter each row through
+`content_gate.memory_visible_to_grants` (the Python mirror of `content-tags.js`),
+overfetching so the drop still fills the limit. **Visible ⟺ clears the coarse
+floor AND the content gate.** Fail-closed: no tag → `general:sensitive`; unknown
+topic / absent grant → hidden. Graph nodes/edges keep the coarse `audiences` gate
+only (no `content_tag`). Ward-context recall (pondering, tome-graduation dedup,
+the ward's own endpoints) omits `topic_grants` → ward sees all, unchanged. See
+`docs/content-gating-build-spec.md` §Phase 4.
 
 ### Pillar H — lifecycle: consolidation scheduler, hygiene, graduation, backup
 
@@ -1492,6 +1532,13 @@ graduations land in `graduation_log`; thalamus surfaces unacknowledged ones as
 a `[GRADUATION NOTICE]` block (TTL-cached, ward-private turns only,
 non-blocking), and the Familiar calls `graduation_acknowledge` once mentioned.
 Tested in `phylactery/tests/test_graduation.py`.
+
+The sibling `[DISCLOSURE NOTICE]` block (ward-disclosure Phase B) works the same
+way for the content-gating re-tag pass: when `content-regate.js` opens one of the
+ward's own formerly-private facts to be governed by content rules, thalamus
+surfaces it (ward-private turns only) so nothing opens behind the ward's back;
+the Familiar calls `disclosure_acknowledge` once mentioned, or `keep_memory_private`
+to revert a fact to strictly-private on the ward's word.
 
 **Encrypted backup/restore** (`backup.py`) — "back up / restore my Familiar":
 `VACUUM INTO` a consistent copy, encrypt with a key derived from the ward's
@@ -1995,7 +2042,7 @@ Once tagged, an event's `outcome` is immutable — the LLM later reasons about a
 
 **`schedule_delete(id)` (0.7.x).** Permanently removes a schedule node — event, task, reminder, or routine **phase** — via `deleteScheduleNode` → Unruh `schedule_delete_node` (which returns `{ok, deleted}`; `deleted:false` means no such id). Distinct from `schedule_resolve`, which marks a node `done`/`cancelled` while *keeping the record*: delete *erases* it, and is the only way to remove a phase or clean up a duplicate/mistaken entry. The plumbing (`deleteScheduleNode` thalamus helper + the Unruh MCP tool) already existed end-to-end; it simply had no Familiar-facing tool until now — the classic "capability not reachable BY the Familiar" gap.
 
-**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
+**Storage decision:** event records and reflection metadata live in `tomes/.surface-events.json` (per-embodiment, like ponderings). Identity-layer *insights* derived from them ("Eury crashes within 4h of skipping meals" — Eury here is the *reference* Familiar instance used in examples, **not** a universal name; each user's Familiar is named via the `{{char}}` config, and code/prompts never hard-code "Eury") get lifted to Phylactery's `custom/what_lapses_cost.md` only after the reflection LLM judges the pattern strong enough. The raw event stream belongs to Proto-Familiar; the durable knowledge belongs to the entity.
 
 **`what_lapses_cost.md`** lives in Phylactery's `custom` category as `what_lapses_cost.md`. The Familiar writes via the reflection loop when patterns emerge. May not exist initially; surface-context assembly is null-tolerant.
 
@@ -2131,12 +2178,14 @@ that is the contract talking — update all seams together or stop.
 |---|---|---|---|
 | Memorization | 5s tick | `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` | Drains queue of session-memorization jobs |
 | Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry |
-| Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired; same tick runs event lead-time alerts (`PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1` to silence those alone) |
+| Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired; same tick runs event lead-time alerts (`PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1` to silence those alone), the weather refresh (self-gated to a 6h cadence; `PROTO_FAMILIAR_WEATHER_DISABLED=1`), and elapsed-stamping of long-past unresolved events (self-gated hourly; `PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1`) — both ride this tick rather than spinning their own loops |
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
 | Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |
 | Tome graduation | 30min tick (opt-in, default OFF) | Settings "Graduate tome knowledge" + `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1` | Drains durable facts stranded in tomes → identity/memory/graph (relational facts resolve-or-create + dedup); confirmed route before tidy; consent-gated ward memory |
+| Content-gating re-tag | 30min tick (opt-in, default OFF) | Settings "Review my private notes for content-sharing" + `PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1` | The Familiar reviews EXISTING ward-private ward-self facts and, with a batched judgment, opens the ones that may be content-gated (`audience → ward-content-gated`, optionally correcting the `content_tag`) while keeping the rest private. Conservative (unsure → keep); code-selects candidates (ward-private + no third-party subject only); a reviewed-tracker judges each once; every opening writes a `[DISCLOSURE NOTICE]` the ward reads + is revertible (`keep_memory_private`). Never on the chat path |
 | Needs tracking | 30min tick (opt-in, default OFF) | Settings "Track unmet needs" + `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1` | Marks a recurring need-window's occurrence `missed` once its window elapses unresolved (the needs-fulfilment ledger). Stands down at moderate+ threat; only the lapse is made factual — never auto-confirms a projected consequence |
 | Memory coverage sweep | 10min tick (default ON) | Settings "Memory coverage sweep" + `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` | Memorizes PAST days that never ingested (day-anchoring Phase 2); skips today + completed days; only enqueues into the memorization worker — no LLM call of its own |
+| Noticing | 20min base pulse + self-set cadence (default ON) | Settings "Let my Familiar notice on its own" + `PROTO_FAMILIAR_NOTICING_DISABLED=1` | The Familiar's own turn: code-gated wake conditions (due intentions, rhythm deviation, readiness gaps, aging intents/tasks, overdue events) → bounded tool-using deliberation. Runs at ALL threat tiers (ward-signed no-stand-down); every decision-reaching tick logs to `logs/noticing-events.jsonl` |
 | Google Calendar sync | 60s wake + ward interval (hourly default; opt-in, default OFF) | Settings "Google Calendar sync" + `PROTO_FAMILIAR_GCAL_DISABLED=1` | Fetch the ward's iCal feed → Unruh `gcal_ingest` (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Failure degrades silently and never reconciles deletions |
 | Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
 | Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |

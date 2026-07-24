@@ -183,6 +183,7 @@ def memory_create(
     standalone: Optional[bool] = None,
     register: Optional[str] = None,
     source_meta: Optional[dict] = None,
+    content_tag: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to store a new memory about my human or our world. I reach for it
@@ -197,6 +198,9 @@ def memory_create(
     register is the axis separate from granularity: episodic (default, a lived
     moment), me (a standing truth about myself), or ward (a standing truth about
     my human) — the recalled-when-relevant home for identity-grade facts.
+    content_tag is "topic:level" (e.g. medical:sensitive) and decides which of
+    my human's Villagers may ever see this fact; omitted → derived from category,
+    fail-closed.
     """
     result = mem.create(
         content, granularity, date_key=date, slug=slug,
@@ -209,6 +213,7 @@ def memory_create(
         standalone=bool(standalone),
         register=register or "episodic",
         source_meta=source_meta if isinstance(source_meta, dict) else None,
+        content_tag=content_tag,
         conn=_c(),
     )
     if not result.get("ok"):
@@ -295,14 +300,17 @@ def memory_update_by_id(
     content: Optional[str] = None,
     audience: Optional[str] = None,
     careWeight: Optional[str] = None,
+    content_tag: Optional[str] = None,
     instanceId: Optional[str] = None,
 ) -> str:
     """I use this to correct or re-tag one specific memory by its id — the reliable
     handle when many facts share a day. content rewrites the text; audience sets who
-    may see it; careWeight is 'high'/'low' or '' to clear. Auto-snapshots first.
+    may see it; careWeight is 'high'/'low' or '' to clear; content_tag is the
+    "topic:level" content gate ('' to clear). Auto-snapshots first.
     """
     result = mem.update_memory_by_id(
-        id, new_content=content, audience=audience, care_weight=careWeight, conn=_c()
+        id, new_content=content, audience=audience, care_weight=careWeight,
+        content_tag=content_tag, conn=_c()
     )
     if not result.get("ok"):
         return f"Update failed: {result.get('error', 'unknown')}"
@@ -329,16 +337,18 @@ def memory_search(
     maxResults: Optional[int] = None,
     instanceId: Optional[str] = None,
     audiences: Optional[list[str]] = None,
+    topic_grants: Optional[dict] = None,
 ) -> dict[str, Any]:
     """I use this to search my memories by meaning. I reach for it when I'm trying to
     recall something relevant to a topic or question — it does semantic RAG search and
     falls back to recency. Returns thin projections with ids and scores.
     `audiences` is the room's allowed audience-tag set (omit for a ward-private
-    room → I see everything); the recall gate keeps shared-room recall to what
-    that room is cleared for.
+    room → I see everything); `topic_grants` is the room's per-topic content-tag
+    grant map (omit for ward). Together they keep shared-room recall to what that
+    room is cleared for — by provenance AND by content sensitivity.
     """
     k = max(1, min(20, int(maxResults or 5)))
-    return mem.search(query, max_results=k, audiences=audiences, conn=_c())
+    return mem.search(query, max_results=k, audiences=audiences, topic_grants=topic_grants, conn=_c())
 
 
 @mcp.tool()
@@ -348,15 +358,17 @@ def memory_by_timerange(
     limit: Optional[int] = None,
     instanceId: Optional[str] = None,
     audiences: Optional[list[str]] = None,
+    topic_grants: Optional[dict] = None,
 ) -> dict[str, Any]:
     """I use this to remember what was happening in my human's life around a span
     of days — not by topic, but by WHEN. I reach for it to relate a moment in time
     to what I actually kept from those days (e.g. what surrounded a hard stretch or
     an appointment). `fromDate`/`toDate` are inclusive YYYY-MM-DD bounds; results
-    come newest day first. `audiences` is the room's allowed set (omit for a
-    ward-private room). Returns thin projections with ids I can then read in full.
+    come newest day first. `audiences` is the room's allowed set and `topic_grants`
+    the room's per-topic content grants (both omitted for a ward-private room).
+    Returns thin projections with ids I can then read in full.
     """
-    return mem.by_timerange(fromDate, toDate, limit=int(limit or 12), audiences=audiences, conn=_c())
+    return mem.by_timerange(fromDate, toDate, limit=int(limit or 12), audiences=audiences, topic_grants=topic_grants, conn=_c())
 
 
 @mcp.tool()
@@ -449,6 +461,18 @@ def memory_list_by_subject(villager_id: str, limit: int = 50) -> dict[str, Any]:
 
 
 @mcp.tool()
+def memory_list_content_gate_candidates(limit: int = 40) -> dict[str, Any]:
+    """List my ward-about-self memories still tagged coarse 'ward-private' — the
+    input to my content-gating re-tag pass, where I decide (with full context)
+    which of my own facts about my human should be governed by content rules vs
+    kept strictly private. Only facts with NO third-party subject are returned,
+    so this can never touch something about someone else. Returns
+    { items: [{ id, date, content, content_tag, category }] }."""
+    items = mem.list_content_gate_candidates(limit=limit, conn=_c())
+    return {"items": items}
+
+
+@mcp.tool()
 def memory_health() -> dict[str, Any]:
     """I use this to check whether my memory's DEDUP is working — the semantic
     matcher that stops the same fact piling up in my human's consent queue. It
@@ -457,6 +481,37 @@ def memory_health() -> dict[str, Any]:
     mode I'm in and why. Returns {healthy, dedup_mode, embed_ok, vec_ok,
     vec_rows, memory_rows, ...}."""
     return mem.vector_health(conn=_c())
+
+
+@mcp.tool()
+def remap_category_audiences(id_map: dict) -> dict[str, Any]:
+    """I use this after my human's Village category ids change from UUIDs to
+    readable slugs: it rewrites the stored `audience` on my memories, graph nodes
+    and edges from each OLD id to its NEW slug, so a memory keeps surfacing to the
+    right circle instead of quietly falling to just-us. Idempotent — a second run
+    changes nothing. `id_map` is {old_id: new_slug}."""
+    return mem.remap_audiences(_c(), id_map)
+
+
+@mcp.tool()
+def memory_granularity_audit() -> dict[str, Any]:
+    """I use this to see which of my memories the consolidation ladder can't
+    reach — rows whose date_key isn't a plain ISO date, so they silently never
+    roll up (daily→weekly→…). It reports my granularity spread, how many rows
+    per tier have an unreadable date_key, how many came from the old entity-core
+    migration, and a few samples. Read-only — it changes nothing, it just shows
+    me where memories are stranded. Returns {by_granularity, unparseable_date_key,
+    migrated_from_entity_core, samples}."""
+    return consol.granularity_audit(conn=_c())
+
+
+@mcp.tool()
+def memory_backfill_content_tags(limit: int | None = None) -> dict[str, Any]:
+    """I use this to give my older memories a content tag (topic + sensitivity)
+    derived from their category, so the content-based sharing gate can reason
+    about who may see each one. Idempotent — runs in the background at boot and
+    does nothing once every memory is tagged. Returns {tagged, remaining}."""
+    return mem.backfill_content_tags(_c(), limit)
 
 
 @mcp.tool()

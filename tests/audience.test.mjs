@@ -239,6 +239,25 @@ describe('grantUnion', () => {
     assert.equal(grantUnion({ memories: 'shared' }, { memories: true }).memories, true);
   });
 
+  it('topics is deep-unioned per topic, NEVER collapsed to a boolean', () => {
+    const u = grantUnion(
+      { memories: true, topics: { medical: 'open', general: 'open' } },
+      { topics: { medical: 'sensitive', family: 'open' } },
+    );
+    // Most-permissive per topic; stays an object (a boolean here would both lose
+    // the map and inflate permissionScore).
+    assert.deepEqual(u.topics, { medical: 'sensitive', general: 'open', family: 'open' });
+    assert.notEqual(u.topics, true);
+  });
+
+  it('topics intersects per topic (min level, only shared topics)', () => {
+    const i = grantIntersection(
+      { topics: { medical: 'sensitive', general: 'open' } },
+      { topics: { medical: 'open', family: 'open' } },
+    );
+    assert.deepEqual(i.topics, { medical: 'open' });  // general/family not in both
+  });
+
   it('ladder max: false ∪ shared = shared', () => {
     assert.equal(grantUnion({ memories: false }, { memories: 'shared' }).memories, 'shared');
   });
@@ -460,11 +479,15 @@ describe('audienceTagFor', () => {
     assert.equal(audienceTagFor({ location: null, participants: [{ id: 'v-bob' }] }, reg), 'cat-acquaint');
   });
 
-  it('multiple participants → the LOWEST permission level present', () => {
-    // friend + acquaintance → acquaintance (the more restrictive of the two).
+  it('participants in different circles share only strangers → strangers', () => {
+    // Alice ∈ {cat-friends, strangers}, Bob ∈ {cat-acquaint, strangers} — under
+    // membership semantics they share only 'strangers', regardless of either
+    // category's permissionScore. This is NOT "the more restrictive category
+    // wins" (that was the old scalar-trust behavior) — it's that the two
+    // circles never overlap at all.
     assert.equal(
       audienceTagFor({ location: null, participants: [{ id: 'v-alice' }, { id: 'v-bob' }] }, reg),
-      'cat-acquaint',
+      'strangers',
     );
   });
 

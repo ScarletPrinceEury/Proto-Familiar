@@ -1,6 +1,6 @@
 ---
 title: Exact Values Are Code's Job
-topics: [decisions]
+topics: [decisions, reference]
 sources:
   - id: claude-md
     type: file

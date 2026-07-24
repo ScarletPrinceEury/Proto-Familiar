@@ -1574,7 +1574,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null, topicGrants = null } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -1628,8 +1628,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         : mcpClient.callTool({
             name: 'memory_search',
             // audiences = the room's allowed audience-tag set (Pillar E recall
-            // gate). null/omitted = ward-private room → no filter (sees all).
-            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}) },
+            // gate, the coarse floor). topic_grants = the room's per-topic
+            // content grants (Phase 4 fine gate). null/omitted on both = ward-
+            // private room → no filter (sees all). They compose: a memory
+            // surfaces only if it clears the coarse floor AND its content_tag.
+            arguments: { query: userMessage, instanceId: 'proto-familiar', maxResults: 5, ...(audiences ? { audiences } : {}), ...(topicGrants ? { topic_grants: topicGrants } : {}) },
           }),
       (staticOnly || !doGraph) ? Promise.reject(new Error(staticOnly ? 'skipped (staticOnly)' : 'skipped (ungated: graph)'))
         : mcpClient.callTool({
@@ -1804,7 +1807,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       const edgeNodeIds = new Set();
       const lines = [];
       // Track id ↔ label for the in-prompt legend so the Familiar can resolve
-      // "Eury protects Chen" to the underlying graph IDs without a tool call.
+      // "{{char}} protects Chen" to the underlying graph IDs without a tool call.
       const idLegendNodes = new Map(); // id → label
       const idLegendEdges = [];        // { id, fromLabel, rel, toLabel }
 
@@ -2322,6 +2325,30 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Disclosure notice (ward-disclosure spec, Phase B — ward-visible + revert) ─
+    // When my re-tag pass opens one of my human's own previously-private facts to
+    // be governed by content rules, I tell them, in my own voice, so nothing gets
+    // opened behind their back and they can pull any of it back. Ward-private
+    // turns only; best-effort.
+    let disclosureBlock = '';
+    if (!staticOnly && !gated) {
+      try {
+        const { readDisclosureNotices } = await import('./content-regate.js');
+        const notices = await readDisclosureNotices();
+        if (Array.isArray(notices) && notices.length > 0) {
+          const lines = [
+            `[DISCLOSURE NOTICE — reviewing my own private notes, I opened ${notices.length} fact(s) about my human so they're now governed by my content-sharing rules (only the people they've trusted with each topic could ever see them; the rest stays as it was). Nothing is forced — this is mine to raise in my own voice when a natural moment opens, and any of it reverts to strictly-private on their word. Never the thing I lead with.]`,
+            'Opened:',
+            ...notices.map((n, i) => `  ${i + 1}. ${n.brief ?? ''} [${n.topic ?? 'general:sensitive'}]${n.date ? ` (${n.date})` : ''}  [id: ${n.id}]`),
+            'When I have mentioned these (or judged they need no mention), I call disclosure_acknowledge with the id(s). If my human wants any kept strictly between us, I call keep_memory_private with the id.',
+          ];
+          disclosureBlock = lines.join('\n');
+        }
+      } catch {
+        /* best-effort — no disclosure block on error */
+      }
+    }
+
     const dynamicSections = [];
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
@@ -2331,6 +2358,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
+    if (disclosureBlock)        dynamicSections.push(disclosureBlock);
     if (careBlock)              dynamicSections.push(careBlock);
     if (stewardshipBlock)       dynamicSections.push(stewardshipBlock);
     if (temporalLines)          dynamicSections.push(`[Temporal Context]\n${temporalLines}`);
@@ -2493,7 +2521,7 @@ export function parseMemoryCreateResult(text) {
   return { id: s.match(/id=([\w-]+)/)?.[1] ?? null, merged: /merged/i.test(s) };
 }
 
-export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
+export async function createMemoryFull({ content, granularity = 'significant', date, slug, audience = 'ward-private', subjects = [], category, contentTag, consent_pending = false, confidence = 1.0, standalone = false, register, sourceMeta }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2501,6 +2529,10 @@ export async function createMemoryFull({ content, granularity = 'significant', d
     const args = { content, granularity, date: date ?? today, audience, subjects, consent_pending, confidence };
     if (slug) args.slug = slug;
     if (category) args.category = category;
+    // The content tag (topic:level) drives recall gating; memorization computes
+    // it in code (never trusts the model's raw value), so pass it straight
+    // through. Omitted → Phylactery derives one from the category, fail-closed.
+    if (contentTag) args.content_tag = contentTag;
     if (standalone) args.standalone = true;
     // Standing facts (memorization's temporality='standing') land on a non-
     // episodic register — 'ward' for a standing truth about my human — so they're
@@ -2562,17 +2594,19 @@ export async function dropPendingMemories(ids) {
 // (unscoped). An empty array → nothing surfaces ('0=1' server-side). Passing it
 // is how a gated (non-ward) Discord turn keeps ward-private memory out of a tool
 // result.
-export async function searchMemory({ query, maxResults = 5, audiences } = {}) {
+export async function searchMemory({ query, maxResults = 5, audiences, topicGrants } = {}) {
   return callTool('memory_search', {
     query, instanceId: 'proto-familiar', maxResults,
     ...(audiences !== undefined ? { audiences } : {}),
+    ...(topicGrants ? { topic_grants: topicGrants } : {}),
   });
 }
 
-export async function memByTimerange({ fromDate, toDate, limit = 12, audiences } = {}) {
+export async function memByTimerange({ fromDate, toDate, limit = 12, audiences, topicGrants } = {}) {
   return callTool('memory_by_timerange', {
     fromDate, toDate, limit, instanceId: 'proto-familiar',
     ...(audiences !== undefined ? { audiences } : {}),
+    ...(topicGrants ? { topic_grants: topicGrants } : {}),
   });
 }
 
@@ -2678,6 +2712,37 @@ export async function getMemoryHealth() {
   });
 }
 
+// Remap stored category-id audiences (memories + graph) after the Village
+// category-slug migration, per an old→new id map. Idempotent; a failure just
+// leaves the affected records fail-closed (ward-only) until the next boot.
+export async function remapCategoryAudiences(idMap) {
+  if (!idMap || typeof idMap !== 'object' || !Object.keys(idMap).length) return { ok: true, memories: 0, nodes: 0, edges: 0 };
+  return callTool('remap_category_audiences', { id_map: idMap }).catch(err => {
+    console.warn('[thalamus] remapCategoryAudiences failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+// Read-only audit of consolidation legibility — which memories the tier ladder
+// can't roll up because their date_key isn't ISO (the entity-core migration
+// mislabel). Never mutates; degrades to an "unknown" shape on failure.
+export async function getMemoryGranularityAudit() {
+  return callTool('memory_granularity_audit', {}).catch(err => {
+    console.warn('[thalamus] getMemoryGranularityAudit failed:', err?.message ?? err);
+    return { ok: false, error: err?.message ?? String(err) };
+  });
+}
+
+// Give pre-Phase-3 memories a content_tag derived from their category, so the
+// content-based recall gate has a value to reason about. Idempotent; degrades
+// to a no-op result on failure.
+export async function backfillContentTags({ limit = null } = {}) {
+  return callTool('memory_backfill_content_tags', limit != null ? { limit } : {}).catch(err => {
+    console.warn('[thalamus] backfillContentTags failed:', err?.message ?? err);
+    return { ok: false, tagged: 0, error: err?.message ?? String(err) };
+  });
+}
+
 // Embed memories that never got a vector (the migration gap) so semantic dedup
 // can see them. Idempotent; degrades to a no-op result on any failure.
 export async function backfillMemoryEmbeddings({ limit = null } = {}) {
@@ -2719,11 +2784,29 @@ export async function getStandingConsent() {
  * the villager consent menu (a person may see what the Familiar holds
  * about them). Degrades to an empty list when Phylactery is down.
  */
+/**
+ * Ward-about-self memories still tagged coarse 'ward-private' — the input to the
+ * Familiar-curated content-gating re-tag pass (ward-disclosure build spec, Phase
+ * B). Facts with a third-party subject are never returned. Degrades to an empty
+ * list when Phylactery is down.
+ */
+export async function listContentGateCandidates({ limit = 40 } = {}) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, items: [] };
+  try {
+    const r = await mcpClient.callTool({
+      name: 'memory_list_content_gate_candidates',
+      arguments: { limit },
+    });
+    return parseToolText(r, { ok: true, items: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
+}
+
 export async function getMemoriesBySubject({ villagerId, limit = 50 }) {
   await startThalamus();
-  if (!phylacteryClient) return { ok: false, items: [] };
+  if (!mcpClient) return { ok: false, items: [] };
   try {
-    const r = await phylacteryClient.callTool({
+    const r = await mcpClient.callTool({
       name: 'memory_list_by_subject',
       arguments: { villager_id: villagerId, limit },
     });
@@ -2847,7 +2930,7 @@ export async function moveMemoryDate({ id, date }) {
   }
 }
 
-export async function updateMemoryById({ id, content, audience, careWeight }) {
+export async function updateMemoryById({ id, content, audience, careWeight, contentTag }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
@@ -2855,6 +2938,7 @@ export async function updateMemoryById({ id, content, audience, careWeight }) {
       ...(content   !== undefined ? { content }   : {}),
       ...(audience  !== undefined ? { audience }  : {}),
       ...(careWeight !== undefined ? { careWeight } : {}),
+      ...(contentTag !== undefined ? { content_tag: contentTag } : {}),
     };
     const result = await callTool('memory_update_by_id', args);
     console.log(`[thalamus] updateMemoryById ${id}`);

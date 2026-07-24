@@ -678,6 +678,57 @@ def test_adopts_hand_added_twin_instead_of_duplicating(conn):
     assert hid in r["updated"] and hid not in r["new"]
 
 
+def test_adopts_a_resolved_hand_added_twin_keeping_its_edges_and_resolution(conn):
+    # Ward decision: a hand-added twin already SETTLED (done/cancelled/missed)
+    # must still be adopted, not shadowed — otherwise Google re-imports a fresh
+    # open duplicate and the causal-graph edges stay orphaned on the settled
+    # node ("Google Calendar and the causal chain break each other").
+    hid = sched.add_node(conn, type="event", label="HEART", when="2026-07-05T15:00:00")
+    state_id = sched.add_node(conn, type="state", label="joy", when="2026-07-05T16:00:00")
+    sched.add_edge(conn, src=hid, dst=state_id, kind="causes",
+                   payload={"valence": "help", "condition": "on_resolve"})
+    # The ward marked their copy done before Google ever synced it.
+    sched.resolve(conn, id=hid, resolution="done")
+
+    r = gcal.gcal_ingest(
+        conn,
+        events=[{"uid": "g-heart@google.com", "summary": "HEART", "start": "2026-07-05T15:00:00"}],
+        reconcile_deletes=False,
+    )
+
+    # No duplicate was created — the ONE node with that label+time is the ward's,
+    # now sync-managed, and it is still resolved (adoption never un-does the
+    # ward's resolution).
+    rows = conn.execute("SELECT id, resolution, payload_json FROM nodes WHERE label='HEART'").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["id"] == hid
+    assert rows[0]["resolution"] == "done"          # resolution preserved
+    payload = json.loads(rows[0]["payload_json"])
+    assert payload["gcal_uid"] == "g-heart@google.com"
+    assert "needs_projection" not in payload        # a settled twin isn't re-cued
+    # The consequence edge survives on the adopted node.
+    assert conn.execute("SELECT COUNT(*) n FROM edges WHERE src_id=?", (hid,)).fetchone()["n"] == 1
+    assert hid in r["updated"] and hid not in r["new"]
+
+
+def test_prefers_an_open_twin_over_a_resolved_one(conn):
+    # When both a settled and a live twin share the exact label+time, adopt the
+    # live one (the node the ward is actually tracking forward).
+    resolved = sched.add_node(conn, type="event", label="HEART", when="2026-07-05T15:00:00")
+    sched.resolve(conn, id=resolved, resolution="cancelled")
+    open_id = sched.add_node(conn, type="event", label="HEART", when="2026-07-05T15:00:00")
+
+    r = gcal.gcal_ingest(
+        conn,
+        events=[{"uid": "g-heart@google.com", "summary": "HEART", "start": "2026-07-05T15:00:00"}],
+        reconcile_deletes=False,
+    )
+    assert open_id in r["updated"] and resolved not in r["updated"]
+    assert not r["new"]   # neither a new insert
+    adopted = json.loads(conn.execute("SELECT payload_json FROM nodes WHERE id=?", (open_id,)).fetchone()["payload_json"])
+    assert adopted["gcal_uid"] == "g-heart@google.com"
+
+
 def test_distinct_time_is_not_adopted(conn):
     # A same-title event at a DIFFERENT time is a distinct item — never merged.
     sched.add_node(conn, type="event", label="HEART", when="2026-07-05T15:00:00")

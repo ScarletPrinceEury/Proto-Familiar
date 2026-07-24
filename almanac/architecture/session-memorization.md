@@ -134,12 +134,20 @@ This design killed the confusing flood of date-less consent asks for things the 
 
 Both paths (day-anchored segmentation and consent gating) extend the same queue and retry mechanics described above rather than replacing them.
 
+The extraction prompts built here also supply a `content_tag` per extracted fact — a topic plus
+a sensitivity level that later controls per-villager disclosure independently of `category`. See
+[Content-based memory gating](content-gating) for the tag vocabulary, the code-side validation
+that never trusts the model's tag directly, and how the tag composes with `resolveRememberGate`
+and the audience floor at recall time.
+
 ## Related
 
 - [Session memorization: durable queue](../decisions/session-memorization-queue) — why the
   queue, the dedicated tome, and the trigger set are shaped the way they are.
 - [Phylactery](phylactery) — the canonical, autonomously-retrieved memory store that Tomes are
   deliberately kept separate from.
+- [Content-based memory gating](content-gating) — how the `content_tag` this pipeline extracts
+  is validated, stored, and used to gate recall per villager tier.
 - [Engineering conventions](../reference/engineering-conventions) — the repo-wide "robust over
   cheap" and graceful-degradation rules this subsystem's shape follows.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how the memorization

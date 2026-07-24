@@ -21,12 +21,58 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 from phylactery.db import get_conn, new_id, now_iso
 from phylactery.snapshot import auto_snapshot
+
+# Consolidation reads date.fromisoformat(date_key[:10]); a stem that isn't
+# ISO-leading strands the row (it never enters any sweep). Normalize on import
+# so migrated rows are always consolidation-legible. Granularity is NOT touched
+# — it still comes from the tier directory (ward decision).
+_TIER_PREFIX_RE = re.compile(r"^(?:daily|weekly|monthly|yearly|significant)[-_]", re.I)
+_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+_US_RE = re.compile(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b")        # mm-dd-yyyy
+_COMPACT_RE = re.compile(r"\b(\d{4})(\d{2})(\d{2})\b")               # yyyymmdd
+
+
+def _iso_or_none(y: str, mo: str, d: str) -> str | None:
+    try:
+        return date(int(y), int(mo), int(d)).isoformat()
+    except ValueError:
+        return None
+
+
+def normalize_date_key(stem: str) -> str:
+    """Coerce an entity-core filename stem to an ISO-leading date_key. Preserves
+    a trailing `_slug` (significant rows keep `YYYY-MM-DD_slug`). Recovers an
+    mm-dd-yyyy or yyyymmdd date, and strips an accidental tier prefix
+    ('weekly-05-23-2025'). Returns the stem UNCHANGED if no valid date can be
+    recovered — nothing is dropped; the granularity audit flags the leftovers."""
+    s = (stem or "").strip()
+    core = _TIER_PREFIX_RE.sub("", s)  # drop a leading "weekly-"/"daily-" etc.
+
+    m = _ISO_RE.match(core)
+    if m and _iso_or_none(*m.groups()):
+        return core                    # already ISO-leading (keeps any _slug)
+
+    m = _US_RE.search(core)
+    if m:
+        iso = _iso_or_none(m.group(3), m.group(1), m.group(2))
+        if iso:
+            return core[:m.start()] + iso + core[m.end():]
+
+    m = _COMPACT_RE.search(core)
+    if m:
+        iso = _iso_or_none(*m.groups())
+        if iso:
+            return core[:m.start()] + iso + core[m.end():]
+
+    return s                           # unrecoverable → verbatim (never dropped)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -129,9 +175,10 @@ def migrate_memories(
             src = _source_json("migration:entity-core", original_id)
             now = now_iso()
 
-            # date_key is the full stem for all tiers.
-            # For significant: stem is YYYY-MM-DD_slug — stored as-is.
-            date_key = stem
+            # date_key normalized to an ISO-leading form so consolidation can
+            # read it (a raw mm-dd-yyyy / tier-prefixed stem strands the row).
+            # For significant: YYYY-MM-DD_slug is already ISO-leading → kept.
+            date_key = normalize_date_key(stem)
 
             if not dry_run:
                 # No embedding here (keeps a large migration fast) — these rows

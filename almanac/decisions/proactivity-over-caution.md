@@ -103,3 +103,10 @@ than a "neutral" default — and is explicit about not overstating how solid eac
 evidence is [@claude-md]. Those guidelines apply repo-wide; this page is about the one
 narrow, safety-specific instance where getting the framing wrong had a measured, real
 consequence.
+
+## Related
+
+- [Safety spine](../architecture/safety-spine) — where this decision's rules are enforced across every crisis-detection and escalation prompt in the system.
+- [Armature](../concepts/armature) — the base model's compliance pull, of which this decision is the safety-critical instance.
+- [Structural authorization](../concepts/structural-authorization) — a more general design concept for closing off the same compliance pull for pre-authorized overrides.
+- [Wait-streak experiment](wait-streak-experiment) — a related instance of the same "do not pre-resolve the question for the model" discipline applied to non-crisis warmth.

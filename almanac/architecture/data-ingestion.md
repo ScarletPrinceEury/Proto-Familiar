@@ -72,5 +72,5 @@ The UI (`POST /api/import-log`) accepts raw text in the request body, calls a su
 
 ## Related
 
-- [Session memorization](session-memorization) — the queue that turns imported messages into Tome entries
-- [Engineering conventions](../reference/engineering-conventions) — the repo-wide graceful-degradation and loud-error rules this subsystem follows
+- [Session memorization](session-memorization) — the queue that consumes imported messages and turns them into Tome entries through the same pipeline as native sessions.
+- [Engineering conventions](../reference/engineering-conventions) — the repo-wide graceful-degradation and loud-error rules this subsystem follows.

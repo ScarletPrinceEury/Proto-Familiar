@@ -294,6 +294,52 @@ export async function markIntentActedOn({ uid, index, tomesDir = DEFAULT_TOMES_D
 }
 
 /**
+ * Drop one deferred intent — let it go WITHOUT acting on it. Distinct from
+ * markIntentActedOn (which means "I filed/said it"): this is for a tell or
+ * filing intent I no longer want to carry — it's stale, already answered in
+ * conversation, or no longer true. It leaves both delivery surfaces (the live
+ * block and the reach-out loop) by setting acted_on, but stamps
+ * disposition='dropped' + the reason so the tome records that it was discarded,
+ * not delivered. (The acknowledge-≠-acting lesson: never let a discard read as
+ * "I did the thing.")
+ *
+ * Returns { ok, alreadyGone? } on success; { ok:false, error } otherwise.
+ */
+export async function dropIntent({ uid, index, reason = '', tomesDir = DEFAULT_TOMES_DIR }) {
+  if (!uid || typeof uid !== 'string') return { ok: false, error: 'uid required' };
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) {
+    return { ok: false, error: 'index must be a non-negative integer' };
+  }
+
+  const targetFile = await findPonderingsTomeFile(tomesDir);
+  if (!targetFile) return { ok: false, error: 'ponderings tome not found' };
+
+  return withLock(targetFile, async () => {
+    let tome;
+    try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+    catch { return { ok: false, error: 'tome unreadable' }; }
+
+    const entry = tome.entries?.[uid];
+    if (!entry) return { ok: false, error: 'entry not found' };
+
+    const intents = entry.wants_to_save;
+    if (!Array.isArray(intents) || index >= intents.length) {
+      return { ok: false, error: 'intent index out of range' };
+    }
+    if (intents[index]?.acted_on === true) return { ok: true, alreadyGone: true };
+
+    intents[index].acted_on = true;              // leaves both delivery surfaces
+    intents[index].disposition = 'dropped';      // …but as a discard, not a delivery
+    intents[index].dropped_reason = String(reason || '').slice(0, 300);
+    intents[index].dropped_at = new Date().toISOString();
+    const tmp = targetFile + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+    await fsp.rename(tmp, targetFile);
+    return { ok: true };
+  });
+}
+
+/**
  * Snooze one deferred intent for `minutes` minutes. The intent stays
  * unacted but won't resurface until the snooze expires. Called by the
  * snooze_deferred_intent LLM tool when the human asks to get to it later.

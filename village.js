@@ -27,6 +27,7 @@ import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { withLock } from './thalamus.js';
+import { CONTENT_TOPICS, sanitizeTopicGrants } from './content-tags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_VILLAGE_PATH = path.join(__dirname, 'village.json');
@@ -89,9 +90,75 @@ function normalizeLocationMode(l) {
 // rename, adjust grants, or delete them freely. Stable IDs make seeding
 // idempotent across upgrades.
 
-const CAT_CLOSE_FRIENDS = '00000000-0000-4000-8001-000000000001';
-const CAT_ACQUAINTANCES  = '00000000-0000-4000-8001-000000000002';
-const CAT_CARE_NETWORK   = '00000000-0000-4000-8001-000000000003';
+// Category ids are readable slugs (the mandatory slug-id rule — a category id
+// rides in memory audiences, villager assignments, and surfaces the model can
+// read, so it must be greppable, not a UUID). The old deterministic-UUID seeds
+// are migrated to these on load; see migrateCategoryIds.
+const CAT_CLOSE_FRIENDS = 'close-friends';
+const CAT_ACQUAINTANCES  = 'acquaintances';
+const CAT_CARE_NETWORK   = 'care-network';
+
+// Old seed ids (pre-slug) → their slug, for the one-time load-time migration.
+const LEGACY_SEED_CATEGORY_IDS = {
+  '00000000-0000-4000-8001-000000000001': CAT_CLOSE_FRIENDS,
+  '00000000-0000-4000-8001-000000000002': CAT_ACQUAINTANCES,
+  '00000000-0000-4000-8001-000000000003': CAT_CARE_NETWORK,
+};
+
+const _UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A short readable slug from a category name ("Close Friends" → "close-friends").
+function slugifyCategoryName(name) {
+  return String(name || '').toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'circle';
+}
+
+/**
+ * Build the old-id → new-slug map for a registry's categories (idempotent).
+ * A UUID-shaped category id is remapped: a known legacy seed → its slug; any
+ * other UUID (a ward-created randomUUID category) → a unique slug from its name.
+ * Ids that are already slugs are left untouched. Pure. Returns a Map (empty when
+ * nothing needs migrating).
+ */
+/**
+ * The full old-id → new-slug map to hand Phylactery so it can remap the
+ * `audience` stored on memories / graph nodes / edges (the category id lives in
+ * two stores; the registry migration only fixes the Node mirror). ALWAYS
+ * includes the fixed legacy-seed map so the seed remap runs idempotently every
+ * boot regardless of registry state; unions in any ward-created UUID → slug from
+ * the raw file (present until the first write persists slugs). Reads the RAW
+ * file (pre-normalize) on purpose — the UUIDs must still be visible to map them.
+ */
+export async function pendingCategoryAudienceRemap({ filePath = DEFAULT_VILLAGE_PATH } = {}) {
+  let derived = {};
+  try {
+    const raw = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+    derived = Object.fromEntries(migrateCategoryIds(Array.isArray(raw?.categories) ? raw.categories : []));
+  } catch { /* no file / bad json → seed map only */ }
+  return { ...LEGACY_SEED_CATEGORY_IDS, ...derived };
+}
+
+export function migrateCategoryIds(rawCategories = []) {
+  const map = new Map();
+  // Reserve the builtin + seed slugs and any id already slug-shaped, so a
+  // name-derived slug can't collide with them.
+  const taken = new Set([CATEGORY_EMERGENCY, CATEGORY_STRANGERS, CAT_CLOSE_FRIENDS, CAT_ACQUAINTANCES, CAT_CARE_NETWORK]);
+  for (const c of rawCategories) {
+    if (c && typeof c.id === 'string' && !_UUID_RE.test(c.id)) taken.add(c.id);
+  }
+  for (const c of rawCategories) {
+    if (!c || typeof c.id !== 'string' || !_UUID_RE.test(c.id)) continue; // already a slug (or junk)
+    let slug = LEGACY_SEED_CATEGORY_IDS[c.id];
+    if (!slug) {
+      const base = slugifyCategoryName(c.name);
+      slug = base;
+      for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+    }
+    map.set(c.id, slug);
+    taken.add(slug);
+  }
+  return map;
+}
 
 const DEFAULT_CATEGORY_SEEDS = [
   {
@@ -173,10 +240,40 @@ function sanitizeGrants(grants) {
   const out = {};
   if (grants && typeof grants === 'object' && !Array.isArray(grants)) {
     for (const [k, v] of Object.entries(grants)) {
-      if (typeof v === 'boolean' || typeof v === 'string') out[k] = v;
+      // `topics` is the content-gating per-topic level map (Phase 2) — the one
+      // nested object we keep, validated to {topic: open|sensitive}. An explicit
+      // topics OBJECT is kept even when empty: {} means "the ward set every
+      // topic to hidden", which must persist (not re-derive from coarse grants).
+      // A non-object topics value is ignored. Every OTHER nested value is still
+      // stripped to keep grants primitive.
+      if (k === 'topics') {
+        if (v && typeof v === 'object' && !Array.isArray(v)) out.topics = sanitizeTopicGrants(v);
+      } else if (typeof v === 'boolean' || typeof v === 'string') {
+        out[k] = v;
+      }
     }
   }
   return out;
+}
+
+// Migration seed for the content-gating per-topic grants (Phase 2): derive an
+// initial {topic: level} map from a tier's COARSE grants so nothing silently
+// loses access when topic-gating (Phase 4) turns on. Conservative but
+// visibility-preserving: a tier that saw "everything sensitive" keeps every
+// topic at sensitive (the ward narrows it deliberately later in the editor).
+// Runs only when a tier has no `topics` yet, so it never overwrites a ward edit.
+function deriveTopicGrantsFromCoarse(coarse = {}) {
+  const has = (k) => coarse[k] === true || (typeof coarse[k] === 'string' && coarse[k].length > 0);
+  const t = {};
+  // Can this tier see memory content at all? → the everyday baseline.
+  if (has('memories') || has('identityBasic')) t.general = 'open';
+  // "Everything except address" (the old broad sensitive grant) → every topic.
+  if (has('identitySensitive')) for (const topic of CONTENT_TOPICS) t[topic] = 'sensitive';
+  // A dedicated health grant → the medical topics specifically.
+  if (has('health')) { t.medical = 'sensitive'; t['mental-health'] = 'sensitive'; }
+  // A location grant → the location topic.
+  if (has('location')) t.location = t.location || 'open';
+  return t;
 }
 
 function normalizeCategoryIds(raw, byId) {
@@ -201,15 +298,32 @@ export function normalizeRegistry(raw) {
   const reg = (raw && typeof raw === 'object') ? raw : {};
   const categories = Array.isArray(reg.categories) ? reg.categories : [];
 
+  // Slug-id migration (idempotent): rewrite any UUID category id to a readable
+  // slug, and carry the remap into every reference below (villager categoryIds,
+  // location assignedCategoryId). A registry already on slugs yields an empty
+  // map and this is a no-op.
+  const idMap = migrateCategoryIds(categories);
+  const remap = (id) => idMap.get(id) ?? id;
+
   const byId = new Map();
   for (const c of categories) {
     if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !c.id.trim()) continue;
     if (typeof c.name !== 'string' || !c.name.trim()) continue;
-    byId.set(c.id, {
-      id: c.id,
+    const cid = remap(c.id);
+    const grants = sanitizeGrants(c.grants);
+    // Content-gating migration (Phase 2): seed per-topic grants from the coarse
+    // grants the FIRST time only (topics absent). Never overwrites a ward edit
+    // (once topics is set + persisted, sanitizeGrants preserves it → present →
+    // skipped). Strangers stay {} (forced below) → sees nothing.
+    if (grants.topics === undefined) {
+      const derived = deriveTopicGrantsFromCoarse(grants);
+      if (Object.keys(derived).length) grants.topics = derived;
+    }
+    byId.set(cid, {
+      id: cid,
       name: c.name.trim(),
-      builtin: c.id === CATEGORY_EMERGENCY || c.id === CATEGORY_STRANGERS,
-      grants: sanitizeGrants(c.grants),
+      builtin: cid === CATEGORY_EMERGENCY || cid === CATEGORY_STRANGERS,
+      grants,
     });
   }
   // Builtins always exist; strangers' grants are locked to the floor.
@@ -238,7 +352,7 @@ export function normalizeRegistry(raw) {
         // Accepts both categoryIds[] (new) and legacy categoryId scalar.
         // Dangling / empty → [strangers]. Narrow, never widen.
         categoryIds: normalizeCategoryIds(
-          v.categoryIds ?? (v.categoryId ? [v.categoryId] : []),
+          (v.categoryIds ?? (v.categoryId ? [v.categoryId] : [])).map(remap),
           byId,
         ),
         aliases: sanitizeAliases(v.aliases),
@@ -269,8 +383,9 @@ export function normalizeRegistry(raw) {
     .map(l => ({
       key: l.key.trim(),
       label: typeof l.label === 'string' ? l.label : l.key.trim(),
-      // Unassigned or dangling → strangers ceiling (the floor).
-      assignedCategoryId: byId.has(l.assignedCategoryId) ? l.assignedCategoryId : CATEGORY_STRANGERS,
+      // Unassigned or dangling → strangers ceiling (the floor). Remap first so
+      // a pre-slug UUID assignment carries over to the migrated category id.
+      assignedCategoryId: byId.has(remap(l.assignedCategoryId)) ? remap(l.assignedCategoryId) : CATEGORY_STRANGERS,
       ...normalizeLocationMode(l),
       // readBots: opt-in to seeing other bots/Familiars in this room.
       // Off by default — the loop guard. Independent of presence mode.
@@ -414,20 +529,34 @@ export async function findVillagerByAlias({ platform, id }, { filePath = DEFAULT
 export async function upsertCategory({ id, name, grants }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   return mutate(filePath, (reg) => {
     if (id === CATEGORY_STRANGERS) throw new Error('the Strangers category is locked — it is the floor');
+    // Preserve the tier's content-topic grants across a save that OMITS `topics`
+    // — the legacy grant editor (vlReadGrants) doesn't send them yet, and a
+    // topic-less PATCH must not wipe them. An explicit `topics` key (the future
+    // topic editor) still replaces. Applied to both builtin + custom updates.
+    const withTopics = (incoming, existing) => {
+      const next = sanitizeGrants(incoming);
+      if (incoming && !('topics' in incoming) && existing?.topics) next.topics = existing.topics;
+      return next;
+    };
     if (id) {
       const existing = reg.categories.find(c => c.id === id);
       if (!existing) throw new Error(`unknown category: ${id}`);
       if (existing.builtin) {
         // Builtin: grants may widen/narrow, identity may not.
-        existing.grants = sanitizeGrants(grants ?? existing.grants);
+        existing.grants = withTopics(grants ?? existing.grants, existing.grants);
         return existing;
       }
       if (typeof name === 'string' && name.trim()) existing.name = name.trim();
-      if (grants !== undefined) existing.grants = sanitizeGrants(grants);
+      if (grants !== undefined) existing.grants = withTopics(grants, existing.grants);
       return existing;
     }
     if (typeof name !== 'string' || !name.trim()) throw new Error('name (string) is required');
-    const cat = { id: randomUUID(), name: name.trim(), builtin: false, grants: sanitizeGrants(grants) };
+    // Readable slug id (the mandatory slug rule), unique within the registry.
+    const taken = new Set(reg.categories.map(c => c.id));
+    const base = slugifyCategoryName(name);
+    let slug = base;
+    for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+    const cat = { id: slug, name: name.trim(), builtin: false, grants: sanitizeGrants(grants) };
     reg.categories.push(cat);
     return cat;
   });

@@ -1,6 +1,6 @@
 ---
 title: Message attachments ride beside content, not inside it
-topics: [decisions]
+topics: [decisions, vision, architecture]
 sources:
   - id: vision-js
     type: file
@@ -43,3 +43,8 @@ This is called a "load-bearing decision" because every future vision-related cha
 **Audience gating is clean**: Private attachments can be silently dropped from specific audiences without altering the message's string content, because attachments are a separate field [@vision-js]. An attachment shared with the ward but not with a villager contributes nothing to that villager's chat turn — not even a text stand-in.
 
 **Requires discipline**: Code must never assume `message.content` is complete for display or analysis. Attachments are metadata that only the materialization seam consumes. Every tool that works with "what the LLM sees" must call `materializeAttachments()` and work with the result, not the raw message.
+
+## Related
+
+- [Vision and media](../architecture/vision-and-media) — the dual of this decision: how attachments become LLM-visible at the materialization seam, and how modality fallback works when vision is unavailable.
+- [Session memorization](../architecture/session-memorization) — where attachment metadata is preserved when sessions turn into lasting memories.

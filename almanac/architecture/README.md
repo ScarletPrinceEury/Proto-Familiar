@@ -92,7 +92,9 @@ tool loop for registered villagers [@architecture-doc]. The escalation and no-co
 invariants that apply to the ward also constrain this surface: a relay to a third party
 always mirrors into the ward's own outbox [@architecture-doc]. `audience.js`'s category grants
 are a read-side control only — what a session is allowed to be told, not what a session is
-allowed to write into memory. See [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes)
+allowed to write into memory. A finer-grained axis, per-topic content sensitivity, layers on
+top of this coarse per-category gate for memories specifically — see
+[Content-based memory gating](content-gating). See [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes)
 for why the write side is a separate, behavioral defense rather than a filter in this pipeline,
 and how it differs from `injection-guard.js`, a pattern-scanner/sanitizer wired (0.8.57) at the
 web-read and Village inbound boundaries — see
@@ -127,6 +129,9 @@ If you're asking yourself... go to:
 
 - [Phylactery](phylactery) — the canonical self-store: identity, memory, and the knowledge
   graph.
+- [Content-based memory gating](content-gating) — the per-topic sensitivity axis layered on top
+  of Village's audience circles, so an overlapping-tier villager can be granted some topics and
+  not others.
 - [Session memorization](session-memorization) — the durable job queue that turns a session or
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
 - [Unruh](unruh) — the temporal-context specialist: the schedule graph, the interest weight

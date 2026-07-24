@@ -183,6 +183,9 @@ corresponding code diff to flag it.
   multi-user platform.
 - [Phylactery](../architecture/phylactery) — the canonical store whose audience-native records
   implement the read-gating half of this page; see its "Audience-native records" section.
+- [Content-based memory gating](../architecture/content-gating) — a finer-grained, per-topic
+  read-side axis layered on top of the category/grant system this page describes; it inherits
+  the same read/write split and is not a write-side protection.
 - [Proactivity over caution](proactivity-over-caution) — the other place in this codebase where
   a caretaker prompt's exact wording is treated as safety-critical and requires human sign-off
   before it changes.

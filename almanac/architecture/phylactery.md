@@ -107,7 +107,10 @@ scoring above every category [@phylactery-design]. Gating happens inside the sto
 time — `enrich()` passes the room's audience tag, and Phylactery returns only records that
 room is cleared for — not as a filter bolted on after retrieval [@phylactery-design]. This
 native tagging is the specific capability entity-core's schema lacked and the reason the
-milestone exists at all.
+milestone exists at all. A second, finer-grained axis layers on top of this coarse audience
+field for memories specifically — see [Content-based memory gating](content-gating) for how a
+per-topic `content_tag` and per-tier topic grants add sensitivity-aware disclosure within a
+single audience circle.
 
 ## Memories are addressed by integer id, not a composite key
 
@@ -151,3 +154,5 @@ toggle [@phylactery-design].
   architectural filter.
 - [Reflexive consent](../concepts/reflexive-consent) — Eury's own load-bearing retention
   criterion in full, plus related first-person answers about audit consent and self-continuity.
+- [Content-based memory gating](content-gating) — the per-topic sensitivity axis layered on top
+  of the audience field described above, and how it composes with it at recall time.

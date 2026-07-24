@@ -220,29 +220,44 @@ def _adopt_hand_added_twin(conn: sqlite3.Connection, ev: dict[str, Any]) -> str 
     gcal_uid, so the uid-keyed reconcile never recognises it and creates a
     second node.
 
-    Adoption is a MERGE, not a delete: the node keeps its id and its consequence
-    edges, and just gains the sync payload (source='gcal', the uid, …), so from
-    the next sync on it's the one managed node for that event. Match is strict
-    (exact label + exact local-naive time, unresolved, not already gcal), so two
-    genuinely-distinct items can't be conflated. Returns the adopted id or None.
+    The twin is matched in ANY resolution state — open, done, missed/lapsed,
+    cancelled — not just open (ward decision). A hand-added copy that the ward
+    already marked done/cancelled and then Google re-syncs is exactly where a
+    duplicate used to appear, and worse, the causal-graph edges stay orphaned on
+    the settled node while a fresh open twin carries none — that's the "Google
+    Calendar and the causal chain break each other" failure. Adopting the
+    settled node keeps ONE node with its edges intact.
+
+    Adoption is a MERGE, not a delete: the node keeps its id, its consequence
+    edges, AND its resolution (update_node never touches the resolution column,
+    so a settled twin stays settled — adoption avoids a duplicate, it does not
+    resurrect a resolution the ward set). Only an OPEN twin is (re)flagged for
+    projection. Match is strict (exact label + exact local-naive time, not
+    already gcal), so two genuinely-distinct items can't be conflated; among
+    matches an unresolved twin is preferred as the live node to adopt. Returns
+    the adopted id or None.
     """
     label = ev.get("summary") or "(untitled)"
     when_local = to_local_naive(ev.get("start")) if ev.get("start") else None
     if not when_local:
         return None
     row = conn.execute(
-        """SELECT id, payload_json FROM nodes
-            WHERE layer='schedule' AND resolution IS NULL
+        """SELECT id, payload_json, resolution FROM nodes
+            WHERE layer='schedule'
               AND label = ? AND when_ts = ?
               AND COALESCE(json_extract(payload_json, '$.source'), '') != 'gcal'
-            ORDER BY created_at ASC LIMIT 1""",
+            ORDER BY (resolution IS NOT NULL) ASC, created_at ASC LIMIT 1""",
         (label, when_local),
     ).fetchone()
     if not row:
         return None
     merged = json.loads(row["payload_json"] or "{}")
     merged.update(_sync_payload(ev))
-    merged["needs_projection"] = True  # cue clears itself if it already has edges
+    # Only an OPEN twin wants (re)projection; a settled one stays settled — the
+    # cue is for upcoming events the Familiar hasn't reasoned about yet, and
+    # projection_candidates filters resolution IS NULL anyway.
+    if row["resolution"] is None:
+        merged["needs_projection"] = True  # cue clears itself if it already has edges
     sched.update_node(
         conn, id=row["id"], label=label,
         when=ev.get("start"), end=ev.get("end"), payload=merged,

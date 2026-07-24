@@ -210,6 +210,7 @@ const state = {
   topics:            [],         // session-level; stored under pf_topics_{sessionId}
   // ── Saved connections (primary + fallbacks) ─────────────
   connections:             [],   // [{ id, name, provider, apiKey, model }]
+  providerApiKeys:         {},   // { [provider]: apiKey } remembered per provider
   primaryConnectionId:     null, // id of the active/primary connection
   fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
   maxEmptyRetries:         2,    // retries per connection when response is empty
@@ -268,6 +269,7 @@ const state = {
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
+  contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
@@ -396,6 +398,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeScanDepth', 'tomeRecursive', 'tomeMaxRecursionSteps',
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
+  'providerApiKeys',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale',
@@ -403,7 +406,7 @@ const SERVER_SYNCED_KEYS = [
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'uiShowAdvanced',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
@@ -880,6 +883,9 @@ function loadPersisted() {
   } catch { /* corrupt */ }
   // Normalize connection-related fields after restore from disk
   if (!Array.isArray(state.connections))           state.connections = [];
+  if (!state.providerApiKeys || typeof state.providerApiKeys !== 'object' || Array.isArray(state.providerApiKeys)) {
+    state.providerApiKeys = {};
+  }
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   if (typeof state.maxEmptyRetries !== 'number')   state.maxEmptyRetries = 2;
   if (typeof state.thalamusDynamicDepth !== 'number'
@@ -1027,6 +1033,9 @@ async function syncSettingsFromServer() {
     pushSettingsToServer(); // persist the renamed field immediately
   }
   if (!Array.isArray(state.connections))           state.connections = [];
+  if (!state.providerApiKeys || typeof state.providerApiKeys !== 'object' || Array.isArray(state.providerApiKeys)) {
+    state.providerApiKeys = {};
+  }
   if (!Array.isArray(state.fallbackConnectionIds)) state.fallbackConnectionIds = [];
   migrateLegacyConnection();
 
@@ -1150,6 +1159,24 @@ function getPrimaryConnection() {
   return state.connections.find(c => c.id === state.primaryConnectionId) || null;
 }
 
+// The always-visible topbar chip showing which connection chat is on. Name is
+// the label; provider/model rides in the tooltip. Falls back to the loose
+// provider/model fields when no saved connection exists yet (first-run).
+function renderActiveConnectionChip() {
+  const label = $('active-connection-label');
+  const chip  = $('active-connection-chip');
+  if (!label || !chip) return;
+  const conn = getPrimaryConnection();
+  const name  = conn?.name || conn?.model || state.model || '';
+  const model = conn?.model || state.model || '';
+  const prov  = conn?.provider || state.provider || '';
+  label.textContent = name || 'No connection';
+  chip.title = name
+    ? `Active connection: ${name}${model ? ` (${prov ? prov + ' / ' : ''}${model})` : ''} — click to change`
+    : 'No connection set — click to configure';
+  chip.classList.toggle('conn-chip-empty', !name);
+}
+
 /**
  * Returns the ordered list of usable connections for a request: primary first,
  * then each enabled fallback. Falls back to a synthetic connection built from
@@ -1178,11 +1205,23 @@ function getConnectionSequence() {
 
 /** Most recent apiKey saved against the given provider, or empty string. */
 function findKeyForProvider(provider) {
+  const remembered = state.providerApiKeys?.[provider];
+  if (typeof remembered === 'string' && remembered.trim()) return remembered;
   for (let i = state.connections.length - 1; i >= 0; i--) {
     const c = state.connections[i];
     if (c.provider === provider && (c.apiKey ?? '').trim()) return c.apiKey;
   }
   return '';
+}
+
+function rememberProviderApiKey(provider, apiKey) {
+  const p = typeof provider === 'string' ? provider.trim() : '';
+  const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!p || !key) return;
+  if (!state.providerApiKeys || typeof state.providerApiKeys !== 'object' || Array.isArray(state.providerApiKeys)) {
+    state.providerApiKeys = {};
+  }
+  state.providerApiKeys[p] = key;
 }
 
 /** Push the current Connection-section fields into the primary connection. */
@@ -1228,6 +1267,17 @@ function deleteConnection(id) {
   }
   saveSettings();
   renderConnectionsList();
+}
+
+function renameConnection(id, name) {
+  const conn = state.connections.find(c => c.id === id);
+  if (!conn) return false;
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) return false;
+  conn.name = trimmed.slice(0, 64);
+  saveSettings();
+  renderConnectionsList();
+  return true;
 }
 
 function setPrimaryConnection(id) {
@@ -1285,6 +1335,10 @@ function moveFallback(id, delta) {
 }
 
 function renderConnectionsList() {
+  // Keep the always-visible topbar chip in sync on every connection change
+  // (add/remove/rename/set-primary all route through here). Runs even when the
+  // Connections modal itself isn't mounted.
+  renderActiveConnectionChip();
   const ul = $('connections-list');
   if (!ul) return;
   ul.innerHTML = '';
@@ -1341,6 +1395,27 @@ function renderConnectionsList() {
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
 
+    const renameRow = document.createElement('div');
+    renameRow.className = 'conn-rename-row hidden';
+    const renameInput = document.createElement('input');
+    renameInput.type = 'text';
+    renameInput.className = 'conn-rename-input';
+    renameInput.maxLength = 64;
+    renameInput.value = conn.name || '';
+    renameInput.setAttribute('aria-label', `New name for connection "${conn.name}"`);
+    const renameSaveBtn = document.createElement('button');
+    renameSaveBtn.type = 'button';
+    renameSaveBtn.textContent = 'Save';
+    renameSaveBtn.className = 'conn-rename-save';
+    const renameCancelBtn = document.createElement('button');
+    renameCancelBtn.type = 'button';
+    renameCancelBtn.textContent = 'Cancel';
+    renameCancelBtn.className = 'conn-rename-cancel';
+    renameRow.appendChild(renameInput);
+    renameRow.appendChild(renameSaveBtn);
+    renameRow.appendChild(renameCancelBtn);
+    info.appendChild(renameRow);
+
     // a11y note: each action button gets both `title` (sighted hover
     // tooltip) and `aria-label` (screen-reader announcement) because
     // the visible textContent is a symbol (✓ / + / ▲ / ▼ / ✕) that
@@ -1348,6 +1423,7 @@ function renderConnectionsList() {
     // aria-pressed so assistive tech can convey on/off state.
     const fbBtn = document.createElement('button');
     fbBtn.type = 'button';
+    fbBtn.className = 'conn-btn conn-fallback-btn';
     fbBtn.textContent = isFallback ? '✓ fallback' : '+ fallback';
     fbBtn.title = isPrimary ? 'Primary connection cannot also be a fallback' : 'Toggle fallback';
     fbBtn.setAttribute('aria-label', `${isFallback ? 'Remove' : 'Add'} "${conn.name}" as fallback`);
@@ -1363,6 +1439,7 @@ function renderConnectionsList() {
     // connection regardless of how the chat path uses it.
     const ecBtn = document.createElement('button');
     ecBtn.type = 'button';
+    ecBtn.className = 'conn-btn conn-phylactery-btn';
     ecBtn.textContent = isEntityCore ? '✓ Phylactery' : '+ Phylactery';
     ecBtn.title = isEntityCore
       ? 'Currently the API key source for Phylactery (click to clear)'
@@ -1377,12 +1454,14 @@ function renderConnectionsList() {
     if (isFallback) {
       const upBtn = document.createElement('button');
       upBtn.type = 'button'; upBtn.textContent = '▲';
+      upBtn.className = 'conn-btn conn-order-btn';
       upBtn.title = 'Try earlier in fallback order';
       upBtn.setAttribute('aria-label', `Move "${conn.name}" earlier in fallback order`);
       upBtn.disabled = fbIdx === 0;
       upBtn.addEventListener('click', () => moveFallback(conn.id, -1));
       const dnBtn = document.createElement('button');
       dnBtn.type = 'button'; dnBtn.textContent = '▼';
+      dnBtn.className = 'conn-btn conn-order-btn';
       dnBtn.title = 'Try later in fallback order';
       dnBtn.setAttribute('aria-label', `Move "${conn.name}" later in fallback order`);
       dnBtn.disabled = fbIdx === state.fallbackConnectionIds.length - 1;
@@ -1391,14 +1470,51 @@ function renderConnectionsList() {
       actions.appendChild(dnBtn);
     }
 
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button'; renameBtn.textContent = 'Rename';
+    renameBtn.className = 'conn-btn conn-rename-btn';
+    renameBtn.title = 'Rename connection';
+    renameBtn.setAttribute('aria-label', `Rename connection "${conn.name}"`);
+    renameBtn.addEventListener('click', () => {
+      renameInput.value = conn.name || '';
+      renameRow.classList.remove('hidden');
+      renameInput.focus();
+      renameInput.select();
+    });
+    actions.appendChild(renameBtn);
+
     const delBtn = document.createElement('button');
-    delBtn.type = 'button'; delBtn.textContent = '✕';
+    delBtn.type = 'button'; delBtn.textContent = 'Delete';
+    delBtn.className = 'conn-btn conn-delete-btn';
     delBtn.title = 'Delete connection';
     delBtn.setAttribute('aria-label', `Delete connection "${conn.name}"`);
     delBtn.addEventListener('click', () => {
       if (confirm(`Delete connection "${conn.name}"?`)) deleteConnection(conn.id);
     });
     actions.appendChild(delBtn);
+
+    const commitRename = () => {
+      const ok = renameConnection(conn.id, renameInput.value);
+      if (!ok) {
+        alert('Connection name cannot be empty.');
+        renameInput.focus();
+      }
+    };
+    renameSaveBtn.addEventListener('click', commitRename);
+    renameCancelBtn.addEventListener('click', () => {
+      renameRow.classList.add('hidden');
+      renameInput.value = conn.name || '';
+    });
+    renameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitRename();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        renameRow.classList.add('hidden');
+        renameInput.value = conn.name || '';
+      }
+    });
 
     li.appendChild(role);
     li.appendChild(info);
@@ -1578,8 +1694,8 @@ function fmtMsgTime(ts) {
 }
 
 // Global strip for the new bracket format. Matches anywhere in the
-// content, not just leading — the rolling-accumulation bug Eury
-// found put multiple snippets at the head, but the LLM could in
+// content, not just leading — the rolling-accumulation bug one
+// Familiar instance surfaced put multiple snippets at the head, but the LLM could in
 // principle echo them mid-prose too.
 const TIMESTAMP_RE_NEW = new RegExp(`${TS_OPEN}\\d{1,2}:\\d{2}${TS_CLOSE}\\s*`, 'g');
 
@@ -3061,6 +3177,7 @@ function exportChat() {
 function readSettingsFromUI() {
   state.provider          = $('provider-select').value;
   state.apiKey            = $('api-key').value;
+  rememberProviderApiKey(state.provider, state.apiKey);
   state.model             = $('model-input').value.trim();
   state.streaming         = $('streaming-toggle').checked;
   state.temperature       = parseFloat($('temperature').value);
@@ -3081,6 +3198,7 @@ function readSettingsFromUI() {
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
+  if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
@@ -3239,6 +3357,7 @@ function writeSettingsToUI() {
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
+  if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
@@ -4440,6 +4559,10 @@ function init() {
 
   // Connections modal (provider/key/model editor + saved connections + per-feature routing).
   $('connections-btn')?.addEventListener('click', openConnectionsModal);
+  // The always-visible topbar chip opens the same Connections modal.
+  $('active-connection-chip')?.addEventListener('click', openConnectionsModal);
+  // Chat section → jump straight to the Knowledge editor's Sessions tab.
+  $('open-sessions-btn')?.addEventListener('click', openKnowledgeModalOnSessions);
   $('connections-modal-close')?.addEventListener('click', closeConnectionsModal);
   $('connections-modal')?.addEventListener('click', e => { if (e.target === $('connections-modal')) closeConnectionsModal(); });
 
@@ -4527,6 +4650,7 @@ function init() {
     if (savedKey && (!keyInput.value.trim() || keyInput.value !== savedKey)) {
       keyInput.value = savedKey;
       state.apiKey   = savedKey;
+      rememberProviderApiKey(prov, savedKey);
       if (hint) hint.style.display = '';
     } else if (hint) {
       hint.style.display = 'none';
@@ -4540,6 +4664,7 @@ function init() {
   const apiKeyEl = $('api-key');
   if (apiKeyEl) {
     apiKeyEl.addEventListener('input', () => {
+      rememberProviderApiKey($('provider-select')?.value || state.provider, apiKeyEl.value);
       const hint = $('api-key-autofill-hint');
       if (hint) hint.style.display = 'none';
     });
@@ -6935,6 +7060,13 @@ function openKnowledgeModal() {
   keGraphClosePopover();
   keSwitchTab('memories');
 }
+// Same modal, opened straight on the Sessions tab (Chat sidebar shortcut).
+function openKnowledgeModalOnSessions() {
+  $('knowledge-modal').classList.remove('hidden');
+  bindResizableModal('knowledge-modal-inner', 'pf-knowledge-modal-size');
+  keGraphClosePopover();
+  keSwitchTab('sessions');
+}
 function closeKnowledgeModal() {
   $('knowledge-modal').classList.add('hidden');
   keGraphClosePopover();
@@ -7021,10 +7153,44 @@ async function keReadServerError(res) {
 
 // ── Memories tab ────────────────────────────────────────────────────────
 let _keMemCache = [];   // last-fetched memories; the search filters this, no refetch
+let _keAudCats  = [];   // Village categories, for id→label on the audience badge
+
+// A memory's `audience` is a Village category id (or 'ward-private'); the badge
+// must show the human LABEL, never the raw id/UUID. Falls back to the id only
+// for a since-deleted circle (so it's still greppable), tagged as unknown.
+function keAudienceLabel(id) {
+  if (!id || id === 'ward-private') return '';
+  // The content-gated sentinel: a fact about the ward whose visibility is
+  // decided by its content tag × each circle's per-topic grants (not a circle).
+  if (id === 'ward-content-gated') return 'by content rules';
+  const cat = _keAudCats.find(c => c.id === id);
+  return cat ? cat.name : `${id.slice(0, 8)}… (unknown circle)`;
+}
+
+// A memory's content_tag ("topic:level") is the Phase 4 recall gate — it decides
+// which Villagers may see this fact BY CONTENT, per topic. Show it as a friendly
+// badge (topic label · level). An empty tag falls back to general:sensitive at
+// recall (ward-only in practice), so it renders as a muted "untagged" hint.
+function keContentTagParts(tag) {
+  const t = String(tag ?? '').trim();
+  if (!t) return null;
+  const [topic, level] = t.split(':');
+  const label = (VL_CONTENT_TOPICS.find(x => x.key === topic)?.label) ?? topic;
+  return { topic, level: level === 'open' ? 'open' : 'sensitive', label };
+}
+function keContentTagBadge(tag) {
+  const p = keContentTagParts(tag);
+  if (!p) return '';
+  return `<span class="ke-badge ke-badge-tag ke-badge-tag-${esc(p.level)}" title="Content: ${esc(p.label)} · ${esc(p.level)} — gates which Villagers may see this, by topic">${esc(p.label)} · ${esc(p.level)}</span>`;
+}
+
 async function keLoadMemories() {
   const list = $('ke-mem-list');
   list.innerHTML = '<p class="logs-loading">Loading…</p>';
   const granularity = $('ke-mem-granularity').value || undefined;
+  // Refresh the Village categories so audience ids resolve to labels (best
+  // effort — a failure just falls back to the id, never blocks the list).
+  try { _keAudCats = (await vlFetch())?.categories ?? _keAudCats; } catch { /* keep last */ }
   try {
     const res = await fetch('/api/entity/memories' + (granularity ? `?granularity=${encodeURIComponent(granularity)}` : ''));
     if (!res.ok) throw new Error(await keReadServerError(res));
@@ -7043,7 +7209,7 @@ function keRenderMemories() {
   const countEl = $('ke-mem-count');
   const q = ($('ke-mem-search')?.value ?? '').trim().toLowerCase();
   const memories = _keMemCache.filter(m => !q ||
-    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''}`
+    `${m.preview ?? ''} ${m.title ?? ''} ${m.date ?? ''} ${m.key ?? ''} ${m.id ?? ''} ${m.granularity ?? ''} ${m.register ?? ''} ${m.audience ?? ''} ${keAudienceLabel(m.audience)} ${m.content_tag ?? ''} ${keContentTagParts(m.content_tag)?.label ?? ''}`
       .toLowerCase().includes(q));
   if (countEl) {
     countEl.textContent = !_keMemCache.length ? ''
@@ -7056,14 +7222,15 @@ function keRenderMemories() {
     const row = document.createElement('div');
     row.className = 'ke-row';
     const audienceBadge = (m.audience && m.audience !== 'ward-private')
-      ? `<span class="ke-badge ke-badge-audience">${esc(m.audience)}</span>` : '';
+      ? `<span class="ke-badge ke-badge-audience" title="Visible to: ${esc(keAudienceLabel(m.audience))}">${esc(keAudienceLabel(m.audience))}</span>` : '';
     const cwBadge = m.care_weight
       ? `<span class="ke-badge ke-badge-cw-${esc(m.care_weight)}">${esc(m.care_weight)}</span>` : '';
     // A me/ward register memory is a standing truth, not a passing moment — badge it.
     const registerBadge = (m.register === 'me' || m.register === 'ward')
       ? `<span class="ke-badge ke-badge-register">standing · ${m.register === 'me' ? 'self' : 'ward'}</span>` : '';
+    const tagBadge = keContentTagBadge(m.content_tag);
     row.innerHTML = `
-      <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${cwBadge}</div>
+      <div class="ke-row-title">${esc(m.granularity)} · ${esc(m.date ?? m.key)}${registerBadge}${audienceBadge}${tagBadge}${cwBadge}</div>
       <div class="ke-row-sub">${esc((m.preview ?? m.title ?? '').slice(0, 140))}</div>`;
     row.addEventListener('click', () => keOpenMemory(m));
     list.appendChild(row);
@@ -7078,14 +7245,40 @@ function keRenderMemories() {
 function keAudienceOptionsHTML(current, categories) {
   const cur  = current ?? 'ward-private';
   const cats = categories ?? [];
-  const opts = [`<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>ward-private (just us)</option>`];
+  // Three understandable states: strictly private, governed by content rules
+  // (the content tag + each circle's per-topic grants decide), or shared to a
+  // specific circle.
+  const opts = [
+    `<option value="ward-private"${cur === 'ward-private' ? ' selected' : ''}>ward-private (just us)</option>`,
+    `<option value="ward-content-gated"${cur === 'ward-content-gated' ? ' selected' : ''}>by content rules (per topic grants)</option>`,
+  ];
   for (const c of cats) {
     opts.push(`<option value="${esc(c.id)}"${cur === c.id ? ' selected' : ''}>${esc(c.name)}</option>`);
   }
-  if (cur !== 'ward-private' && !cats.some(c => c.id === cur)) {
+  if (cur !== 'ward-private' && cur !== 'ward-content-gated' && !cats.some(c => c.id === cur)) {
     opts.push(`<option value="${esc(cur)}" selected>${esc(cur)} (unknown circle)</option>`);
   }
   return opts.join('');
+}
+
+// The content-tag editor: a topic <select> + a level <select>, populated from the
+// memory's current "topic:level". "— untagged" clears it (→ general:sensitive at
+// recall). The server canonicalises/validates whatever is sent (the exact-values
+// rule); this is just the ward-facing surface for the Phase 4 gate.
+function keContentTagEditorHTML(currentTag) {
+  const p = keContentTagParts(currentTag);
+  const curTopic = p?.topic ?? '';
+  const curLevel = p?.level ?? 'sensitive';
+  const topicOpts = [`<option value=""${curTopic ? '' : ' selected'}>— untagged (ward-only)</option>`];
+  for (const t of VL_CONTENT_TOPICS) {
+    topicOpts.push(`<option value="${esc(t.key)}"${curTopic === t.key ? ' selected' : ''}>${esc(t.label)}</option>`);
+  }
+  const levelOpts = ['open', 'sensitive']
+    .map(l => `<option value="${l}"${curLevel === l ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <label class="ke-meta-label" for="ke-mem-tag-topic">Content</label>
+    <select id="ke-mem-tag-topic" class="ke-select">${topicOpts.join('')}</select>
+    <select id="ke-mem-tag-level" class="ke-select" aria-label="Content sensitivity level">${levelOpts}</select>`;
 }
 
 // A memory is addressed by its unique id — granularity+date can't single out a
@@ -7104,6 +7297,7 @@ async function keOpenMemory(m) {
     const granularity = data.granularity ?? m.granularity ?? '';
     const date       = data.date        ?? m.key ?? '';
     const audience   = data.audience    ?? 'ward-private';
+    const contentTag = data.content_tag ?? '';
     const careWeight = data.care_weight ?? '';
     const register   = data.register    ?? 'episodic';
     const registerNote = (register === 'me' || register === 'ward')
@@ -7134,6 +7328,9 @@ async function keOpenMemory(m) {
         </select>
       </div>
       <div class="ke-meta-row">
+        ${keContentTagEditorHTML(contentTag)}
+      </div>
+      <div class="ke-meta-row">
         <label class="ke-meta-label" for="ke-mem-movedate">Filed under</label>
         <input type="date" id="ke-mem-movedate" class="ke-select" value="${esc(dayValue)}">
         <button id="ke-mem-move" class="btn-secondary">Move to this day</button>
@@ -7148,9 +7345,13 @@ async function keOpenMemory(m) {
       const body = $('ke-mem-content').value;
       const aud = $('ke-mem-audience').value;
       const cw  = $('ke-mem-care-weight').value;
+      // Compose the content tag from the two selects; empty topic clears it.
+      const tagTopic = $('ke-mem-tag-topic').value;
+      const tagLevel = $('ke-mem-tag-level').value || 'sensitive';
+      const contentTag = tagTopic ? `${tagTopic}:${tagLevel}` : '';
       const r = await fetch(`/api/entity/memories/by-id/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body, audience: aud, careWeight: cw || '' }),
+        body: JSON.stringify({ content: body, audience: aud, careWeight: cw || '', contentTag }),
       });
       if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
       keLoadMemories();
@@ -9606,7 +9807,7 @@ function teLocalDateKey(d) {
 // the Monday on-or-before the 1st of the month — gives us a clean
 // 6-row × 7-col grid that always starts on Monday, with the prior
 // month's tail filling the first row. (Localised to Monday-start
-// because Eury runs in DE; flipping to Sunday-start is a one-line
+// because the reference instance runs in DE; flipping to Sunday-start is a one-line
 // change if a setting ever surfaces.)
 function teCalendarGridStart(year, month) {
   const first = new Date(year, month, 1);
@@ -9906,7 +10107,7 @@ async function teLoadRoutine() {
   teLoadRounds();
 }
 
-// "Eury's rounds" (Initiative Pass 3): a read-only view of the standing
+// The Familiar's rounds (Initiative Pass 3): a read-only view of the standing
 // rounds the Familiar keeps, honouring its own visibility choice. Private
 // rounds are counted but their contents withheld — the Familiar decides
 // what's legible here; we never expose a hidden round's text.
@@ -10925,6 +11126,41 @@ const VL_KNOWN_GRANTS = [
     hint: 'Identity sections about where you are/live become visible to this category.' },
 ];
 
+// Content-gating topics (Phase 2b) — mirror content-tags.js CONTENT_TOPICS.
+// Kept as a UI-local list (app.js is a browser script, can't import the Node
+// module); the server validates against the canonical set on save.
+const VL_CONTENT_TOPICS = [
+  { key: 'general',       label: 'Everyday life' },
+  { key: 'medical',       label: 'Physical health' },
+  { key: 'mental-health', label: 'Mental health' },
+  { key: 'sexuality',     label: 'Sexuality' },
+  { key: 'gender',        label: 'Gender identity' },
+  { key: 'family',        label: 'Family' },
+  { key: 'relationships', label: 'Relationships' },
+  { key: 'finances',      label: 'Finances' },
+  { key: 'legal',         label: 'Legal matters' },
+  { key: 'substance',     label: 'Substance use' },
+  { key: 'religion',      label: 'Religion & faith' },
+  { key: 'politics',      label: 'Politics' },
+  { key: 'work',          label: 'Work' },
+  { key: 'location',      label: 'Whereabouts' },
+  { key: 'contact-info',  label: 'Contact info' },
+];
+
+function vlTopicRow(key, label, current, disabled) {
+  const d = disabled ? ' disabled' : '';
+  const cur = (current === 'open' || current === 'sensitive') ? current : 'none';
+  const opts = [
+    { v: 'none',      t: 'Hidden' },
+    { v: 'open',      t: 'Open' },
+    { v: 'sensitive', t: 'Sensitive too' },
+  ].map(o => `<option value="${o.v}"${o.v === cur ? ' selected' : ''}>${esc(o.t)}</option>`).join('');
+  return `<div class="vl-topic-row" data-topic="${esc(key)}">
+    <span class="vl-topic-label">${esc(label)}</span>
+    <select class="vl-topic-val"${d} aria-label="${esc(label)} — how much of this topic this circle sees">${opts}</select>
+  </div>`;
+}
+
 function vlKnownGrantRow(def, current, disabled) {
   const d = disabled ? ' disabled' : '';
   const cur = current === undefined || current === null ? false : current;
@@ -10951,7 +11187,12 @@ function vlRenderCatDetail(cat) {
   const knownRows = VL_KNOWN_GRANTS.map(def => vlKnownGrantRow(def, grants[def.key], isLocked)).join('');
   // Unknown/custom keys (forward-compat, hand-added) keep the free-form
   // editor — but tucked behind an "Advanced" disclosure, not up front.
-  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k));
+  // `topics` (the content-gating per-topic map) is a nested object, NOT a
+  // free-form grant — it must never render as a raw row (would show
+  // "[object Object]" and, worse, vlReadGrants would re-serialize it to a
+  // string and destroy the map). Its own editor arrives in Phase 2b; for now
+  // it round-trips untouched (the server preserves it on a topic-less save).
+  const customEntries = Object.entries(grants).filter(([k]) => !knownKeys.has(k) && k !== 'topics');
   const customRows = customEntries.map(([k, v], i) =>
     vlGrantRowHtml(i, k, typeof v === 'string' ? 'str' : 'bool', typeof v === 'string' ? v : (v ? 'true' : 'false'), isLocked)
   ).join('');
@@ -10966,6 +11207,12 @@ function vlRenderCatDetail(cat) {
     <div>
       <div class="vl-field-label">What people in this category may know or see</div>
       <div id="vl-c-grants-known">${knownRows}</div>
+      ${(!isNew && !isLocked) ? `
+      <details class="vl-grants-advanced vl-topics-section">
+        <summary>Content topics — which kinds of memory this circle may see</summary>
+        <p class="field-hint">Every memory is tagged by topic. This circle sees a topic's memories only up to the level you allow: <strong>Open</strong> for everyday mentions, <strong>Sensitive too</strong> for the deeper ones, <strong>Hidden</strong> for none. (New topic-based gating — takes effect as memories get tagged.)</p>
+        <div id="vl-c-topics">${VL_CONTENT_TOPICS.map(t => vlTopicRow(t.key, t.label, grants.topics?.[t.key], isLocked)).join('')}</div>
+      </details>` : ''}
       <details class="vl-grants-advanced"${customEntries.length ? ' open' : ''}>
         <summary>Advanced: custom grants</summary>
         <div id="vl-c-grants" style="display:flex;flex-direction:column;gap:5px">${customRows}</div>
@@ -11032,6 +11279,21 @@ function vlReadGrants() {
     if (!key) return;
     grants[key] = type === 'str' ? val : (val.toLowerCase() !== 'false' && val !== '0');
   });
+  // Content-topic grants (Phase 2b): rendered only for an EXISTING category's
+  // editor — a new category has none, so we omit `topics` entirely and let the
+  // server seed it from the coarse grants. When the section IS present we emit
+  // an explicit map (even empty) so "set every topic to Hidden" persists rather
+  // than re-deriving.
+  const topicSection = document.getElementById('vl-c-topics');
+  if (topicSection) {
+    const topics = {};
+    topicSection.querySelectorAll('.vl-topic-row').forEach(row => {
+      const key = row.dataset.topic;
+      const val = row.querySelector('.vl-topic-val')?.value;
+      if (key && (val === 'open' || val === 'sensitive')) topics[key] = val;
+    });
+    grants.topics = topics;
+  }
   return grants;
 }
 

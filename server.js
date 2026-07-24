@@ -29,7 +29,8 @@ import {
   exportBackup, restoreBackup, runLifecyclePass,
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
-  getMemoryHealth, backfillMemoryEmbeddings,
+  getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
+  remapCategoryAudiences, backfillContentTags,
   searchMemory,
   reconnectPhylactery,
   recordInterest, recordHandoff, listLiveInterests, listInterests,
@@ -95,6 +96,7 @@ import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } fro
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
 import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
+import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
@@ -145,8 +147,10 @@ import {
   upsertLocation as upsertVillageLocation, deleteLocation as deleteVillageLocation,
   migrateTrustedContacts, seedDefaultCategories,
   initVillageSync, bootSync as villageBootSync,
+  pendingCategoryAudienceRemap,
 } from './village.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, WARD_PRIVATE } from './audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
+import { normalizeTag } from './content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
@@ -260,11 +264,18 @@ import { withLock, writeTomeFile, modifyTomeFile } from './thalamus.js';
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
 const _chatRateCounts = new Map();
+const _RATE_MAP_SWEEP_AT = 1000; // prune expired entries once the map grows past this
 function chatRateLimit(req, res, next) {
   const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
   const now = Date.now();
   const WINDOW_MS = 60_000;
   const MAX_REQ   = 20;
+  // Bounded memory: many distinct client IPs (behind Tailscale) would otherwise
+  // accrete forever. Sweep expired windows only when the map has actually grown
+  // — O(n) at most once per 1000 new IPs, never per request on the common path.
+  if (_chatRateCounts.size > _RATE_MAP_SWEEP_AT) {
+    for (const [k, v] of _chatRateCounts) if (now > v.resetAt) _chatRateCounts.delete(k);
+  }
   const entry = _chatRateCounts.get(ip) ?? { count: 0, resetAt: now + WINDOW_MS };
   if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + WINDOW_MS; }
   entry.count++;
@@ -375,12 +386,16 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   let audienceGrants  = WARD_PRIVATE;
   let audienceTag     = 'ward-private';
   let audienceVisible = null; // the room's allowed audience-tag set for recall (null = ward sees all)
+  let audienceTopics  = null; // the room's per-topic content grants (null = ward sees all)
   if (enrichMode === 'full' && sessionAudience && typeof sessionAudience === 'object') {
     try {
       const registry = await getVillageRegistry();
       audienceGrants  = resolveAudience(sessionAudience, registry);
       audienceTag     = audienceTagFor(sessionAudience, registry);
-      audienceVisible = visibleAudiences(audienceTag, registry); // Pillar E recall gate
+      // Pillar E recall gate — circle MEMBERSHIP: the set of circles everyone
+      // present shares (needs the session audience, not just the room tag).
+      audienceVisible = visibleAudiences(sessionAudience, registry);
+      audienceTopics  = topicGrantsForRoom(audienceGrants, audienceTag); // Phase 4 content gate (fine)
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
@@ -392,7 +407,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
 
@@ -736,8 +751,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         // Tell the client the round budget ran out mid-reach, so it can offer
         // the ward a one-click "go on" (a fresh turn = a fresh budget).
         if (roundCapHit) data._roundCapHit = true;
-        tickSurfacing();
-    req.off('close', onClientClose);
+        req.off('close', onClientClose);
         if (thalamusEnvelope) data._thalamus = thalamusEnvelope;
         if (toolRounds.length > 0) data._toolRounds = toolRounds;
         // Pillar D: semantic outgoing gate. Non-ward-private rooms only;
@@ -765,7 +779,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         {
           const responseText = data.choices?.[0]?.message?.content ?? '';
           tickSurfacing((toolRounds ?? []).flatMap(r => (r.toolCalls ?? []).map(tc => tc.function?.name)));
-        if (enriched.surfacedBookmarks?.length > 0) {
+          if (enriched.surfacedBookmarks?.length > 0) {
             reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
               .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
           }
@@ -1421,8 +1435,8 @@ app.get('/api/noticing-events', async (_req, res) => {
   catch { res.json([]); }
 });
 
-// "Eury's rounds" (Initiative Pass 3): the ward-facing view of the Familiar's
-// standing rounds, honouring the Familiar's own visibility choice. A private
+// The Familiar's rounds (Initiative Pass 3): the ward-facing view of the
+// Familiar's standing rounds, honouring the Familiar's own visibility choice. A private
 // round is COUNTED (hidden_count) but its contents withheld — existence is
 // never hidden (no covert cognition), only what a private round is.
 app.get('/api/rounds', async (_req, res) => {
@@ -1640,6 +1654,241 @@ app.post('/api/models', async (req, res) => {
   try { res.json(await listProviderModels({ provider, apiKey })); }
   catch (err) { res.status(500).json({ ok: false, error: err?.message ?? String(err) }); }
 });
+
+// ── OpenAI/SillyTavern compatibility endpoints ───────────────
+// Accept OpenAI-style routes so external clients (including SillyTavern)
+// can use Proto-Familiar as a drop-in base URL.
+
+function bearerTokenFromReq(req) {
+  const auth = String(req.get('authorization') || '');
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || '';
+}
+
+function resolveCompatConnection(req, body = {}) {
+  const s = readSettingsSync() || {};
+  const primary = primaryConnectionFrom(s);
+  const providerFromBody = (typeof body.provider === 'string' && PROVIDER_URLS[body.provider])
+    ? body.provider
+    : '';
+  const provider = providerFromBody || primary?.provider || s.provider || 'nanogpt';
+  const apiKeyFromBody = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+  const apiKey = bearerTokenFromReq(req) || apiKeyFromBody || primary?.apiKey || s.apiKey || '';
+  const modelFromBody = typeof body.model === 'string' ? body.model.trim() : '';
+  const model = modelFromBody || primary?.model || s.model || '';
+  return { provider, apiKey, model };
+}
+
+function completionPromptToMessages(prompt) {
+  if (typeof prompt === 'string' && prompt.trim()) {
+    return [{ role: 'user', content: prompt }];
+  }
+  if (Array.isArray(prompt)) {
+    const joined = prompt
+      .map(p => (typeof p === 'string' ? p : ''))
+      .filter(Boolean)
+      .join('\n\n');
+    if (joined.trim()) return [{ role: 'user', content: joined }];
+  }
+  return null;
+}
+
+async function proxyChatViaApiChat(req, res, body) {
+  let upstream;
+  try {
+    upstream = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+  }
+
+  const ct = upstream.headers.get('content-type') || 'application/json';
+  res.status(upstream.status);
+  res.setHeader('Content-Type', ct);
+  if (!body.stream || !upstream.body) {
+    const text = await upstream.text();
+    return res.send(text);
+  }
+
+  // Stream passthrough for /v1/chat/completions.
+  const reader = upstream.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+  } catch { /* passthrough interrupted */ }
+  return res.end();
+}
+
+app.post('/v1/chat/completions', async (req, res) => {
+  const body = req.body || {};
+  const { provider, apiKey, model } = resolveCompatConnection(req, body);
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : completionPromptToMessages(body.prompt);
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return badRequest(res, 'messages (array) or prompt (string/array) is required');
+  }
+  if (!PROVIDER_URLS[provider]) return badRequest(res, `Unknown provider: ${provider}`);
+  if (!apiKey) return badRequest(res, 'API key is required (Bearer token or saved connection key).');
+  if (!model) return badRequest(res, 'Model is required (request body or saved connection model).');
+
+  const payload = {
+    provider,
+    apiKey,
+    model,
+    messages,
+    stream: !!body.stream,
+    enrich: false,
+  };
+  if (typeof body.temperature === 'number') payload.temperature = body.temperature;
+  if (typeof body.max_tokens === 'number') payload.max_tokens = body.max_tokens;
+  if (Array.isArray(body.tools)) payload.tools = body.tools;
+  if (body.tool_choice !== undefined) payload.tool_choice = body.tool_choice;
+
+  return proxyChatViaApiChat(req, res, payload);
+});
+
+app.post('/v1/completions', async (req, res) => {
+  const body = req.body || {};
+  const { provider, apiKey, model } = resolveCompatConnection(req, body);
+  const messages = completionPromptToMessages(body.prompt);
+  if (!messages) return badRequest(res, 'prompt (string/array) is required');
+  if (!PROVIDER_URLS[provider]) return badRequest(res, `Unknown provider: ${provider}`);
+  if (!apiKey) return badRequest(res, 'API key is required (Bearer token or saved connection key).');
+  if (!model) return badRequest(res, 'Model is required (request body or saved connection model).');
+
+  // Streaming text-completions are translated from chat SSE deltas.
+  if (body.stream) {
+    let upstream;
+    try {
+      upstream = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, apiKey, model, messages, stream: true, enrich: false }),
+      });
+    } catch (err) {
+      return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+    }
+
+    if (!upstream.ok || (upstream.headers.get('content-type') || '').includes('application/json')) {
+      const text = await upstream.text();
+      return res.status(upstream.status).type('application/json').send(text);
+    }
+
+    const completionId = `cmpl-${randomUUID()}`;
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') {
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
+          }
+          let evt;
+          try { evt = JSON.parse(raw); } catch { continue; }
+          const delta = evt?.choices?.[0]?.delta?.content;
+          const finishReason = evt?.choices?.[0]?.finish_reason ?? null;
+          if (typeof delta !== 'string' && finishReason == null) continue;
+          const out = {
+            id: completionId,
+            object: 'text_completion',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{
+              text: typeof delta === 'string' ? delta : '',
+              index: 0,
+              logprobs: null,
+              finish_reason: finishReason,
+            }],
+          };
+          res.write(`data: ${JSON.stringify(out)}\n\n`);
+        }
+      }
+    } catch { /* interrupted stream */ }
+    return res.end();
+  }
+
+  // Non-stream text completion translates one chat completion response.
+  let upstream;
+  try {
+    upstream = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider,
+        apiKey,
+        model,
+        messages,
+        stream: false,
+        enrich: false,
+        ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+        ...(typeof body.max_tokens === 'number' ? { max_tokens: body.max_tokens } : {}),
+      }),
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Network error reaching /api/chat: ${err.message}` });
+  }
+  const text = await upstream.text();
+  if (!upstream.ok) {
+    return res.status(upstream.status).type('application/json').send(text);
+  }
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch { return res.status(502).json({ error: 'Upstream /api/chat returned non-JSON.' }); }
+  const answer = parsed?.choices?.[0]?.message?.content ?? '';
+  const finishReason = parsed?.choices?.[0]?.finish_reason ?? 'stop';
+  return res.json({
+    id: parsed?.id || `cmpl-${randomUUID()}`,
+    object: 'text_completion',
+    created: parsed?.created || Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ text: answer, index: 0, logprobs: null, finish_reason: finishReason }],
+    ...(parsed?.usage ? { usage: parsed.usage } : {}),
+  });
+});
+
+async function compatModelsHandler(req, res) {
+  const body = req.body || {};
+  const { provider, apiKey } = resolveCompatConnection(req, body);
+  if (!PROVIDER_URLS[provider]) return badRequest(res, `Unknown provider: ${provider}`);
+  if (!apiKey) return badRequest(res, 'API key is required (Bearer token or saved connection key).');
+
+  const listed = await listProviderModels({ provider, apiKey });
+  if (!listed?.ok) return res.status(502).json({ error: listed?.error || 'failed to list models' });
+  return res.json({
+    object: 'list',
+    data: (listed.models || []).map(m => ({
+      id: m.id,
+      object: 'model',
+      created: 0,
+      owned_by: 'proto-familiar',
+    })),
+  });
+}
+
+app.get('/v1/models', compatModelsHandler);
+app.post('/v1/models', compatModelsHandler);
+app.get('/v1/model', compatModelsHandler);
 
 // ── Tome endpoints ──────────────────────────────────────────────
 const TOMES_DIR = path.join(__dirname, 'tomes');
@@ -2050,6 +2299,15 @@ app.get('/api/memory-health', async (_req, res) => {
   catch (err) { res.json({ ok: false, healthy: null, dedup_mode: 'unknown', error: err?.message ?? String(err) }); }
 });
 
+// GET /api/memory-granularity — read-only audit of which memories the tier
+// ladder can't consolidate (non-ISO date_key from the entity-core migration).
+// Diagnostic only; mutates nothing. Lets the ward SEE the mislabeled rows
+// before any heal is chosen.
+app.get('/api/memory-granularity', async (_req, res) => {
+  try { res.json(await getMemoryGranularityAudit()); }
+  catch (err) { res.json({ ok: false, error: err?.message ?? String(err) }); }
+});
+
 // POST /api/memory-backfill — embed any memories missing a vector (the
 // migration gap), so semantic dedup can see them. Idempotent; also runs
 // automatically at boot when a gap is detected.
@@ -2331,15 +2589,32 @@ app.get('/api/entity/memories/by-id/:id', async (req, res) => {
 app.put('/api/entity/memories/by-id/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_MEMORY_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const { content, audience, careWeight } = req.body;
+  const { content, audience, careWeight, contentTag } = req.body;
   if (content !== undefined && (typeof content !== 'string' || !content.trim())) return badRequest(res, 'content must be a non-empty string');
   if (content !== undefined && content.length > 16384)                          return badRequest(res, 'content exceeds 16 KB limit');
   if (audience !== undefined && typeof audience !== 'string')                    return badRequest(res, 'audience must be string');
+  // The content tag is a machine value: the ward's edit is canonicalised in code
+  // (the exact-values rule). '' clears it (→ fail-closed general:sensitive at
+  // recall); a recognised topic[:level] is normalised to canonical "topic:level";
+  // anything unrecognised is rejected rather than stored as junk.
+  let contentTagArg;
+  if (contentTag !== undefined) {
+    if (typeof contentTag !== 'string') return badRequest(res, 'contentTag must be string');
+    const trimmed = contentTag.trim();
+    if (trimmed === '') {
+      contentTagArg = '';
+    } else {
+      const norm = normalizeTag(trimmed);
+      if (!norm) return badRequest(res, 'contentTag must be a known topic (optionally :open/:sensitive)');
+      contentTagArg = `${norm.topic}:${norm.level}`;
+    }
+  }
   const result = await updateMemoryById({
     id,
     ...(content   !== undefined ? { content: content.trim() } : {}),
     ...(audience  !== undefined ? { audience }                : {}),
     ...(careWeight !== undefined ? { careWeight }             : {}),
+    ...(contentTagArg !== undefined ? { contentTag: contentTagArg } : {}),
   });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result ?? { ok: true });
@@ -2454,7 +2729,7 @@ app.get('/api/entity/graph/nodes', async (req, res) => {
 });
 
 // Text search across graph nodes — backs the find_graph_node LLM tool so
-// the Familiar can resolve a name ("Eury", "Chen") to a graph id without
+// the Familiar can resolve a name ("Chen", "Milkyway") to a graph id without
 // loading the full node list.
 app.get('/api/entity/graph/search', async (req, res) => {
   const { q, type, limit } = req.query;
@@ -2999,7 +3274,6 @@ app.get('/api/gcal/calendars', async (_req, res) => {
 app.post('/api/gcal/google/credentials', async (req, res) => {
   const creds = parseCredentials(req.body?.credentials);
   if (!creds) return res.status(400).json({ error: 'that doesn\'t look like a Google credentials.json (no client_id found)' });
-  const store = (await readGoogleToken()) || {};
   // New client → drop any stale token; the ward will re-Allow.
   await writeGoogleToken({ client_id: creds.clientId, client_secret: creds.clientSecret });
   res.json(googlePublicStatus(await readGoogleToken()));
@@ -3478,6 +3752,11 @@ app.delete('/api/village/locations', async (req, res) => {
 const VILLAGE_PULL_TIMEOUT_MS = 8_000;
 const VILLAGE_RESYNC_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000];
 
+// Category-slug audience remap map, captured from the RAW registry during
+// village sync (before slugs are persisted) and applied to Phylactery once it's
+// up. Module-scoped because capture and apply live in different boot functions.
+let _pendingAudienceRemap = null;
+
 async function startVillageSync() {
   // Tracks whether the most recent canonical pull actually REACHED Phylactery
   // (vs. timing out). A reached pull that simply found no village data yet is
@@ -3512,6 +3791,12 @@ async function startVillageSync() {
     },
   });
   try {
+    // Capture the category-slug audience remap map from the RAW registry BEFORE
+    // villageBootSync can persist slugs over the UUIDs — otherwise a ward-created
+    // category's old UUID would already be gone and its memories couldn't be
+    // re-pointed. Seeds are covered by the fixed map regardless; this preserves
+    // the ward-created mappings too. Applied to Phylactery further down, once it's up.
+    _pendingAudienceRemap = await pendingCategoryAudienceRemap().catch(() => null);
     await villageBootSync();
     const { added } = await seedDefaultCategories();
     if (added > 0) console.log(`[village] seeded ${added} default category/categories`);
@@ -3607,6 +3892,28 @@ const httpServer = app.listen(PORT, HOST, async () => {
         }).catch(() => {});
       }
     }
+  }).catch(() => {});
+  // Complete the Village category-slug migration in Phylactery: the registry
+  // mirror slugs its own ids on read, but memories / graph nodes+edges store the
+  // category id as their `audience`, so an old-UUID audience would fall
+  // fail-closed to ward-only until remapped. Idempotent (matches nothing once
+  // done); always carries the fixed legacy-seed map so it heals even if the raw
+  // registry has already been slugged. Fire-and-forget — a Phylactery hiccup
+  // just retries next boot.
+  // Content-gating Phase 3: give pre-tag memories a content_tag derived from
+  // their category, so the recall gate (Phase 4) always has a value. Idempotent;
+  // fire-and-forget, retries next boot on a Phylactery hiccup.
+  backfillContentTags().then(r => {
+    if (r?.ok && r.tagged) console.log(`[memory] content-tag backfill: tagged ${r.tagged}, ${r.remaining ?? 0} remaining`);
+    else if (r && !r.ok) console.warn(`[memory] content-tag backfill skipped: ${r.error ?? 'unknown'}`);
+  }).catch(() => {});
+  Promise.resolve(_pendingAudienceRemap ?? pendingCategoryAudienceRemap()).then(map => {
+    if (!map || !Object.keys(map).length) return;
+    return remapCategoryAudiences(map).then(r => {
+      const moved = (r?.memories ?? 0) + (r?.nodes ?? 0) + (r?.edges ?? 0);
+      if (r?.ok && moved) console.log(`[village] category-slug audience remap: ${r.memories} memor(ies), ${r.nodes} node(s), ${r.edges} edge(s) re-pointed to slug ids`);
+      else if (r && !r.ok) console.warn(`[village] category-slug audience remap skipped: ${r.error ?? 'unknown'}`);
+    });
   }).catch(() => {});
   // Self-update check: prime the indicator at boot, then re-check on a slow
   // background cadence so a ward with the UI open sees a new version appear
@@ -4553,7 +4860,7 @@ function startReachout() {
       // lands in the reachout event log so the loop is auditable via
       // /api/reachout-events. Pure gate outcomes (cooldown/disabled/
       // quiet-hours/crisis-defer) fire every tick and stay unlogged.
-      const deliberated = ['llm_said_wait', 'reached_ward', 'reached_villager', 'delivery_failed', 'unknown_villager', 'rate_limited'];
+      const deliberated = ['llm_said_wait', 'reached_ward', 'reached_villager', 'delivery_failed', 'unknown_villager', 'rate_limited', 'ward_active'];
       if (deliberated.includes(r.reason)) {
         appendReachoutEventLog({
           reason:         r.reason,
@@ -4577,6 +4884,13 @@ function startReachout() {
   // off-switch: PROTO_FAMILIAR_TOME_GRADUATION_DISABLED=1.
   startTomeGraduationLoop();
 
+  // Content-gating re-tag (ward-disclosure spec, Phase B). OPT-IN (default OFF):
+  // the Familiar reviews my human's EXISTING ward-private facts and, with
+  // judgment, opens the ones that can be governed by content rules (keeping the
+  // rest private) — every opening ward-visible + revertible. Hard off-switch:
+  // PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1.
+  startContentRegateLoop();
+
   // Needs-tracking (Pass 2). Opt-in (default OFF): marks a recurring
   // need-window's occurrence `missed` once its window elapses unresolved,
   // building the needs-fulfilment ledger. Stands down at moderate+ threat;
@@ -4599,8 +4913,12 @@ async function gatherNoticingWakeInputs() {
   const tz = s?.wardTimeZone || null;
   const nowMs = Date.now();
   const leadHours = Number.isFinite(Number(s?.readinessLeadHours)) ? Number(s.readinessLeadHours) : 48;
-  const winFrom = new Date(nowMs - 12 * 3600_000).toISOString();
-  const winTo   = new Date(nowMs + leadHours * 3600_000).toISOString();
+  // Ward-local-naive window bounds (not UTC toISOString) — get_window compares
+  // these against ward-local-naive when_ts, so a UTC bound on a cross-zone
+  // server slid the noticing window by the offset. wardLocalNowISO takes the
+  // instant as its 2nd arg, so it renders any shifted moment in the ward's zone.
+  const winFrom = wardLocalNowISO(tz, nowMs - 12 * 3600_000);
+  const winTo   = wardLocalNowISO(tz, nowMs + leadHours * 3600_000);
 
   const [dueRes, baseline, lastAct, win, allIntents, tells] = await Promise.all([
     getDueIntentions({ now: wardLocalNowISO(tz) }).catch(() => ({ due: [] })),
@@ -4834,6 +5152,7 @@ async function handleSignal(signal) {
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
+  try { await stopContentRegateLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
   try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
   try { await stopNoticingLoop(); } catch { /* already stopped */ }

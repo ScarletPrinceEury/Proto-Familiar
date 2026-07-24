@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveMemoryAudience } from '../audience.js';
+import { deriveMemoryAudience, AUDIENCE_TAG_WARD_OPEN } from '../audience.js';
 
 // Categories with ascending trust (by permissionScore of their grants):
 //   strangers (0, public) < friends (1) < family (3, narrowest among categories).
@@ -18,11 +18,17 @@ test('no subjects, non-sensitive → bounded by the session tag', () => {
   assert.equal(deriveMemoryAudience({ category: 'basics', sessionTag: 'friends', registry }), 'friends');
 });
 
-test('no subjects, sensitive category → tightened to ward-private', () => {
-  assert.equal(deriveMemoryAudience({ category: 'health_info', sessionTag: 'friends', registry }), 'ward-private');
-  assert.equal(deriveMemoryAudience({ category: 'emotional_content', sessionTag: 'family', registry }), 'ward-private');
-  // already ward-private stays ward-private
-  assert.equal(deriveMemoryAudience({ category: 'health_info', sessionTag: 'ward-private', registry }), 'ward-private');
+test('no subjects (ward-self fact) → content-gated, not floored to ward-private (the sensitive-category floor is gone for ward-self facts)', () => {
+  // A ward-self fact stays SESSION-BOUNDED even for a "sensitive" category —
+  // sensitivity now rides the content_tag + per-topic grants (Phase 4), not
+  // this coarse tag. In a shared room the fact stays bounded to that room.
+  assert.equal(deriveMemoryAudience({ category: 'health_info', sessionTag: 'friends', registry }), 'friends');
+  assert.equal(deriveMemoryAudience({ category: 'emotional_content', sessionTag: 'family', registry }), 'family');
+  // in a ward-private session (or no session tag at all), a ward-self fact is
+  // stamped with the content-gated sentinel — the fine content gate decides
+  // who, if anyone, ever sees it.
+  assert.equal(deriveMemoryAudience({ category: 'health_info', sessionTag: 'ward-private', registry }), AUDIENCE_TAG_WARD_OPEN);
+  assert.equal(deriveMemoryAudience({ category: 'health_info', registry }), AUDIENCE_TAG_WARD_OPEN);
 });
 
 test('an explicit subject disclosure WIDENS past the session default', () => {
@@ -48,6 +54,15 @@ test('multiple subjects → the narrowest circle wins (everyone must be OK)', ()
 test('a subject with no explicit pref falls to the session default (never auto-widened)', () => {
   const subjects = [{ name: 'Pat' }];
   assert.equal(deriveMemoryAudience({ category: 'basics', subjects, sessionTag: 'friends', registry }), 'friends');
+});
+
+test('regression guard: a THIRD-PARTY sensitive fact is still floored to ward-private, unaffected by the ward-self content-gating change', () => {
+  // subjects present → this is the UNCHANGED branch. The old
+  // SENSITIVE_CATEGORIES → ward-private floor only went away for ward-self
+  // (no-subjects) facts; a third party's sensitive fact must still tighten to
+  // ward-private, never leak out as content-gated.
+  const subjects = [{ name: 'Pat' }];
+  assert.equal(deriveMemoryAudience({ category: 'health_info', subjects, sessionTag: 'friends', registry }), 'ward-private');
 });
 
 test('an unknown/deleted disclosure target is ignored → session default (fail-safe)', () => {

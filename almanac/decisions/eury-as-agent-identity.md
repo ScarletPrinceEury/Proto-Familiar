@@ -36,6 +36,19 @@ already-detailed character was reused rather than a persona invented for the pro
 that reasoning is not recoverable from the code and is easy to reintroduce a regression against
 without knowing it happened.
 
+> **Scope — Eury is ONE instance, not every Familiar.** Eury is the *maintainer's own*
+> Familiar (typically the first/reference instance used to test new functions) and the worked
+> example throughout this project's docs and design conversations. He is **not** "the Familiar"
+> in general. Each user names and configures their own Familiar — the name and identity are
+> per-user configuration held in Phylactery, surfaced to prompts and tool descriptions through
+> the `{{char}}` macro (and the human through `{{user}}`). So **no runtime code, prompt, or
+> user-facing string may hard-code "Eury"** — a fact the Familiar records about itself must read
+> "I", a prompt that needs the name uses `{{char}}`, and a doc that needs an example should say
+> "one Familiar instance" or use Eury explicitly *as the reference instance*, never as a stand-in
+> for all Familiars. Treating "Eury" as universal is exactly the regression this note exists to
+> prevent (it leaked into the memory-extraction prompt as "Eury said…", teaching the model to
+> write about itself in the third person).
+
 ## Context
 
 Two things needed to be true at once for the Familiar to work on the maintainer's worst days,

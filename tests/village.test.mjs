@@ -11,6 +11,7 @@ import {
   findVillagerByAlias, migrateTrustedContacts,
   seedDefaultCategories,
   initVillageSync, bootSync,
+  migrateCategoryIds,
   CATEGORY_EMERGENCY, CATEGORY_STRANGERS,
 } from '../village.js';
 
@@ -87,12 +88,18 @@ test('location with dangling/absent assignedCategoryId falls to strangers', () =
   for (const l of reg.locations) assert.equal(l.assignedCategoryId, CATEGORY_STRANGERS);
 });
 
-test('grant values are restricted to primitives', () => {
+test('grant values are restricted to primitives (except the topics map)', () => {
   const reg = normalizeRegistry({
     categories: [{ id: 'c1', name: 'Friends', grants: { location: true, schedule: 'coarse', evil: { nested: true }, fn: null } }],
   });
   const c = reg.categories.find(x => x.id === 'c1');
-  assert.deepEqual(c.grants, { location: true, schedule: 'coarse' });
+  // Coarse primitives kept; arbitrary nested objects + null stripped.
+  assert.equal(c.grants.location, true);
+  assert.equal(c.grants.schedule, 'coarse');
+  assert.equal(c.grants.evil, undefined);
+  assert.equal(c.grants.fn, undefined);
+  // `topics` is the ONE nested object kept — here seeded from the location grant.
+  assert.deepEqual(c.grants.topics, { location: 'open' });
 });
 
 test('corrupt file on disk yields a clean empty registry', async () => {
@@ -473,4 +480,128 @@ test('bootSync: pull failure leaves mirror authoritative (never throws)', async 
   initVillageSync({ pull: async () => { throw new Error('Phylactery down'); } });
   const reg = await bootSync({ filePath });
   assert.equal(reg.villagers[0].name, 'Chen');
+});
+
+// ── Category-id slug migration (readable ids, not UUIDs) ─────────────
+
+test('migrateCategoryIds: legacy seed UUIDs → their slugs; ward UUIDs → name slugs; slugs untouched', () => {
+  const map = migrateCategoryIds([
+    { id: '00000000-0000-4000-8001-000000000001', name: 'Close Friends' },
+    { id: '00000000-0000-4000-8001-000000000003', name: 'Care Network' },
+    { id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', name: 'Book Club' },
+    { id: 'strangers', name: 'Strangers' },                 // already a slug → kept
+  ]);
+  assert.equal(map.get('00000000-0000-4000-8001-000000000001'), 'close-friends');
+  assert.equal(map.get('00000000-0000-4000-8001-000000000003'), 'care-network');
+  assert.equal(map.get('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'), 'book-club');
+  assert.equal(map.has('strangers'), false);                // slug ids are not remapped
+});
+
+test('migrateCategoryIds: name-slug collisions get a numeric suffix', () => {
+  const map = migrateCategoryIds([
+    { id: '11111111-1111-4111-8111-111111111111', name: 'Family' },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'Family' },
+  ]);
+  const slugs = [...map.values()];
+  assert.deepEqual(slugs, ['family', 'family-2']);
+});
+
+test('normalizeRegistry migrates UUID category ids across every reference', () => {
+  const reg = normalizeRegistry({
+    categories: [
+      { id: '00000000-0000-4000-8001-000000000001', name: 'Close Friends', grants: { health: true } },
+    ],
+    villagers: [
+      { id: 'v1', name: 'Chen', categoryIds: ['00000000-0000-4000-8001-000000000001'] },
+    ],
+    locations: [
+      { key: 'guild:1/chan:2', label: 'Lounge', assignedCategoryId: '00000000-0000-4000-8001-000000000001' },
+    ],
+  });
+  assert.ok(reg.categories.some(c => c.id === 'close-friends'));
+  assert.ok(!reg.categories.some(c => /^0{8}-/.test(c.id)));
+  assert.deepEqual(reg.villagers[0].categoryIds, ['close-friends']);
+  assert.equal(reg.locations[0].assignedCategoryId, 'close-friends');
+});
+
+test('upsertCategory mints a readable slug id, not a UUID', async () => {
+  const cat = await upsertCategory({ name: 'Work Friends', grants: {} }, { filePath });
+  assert.equal(cat.id, 'work-friends');
+  const cat2 = await upsertCategory({ name: 'Work Friends', grants: {} }, { filePath });
+  assert.equal(cat2.id, 'work-friends-2');   // collision → suffix
+});
+
+test('pendingCategoryAudienceRemap: always includes the fixed legacy-seed map', async () => {
+  const { pendingCategoryAudienceRemap } = await import('../village.js');
+  // No file at this path → seed map only (the three legacy seed UUIDs → slugs).
+  const map = await pendingCategoryAudienceRemap({ filePath: path.join(dir, 'nonexistent.json') });
+  assert.equal(map['00000000-0000-4000-8001-000000000001'], 'close-friends');
+  assert.equal(map['00000000-0000-4000-8001-000000000002'], 'acquaintances');
+  assert.equal(map['00000000-0000-4000-8001-000000000003'], 'care-network');
+});
+
+test('pendingCategoryAudienceRemap: unions ward-created UUID → name-slug from the raw file', async () => {
+  const { pendingCategoryAudienceRemap } = await import('../village.js');
+  const raw = { categories: [{ id: 'b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e', name: 'Book Club' }] };
+  await fsp.writeFile(filePath, JSON.stringify(raw), 'utf8');
+  const map = await pendingCategoryAudienceRemap({ filePath });
+  assert.equal(map['b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e'], 'book-club');
+  assert.equal(map['00000000-0000-4000-8001-000000000001'], 'close-friends'); // seeds still present
+});
+
+// ── Content-gating Phase 2: per-topic grant seeding + preservation ──
+
+test('normalizeRegistry: seeds per-topic grants from coarse grants (first time only)', () => {
+  const reg = normalizeRegistry({
+    categories: [
+      { id: 'close', name: 'Close', grants: { identitySensitive: true, memories: true } },
+      { id: 'care',  name: 'Care',  grants: { health: true, memories: 'shared' } },
+      { id: 'acq',   name: 'Acq',   grants: { identityBasic: true } },
+    ],
+  });
+  const g = id => reg.categories.find(c => c.id === id).grants.topics;
+  // identitySensitive → every topic at sensitive.
+  assert.equal(g('close').medical, 'sensitive');
+  assert.equal(g('close').sexuality, 'sensitive');
+  // health → medical topics; memories:'shared' → general open; NOT sexuality (conservative).
+  assert.equal(g('care').medical, 'sensitive');
+  assert.equal(g('care').general, 'open');
+  assert.ok(!g('care').sexuality);
+  // identityBasic → general open only.
+  assert.deepEqual(g('acq'), { general: 'open' });
+});
+
+test('normalizeRegistry: never overwrites an existing (ward-set) topics map', () => {
+  const reg = normalizeRegistry({
+    categories: [{ id: 'c', name: 'C', grants: { identitySensitive: true, topics: { medical: 'open' } } }],
+  });
+  assert.deepEqual(reg.categories.find(c => c.id === 'c').grants.topics, { medical: 'open' });
+});
+
+test('upsertCategory: a topic-less update preserves the tier topic grants', async () => {
+  const cat = await upsertCategory({ name: 'Friends', grants: { identitySensitive: true } }, { filePath });
+  // Migration seeds topics on read.
+  let after = (await getRegistry({ filePath })).categories.find(c => c.id === cat.id);
+  assert.equal(after.grants.topics.medical, 'sensitive');
+  // A legacy-editor save (no `topics` key) must keep them while replacing coarse grants.
+  await upsertCategory({ id: cat.id, grants: { identityBasic: true } }, { filePath });
+  after = (await getRegistry({ filePath })).categories.find(c => c.id === cat.id);
+  assert.equal(after.grants.topics.medical, 'sensitive');
+  assert.equal(after.grants.identitySensitive, undefined);
+});
+
+test('upsertCategory: an explicit topics map replaces', async () => {
+  const cat = await upsertCategory({ name: 'Friends', grants: { identitySensitive: true } }, { filePath });
+  await upsertCategory({ id: cat.id, grants: { identityBasic: true, topics: { medical: 'open' } } }, { filePath });
+  const after = (await getRegistry({ filePath })).categories.find(c => c.id === cat.id);
+  assert.deepEqual(after.grants.topics, { medical: 'open' });
+});
+
+test('upsertCategory: an explicit empty topics map persists (clear-all is not re-derived)', async () => {
+  const cat = await upsertCategory({ name: 'Friends', grants: { identitySensitive: true } }, { filePath });
+  // The ward sets every topic to Hidden → topics: {}. It must STICK, not
+  // re-seed from identitySensitive on the next read.
+  await upsertCategory({ id: cat.id, grants: { identitySensitive: true, topics: {} } }, { filePath });
+  const after = (await getRegistry({ filePath })).categories.find(c => c.id === cat.id);
+  assert.deepEqual(after.grants.topics, {});
 });

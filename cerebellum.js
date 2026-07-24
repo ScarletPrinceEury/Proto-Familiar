@@ -69,7 +69,7 @@ import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from 
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { markIntentActedOn, snoozeIntent, readPonderingByUid } from './recent-ponderings.js';
+import { markIntentActedOn, snoozeIntent, dropIntent, getUnactedIntents, readPonderingByUid } from './recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { readWeatherNowLine, weatherEnabled } from './weather-mirror.js';
 import { resolveLocation, getForecast, dayDatesFor } from './weather-service.js';
@@ -78,7 +78,7 @@ import { flagDistress } from './threat-tracker.js';
 import { resetTriageCooldown } from './silence-triage-loop.js';
 import { pruneConsentPending } from './memorization.js';
 import { enqueueOutbox, listOutbox, updateOutboxMeta, rekeyOutboxIds } from './outbox.js';
-import { buildTimeAnchorBlock, relativeTime, plainInterval } from './relative-time.js';
+import { buildTimeAnchorBlock, relativeTime, plainInterval, wardLocalNowISO } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { selectSurfaceCandidates } from './surface-context.js';
 import { rekeyCueState } from './gcal-projection.js';
@@ -691,8 +691,12 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     // I already have temporal_context loaded as part of enrich() in
     // many call sites, but triage is async + standalone here, so
     // fetch a fresh window directly. Cheap — no LLM call.
-    const fromIso = new Date(Date.now() - 24 * 3600_000).toISOString();
-    const toIso   = new Date(Date.now() + 7 * 24 * 3600_000).toISOString();
+    // Ward-local-naive bounds (not UTC toISOString) — get_window compares
+    // against ward-local-naive when_ts, so a UTC bound slid this candidate-task
+    // window by the offset on a cross-zone server (audit fix).
+    const tz = s?.wardTimeZone || null;
+    const fromIso = wardLocalNowISO(tz, nowMs - 24 * 3600_000);
+    const toIso   = wardLocalNowISO(tz, nowMs + 7 * 24 * 3600_000);
     const win = await getScheduleWindow({ from_ts: fromIso, to_ts: toIso, limit: 100 }).catch(() => ({ nodes: [] }));
     const nodes = Array.isArray(win) ? win : (Array.isArray(win?.nodes) ? win.nodes : []);
     const openItems = nodes
@@ -1076,13 +1080,21 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'list_deferred_intents',
+      description: 'I use this to look at my OWN pending queue of deferred intents — the things I noted in my free time that I still mean to file or say to my human. The [Deferred intents from my free time] block only appears when the system surfaces it; this lets me inspect the queue myself, any time, so I can audit it: catch one that\'s already been answered in our conversation and drop it, remember a tell I meant to bring up, or just see what\'s outstanding. Each item comes back with its uid + index, which I then pass to acknowledge_deferred_intent, snooze_deferred_intent, or drop_deferred_intent. Takes no arguments.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'snooze_deferred_intent',
       description: 'I call this when my human asks me to come back to a deferred intent later. It snoozes the intent so it stops appearing for now and automatically resurfaces after the given number of minutes. I do not call this on my own initiative — only when my human explicitly asks to defer.',
       parameters: {
         type: 'object',
         properties: {
-          uid:     { type: 'string', description: 'UUID of the pondering entry (shown in the deferred-intents block).' },
-          index:   { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+          uid:     { type: 'string', description: 'Entry uid for the intent — from the deferred-intents block or from list_deferred_intents.' },
+          index:   { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array — from the block or from list_deferred_intents.' },
           minutes: { type: 'number', description: 'How long to snooze in minutes. Default 60. Max 10080 (one week).' },
         },
         required: ['uid', 'index'],
@@ -1092,13 +1104,29 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'acknowledge_deferred_intent',
-      description: 'I call this after I have filed a deferred intent from my free time — one that appeared in the [Deferred intents from my free time] block — using save_to_tome, save_memory, or update_identity. It marks the intent as acted on so it stops appearing in my working context. I call this once per intent, right after the filing tool call.',
+      name: 'drop_deferred_intent',
+      description: 'I use this to let go of a deferred intent WITHOUT acting on it — one that\'s gone stale, that my human and I already covered in conversation, or that I no longer want to carry. This is NOT acknowledge_deferred_intent: dropping means I discarded it, not that I filed or said it. Filing/saying it is acknowledge; getting to it later is snooze; letting it go for good is drop. I can find the uid + index from list_deferred_intents or the deferred-intents block.',
       parameters: {
         type: 'object',
         properties: {
-          uid:   { type: 'string', description: 'UUID of the pondering entry that carried the intent (shown in the deferred-intents block).' },
-          index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array (shown in the deferred-intents block).' },
+          uid:    { type: 'string', description: 'Entry uid for the intent — from list_deferred_intents or the deferred-intents block.' },
+          index:  { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array.' },
+          reason: { type: 'string', description: 'A short note on why I\'m letting it go (e.g. "already answered in chat", "no longer true") — recorded with the drop, optional.' },
+        },
+        required: ['uid', 'index'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'acknowledge_deferred_intent',
+      description: 'I call this after I have filed a deferred intent from my free time — one that appeared in the [Deferred intents from my free time] block or that I found via list_deferred_intents — using save_to_tome, save_memory, or update_identity, or after I have actually SAID a "tell" to my human. It marks the intent as acted on so it stops appearing in my working context. I call this once per intent, right after the filing tool call or after saying the thing — never as a substitute for doing it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uid:   { type: 'string', description: 'Entry uid that carried the intent — from the deferred-intents block or from list_deferred_intents.' },
+          index: { type: 'number', description: 'Index of the intent within that entry\'s wants_to_save array — from the block or from list_deferred_intents.' },
         },
         required: ['uid', 'index'],
       },
@@ -2130,6 +2158,34 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'disclosure_acknowledge',
+      description: "I call this once I've told my human (or judged no mention is needed) about the formerly-private facts I opened to my content-sharing rules — the items in the [DISCLOSURE NOTICE] block. It settles those notices so I don't keep re-raising them. The facts stay opened; this only marks that I've surfaced them.",
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: { type: 'array', items: { type: 'string' }, description: 'Disclosure notice ids (from the [DISCLOSURE NOTICE] block) I have now surfaced.' },
+        },
+        required: ['ids'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'keep_memory_private',
+      description: "I call this when my human wants one of the facts I opened kept strictly between us again. It sets that memory's audience back to ward-private, so no one in their Village can see it regardless of content rules, and settles its disclosure notice. I reach for it the moment they say to keep something private.",
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The memory id to set back to strictly private (from the [DISCLOSURE NOTICE] block, or a recall/list result).' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_files',
       description: "I list what's in my own folder — the Proto-Familiar files that make me up. I use this to find my way around when I want to look something up on purpose: which Tomes exist, what session logs are there, where a doc lives. I pass a folder path relative to my root (e.g. \"tomes\" or \"logs\"), or nothing for the top level. It's read-only and fenced to my own folder; my human's secrets (settings, keys) are never shown. I only do this in a private moment with {{user}} — my files hold our history, not for other rooms.",
       parameters: {
@@ -2412,6 +2468,33 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to update identity: ${err.message}`; }
   },
 
+  list_deferred_intents: async () => {
+    try {
+      const intents = await getUnactedIntents({ limit: 25 });
+      if (!intents.length) return quietOk('My deferred-intents queue is empty — nothing pending to file or say.');
+      const now = Date.now();
+      const lines = intents.map(t => {
+        const age = Number.isFinite(t.created_ms) ? (relativeTime(new Date(t.created_ms).toISOString(), now) || '') : '';
+        const agePart = age ? ` · noted ${age}` : '';
+        return `- [${t.kind}] ${t.summary}${agePart}  (uid=${t.uid}, index=${t.index})`;
+      });
+      return `My pending deferred intents (${intents.length}):\n${lines.join('\n')}\n\nI act on one with save_to_tome/save_memory/update_identity then acknowledge_deferred_intent, or say a "tell" then acknowledge; I snooze_deferred_intent to get to it later, or drop_deferred_intent to let a stale one go.`;
+    } catch (err) { return `I couldn't read my deferred-intents queue: ${err.message}`; }
+  },
+
+  drop_deferred_intent: async ({ uid, index, reason = '' }) => {
+    if (typeof uid !== 'string' || !INTENT_UID_RE.test(uid)) return 'Failed to drop intent: uid must be a valid entry uid.';
+    const idx = Number(index);
+    if (!Number.isFinite(idx) || !Number.isInteger(idx) || idx < 0) {
+      return 'Failed to drop intent: index must be a non-negative integer.';
+    }
+    try {
+      const data = await dropIntent({ uid, index: idx, reason });
+      if (data.alreadyGone) return 'That intent was already acted on or dropped — nothing to let go of.';
+      return data.ok ? quietOk('Deferred intent let go — I won\'t carry that one anymore.') : `Drop failed: ${data.error ?? 'unknown error'}`;
+    } catch (err) { return `Failed to drop intent: ${err.message}`; }
+  },
+
   snooze_deferred_intent: async ({ uid, index, minutes = 60 }) => {
     if (typeof uid !== 'string' || !INTENT_UID_RE.test(uid)) return 'Failed to snooze intent: uid must be a valid entry uid.';
     const idx = Number(index);
@@ -2478,6 +2561,28 @@ export const TOOL_EXECUTORS = {
     const result = await acknowledgeGraduations(ids);
     const n = result?.acknowledged ?? ids.length;
     return quietOk(`Marked ${n} graduation notice(s) as surfaced. The filed-away detail stays recalled-when-relevant.`);
+  },
+
+  // ── Disclosure notices (ward-disclosure spec, Phase B) ─────────────
+  // I've told my human which of their formerly-private facts I opened to my
+  // content rules; these settle those notices. acknowledge = I mentioned it (or
+  // judged it needs no mention), leave it opened. keep_memory_private = my human
+  // wants it strictly between us again — revert its audience to ward-private.
+  disclosure_acknowledge: async ({ ids } = {}) => {
+    const arr = Array.isArray(ids) ? ids : (ids ? [ids] : []);
+    if (!arr.length) return 'ids must be a non-empty array of disclosure notice ids.';
+    const { clearDisclosureNotice } = await import('./content-regate.js');
+    for (const id of arr) { await clearDisclosureNotice(id).catch(() => {}); }
+    return quietOk(`Marked ${arr.length} disclosure notice(s) as surfaced.`);
+  },
+
+  keep_memory_private: async ({ id } = {}) => {
+    if (!id || typeof id !== 'string') return 'I need the id of the memory to keep private.';
+    const r = await updateMemoryById({ id, audience: 'ward-private' });
+    if (r?.ok === false) return `I couldn't set that back to private: ${r.error ?? 'update failed'}.`;
+    const { clearDisclosureNotice } = await import('./content-regate.js');
+    await clearDisclosureNotice(id).catch(() => {});
+    return quietOk('Kept between us — I set that memory back to strictly private.');
   },
 
   // ── Knowledge-editing executors ────────────────────────────────────
@@ -2646,8 +2751,9 @@ export const TOOL_EXECUTORS = {
     // Scope recall to what this turn may see (never ward-private on a gated
     // villager turn; unscoped for ward/web). One decision, in discordReadAudiences.
     const audiences = discordReadAudiences(ctx);
+    const topicGrants = discordReadTopicGrants(ctx);
     try {
-      const res   = await searchMemory({ query: q, maxResults: n, audiences });
+      const res   = await searchMemory({ query: q, maxResults: n, audiences, topicGrants });
       const items = Array.isArray(res?.results) ? res.results : [];
       if (items.length === 0) return `I searched my memory for "${q}" and found nothing close — this looks new to me.`;
       const lines = items.map((r, i) => {
@@ -2676,8 +2782,9 @@ export const TOOL_EXECUTORS = {
     const to2 = /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : f;
     const n = Math.min(50, Math.max(1, parseInt(limit, 10) || 12));
     const audiences = discordReadAudiences(ctx);
+    const topicGrants = discordReadTopicGrants(ctx);
     try {
-      const res   = await memByTimerange({ fromDate: f, toDate: to2, limit: n, audiences });
+      const res   = await memByTimerange({ fromDate: f, toDate: to2, limit: n, audiences, topicGrants });
       const items = Array.isArray(res?.results) ? res.results : [];
       const span  = f === to2 ? f : `${f} – ${to2}`;
       if (items.length === 0) return `I looked back over ${span} and I'm not holding anything from those days — either it was quiet, or nothing got kept.`;
@@ -4160,6 +4267,18 @@ export function discordReadAudiences(ctx = {}) {
   const gated = ctx?.discord === true && ctx?.wardPrivate === false;
   if (!gated) return undefined;
   return Array.isArray(ctx.audiences) ? ctx.audiences : [];
+}
+
+// The content-tag gate's companion to discordReadAudiences (content-gating
+// Phase 4): the room's per-topic grant map for a gated Discord READ. The two
+// are always read together so the coarse floor and the fine content gate can't
+// drift. Ward/web → undefined (unscoped, sees all). A gated non-ward turn → the
+// room's topic-grant map, FAIL-CLOSED to `{}` (→ nothing surfaces by content)
+// if it's somehow absent, mirroring the audiences fail-closed to [].
+export function discordReadTopicGrants(ctx = {}) {
+  const gated = ctx?.discord === true && ctx?.wardPrivate === false;
+  if (!gated) return undefined;
+  return (ctx.topicGrants && typeof ctx.topicGrants === 'object') ? ctx.topicGrants : {};
 }
 
 // Provenance + audience clamp for a WRITE a villager caused by acting through me
