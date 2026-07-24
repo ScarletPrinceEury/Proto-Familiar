@@ -230,11 +230,11 @@ export function selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, no
 }
 
 /** The banner/push text for one weather heads-up. Code-built words. */
-export function formatWeatherAlert(alert, { nowMs = Date.now() } = {}) {
+export function formatWeatherAlert(alert, { nowMs = Date.now(), unit = 'celsius' } = {}) {
   const rel = relativeTime(alert.whenMs, nowMs) || '';
   const clock = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(alert.whenIso || '') ? alert.whenIso.slice(11, 16) : '';
   const when = [rel, clock ? `at ${clock}` : ''].filter(Boolean).join(' — ');
-  const wx = formatItemWeather(alert.hour) || 'rough weather then';
+  const wx = formatItemWeather(alert.hour, unit) || 'rough weather then';
   return {
     title: `Weather heads-up: ${alert.label ?? '(untitled)'}`,
     body: `Outside ${when ? `${when}` : 'soon'} — ${wx}. Worth planning around while there's time.`,

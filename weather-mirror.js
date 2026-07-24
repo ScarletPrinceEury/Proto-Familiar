@@ -75,11 +75,11 @@ export function readWeatherMirrorSync({ tomesDir = DEFAULT_TOMES_DIR } = {}) {
  * Sync, never throws. '' when disabled, absent, or stale (staleness enforced
  * again here belt-and-suspenders even if a stale mirror lingered on disk).
  */
-export function readWeatherNowLine({ tomesDir = DEFAULT_TOMES_DIR, now = Date.now() } = {}) {
+export function readWeatherNowLine({ tomesDir = DEFAULT_TOMES_DIR, now = Date.now(), unit = 'celsius' } = {}) {
   try {
     const mirror = readWeatherMirrorSync({ tomesDir });
     if (!mirror) return '';
-    return buildNowWeatherLine(mirror, { now });
+    return buildNowWeatherLine(mirror, { now, unit });
   } catch {
     return '';
   }

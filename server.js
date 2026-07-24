@@ -466,17 +466,21 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   //    salience even as tool traffic grows the tail.
   let timeAnchor = '';
   if (enrichMode === 'full') {
+    const anchorSettings = readSettingsSync();
     timeAnchor = buildTimeAnchorBlock({
       now: Date.now(),
       lastUserMessageAt: lastUserMessageAt ?? null,
       // The ward's zone, not the server's — so the [Now] the Familiar reads is
       // the ward's clock even when the server runs in a different timezone.
-      timeZone: readSettingsSync()?.wardTimeZone || null,
+      timeZone: anchorSettings?.wardTimeZone || null,
       // Full weather detail is ward-private only. On any gated (non-ward)
       // turn the vague tier renders instead — qualitative, no numbers/units/
       // times/labels, so precise values can't leak a location (§5.6).
       // Fail-closed: unclear audience → vague, and vague itself → '' if stale.
-      weatherLine: audienceTag === 'ward-private' ? readWeatherNowLine() : readWeatherVagueLine(),
+      // The vague tier has no numbers/units, so it needs no unit passed.
+      weatherLine: audienceTag === 'ward-private'
+        ? readWeatherNowLine({ unit: anchorSettings?.weatherUnit })
+        : readWeatherVagueLine(),
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
@@ -4352,7 +4356,7 @@ function startRemindersScheduler() {
       const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
       const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
       return selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
-        .map(a => ({ ...a, ...formatWeatherAlert(a, { nowMs }) }));
+        .map(a => ({ ...a, ...formatWeatherAlert(a, { nowMs, unit: s?.weatherUnit }) }));
     },
     markEventAlerted: async ({ id, occurrenceDate, kind }) => {
       const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null, kind: kind || 'event' });
@@ -4999,8 +5003,9 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
   ]);
   const nowBlock = buildTimeAnchorBlock({
     now: Date.now(), lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
-    // Noticing is a ward-private deliberation → full weather line.
-    weatherLine: readWeatherNowLine(),
+    // Noticing is a ward-private deliberation → full weather line, in the
+    // ward's chosen unit.
+    weatherLine: readWeatherNowLine({ unit: s?.weatherUnit }),
   });
   const prompt = substituteMacros(buildNoticingPrompt({
     // flag_distress is in the noticing toolset now, so the prompt's

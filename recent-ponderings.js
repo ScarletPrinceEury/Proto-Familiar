@@ -19,8 +19,8 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { promises as fsp } from 'fs';
-import { PONDERINGS_TOME_NAME } from './pondering.js';
-import { withLock } from './thalamus.js';
+import { PONDERINGS_TOME_NAME, shortPonderUid, findOrCreatePonderingsTome } from './pondering.js';
+import { withLock, modifyTomeFile } from './thalamus.js';
 import { relativeTime } from './relative-time.js';
 
 // Routing hints for the deferred-intents block. Storage kinds map to a
@@ -69,7 +69,10 @@ export async function getRecentPonderings({
 
   const cutoff = now - sinceDays * DAY_MS;
   return Object.values(tome.entries)
-    .filter(e => e && typeof e.created_at === 'string')
+    // session-followup entries are the "I said I'd do it" catch (deferred-
+    // followups spec) — a bookkeeping record, not a real thought I had, so
+    // they never show up as "things I've been quietly thinking about."
+    .filter(e => e && typeof e.created_at === 'string' && e.scope !== 'session-followup')
     .map(e => ({
       uid:        e.uid,
       title:      e.comment ?? '',
@@ -188,6 +191,103 @@ export async function readPonderingByUid({ uid, tomesDir = DEFAULT_TOMES_DIR } =
 
 // ── Deferred intents (Pillar B of the autonomous-routing fix) ────────────
 
+// How long an unacted follow-up nags before it's auto-dropped (deferred-
+// followups spec: "no infinite nag"). Not a ward setting — a fixed ceiling.
+export const FOLLOWUP_MAX_AGE_DAYS = 7;
+
+// Conservative lexical containment, mirroring the memory-dedup fallback idea
+// (normalize, then check one contains the other) — used only to stop the
+// SAME commitment landing twice across overlapping memorization slices, not
+// to judge whether two different follow-ups are "similar enough."
+function normalizeFollowupText(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Store a deferred follow-up — something I told my human I'd do this
+ * session but didn't actually do (no tool call to back it up). It's a
+ * deferred intent like a pondering's wants_to_save entries, just minted
+ * straight into its own tome entry (kind:'followup', scope:'session-
+ * followup') instead of riding a pondering. getUnactedIntents already
+ * scans every entry's wants_to_save, so it surfaces with no new read code.
+ *
+ * Dedup: skipped (created:false) when an existing OPEN follow-up's summary
+ * lexically contains or is contained by this one — conservative, so the
+ * same commitment caught from two overlapping memorization slices doesn't
+ * get filed twice. Never throws — a store failure degrades to "no follow-
+ * up landed," which the caller logs and moves on from.
+ *
+ * Returns { ok, created, uid? } — created:false on dedup-skip.
+ */
+export async function createSessionFollowup({ summary, tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  const clean = String(summary ?? '').trim();
+  if (!clean) return { ok: false, error: 'summary required' };
+
+  const { file } = await findOrCreatePonderingsTome(tomesDir);
+  const normNew = normalizeFollowupText(clean);
+  let created = false;
+  let uid = null;
+
+  await modifyTomeFile(file, (fresh) => {
+    fresh.entries = fresh.entries || {};
+    for (const entry of Object.values(fresh.entries)) {
+      if (entry?.scope !== 'session-followup' || !Array.isArray(entry.wants_to_save)) continue;
+      for (const intent of entry.wants_to_save) {
+        if (intent?.kind !== 'followup' || intent.acted_on !== false) continue;
+        const normExisting = normalizeFollowupText(intent.summary);
+        if (!normExisting) continue;
+        if (normNew.includes(normExisting) || normExisting.includes(normNew)) {
+          return; // duplicate of a still-open follow-up — skip, unmutated
+        }
+      }
+    }
+
+    uid = shortPonderUid();
+    while (fresh.entries[uid]) uid = shortPonderUid();
+    const now = new Date().toISOString();
+    fresh.entries[uid] = {
+      uid,
+      comment:             clean.slice(0, 60),
+      keys:                [],
+      keysecondary:        [],
+      content:             clean,
+      constant:            false,
+      selective:           false,
+      selectiveLogic:      0,
+      enabled:             false,
+      position:            4,
+      depth:               4,
+      role:                0,
+      scanDepth:           null,
+      caseSensitive:       null,
+      matchWholeWords:     null,
+      probability:         100,
+      sticky:              null,
+      cooldown:            null,
+      preventRecursion:    false,
+      delayUntilRecursion: false,
+      excludeRecursion:    false,
+      group:               '',
+      groupWeight:         null,
+      insertion_order:     100,
+      created_at:          now,
+      learnedAt:           now,
+      session_id:          null,
+      scope:               'session-followup',
+      topic_id:            null,
+      topic_pondered:      null,
+      wants_to_save:       [{ kind: 'followup', summary: clean, source: 'session', acted_on: false }],
+    };
+    created = true;
+  });
+
+  return { ok: true, created, uid };
+}
+
 /**
  * Helper: locate the ponderings tome file without acquiring a lock.
  * Scan is read-only; callers that need atomic mutation pass the result
@@ -232,9 +332,14 @@ export async function getUnactedIntents({
   // still holds for them; only a "tell", whose whole action is the saying, is
   // spent by being surfaced.
   markSurfaced = false,
+  // Deferred-followups spec: how long an unacted follow-up may nag before
+  // it's dropped as aged-out. A param (not hardcoded) so tests can exercise
+  // the boundary without waiting a real week.
+  followupMaxAgeDays = FOLLOWUP_MAX_AGE_DAYS,
 } = {}) {
   const targetFile = await findPonderingsTomeFile(tomesDir);
   if (!targetFile) return [];
+  const followupMaxAgeMs = followupMaxAgeDays * DAY_MS;
 
   // Read → decide → (optionally) write. Returns the intents to show plus
   // whether the tome was mutated (only ever mutated when markSurfaced).
@@ -243,6 +348,7 @@ export async function getUnactedIntents({
     const now = Date.now();
     const candidates = [];   // { created_ms, entry, idx, intent }
     const spentTells = [];   // tells already surfaced in a prior live turn
+    const agedFollowups = []; // follow-ups past their nag window — dropped, not shown
     for (const entry of Object.values(tome.entries)) {
       if (!Array.isArray(entry?.wants_to_save)) continue;
       const created_ms = Date.parse(entry.created_at ?? '') || 0;
@@ -257,6 +363,12 @@ export async function getUnactedIntents({
         // anywhere (that repetition was the bug). On the live surface it is
         // auto-acked below; elsewhere it is simply hidden.
         if (intent.kind === 'tell' && intent.surfaced_at) { spentTells.push(intent); continue; }
+        // A follow-up I never acted on for too long stops nagging — an honest
+        // "aged-out" record, never a claim I did it (CLAUDE.md: no infinite nag).
+        if (intent.kind === 'followup' && created_ms && (now - created_ms) > followupMaxAgeMs) {
+          agedFollowups.push(intent);
+          continue;
+        }
         candidates.push({ created_ms, entry, idx, intent });
       }
     }
@@ -270,6 +382,16 @@ export async function getUnactedIntents({
       // that replaces relying on my own acknowledge call.
       for (const intent of spentTells) {
         if (intent.acted_on === false) { intent.acted_on = true; if (!intent.disposition) intent.disposition = 'surfaced'; mutated = true; }
+      }
+      // Drop aged-out follow-ups for good, stamped honestly (never "done").
+      const nowIsoAge = new Date(now).toISOString();
+      for (const intent of agedFollowups) {
+        if (intent.acted_on === false) {
+          intent.acted_on = true;
+          intent.disposition = 'aged-out';
+          intent.aged_out_at = nowIsoAge;
+          mutated = true;
+        }
       }
       // Stamp ONLY the tells actually shown this turn (post-limit) so a
       // sliced-off tell isn't consumed without ever being seen.
@@ -443,14 +565,16 @@ export async function snoozeIntent({ uid, index, minutes = 60, tomesDir = DEFAUL
  * acknowledge_deferred_intent after the file lands. A "tell" shows no
  * acknowledge step — the system consumes it in code once it has had its one
  * live turn (getUnactedIntents markSurfaced), so it can't nag turn after turn
- * when I forget the bookkeeping. Returns '' when there are no intents.
+ * when I forget the bookkeeping. A "followup" is something I said I'd do but
+ * didn't — it needs a real tool AND the acknowledge step, same as a filing
+ * intent, since saying it isn't doing it. Returns '' when there are no intents.
  */
 export function formatDeferredIntentsBlock(intents) {
   if (!intents || intents.length === 0) return '';
 
   const lines = [
     '[Deferred intents from my free time]',
-    'While thinking on my own recently, I thought of some things I want to file or talk about. Unless it\'s wildly inappropriate — like during an active crisis — I bring these up now. For filing intents, I ask my human for consent or clarifications. For things I want to say, I say them. I trust my human to tell me if now isn\'t the right time.',
+    'Some things I want to file, talk about, or follow through on. Unless it\'s wildly inappropriate — like during an active crisis — I act on these now. For filing intents, I ask my human for consent or clarifications. For things I want to say, I say them. For things I said I\'d do, I actually do them. I trust my human to tell me if now isn\'t the right time.',
     '',
   ];
 
@@ -462,6 +586,12 @@ export function formatDeferredIntentsBlock(intents) {
       // had this turn, so I just bring it up — I never have to remember to
       // file bookkeeping for something whose whole action is the saying.
       lines.push(`   → I bring this up in my response now`);
+    } else if (kind === 'followup') {
+      // No single named tool — I said I'd do SOMETHING, and it could be a
+      // reminder, a schedule entry, a note, whatever the actual commitment
+      // was. I pick the real tool for it, or drop it if it's moot, then
+      // acknowledge so it stops nagging. Saying it again is not doing it.
+      lines.push(`   → I follow through NOW with the right tool — a reminder, a schedule entry, a note — or I drop it if it's moot. Saying I'll do it is not doing it. Then acknowledge_deferred_intent(uid="${uid}", index=${index}).`);
     } else {
       const tool = KIND_TOOL[kind] ?? 'save_to_tome';
       lines.push(`   → ${tool} — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);

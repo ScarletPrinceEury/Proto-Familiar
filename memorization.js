@@ -181,6 +181,7 @@ import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from '.
 import { readSettingsSync } from './cerebellum.js';
 import { substituteMacros } from './macros.js';
 import { contentWithStandins, getAssetMeta } from './media.js';
+import { createSessionFollowup } from './recent-ponderings.js';
 
 // Vision (§7): fold image stand-ins into a slice's transcript so an image-
 // carrying message is memorable — an image-only message (empty text, one
@@ -257,7 +258,7 @@ content_tag — what this fact is ABOUT and how private it feels, as "topic:leve
   level — "open" or "sensitive". "sensitive" is anything my human would only want shared with people they really trust on that subject; "open" is the everyday version. Unsure → "sensitive".
   It's separate from category: category is how I file the fact, content_tag is who gets to see it. E.g. "my human came out to me" → "sexuality:sensitive"; "my human works at a bakery" → "work:open"; "we talked about their new medication" → "medical:sensitive"; "they like oat milk" → "general:open".`;
 
-export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = []) {
+export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true) {
   const readable = messages.filter(m => {
     if (m.role === 'tool') return false;
     if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) return false;
@@ -288,6 +289,17 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `\n### Schedule legend (the ward's items around these days — for schedule_refs only)\n${legend.slice(0, 30).map(n => `  ${n.label} [${n.type ?? 'item'}] = ${n.id}`).join('\n')}\n`
     : '';
 
+  // Deferred follow-ups (0.9.x, the "I'll do that later" catch). Ward-private
+  // only — the mirror of the deferred-"tell" bug: there I said a thing and
+  // forgot the bookkeeping, here I promise a thing and never do it. I only
+  // catch and re-surface it; I never invent the reminder time or the tool.
+  const followupsFieldLine = followupsEnabled
+    ? `,\n  "follow_ups": [\n    "Short summary of the thing I said I'd do but didn't"\n  ]`
+    : '';
+  const followupsFieldRules = followupsEnabled
+    ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but did not actually do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
+    : '';
+
   return `I'm looking back over the conversation I just had with {{user}}, pulling out what's worth keeping — the things I'd want to remember later about them, about myself, or about the people and things in their life. One clear fact per entry, concrete and real, nothing vague. I also jot down the plain connections between the people, places and things that came up, because that little web is how I find a memory again later.${focusBlock}
 
 I return ONLY valid JSON with this exact shape (no markdown fences, no commentary):
@@ -310,7 +322,7 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
       "to":       "Acme",
       "toType":   "organisation"
     }
-  ]
+  ]${followupsFieldLine}
 }
 
 ### Field rules — facts
@@ -349,7 +361,7 @@ from / to — the names of the two things. {{user}} is my human's name here; I u
 fromType / toType — what each one IS. Pick from: ${GRAPH_ENTITY_TYPES_STR}.
   ${GRAPH_NODE_RUBRIC}
 type — a short snake_case label read from→to: works_at, lives_in, married_to, parent_of, friend_of, has_condition, owns, located_in, colleague_of, and so on.
-
+${followupsFieldRules}
 ### A few rules for myself
 - One entry per distinct fact. One sentence carrying two facts about two people is two entries.
 - If a fact could be two categories, I take the more sensitive one (health > emotional > relationships > whereabouts > basics).
@@ -623,6 +635,36 @@ export function parseRelations(raw, finishReason = null) {
   return out;
 }
 
+// Deferred follow-ups (0.9.x): pull the optional "follow_ups" array out of the
+// SAME response that carried facts/relations — no extra LLM call (CLAUDE.md
+// "ride existing requests"). Mirrors parseFacts' shape but the payload is
+// just short strings, not objects, so it's a plain filter/trim, never a
+// brace-counting salvage. Enrichment, never load-bearing: malformed or
+// missing → [], same as parseRelations — a follow-up bug can never cost the
+// human a memorized fact.
+const MAX_FOLLOWUPS_PER_JOB = 10;
+
+export function parseFollowups(raw, finishReason = null) {
+  const cleaned = String(raw).replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+  const match = cleaned.match(/\{[\s\S]+\}/);
+  if (!match) return [];
+  let parsed;
+  try { parsed = JSON.parse(match[0]); }
+  catch { return []; } // truncated/malformed — a follow-up isn't worth salvaging half a JSON object for
+  const arr = Array.isArray(parsed.follow_ups) ? parsed.follow_ups : [];
+  return arr
+    .map(f => String(f ?? '').trim())
+    .filter(Boolean)
+    .slice(0, MAX_FOLLOWUPS_PER_JOB);
+}
+
+// The one gate: env off-switch wins outright; otherwise the ward's
+// `followupsEnabled` setting (default ON — the ward asked for this).
+export function followupsFeatureEnabled(settings) {
+  if (process.env.PROTO_FAMILIAR_FOLLOWUPS_DISABLED === '1') return false;
+  return settings?.followupsEnabled !== false;
+}
+
 // ── Consent-pending helpers ───────────────────────────────────────
 
 export async function readConsentPending() {
@@ -690,10 +732,17 @@ async function processJob(job) {
     } catch { /* no legend this job */ }
   }
 
+  // Deferred follow-ups (0.9.x): ward-private sessions only, gated by the
+  // env kill-switch + the ward's settings toggle. `promptFn === buildPrompt`
+  // already IS the ward-private branch (buildSharedRoomPrompt never asks for
+  // follow_ups), so this is the single flag both the prompt and the parse
+  // step read.
+  const followupsOn = promptFn === buildPrompt && followupsFeatureEnabled(settings);
+
   // Fold image stand-ins into the slice so image-carrying turns are memorable.
   const visionMessages = await foldImageStandins(job.messages, settings);
   const builtPrompt = promptFn === buildPrompt
-    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend)
+    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn)
     : promptFn(visionMessages, job.topicLabel ?? null, wardName);
   // {{char}}/{{user}} in the extraction templates resolve to the configured
   // names here (boundary #1) — the same place every other standalone Familiar-
@@ -709,6 +758,15 @@ async function processJob(job) {
   // "ride existing requests"). They're enrichment, so parseRelations never
   // throws; the worst case is an empty graph update, never a lost fact.
   const relations = parseRelations(raw, finishReason);
+  // Follow-ups ride the same response too. Never throws; a parse failure
+  // degrades to no follow-up, same as relations.
+  const followups = followupsOn ? parseFollowups(raw, finishReason) : [];
+  if (followups.length) {
+    for (const summary of followups) {
+      try { await createSessionFollowup({ summary }); }
+      catch (err) { console.warn('[memorization] createSessionFollowup failed:', err?.message ?? err); }
+    }
+  }
 
   // Build name → villager lookup for the remember gate
   const registry = await getRegistry().catch(() => ({ villagers: [] }));
