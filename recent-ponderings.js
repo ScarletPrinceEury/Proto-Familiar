@@ -219,40 +219,99 @@ async function findPonderingsTomeFile(tomesDir) {
 export async function getUnactedIntents({
   tomesDir = DEFAULT_TOMES_DIR,
   limit    = 5,
+  // markSurfaced:true is the LIVE, ward-private [Deferred intents] chat surface
+  // (thalamus enrich). There a "tell" gets exactly ONE turn in front of me,
+  // then the SYSTEM consumes it in code — it never waits on my
+  // acknowledge_deferred_intent call. That dependency was the bug: I'd voice a
+  // tell but forget the bookkeeping, so the same tell re-surfaced every turn
+  // and I asked my human the same warm question over and over. Read-only paths
+  // (list_deferred_intents, the reach-out candidate scan, the noticing wake
+  // check) pass false and never consume. FILING intents (tome/memory/identity)
+  // are never auto-consumed — they carry a real side-effect (a write, a memory,
+  // an identity edit) that must actually happen first, so acting-≠-marking-done
+  // still holds for them; only a "tell", whose whole action is the saying, is
+  // spent by being surfaced.
+  markSurfaced = false,
 } = {}) {
   const targetFile = await findPonderingsTomeFile(tomesDir);
   if (!targetFile) return [];
 
-  let tome;
-  try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
-  catch { return []; }
-  if (!tome?.entries) return [];
-
-  const now = Date.now();
-  const flat = [];
-  for (const entry of Object.values(tome.entries)) {
-    if (!Array.isArray(entry?.wants_to_save)) continue;
-    const created_ms = Date.parse(entry.created_at ?? '') || 0;
-    for (let idx = 0; idx < entry.wants_to_save.length; idx++) {
-      const intent = entry.wants_to_save[idx];
-      if (!intent || intent.acted_on !== false) continue;
-      if (intent.snooze_until) {
-        const snoozeMs = Date.parse(intent.snooze_until);
-        if (Number.isFinite(snoozeMs) && now < snoozeMs) continue;
+  // Read → decide → (optionally) write. Returns the intents to show plus
+  // whether the tome was mutated (only ever mutated when markSurfaced).
+  const process = (tome) => {
+    if (!tome?.entries) return { list: [], mutated: false };
+    const now = Date.now();
+    const candidates = [];   // { created_ms, entry, idx, intent }
+    const spentTells = [];   // tells already surfaced in a prior live turn
+    for (const entry of Object.values(tome.entries)) {
+      if (!Array.isArray(entry?.wants_to_save)) continue;
+      const created_ms = Date.parse(entry.created_at ?? '') || 0;
+      for (let idx = 0; idx < entry.wants_to_save.length; idx++) {
+        const intent = entry.wants_to_save[idx];
+        if (!intent || intent.acted_on !== false) continue;
+        if (intent.snooze_until) {
+          const snoozeMs = Date.parse(intent.snooze_until);
+          if (Number.isFinite(snoozeMs) && now < snoozeMs) continue;
+        }
+        // A tell that already had its live turn is spent — it never re-surfaces
+        // anywhere (that repetition was the bug). On the live surface it is
+        // auto-acked below; elsewhere it is simply hidden.
+        if (intent.kind === 'tell' && intent.surfaced_at) { spentTells.push(intent); continue; }
+        candidates.push({ created_ms, entry, idx, intent });
       }
-      flat.push({
-        uid:        entry.uid,
-        entryTitle: entry.comment ?? '',
-        created_ms,
-        index:      idx,
-        kind:       intent.kind,
-        summary:    intent.summary,
-      });
     }
+
+    candidates.sort((a, b) => a.created_ms - b.created_ms);
+    const shown = candidates.slice(0, limit);
+
+    let mutated = false;
+    if (markSurfaced) {
+      // Consume spent tells (they had their moment) — the code-side auto-ack
+      // that replaces relying on my own acknowledge call.
+      for (const intent of spentTells) {
+        if (intent.acted_on === false) { intent.acted_on = true; if (!intent.disposition) intent.disposition = 'surfaced'; mutated = true; }
+      }
+      // Stamp ONLY the tells actually shown this turn (post-limit) so a
+      // sliced-off tell isn't consumed without ever being seen.
+      const nowIso = new Date(now).toISOString();
+      for (const c of shown) {
+        if (c.intent.kind === 'tell' && !c.intent.surfaced_at) { c.intent.surfaced_at = nowIso; mutated = true; }
+      }
+    }
+
+    const list = shown.map(c => ({
+      uid:        c.entry.uid,
+      entryTitle: c.entry.comment ?? '',
+      created_ms: c.created_ms,
+      index:      c.idx,
+      kind:       c.intent.kind,
+      summary:    c.intent.summary,
+    }));
+    return { list, mutated };
+  };
+
+  // Read-only inspection: never take the write lock, never mutate.
+  if (!markSurfaced) {
+    let tome;
+    try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+    catch { return []; }
+    return process(tome).list;
   }
 
-  flat.sort((a, b) => a.created_ms - b.created_ms);
-  return flat.slice(0, limit);
+  // Live surface: read-modify-write under the tome lock so the stamp/auto-ack
+  // persists and can't race the acknowledge endpoint or reach-out delivery.
+  return withLock(targetFile, async () => {
+    let tome;
+    try { tome = JSON.parse(await fsp.readFile(targetFile, 'utf8')); }
+    catch { return []; }
+    const { list, mutated } = process(tome);
+    if (mutated) {
+      const tmp = targetFile + '.tmp';
+      await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+      await fsp.rename(tmp, targetFile);
+    }
+    return list;
+  });
 }
 
 /**
@@ -379,9 +438,12 @@ export async function snoozeIntent({ uid, index, minutes = 60, tomesDir = DEFAUL
 /**
  * Render unacted deferred intents as a prompt-injection block.
  *
- * Each entry shows the kind, the summary, the tool to use, and the
- * (uid, index) pair the Familiar needs to call acknowledge_deferred_intent
- * after filing. Returns '' when there are no intents.
+ * Each entry shows the kind and the summary. A filing intent
+ * (tome/memory/identity) shows its tool + the (uid, index) for
+ * acknowledge_deferred_intent after the file lands. A "tell" shows no
+ * acknowledge step — the system consumes it in code once it has had its one
+ * live turn (getUnactedIntents markSurfaced), so it can't nag turn after turn
+ * when I forget the bookkeeping. Returns '' when there are no intents.
  */
 export function formatDeferredIntentsBlock(intents) {
   if (!intents || intents.length === 0) return '';
@@ -396,7 +458,10 @@ export function formatDeferredIntentsBlock(intents) {
     const { uid, kind, summary, index } = intents[i];
     lines.push(`${i + 1}. [${kind}] ${summary}`);
     if (kind === 'tell') {
-      lines.push(`   → write this out in my response — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
+      // No acknowledge step for a tell: the system marks it said once it has
+      // had this turn, so I just bring it up — I never have to remember to
+      // file bookkeeping for something whose whole action is the saying.
+      lines.push(`   → I bring this up in my response now`);
     } else {
       const tool = KIND_TOOL[kind] ?? 'save_to_tome';
       lines.push(`   → ${tool} — then acknowledge_deferred_intent(uid="${uid}", index=${index})`);
