@@ -264,7 +264,7 @@ export async function buildStewardshipBlock(opts = {}) {
       let wxNote = '';
       if (outside && mirror) {
         const hour = forecastAtHour(mirror.hourly, Date.parse(r.when));
-        if (hour && isAdverseHour(hour)) wxNote = ` — ${formatItemWeather(hour)}`;
+        if (hour && isAdverseHour(hour)) wxNote = ` — ${formatItemWeather(hour, settings.weatherUnit)}`;
       }
       bullets.push(`"${r.label}" (${r.when.slice(0, 10)} ${r.when.slice(11, 16)}) needs ${r.unmet.join(', ')} sorted first — still open${tagNote}${wxNote}. I check in while there's time.`);
     }

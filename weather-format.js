@@ -76,10 +76,17 @@ export function windBand(kmh) {
 }
 
 // ── Value renderers (value + band, machine-formatted) ────────────────
-export function formatTemp(c) {
+// `unit` is 'celsius' (default) or 'fahrenheit' — the ward's display choice
+// (settings.weatherUnit). The model never converts; code does it here, once,
+// at the render boundary. The BAND stays computed from Celsius internally
+// (tempBand takes `c` unconverted) so a display-unit switch can never shift
+// a "cold"/"mild" read — only the printed number and its unit symbol change.
+export function formatTemp(c, unit = 'celsius') {
   if (!Number.isFinite(c)) return '';
   const band = tempBand(c);
-  return `${Math.round(c)}°C${band ? ` (${band})` : ''}`;
+  const value = unit === 'fahrenheit' ? Math.round(c * 9 / 5 + 32) : Math.round(c);
+  const symbol = unit === 'fahrenheit' ? '°F' : '°C';
+  return `${value}${symbol}${band ? ` (${band})` : ''}`;
 }
 
 function hhmm(iso) {
@@ -118,7 +125,7 @@ export function precipTransition(current, hourly, now = Date.now()) {
  * usable/fresh forecast (absence renders as absence). `mirror` is the
  * read-mirror shape { fetched_at, current, hourly }.
  */
-export function buildNowWeatherLine(mirror, { now = Date.now() } = {}) {
+export function buildNowWeatherLine(mirror, { now = Date.now(), unit = 'celsius' } = {}) {
   if (!mirror || typeof mirror !== 'object') return '';
   const fetchedMs = Date.parse(mirror.fetched_at);
   if (!Number.isFinite(fetchedMs) || (now - fetchedMs) > WEATHER_STALE_MS) return '';
@@ -126,7 +133,7 @@ export function buildNowWeatherLine(mirror, { now = Date.now() } = {}) {
   if (!cur || !Number.isFinite(Number(cur.temp_c))) return '';
 
   const parts = [];
-  parts.push(formatTemp(Number(cur.temp_c)));
+  parts.push(formatTemp(Number(cur.temp_c), unit));
   const words = wmoToWords(cur.weather_code);
   if (words) parts.push(words);
   const wb = windBand(Number(cur.wind_kmh));
@@ -226,11 +233,11 @@ export function isAdverseHour(hour) {
  * ~6°C"), otherwise a benign brief ("clear then, ~14°C (mild)"). Returns ''
  * only when the hour has no usable temperature.
  */
-export function formatItemWeather(hour) {
+export function formatItemWeather(hour, unit = 'celsius') {
   if (!hour || typeof hour !== 'object') return '';
   const t = Number(hour.temp_c);
   if (!Number.isFinite(t)) return '';
-  const tempStr = formatTemp(t);
+  const tempStr = formatTemp(t, unit);
   const code = Number(hour.weather_code);
   const wet = (Number(hour.precip_mm) > 0) || isPrecipCode(code);
   const wb = windBand(Number(hour.wind_kmh));
@@ -267,14 +274,20 @@ function modeCode(hours) {
   return best;
 }
 // One part's phrase: "light rain, 7–9°C (mild)" / "overcast, 4–6°C (cold)".
-function describePart(hours) {
+// The band is read off the (unconverted) Celsius high; only the printed
+// number(s) and unit symbol follow `unit`.
+function describePart(hours, unit = 'celsius') {
   const hs = hours.filter(h => h && typeof h === 'object');
   if (!hs.length) return '';
   const temps = hs.map(h => Number(h.temp_c)).filter(Number.isFinite);
   let tempStr = '';
   if (temps.length) {
-    const lo = Math.round(Math.min(...temps)), hi = Math.round(Math.max(...temps));
-    tempStr = lo === hi ? `${hi}°C (${tempBand(hi)})` : `${lo}–${hi}°C (${tempBand(hi)})`;
+    const loC = Math.min(...temps), hiC = Math.max(...temps);
+    const band = tempBand(hiC);
+    const conv = c => unit === 'fahrenheit' ? Math.round(c * 9 / 5 + 32) : Math.round(c);
+    const symbol = unit === 'fahrenheit' ? '°F' : '°C';
+    const lo = conv(loC), hi = conv(hiC);
+    tempStr = lo === hi ? `${hi}${symbol} (${band})` : `${lo}–${hi}${symbol} (${band})`;
   }
   const precipHours = hs.filter(h => (Number(h.precip_mm) > 0) || isPrecipCode(h.weather_code));
   let condition;
@@ -301,12 +314,12 @@ function notableForDay(dayHours) {
   if (firstStrong) notes.push(`strong wind around ~${hhmm(firstStrong.time)}`);
   return notes.slice(0, 3);
 }
-function describeDay(label, dayHours) {
+function describeDay(label, dayHours, unit = 'celsius') {
   if (!dayHours.length) return '';
   const partStrs = [];
   for (const p of PARTS) {
     const hrs = dayHours.filter(h => { const hr = hourOf(h.time); return hr >= p.from && hr <= p.to; });
-    const d = describePart(hrs);
+    const d = describePart(hrs, unit);
     if (d) partStrs.push(`${p.key}: ${d}`);
   }
   if (!partStrs.length) return '';
@@ -323,15 +336,15 @@ function describeDay(label, dayHours) {
  * (absence renders as absence). `locationLabel` is the ward's own label (never
  * a place name/coords) and is included only on ward-private surfaces.
  */
-export function weatherArc(forecast, { todayDate, tomorrowDate, locationLabel = '' } = {}) {
+export function weatherArc(forecast, { todayDate, tomorrowDate, locationLabel = '', unit = 'celsius' } = {}) {
   if (!forecast || typeof forecast !== 'object') return '';
   const hourly = Array.isArray(forecast.hourly) ? forecast.hourly : [];
   if (!hourly.length) return '';
   const today = hourly.filter(h => dateOf(h.time) === todayDate);
   const tomorrow = hourly.filter(h => dateOf(h.time) === tomorrowDate);
   const lines = [];
-  const t1 = describeDay('Today', today);
-  const t2 = describeDay('Tomorrow', tomorrow);
+  const t1 = describeDay('Today', today, unit);
+  const t2 = describeDay('Tomorrow', tomorrow, unit);
   if (t1) lines.push(t1);
   if (t2) lines.push(t2);
   if (!lines.length) return '';

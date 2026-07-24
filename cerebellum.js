@@ -627,8 +627,9 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // lastUserMessageAt comes from silenceMs; the loop calls us with that
   // already computed.
   const lastUserAt = new Date(nowMs - silenceMs).toISOString();
-  // Triage is a ward-private deliberation → full weather line.
-  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs }) });
+  // Triage is a ward-private deliberation → full weather line, in the
+  // ward's chosen unit (display only — never a gate/decision input).
+  const nowBlock = buildTimeAnchorBlock({ now: nowMs, lastUserMessageAt: lastUserAt, weatherLine: readWeatherNowLine({ now: nowMs, unit: s?.weatherUnit }) });
 
   const signalsBlock = signals?.length
     ? `\nRecent signals that raised the threat level:\n${signals.map(sig => {
@@ -3966,7 +3967,7 @@ export const TOOL_EXECUTORS = {
       return vague || "I'll keep the weather to myself here.";
     }
     const { todayDate, tomorrowDate } = dayDatesFor(loc.timezone, now);
-    const arc = weatherArc(got.forecast, { todayDate, tomorrowDate, locationLabel: loc.label });
+    const arc = weatherArc(got.forecast, { todayDate, tomorrowDate, locationLabel: loc.label, unit: s?.weatherUnit });
     if (!arc) return "The forecast I have doesn't reach today and tomorrow yet — I'll refresh it and look again.";
     return got.stale ? `${arc}\n(This is the last reading I have — the live fetch didn't come back just now.)` : arc;
   },

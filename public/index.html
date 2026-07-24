@@ -1674,6 +1674,15 @@
           </div>
           <div class="field-hint">On by default. When on, your Familiar can feel the weather where you are and check the day ahead before nudging you about anything outdoors. <strong>Your places stay on this device's server and are never told to the AI</strong> — it only ever sees the label you give a place ("home", "work") and the weather in plain words, never coordinates. Off, and it says nothing about the weather. Hard off-switch: <code>PROTO_FAMILIAR_WEATHER_DISABLED=1</code>.</div>
 
+          <div class="field" style="margin-top:10px">
+            <label>Temperature shown as</label>
+            <div role="group" aria-label="Temperature unit">
+              <label class="ws-opt"><input type="radio" name="weather-unit" value="celsius" aria-label="Celsius"><span>°C — Celsius</span></label>
+              <label class="ws-opt"><input type="radio" name="weather-unit" value="fahrenheit" aria-label="Fahrenheit"><span>°F — Fahrenheit</span></label>
+            </div>
+            <div class="field-hint">Every temperature your Familiar shows you — the current reading, the day ahead, alerts — follows this. Celsius by default.</div>
+          </div>
+
           <h4 style="margin:14px 0 4px">Your places</h4>
           <div class="field-hint" style="margin-bottom:6px">Add the places whose weather matters — the first becomes your current place (the one the "right now" weather follows). The AI only ever learns the label.</div>
           <div id="weather-places-list" style="margin:8px 0"><div class="field-hint">No places yet.</div></div>

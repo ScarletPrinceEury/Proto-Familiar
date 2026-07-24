@@ -242,6 +242,12 @@ const state = {
   // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
+  // Deferred follow-ups (the "I'll do that later" catch). Default-ON: when I
+  // tell my human I'll do something and don't actually use the tool to make
+  // it real, memorization catches the open promise and re-surfaces it to me
+  // until I follow through or drop it. Off via this toggle or
+  // PROTO_FAMILIAR_FOLLOWUPS_DISABLED=1 on the server.
+  followupsEnabled:        true,
 
   // Warm reach-outs (companionship loop). Default-ON: the Familiar
   // reaches out warmly on its own, not only in crisis. Quiet hours are
@@ -264,6 +270,10 @@ const state = {
   // Weather sense (W-A). Default-ON but inert until the ward adds a location.
   // Off via this toggle or PROTO_FAMILIAR_WEATHER_DISABLED=1 on the server.
   weatherEnabled:          true,
+  // Display unit for every temperature the Familiar shows me (the [Now]
+  // line, weather_today, alerts) — 'celsius' or 'fahrenheit'. Conversion
+  // happens in code (weather-format.js); the model never does the math.
+  weatherUnit:             'celsius',
   // Memory coverage sweep (day-anchoring Phase 2). Default-ON: a slow pass that
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
@@ -401,9 +411,9 @@ const SERVER_SYNCED_KEYS = [
   'providerApiKeys',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
-  'ponderingEnabled', 'ponderingIntervalScale',
+  'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
-  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled',
+  'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'uiShowAdvanced',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
@@ -3214,6 +3224,10 @@ function readSettingsFromUI() {
   }
   if ($('event-alerts-toggle')) state.eventAlertsEnabled = $('event-alerts-toggle').checked;
   if ($('weather-toggle')) state.weatherEnabled = $('weather-toggle').checked;
+  {
+    const wu = document.querySelector('input[name="weather-unit"]:checked');
+    if (wu) state.weatherUnit = wu.value === 'fahrenheit' ? 'fahrenheit' : 'celsius';
+  }
   if ($('vision-enabled-toggle')) {
     const was = state.visionEnabled !== false;
     state.visionEnabled = $('vision-enabled-toggle').checked;
@@ -3380,6 +3394,7 @@ function writeSettingsToUI() {
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
+  setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
   if ($('elapsed-stamp-hours')) setIfNotFocused($('elapsed-stamp-hours'), 'value', state.elapsedStampHours ?? 24);
   if ($('gcal-source')) setIfNotFocused($('gcal-source'), 'value', state.gcalSource ?? 'link');
@@ -4627,6 +4642,9 @@ function init() {
       }
       readSettingsFromUI();
     });
+  });
+  document.querySelectorAll('input[name="weather-unit"]').forEach(el => {
+    el.addEventListener('change', readSettingsFromUI);
   });
 
   // Provider change → refresh model suggestions and set sane default. Also
@@ -8819,6 +8837,7 @@ let _weatherPending = null;   // { lat, lon, place_name, timezone } awaiting a l
 async function teLoadWeather() {
   const t = $('weather-toggle');
   if (t) t.checked = state.weatherEnabled !== false;
+  setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   weatherCancelPlace();
   await renderWeatherPlaces();
 }
