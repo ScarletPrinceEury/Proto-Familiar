@@ -2029,7 +2029,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let deferredIntentsBlock = '';
     if (liveTurn && !staticOnly && !gated) {
       try {
-        const intents = await getUnactedIntents({ limit: 5 });
+        // markSurfaced:true — this is the live, ward-private surface, so a
+        // surfaced "tell" is consumed in code after its one turn instead of
+        // waiting on my acknowledge call (which I'd forget, re-asking the same
+        // warm question every turn). Filing intents are untouched by this.
+        const intents = await getUnactedIntents({ limit: 5, markSurfaced: true });
         deferredIntentsBlock = formatDeferredIntentsBlock(intents);
         if (intents.length > 0) {
           console.log(`[thalamus] deferred intents: ${intents.length} unacted (oldest first)`);

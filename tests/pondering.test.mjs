@@ -734,17 +734,19 @@ test('formatDeferredIntentsBlock: tell renders as conversational hint, not tool 
     { uid: 'abc', kind: 'tell',     summary: 'ask how the DnD session went', index: 0 },
     { uid: 'def', kind: 'identity', summary: 'Melian dislikes sudden plan changes', index: 1 },
   ]);
-  // tell: no tool name, just the conversational instruction
+  // tell: no tool name, just bring it up — and NO acknowledge step, because
+  // the system consumes a surfaced tell in code (getUnactedIntents
+  // markSurfaced), so the Familiar can't be relied on to file bookkeeping.
   assert.match(block, /\[tell\].*ask how the DnD session went/);
-  assert.match(block, /write this out in my response/);
+  assert.match(block, /I bring this up in my response now/);
   assert.doesNotMatch(block, /save_to_tome.*index=0/);
   assert.doesNotMatch(block, /save_memory.*index=0/);
   assert.doesNotMatch(block, /update_identity.*index=0/);
-  // storage kind still renders its tool
+  assert.doesNotMatch(block, /acknowledge_deferred_intent\(uid="abc"/);
+  // storage kind still renders its tool AND its acknowledge call (a filing
+  // intent has a real action that must land before it's marked done)
   assert.match(block, /\[identity\].*Melian dislikes sudden plan changes/);
   assert.match(block, /update_identity/);
-  // both carry acknowledge call
-  assert.match(block, /acknowledge_deferred_intent\(uid="abc", index=0\)/);
   assert.match(block, /acknowledge_deferred_intent\(uid="def", index=1\)/);
 });
 

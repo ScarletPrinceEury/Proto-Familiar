@@ -618,7 +618,17 @@ owns the deferred-intent consumer (Pillar B): `getUnactedIntents()`
 returns unacted `wants_to_save` entries oldest-first; `markIntentActedOn()`
 flips one `acted_on` flag under the per-file lock after the chat-turn
 Familiar files it; `formatDeferredIntentsBlock()` renders the [Deferred
-intents] block for enrich().
+intents] block for enrich(). **A "tell" auto-consumes in code:**
+`getUnactedIntents({ markSurfaced:true })` — passed only on enrich's live,
+ward-private surface — stamps a shown `tell` with `surfaced_at`, and on the
+next live turn marks it `acted_on` (disposition `'surfaced'`) so it is shown
+exactly once. This removes the reliance on the LLM calling
+`acknowledge_deferred_intent` after voicing a tell — forgetting that made the
+same warm question re-surface every turn. Filing intents (tome/memory/identity)
+are never auto-consumed: they carry a real side-effect that must land first, so
+they still require the tool call + acknowledge (acting-≠-marking-done). All
+read-only callers (`list_deferred_intents`, the reach-out candidate scan, the
+noticing wake check) pass `markSurfaced:false` and never mutate.
 
 **`pondering-cadence.js`** — pure tiered formula:
 `computeRequiredInterval(topWeight, threatLevel, { scale })`. Tiers:

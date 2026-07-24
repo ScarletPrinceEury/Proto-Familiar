@@ -278,7 +278,7 @@ Proto-Familiar's version lives in `package.json` (`version` field) and is the **
 - The startup banner: `Proto-Familiar <v> running at:`
 - The sidebar footer badge in the UI.
 
-The current release tag is whatever's in `package.json`'s `version` field — read at boot and exposed through the surfaces above. While in alpha the version stays in the `0.2.x` series; the minor slot is reserved for the next major milestone (currently the Unruh temporal-context module — see [`unruh-implementation-plan.md`](unruh-implementation-plan.md)).
+The current release tag is whatever's in `package.json`'s `version` field — read at boot and exposed through the surfaces above. While in alpha the format is `MAJOR.MINOR.PATCH-alpha`; the MINOR slot names a milestone (one milestone = one minor — see [`CLAUDE.md`](../CLAUDE.md)) and PATCH covers everything landed inside it, so check `package.json` directly for what's current rather than relying on a milestone name here.
 
 Bump policy (followed by AI agents working in this repo via [`CLAUDE.md`](../CLAUDE.md)):
 

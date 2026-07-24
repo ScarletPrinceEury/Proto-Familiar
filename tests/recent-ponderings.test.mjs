@@ -6,7 +6,7 @@ import { promises as fsp, mkdtempSync, rmSync } from 'fs';
 import { randomUUID } from 'crypto';
 
 import { ponderOnce, PONDERINGS_TOME_NAME } from '../pondering.js';
-import { getRecentPonderings, formatPonderingsForPrompt, readPonderingByUid } from '../recent-ponderings.js';
+import { getRecentPonderings, formatPonderingsForPrompt, readPonderingByUid, getUnactedIntents } from '../recent-ponderings.js';
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ponder-recent-'));
@@ -151,6 +151,104 @@ test('formatPonderingsForPrompt renders only the latest in full; the rest are a 
   assert.match(out, /t2.*\[id: b\]/);
   assert.equal(out.includes('c2-full'), false);
   assert.match(out, /read_pondering/);
+});
+
+// ── Deferred-intent surfacing / auto-consume ──────────────────────────────
+// A "tell" whose whole action is the saying must be consumed by the system
+// once it has had its one live turn — it must NOT wait on the LLM's
+// acknowledge call (forgetting that was the "asked the same warm question
+// three times in one chat" bug). Filing intents keep needing a real action.
+
+async function seedIntentsTome(dir, entries) {
+  const id = randomUUID();
+  const file = path.join(dir, `${id}.json`);
+  const tome = {
+    id, name: PONDERINGS_TOME_NAME, description: '', enabled: false,
+    entries: Object.fromEntries(entries.map(e => [e.uid, {
+      uid: e.uid, comment: e.title ?? '', content: e.content ?? 'p', created_at: e.created_at,
+      enabled: false, scope: 'pondering',
+      wants_to_save: (e.wants_to_save ?? []).map(w => ({ acted_on: false, ...w })),
+    }])),
+  };
+  await fsp.writeFile(file, JSON.stringify(tome, null, 2));
+  return file;
+}
+const readTome = async (file) => JSON.parse(await fsp.readFile(file, 'utf8'));
+
+test('a tell surfaces once under markSurfaced, then auto-consumes on the next live turn', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const file = await seedIntentsTome(dir, [
+      { uid: 'e1', created_at: '2026-05-30T10:00:00Z',
+        wants_to_save: [{ kind: 'tell', summary: 'ask how the garden is doing' }] },
+    ]);
+
+    // Turn 1: the tell is shown and stamped surfaced_at (still unacted).
+    const first = await getUnactedIntents({ tomesDir: dir, markSurfaced: true });
+    assert.deepEqual(first.map(i => i.summary), ['ask how the garden is doing']);
+    let tome = await readTome(file);
+    assert.equal(tome.entries.e1.wants_to_save[0].acted_on, false);
+    assert.ok(tome.entries.e1.wants_to_save[0].surfaced_at, 'surfaced_at stamped on turn 1');
+
+    // Turn 2: it has had its turn → auto-acked in code and no longer shown.
+    const second = await getUnactedIntents({ tomesDir: dir, markSurfaced: true });
+    assert.deepEqual(second, [], 'a spent tell never re-surfaces');
+    tome = await readTome(file);
+    assert.equal(tome.entries.e1.wants_to_save[0].acted_on, true, 'auto-consumed without an LLM ack');
+    assert.equal(tome.entries.e1.wants_to_save[0].disposition, 'surfaced');
+  } finally { cleanup(); }
+});
+
+test('read-only inspection (markSurfaced:false) never mutates and hides spent tells', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const file = await seedIntentsTome(dir, [
+      { uid: 'e1', created_at: '2026-05-30T10:00:00Z',
+        wants_to_save: [
+          { kind: 'tell', summary: 'fresh tell' },
+          { kind: 'tell', summary: 'already surfaced', surfaced_at: '2026-05-29T10:00:00Z' },
+        ] },
+    ]);
+    const before = await fsp.readFile(file, 'utf8');
+    const got = await getUnactedIntents({ tomesDir: dir, markSurfaced: false });
+    assert.deepEqual(got.map(i => i.summary), ['fresh tell'], 'spent tell hidden, fresh one shown');
+    assert.equal(await fsp.readFile(file, 'utf8'), before, 'read-only path wrote nothing');
+  } finally { cleanup(); }
+});
+
+test('filing intents are never auto-consumed by surfacing (they need the real action)', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const file = await seedIntentsTome(dir, [
+      { uid: 'e1', created_at: '2026-05-30T10:00:00Z',
+        wants_to_save: [{ kind: 'memory', summary: 'remember the vet appointment' }] },
+    ]);
+    for (let turn = 0; turn < 3; turn++) {
+      const got = await getUnactedIntents({ tomesDir: dir, markSurfaced: true });
+      assert.deepEqual(got.map(i => i.summary), ['remember the vet appointment'],
+        'a filing intent keeps surfacing until actually acted on');
+    }
+    const tome = await readTome(file);
+    assert.equal(tome.entries.e1.wants_to_save[0].acted_on, false);
+    assert.equal(tome.entries.e1.wants_to_save[0].surfaced_at, undefined, 'filing intents are never stamped');
+  } finally { cleanup(); }
+});
+
+test('only tells actually shown (post-limit) are stamped; sliced-off tells are untouched', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const file = await seedIntentsTome(dir, [
+      { uid: 'a', created_at: '2026-05-25T10:00:00Z', wants_to_save: [{ kind: 'tell', summary: 'oldest' }] },
+      { uid: 'b', created_at: '2026-05-26T10:00:00Z', wants_to_save: [{ kind: 'tell', summary: 'middle' }] },
+      { uid: 'c', created_at: '2026-05-27T10:00:00Z', wants_to_save: [{ kind: 'tell', summary: 'newest' }] },
+    ]);
+    const got = await getUnactedIntents({ tomesDir: dir, limit: 2, markSurfaced: true });
+    assert.deepEqual(got.map(i => i.summary), ['oldest', 'middle'], 'oldest-first, limited to 2');
+    const tome = await readTome(file);
+    assert.ok(tome.entries.a.wants_to_save[0].surfaced_at, 'shown tell stamped');
+    assert.ok(tome.entries.b.wants_to_save[0].surfaced_at, 'shown tell stamped');
+    assert.equal(tome.entries.c.wants_to_save[0].surfaced_at, undefined, 'sliced-off tell NOT stamped');
+  } finally { cleanup(); }
 });
 
 test('readPonderingByUid returns the full text by id, and errors cleanly on a miss', async () => {
