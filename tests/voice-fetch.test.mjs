@@ -371,3 +371,120 @@ test('an unpacked model whose marker cannot be written counts as NOT installed',
     assert.equal(i.models[0].complete, false);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// ── Reclaim, for archive models ──────────────────────────────────────────
+//
+// Raised in review: reclaim only unlinked `installedPath()` and then called
+// `fs.rmdir`, which removes EMPTY directories only. An archive model unpacks
+// into the model directory and leaves no file at `installedPath` at all, so
+// for the common case reclaim silently freed almost nothing.
+
+/** A real .tar.bz2, built with Python, so this exercises the true install shape. */
+async function makeArchiveBuffer(dir, entries) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+  const out = path.join(dir, 'built.tar.bz2');
+  await run('python3', ['-c', `
+import tarfile, io
+with tarfile.open(${JSON.stringify(out)}, 'w:bz2') as tf:
+    for name, data in ${JSON.stringify(entries)}:
+        b = data.encode()
+        ti = tarfile.TarInfo('pkg/' + name)
+        ti.size = len(b)
+        tf.addfile(ti, io.BytesIO(b))
+`]);
+  const buf = await fs.readFile(out);
+  await fs.rm(out, { force: true });
+  return buf;
+}
+
+test('reclaiming an ARCHIVE model removes the unpacked directory, not just the blob', async () => {
+  const dir = await tmpDir();
+  const build = await tmpDir();
+  try {
+    const body = await makeArchiveBuffer(build, [['encoder.onnx', 'e'.repeat(5000)], ['tokens.txt', 'hello']]);
+    await withServer({ '/m': body }, async (base) => {
+      const digest = sha(body);
+      const m = model('m1', [{ name: 'm.tar.bz2', url: `${base}/m`, sha256: digest, bytes: body.length }]);
+      const r = await fetchPlan({ plan: { all: [m] }, modelsDir: dir });
+      assert.equal(r.ok, true);
+
+      const modelDir = path.join(dir, 'm1');
+      assert.ok((await fs.readdir(modelDir)).includes('encoder.onnx'), 'precondition: it unpacked');
+
+      const rec = await reclaimModels({ plan: { all: [m] }, modelsDir: dir });
+      assert.equal(await fs.access(modelDir).then(() => true, () => false), false,
+        'the unpacked directory must be gone, not left behind by an rmdir that only handles empty ones');
+      assert.equal(await fs.access(blobPath(dir, digest)).then(() => true, () => false), false);
+
+      // freedBytes must include the UNPACKED bytes, which are most of the disk:
+      // counting only the blob would report a fraction of what was reclaimed.
+      assert.ok(rec.freedBytes > body.length,
+        `freed ${rec.freedBytes} should exceed the ${body.length}-byte archive alone`);
+      assert.ok(rec.freedBytes >= 5000, 'the extracted payload is counted');
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(build, { recursive: true, force: true });
+  }
+});
+
+test('reclaim still works for a plain-file model, and counts it once', async () => {
+  const dir = await tmpDir();
+  const body = Buffer.alloc(4096, 4);
+  try {
+    await withServer({ '/a': body }, async (base) => {
+      const digest = sha(body);
+      const m = model('m1', [{ name: 'a.onnx', url: `${base}/a`, sha256: digest, bytes: body.length }]);
+      await fetchPlan({ plan: { all: [m] }, modelsDir: dir });
+
+      const rec = await reclaimModels({ plan: { all: [m] }, modelsDir: dir });
+      assert.equal(await fs.access(path.join(dir, 'm1')).then(() => true, () => false), false);
+      // Blob + its hardlink in the model dir are the SAME bytes on disk, so the
+      // figure should be about one copy, not two.
+      assert.ok(rec.freedBytes >= body.length);
+      assert.ok(rec.freedBytes <= body.length * 2, 'a hardlink is not a second copy of the disk');
+    });
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('a model id that is not a plain path segment is skipped, never used for a recursive delete', async () => {
+  const dir = await tmpDir();
+  try {
+    const canary = path.join(dir, 'do-not-delete');
+    await fs.mkdir(canary, { recursive: true });
+    await fs.writeFile(path.join(canary, 'keep.txt'), 'still here');
+
+    for (const id of ['../do-not-delete', '..', '.', 'a/b', '']) {
+      const rec = await reclaimModels({ plan: { all: [{ id, label: id, files: [] }] }, modelsDir: dir });
+      assert.equal(rec.freedBytes, 0);
+    }
+    assert.equal(await fs.readFile(path.join(canary, 'keep.txt'), 'utf8'), 'still here');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('reclaim of one model never takes a blob another still needs, archives included', async () => {
+  const dir = await tmpDir();
+  const build = await tmpDir();
+  try {
+    const shared = await makeArchiveBuffer(build, [['shared.onnx', 's'.repeat(3000)]]);
+    await withServer({ '/s': shared }, async (base) => {
+      const digest = sha(shared);
+      const f = () => ({ name: 'm.tar.bz2', url: `${base}/s`, sha256: digest, bytes: shared.length });
+      const m1 = model('m1', [f()]);
+      const m2 = model('m2', [f()]);
+      await fetchPlan({ plan: { all: [m1, m2] }, modelsDir: dir });
+
+      await reclaimModels({ plan: { all: [m2] }, modelsDir: dir, keepBlobsFor: [m1] });
+      assert.equal(await fs.access(blobPath(dir, digest)).then(() => true, () => false), true,
+        'the shared blob survives');
+      assert.equal(await fs.access(path.join(dir, 'm1')).then(() => true, () => false), true,
+        "and the other model's unpacked directory is untouched");
+      assert.equal(await fs.access(path.join(dir, 'm2')).then(() => true, () => false), false);
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(build, { recursive: true, force: true });
+  }
+});

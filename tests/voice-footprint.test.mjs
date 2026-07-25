@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  preflightDecision, dirSize, measureFootprint, volumeSpace,
+  preflightDecision, dirSize, uniqueSize, measureFootprint, volumeSpace,
   RESERVE_BYTES, FOOTPRINT_CATEGORIES,
 } from '../voice-footprint.js';
 
@@ -164,4 +164,39 @@ test('volumeSpace walks up to an existing ancestor, so it works before the targe
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('uniqueSize counts one set of bytes once, however many names it has', async () => {
+  // The model store is full of hardlinks by design: a blob and its link in a
+  // model directory are the same bytes. Summing both would tell my human they
+  // reclaimed twice what they did.
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vf-'));
+  try {
+    await fs.mkdir(path.join(root, 'blobs'), { recursive: true });
+    await fs.mkdir(path.join(root, 'model'), { recursive: true });
+    const blob = path.join(root, 'blobs', 'abc');
+    await fs.writeFile(blob, Buffer.alloc(4000));
+    await fs.link(blob, path.join(root, 'model', 'a.onnx'));
+
+    assert.equal((await dirSize(root)).bytes, 8000, 'dirSize sees two files');
+    assert.equal((await uniqueSize(root)).bytes, 4000, 'uniqueSize sees one set of bytes');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('uniqueSize counts genuinely separate copies separately', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vf-'));
+  try {
+    await fs.writeFile(path.join(root, 'a'), Buffer.alloc(1000));
+    await fs.writeFile(path.join(root, 'b'), Buffer.alloc(1000));
+    assert.equal((await uniqueSize(root)).bytes, 2000, 'a copy is not a hardlink');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('uniqueSize is zero for an absent tree and bounded on a large one', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vf-'));
+  try {
+    assert.deepEqual(await uniqueSize(path.join(root, 'nope')), { bytes: 0, partial: false });
+    for (let i = 0; i < 20; i++) await fs.writeFile(path.join(root, `f${i}`), Buffer.alloc(10));
+    assert.equal((await uniqueSize(root, { maxEntries: 5 })).partial, true);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

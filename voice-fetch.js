@@ -36,7 +36,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 
 import { isPinned, planSize, describePlanForConsent } from './voice-models.js';
-import { preflight } from './voice-footprint.js';
+import { preflight, uniqueSize } from './voice-footprint.js';
 import { isArchive, extractArchive, writeMarker, isExtractedFrom } from './voice-extract.js';
 
 /** Where the bytes live, relative to the app root. Git-ignored; no model ships in the repo. */
@@ -435,26 +435,52 @@ export async function reclaimModels({ plan, modelsDir, keepBlobsFor = [] }) {
   const keep = new Set();
   for (const m of keepBlobsFor) for (const f of m.files ?? []) if (isSha256(f.sha256)) keep.add(f.sha256);
 
-  let freed = 0;
+  // How much disk this actually frees is MEASURED, not accumulated: the store
+  // is full of hardlinks by design, so adding up the things we delete would
+  // count one set of bytes twice (a blob and its link in a model directory) or
+  // credit us with freeing bytes another model still holds. Measuring the
+  // whole store either side, counting each inode once, is the ground truth and
+  // is correct for every shape at once — archives, hardlinks, copy fallbacks,
+  // and blobs a second model still needs.
+  const before = (await uniqueSize(modelsDir)).bytes;
   const removed = [];
+
   for (const model of plan?.all ?? []) {
+    // A model id becomes a directory we delete RECURSIVELY, so it must be one
+    // ordinary path segment. Ids come from the manifest today, but a recursive
+    // delete keyed on a value that could ever carry `..` is the kind of thing
+    // that is only safe until it isn't.
+    if (!isSafeSegment(model.id)) continue;
+
     for (const f of model.files ?? []) {
-      const dest = installedPath(modelsDir, model.id, f.name);
-      const destSize = await sizeOf(dest);
-      try { await fs.unlink(dest); } catch { /* not installed */ }
       if (isSha256(f.sha256) && !keep.has(f.sha256)) {
-        const blob = blobPath(modelsDir, f.sha256);
-        const blobSize = await sizeOf(blob);
         try {
-          await fs.unlink(blob);
-          freed += blobSize ?? destSize ?? 0;
+          await fs.unlink(blobPath(modelsDir, f.sha256));
           removed.push({ id: model.id, file: f.name });
         } catch { /* already gone */ }
       }
     }
-    try { await fs.rmdir(path.join(modelsDir, model.id)); } catch { /* non-empty or absent; fine */ }
+
+    // Recursive, because an ARCHIVE model unpacks into this directory and
+    // leaves no file at `installedPath` at all. The previous `rmdir` removed
+    // EMPTY directories only, so for archives — the common case — it silently
+    // did nothing and reclaim freed almost none of the disk it reported.
+    // (Raised in review.)
+    try {
+      await fs.rm(path.join(modelsDir, model.id), { recursive: true, force: true });
+    } catch { /* leave what we cannot remove; the measurement stays honest */ }
   }
-  return { freedBytes: freed, removed };
+
+  const after = (await uniqueSize(modelsDir)).bytes;
+  return { freedBytes: Math.max(0, before - after), removed };
+}
+
+/** A path segment that is exactly one ordinary name — no separators, no traversal. */
+function isSafeSegment(name) {
+  return typeof name === 'string'
+    && name.length > 0
+    && name !== '.' && name !== '..'
+    && !/[\\/]/.test(name);
 }
 
 /** The consent payload a ward-facing surface shows before any of this runs. */

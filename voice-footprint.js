@@ -116,6 +116,52 @@ export async function dirSize(dir, { maxEntries = 200_000 } = {}) {
 }
 
 /**
+ * Bytes a directory tree ACTUALLY occupies, counting each inode once.
+ *
+ * `dirSize` sums every file it sees, which is the right answer for "how big is
+ * this tree". It is the wrong answer for "how much disk would deleting it
+ * free", because the model store is deliberately full of hardlinks: a blob and
+ * its link in a model directory are one set of bytes with two names. Summing
+ * both double-counts, and reporting that to my human as reclaimed space would
+ * be a straightforwardly false number.
+ *
+ * Falls back to counting a file normally when identity is unavailable (some
+ * filesystems report ino 0), which over-counts rather than under-counts —
+ * the safer direction for a figure someone is deciding on.
+ */
+export async function uniqueSize(dir, { maxEntries = 200_000 } = {}) {
+  const seen = new Set();
+  let bytes = 0;
+  let seenCount = 0;
+  let partial = false;
+
+  const walk = async (d) => {
+    if (seenCount >= maxEntries) { partial = true; return; }
+    let entries;
+    try { entries = await fs.readdir(d, { withFileTypes: true }); } catch { partial = true; return; }
+    for (const e of entries) {
+      if (seenCount >= maxEntries) { partial = true; return; }
+      seenCount++;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { await walk(full); continue; }
+      try {
+        const st = await fs.lstat(full);
+        const id = st.ino ? `${st.dev}:${st.ino}` : null;
+        if (id) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+        }
+        bytes += st.size;
+      } catch { partial = true; }
+    }
+  };
+
+  try { await fs.access(dir); } catch { return { bytes: 0, partial: false }; }
+  await walk(dir);
+  return { bytes, partial };
+}
+
+/**
  * Free and total bytes on the volume holding `target`. Walks up to the
  * nearest existing ancestor, because the pre-flight check runs BEFORE the
  * models directory exists.
