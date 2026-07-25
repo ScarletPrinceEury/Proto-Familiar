@@ -159,3 +159,60 @@ test('a steady voice and a moving one are described differently', () => {
   assert.match(steady, /steady/);
   assert.match(moving, /moves around/);
 });
+
+// ── The cached and fresh paths must agree ────────────────────────────────
+
+test('a measurement describes itself the same way whether or not it was cached', async () => {
+  const { measureClip } = await import('../voice-clips.js');
+  const os = await import('node:os');
+  const fsp = (await import('node:fs')).promises;
+  const pathm = await import('node:path');
+
+  const root = await fsp.mkdtemp(pathm.join(os.tmpdir(), 'vclip-'));
+  try {
+    const wav = makeWav({ hz: 150, seconds: 1 });
+    const { createHash } = await import('node:crypto');
+    const sha256 = createHash('sha256').update(wav).digest('hex');
+    await fsp.writeFile(pathm.join(root, 'voice-clips.json'), JSON.stringify({
+      clips: [{ id: 'x', variant: 'original', source: 'voice-zero', file: 'x.wav', url: 'https://e.test/x.wav', sha256, bytes: wav.length }],
+      counts: { clips: 1, voices: 1 },
+    }));
+
+    const { _resetCatalogue } = await import('../voice-clips.js');
+    _resetCatalogue();
+    const fetchImpl = async () => ({ ok: true, arrayBuffer: async () => wav });
+
+    const fresh = await measureClip({ rootDir: root, key: 'voice-zero/x/original', fetchImpl });
+    const cached = await measureClip({ rootDir: root, key: 'voice-zero/x/original', fetchImpl });
+
+    assert.equal(fresh.cached, false);
+    assert.equal(cached.cached, true, 'the second call should come from cache');
+    assert.equal(cached.medianF0Hz, fresh.medianF0Hz);
+    assert.ok(fresh.description, 'a fresh measurement describes itself');
+    assert.equal(cached.description, fresh.description, 'and a cached one describes itself identically');
+    _resetCatalogue();
+  } finally { await fsp.rm(root, { recursive: true, force: true }); }
+});
+
+test('a clip whose bytes do not match the catalogue is refused, not measured', async () => {
+  const { measureClip, _resetCatalogue } = await import('../voice-clips.js');
+  const os = await import('node:os');
+  const fsp = (await import('node:fs')).promises;
+  const pathm = await import('node:path');
+
+  const root = await fsp.mkdtemp(pathm.join(os.tmpdir(), 'vclip-'));
+  try {
+    await fsp.writeFile(pathm.join(root, 'voice-clips.json'), JSON.stringify({
+      clips: [{ id: 'x', variant: 'original', source: 'voice-zero', file: 'x.wav', url: 'https://e.test/x.wav', sha256: 'a'.repeat(64), bytes: 10 }],
+      counts: { clips: 1, voices: 1 },
+    }));
+    _resetCatalogue();
+    const r = await measureClip({
+      rootDir: root, key: 'voice-zero/x/original',
+      fetchImpl: async () => ({ ok: true, arrayBuffer: async () => makeWav({ hz: 150, seconds: 0.5 }) }),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'checksum', 'the pitch shown must describe the clip that would install');
+    _resetCatalogue();
+  } finally { await fsp.rm(root, { recursive: true, force: true }); }
+});

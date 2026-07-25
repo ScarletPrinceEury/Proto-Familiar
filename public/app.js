@@ -4891,6 +4891,7 @@ function init() {
   $('voice-picker-search')?.addEventListener('input', debounceVoiceSearch);
   $('voice-picker-source')?.addEventListener('change', () => loadVoicePage(true));
   $('voice-picker-sort')?.addEventListener('change', () => loadVoicePage(true));
+  $('voice-picker-all')?.addEventListener('change', () => loadVoicePage(true));
   $('voice-bench-close')?.addEventListener('click', closeVoiceBenchModal);
   $('voice-bench-run')?.addEventListener('click', startVoiceBench);
   $('voice-bench-again')?.addEventListener('click', resetVoiceBench);
@@ -7303,12 +7304,17 @@ async function loadVoicePage(reset) {
   const q = encodeURIComponent($('voice-picker-search')?.value ?? '');
   const source = $('voice-picker-source')?.value ?? '';
   const sort = $('voice-picker-sort')?.value ?? 'source';
-  const r = await vbGet(`/api/voice/clips?q=${q}&source=${source}&sort=${sort}&limit=${VP.limit}&offset=${VP.offset}`);
+  // The shortlist is the default view: ten voices spanning deep to high, so
+  // choosing is a choice rather than a search through 377.
+  const shortlist = $('voice-picker-all')?.checked ? '' : '&shortlist=1';
+  const r = await vbGet(`/api/voice/clips?q=${q}&source=${source}&sort=${sort}&limit=${VP.limit}&offset=${VP.offset}${shortlist}`);
   if (!r?.ok) { $('voice-picker-count').textContent = "I couldn't load the voice list."; return; }
 
   VP.total = r.total;
-  $('voice-picker-count').textContent =
-    `${r.total} voice${r.total === 1 ? '' : 's'}${r.measured ? ` · ${r.measured} measured` : ''}`;
+  const showingAll = $('voice-picker-all')?.checked;
+  $('voice-picker-count').textContent = showingAll
+    ? `${r.total} voice${r.total === 1 ? '' : 's'}${r.measured ? ` · ${r.measured} measured` : ''}`
+    : `${r.total} suggested — a spread from deep to high. Tick "show all" to browse the rest.`;
 
   const list = $('voice-picker-list');
   for (const row of r.rows) list.appendChild(voiceRow(row));
@@ -7331,9 +7337,11 @@ function voiceRow(row) {
   const label = document.createElement('div');
   label.style.cssText = 'flex:1; min-width:0';
   const pitch = row.medianF0Hz ? `${row.medianF0Hz} Hz` : 'not measured yet';
+  const badge = row.isDefault ? ' <span title="the voice I start with">★</span>' : '';
+  const note = row.note ? ` · ${row.note}` : '';
   label.innerHTML =
-    `<div style="font-weight:600">${row.id}</div>` +
-    `<div class="field-hint" style="margin:0">${row.source} · ${pitch}${row.description ? ` · ${row.description}` : ''}</div>`;
+    `<div style="font-weight:600">${row.id}${badge}</div>` +
+    `<div class="field-hint" style="margin:0">${row.source} · ${pitch}${note || (row.description ? ` · ${row.description}` : '')}</div>`;
 
   play.addEventListener('click', () => toggleVoicePreview(row, play, label));
   el.append(play, label);

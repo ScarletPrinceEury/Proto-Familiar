@@ -647,6 +647,10 @@
         <p class="field-hint hint-keep">Have a listen and pick one. Previews play from the voice library online — nothing is kept unless you choose it.</p>
 
         <div class="action-row" style="gap:8px; flex-wrap:wrap; align-items:center">
+          <label class="switch-label" for="voice-picker-all" style="display:flex; gap:6px; align-items:center; white-space:nowrap">
+            <input type="checkbox" id="voice-picker-all">
+            <span>Show all voices</span>
+          </label>
           <input id="voice-picker-search" type="search" placeholder="Search by name…" aria-label="Search voices" style="flex:1 1 180px; min-width:140px">
           <select id="voice-picker-source" aria-label="Which collection"></select>
           <select id="voice-picker-sort" aria-label="Order">

@@ -109,6 +109,66 @@ export const VOICE_SOURCES = Object.freeze([
   },
 ]);
 
+/**
+ * The voice that ships in the box.
+ *
+ * Chosen by ear (ward decision, 2026-07) from the VCTK corpus: clear, and
+ * androgynous enough to be a reasonable thing to hand someone before they have
+ * any opinion about what their Familiar should sound like. 12.8 s of reference
+ * with 59% of it actually speech — a good clone source.
+ *
+ * Its measured pitch is 145 Hz, which is LOWER than several clips that read as
+ * more masculine. That is the whole argument for not deriving a voice's
+ * character from its pitch: timbre carries what a number cannot, and only ears
+ * settle it.
+ *
+ * NOTE THE LICENCE. This is CC BY 4.0, not CC0, so shipping it obliges us to
+ * carry the VCTK credit — see `attributionNotice()`. That obligation is real
+ * whether or not anyone remembers it, which is why the credit is generated
+ * from the catalogue rather than written into a file by hand.
+ */
+export const DEFAULT_VOICE = Object.freeze({
+  key: 'vctk/p255_023/original',
+  source: 'vctk',
+  id: 'p255_023',
+  variant: 'original',
+  label: 'The voice I start with',
+  why: 'Clear and androgynous — a reasonable thing to sound like before my human has an opinion about it.',
+  measuredF0Hz: 145,
+});
+
+/**
+ * The curated shortlist — the voices offered first.
+ *
+ * 377 catalogued voices is a library, not a choice. For the people this
+ * project is built for, a wall of undifferentiated options is an access
+ * barrier rather than generosity: the UI guidelines call this out, and it is
+ * why the picker leads with ten and puts the rest behind a deliberate step.
+ *
+ * Chosen by ear (ward, 2026-07) for RANGE rather than for being individually
+ * best — 79 Hz to 238 Hz, so someone hunting for "deeper" or "higher" finds
+ * the shape they want inside ten clips instead of three hundred. The pitches
+ * are measured, not asserted; they are recorded here so the ordering is
+ * stable without needing every clip measured first.
+ *
+ * Every entry is CC0 or CC BY 4.0, and `validateShippingSet` covers the
+ * sources they come from.
+ */
+export const SHORTLIST = Object.freeze([
+  { key: 'vctk/p254_023/original',        source: 'vctk',       id: 'p254_023',       f0: 79,  note: 'The deepest here.' },
+  { key: 'voice-zero/peter_yearsley/original', source: 'voice-zero', id: 'peter_yearsley', f0: 90,  note: 'Deep, and a shorter reference than most.' },
+  { key: 'voice-zero/bill_boerst/original',    source: 'voice-zero', id: 'bill_boerst',    f0: 126, note: null },
+  { key: 'voice-zero/stuart_bell/original',    source: 'voice-zero', id: 'stuart_bell',    f0: 127, note: 'Moves around a lot — reads with character.' },
+  { key: 'vctk/p247_023/original',        source: 'vctk',       id: 'p247_023',       f0: 132, note: 'Steady.' },
+  { key: 'vctk/p255_023/original',        source: 'vctk',       id: 'p255_023',       f0: 145, note: 'What I sound like unless my human changes it.' },
+  { key: 'voice-zero/caro_davy/original',      source: 'voice-zero', id: 'caro_davy',      f0: 155, note: null },
+  { key: 'vctk/p234_023/original',        source: 'vctk',       id: 'p234_023',       f0: 181, note: null },
+  { key: 'vctk/p250_023/original',        source: 'vctk',       id: 'p250_023',       f0: 216, note: 'Moves around a lot.' },
+  { key: 'vctk/p236_023/original',        source: 'vctk',       id: 'p236_023',       f0: 238, note: 'The highest here.' },
+]);
+
+export const shortlistKeys = () => new Set(SHORTLIST.map((v) => v.key));
+
 /** Sources we may actually ship. The gate, not a suggestion. */
 export function shippableSources() {
   return VOICE_SOURCES.filter((s) => s.license.redistributable && !s.rejected);

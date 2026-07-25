@@ -4,6 +4,7 @@ import {
   VOICE_SOURCES, LICENSES, shippableSources, sourceByKey,
   rejectionReason, attributionNotice, validateShippingSet,
   VOICE_PROVENANCE, mayLeaveTheMachine, belongsInIdentityBackup, redactForSharing,
+  DEFAULT_VOICE, SHORTLIST, shortlistKeys,
 } from '../voice-catalogue.js';
 
 test('no non-commercial source can ever reach the shipped set', () => {
@@ -121,4 +122,66 @@ test('every catalogue entry names where it came from, so a licence claim can be 
     assert.match(s.upstream, /^https:\/\//, `${s.key} has no upstream url`);
     assert.ok(s.license, `${s.key} has no licence recorded`);
   }
+});
+
+test('the voice that ships in the box comes from a source we are allowed to ship', () => {
+  const src = sourceByKey(DEFAULT_VOICE.source);
+  assert.ok(src, 'the default voice names a real catalogue source');
+  assert.equal(src.license.redistributable, true);
+  assert.equal(src.license.commercialOk, true, 'the bundled voice cannot carry an NC restriction');
+  assert.ok(shippableSources().some((s) => s.key === DEFAULT_VOICE.source));
+});
+
+test('the bundled voice is CC BY, so its credit must actually appear in the NOTICE', () => {
+  const src = sourceByKey(DEFAULT_VOICE.source);
+  assert.equal(src.license.requiresAttribution, true);
+  assert.ok(src.attribution, 'and the credit is recorded');
+  assert.match(attributionNotice(), /VCTK/, 'a credit we are obliged to carry must be carried');
+});
+
+test('the default voice is a real catalogue entry, not a name someone hoped existed', async () => {
+  const { loadCatalogue, _resetCatalogue } = await import('../voice-clips.js');
+  _resetCatalogue();
+  const cat = loadCatalogue(process.cwd());
+  const found = (cat.clips ?? []).find(
+    (c) => c.source === DEFAULT_VOICE.source && c.id === DEFAULT_VOICE.id && c.variant === DEFAULT_VOICE.variant,
+  );
+  assert.ok(found, `${DEFAULT_VOICE.key} is not in voice-clips.json`);
+  assert.match(found.sha256, /^[0-9a-f]{64}$/, 'and it is pinned, so it can actually be installed');
+  _resetCatalogue();
+});
+
+test('the shortlist spans deep to high, so "lower" and "higher" are both reachable in ten', () => {
+  const f0s = SHORTLIST.map((v) => v.f0);
+  assert.ok(Math.min(...f0s) < 100, 'something genuinely deep is offered');
+  assert.ok(Math.max(...f0s) > 220, 'and something genuinely high');
+  assert.deepEqual(f0s, [...f0s].sort((a, b) => a - b), 'ordered deepest to highest');
+});
+
+test('the shortlist is small enough to be a choice rather than a library', () => {
+  assert.ok(SHORTLIST.length <= 12, `${SHORTLIST.length} options is a wall, not a shortlist`);
+  assert.ok(SHORTLIST.length >= 5);
+});
+
+test('the default voice is in the shortlist — it cannot be the one option nobody is offered', () => {
+  assert.ok(shortlistKeys().has(DEFAULT_VOICE.key));
+});
+
+test('every shortlisted voice comes from a source we may ship', () => {
+  const allowed = new Set(shippableSources().map((s) => s.key));
+  for (const v of SHORTLIST) {
+    assert.ok(allowed.has(v.source), `${v.key} comes from ${v.source}, which we may not ship`);
+  }
+});
+
+test('every shortlisted voice is a real pinned clip', async () => {
+  const { loadCatalogue, _resetCatalogue } = await import('../voice-clips.js');
+  _resetCatalogue();
+  const clips = loadCatalogue(process.cwd()).clips ?? [];
+  for (const v of SHORTLIST) {
+    const found = clips.find((c) => `${c.source}/${c.id}/original` === v.key);
+    assert.ok(found, `${v.key} is not in the catalogue`);
+    assert.match(found.sha256, /^[0-9a-f]{64}$/);
+  }
+  _resetCatalogue();
 });

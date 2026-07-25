@@ -1354,6 +1354,7 @@ app.get('/api/voice/clips', async (req, res) => {
       features,
       source: req.query.source || null,
       variant: req.query.variant || 'original',
+      shortlist: req.query.shortlist === '1',
       q: req.query.q || '',
       sort: req.query.sort || 'source',
       limit: Math.max(1, Math.min(200, Number(req.query.limit) || 60)),

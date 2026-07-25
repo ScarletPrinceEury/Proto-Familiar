@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { measureVoiceClip, describeMeasurement } from './voice-audio-features.js';
-import { sourceByKey } from './voice-catalogue.js';
+import { sourceByKey, SHORTLIST, shortlistKeys, DEFAULT_VOICE } from './voice-catalogue.js';
 
 const CACHE_FILE = path.join('tomes', '.voice-clip-features.json');
 
@@ -79,6 +79,7 @@ export function listClips({
   features = {},
   source = null,
   variant = 'original',
+  shortlist = false,
   q = '',
   sort = 'source',
   limit = 60,
@@ -87,8 +88,10 @@ export function listClips({
   const all = loadCatalogue(rootDir).clips ?? [];
   const needle = String(q ?? '').trim().toLowerCase();
 
+  const short = shortlistKeys();
   let rows = all.filter((c) => {
     if (variant && variant !== 'any' && c.variant !== variant) return false;
+    if (shortlist && !short.has(clipKey(c))) return false;
     if (source && c.source !== source) return false;
     if (needle && !`${c.id} ${c.source}`.toLowerCase().includes(needle)) return false;
     return true;
@@ -103,6 +106,9 @@ export function listClips({
       voicedFraction: f?.ok ? f.voicedFraction : null,
       description: f?.ok ? describeMeasurement(f) : null,
       licence: sourceByKey(c.source)?.license?.label ?? null,
+      suggested: short.has(clipKey(c)),
+      isDefault: clipKey(c) === DEFAULT_VOICE.key,
+      note: SHORTLIST.find((v) => v.key === clipKey(c))?.note ?? null,
     };
   });
 
@@ -114,7 +120,12 @@ export function listClips({
     return dir === 'deeper' ? am - bm : bm - am;
   };
 
-  if (sort === 'deeper' || sort === 'higher') rows.sort(byPitch(sort));
+  if (shortlist && sort === 'source') {
+    // The shortlist has a deliberate order: deepest to highest, so "I want
+    // something lower" is a direction to scroll rather than a search.
+    const order = new Map(SHORTLIST.map((v, i) => [v.key, i]));
+    rows.sort((a, b) => (order.get(a.key) ?? 99) - (order.get(b.key) ?? 99));
+  } else if (sort === 'deeper' || sort === 'higher') rows.sort(byPitch(sort));
   else if (sort === 'id') rows.sort((a, b) => a.id.localeCompare(b.id));
   else rows.sort((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 
@@ -142,7 +153,13 @@ export async function measureClip({ rootDir = process.cwd(), key, fetchImpl = fe
   if (!clip) return { ok: false, reason: 'unknown-clip' };
 
   const cache = await readCache(rootDir);
-  if (cache[key]?.ok) return { ok: true, cached: true, ...cache[key] };
+  if (cache[key]?.ok) {
+    // The description is derived, not stored — so it has to be derived here
+    // too. Returning a different SHAPE on the cached path than the fresh one
+    // is the kind of difference that only shows up once something has been
+    // measured before, which is to say: in front of my human, not in a test.
+    return { ok: true, cached: true, ...cache[key], description: describeMeasurement(cache[key]) };
+  }
 
   let buf;
   try {
