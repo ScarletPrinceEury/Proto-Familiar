@@ -5,12 +5,14 @@ Pass 0 of the voice milestone (`docs/voice-build-spec.md` §13). This is the
 what a ward's machine can actually run, what it costs them, and a report they
 can send back.
 
-Four commits. Nothing here touches the chat path.
+Seven commits. Nothing here touches the chat path.
 
 - `8510019` — supply chain, footprint budget, bench measuring core
 - `bf40184` — the ward-facing surface: endpoint, Diagnostics button, CLI
 - `38b90b7` — first real bench results from the X380
 - `47920f3` — measured unpacked sizes; all six plans now measured
+- `3ae5d44` / `f07d368` — PR description brought up to the measured numbers
+- `e9becf4` — §14's interference bar rewritten; the first measurement broke it
 
 **It has been run on the reference machine.** The Diagnostics button, the
 endpoint, the polling and the interference probe all work on Windows against
@@ -118,6 +120,9 @@ changed §14's acceptance bar (see decision 7).
    `logs/` *before* the run flips to done, so closing the window never loses a
    run someone waited minutes for.
 
+6. **Stage labels are plain language.** A test fails if `RTF`, `ASR`, `TTS` or
+   `onnx` appear in them — a ward reads these while waiting.
+
 7. **§14's interference bar was rewritten because the first real measurement
    broke it.** A flat "±20% of normal" is an ~8 ms window against a 39 ms
    baseline: it fails on shifts nobody could perceive, and gets *harder the
@@ -127,9 +132,6 @@ changed §14's acceptance bar (see decision 7).
    a network LLM) and "baseline + 20%, floor 25 ms" (for a machine already
    slower than that). Code, not prose — `interferenceBudgetMs` — and the
    report names which half was binding.
-
-6. **Stage labels are plain language.** A test fails if `RTF`, `ASR`, `TTS` or
-   `onnx` appear in them — a ward reads these while waiting.
 
 ## Two bugs found by running it, not by testing it
 
