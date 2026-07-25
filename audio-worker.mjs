@@ -27,7 +27,8 @@
  */
 
 import path from 'node:path';
-import { encodeJson, createFrameReader, KIND_JSON } from './audio-frame.js';
+import { encodeJson, encodePcm, createFrameReader, KIND_JSON } from './audio-frame.js';
+import { floatToPcm16 } from './voice-audio-features.js';
 
 const send = (obj) => {
   try { process.stdout.write(encodeJson(obj)); } catch { /* the pipe is gone; the supervisor will notice */ }
@@ -42,9 +43,18 @@ const threads = {
 };
 
 /**
- * PocketTTS quality/speed lever. Upstream's docs use 2, its node example 5.
- * Starting at 4 as a middle ground; Pass 0's bench on real hardware is what
- * settles it, and §4.6 can shed steps before shedding the voice entirely.
+ * PocketTTS quality/speed lever, and — since this model exposes no seed — the
+ * ONLY lever on how consistent it sounds.
+ *
+ * The generation is stochastic per call: there is no `seed`, no `target_rms`
+ * and no `guidance_scale` for pocket (those last two belong to ZipVoice; the
+ * `seed` in the library belongs to an ASR config). More steps means the
+ * flow-matching decoder converges further, so runs land closer to the same
+ * rendering of the same reference clip. Fewer steps means faster, and more
+ * audibly different each time.
+ *
+ * Measured on the reference laptop: RTF 0.616 at 4 steps, which leaves real
+ * headroom under 1.0. §4.6 can still shed steps before shedding the voice.
  */
 const NUM_STEPS = Number(process.env.PF_TTS_NUM_STEPS) || 4;
 
@@ -77,7 +87,11 @@ function buildPocketTts(modelDir) {
       numThreads: threads.tts,
       provider: 'cpu',
     },
-    maxNumSentences: 1,
+    // One generation must be able to carry a whole message. At 1, the session
+    // stops at each sentence — and because the clone is zero-shot per pass,
+    // every sentence came back a slightly different speaker. That was the bug
+    // my human heard: three sentences, three voices, three levels.
+    maxNumSentences: 64,
   });
 }
 
@@ -139,7 +153,10 @@ const OPS = {
       if (role === 'tts') loaded.set(role, { session: buildPocketTts(modelDir), modelDir, at: Date.now() });
       else loaded.set(role, { modelDir, at: Date.now() });   // other roles arrive with Pass 2
       reportState();
-      send({ reqId, ok: true, role, modelDir });
+      // The sample rate rides back on the load, because a streaming caller has
+      // to write a wav header BEFORE any audio exists. Asking the engine beats
+      // hard-coding 24000 and hoping a future model agrees.
+      send({ reqId, ok: true, role, modelDir, sampleRate: loaded.get(role)?.session?.sampleRate ?? null });
     } catch (err) {
       send({ reqId, ok: false, reason: 'load-failed', detail: String(err?.message ?? err) });
     }
@@ -200,6 +217,89 @@ const OPS = {
       send({ reqId, ok: false, reason: 'tts-failed', detail: String(err?.message ?? err) });
     }
   },
+  /**
+   * Speak a whole message as ONE generation, streaming the audio out as it
+   * arrives.
+   *
+   * This exists because the obvious alternative is wrong. Splitting a message
+   * into sentences and calling `tts` per sentence gives low latency, but
+   * PocketTTS clones ZERO-SHOT PER CALL and exposes no seed — so every call
+   * re-derives the voice and samples the flow-matching decoder afresh. Three
+   * sentences came out sounding like three different speakers at three
+   * different levels, which is what my human heard. The clone has to happen
+   * once, and the audio has to stream out of that one clone.
+   *
+   * `maxNumSentences` is raised for exactly this reason: the session must be
+   * free to carry the whole text through a single generation rather than
+   * being forced to stop at one sentence.
+   *
+   * Each `onProgress` callback becomes a PCM frame on the same pipe the
+   * protocol was built for. The final JSON frame closes the request and
+   * carries the totals — a caller must be able to tell "finished" from
+   * "the pipe went quiet".
+   */
+  async ttsStream({ reqId, streamId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    if (!text || typeof text !== 'string') return send({ reqId, ok: false, reason: 'bad-request', detail: 'text is required' });
+    if (!referenceWav) return send({ reqId, ok: false, reason: 'no-voice', detail: 'a reference clip is required — PocketTTS has no built-in voice' });
+    if (!Number.isFinite(streamId)) return send({ reqId, ok: false, reason: 'bad-request', detail: 'streamId is required' });
+
+    const held = loaded.get('tts');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the speaking model is not loaded' });
+
+    try {
+      const ref = engine.readWave(referenceWav);
+      const generationConfig = new engine.GenerationConfig({
+        speed,
+        referenceAudio: ref.samples,
+        referenceSampleRate: ref.sampleRate,
+        numSteps,
+        extra: { max_reference_audio_len: MAX_REFERENCE_SECONDS },
+      });
+
+      const started = Date.now();
+      let sampleCount = 0;
+      let firstChunkMs = null;
+
+      const audio = await held.session.generateAsync({
+        text,
+        generationConfig,
+        onProgress: ({ samples }) => {
+          if (!samples?.length) return 1;
+          if (firstChunkMs === null) firstChunkMs = Date.now() - started;
+          sampleCount += samples.length;
+          try {
+            process.stdout.write(encodePcm(streamId, floatToPcm16(samples)));
+          } catch {
+            // The pipe is gone. Returning 0 asks the engine to stop rather
+            // than finish generating audio with nowhere to go.
+            return 0;
+          }
+          return 1;
+        },
+      });
+
+      const elapsedMs = Date.now() - started;
+      const sampleRate = audio?.sampleRate ?? held.session.sampleRate;
+      // Trust what was actually streamed. `audio.samples` is the whole clip
+      // again, and reporting its length as the streamed count would overstate
+      // what the caller received if the engine stopped early.
+      const durationSec = sampleCount / sampleRate;
+
+      send({
+        reqId, ok: true, streamId, sampleRate,
+        sampleCount,
+        durationSec: Number(durationSec.toFixed(3)),
+        elapsedMs,
+        firstChunkMs,
+        realTimeFactor: durationSec > 0 ? Number((elapsedMs / 1000 / durationSec).toFixed(3)) : null,
+      });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'tts-failed', detail: String(err?.message ?? err) });
+    }
+  },
+
   /**
    * Not implemented yet.
    *

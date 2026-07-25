@@ -2098,10 +2098,13 @@ function createMessageEl(role, htmlContent, timestamp, attachments = null) {
 const speech = { token: 0, audio: null, btn: null };
 
 function stopSpeaking() {
-  speech.token++;                     // invalidates any fetch still in flight
+  speech.token++;                     // invalidates anything still in flight
   if (speech.audio) {
     speech.audio.pause();
-    URL.revokeObjectURL(speech.audio.src);
+    // Dropping the src ends the streaming request, so a stopped message stops
+    // being generated too rather than running to completion unheard.
+    speech.audio.removeAttribute('src');
+    speech.audio.load();
     speech.audio = null;
   }
   if (speech.btn) {
@@ -2109,36 +2112,6 @@ function stopSpeaking() {
     speech.btn.classList.remove('is-speaking');
     speech.btn = null;
   }
-}
-
-async function fetchUtterance(text) {
-  const res = await fetch('/api/voice/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, prepared: true }),
-  });
-  // A JSON body here means a refusal — the happy path is audio bytes.
-  if (!res.ok || (res.headers.get('Content-Type') || '').includes('application/json')) {
-    const why = await res.json().catch(() => ({}));
-    return { ok: false, reason: why.reason ?? `HTTP ${res.status}`, detail: why.detail };
-  }
-  return {
-    ok: true,
-    blob: await res.blob(),
-    fellBackFrom: res.headers.get('X-Voice-Fell-Back-From'),
-    fallbackReason: res.headers.get('X-Voice-Reason'),
-  };
-}
-
-function playBlob(blob, token) {
-  return new Promise((resolve) => {
-    const audio = new Audio(URL.createObjectURL(blob));
-    speech.audio = audio;
-    const done = () => { if (speech.token === token) resolve(); };
-    audio.addEventListener('ended', done);
-    audio.addEventListener('error', done);   // a clip that will not play is not a reason to stall the rest
-    audio.play().catch(done);                // autoplay refusal resolves rather than hangs
-  });
 }
 
 async function speakMessage(text, btn) {
@@ -2152,13 +2125,18 @@ async function speakMessage(text, btn) {
   btn.classList.add('is-speaking');
 
   const fail = (reason, detail) => {
+    // Order matters: stopSpeaking resets the label, so it has to run BEFORE
+    // the message is written or the message is wiped the instant it is set.
+    stopSpeaking();
     // Say what went wrong on the button itself. Someone using read-aloud may
     // be doing so precisely because reading a toast across the screen is the
     // hard part.
     btn.textContent = '🔊 Unavailable';
     btn.title = detail ? `${reason} — ${detail}` : String(reason);
-    setTimeout(() => { if (speech.btn !== btn) { btn.textContent = '🔊 Read aloud'; } }, 200);
-    stopSpeaking();
+    setTimeout(() => {
+      // Only reset if it has not since been reused for a real attempt.
+      if (speech.btn !== btn) btn.textContent = '🔊 Read aloud';
+    }, 5000);
   };
 
   try {
@@ -2169,26 +2147,21 @@ async function speakMessage(text, btn) {
     });
     const plan = await planRes.json();
     if (speech.token !== token) return;
-    if (!plan.ok || plan.empty) return fail('there is nothing here to read out');
+    if (!plan.ok || plan.empty || !plan.id) return fail('there is nothing here to read out');
 
-    // Fetch the first, then keep exactly one utterance ahead — enough to play
-    // without gaps, without synthesising a long message nobody waits through.
-    let pending = fetchUtterance(plan.chunks[0]);
-
-    for (let i = 0; i < plan.chunks.length; i++) {
-      const current = await pending;
-      if (speech.token !== token) return;
-      if (!current.ok) return fail(current.reason, current.detail);
-
-      if (i === 0 && current.fellBackFrom) {
-        btn.title = `Speaking in the default voice — ${decodeURIComponent(current.fallbackReason || 'the chosen one is not downloaded')}`;
-      }
-
-      pending = i + 1 < plan.chunks.length ? fetchUtterance(plan.chunks[i + 1]) : null;
-      await playBlob(current.blob, token);
-      if (speech.token !== token) return;
-    }
-    stopSpeaking();
+    // One URL, one generation, streamed. The browser starts playing as bytes
+    // arrive, which is where the responsiveness comes from now — not from
+    // splitting the message up, which is what made it sound like several
+    // different people.
+    const audio = new Audio(`/api/voice/tts/${encodeURIComponent(plan.id)}`);
+    speech.audio = audio;
+    audio.addEventListener('ended', () => { if (speech.token === token) stopSpeaking(); });
+    audio.addEventListener('error', () => {
+      if (speech.token === token) fail('the voice could not start', 'the speech engine may not be installed');
+    });
+    await audio.play().catch(() => {
+      if (speech.token === token) fail('playback was blocked', 'the browser refused to start audio');
+    });
   } catch (err) {
     fail('read-aloud failed', String(err?.message ?? err));
   }

@@ -42,12 +42,35 @@ export const F0_MAX_HZ = 400;
  * otherwise wrap to full-scale noise, which is a loud, startling failure on a
  * surface people use *because* the screen is hard for them.
  */
-export function encodeWav(samples, sampleRate = 24000) {
+export function floatToPcm16(samples) {
   const n = samples?.length ?? 0;
-  const buf = Buffer.alloc(44 + n * 2);
+  const out = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    out.writeInt16LE(Math.round(v * 32767), i * 2);
+  }
+  return out;
+}
 
+/**
+ * A wav header on its own.
+ *
+ * Separate from the samples because a STREAMED wav has to declare its size
+ * before any audio exists — the header goes out first and the bytes follow as
+ * they are generated. `byteLength` may therefore be a promise rather than a
+ * fact; see the streaming note in server.js for what is declared and why.
+ */
+export const WAV_STREAMING_LENGTH = 0xFFFFFFFF;
+
+export function wavHeader(byteLength, sampleRate = 24000) {
+  const streaming = byteLength === WAV_STREAMING_LENGTH;
+  const buf = Buffer.alloc(44);
   buf.write('RIFF', 0, 'ascii');
-  buf.writeUInt32LE(36 + n * 2, 4);
+  // A streamed wav has to declare a size before the audio exists. The
+  // convention is to claim the maximum and let the stream ending be the end —
+  // players read until the bytes stop. Adding 36 would overflow, so the
+  // streaming case writes the sentinel straight through.
+  buf.writeUInt32LE(streaming ? WAV_STREAMING_LENGTH : 36 + byteLength, 4);
   buf.write('WAVE', 8, 'ascii');
   buf.write('fmt ', 12, 'ascii');
   buf.writeUInt32LE(16, 16);          // fmt chunk size
@@ -58,13 +81,13 @@ export function encodeWav(samples, sampleRate = 24000) {
   buf.writeUInt16LE(2, 32);           // block align
   buf.writeUInt16LE(16, 34);          // bits per sample
   buf.write('data', 36, 'ascii');
-  buf.writeUInt32LE(n * 2, 40);
-
-  for (let i = 0; i < n; i++) {
-    const v = Math.max(-1, Math.min(1, samples[i] ?? 0));
-    buf.writeInt16LE(Math.round(v * 32767), 44 + i * 2);
-  }
+  buf.writeUInt32LE(byteLength, 40);
   return buf;
+}
+
+export function encodeWav(samples, sampleRate = 24000) {
+  const pcm = floatToPcm16(samples);
+  return Buffer.concat([wavHeader(pcm.length, sampleRate), pcm]);
 }
 
 /**

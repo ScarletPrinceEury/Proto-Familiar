@@ -185,14 +185,71 @@ export function splitForSpeech(text, { maxChars = MAX_CHUNK_CHARS, minChars = MI
 }
 
 /**
- * Everything at once: markdown in, utterances out.
+ * How much text one generation may carry.
  *
- * `spoken` is the joined text actually sent to the engine, kept so a caller
- * can show what was said rather than what was written — they differ, and the
+ * Deliberately large. A whole message SHOULD be one generation — PocketTTS
+ * clones zero-shot per call with no seed, so every extra generation is
+ * another roll of the dice on what the voice sounds like. This cap exists
+ * only so that a pathologically long message cannot ask the engine to hold
+ * minutes of audio in memory at once, not to chop ordinary messages up.
+ */
+const MAX_GENERATION_CHARS = 3000;
+
+/**
+ * Split for GENERATION, which is a different question from splitting for
+ * playback.
+ *
+ * Almost always returns one part. When it cannot, it breaks at paragraph
+ * boundaries and then at sentences — a seam where the voice may shift is far
+ * less jarring between paragraphs than mid-thought, and a seam is exactly
+ * what a second generation costs.
+ */
+export function splitForGeneration(text, { maxChars = MAX_GENERATION_CHARS } = {}) {
+  if (typeof text !== 'string' || !text.trim()) return [];
+  if (text.length <= maxChars) return [text.trim()];
+
+  const parts = [];
+  let buf = '';
+  for (const para of text.split(/\n{2,}/)) {
+    const candidate = buf ? `${buf}\n\n${para}` : para;
+    if (candidate.length <= maxChars) { buf = candidate; continue; }
+    if (buf) { parts.push(buf.trim()); buf = ''; }
+
+    if (para.length <= maxChars) { buf = para; continue; }
+    // A single paragraph over the cap: fall back to sentences, packed as
+    // full as they will go so there are as few seams as possible.
+    let sub = '';
+    for (const sentence of splitForSpeech(para, { maxChars: maxChars, minChars: 1 })) {
+      const next = sub ? `${sub} ${sentence}` : sentence;
+      if (next.length <= maxChars) sub = next;
+      else { if (sub) parts.push(sub.trim()); sub = sentence; }
+    }
+    if (sub) buf = sub;
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  return parts.filter(Boolean);
+}
+
+/**
+ * Everything at once: markdown in, generation units out.
+ *
+ * `spoken` is the text actually sent to the engine, kept so a caller can show
+ * what was said rather than what was written — they differ, and that
  * difference is the whole point of this module.
+ *
+ * `parts` is normally length 1. `seams` counts the places where a second
+ * generation had to start, which is the number of points a listener might
+ * hear the voice shift. Reported rather than hidden: an unavoidable seam is
+ * survivable, an unexplained one sounds like a bug.
  */
 export function prepareForSpeech(input, opts = {}) {
   const { text, notes } = speakableText(input);
-  const chunks = splitForSpeech(text, opts);
-  return { chunks, spoken: text, notes, empty: chunks.length === 0 };
+  const parts = splitForGeneration(text, opts);
+  return {
+    parts,
+    seams: Math.max(0, parts.length - 1),
+    spoken: text,
+    notes,
+    empty: parts.length === 0,
+  };
 }

@@ -264,7 +264,9 @@ import { createAudioWorker } from './audio-worker-host.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice } from './voices.js';
 import { prepareForSpeech } from './voice-speech.js';
-import { encodeWav } from './voice-audio-features.js';
+import { wavHeader, WAV_STREAMING_LENGTH } from './voice-audio-features.js';
+import { KIND_PCM } from './audio-frame.js';
+import { shortSlug } from './slug-ids.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -1456,47 +1458,101 @@ async function ensureTtsLoaded() {
   return audioWorker.request({ op: 'load', role: 'tts', modelDir: TTS_MODEL_DIR }, { timeoutMs: 180_000 });
 }
 
-// What would be said, and how it breaks up. No engine, no model, no cost.
+// Prepared text, waiting to be spoken. Held only long enough for the browser
+// to turn a plan into an <audio> src — this is a handoff, not a cache.
+const utterances = new Map();
+const UTTERANCE_TTL_MS = 10 * 60_000;
+
+function keepUtterance(parts) {
+  const now = Date.now();
+  for (const [k, v] of utterances) if (now - v.at > UTTERANCE_TTL_MS) utterances.delete(k);
+  const id = `say-${shortSlug(6)}`;
+  utterances.set(id, { parts, at: now });
+  return id;
+}
+
+/** Stream ids are 16-bit on the wire, so they wrap rather than grow. */
+let nextStreamId = 1;
+const takeStreamId = () => (nextStreamId = (nextStreamId % 65535) + 1);
+
+// What would be said, and how. No engine, no model, no cost.
 app.post('/api/voice/speech-plan', (req, res) => {
-  const { chunks, spoken, notes, empty } = prepareForSpeech(String(req.body?.text ?? ''));
-  res.json({ ok: true, chunks, spoken, notes, empty });
+  const plan = prepareForSpeech(String(req.body?.text ?? ''));
+  if (plan.empty) return res.json({ ok: true, ...plan, id: null });
+  res.json({ ok: true, ...plan, id: keepUtterance(plan.parts) });
 });
 
-app.post('/api/voice/tts', async (req, res) => {
+/**
+ * Speak a planned message, streaming the audio as it is generated.
+ *
+ * ── Why this is one generation and a stream, not several requests ───────
+ * The obvious design — split into sentences, fetch each as its own wav — is
+ * what shipped first and it was wrong. PocketTTS clones ZERO-SHOT PER CALL
+ * and exposes no seed (no `target_rms` or `guidance_scale` either; those
+ * belong to ZipVoice). So each request re-derived the voice and re-sampled
+ * the decoder: three sentences came back as three speakers at three levels.
+ *
+ * The clone has to happen once. Streaming out of that single generation is
+ * what keeps the latency the chunking was there to buy — the engine's own
+ * progress callback hands over audio as it is produced, and the framed PCM
+ * protocol carries it. Ordinary messages are exactly one generation; only a
+ * very long one seams, at a paragraph, and the plan says how many times.
+ */
+app.get('/api/voice/tts/:id', async (req, res) => {
   if (!audioWorker) return res.status(503).json({ ok: false, reason: 'voice-disabled' });
 
-  const raw = String(req.body?.text ?? '');
-  // Speak exactly what was asked when the caller has already planned; plan it
-  // here when they have not, so a bare call still never reads asterisks aloud.
-  const text = req.body?.prepared ? raw : prepareForSpeech(raw).spoken;
-  if (!text.trim()) return res.json({ ok: false, reason: 'nothing-to-say' });
+  const held = utterances.get(req.params.id);
+  if (!held) return res.status(404).json({ ok: false, reason: 'expired', detail: 'ask for a fresh plan' });
 
   const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
   const voice = await resolveVoice({ rootDir: __dirname, settings: s });
-  if (!voice.ok) return res.json({ ok: false, reason: voice.reason, detail: voice.detail });
+  if (!voice.ok) return res.status(503).json({ ok: false, reason: voice.reason, detail: voice.detail });
 
   const loaded = await ensureTtsLoaded();
-  if (!loaded.ok) return res.json({ ok: false, reason: loaded.reason, detail: loaded.detail });
+  if (!loaded.ok) return res.status(503).json({ ok: false, reason: loaded.reason, detail: loaded.detail });
 
-  const r = await audioWorker.request(
-    { op: 'tts', text, referenceWav: voice.path, speed: Number(s.voiceTts?.speed) || 1.0 },
-    { timeoutMs: 120_000 },
-  );
-  if (!r.ok) return res.json({ ok: false, reason: r.reason, detail: r.detail });
+  const sampleRate = Number(loaded.sampleRate) || 24000;
+  const speed = Number(s.voiceTts?.speed) || 1.0;
+  const numSteps = Number(s.voiceTts?.numSteps) || undefined;
 
-  const wav = encodeWav(r.samples, r.sampleRate);
-  // The fallback rides on the response rather than being swallowed: someone
-  // who picked a voice and is hearing a different one should be told which,
-  // not left wondering whether their choice took.
   if (voice.fellBackFrom) {
     res.set('X-Voice-Fell-Back-From', encodeURIComponent(voice.fellBackFrom));
     res.set('X-Voice-Reason', encodeURIComponent(voice.reason ?? ''));
   }
   res.set('X-Voice-Key', encodeURIComponent(voice.key));
-  res.set('X-Voice-Rtf', String(r.realTimeFactor ?? ''));
   res.set('Content-Type', 'audio/wav');
   res.set('Cache-Control', 'no-store');
-  res.send(wav);
+  res.write(wavHeader(WAV_STREAMING_LENGTH, sampleRate));
+
+  let aborted = false;
+  res.on('close', () => { aborted = true; });
+
+  try {
+    for (const part of held.parts) {
+      if (aborted) break;
+      const streamId = takeStreamId();
+      // Subscribe BEFORE asking, or the first frames arrive with nobody
+      // listening and the start of the sentence is simply missing.
+      const unsubscribe = audioWorker.on((frame) => {
+        if (frame.kind === KIND_PCM && frame.streamId === streamId && !aborted) {
+          res.write(Buffer.from(frame.pcm));
+        }
+      });
+      try {
+        const r = await audioWorker.request(
+          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps },
+          { timeoutMs: 300_000 },
+        );
+        // A failure mid-message cannot be reported in the body — the browser
+        // is already playing a wav. Ending the stream is the only honest
+        // signal available; the log is where the reason lives.
+        if (!r.ok) { console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`); break; }
+      } finally { unsubscribe(); }
+    }
+  } catch (err) {
+    console.warn(`[voice] read-aloud stream error: ${String(err?.message ?? err)}`);
+  }
+  res.end();
 });
 
 app.get('/api/voice/clips', async (req, res) => {

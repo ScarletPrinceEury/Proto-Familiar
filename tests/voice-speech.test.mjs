@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { speakableText, splitForSpeech, prepareForSpeech } from '../voice-speech.js';
-import { encodeWav, parseWav } from '../voice-audio-features.js';
+import { encodeWav, parseWav, wavHeader, floatToPcm16, WAV_STREAMING_LENGTH } from '../voice-audio-features.js';
 
 // ── Markdown that was written to be read, said instead ───────────────────
 
@@ -135,9 +135,10 @@ test('nothing to say is an empty list, not a chunk of whitespace', () => {
 });
 
 test('prepareForSpeech reports emptiness rather than sending silence to the engine', () => {
-  const r = prepareForSpeech('![](only-an-image.png)'.replace('![](only-an-image.png)', '   '));
+  const r = prepareForSpeech('   ');
   assert.equal(r.empty, true);
-  assert.deepEqual(r.chunks, []);
+  assert.deepEqual(r.parts, []);
+  assert.equal(r.seams, 0);
 });
 
 test('a whole message survives the round trip end to end', () => {
@@ -146,6 +147,46 @@ test('a whole message survives the round trip end to end', () => {
   assert.doesNotMatch(r.spoken, /[*#`]|🎉|http/);
   assert.match(r.spoken, /I did the thing/);
   assert.equal(r.notes.length, 1);
+});
+
+// ── One generation per message: the fix for three-voices-in-one-reply ────
+
+test('an ordinary multi-sentence message is ONE generation', () => {
+  // The whole bug: PocketTTS clones zero-shot per call with no seed, so a
+  // second generation is a second roll of the dice on what the voice is.
+  // Three sentences must not become three clones.
+  const r = prepareForSpeech('First sentence here. Second sentence follows. And a third one closes it.');
+  assert.equal(r.parts.length, 1);
+  assert.equal(r.seams, 0, 'no seam means no place the voice can shift');
+});
+
+test('even a long-ish message stays one generation', () => {
+  const r = prepareForSpeech(`${'This is a full sentence of ordinary length. '.repeat(40)}`);
+  assert.equal(r.parts.length, 1, 'about 1700 characters is still one clone');
+});
+
+test('a pathologically long message seams at paragraphs, and says how often', () => {
+  // Splitting is a last resort against holding minutes of audio in memory, not
+  // a routine step — and where it happens, it happens between paragraphs.
+  const para = `${'A sentence of reasonable length goes here. '.repeat(30)}`;
+  const r = prepareForSpeech([para, para, para].join('\n\n'));
+  assert.ok(r.parts.length > 1);
+  assert.equal(r.seams, r.parts.length - 1, 'the count of places the voice may shift is reported');
+  for (const p of r.parts) assert.ok(p.length <= 3000, `a part exceeded the generation cap: ${p.length}`);
+});
+
+test('splitting for generation loses no words', () => {
+  const para = `${'Words that must all survive the split. '.repeat(30)}`;
+  const src = [para, para, para].join('\n\n');
+  const r = prepareForSpeech(src);
+  const rejoined = r.parts.join(' ').replace(/\s+/g, ' ').trim();
+  assert.equal(rejoined, r.spoken.replace(/\s+/g, ' ').trim());
+});
+
+test('a single unbroken paragraph over the cap still splits rather than being dropped', () => {
+  const r = prepareForSpeech('One sentence. '.repeat(400));
+  assert.ok(r.parts.length > 1);
+  assert.ok(r.parts.every((p) => p.length <= 3000));
 });
 
 // ── Float samples becoming a wav a browser will play ─────────────────────
@@ -182,4 +223,25 @@ test('a plain array works as well as a typed array', () => {
   const parsed = parseWav(encodeWav([0, 0.25, -0.25], 16000));
   assert.equal(parsed.sampleRate, 16000);
   assert.equal(parsed.samples.length, 3);
+});
+
+test('a streaming header declares the maximum and does not overflow', () => {
+  // Audio is generated after the header goes out, so the size cannot be
+  // known. Adding 36 to the sentinel would wrap to a tiny number and the
+  // player would stop almost immediately.
+  const h = wavHeader(WAV_STREAMING_LENGTH, 24000);
+  assert.equal(h.length, 44);
+  assert.equal(h.readUInt32LE(4), WAV_STREAMING_LENGTH, 'RIFF size, not wrapped');
+  assert.equal(h.readUInt32LE(40), WAV_STREAMING_LENGTH, 'data size, not wrapped');
+  assert.equal(h.toString('ascii', 0, 4), 'RIFF');
+  assert.equal(h.readUInt32LE(24), 24000, 'sample rate survives');
+});
+
+test('a streamed wav parses as audio once the bytes have arrived', () => {
+  // parseWav trusts the bytes present over the declared length, so a stream
+  // that ends is readable rather than a claimed-4GB file that never resolves.
+  const body = floatToPcm16(new Float32Array([0, 0.5, -0.5, 0.25]));
+  const parsed = parseWav(Buffer.concat([wavHeader(WAV_STREAMING_LENGTH, 24000), body]));
+  assert.equal(parsed.samples.length, 4);
+  assert.ok(Math.abs(parsed.samples[1] - 0.5) < 0.001);
 });
