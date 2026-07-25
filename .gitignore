@@ -95,3 +95,7 @@ tomes/.memory-coverage.json
 tomes/.memory-coverage.json.tmp
 tomes/.stewardship-state.json
 tomes/.stewardship-state.json.tmp
+
+# Measured pitch of previewed reference clips — a cache, re-derivable by listening again
+tomes/.voice-clip-features.json
+tomes/.voice-clip-features.json.tmp

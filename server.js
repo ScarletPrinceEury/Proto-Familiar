@@ -259,6 +259,7 @@ import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsR
 import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './voice-models.js';
 import { consentSummary, inspectInstalled, MODELS_SUBDIR } from './voice-fetch.js';
 import { measureFootprint } from './voice-footprint.js';
+import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -1336,6 +1337,45 @@ app.get('/api/diagnostics/voice-bench', (_req, res) => {
   const st = statusOf();
   const run = st.status === 'done' ? reportPathsRelative(__dirname, st.savedTo) : null;
   res.json({ ok: true, ...st, savedTo: run });
+});
+
+// ── Reference-voice picker (voice spec §6.5) ─────────────────────────────
+//
+// PocketTTS clones zero-shot from a reference clip, so choosing a voice is
+// choosing a wav file. 700+ CC0 clips are catalogued with verified checksums;
+// the browser previews them straight from the pinned URL, and pitch is
+// measured lazily as they are auditioned.
+
+app.get('/api/voice/clips', async (req, res) => {
+  try {
+    const features = await cachedFeatures(__dirname);
+    const out = listClips({
+      rootDir: __dirname,
+      features,
+      source: req.query.source || null,
+      variant: req.query.variant || 'original',
+      q: req.query.q || '',
+      sort: req.query.sort || 'source',
+      limit: Math.max(1, Math.min(200, Number(req.query.limit) || 60)),
+      offset: Math.max(0, Number(req.query.offset) || 0),
+    });
+    res.json({ ok: true, ...out });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+app.get('/api/voice/clips/summary', async (_req, res) => {
+  try { res.json({ ok: true, ...(await catalogueSummary(__dirname)) }); }
+  catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
+});
+
+// Measure one clip on demand — fetched, checksum-verified, measured, cached.
+app.post('/api/voice/clips/measure', async (req, res) => {
+  const key = typeof req.body?.key === 'string' ? req.body.key : '';
+  if (!key) return badRequest(res, 'key is required');
+  try { res.json(await measureClip({ rootDir: __dirname, key })); }
+  catch (err) { res.json({ ok: false, reason: 'failed', detail: String(err?.message ?? err) }); }
 });
 
 app.post('/api/diagnostics/voice-bench/cancel', (_req, res) => res.json({ ok: true, ...cancelBenchmark() }));

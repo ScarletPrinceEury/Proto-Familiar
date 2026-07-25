@@ -227,6 +227,10 @@
             <div class="action-row" style="margin-top:4px">
               <button id="voice-bench-btn" class="btn-secondary">🎤 Voice benchmark</button>
             </div>
+            <p class="field-hint" style="margin-top:10px">Listen to the reference voices my Familiar could speak with, and pick one.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
+            </div>
           </div>
         </div>
 
@@ -630,6 +634,44 @@
   </div>
 
   <!-- Diagnostics modal -->
+  <!-- Reference-voice picker (voice spec §6.5). PocketTTS clones zero-shot
+       from a reference clip, so choosing a voice IS choosing a wav. Previews
+       stream from the pinned upstream URL; only a chosen voice is kept. -->
+  <div class="modal-backdrop hidden" id="voice-picker-modal" role="dialog" aria-modal="true" aria-labelledby="voice-picker-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="voice-picker-title">Choose a voice</h2>
+        <button class="icon-btn modal-close" id="voice-picker-close" aria-label="Close" data-ms-icon="close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint hint-keep">Have a listen and pick one. Previews play from the voice library online — nothing is kept unless you choose it.</p>
+
+        <div class="action-row" style="gap:8px; flex-wrap:wrap; align-items:center">
+          <input id="voice-picker-search" type="search" placeholder="Search by name…" aria-label="Search voices" style="flex:1 1 180px; min-width:140px">
+          <select id="voice-picker-source" aria-label="Which collection"></select>
+          <select id="voice-picker-sort" aria-label="Order">
+            <option value="source">By collection</option>
+            <option value="deeper">Deeper voices first</option>
+            <option value="higher">Higher voices first</option>
+            <option value="id">By name</option>
+          </select>
+        </div>
+        <p class="field-hint" id="voice-picker-count"></p>
+
+        <div id="voice-picker-list" class="pi-list" style="max-height:52vh; overflow:auto"></div>
+
+        <div class="action-row" style="margin-top:8px">
+          <button id="voice-picker-more" class="btn-secondary hidden">Show more</button>
+        </div>
+        <p class="field-hint" id="voice-picker-note"></p>
+      </div>
+      <div class="modal-footer">
+        <span class="field-hint" id="voice-picker-chosen" style="flex:1"></span>
+        <button id="voice-picker-done" class="btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Voice benchmark (voice spec §0.5) — a ward-facing measurement, not a
        developer script. The report is the deliverable: readable here, copied
        or downloaded, and saved to logs/ so closing this window loses nothing. -->

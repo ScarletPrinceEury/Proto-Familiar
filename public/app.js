@@ -4884,6 +4884,13 @@ function init() {
   // Trigger tracer (regex/keyword diagnostic)
   $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
   $('voice-bench-btn')?.addEventListener('click', openVoiceBenchModal);
+  $('voice-picker-btn')?.addEventListener('click', openVoicePicker);
+  $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
+  $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
+  $('voice-picker-more')?.addEventListener('click', () => loadVoicePage(false));
+  $('voice-picker-search')?.addEventListener('input', debounceVoiceSearch);
+  $('voice-picker-source')?.addEventListener('change', () => loadVoicePage(true));
+  $('voice-picker-sort')?.addEventListener('change', () => loadVoicePage(true));
   $('voice-bench-close')?.addEventListener('click', closeVoiceBenchModal);
   $('voice-bench-run')?.addEventListener('click', startVoiceBench);
   $('voice-bench-again')?.addEventListener('click', resetVoiceBench);
@@ -7252,6 +7259,123 @@ function downloadVoiceBench() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+
+// ── Reference-voice picker (voice spec §6.5) ─────────────────────────────
+//
+// 700+ CC0 clips is a lot to get through, so the shape matters: search and
+// sort up front, one page at a time, nothing auto-playing. Pitch is measured
+// the first time a clip is heard, so sorting by "deeper" or "higher" improves
+// as my human browses rather than demanding a 350 MB download first.
+
+const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null };
+
+async function openVoicePicker() {
+  $('voice-picker-modal').classList.remove('hidden');
+  const sel = $('voice-picker-source');
+  if (sel && !sel.options.length) {
+    const s = await vbGet('/api/voice/clips/summary');
+    const opts = ['<option value="">All collections</option>'];
+    for (const src of s?.sources ?? []) {
+      opts.push(`<option value="${src.key}">${src.label} (${src.voices})</option>`);
+    }
+    sel.innerHTML = opts.join('');
+    $('voice-picker-note').textContent = s?.ok
+      ? `${s.voices} voices catalogued, ${s.measured} measured so far. Every one is free to use — ${[...new Set((s.sources ?? []).map((x) => x.licence))].filter(Boolean).join(' or ')}.`
+      : '';
+  }
+  await loadVoicePage(true);
+}
+
+function closeVoicePicker() {
+  stopVoicePreview();
+  $('voice-picker-modal').classList.add('hidden');
+}
+
+function debounceVoiceSearch() {
+  clearTimeout(VP.searchTimer);
+  VP.searchTimer = setTimeout(() => loadVoicePage(true), 250);
+}
+
+async function loadVoicePage(reset) {
+  if (reset) { VP.offset = 0; $('voice-picker-list').innerHTML = ''; }
+  const q = encodeURIComponent($('voice-picker-search')?.value ?? '');
+  const source = $('voice-picker-source')?.value ?? '';
+  const sort = $('voice-picker-sort')?.value ?? 'source';
+  const r = await vbGet(`/api/voice/clips?q=${q}&source=${source}&sort=${sort}&limit=${VP.limit}&offset=${VP.offset}`);
+  if (!r?.ok) { $('voice-picker-count').textContent = "I couldn't load the voice list."; return; }
+
+  VP.total = r.total;
+  $('voice-picker-count').textContent =
+    `${r.total} voice${r.total === 1 ? '' : 's'}${r.measured ? ` · ${r.measured} measured` : ''}`;
+
+  const list = $('voice-picker-list');
+  for (const row of r.rows) list.appendChild(voiceRow(row));
+
+  VP.offset += r.rows.length;
+  $('voice-picker-more').classList.toggle('hidden', VP.offset >= VP.total);
+}
+
+function voiceRow(row) {
+  const el = document.createElement('div');
+  el.className = 'pi-row';
+  el.style.cssText = 'display:flex; gap:10px; align-items:center; padding:6px 4px';
+
+  const play = document.createElement('button');
+  play.className = 'btn-secondary';
+  play.textContent = '▶';
+  play.setAttribute('aria-label', `Play ${row.id}`);
+  play.style.minWidth = '2.4em';
+
+  const label = document.createElement('div');
+  label.style.cssText = 'flex:1; min-width:0';
+  const pitch = row.medianF0Hz ? `${row.medianF0Hz} Hz` : 'not measured yet';
+  label.innerHTML =
+    `<div style="font-weight:600">${row.id}</div>` +
+    `<div class="field-hint" style="margin:0">${row.source} · ${pitch}${row.description ? ` · ${row.description}` : ''}</div>`;
+
+  play.addEventListener('click', () => toggleVoicePreview(row, play, label));
+  el.append(play, label);
+  return el;
+}
+
+function stopVoicePreview() {
+  if (VP.playing) {
+    try { VP.playing.audio.pause(); } catch { /* already stopped */ }
+    VP.playing.button.textContent = '▶';
+    VP.playing = null;
+  }
+}
+
+/**
+ * Play a preview, and measure the clip while it plays.
+ *
+ * The measurement rides the listening — by the time someone has heard a dozen
+ * voices, a dozen are measured and sorting by pitch means something. Nothing
+ * is downloaded to disk for a clip that was only auditioned.
+ */
+async function toggleVoicePreview(row, button, label) {
+  if (VP.playing?.key === row.key) { stopVoicePreview(); return; }
+  stopVoicePreview();
+
+  const audio = new Audio(row.url);
+  audio.addEventListener('ended', () => stopVoicePreview());
+  audio.addEventListener('error', () => {
+    button.textContent = '▶';
+    label.querySelector('.field-hint').textContent = `${row.source} · couldn't play this one`;
+  });
+  VP.playing = { key: row.key, audio, button };
+  button.textContent = '■';
+  audio.play().catch(() => stopVoicePreview());
+
+  if (!row.measured) {
+    const m = await vbPost('/api/voice/clips/measure', { key: row.key });
+    if (m?.ok) {
+      label.querySelector('.field-hint').textContent =
+        `${row.source} · ${m.medianF0Hz ?? '—'} Hz${m.description ? ` · ${m.description}` : ''}`;
+    }
+  }
 }
 
 // ── Knowledge editor (Phylactery: memories, identity, graph, snapshots) ──
