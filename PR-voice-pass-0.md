@@ -5,14 +5,15 @@ Pass 0 of the voice milestone (`docs/voice-build-spec.md` §13). This is the
 what a ward's machine can actually run, what it costs them, and a report they
 can send back.
 
-Seven commits. Nothing here touches the chat path.
+Nothing here touches the chat path. The work landed in this order:
 
-- `8510019` — supply chain, footprint budget, bench measuring core
-- `bf40184` — the ward-facing surface: endpoint, Diagnostics button, CLI
-- `38b90b7` — first real bench results from the X380
-- `47920f3` — measured unpacked sizes; all six plans now measured
-- `3ae5d44` / `f07d368` — PR description brought up to the measured numbers
-- `e9becf4` — §14's interference bar rewritten; the first measurement broke it
+- supply chain, footprint budget, bench measuring core (`8510019`)
+- the ward-facing surface: endpoint, Diagnostics button, CLI (`bf40184`)
+- first real bench results from the X380 (`38b90b7`)
+- measured unpacked sizes; all six plans now measured (`47920f3`)
+- §14's interference bar rewritten — the first measurement broke it (`e9becf4`)
+
+plus documentation follow-ups.
 
 **It has been run on the reference machine.** The Diagnostics button, the
 endpoint, the polling and the interference probe all work on Windows against

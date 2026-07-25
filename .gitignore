@@ -89,3 +89,9 @@ models/
 
 # Pin-time scratch (measuring what an archive unpacks to) — never committed
 .pin-measure/
+
+# Runtime state written by the running server (siblings of the tomes/.*.json above)
+tomes/.memory-coverage.json
+tomes/.memory-coverage.json.tmp
+tomes/.stewardship-state.json
+tomes/.stewardship-state.json.tmp
