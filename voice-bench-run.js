@@ -87,6 +87,7 @@ export function startBenchmark({
   rootDir,
   planOptions = {},
   engineFactory = null,
+  reportSaver = saveReport,
   probe = null,
   appVersion = null,
   samples = 12,
@@ -129,16 +130,16 @@ export function startBenchmark({
         state.status = 'cancelled';
       } else {
         state.result = result;
-        state.status = 'done';
         // Persist before flipping to done, so a ward who closes the modal the
         // instant it finishes still has the file. The report surviving its
         // window is the whole point of §0.5's "send this back".
         try {
-          const saved = await saveReport({ rootDir, result });
+          const saved = await reportSaver({ rootDir, result });
           state.savedTo = saved;
         } catch (err) {
           state.savedTo = { error: String(err?.message ?? err) };
         }
+        state.status = 'done';
       }
     } catch (err) {
       state.status = 'failed';

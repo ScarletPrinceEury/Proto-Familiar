@@ -65,6 +65,45 @@ test('the report is written to disk BEFORE the run reports done — closing the 
   } finally { resetBenchmark(); await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test('polling never reports done before the report save finishes', async () => {
+  const root = await tmp();
+  try {
+    resetBenchmark();
+    let releaseSave;
+    let markSaveStarted;
+    const saveStarted = new Promise((resolve) => {
+      markSaveStarted = resolve;
+    });
+    const saveMayFinish = new Promise((resolve) => {
+      releaseSave = resolve;
+    });
+
+    startBenchmark({
+      rootDir: root,
+      samples: 1,
+      probe: async () => {},
+      reportSaver: async ({ rootDir, result }) => {
+        markSaveStarted();
+        await saveMayFinish;
+        const logsDir = path.join(rootDir, 'logs');
+        await fs.mkdir(logsDir, { recursive: true });
+        const mdPath = path.join(logsDir, 'voice-bench-test.md');
+        const jsonPath = path.join(logsDir, 'voice-bench-test.json');
+        await fs.writeFile(mdPath, result.markdown, 'utf8');
+        await fs.writeFile(jsonPath, JSON.stringify({ ok: true }), 'utf8');
+        return { mdPath, jsonPath };
+      },
+    });
+
+    await saveStarted;
+    const mid = statusOf();
+    assert.notEqual(mid.status, 'done', 'done must wait for the save to finish');
+    releaseSave();
+    assert.ok(await settle(() => statusOf().status === 'done'));
+    assert.ok(statusOf().savedTo?.mdPath);
+  } finally { resetBenchmark(); await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('a second start returns the run already going — clicking twice means running once', async () => {
   const root = await tmp();
   try {
