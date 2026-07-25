@@ -347,7 +347,16 @@ export function renderReport(result) {
   if (result.plan) {
     L.push('');
     const ev = result.plan.evaluation;
-    L.push(`Plan measured: **${result.plan.capabilityTier} / ${result.plan.voiceEngine} / ${result.plan.asrLangs.join('+')}** — ${ev.estimated ? 'about ' : ''}${formatBytes(ev.totalBytes)}.`);
+    // Download and disk are different numbers and both matter: one is what
+    // crosses the network, the other is what the ceilings are about.
+    const disk = Number.isFinite(ev.totalDiskBytes) ? ev.totalDiskBytes : ev.totalBytes;
+    L.push(`Plan measured: **${result.plan.capabilityTier} / ${result.plan.voiceEngine} / ${result.plan.asrLangs.join('+')}**`);
+    L.push('');
+    L.push(`- Download: ${ev.estimated ? 'about ' : ''}${formatBytes(ev.totalBytes)}`);
+    L.push(`- On disk once unpacked: ${ev.diskEstimated ? 'about ' : ''}${formatBytes(disk)}`);
+    if (Number.isFinite(ev.peakBytes) && ev.peakBytes > disk) {
+      L.push(`- Free space needed while installing: ${formatBytes(ev.peakBytes)} (the archive and its unpacked copy both exist for a moment)`);
+    }
     L.push(ev.withinBudget
       ? '✅ Inside the §0.7 footprint ceilings.'
       : `⚠️ Over the §0.7 ceilings: ${ev.violations.map((v) => `${v.axis} ${v.of} at ${formatBytes(v.bytes)} against ${formatBytes(v.ceiling)}`).join('; ')}.`);
