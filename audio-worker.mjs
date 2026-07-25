@@ -29,6 +29,9 @@
 import path from 'node:path';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON } from './audio-frame.js';
 import { floatToPcm16 } from './voice-audio-features.js';
+import {
+  generationExtras, DEFAULT_NUM_STEPS, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
+} from './voice-generation.js';
 
 const send = (obj) => {
   try { process.stdout.write(encodeJson(obj)); } catch { /* the pipe is gone; the supervisor will notice */ }
@@ -43,23 +46,17 @@ const threads = {
 };
 
 /**
- * PocketTTS quality/speed lever, and — since this model exposes no seed — the
- * ONLY lever on how consistent it sounds.
+ * Generation knobs live in `voice-generation.js` so they are testable — this
+ * file is a script with top-level stdio handlers and cannot be imported from
+ * a test without hanging it. The seed in particular decides whether I sound
+ * like one person across a message, so it does not get to be unverifiable.
  *
- * The generation is stochastic per call: there is no `seed`, no `target_rms`
- * and no `guidance_scale` for pocket (those last two belong to ZipVoice; the
- * `seed` in the library belongs to an ASR config). More steps means the
- * flow-matching decoder converges further, so runs land closer to the same
- * rendering of the same reference clip. Fewer steps means faster, and more
- * audibly different each time.
- *
- * Measured on the reference laptop: RTF 0.616 at 4 steps, which leaves real
- * headroom under 1.0. §4.6 can still shed steps before shedding the voice.
+ * Env overrides stay here: they are how a ward tunes by ear on their own
+ * machine without editing code.
  */
-const NUM_STEPS = Number(process.env.PF_TTS_NUM_STEPS) || 4;
-
-/** Upstream caps reference audio at 12 s; named so a longer clip is trimmed knowingly. */
-const MAX_REFERENCE_SECONDS = 12;
+const NUM_STEPS = Number(process.env.PF_TTS_NUM_STEPS) || DEFAULT_NUM_STEPS;
+const TTS_SEED = Number(process.env.PF_TTS_SEED) || DEFAULT_TTS_SEED;
+const TTS_TEMPERATURE = Number(process.env.PF_TTS_TEMPERATURE) || DEFAULT_TTS_TEMPERATURE;
 
 /**
  * Build the PocketTTS session from an unpacked model directory.
@@ -87,11 +84,11 @@ function buildPocketTts(modelDir) {
       numThreads: threads.tts,
       provider: 'cpu',
     },
-    // One generation must be able to carry a whole message. At 1, the session
-    // stops at each sentence — and because the clone is zero-shot per pass,
-    // every sentence came back a slightly different speaker. That was the bug
-    // my human heard: three sentences, three voices, three levels.
-    maxNumSentences: 64,
+    // PocketTTS IGNORES this — its Generate does its own SplitByPunctuation
+    // and never consults maxNumSentences. Left at upstream's own value and
+    // documented rather than deleted, so nobody reaches for it again as a
+    // consistency lever: it is not one. The seed is.
+    maxNumSentences: 1,
   });
 }
 
@@ -176,7 +173,7 @@ const OPS = {
    * built-in voice to fall back on. A missing reference is a clear refusal
    * rather than a default nobody chose.
    */
-  async tts({ reqId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS }) {
+  async tts({ reqId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS, seed = TTS_SEED, temperature = TTS_TEMPERATURE }) {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!text || typeof text !== 'string') return send({ reqId, ok: false, reason: 'bad-request', detail: 'text is required' });
@@ -192,10 +189,7 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        // Upstream's own cap. Naming it means a longer reference is trimmed
-        // deliberately rather than silently — p255_023 is 12.8 s and would
-        // otherwise be cut without anyone knowing where.
-        extra: { max_reference_audio_len: MAX_REFERENCE_SECONDS },
+        extra: generationExtras({ seed, temperature }),
       });
 
       const started = Date.now();
@@ -238,7 +232,7 @@ const OPS = {
    * carries the totals — a caller must be able to tell "finished" from
    * "the pipe went quiet".
    */
-  async ttsStream({ reqId, streamId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS }) {
+  async ttsStream({ reqId, streamId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS, seed = TTS_SEED, temperature = TTS_TEMPERATURE }) {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!text || typeof text !== 'string') return send({ reqId, ok: false, reason: 'bad-request', detail: 'text is required' });
@@ -255,7 +249,7 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        extra: { max_reference_audio_len: MAX_REFERENCE_SECONDS },
+        extra: generationExtras({ seed, temperature }),
       });
 
       const started = Date.now();

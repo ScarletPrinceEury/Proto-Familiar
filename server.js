@@ -1513,7 +1513,12 @@ app.get('/api/voice/tts/:id', async (req, res) => {
 
   const sampleRate = Number(loaded.sampleRate) || 24000;
   const speed = Number(s.voiceTts?.speed) || 1.0;
+  // Left undefined unless my human set them, so the worker's own defaults
+  // stay the single place these are decided. `seed` in particular is what
+  // keeps my voice the same from sentence to sentence.
   const numSteps = Number(s.voiceTts?.numSteps) || undefined;
+  const seed = Number.isFinite(Number(s.voiceTts?.seed)) ? Number(s.voiceTts.seed) : undefined;
+  const temperature = Number(s.voiceTts?.temperature) || undefined;
 
   if (voice.fellBackFrom) {
     res.set('X-Voice-Fell-Back-From', encodeURIComponent(voice.fellBackFrom));
@@ -1540,7 +1545,7 @@ app.get('/api/voice/tts/:id', async (req, res) => {
       });
       try {
         const r = await audioWorker.request(
-          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps },
+          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature },
           { timeoutMs: 300_000 },
         );
         // A failure mid-message cannot be reported in the body — the browser
