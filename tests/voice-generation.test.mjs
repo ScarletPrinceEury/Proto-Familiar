@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   generationExtras, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
+  MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit,
 } from '../voice-generation.js';
 
 /**
@@ -63,4 +64,42 @@ test('the defaults are the values measured on real hardware', () => {
   assert.equal(DEFAULT_NUM_STEPS, 4, 'RTF 0.616 on the reference laptop');
   assert.equal(DEFAULT_TTS_TEMPERATURE, 0.7, "upstream's own default");
   assert.equal(MAX_REFERENCE_SECONDS, 12, 'most of a 12.8 s clip');
+});
+
+// ── The runt fragment, and the noise it caused ──────────────────────────
+
+test('the sentence threshold is well clear of 200, where the runt was born', () => {
+  // A 205-character sentence split at 200 left 'real.' as its own utterance.
+  // The LM hit EOS at step 0, upstream's `if (eos_step > 0 …)` never fired,
+  // and the loop ran its whole 500-frame budget as noise.
+  assert.ok(MAX_CHAR_IN_SENTENCE > 205, 'the reported sentence must pass through whole');
+  assert.equal(MAX_CHAR_IN_SENTENCE, 360);
+});
+
+test('both sentence bounds ride on every generation', () => {
+  const extra = generationExtras();
+  assert.equal(extra.max_char_in_sentence, MAX_CHAR_IN_SENTENCE);
+  assert.equal(extra.min_char_in_sentence, MIN_CHAR_IN_SENTENCE);
+});
+
+test('a runaway is capped in seconds, not tens of seconds', () => {
+  const forTheRunt = runawaySampleLimit('real.', 24000) / 24000;
+  assert.ok(forTheRunt <= 4, `the fragment that caused this must not run long: ${forTheRunt}s`);
+  assert.ok(forTheRunt >= 2, 'but not so tight that a short real line is cut');
+});
+
+test('the cap scales with the text, so a long sentence is not truncated', () => {
+  const short = runawaySampleLimit('Hey.', 24000);
+  const long = runawaySampleLimit('x'.repeat(300), 24000);
+  assert.ok(long > short * 3, 'more words must buy more room');
+  assert.ok(long / 24000 > 300 / 14, 'and comfortably more than the text could take to say');
+});
+
+test('the cap never returns zero or NaN, whatever it is handed', () => {
+  // It gates audio reaching a person. A NaN ceiling would compare false and
+  // silently disable the guard.
+  for (const bad of ['', null, undefined, 0, {}, []]) {
+    const v = runawaySampleLimit(bad, 24000);
+    assert.ok(Number.isFinite(v) && v > 0, `runawaySampleLimit(${String(bad)}) = ${v}`);
+  }
 });

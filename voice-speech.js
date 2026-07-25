@@ -25,6 +25,79 @@
  */
 
 import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE } from './voice-generation.js';
+
+/**
+ * Typographic characters the model's vocabulary does not contain.
+ *
+ * The tokenizer has 4000 tokens and holds ASCII `'`, `"` and `-`, but has NO
+ * token containing a curly quote or an ellipsis. SentencePiece falls back to
+ * raw byte tokens for those, so a perfectly ordinary apostrophe in "there's"
+ * becomes three bytes the model has rarely seen in that position. That is a
+ * quiet, cumulative destabiliser rather than an obvious failure, which is the
+ * kind worth removing before it is ever noticed.
+ *
+ * The em-dash IS in the vocabulary, so it stays.
+ */
+const VOCAB_SAFE = [
+  [/[‘’‚‛]/g, "'"],      // curly single quotes
+  [/[“”„‟]/g, '"'],      // curly double quotes
+  [/…/g, '...'],                         // ellipsis
+  [/[‐‑‒–]/g, '-'],      // hyphens and en-dash (em-dash kept)
+  [/[     ]/g, ' '], // non-breaking and thin spaces
+  [/[​‌‍﻿]/g, ''],        // zero-width, invisible entirely
+  [/[ʼ′]/g, "'"],                   // modifier apostrophe, prime
+];
+
+/**
+ * Split a sentence that is too long for the engine to take whole.
+ *
+ * Upstream splits at `max_char_in_sentence` and drops whatever is left into
+ * its own chunk with NO minimum size — which is how a 205-character sentence
+ * produced the five-character fragment 'real.' and, through an EOS bug, forty
+ * seconds of noise. See voice-generation.js for the full mechanism.
+ *
+ * This guarantees what upstream does not: every piece is at least
+ * `minChars`. It prefers to break at a clause boundary (a comma, semicolon or
+ * dash), because that is where a listener already expects a pause, and it
+ * checks that BOTH sides clear the floor before accepting a break. A period
+ * replaces the clause mark so the engine treats each piece as a whole
+ * sentence and never re-splits it.
+ *
+ * The text is being altered, which is not free — a comma promoted to a full
+ * stop is a slightly firmer pause than the writer intended. That is a small
+ * and honest cost next to the alternative.
+ */
+export function capSentenceLength(text, { maxChars = MAX_CHAR_IN_SENTENCE - 20, minChars = MIN_CHAR_IN_SENTENCE + 10 } = {}) {
+  if (typeof text !== 'string' || text.length <= maxChars) return text;
+
+  const cut = (s) => {
+    if (s.length <= maxChars) return [s];
+
+    // Clause marks, then any space — searching back from the limit, and only
+    // accepting a point that leaves enough on BOTH sides.
+    for (const pattern of [/[,;:]\s|\s[—–-]\s/g, /\s/g]) {
+      let best = -1;
+      let match;
+      pattern.lastIndex = 0;
+      while ((match = pattern.exec(s)) !== null) {
+        const at = match.index + match[0].length;
+        if (at > maxChars) break;
+        if (at >= minChars && s.length - at >= minChars) best = at;
+      }
+      if (best > 0) {
+        const head = s.slice(0, best).trim().replace(/[,;:—–-]$/, '');
+        return [`${head}.`, ...cut(s.slice(best).trim())];
+      }
+    }
+    // Nothing safe to break on. Leaving it whole is better than manufacturing
+    // a runt — the engine will split it, but at least not into a fragment
+    // this code created.
+    return [s];
+  };
+
+  return cut(text).join(' ');
+}
 
 /** Beyond this, one utterance is split even without punctuation to split on. */
 const MAX_CHUNK_CHARS = 240;
@@ -115,6 +188,18 @@ export function speakableText(input) {
     .replace(/\s+\)/g, ')')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+
+  // Characters the vocabulary cannot represent as real tokens, before any
+  // length work — the substitutions change lengths (… becomes ...).
+  for (const [pattern, to] of VOCAB_SAFE) s = s.replace(pattern, to);
+
+  // Then make sure no single sentence is long enough for the engine to split
+  // it into a fragment. Done per sentence so a long message of ordinary
+  // sentences is left completely alone.
+  s = s
+    .split(/(?<=[.!?])(\s+)/)
+    .map((piece) => (/^\s+$/.test(piece) ? piece : capSentenceLength(piece)))
+    .join('');
 
   return { text: s, notes };
 }

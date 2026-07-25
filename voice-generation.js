@@ -43,6 +43,69 @@ export const DEFAULT_NUM_STEPS = 4;
 export const MAX_REFERENCE_SECONDS = 12;
 
 /**
+ * The runt-fragment bug, and why this number is not 200.
+ *
+ * Generate splits every sentence longer than `max_char_in_sentence`, and
+ * SplitLongSentence puts whatever is left over into its own chunk. Crucially
+ * MergeShortSentences has ALREADY run by then, so that leftover is never
+ * merged back. A 205-character sentence therefore becomes:
+ *
+ *     ['It assumes ... is a lower grade of'  (199 chars)
+ *      'real.'                               (5 chars)]
+ *
+ * and 'real.' is handed to the LM as a whole utterance. It reaches EOS
+ * immediately — at step 0 — and then:
+ *
+ *     if (eos_step < 0 && p_logit[0] > -4) eos_step = step;   // eos_step = 0
+ *     if (eos_step > 0 && (step >= eos_step + frames_after_eos)) break;
+ *                     ^^^ 0 > 0 is false, so this never fires
+ *
+ * The loop runs all 500 frames. At Mimi's 12.5 Hz that is up to forty seconds
+ * of autoregressive garbage: my human heard the word repeated in a panic, then
+ * swelling white noise, then something like pained sounds. On a companion, to
+ * someone who may have opened the app because they were already struggling.
+ *
+ * Raising the threshold means ordinary long sentences are spoken whole and no
+ * runt is ever produced. 360 characters is roughly 22 seconds of speech, which
+ * leaves real margin under the 40-second frame budget. Anything longer than
+ * this is split by `capSentenceLength` in voice-speech.js, which guarantees a
+ * minimum piece size — the guarantee upstream is missing.
+ */
+export const MAX_CHAR_IN_SENTENCE = 360;
+
+/** Upstream's own value. Merges short sentences BEFORE the split above. */
+export const MIN_CHAR_IN_SENTENCE = 30;
+
+/** Roughly how much text a second of speech carries. Used only for the cap below. */
+const CHARS_PER_SECOND = 14;
+
+/** Generous multiple of the expected duration before something is judged runaway. */
+const RUNAWAY_FACTOR = 3;
+
+/** Never cut anything below this, so a legitimately short line is safe. */
+const RUNAWAY_FLOOR_SECONDS = 3;
+
+/**
+ * How much audio this text could plausibly produce before something has gone
+ * wrong.
+ *
+ * The containment half of the fix above. `capSentenceLength` should stop the
+ * runt from ever being generated — but the runaway is an upstream loop bug I
+ * cannot patch, and I would rather not rely on having found its only trigger.
+ * If audio keeps arriving well past what the words could account for, the
+ * generation is stopped mid-flight.
+ *
+ * Tuned to be embarrassing rather than harmful when wrong: a false positive
+ * truncates a sentence, which is visible and reported. A false negative is
+ * forty seconds of distress noise aimed at someone who trusts this voice.
+ */
+export function runawaySampleLimit(text, sampleRate = 24000) {
+  const chars = typeof text === 'string' ? text.length : 0;
+  const seconds = Math.max(RUNAWAY_FLOOR_SECONDS, (chars / CHARS_PER_SECOND) * RUNAWAY_FACTOR);
+  return Math.ceil(seconds * sampleRate);
+}
+
+/**
  * A number, or the fallback — without JavaScript's helpful coercions.
  *
  * `Number(null)`, `Number('')` and `Number([])` are all 0, so a settings file
@@ -78,5 +141,7 @@ export function generationExtras({ seed, temperature } = {}) {
     seed: wanted < 0 ? DEFAULT_TTS_SEED : wanted,
     temperature: num(temperature, DEFAULT_TTS_TEMPERATURE),
     max_reference_audio_len: MAX_REFERENCE_SECONDS,
+    max_char_in_sentence: MAX_CHAR_IN_SENTENCE,
+    min_char_in_sentence: MIN_CHAR_IN_SENTENCE,
   };
 }

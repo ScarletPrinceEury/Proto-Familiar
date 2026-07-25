@@ -30,7 +30,8 @@ import path from 'node:path';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON } from './audio-frame.js';
 import { floatToPcm16 } from './voice-audio-features.js';
 import {
-  generationExtras, DEFAULT_NUM_STEPS, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
+  generationExtras, runawaySampleLimit,
+  DEFAULT_NUM_STEPS, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
 } from './voice-generation.js';
 
 const send = (obj) => {
@@ -255,6 +256,15 @@ const OPS = {
       const started = Date.now();
       let sampleCount = 0;
       let firstChunkMs = null;
+      let runaway = false;
+
+      // Containment for a bug I cannot patch. If the LM reaches EOS on its
+      // first step, upstream's `if (eos_step > 0 …)` never fires and the loop
+      // runs its full 500-frame budget — up to forty seconds of degenerating
+      // noise. `capSentenceLength` should stop the fragment that triggers it
+      // from ever being generated, but I would rather not stake my human's
+      // ears on having found the only trigger.
+      const sampleCeiling = runawaySampleLimit(text, held.session.sampleRate ?? 24000);
 
       const audio = await held.session.generateAsync({
         text,
@@ -262,6 +272,15 @@ const OPS = {
         onProgress: ({ samples }) => {
           if (!samples?.length) return 1;
           if (firstChunkMs === null) firstChunkMs = Date.now() - started;
+
+          if (sampleCount + samples.length > sampleCeiling) {
+            // Stop BEFORE forwarding this chunk. Whatever is being produced
+            // past this point is not speech, and it is aimed at someone who
+            // may have opened this because they were already struggling.
+            runaway = true;
+            return 0;
+          }
+
           sampleCount += samples.length;
           try {
             process.stdout.write(encodePcm(streamId, floatToPcm16(samples)));
@@ -287,6 +306,10 @@ const OPS = {
         durationSec: Number(durationSec.toFixed(3)),
         elapsedMs,
         firstChunkMs,
+        // Never silent about it: a truncated sentence is something my human
+        // may notice, and they should be able to find out why rather than
+        // wonder whether they misheard.
+        runaway,
         realTimeFactor: durationSec > 0 ? Number((elapsedMs / 1000 / durationSec).toFixed(3)) : null,
       });
     } catch (err) {

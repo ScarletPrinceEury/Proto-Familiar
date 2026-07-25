@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { speakableText, splitForSpeech, prepareForSpeech } from '../voice-speech.js';
+import { speakableText, splitForSpeech, prepareForSpeech, capSentenceLength } from '../voice-speech.js';
+import { MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE } from '../voice-generation.js';
 import { encodeWav, parseWav, wavHeader, floatToPcm16, WAV_STREAMING_LENGTH } from '../voice-audio-features.js';
 
 // ── Markdown that was written to be read, said instead ───────────────────
@@ -187,6 +188,71 @@ test('a single unbroken paragraph over the cap still splits rather than being dr
   const r = prepareForSpeech('One sentence. '.repeat(400));
   assert.ok(r.parts.length > 1);
   assert.ok(r.parts.every((p) => p.length <= 3000));
+});
+
+// ── Vocabulary-safe punctuation ─────────────────────────────────────────
+
+test('curly quotes become ASCII — the vocabulary has no token for them', () => {
+  // 4000 tokens, and not one contains U+2019 or U+201C. SentencePiece falls
+  // back to raw bytes, so an ordinary apostrophe becomes three tokens the
+  // model has barely seen in that position.
+  const { text } = speakableText('It assumes there’s a “pure” way to want something.');
+  assert.equal(text, 'It assumes there\'s a "pure" way to want something.');
+  assert.doesNotMatch(text, /[‘’“”]/);
+});
+
+test('an ellipsis becomes three dots, and invisible characters go entirely', () => {
+  assert.match(speakableText('Just… you gave me that.').text, /Just\.\.\. you/);
+  assert.doesNotMatch(speakableText('a​b c').text, /[​ ]/);
+});
+
+test('the em-dash survives, because the vocabulary does have it', () => {
+  // Normalising away something the model handles correctly would cost prosody
+  // for nothing.
+  assert.match(speakableText('in my head — the question').text, /—/);
+});
+
+// ── The runt fragment that produced seconds of noise ────────────────────
+
+const REPORTED = 'It assumes there’s a “pure” way to want something — independently generated, pre-existing, self-originated — and that anything that wakes up in response to someone else’s reaching is a lower grade of real.';
+
+test('the reported sentence is never chopped into a fragment', () => {
+  // 205 characters. Upstream split it at 200 and left 'real.' alone, which
+  // hit EOS at step 0 and ran the full frame budget as noise. It must now go
+  // to the engine whole.
+  const { text } = speakableText(REPORTED);
+  assert.equal(text.length, 205, 'ASCII quotes are the same width as curly ones');
+  assert.ok(text.length < MAX_CHAR_IN_SENTENCE, 'below the threshold, so the engine leaves it alone');
+  assert.match(text, /lower grade of real\.$/);
+});
+
+test('a sentence long enough to need splitting never leaves a runt', () => {
+  const long = `It assumes there is a pure way to want something, ${'independently generated and pre-existing, '.repeat(8)}and that is a framework built for a different kind of being.`;
+  assert.ok(long.length > MAX_CHAR_IN_SENTENCE);
+
+  const pieces = capSentenceLength(long).split(/(?<=[.!?])\s+/).filter(Boolean);
+  assert.ok(pieces.length > 1, 'it did split');
+  for (const p of pieces) {
+    assert.ok(p.length >= MIN_CHAR_IN_SENTENCE, `a runt survived: ${JSON.stringify(p)}`);
+  }
+});
+
+test('splitting keeps every word, changing only the punctuation at the seam', () => {
+  const long = `The wanting does not need to exist in a vacuum to count, ${'and the reaching is what makes it real, '.repeat(9)}so that is where I got to.`;
+  const words = (s) => s.replace(/[.,;:]/g, ' ').split(/\s+/).filter(Boolean);
+  assert.deepEqual(words(capSentenceLength(long)), words(long));
+});
+
+test('a sentence with nowhere safe to break is left whole rather than mangled', () => {
+  // Manufacturing a runt would be worse than handing over a long sentence.
+  const unbreakable = `${'a'.repeat(500)}.`;
+  assert.equal(capSentenceLength(unbreakable), unbreakable);
+});
+
+test('ordinary text is untouched by the length guard', () => {
+  const normal = 'Hey. There has been this thing turning over in my head. I think I landed somewhere.';
+  assert.equal(capSentenceLength(normal), normal);
+  assert.equal(speakableText(normal).text, normal);
 });
 
 // ── Float samples becoming a wav a browser will play ─────────────────────
