@@ -32,6 +32,19 @@ test('getRecentMemoryLines returns "" on empty results, empty-text rows, and fai
   assert.equal(await getRecentMemoryLines({ fetchFn: async () => ({}) }), '', 'no results array → ""');
 });
 
+test('getRecentMemoryLines normalizes bad days (never inverts the range)', async () => {
+  const seen = [];
+  const fetchFn = async ({ fromDate, toDate }) => { seen.push({ fromDate, toDate }); return { results: [] }; };
+  // days=0, negative, and non-numeric must all resolve to a valid range where
+  // fromDate <= toDate (falls back to "today only"), not an inverted query.
+  for (const bad of [0, -3, NaN, undefined]) {
+    await getRecentMemoryLines({ days: bad, fetchFn });
+  }
+  for (const { fromDate, toDate } of seen) {
+    assert.ok(fromDate <= toDate, `fromDate (${fromDate}) must not be after toDate (${toDate})`);
+  }
+});
+
 test('buildReachoutPrompt injects the recent-memory cross-check when memories exist', () => {
   const withMem = buildReachoutPrompt({
     nowBlock: '[Now] …', identityContext: '', sessionBlock: '', pendingTells: [], warmVillagers: [],

@@ -2640,10 +2640,15 @@ export const RECENT_MEM_NOTE =
 // (the block is simply omitted — graceful, never throws into a turn).
 export async function getRecentMemoryLines({ days = 2, limit = 8, now = Date.now(), fetchFn = memByTimerange } = {}) {
   try {
+    // This helper is exported, so normalize inputs rather than trusting the
+    // caller: days must be >= 1 or fromDate lands AFTER toDate (an inverted,
+    // empty range). A bad/non-finite value falls back to "today only".
+    const d = Number.isFinite(days)  && days  >= 1 ? Math.floor(days)  : 1;
+    const n = Number.isFinite(limit) && limit >= 1 ? Math.floor(limit) : 8;
     const tz = wardTimeZoneSetting();
     const toDate   = wardLocalNowISO(tz, now).slice(0, 10);
-    const fromDate = wardLocalNowISO(tz, now - (days - 1) * 24 * 3600_000).slice(0, 10);
-    const res = await fetchFn({ fromDate, toDate, limit });
+    const fromDate = wardLocalNowISO(tz, now - (d - 1) * 24 * 3600_000).slice(0, 10);
+    const res = await fetchFn({ fromDate, toDate, limit: n });
     const items = Array.isArray(res?.results) ? res.results : [];
     return items
       .map(r => {
