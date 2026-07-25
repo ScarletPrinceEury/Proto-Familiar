@@ -199,10 +199,18 @@ export function buildSituationReport(conditions, { relInterval } = {}) {
  * balance-sheet; lean on the invited-default; the real costs are the narrow,
  * action-specific ones (my human's body, my own self, my human's privacy).
  */
-export function buildNoticingPrompt({ nowBlock = '', situationReport = [], threatTier = 'calm', hasFlagDistress = false }) {
+export function buildNoticingPrompt({ nowBlock = '', situationReport = [], threatTier = 'calm', hasFlagDistress = false, recentConversation = '', recentMemories = '' }) {
   const reportBlock = situationReport.length
     ? situationReport.join('\n')
     : '- (nothing specific is flagged — I look anyway, but I do not invent a reason to act.)';
+
+  // Recent context so I decide with the same picture a live chat turn has, not
+  // blind — what we've actually been saying, and what I hold from the last day
+  // or two. Presented as information only: I read it and use my own judgment;
+  // it is NOT a reason to go quiet, least of all when concern is elevated.
+  const recentContextBlock =
+    (recentConversation ? `\n\nRecently, my human and I have been talking about:\n${recentConversation}` : '') +
+    (recentMemories     ? `\n\nWhat I hold from today and yesterday:\n${recentMemories}` : '');
 
   const elevated = threatTier === 'moderate' || threatTier === 'high' || threatTier === 'severe';
   const flagClause = hasFlagDistress
@@ -219,7 +227,7 @@ This is my time. Given everything I can see, is there something I want to do?
 ${nowBlock}
 
 What I'm looking at:
-${reportBlock}
+${reportBlock}${recentContextBlock}
 ${threatLine}
 ---
 

@@ -44,7 +44,7 @@ import {
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
-  memByTimerange,
+  memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -108,6 +108,7 @@ import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative
 // live there; server.js keeps only route handling and loop boot.
 import {
   readSettingsSync, primaryConnectionFrom, connectionForFeature,
+  getRecentSessionMessages, formatRecentMessagesForContext,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
@@ -4997,12 +4998,19 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
   const conn = connectionForFeature(s, 'noticing');
   if (!conn?.apiKey || !conn?.model) return { toolNamesCalled: [] };
 
-  const [{ static: identity }, lastAct] = await Promise.all([
+  const nowMs = Date.now();
+  const [{ static: identity }, lastAct, recentMessages, recentMemories] = await Promise.all([
     enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
     getLastUserActivity().catch(() => null),
+    // Same recent context a live chat turn / warm reach-out gets, so noticing
+    // isn't deciding blind to what was just said or what I hold from the last
+    // day or two. Information only — no suppression, no stand-down (ward
+    // decision); the no-look-away-at-threat posture is unchanged.
+    getRecentSessionMessages({ limit: 6 }).catch(() => []),
+    getRecentMemoryLines({ days: 2, limit: 8, now: nowMs }).catch(() => ''),
   ]);
   const nowBlock = buildTimeAnchorBlock({
-    now: Date.now(), lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
+    now: nowMs, lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
     // Noticing is a ward-private deliberation → full weather line, in the
     // ward's chosen unit.
     weatherLine: readWeatherNowLine({ unit: s?.weatherUnit }),
@@ -5011,6 +5019,8 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
     // flag_distress is in the noticing toolset now, so the prompt's
     // hand-to-triage clause names a lever the Familiar can actually pull.
     nowBlock, situationReport, threatTier, hasFlagDistress: true,
+    recentConversation: formatRecentMessagesForContext(recentMessages, nowMs),
+    recentMemories,
   }), s);
   const messages = [
     ...(identity ? [{ role: 'system', content: identity }] : []),

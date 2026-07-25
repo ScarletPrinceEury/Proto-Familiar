@@ -772,7 +772,11 @@ moderate+ → stand down, triage owns the moment), quiet hours
 (`warmthQuietHoursStart/End`, default 23–08 local), and a cool-down
 (`nextCheckInMs`, clamped to [15min, 24h], default ~2h). The decision
 (`decideReachoutViaLLM`) reuses `enrich(staticOnly)` + recent session
-messages for continuity, and is given the pending `tell` intents
+messages for continuity, is given **recent memories (today + yesterday) via
+`getRecentMemoryLines`** so it cross-checks whether the thing it would raise was
+already answered (the prompt suppresses a redundant re-ask without dampening a
+genuinely fresh reach-out — the reported "brings it up even though we discussed
+it" fix), and is given the pending `tell` intents
 (`getUnactedIntents`, filtered to kind `tell`) and the warm-villager list
 (`getWarmVillagers`: `relationToFamiliar==='warm'` AND Discord-reachable —
 the dormant tag's first real use). On `reach_out` it routes to either a
@@ -839,7 +843,13 @@ clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
 in `server.js`'s `noticingDeliberate` (`composeNoticingTools`: intention CRUD + a
 few schedule reads + the noticing-scoped `reach_out_to_ward` warm-knock and
 `set_next_check`; a reach-out refused during quiet hours is not counted as
-acting). **Does NOT stand down at elevated threat** (ward-signed,
+acting). It assembles the same recent context a live chat turn / warm reach-out
+gets — identity (static block), the time anchor, **recent conversation
+(`getRecentSessionMessages` → `formatRecentMessagesForContext`) and recent
+memories (`getRecentMemoryLines`, today+yesterday)** — so it doesn't decide blind
+to what was just said. That context is **information only** (ward decision, no
+suppression instruction): it never nudges a stand-down, and the recent context is
+worded to yield to the no-look-away posture at elevated threat. **Does NOT stand down at elevated threat** (ward-signed,
 safety-significant — the tier shifts the register, never skips the turn; joins
 the safety-critical sign-off set). A proactive act resets the wait streak; a
 stand-down increments it (`source:'noticing'`). Every decision-reaching tick —
@@ -1832,7 +1842,7 @@ doesn't sit in front of it.
 | Block | Contents | Lifetime | Placement |
 |---|---|---|---|
 | `static` | `base_instructions.md` + identity files (self / user / relationship / custom) | Stable across turns in a session | Prepended to the system message at index 0 |
-| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → Google-Calendar projection cue (0.8) → `[CARE CHECK]` (if threat ≠ calm) → `[My stewardship]` (0.8.18, if anything qualifies) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
+| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → recent-memory cross-check (today+yesterday, `getRecentMemoryLines`, ward-private live turns — so proactive questions don't re-ask something already answered) → Google-Calendar projection cue (0.8) → `[CARE CHECK]` (if threat ≠ calm) → `[My stewardship]` (0.8.18, if anything qualifies) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
 
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 
