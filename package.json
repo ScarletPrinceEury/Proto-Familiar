@@ -30,5 +30,8 @@
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "optionalDependencies": {
+    "sherpa-onnx-node": "^1.13.4"
   }
 }

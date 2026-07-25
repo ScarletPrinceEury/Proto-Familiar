@@ -260,6 +260,8 @@ import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_E
 import { consentSummary, inspectInstalled, MODELS_SUBDIR } from './voice-fetch.js';
 import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
+import { createAudioWorker } from './audio-worker-host.js';
+import { DEFAULT_VOICE } from './voice-catalogue.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -1345,6 +1347,64 @@ app.get('/api/diagnostics/voice-bench', (_req, res) => {
 // choosing a wav file. 700+ CC0 clips are catalogued with verified checksums;
 // the browser previews them straight from the pinned URL, and pitch is
 // measured lazily as they are auditioned.
+
+// ── The audio worker (voice spec §2, §11) ────────────────────────────────
+//
+// `voiceEnabled` is default OFF and governs everything that HEARS — a
+// microphone is opt-in in a way a pasted photo is not. Read-aloud does not
+// require it (§11): it is an accessibility surface, and hard-of-hearing wards
+// are exactly who it serves.
+//
+// PROTO_FAMILIAR_VOICE_DISABLED=1 kills all of it, read-aloud included.
+
+const VOICE_HARD_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
+
+const audioWorker = VOICE_HARD_DISABLED ? null : createAudioWorker({
+  onEvent: (e) => {
+    // Failures that matter are observable — the repo rule. A parked worker in
+    // particular must never be something a ward has to guess at.
+    if (e.type === 'parked') console.warn(`[voice] worker parked: ${e.reason}`);
+    else if (e.type === 'exit') console.warn(`[voice] worker exited (${e.signal ?? e.code})`);
+    else if (e.type === 'protocol-error') console.warn(`[voice] protocol error: ${e.reason}`);
+  },
+});
+
+function voiceListeningEnabled() {
+  if (VOICE_HARD_DISABLED) return false;
+  try { return readSettingsSync()?.voiceEnabled === true; } catch { return false; }
+}
+
+app.get('/api/voice/status', async (_req, res) => {
+  const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
+  const base = {
+    ok: true,
+    // Why voice is or is not available, in the order the reasons actually
+    // apply — a ward reading this should not have to work out which gate bit.
+    hardDisabled: VOICE_HARD_DISABLED,
+    listeningEnabled: voiceListeningEnabled(),
+    readAloudAvailable: !VOICE_HARD_DISABLED,
+    defaultVoice: DEFAULT_VOICE.key,
+    chosenVoice: s.voiceTts?.voice ?? DEFAULT_VOICE.key,
+  };
+  if (!audioWorker) {
+    return res.json({ ...base, worker: { running: false, reason: 'PROTO_FAMILIAR_VOICE_DISABLED=1' } });
+  }
+  const worker = audioWorker.status();
+  // Ask the worker itself rather than assuming: a running process that cannot
+  // load the binding is a different state from no process at all.
+  let engine = null;
+  if (worker.running) {
+    const r = await audioWorker.request({ op: 'ping' }, { timeoutMs: 4000 });
+    engine = r.ok ? { available: r.engineAvailable, detail: r.engineDetail ?? null } : { available: false, detail: r.detail ?? r.reason };
+  }
+  res.json({ ...base, worker, engine });
+});
+
+// Clearing a park is deliberate — the ward has presumably fixed something.
+app.post('/api/voice/unpark', (_req, res) => {
+  if (!audioWorker) return res.json({ ok: false, reason: 'voice-disabled' });
+  res.json({ ok: true, ...audioWorker.unpark() });
+});
 
 app.get('/api/voice/clips', async (req, res) => {
   try {
