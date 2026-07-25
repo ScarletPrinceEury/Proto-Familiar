@@ -76,25 +76,57 @@ Two findings worth carrying into §0.7:
   against deleting memories; it is the difference between reclaiming 389 MB
   and reclaiming nothing worth having. Worth saying plainly in that UI.
 
-### Plan sizing (listening / pocket / en)
+### Model sizes — download vs. disk (measured)
 
-| | |
-|---|---|
-| Download | 218 MB |
-| On disk once unpacked | ~218 MB (**estimated** — see gap below) |
-| Free space needed during install | 434 MB |
+Every archive expands, and **not by a consistent factor.** This is why the pin
+records both numbers instead of assuming a ratio.
 
-Inside the §0.7 ceilings. ✅
+| model | download | on disk | expansion |
+|---|---|---|---|
+| PocketTTS | 94 MB | **194 MB** | **2.07×** |
+| English ASR (zipformer en-20M) | 122 MB | 130 MB | 1.07× |
+| German ASR (zipformer de-kroko) | 55 MB | 68 MB | 1.24× |
+| Silero VAD | 2.2 MB | 2.2 MB | 1.00× (not an archive) |
 
-**Gap:** the unpacked figure is a fallback, not a measurement. PocketTTS and
-the English ASR have no `diskBytes` pin yet, so `planSize()` correctly falls
-back to download size and flags the estimate. German measured at 1.24×, so the
-real disk figure is likely nearer 270 MB. Close it with:
+### Plan sizing — all six combinations, measured
 
-```
-node scripts/pin-audio-models.mjs tts-pocket --measure
-node scripts/pin-audio-models.mjs asr-streaming-en --measure
-```
+| plan | download | on disk | free space needed while installing |
+|---|---|---|---|
+| read-aloud / pocket | 94 MB | **194 MB** | 288 MB |
+| read-aloud / piper | 40 MB | ~40 MB | 40 MB |
+| **listening / pocket** (default) | **218 MB** | **326 MB** | **542 MB** |
+| listening / piper | 164 MB | ~172 MB | 294 MB |
+| listening-plus / pocket | 268 MB | ~376 MB | 592 MB |
+| listening-plus / piper | 214 MB | ~222 MB | 344 MB |
+
+`~` still means an estimate: piper, GTCRN and the speaker model are unpinned.
+
+**Every combination is inside its §0.7 ceilings.** ✅ Voice: 194 / 250 MB.
+Capability: 132 / 150 MB — the tightest margin in the table, and it is the
+English decoder that fills it.
+
+### What these numbers correct
+
+1. **"PocketTTS is cheaper than the English decoder" was wrong.** That held on
+   *download* size (94 vs 122 MB) and reverses on disk (194 vs 130 MB) — the
+   expressive voice is the single largest item in the default install after
+   all. It is still comfortably inside its ceiling and remains the right
+   default, but the argument for it is "it fits and it matters", not "it is
+   cheap".
+
+2. **Peak install requirement is 542 MB for the default plan** — two and a
+   half times the download. This is the number the pre-flight actually refuses
+   on, and it vindicates measuring peak rather than download: a ward with
+   600 MB free would have been told 218 MB and then run out mid-install.
+
+3. **A uniform expansion ratio would have been badly wrong.** 1.07× to 2.07×
+   across four models. Guessing "about 1.3×" would have understated PocketTTS
+   by 100 MB — larger than the entire German decoder.
+
+4. **piper's fallback role is now quantified.** Choosing it saves 154 MB of
+   disk and cuts the peak requirement by 248 MB. That is a real escape hatch
+   for a genuinely full machine, and the §0.7 offer copy should name a figure
+   this concrete rather than a vague "smaller".
 
 ### Not yet measured
 

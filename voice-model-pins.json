@@ -17,7 +17,8 @@
         "name": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2",
         "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2",
         "sha256": "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
-        "bytes": 127887156
+        "bytes": 127887156,
+        "diskBytes": 136398588
       }
     ],
     "pinnedAt": "2026-07-25"
@@ -28,7 +29,8 @@
         "name": "sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2",
         "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2",
         "sha256": "2f3b88823cbbb9bf0b2477ec8ae7b3fec417b3a87b6bb5f256dba66f2ad967cb",
-        "bytes": 98336520
+        "bytes": 98336520,
+        "diskBytes": 203216103
       }
     ],
     "pinnedAt": "2026-07-25"
