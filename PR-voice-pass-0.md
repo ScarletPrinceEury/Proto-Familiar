@@ -5,10 +5,16 @@ Pass 0 of the voice milestone (`docs/voice-build-spec.md` §13). This is the
 what a ward's machine can actually run, what it costs them, and a report they
 can send back.
 
-Two commits. Nothing here touches the chat path.
+Four commits. Nothing here touches the chat path.
 
 - `8510019` — supply chain, footprint budget, bench measuring core
 - `bf40184` — the ward-facing surface: endpoint, Diagnostics button, CLI
+- `38b90b7` — first real bench results from the X380
+- `47920f3` — measured unpacked sizes; all six plans now measured
+
+**It has been run on the reference machine.** The Diagnostics button, the
+endpoint, the polling and the interference probe all work on Windows against
+a live Phylactery. Results in `docs/voice-bench-results.md`.
 
 ---
 
@@ -58,16 +64,26 @@ ships every model as `.tar.bz2` and Node has no bzip2.
 
 ## Measured, replacing estimates
 
-| | estimated | download | on disk |
-|---|---|---|---|
-| PocketTTS | ~200 MB | **94 MB** | not yet measured |
-| English ASR | ~80 MB | **122 MB** | not yet measured |
-| German ASR | ~80 MB | **55 MB** | **68 MB** (1.24×) |
-| Silero VAD | ~2 MB | **2.2 MB** | 2.2 MB |
+| | spec estimate | download | on disk | expansion |
+|---|---|---|---|---|
+| PocketTTS | ~200 MB | 94 MB | **194 MB** | **2.07×** |
+| English ASR | ~80 MB | 122 MB | 130 MB | 1.07× |
+| German ASR | ~80 MB | 55 MB | 68 MB | 1.24× |
+| Silero VAD | ~2 MB | 2.2 MB | 2.2 MB | — |
 
-Every tier is inside its §0.7 ceiling. PocketTTS turned out **cheaper than the
-English decoder**, which makes "expressive voice at every tier" easy rather
-than a trade.
+Default plan (listening / pocket / en): **218 MB download, 326 MB on disk,
+542 MB of free space needed during install.** All six tier × engine
+combinations are inside their §0.7 ceilings; capability is tightest at
+132 / 150 MB, filled by the English decoder.
+
+Expansion ranges 1.07× to 2.07×, which is why the pin records both numbers
+instead of deriving one from the other — a uniform ratio would have
+understated PocketTTS by ~100 MB, more than the entire German decoder.
+
+**Interference baseline (the §4 headline):** a real `mem_search` through the
+live thalamus is **39 ms median, 40 ms p90** over 12 samples on the X380.
+§4.4's 1200 ms soft budget has enormous headroom. But that makes §14's ±20%
+acceptance bar an ~8 ms window — see "Open questions" below.
 
 ## Decisions worth reviewing
 
@@ -92,8 +108,10 @@ than a trade.
 
 4. **Download, disk, and peak are three different numbers.** Ceilings check
    **disk**; the pre-flight checks **peak** — during install an archive and
-   its unpacked copy both exist (434 MB for the default plan against a 218 MB
-   download). The report names all three.
+   its unpacked copy both exist. Measured: **542 MB peak against a 218 MB
+   download**, two and a half times. A ward with 600 MB free would have been
+   quoted 218 MB and then run out mid-install, on precisely the machines the
+   budget exists to protect. The report names all three.
 
 5. **Cancelling a benchmark writes nothing.** A half-measured report that
    looks whole is worse than no report. Conversely the report is saved to
@@ -138,12 +156,25 @@ Until the adapter and fixtures exist, audio measurements report themselves
 `skipped` with a reason. Machine facts, disk footprint and the quiet-machine
 interference baseline all work today.
 
+## Open questions for review
+
+- **§14's ±20% interference bar may be the wrong test.** Against a 39 ms
+  baseline it is an ~8 ms window; a 39 → 60 ms shift would fail while being
+  invisible to my human. An absolute ceiling ("stays under 100 ms") is
+  probably the honest version of the same promise. Worth settling before
+  Pass 2 builds against it.
+- **The Python runtimes are the biggest thing on disk** — 173 MB Phylactery +
+  55 MB Unruh, larger than the whole default voice plan. §0.7 was written as
+  though voice were what makes an install heavy. It isn't. If disk is
+  genuinely an access barrier, that is where the next look belongs.
+- **Everything that is actually the Familiar is 4.4 MB**, ~1% of a 393 MB
+  install. Worth saying plainly in the Storage view when it is built.
+- **piper's fallback now has a number**: saves 154 MB of disk, cuts peak by
+  248 MB. §0.7 says the offer must name what it costs — it should quote that
+  rather than say "smaller".
+
 ## Known gaps
 
-- **PocketTTS's unpacked size is unmeasured.** Degrades honestly — falls back
-  to download size and flags `estimated`. Fill it with
-  `node scripts/pin-audio-models.mjs tts-pocket --measure` after a first
-  install.
 - **PocketTTS may be English-only.** Upstream ships and documents it as
   English; `lang` is `'en'` rather than `'multi'` until measured otherwise. If
   it is English-only, "expressive voice at every tier" quietly stops being
