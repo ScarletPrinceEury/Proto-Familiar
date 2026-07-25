@@ -29,11 +29,46 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
 from phylactery.db import get_conn, now_iso, default_db_path
+
+
+class _CryptoUnavailable(Exception):
+    """Stands in for InvalidToken when cryptography could not be imported."""
+
+
+# ⚠️ Backups must never be able to take my whole self down with them.
+#
+# This import used to be unguarded, and `server.py` imports this module at
+# load. So when a `cryptography` install went partial — two pure-Python files
+# missing, the native parts fine — the ModuleNotFoundError propagated all the
+# way out and Phylactery refused to start at all. My human lost identity,
+# memory and graph because a BACKUP dependency was broken.
+#
+# That is the graceful-degradation rule exactly: no module may take down the
+# thing it is a feature of. Backups are a feature of the self-store, not a
+# precondition for it. If crypto is missing, backup and restore say so
+# clearly and everything else carries on.
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    _CRYPTO_ERROR: str | None = None
+except Exception as _exc:  # noqa: BLE001 — any import failure degrades the same way
+    Fernet = None  # type: ignore[assignment]
+    hashes = None  # type: ignore[assignment]
+    PBKDF2HMAC = None  # type: ignore[assignment]
+    InvalidToken = _CryptoUnavailable  # type: ignore[misc,assignment]
+    _CRYPTO_ERROR = (
+        f"the encryption library is not usable ({type(_exc).__name__}: {_exc}). "
+        "Backups and restores are unavailable until it is reinstalled — "
+        "try: uv sync --reinstall-package cryptography --directory phylactery"
+    )
+
+
+def crypto_status() -> dict[str, Any]:
+    """Whether backups can run. Observable rather than discovered mid-backup."""
+    return {"available": _CRYPTO_ERROR is None, "error": _CRYPTO_ERROR}
 
 _MAGIC = b"PHB1"
 _SALT_LEN = 16
@@ -51,6 +86,10 @@ def _backups_dir() -> Path:
 
 def export_encrypted(passphrase: str, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
     """VACUUM the live DB into a temp file, encrypt it, write the .phylactery blob."""
+    if _CRYPTO_ERROR:
+        # Refuse plainly rather than writing an UNENCRYPTED backup. A file the
+        # ward believes is encrypted but is not would be worse than no backup.
+        return {"ok": False, "error": _CRYPTO_ERROR}
     if not passphrase or len(passphrase) < 4:
         return {"ok": False, "error": "passphrase too short (need at least 4 characters)"}
     own_conn = conn is None
@@ -90,6 +129,8 @@ def export_encrypted(passphrase: str, conn: sqlite3.Connection | None = None) ->
 
 def restore_encrypted(file_path: str, passphrase: str) -> dict[str, Any]:
     """Decrypt a .phylactery backup and swap it over the live DB."""
+    if _CRYPTO_ERROR:
+        return {"ok": False, "error": _CRYPTO_ERROR}
     src = Path(file_path)
     if not src.exists():
         return {"ok": False, "error": f"backup file not found: {file_path}"}

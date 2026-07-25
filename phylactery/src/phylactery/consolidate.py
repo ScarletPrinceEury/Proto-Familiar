@@ -19,7 +19,14 @@ import sqlite3
 from datetime import date, timedelta
 from typing import Any
 
-import httpx
+# httpx is imported inside _call_llm, not here.
+#
+# server.py imports this module at load, so an unguarded top-level import of
+# anything external means a broken install of that thing stops Phylactery
+# starting at all — identity and memory gone because a summarising helper
+# could not be imported. That exact failure already happened once with
+# `cryptography` in backup.py. Python caches modules, so the lazy import costs
+# nothing after the first call.
 
 from phylactery.db import get_conn, now_iso
 from phylactery.memory import create as memory_create
@@ -44,6 +51,8 @@ def _llm_config() -> dict[str, str] | None:
 
 
 def _call_llm(cfg: dict, prompt: str) -> str:
+    import httpx
+
     resp = httpx.post(
         cfg["base_url"],
         headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
