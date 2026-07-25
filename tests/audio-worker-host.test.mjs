@@ -303,14 +303,37 @@ test('a missing engine is a reported reason, never a crash — no restart, no pa
 });
 
 test('an unimplemented op answers unsupported rather than silence', async () => {
-  // Silence would let a caller believe it had spoken when it had not — the
-  // confabulation failure the 0.9 post-mortem is about.
+  // Silence would let a caller believe something happened when it had not —
+  // the confabulation failure the 0.9 post-mortem is about.
+  const w = createAudioWorker({ workerScript: REAL_WORKER, idleMs: 0 });
+  try {
+    const r = await w.request({ op: 'transcribe' }, { timeoutMs: 8000 });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'unsupported');
+    assert.match(r.detail, /voice notes/);
+  } finally { w.stop(); }
+});
+
+test('speaking refuses in the right ORDER — no engine before no voice before not loaded', async () => {
+  // The order matters for what a ward is told. Here there is no engine, so
+  // that is the answer; on a machine with one, the next gate speaks instead.
   const w = createAudioWorker({ workerScript: REAL_WORKER, idleMs: 0 });
   try {
     const r = await w.request({ op: 'tts', text: 'hello' }, { timeoutMs: 8000 });
     assert.equal(r.ok, false);
-    assert.equal(r.reason, 'unsupported');
-    assert.match(r.detail, /read-aloud/);
+    assert.ok(['no-engine', 'no-voice', 'not-loaded'].includes(r.reason), `unexpected reason ${r.reason}`);
+    assert.ok(r.detail, 'and it always says why');
+  } finally { w.stop(); }
+});
+
+test('speaking with no reference clip is refused — PocketTTS has no built-in voice', async () => {
+  // Zero-shot cloning means there is nothing to fall back on. A default nobody
+  // chose would be worse than a clear refusal.
+  const w = createAudioWorker({ workerScript: REAL_WORKER, idleMs: 0 });
+  try {
+    const r = await w.request({ op: 'tts', text: 'hello', referenceWav: null }, { timeoutMs: 8000 });
+    assert.equal(r.ok, false);
+    assert.notEqual(r.reason, 'op-failed', 'a missing voice is a stated refusal, not a crash');
   } finally { w.stop(); }
 });
 

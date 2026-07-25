@@ -26,6 +26,7 @@
  * an op that answers `unsupported` is honest; one that pretends is not.
  */
 
+import path from 'node:path';
 import { encodeJson, createFrameReader, KIND_JSON } from './audio-frame.js';
 
 const send = (obj) => {
@@ -39,6 +40,46 @@ const threads = {
   tts: Number(process.env.PF_AUDIO_THREADS_TTS) || 2,
   speaker: Number(process.env.PF_AUDIO_THREADS_SPEAKER) || 1,
 };
+
+/**
+ * PocketTTS quality/speed lever. Upstream's docs use 2, its node example 5.
+ * Starting at 4 as a middle ground; Pass 0's bench on real hardware is what
+ * settles it, and §4.6 can shed steps before shedding the voice entirely.
+ */
+const NUM_STEPS = Number(process.env.PF_TTS_NUM_STEPS) || 4;
+
+/** Upstream caps reference audio at 12 s; named so a longer clip is trimmed knowingly. */
+const MAX_REFERENCE_SECONDS = 12;
+
+/**
+ * Build the PocketTTS session from an unpacked model directory.
+ *
+ * The seven file names are upstream's, and the extractor strips the archive's
+ * wrapper directory (voice-extract.js), so they sit directly in modelDir.
+ * numThreads comes from the host's cap — the whole point of §2's thread
+ * discipline is that it is set at session creation, not hoped for.
+ */
+function buildPocketTts(modelDir) {
+  const at = (f) => path.join(modelDir, f);
+  return new engine.OfflineTts({
+    model: {
+      pocket: {
+        lmFlow: at('lm_flow.int8.onnx'),
+        lmMain: at('lm_main.int8.onnx'),
+        encoder: at('encoder.onnx'),
+        decoder: at('decoder.int8.onnx'),
+        textConditioner: at('text_conditioner.onnx'),
+        vocabJson: at('vocab.json'),
+        tokenScoresJson: at('token_scores.json'),
+        voiceEmbeddingCacheCapacity: 50,
+      },
+      debug: false,
+      numThreads: threads.tts,
+      provider: 'cpu',
+    },
+    maxNumSentences: 1,
+  });
+}
 
 /** Loaded models, by role. Lazy: nothing loads until something needs it. */
 const loaded = new Map();
@@ -57,7 +98,9 @@ async function ensureEngine() {
   if (engine) return { ok: true };
   if (engineError) return { ok: false, reason: 'no-engine', detail: engineError };
   try {
-    engine = await import('sherpa-onnx-node');
+    // CommonJS: the namespace object puts module.exports on `.default`.
+    const mod = await import('sherpa-onnx-node');
+    engine = mod.default ?? mod;
     return { ok: true };
   } catch (err) {
     engineError = `the speech engine is not installed (${String(err?.message ?? err).split('\n')[0]})`;
@@ -93,10 +136,8 @@ const OPS = {
     if (loaded.has(role)) return send({ reqId, ok: true, alreadyLoaded: true, role });
 
     try {
-      // Placeholder for the real per-role session construction, which needs a
-      // machine with the binding to write against. Recorded so `status` is
-      // truthful about what is held.
-      loaded.set(role, { modelDir, at: Date.now() });
+      if (role === 'tts') loaded.set(role, { session: buildPocketTts(modelDir), modelDir, at: Date.now() });
+      else loaded.set(role, { modelDir, at: Date.now() });   // other roles arrive with Pass 2
       reportState();
       send({ reqId, ok: true, role, modelDir });
     } catch (err) {
@@ -112,15 +153,61 @@ const OPS = {
   },
 
   /**
-   * Ops the spine does not implement yet.
+   * Speak. Returns the samples; the caller decides what to do with them.
+   *
+   * PocketTTS clones zero-shot, so a reference clip is REQUIRED — there is no
+   * built-in voice to fall back on. A missing reference is a clear refusal
+   * rather than a default nobody chose.
+   */
+  async tts({ reqId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    if (!text || typeof text !== 'string') return send({ reqId, ok: false, reason: 'bad-request', detail: 'text is required' });
+    if (!referenceWav) return send({ reqId, ok: false, reason: 'no-voice', detail: 'a reference clip is required — PocketTTS has no built-in voice' });
+
+    const held = loaded.get('tts');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the speaking model is not loaded' });
+
+    try {
+      const ref = engine.readWave(referenceWav);
+      const generationConfig = new engine.GenerationConfig({
+        speed,
+        referenceAudio: ref.samples,
+        referenceSampleRate: ref.sampleRate,
+        numSteps,
+        // Upstream's own cap. Naming it means a longer reference is trimmed
+        // deliberately rather than silently — p255_023 is 12.8 s and would
+        // otherwise be cut without anyone knowing where.
+        extra: { max_reference_audio_len: MAX_REFERENCE_SECONDS },
+      });
+
+      const started = Date.now();
+      const audio = held.session.generate({ text, generationConfig });
+      const elapsedMs = Date.now() - started;
+      const durationSec = audio.samples.length / audio.sampleRate;
+
+      send({
+        reqId, ok: true,
+        sampleRate: audio.sampleRate,
+        durationSec: Number(durationSec.toFixed(3)),
+        elapsedMs,
+        realTimeFactor: durationSec > 0 ? Number((elapsedMs / 1000 / durationSec).toFixed(3)) : null,
+        // Float samples as a plain array: the host writes the wav, because the
+        // worker's job is inference and nothing else.
+        samples: Array.from(audio.samples),
+      });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'tts-failed', detail: String(err?.message ?? err) });
+    }
+  },
+  /**
+   * Not implemented yet.
    *
    * Answering `unsupported` keeps the contract — every request gets a reply —
-   * while being plain that the capability is absent. A stub that returned
-   * silence or a plausible-looking empty result would let a caller believe it
-   * had spoken when it had not, which is the confabulation failure the 0.9
-   * post-mortem is about.
+   * while being plain the capability is absent. Silence, or a plausible-looking
+   * empty result, would let a caller believe something happened when it did
+   * not: the confabulation failure the 0.9 post-mortem is about.
    */
-  async tts({ reqId }) { send({ reqId, ok: false, reason: 'unsupported', detail: 'speaking arrives with read-aloud' }); },
   async transcribe({ reqId }) { send({ reqId, ok: false, reason: 'unsupported', detail: 'transcription arrives with voice notes' }); },
 };
 
