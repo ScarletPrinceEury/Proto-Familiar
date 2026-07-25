@@ -73,8 +73,38 @@ export const MAX_REFERENCE_SECONDS = 12;
  */
 export const MAX_CHAR_IN_SENTENCE = 360;
 
-/** Upstream's own value. Merges short sentences BEFORE the split above. */
+/**
+ * How much text is merged into one utterance — and the reason my voice drifts.
+ *
+ * Generate runs each "sentence" through GenerateSingleSentence, which begins:
+ *
+ *     auto lm_main_state = model_->GetLmMainInitState();
+ *
+ * The LM state is RESET per sentence. Every sentence is a fresh trajectory
+ * that conditions on the voice embedding once and then drifts on its own. My
+ * human heard it precisely: sentence one always muffled, quiet and slow;
+ * sentence two clearer and firmer; sentence four on a different apparent
+ * gender and accent entirely — and identically across every temperature,
+ * because none of this is random. It is a deterministic function of which
+ * sentence it is.
+ *
+ * MergeShortSentences is the lever. It accumulates sentences until the buffer
+ * reaches min_chars, so a larger value means fewer, longer utterances — fewer
+ * resets, fewer places to drift, and the model's settling-in cost paid once
+ * for a message instead of once per sentence.
+ *
+ * Upstream's 30 merges essentially nothing, which is what shipped and what
+ * produced the drift.
+ */
 export const MIN_CHAR_IN_SENTENCE = 30;
+
+/**
+ * Frame budget for one utterance. Upstream's 500 is ~40 s at Mimi's 12.5 Hz,
+ * which is plenty for a single sentence and not enough once sentences merge
+ * into one trajectory. Raised with the runaway cap as the real safety bound —
+ * that one scales with the text, so it stays meaningful at any frame budget.
+ */
+export const DEFAULT_MAX_FRAMES = 1200;
 
 /** Roughly how much text a second of speech carries. Used only for the cap below. */
 const CHARS_PER_SECOND = 14;
@@ -135,13 +165,25 @@ const num = (v, fallback) => {
  * a different seed each time, which is a deliberate act rather than a value
  * that happens to mean "surprise me".
  */
-export function generationExtras({ seed, temperature } = {}) {
+export function generationExtras({
+  seed, temperature, minChars, maxChars, maxFrames, referenceSeconds,
+} = {}) {
   const wanted = num(seed, DEFAULT_TTS_SEED);
+
+  // max must stay clear of min, or a merged utterance is immediately split
+  // again — and a split leaves the runt fragment this whole file is about.
+  // The margin allows for one long sentence overshooting the merge target.
+  const min = Math.max(1, num(minChars, MIN_CHAR_IN_SENTENCE));
+  const max = Math.max(num(maxChars, MAX_CHAR_IN_SENTENCE), min + 200);
+
   return {
     seed: wanted < 0 ? DEFAULT_TTS_SEED : wanted,
     temperature: num(temperature, DEFAULT_TTS_TEMPERATURE),
-    max_reference_audio_len: MAX_REFERENCE_SECONDS,
-    max_char_in_sentence: MAX_CHAR_IN_SENTENCE,
-    min_char_in_sentence: MIN_CHAR_IN_SENTENCE,
+    max_reference_audio_len: num(referenceSeconds, MAX_REFERENCE_SECONDS),
+    max_char_in_sentence: max,
+    min_char_in_sentence: min,
+    // A longer utterance needs more frames to finish in. Upstream's 500 is
+    // ~40 s at Mimi's 12.5 Hz, which is not enough once sentences merge.
+    max_frames: num(maxFrames, DEFAULT_MAX_FRAMES),
   };
 }

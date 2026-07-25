@@ -174,7 +174,7 @@ const OPS = {
    * built-in voice to fall back on. A missing reference is a clear refusal
    * rather than a default nobody chose.
    */
-  async tts({ reqId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS, seed = TTS_SEED, temperature = TTS_TEMPERATURE }) {
+  async tts({ reqId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS, seed = TTS_SEED, temperature = TTS_TEMPERATURE, minChars, maxChars, maxFrames, referenceSeconds }) {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!text || typeof text !== 'string') return send({ reqId, ok: false, reason: 'bad-request', detail: 'text is required' });
@@ -190,7 +190,7 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        extra: generationExtras({ seed, temperature }),
+        extra: generationExtras({ seed, temperature, minChars, maxChars, maxFrames, referenceSeconds }),
       });
 
       const started = Date.now();
@@ -233,7 +233,7 @@ const OPS = {
    * carries the totals — a caller must be able to tell "finished" from
    * "the pipe went quiet".
    */
-  async ttsStream({ reqId, streamId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS, seed = TTS_SEED, temperature = TTS_TEMPERATURE }) {
+  async ttsStream({ reqId, streamId, text, referenceWav, speed = 1.0, numSteps = NUM_STEPS, seed = TTS_SEED, temperature = TTS_TEMPERATURE, minChars, maxChars, maxFrames, referenceSeconds }) {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!text || typeof text !== 'string') return send({ reqId, ok: false, reason: 'bad-request', detail: 'text is required' });
@@ -250,7 +250,7 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        extra: generationExtras({ seed, temperature }),
+        extra: generationExtras({ seed, temperature, minChars, maxChars, maxFrames, referenceSeconds }),
       });
 
       const started = Date.now();

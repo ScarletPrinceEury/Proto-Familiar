@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   generationExtras, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
-  MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit,
+  MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES,
 } from '../voice-generation.js';
 
 /**
@@ -102,4 +102,35 @@ test('the cap never returns zero or NaN, whatever it is handed', () => {
     const v = runawaySampleLimit(bad, 24000);
     assert.ok(Number.isFinite(v) && v > 0, `runawaySampleLimit(${String(bad)}) = ${v}`);
   }
+});
+
+// ── Chunking: fewer LM resets, fewer places to drift ────────────────────
+
+test('the frame budget leaves room for a merged utterance', () => {
+  // Upstream's 500 is ~40 s at Mimi's 12.5 Hz — enough for one sentence, not
+  // for a whole message once sentences merge into one trajectory.
+  assert.ok(DEFAULT_MAX_FRAMES > 500);
+  assert.equal(generationExtras().max_frames, DEFAULT_MAX_FRAMES);
+  assert.equal(generationExtras({ maxFrames: 1800 }).max_frames, 1800);
+});
+
+test('merging is off by default — raising it is a decision, not a drift', () => {
+  assert.equal(generationExtras().min_char_in_sentence, MIN_CHAR_IN_SENTENCE);
+  assert.equal(generationExtras({ minChars: 400 }).min_char_in_sentence, 400);
+});
+
+test('max is always forced clear of min, so a merged utterance is not re-split', () => {
+  // Re-splitting a merged chunk gains nothing and risks the runt fragment.
+  for (const [minChars, maxChars] of [[400, 100], [400, 400], [500, 550], [30, 360]]) {
+    const e = generationExtras({ minChars, maxChars });
+    assert.ok(
+      e.max_char_in_sentence >= e.min_char_in_sentence + 200,
+      `min=${e.min_char_in_sentence} max=${e.max_char_in_sentence} leaves no room to overshoot`,
+    );
+  }
+});
+
+test('the reference window is overridable, since upstream defaults to 10 not 12', () => {
+  assert.equal(generationExtras({ referenceSeconds: 10 }).max_reference_audio_len, 10);
+  assert.equal(generationExtras().max_reference_audio_len, MAX_REFERENCE_SECONDS);
 });
