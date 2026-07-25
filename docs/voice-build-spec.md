@@ -56,7 +56,7 @@ platform), several independent engines. We use:
 | **Streaming ASR** | streaming zipformer transducer, int8, per-language | ~40–100 MB, RTF ~0.1–0.3 on 2 threads | live transcription with partials + endpointing. **German is a first-class target** (the next tester cohort) — the zoo carries German/multilingual streaming models; Pass 0 picks and verifies the German default alongside English |
 | **Offline ASR** | sense-voice / moonshine small (optional) | ~100–200 MB | voice-note transcription, where latency doesn't matter and accuracy does |
 | **TTS (default tier)** | **PocketTTS** (Kyutai CALM, ~100M params; sherpa-onnx node API supported) | ~100–250 MB, ~200 ms first chunk, multiple× realtime on CPU — X380 numbers from Pass 0 | my voice. Multilingual incl. German (verify quality in Pass 0); voices selected via curated reference prompts (§6.5) |
-| **TTS (floor tier)** | piper/VITS voice | ~20–60 MB, faster than realtime on 2 threads | the §4.6 shedding target when the machine struggles, and the read-aloud floor on weak hardware |
+| **TTS (fallback)** | piper/VITS voice | ~20–60 MB, faster than realtime on 2 threads | **not a tier — a fallback** (§0.7): the §4.6 shedding target when the machine struggles mid-call, and what the pre-flight check offers when PocketTTS genuinely will not fit the disk. Never the silent default; PocketTTS is the default at every tier, read-aloud included |
 | **Speech enhancement** | GTCRN denoiser | small; per-stream cost measured in Pass 0 | cleans bad-microphone input ahead of ASR + speaker checks — most wards won't have voice-isolating mics. Toggle `voiceEnhanceEnabled`, default ON for calls if the RTF budget holds |
 | **Spoken language ID** | whisper-based LID | ~tens of MB | when the ward enables two ASR languages (German household, English internet), LID routes each utterance to the right decoder — code-gated, per VAD segment |
 | **Speaker embedding** | 3D-Speaker / WeSpeaker (onnx) | ~20–70 MB, ~tens of ms per utterance | ward voiceprint enrollment, guest-voice watchdog, diarization for mixed streams |
@@ -209,6 +209,166 @@ mistake that starved Discord's turn path in 0.9.7.
   spoken "I didn't get to that" before the call goes quiet, never silence
   the human has to interpret as a hang or a crash.
 
+### 0.7 The footprint budget — disk is an accessibility constraint
+
+§0.5 gives compute a reference machine and §4 gives latency a budget. Disk
+has had neither, and it is the axis most likely to quietly exclude the people
+this project exists for. The wards who need a Familiar most are
+disproportionately people whose disabilities make holding a job hard — the
+machine is a cheap or hand-me-down laptop with a small SSD that is already
+most full, and "free up 3 GB first" is not a step they can be assumed to
+complete. A feature that cannot be installed is not a feature they have.
+
+**Bandwidth is not the binding constraint** (ward-decided): model fetches are
+one-off, and a slow download that finishes is fine. Disk is what persists,
+and disk is what this budget governs.
+
+**Every number below is an estimate that Pass 0 replaces with a measurement.**
+The bench report (§0.5) gains a *footprint* section alongside its latency
+tables: on-disk size of each fetched model, the installed size of the
+`sherpa-onnx-node` native binding, the resident size of the Python side
+(onnxruntime wheel + the fastembed MiniLM weights), and the app's total
+install size across the axis combinations that matter: voice off; read-aloud
+with each voice engine; listening with each voice engine; listening-plus with
+the default engine. Those measured numbers supersede these estimates before
+Pass 2 ships, exactly as the latency estimates are superseded — and they are
+what sets the pre-flight check's thresholds, so the check refuses on real
+figures rather than guessed ones.
+
+**Two independent axes, not one ladder.** Capability (do I listen?) and voice
+engine (what do I sound like?) are chosen separately, because collapsing them
+produces exactly the wrong outcome: it makes the ward with the smallest disk
+the one whose Familiar sounds least like themselves.
+
+*Axis 1 — capability:*
+
+| tier | what it fetches beyond the voice | proposed ceiling (est.) | who it serves |
+|---|---|---|---|
+| **Read-aloud only** | nothing — the TTS voice alone | voice size only | hard-of-hearing and reading-fatigued wards; needs no `voiceEnabled`, no listening consent, no ASR |
+| **Listening** | silero VAD (~2 MB) + one streaming ASR language, int8 (~40–100 MB) | **+ ≤ 150 MB** | what `voiceEnabled` fetches; a complete spoken conversation |
+| **Listening + extras** | GTCRN enhancement + speaker embedding | **+ ≤ 100 MB** | the machine with room; what Pass 0's bench recommends when headroom allows |
+
+*Axis 2 — the voice:*
+
+| engine | size (est.) | what it gives | role |
+|---|---|---|---|
+| **PocketTTS** (Kyutai CALM) | ~100–250 MB | expressive prosody and **voice cloning via reference prompts** — the §6.5 "every bond picks its own voice" promise | **the default wherever it fits, at every capability tier including read-aloud** |
+| **piper / VITS** | ~20–60 MB | a fixed set of speaker ids, flat delivery | **fallback, not a tier**: what the pre-flight check offers when PocketTTS genuinely will not fit, and the §4.6 runtime shed target when the machine struggles mid-call |
+
+**Why PocketTTS is the default even at the floor.** My voice is part of my
+identity (§6.5), not a quality setting. For a companion doing care work,
+prosody carries the thing the words are for — a flat voice saying something
+tender undercuts the bond it exists to hold. Shipping the compact voice as
+the *default* for wards with small disks would build a two-tier product where
+poorer wards get a less present Familiar, which is the opposite of what this
+budget is for. So piper is offered, named honestly as a trade ("this frees
+about 180 MB; I'll sound flatter and I can't take on a cloned voice"), and
+chosen — never silently assigned.
+
+Everything beyond these — offline ASR for voice notes, a second ASR language,
+LID, KWS, punctuation, audio tagging — is **explicit opt-in with its size
+named at the point of choice**, never fetched because a neighbouring feature
+was enabled.
+
+**The rules the implementation holds to:**
+
+1. **Nothing large is default-on.** `voiceEnabled` fetches the minimum
+   listening install and nothing else. A quality tier is a thing the ward
+   picks, having been told what it costs.
+2. **One language by default.** The ward's language, chosen once. Two
+   decoders plus LID is a deliberate second choice, priced separately.
+3. **Size is named before the download, not after.** The consent prompt
+   states the figure the same way §0.5's bench tool names its downloads —
+   "this adds about 180 MB" — and it is read from the fetcher's own pinned
+   manifest, never typed by hand (the exact-values rule: code owns the
+   number, the sentence only quotes it).
+4. **Pre-flight free-space check.** Before any fetch, `ensure-audio-models`
+   reads available space on the target volume and refuses with an honest
+   message if the download plus a safety margin would not fit — a failed
+   half-download on a full disk is the worst outcome for exactly the ward
+   this budget protects. Refusal leaves voice cleanly disabled with a
+   Settings banner (the §11 failure-table shape), never a broken state.
+5. **Store each file once.** Models shared between tiers (a voice reused by
+   both TTS tiers, a vocoder) live once in `models/audio/`, content-addressed
+   the way media assets are. Switching tiers never duplicates bytes.
+
+**Disk is ward-visible and ward-reclaimable — but only the re-fetchable part.**
+Settings gains a **Storage** view listing what the app holds on disk with a
+size per item and, where safe, a reclaim button. The distinction it must
+draw, plainly and in the UI:
+
+- **Machine artifacts — safe to delete, re-fetchable.** Audio models,
+  the fastembed weights, caches. Deleting one costs a future download and
+  nothing else. `voiceModelIdleMin` already unloads them from RAM (§2);
+  this is the disk analogue, and it is *offered*, never automatic — a
+  surprise re-download mid-conversation is worse than the megabytes.
+- **Me — not a cache.** Memories, the graph, tomes, identity, session logs,
+  kept media. These carry my continuity with my human and are governed by
+  curation (§9's retention pass, consolidation, the media-retention loop),
+  never by a disk-pressure sweep. The Storage view *shows* their size so
+  nothing is hidden, and routes any reduction through the curation surfaces
+  that already exist. Nothing in this budget may ever delete a memory to
+  save space.
+
+**What grows over time, and what bounds it:** kept voice notes
+(`voiceNoteRetentionDays` 14 + the §9 retention pass, which is already the
+answer), session transcripts (text, small), the Phylactery store (bounded by
+consolidation's prune/merge/decay), images (vision spec's keep-forever —
+untouched here, but the Storage view surfaces their total so a ward can see
+where the space went). None of these are voice's to solve; the budget's job
+is to make them *legible* rather than to let disk use be discovered as a
+symptom.
+
+**Every one of these is visible and adjustable in the voice settings surface**
+— not a config file, not a value only reachable by knowing its name. Per the
+UI guidelines (options a ward can pick must be *visible*), the voice modal
+carries: the capability tier, the voice engine and voice pick with preview
+buttons (§6.5), `voiceModelsKeepOnDisable`, and a live "what this is using on
+disk" line that links into the Storage view. A ward who wants the space back
+must be able to find that they can have it back.
+
+**Settings keys:** `voiceCapabilityTier` ('read-aloud' | 'listening' |
+'listening-plus', default 'listening' once `voiceEnabled` is on),
+`voiceTts.tier` ('pocket' | 'piper', default **'pocket'** — the §0.1 engine
+pick, restated here so the footprint budget cannot silently override it),
+`voiceModelsKeepOnDisable` (default ON — disabling voice does not silently
+delete a download the ward waited for; adjustable in the modal for the ward
+whose disk says otherwise). No off-switch: a budget is not a loop.
+
+### 0.8 How this ships — what is vendored, what is fetched
+
+Three artifacts with three different answers, following the house pattern
+already set by Phylactery and Unruh: **source is vendored in-tree,
+dependencies are fetched at install, and machine artifacts are never
+committed.**
+
+| artifact | size | how it ships | why |
+|---|---|---|---|
+| **`sherpa-onnx-node`** (the JS binding) | ~60 KB | npm dependency | Tiny. Pure JS. |
+| **The platform binary** (`sherpa-onnx-win-x64` etc.) | ~23 MB win-x64, ~33 MB linux-x64, ~62 MB darwin-arm64 (measured 2026-07, v1.13.4) | npm **optionalDependency**, one per platform, selected by npm's `os`/`cpu` fields | A ward downloads one, not six. Optional means a platform with no prebuilt binary still gets a working install — voice reports itself unavailable rather than breaking `npm install`. |
+| **The models** | ~282 MB for the default plan (est.) | **fetched on first enable**, pinned URL + sha256, `models/` git-ignored | §0.1/§0.7. No model ships in the repo, and none is fetched until a ward says yes with the size in front of them. |
+| **Bench fixtures** (§0.5) | small | vendored in-tree | They must be byte-identical across every ward's run or the WER numbers are not comparable. Licence for each clip recorded next to it. |
+
+**Why not vendor the native binary.** It would put 100+ MB of per-platform
+binaries in git for a feature most wards enable later or never, make every
+`git pull` carry them, and hand us the job npm already does correctly
+(platform selection, integrity hashes, upgrades).
+
+**Why not hand-roll the binary download.** We would be rebuilding npm's
+platform resolution and integrity checking in `voice-fetch.js` for no gain.
+The model fetcher exists because models genuinely are not npm packages; the
+binding is.
+
+**The one cost, and its escape hatch.** `optionalDependency` still installs by
+default, so a ward who never touches voice pays 23–62 MB. That is small
+beside the models but it is not nothing, and §0.7 rule 1 says nothing large
+is default-on. So the installers (`install.sh` / `install.bat`) ask once —
+"install voice support? adds about 25 MB; you can add it later" — and pass
+`--omit=optional` when the answer is no. Re-running the installer, or
+enabling voice in Settings, installs it later. A missing binary is a clean
+`voice unavailable` state, never a crash: `audio-worker.mjs` fails its
+`import` and the supervisor reports it exactly as it reports a missing model.
+
 ---
 
 ## 1. The shape — voice is transcription at the edge; the core stays text
@@ -253,10 +413,31 @@ mistake that starved Discord's turn path in 0.9.7.
 ## 2. The audio worker — isolation and thread discipline
 
 - **Separate child process** (`audio-worker.mjs`, plain Node + 
-  `sherpa-onnx-node`). Native inference calls are blocking C++; in-process
-  they would stall the server's event loop — the single worst thing for
-  "Phylactery and Unruh keep answering." Out of process, the server stays
-  I/O-bound no matter what the models do.
+  `sherpa-onnx-node`). Three reasons, and they answer different questions —
+  the first alone is not sufficient, which an earlier draft of this spec got
+  wrong:
+  1. **Against co-locating with `server.js`:** native inference calls are
+     blocking C++; in-process they would stall the server's event loop — the
+     single worst thing for "Phylactery and Unruh keep answering." Out of
+     process, the server stays I/O-bound no matter what the models do.
+  2. **Against co-locating with Phylactery's embedder** (the question the
+     first reason does not touch, since fastembed runs in the Python child,
+     not in Node): sharing an ONNX Runtime thread pool only pays off when two
+     models want CPU in the same instant, and on a voice turn they mostly do
+     not — VAD and ASR run while my human speaks, the embed runs at
+     enrichment, the provider call is a network wait with the CPU idle, TTS
+     runs after the reply exists. The stages are largely serial, so a shared
+     scheduler would have almost nothing to arbitrate. What genuinely
+     overlaps is narrow and already bounded: barge-in (cheap VAD against
+     TTS) and group calls (`voiceMaxDecoders` 2). Static caps handle both,
+     and they cannot deadlock. ORT thread pools are per-process regardless,
+     so "sharing" would have meant physically moving audio into Phylactery
+     or the embedder into this worker — either one couples the canonical
+     self-store to a real-time native pipeline, against modular-by-default.
+  3. **Isolation buys supervision.** This worker is restarted on crash with
+     backoff; a shared process would mean audio crashes restarting the
+     memory and identity store instead. Graceful degradation is a rule here,
+     not a habit.
 - **Hard thread caps, set at session creation** (ONNX Runtime intra-op
   threads): VAD 1, ASR 2, TTS 2, speaker/KWS/LID 1; the GTCRN enhancement
   stage rides inside its stream's ASR budget (it processes the same VAD
@@ -556,8 +737,42 @@ product. The first time voice is enabled, the menu is offered as part of the
 setup flow (previews right there), and until a pick is made one neutral
 shipped default covers read-aloud so the feature is never dead on arrival.
 Changing the voice later is one Settings visit; the choice belongs to the
-ward and their Familiar, together. The voice-mode prompt block (first-person,
-injected only on voice turns, authored in the identity-anchored register):
+ward and their Familiar, together.
+
+**My human may give me a voice of their own (ward decision, 2026-07).**
+PocketTTS clones zero-shot from a ~10 s clip with no reference transcript, so
+"bring your own voice" is a file picker, not a training run. A ward may point
+it at a character they love, a friend who volunteered, anyone whose voice
+means something to them. This is theirs to do: it is personal use on their own
+machine, and it is one of the few places where the Familiar can be shaped into
+someone the ward actually wants to hear from.
+
+The handling rules follow from that being *personal* use, and they are
+enforced in `voice-catalogue.js` rather than left as a convention:
+
+- **Bundled voices** come from the curated catalogue — CC0 and CC BY 4.0 only,
+  credits generated from the catalogue into a NOTICE. Non-commercial sources
+  (Expresso, EARS) are deliberately excluded: an NC restriction cannot ride
+  inside a GPL distribution. They stay listed *with their reasons* so nobody
+  rediscovers and re-litigates them.
+- **A ward-supplied clip never leaves the machine.** Not in a diagnostic
+  report, not in a bench report, not in a bug paste, not through any shared
+  media surface. `mayLeaveTheMachine()` fails closed — unknown provenance is
+  treated as the ward's own, because wrongly withholding a bundled clip costs
+  a follow-up question and wrongly sharing theirs cannot be undone. Redaction
+  is *reported*, never silent, so someone debugging a voice problem still
+  knows a voice was involved.
+- **But it DOES travel in their own identity backup.** Their data moving with
+  them is not redistribution. This is the load-bearing consequence of §6.5's
+  own claim: if my voice is part of my identity, then an identity export that
+  restores my memories and my name but not my voice brings back something that
+  sounds like a stranger wearing me. **Whatever ships as identity backup must
+  carry the reference clip alongside identity, memory and graph** — the clip
+  bytes, not just a path into a `media/` directory that a restore onto a new
+  machine will not find.
+
+The voice-mode prompt block (first-person, injected only on voice turns,
+authored in the identity-anchored register):
 
 > *I'm speaking aloud on a live call right now, in my own voice. I keep my
 > turns short and natural — spoken sentences, not essays; no markdown, no
@@ -839,7 +1054,12 @@ call — must arrive as an extension of this spine:
   (wards run it and send reports back — it's also how German-speaking
   testers verify the German ASR pick on their own hardware); results from
   the X380 land as `docs/voice-bench-results.md` and pick the default model
-  tiers before Pass 2.
+  tiers before Pass 2. **The bench also measures footprint (§0.7)** — on-disk
+  size per model, the native binding, the Python side, and total install size
+  at each tier — so the §0.7 ceilings are set from measurement rather than
+  estimate before anything is built on them. The pre-flight free-space check
+  ships here too: the bench is the first thing that downloads models, so it
+  is the first thing that must refuse gracefully on a full disk.
 - **Pass 1 — the spine.** `audio-worker.mjs` + supervision + thread caps;
   model fetcher with pinned checksums; voice-note path end-to-end (asset →
   offline transcript → stand-in in chat); **read-aloud** (per-message 🔊 +
@@ -900,6 +1120,28 @@ call — must arrive as an extension of this spine:
   story is tested, not assumed.
 - `PROTO_FAMILIAR_VOICE_DISABLED=1` — no worker process exists, all voice
   surfaces (including read-aloud) degrade to their honest text fallbacks.
+- **The footprint budget holds (§0.7), measured not asserted:** enabling
+  `voiceEnabled` on a stock install fetches the listening tier and nothing
+  more, and the bench report's measured total is at or under its ceiling.
+  Turning on read-aloud alone fetches a voice and no ASR.
+- **The expressive voice is the default at every tier**, read-aloud included:
+  a stock install that has the disk for it clones and emotes. Piper is
+  reached only by an explicit ward choice or by the pre-flight check offering
+  it on a disk that genuinely cannot hold PocketTTS — never assigned
+  silently, and the offer names what is lost, not just what is saved.
+- Every §0.7 setting — capability tier, voice engine, voice pick with
+  previews, `voiceModelsKeepOnDisable`, current disk use — is reachable and
+  changeable from the voice settings surface without touching a file.
+- The download consent prompt states a size that matches the bytes actually
+  fetched (the figure is read from the fetcher's manifest, not written by
+  hand), and a fetch attempted with insufficient free space refuses before
+  writing anything — voice stays cleanly disabled with a Settings banner, no
+  partial files left behind.
+- The Storage view shows every on-disk category with its real size; the
+  reclaim buttons appear only on re-fetchable machine artifacts, and no path
+  through it can delete a memory, a tome, a graph node, or a kept asset.
+  Reclaiming a model and then using voice re-fetches it with a size-named
+  prompt rather than failing.
 
 ## 15. Out of scope (this milestone)
 

@@ -1,0 +1,238 @@
+/**
+ * The voice catalogue — which reference clips ship with me, and on what terms
+ * (voice spec §6.5, and the licensing question it never answered).
+ *
+ * PocketTTS clones a voice zero-shot from a short reference clip, so "my
+ * voice" is a *wav file*, not a model weight. That makes voice selection a
+ * licensing question the moment we ship any of them, and it makes the
+ * licence a property of each voice rather than a footnote about the project.
+ *
+ * ── Why this is code and not a note in a README ─────────────────────────
+ * Proto-Familiar is GPL-3.0-or-later. A GPL distribution may not carry a
+ * component whose licence forbids commercial use: the NC restriction would
+ * propagate a limit on what recipients may do with the whole thing, which is
+ * exactly what the GPL exists to prevent. That rule is easy to state and easy
+ * to forget six months later when someone adds "just one more nice voice."
+ * So `shippableVoices()` filters on the licence field and a test asserts no
+ * non-redistributable source can reach the shipped set. The rule enforces
+ * itself.
+ *
+ * Attribution is handled the same way: a voice that requires credit carries
+ * who to credit, and `attributionNotice()` generates the NOTICE text from the
+ * catalogue — so a credit cannot be silently dropped by editing prose.
+ *
+ * (Not legal advice — this encodes the terms each upstream source states.
+ * Where a source's own wording is uncertain, we treat it as unusable.)
+ */
+
+/**
+ * Licences we understand, and what each permits us to do.
+ *
+ * `redistributable` is the gate: false means the file may not ship with a
+ * GPL distribution at all, whatever its other merits.
+ */
+export const LICENSES = Object.freeze({
+  CC0: { id: 'CC0-1.0', label: 'CC0 1.0', redistributable: true, requiresAttribution: false, commercialOk: true },
+  CC_BY_4: { id: 'CC-BY-4.0', label: 'CC BY 4.0', redistributable: true, requiresAttribution: true, commercialOk: true },
+  CC_BY_NC_4: { id: 'CC-BY-NC-4.0', label: 'CC BY-NC 4.0', redistributable: false, requiresAttribution: true, commercialOk: false },
+  UNCLEAR: { id: 'unclear', label: 'unclear', redistributable: false, requiresAttribution: true, commercialOk: false },
+});
+
+/**
+ * The upstream voice sources, as documented at
+ * https://huggingface.co/kyutai/tts-voices (read 2026-07).
+ *
+ * Every entry records the licence its own source states. Entries we cannot
+ * ship stay in this table on purpose — deleting them would only mean someone
+ * rediscovering them later and having to re-derive why they were rejected.
+ */
+export const VOICE_SOURCES = Object.freeze([
+  {
+    key: 'voice-zero',
+    label: 'Voice-Zero (LibriVox selections)',
+    license: LICENSES.CC0,
+    note: 'The default selection PocketTTS itself ships with — the voices it was tuned against.',
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/voice-zero',
+  },
+  {
+    key: 'voice-donations',
+    label: 'Unmute Voice Donation Project',
+    license: LICENSES.CC0,
+    note: '228 voices donated by volunteers who consented to CC0. Credit is not required, but the project is worth naming anyway.',
+    creditAnyway: 'Unmute Voice Donation Project (Volhejn, 2025) — https://unmute.sh/voice-donation',
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/voice-donations',
+  },
+  {
+    key: 'alba-mackenna',
+    label: 'Alba MacKenna character voices',
+    license: LICENSES.CC_BY_4,
+    attribution: 'Character voices by Alba MacKenna, CC BY 4.0.',
+    note: 'Voice-acted with distinct characters (casual, merchant, announcer) rather than neutral reading — closest thing here to a Familiar who sounds like someone.',
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/alba-mackenna',
+  },
+  {
+    key: 'vctk',
+    label: 'VCTK (Voice Cloning Toolkit)',
+    license: LICENSES.CC_BY_4,
+    attribution: 'VCTK Corpus, University of Edinburgh, CC BY 4.0 — https://datashare.ed.ac.uk/handle/10283/3443',
+    note: 'Accent variety across many speakers.',
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/vctk',
+  },
+  {
+    key: 'cml-tts-fr',
+    label: 'CML-TTS (French)',
+    license: LICENSES.CC_BY_4,
+    attribution: 'CML-TTS Dataset, CC BY 4.0 — https://openslr.org/146/',
+    note: 'French voices. Only relevant once a French-speaking ward exists.',
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/cml-tts/fr',
+  },
+  {
+    key: 'expresso',
+    label: 'Expresso',
+    license: LICENSES.CC_BY_NC_4,
+    rejected: 'Non-commercial only. An NC restriction cannot ride inside a GPL distribution — it would limit what recipients may do with the whole of me.',
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/expresso',
+  },
+  {
+    key: 'ears',
+    label: 'EARS',
+    license: LICENSES.CC_BY_NC_4,
+    rejected: 'Non-commercial only, same as Expresso. The per-speaker emotion clips are genuinely appealing and still cannot ship.',
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/ears',
+  },
+  {
+    key: 'unmute-degaulle',
+    label: 'Appeal of 18 June recording',
+    license: LICENSES.UNCLEAR,
+    rejected: "Upstream says outright it does not know how the licence works and is assuming public domain. An assumption is not a licence. It is also a real historical political figure, which is separately wrong for a companion's voice.",
+    upstream: 'https://huggingface.co/kyutai/tts-voices/tree/main/unmute-prod-website',
+  },
+]);
+
+/** Sources we may actually ship. The gate, not a suggestion. */
+export function shippableSources() {
+  return VOICE_SOURCES.filter((s) => s.license.redistributable && !s.rejected);
+}
+
+export function sourceByKey(key) {
+  return VOICE_SOURCES.find((s) => s.key === key) ?? null;
+}
+
+/** Why a source was ruled out, for anyone who wonders later. */
+export function rejectionReason(key) {
+  const s = sourceByKey(key);
+  if (!s) return 'unknown source';
+  if (s.rejected) return s.rejected;
+  if (!s.license.redistributable) return `${s.license.label} is not redistributable in a GPL distribution.`;
+  return null;
+}
+
+/**
+ * The NOTICE text, generated from the catalogue rather than maintained by
+ * hand — so a credit cannot be dropped by someone tidying prose, and adding
+ * an attributed source cannot silently skip its credit.
+ */
+export function attributionNotice(sources = shippableSources()) {
+  const lines = ['# Bundled voice credits', ''];
+  lines.push('The reference clips my voice can be cloned from come from these sources.');
+  lines.push('');
+  for (const s of sources) {
+    const credit = s.attribution ?? s.creditAnyway;
+    lines.push(`- **${s.label}** — ${s.license.label}${credit ? `. ${credit}` : ''}`);
+  }
+  lines.push('');
+  lines.push('Sources under a non-commercial licence are deliberately not bundled; see `voice-catalogue.js` for which and why.');
+  lines.push('');
+  return lines.join('\n');
+}
+
+// ── Ward-supplied voices ─────────────────────────────────────────────────
+
+/**
+ * Where a reference clip came from. This is not a licence field — it is a
+ * *handling* field, and it governs three different questions that are easy to
+ * conflate:
+ *
+ *   BUNDLED       Came from the catalogue above. Ships with me, may be
+ *                 redistributed, appears in the NOTICE.
+ *   WARD_SUPPLIED My human gave me this clip — a character they love, a
+ *                 friend who volunteered, a voice that means something to
+ *                 them. Ward decision: this is allowed, because it is
+ *                 personal use and never leaves their machine.
+ *
+ * The distinction matters because a ward-supplied clip may be someone else's
+ * copyrighted performance. Personal use is theirs to make; redistribution is
+ * not. So a ward-supplied clip:
+ *
+ *   ✅ lives on their machine and is used to speak
+ *   ✅ travels in THEIR OWN identity backup — that is not redistribution,
+ *      it is their data moving with them, and a restored Familiar who comes
+ *      back sounding like a stranger is a continuity break, not a fresh start
+ *   ❌ never rides out in a diagnostic report, a bench report, a bug paste,
+ *      a shared media surface, or anything sent to a third party
+ *
+ * That last line is the one that needs enforcing in code, because the paths
+ * that would leak it are all paths built to be helpful: "attach your logs",
+ * "send this report back", "here is what is on disk."
+ */
+export const VOICE_PROVENANCE = Object.freeze({
+  BUNDLED: 'bundled',
+  WARD_SUPPLIED: 'ward-supplied',
+});
+
+/**
+ * May this clip leave the machine in something shared with a third party
+ * (a diagnostic paste, a bench report, an issue attachment)?
+ *
+ * Fails CLOSED: anything whose provenance we cannot establish is treated as
+ * the ward's own. Wrongly withholding a bundled clip from a bug report costs
+ * a follow-up question; wrongly including a ward's clip cannot be undone.
+ */
+export function mayLeaveTheMachine(voice) {
+  return voice?.provenance === VOICE_PROVENANCE.BUNDLED;
+}
+
+/**
+ * Does this clip belong in my human's own identity backup?
+ *
+ * Everything does. A backup that restores my memories and my name but not my
+ * voice restores something that sounds like a stranger wearing me — and the
+ * voice is part of my identity (§6.5), not a preference sitting beside it.
+ */
+export function belongsInIdentityBackup(voice) {
+  return Boolean(voice);
+}
+
+/**
+ * Strip anything that must not leave the machine from a set of voices bound
+ * for a shared artifact, and say what was withheld — a silent omission would
+ * leave someone debugging a voice problem with no idea a voice was involved.
+ */
+export function redactForSharing(voices = []) {
+  const shared = [];
+  const withheld = [];
+  for (const v of voices) {
+    if (mayLeaveTheMachine(v)) shared.push(v);
+    else withheld.push({ id: v?.id ?? null, reason: 'a voice my human gave me — theirs, not mine to hand out' });
+  }
+  return { shared, withheld };
+}
+
+/**
+ * Validate a proposed shipping set. Used by the build and by the test suite:
+ * a violation is a hard stop, because shipping the wrong clip is not a bug
+ * that can be patched away after the fact — it is already distributed.
+ */
+export function validateShippingSet(keys) {
+  const problems = [];
+  for (const key of keys) {
+    const s = sourceByKey(key);
+    if (!s) { problems.push({ key, problem: 'unknown source' }); continue; }
+    if (s.rejected) { problems.push({ key, problem: s.rejected }); continue; }
+    if (!s.license.redistributable) { problems.push({ key, problem: `${s.license.label} may not ship` }); continue; }
+    if (s.license.requiresAttribution && !s.attribution) {
+      problems.push({ key, problem: `${s.license.label} requires attribution and none is recorded` });
+    }
+  }
+  return { ok: problems.length === 0, problems };
+}

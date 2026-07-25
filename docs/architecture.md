@@ -2242,6 +2242,56 @@ that is the contract talking — update all seams together or stop.
 The autonomous loops do not run during shutdown — server.js's SIGTERM
 handler awaits each loop's `stop*()` before closing the MCP children.
 
+## Voice — Pass 0 (the bench tool and its supply chain)
+
+Voice owns its own milestone (`docs/voice-build-spec.md`). Pass 0 is the
+measuring pass: it ships no speech, only the machinery that decides what a
+ward's machine can actually run and what it costs them. Five modules, all
+pure or file-local, none on the chat path.
+
+| module | owns |
+|---|---|
+| `voice-models.js` | The manifest + tier composition. Two INDEPENDENT axes — capability (`read-aloud` / `listening` / `listening-plus`) × voice engine (`pocket` / `piper`) — and the §0.7 footprint ceilings, checked by `evaluatePlan()`. ASR languages are a table; `availableAsrLangs()` returns only curated **and** pinned ones so a menu cannot offer what cannot be fetched. |
+| `voice-footprint.js` | On-disk measurement per category and the free-space pre-flight. Fails **closed**: unreadable free space refuses a download rather than guessing. Splits re-fetchable MACHINE artifacts from the Familiar's own SELF (memories, tomes, graph, kept media) — only machine artifacts are ever reclaimable. |
+| `voice-fetch.js` | Pre-flight → refuse-unpinned → stream-and-hash → verify → content-addressed install. Blobs stored once and hardlinked; reclaiming one model can never take a blob another still needs. |
+| `voice-extract.js` | Archive unpacking. Verify-THEN-unpack, two independent path-traversal defences, temp-then-rename so a failure leaves no half-installed directory. `.installed.json` records which archive produced a model directory. |
+| `voice-catalogue.js` | Which reference voice clips may ship, and on what terms. |
+| `voice-bench.js` | The measurements: WER (real word-level edit distance with the operation mix), RTF at 1 and 2 streams, TTS time-to-first-chunk, and the §4 interference phase. Report renders to markdown + JSON. |
+
+**The supply chain is three-way (spec §0.8):** the `sherpa-onnx-node` binding
+and its per-platform binary come from npm (optionalDependency, one platform
+per ward); the models are fetched on first enable from pinned URLs with
+sha256; bench fixtures are vendored so WER is comparable across wards.
+
+**Pins are machine-written, never typed.** `voice-model-pins.json` is produced
+by `scripts/pin-audio-models.mjs`, which downloads a candidate, hashes it in
+flight, and — for archives — unpacks it to record the size it occupies on
+disk. `applyPins()` accepts only whole records (https url, 64-hex sha256,
+positive byte count), so a half-pin can never become a fetchable model. This
+is the exact-values rule made structural: there is no line in source for
+anyone to type a hash into.
+
+**Download size and disk size are different numbers, and both matter.** bz2
+archives expand (the German decoder: 55 MB fetched, 68 MB unpacked). The §0.7
+ceilings are checked against DISK; the pre-flight is checked against PEAK —
+during install the archive and its unpacked copy both exist, and sizing only
+the download would start a fetch that cannot finish, on precisely the
+nearly-full machines the budget exists to protect.
+
+**Licensing is enforced in code, not remembered.** `shippableSources()` gates
+on the licence field; non-commercial sources (Expresso, EARS) cannot reach the
+shipped set of a GPL distribution, and stay listed *with their reasons* so
+nobody rediscovers and re-litigates them. The NOTICE text is generated from
+the catalogue so a credit cannot be dropped by editing prose.
+
+**Ward-supplied voice clips are allowed and are handled as personal use.**
+PocketTTS clones zero-shot from a ~10 s clip, so a ward may use a voice that
+means something to them. `mayLeaveTheMachine()` fails closed — such a clip
+never rides out in a diagnostic, bench report or shared surface — but
+`belongsInIdentityBackup()` is true for every voice, because a restored
+Familiar that comes back sounding like a stranger is a continuity break. The
+two questions are orthogonal by design.
+
 ## Security design
 
 - **API key handling:** key travels browser → `localhost` only. Server
