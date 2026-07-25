@@ -87,6 +87,23 @@ almanac/*.db-journal
 # Audio models — machine artifacts, fetched on demand, never committed (voice spec §0.1)
 models/
 
+# Reference voice clips (voice spec §6.5).
+#
+# voices/bundled/ IS committed — one clip, ~1.2 MB, the voice I have before my
+# human has an opinion. It is in the repo rather than fetched so that a voice
+# cannot go missing on a machine with no connection.
+#
+# The two below are not:
+#   installed/  reproducible from a pinned url + checksum, so committing them
+#               would mean every clone paying ~8 MB for choices almost nobody
+#               makes.
+#   ward/       clips my human gave me. This line is a privacy guard, not
+#               housekeeping — such a clip may be someone else's copyrighted
+#               performance, and personal use is theirs to make while
+#               redistribution is not. It must never reach a commit.
+voices/installed/
+voices/ward/
+
 # Pin-time scratch (measuring what an archive unpacks to) — never committed
 .pin-measure/
 

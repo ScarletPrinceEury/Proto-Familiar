@@ -475,8 +475,15 @@ export async function reclaimModels({ plan, modelsDir, keepBlobsFor = [] }) {
   return { freedBytes: Math.max(0, before - after), removed };
 }
 
-/** A path segment that is exactly one ordinary name — no separators, no traversal. */
-function isSafeSegment(name) {
+/**
+ * A path segment that is exactly one ordinary name — no separators, no
+ * traversal.
+ *
+ * Exported because `voices.js` builds filenames out of catalogue keys and
+ * ward-supplied names, and a security predicate that exists in two copies is
+ * one that drifts. One definition, one place to correct it.
+ */
+export function isSafeSegment(name) {
   return typeof name === 'string'
     && name.length > 0
     && name !== '.' && name !== '..'

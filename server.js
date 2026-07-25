@@ -262,6 +262,7 @@ import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { createAudioWorker } from './audio-worker-host.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
+import { resolveVoice } from './voices.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -1376,15 +1377,32 @@ function voiceListeningEnabled() {
 
 app.get('/api/voice/status', async (req, res) => {
   const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
+
+  // Resolve rather than report. `chosenVoice` alone is a setting, not a fact:
+  // it can name a voice that was never downloaded, and answering with it would
+  // claim I speak in a voice I have no file for — the same shape as the
+  // `engine: null` bug, where the endpoint reported a field it never checked.
+  const voice = await resolveVoice({ rootDir: __dirname, settings: s });
+
   const base = {
     ok: true,
     // Why voice is or is not available, in the order the reasons actually
     // apply — a ward reading this should not have to work out which gate bit.
     hardDisabled: VOICE_HARD_DISABLED,
     listeningEnabled: voiceListeningEnabled(),
-    readAloudAvailable: !VOICE_HARD_DISABLED,
+    // Read-aloud needs a reference clip as much as it needs the engine:
+    // PocketTTS clones zero-shot and has no built-in voice to fall back on.
+    readAloudAvailable: !VOICE_HARD_DISABLED && voice.ok,
     defaultVoice: DEFAULT_VOICE.key,
     chosenVoice: s.voiceTts?.voice ?? DEFAULT_VOICE.key,
+    voice: {
+      key: voice.key ?? null,
+      provenance: voice.provenance ?? null,
+      // Named when the chosen voice was not on disk, so a ward who picked
+      // something and hears the default learns why instead of wondering.
+      fellBackFrom: voice.fellBackFrom ?? null,
+      reason: voice.reason ?? voice.detail ?? null,
+    },
   };
   if (!audioWorker) {
     return res.json({ ...base, worker: { running: false, reason: 'PROTO_FAMILIAR_VOICE_DISABLED=1' } });

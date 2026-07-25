@@ -192,8 +192,22 @@ export function rejectionReason(key) {
  * hand — so a credit cannot be dropped by someone tidying prose, and adding
  * an attributed source cannot silently skip its credit.
  */
-export function attributionNotice(sources = shippableSources()) {
+export function attributionNotice(sources = shippableSources(), { bundled = null } = {}) {
   const lines = ['# Bundled voice credits', ''];
+
+  // The clip actually committed to this repo gets named first and on its own.
+  // Crediting it inside a list of sources we merely *offer* would blur the
+  // line the CC BY obligation sits on: attribution is owed for what we
+  // distribute, and right now that is exactly one file.
+  if (bundled) {
+    const s = sourceByKey(bundled.source);
+    lines.push('## Shipped in this repository', '');
+    lines.push(`\`${bundled.file}\` — ${bundled.key}`);
+    if (s) lines.push('', `${s.label} — ${s.license.label}${s.attribution ? `. ${s.attribution}` : ''}`);
+    lines.push('');
+    lines.push('## Available to download', '');
+  }
+
   lines.push('The reference clips my voice can be cloned from come from these sources.');
   lines.push('');
   for (const s of sources) {
