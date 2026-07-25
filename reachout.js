@@ -29,7 +29,7 @@
 import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';
 import { enrich, getRecentMemoryLines } from './thalamus.js';
-import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages } from './cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages, formatRecentMessagesForContext } from './cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
@@ -201,15 +201,9 @@ export async function decideReachoutViaLLM({
   const lastContactMs = Number.isFinite(wardSilenceMs) ? (nowMs - wardSilenceMs) : NaN;
   const rhythmLine = buildRhythmLine(baseline, { lastContactMs, timeZone: s?.wardTimeZone || null });
 
-  const sessionBlock = (recentMessages && recentMessages.length)
-    ? `\nThe last things my human and I talked about (so anything I reach out about connects to our actual life, not nothing):\n${recentMessages.map(m => {
-        const text = typeof m.content === 'string'
-          ? m.content
-          : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
-        const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
-        const prefix = when ? `[${m.role === 'user' ? 'Them' : 'Me'} · ${when}]` : `[${m.role === 'user' ? 'Them' : 'Me'}]`;
-        return `  ${prefix}: ${text.slice(0, 300)}`;
-      }).join('\n')}`
+  const sessionLines = formatRecentMessagesForContext(recentMessages, nowMs);
+  const sessionBlock = sessionLines
+    ? `\nThe last things my human and I talked about (so anything I reach out about connects to our actual life, not nothing):\n${sessionLines}`
     : '';
 
   const prompt = substituteMacros(buildReachoutPrompt({

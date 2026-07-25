@@ -278,6 +278,29 @@ export async function getRecentSessionMessages({ limit = 8 } = {}) {
   }
 }
 
+/**
+ * Format recent session messages into compact context lines for a ward-private
+ * deliberation (warm reach-out, noticing). Handles the vision-era array
+ * `content` (pulls the text part) and a plain string alike, stamps each with a
+ * relative "when", and prefixes Them/Me. Returns '' when there's nothing.
+ * Shared so the two proactive surfaces don't each carry the same map inline.
+ */
+export function formatRecentMessagesForContext(messages = [], now = Date.now()) {
+  if (!Array.isArray(messages) || !messages.length) return '';
+  return messages
+    .map(m => {
+      const text = typeof m.content === 'string'
+        ? m.content
+        : (Array.isArray(m.content) ? (m.content.find(c => c?.type === 'text')?.text ?? '') : '');
+      const when   = m.timestamp ? relativeTime(m.timestamp, now) : '';
+      const who    = m.role === 'user' ? 'Them' : 'Me';
+      const prefix = when ? `[${who} · ${when}]` : `[${who}]`;
+      return text.trim() ? `  ${prefix}: ${text.slice(0, 300)}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
 // ── Channel adapters (push delivery) ─────────────────────────────
 //
 // The outbox used to be drained only by the browser polling

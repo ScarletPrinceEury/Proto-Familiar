@@ -3,6 +3,23 @@ import assert from 'node:assert/strict';
 
 import { getRecentMemoryLines } from '../thalamus.js';
 import { buildReachoutPrompt } from '../reachout.js';
+import { formatRecentMessagesForContext } from '../cerebellum.js';
+
+// The shared recent-message formatter (used by warm reach-out AND noticing —
+// extracted so the two proactive surfaces don't each carry the same map).
+test('formatRecentMessagesForContext handles string + array content, skips empties', () => {
+  const now = Date.parse('2026-07-25T12:00:00Z');
+  const out = formatRecentMessagesForContext([
+    { role: 'user', content: 'plain string message', timestamp: '2026-07-25T11:00:00Z' },
+    { role: 'assistant', content: [{ type: 'text', text: 'array content message' }], timestamp: '2026-07-25T11:30:00Z' },
+    { role: 'user', content: '' },   // empty → dropped
+  ], now);
+  assert.match(out, /Them.*plain string message/);
+  assert.match(out, /Me.*array content message/);
+  assert.equal(out.split('\n').length, 2, 'the empty message is dropped');
+  assert.equal(formatRecentMessagesForContext([], now), '');
+  assert.equal(formatRecentMessagesForContext(undefined, now), '');
+});
 
 // The fix: proactive questions (warm reach-out + the causal-chain "did that
 // follow?" hindsight lines) must cross-check recent (today+yesterday) memory

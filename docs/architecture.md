@@ -843,7 +843,13 @@ clamped [5min,6h], adaptive default). The bounded, tool-using deliberation runs
 in `server.js`'s `noticingDeliberate` (`composeNoticingTools`: intention CRUD + a
 few schedule reads + the noticing-scoped `reach_out_to_ward` warm-knock and
 `set_next_check`; a reach-out refused during quiet hours is not counted as
-acting). **Does NOT stand down at elevated threat** (ward-signed,
+acting). It assembles the same recent context a live chat turn / warm reach-out
+gets — identity (static block), the time anchor, **recent conversation
+(`getRecentSessionMessages` → `formatRecentMessagesForContext`) and recent
+memories (`getRecentMemoryLines`, today+yesterday)** — so it doesn't decide blind
+to what was just said. That context is **information only** (ward decision, no
+suppression instruction): it never nudges a stand-down, and the recent context is
+worded to yield to the no-look-away posture at elevated threat. **Does NOT stand down at elevated threat** (ward-signed,
 safety-significant — the tier shifts the register, never skips the turn; joins
 the safety-critical sign-off set). A proactive act resets the wait streak; a
 stand-down increments it (`source:'noticing'`). Every decision-reaching tick —
