@@ -44,7 +44,7 @@ import {
   ingestGcal,
   shutdownUnruh, shutdownPhylactery,
   reportSurfacingOutcomes, listBookmarks,
-  memByTimerange,
+  memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -108,6 +108,7 @@ import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative
 // live there; server.js keeps only route handling and loop boot.
 import {
   readSettingsSync, primaryConnectionFrom, connectionForFeature,
+  getRecentSessionMessages, formatRecentMessagesForContext,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
@@ -466,17 +467,21 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   //    salience even as tool traffic grows the tail.
   let timeAnchor = '';
   if (enrichMode === 'full') {
+    const anchorSettings = readSettingsSync();
     timeAnchor = buildTimeAnchorBlock({
       now: Date.now(),
       lastUserMessageAt: lastUserMessageAt ?? null,
       // The ward's zone, not the server's — so the [Now] the Familiar reads is
       // the ward's clock even when the server runs in a different timezone.
-      timeZone: readSettingsSync()?.wardTimeZone || null,
+      timeZone: anchorSettings?.wardTimeZone || null,
       // Full weather detail is ward-private only. On any gated (non-ward)
       // turn the vague tier renders instead — qualitative, no numbers/units/
       // times/labels, so precise values can't leak a location (§5.6).
       // Fail-closed: unclear audience → vague, and vague itself → '' if stale.
-      weatherLine: audienceTag === 'ward-private' ? readWeatherNowLine() : readWeatherVagueLine(),
+      // The vague tier has no numbers/units, so it needs no unit passed.
+      weatherLine: audienceTag === 'ward-private'
+        ? readWeatherNowLine({ unit: anchorSettings?.weatherUnit })
+        : readWeatherVagueLine(),
     }) || '';
     if (timeAnchor && !loopMode) {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
@@ -4352,7 +4357,7 @@ function startRemindersScheduler() {
       const nowMs = new Date(wardLocalNowISO(s?.wardTimeZone)).getTime();
       const { windowNodes, recurringNodes } = await fetchAlertScanData(nowMs);
       return selectDueWeatherAlerts({ windowNodes, recurringNodes, mirror, nowMs, defaultLeadMs, maxLeadMs: MAX_LEAD_MS, graceMs: ALERT_GRACE_MS })
-        .map(a => ({ ...a, ...formatWeatherAlert(a, { nowMs }) }));
+        .map(a => ({ ...a, ...formatWeatherAlert(a, { nowMs, unit: s?.weatherUnit }) }));
     },
     markEventAlerted: async ({ id, occurrenceDate, kind }) => {
       const r = await markEventAlerted({ id, occurrence_date: occurrenceDate ?? null, kind: kind || 'event' });
@@ -4993,19 +4998,29 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
   const conn = connectionForFeature(s, 'noticing');
   if (!conn?.apiKey || !conn?.model) return { toolNamesCalled: [] };
 
-  const [{ static: identity }, lastAct] = await Promise.all([
+  const nowMs = Date.now();
+  const [{ static: identity }, lastAct, recentMessages, recentMemories] = await Promise.all([
     enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
     getLastUserActivity().catch(() => null),
+    // Same recent context a live chat turn / warm reach-out gets, so noticing
+    // isn't deciding blind to what was just said or what I hold from the last
+    // day or two. Information only — no suppression, no stand-down (ward
+    // decision); the no-look-away-at-threat posture is unchanged.
+    getRecentSessionMessages({ limit: 6 }).catch(() => []),
+    getRecentMemoryLines({ days: 2, limit: 8, now: nowMs }).catch(() => ''),
   ]);
   const nowBlock = buildTimeAnchorBlock({
-    now: Date.now(), lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
-    // Noticing is a ward-private deliberation → full weather line.
-    weatherLine: readWeatherNowLine(),
+    now: nowMs, lastUserMessageAt: lastAct?.ts ?? null, timeZone: s?.wardTimeZone || null,
+    // Noticing is a ward-private deliberation → full weather line, in the
+    // ward's chosen unit.
+    weatherLine: readWeatherNowLine({ unit: s?.weatherUnit }),
   });
   const prompt = substituteMacros(buildNoticingPrompt({
     // flag_distress is in the noticing toolset now, so the prompt's
     // hand-to-triage clause names a lever the Familiar can actually pull.
     nowBlock, situationReport, threatTier, hasFlagDistress: true,
+    recentConversation: formatRecentMessagesForContext(recentMessages, nowMs),
+    recentMemories,
   }), s);
   const messages = [
     ...(identity ? [{ role: 'system', content: identity }] : []),

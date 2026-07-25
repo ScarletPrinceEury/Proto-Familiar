@@ -133,6 +133,34 @@ test('prompt: no threat line at calm/mild; present at moderate+', () => {
   assert.match(mod, /noticing matters most/);
 });
 
+test('prompt: recent conversation + memories ride as neutral context when provided', () => {
+  const withCtx = buildNoticingPrompt({
+    situationReport: ['- x'], threatTier: 'calm',
+    recentConversation: '  [Them · earlier]: sorted the therapy paperwork',
+    recentMemories: '  · (daily/2026-07-25) felt lighter after therapy',
+  });
+  assert.match(withCtx, /sorted the therapy paperwork/);
+  assert.match(withCtx, /felt lighter after therapy/);
+  // Presented as information — NOT a suppression / stand-down instruction.
+  assert.doesNotMatch(withCtx, /don't ask|already answered|do not act|stay quiet/i);
+
+  const noCtx = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'calm' });
+  assert.doesNotMatch(noCtx, /Recently, my human and I have been talking about/);
+  assert.doesNotMatch(noCtx, /What I hold from today and yesterday/);
+});
+
+test('prompt: recent context never displaces the no-look-away posture at threat', () => {
+  const mod = buildNoticingPrompt({
+    situationReport: ['- x'], threatTier: 'moderate',
+    recentConversation: '  [Them · earlier]: we already talked this through',
+    recentMemories: '  · (daily/2026-07-25) covered it',
+  });
+  // Even with "we already covered it" in context, the elevated-threat posture
+  // ("I do not look away") stands — context must not read as a stand-down cue.
+  assert.match(mod, /noticing matters most/);
+  assert.match(mod, /do not look away/);
+});
+
 test('prompt: flag_distress clause only when the tool is in hand', () => {
   const withTool = buildNoticingPrompt({ situationReport: ['- x'], threatTier: 'severe', hasFlagDistress: true });
   assert.match(withTool, /flag_distress/);

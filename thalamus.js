@@ -2029,7 +2029,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let deferredIntentsBlock = '';
     if (liveTurn && !staticOnly && !gated) {
       try {
-        const intents = await getUnactedIntents({ limit: 5 });
+        // markSurfaced:true — this is the live, ward-private surface, so a
+        // surfaced "tell" is consumed in code after its one turn instead of
+        // waiting on my acknowledge call (which I'd forget, re-asking the same
+        // warm question every turn). Filing intents are untouched by this.
+        const intents = await getUnactedIntents({ limit: 5, markSurfaced: true });
         deferredIntentsBlock = formatDeferredIntentsBlock(intents);
         if (intents.length > 0) {
           console.log(`[thalamus] deferred intents: ${intents.length} unacted (oldest first)`);
@@ -2037,6 +2041,17 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       } catch (err) {
         console.error('[thalamus] getUnactedIntents failed:', err?.message ?? err);
       }
+    }
+
+    // ── Recent memories (today + yesterday) — the proactivity cross-check ──
+    // Gives a warm reach-out AND the "did that follow?" hindsight questions
+    // something to check against, so I don't ask what my human already told me
+    // (the reported re-ask-across-sessions bug). Ward-private live turns only;
+    // best-effort — getRecentMemoryLines already degrades to '' on any failure.
+    let recentMemBlock = '';
+    if (liveTurn && !staticOnly && !gated) {
+      const lines = await getRecentMemoryLines({ days: 2, limit: 8 });
+      if (lines) recentMemBlock = `[What my human and I have covered — today and yesterday]\n${RECENT_MEM_NOTE}\n${lines}`;
     }
 
     // ── Projection cue (gcal §4, generalized by the causal-chain fix) ────
@@ -2355,6 +2370,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (ponderingsBlock)        dynamicSections.push(ponderingsBlock);
     if (deferredIntentsBlock)   dynamicSections.push(deferredIntentsBlock);
+    if (recentMemBlock)         dynamicSections.push(recentMemBlock);
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
@@ -2608,6 +2624,41 @@ export async function memByTimerange({ fromDate, toDate, limit = 12, audiences, 
     ...(audiences !== undefined ? { audiences } : {}),
     ...(topicGrants ? { topic_grants: topicGrants } : {}),
   });
+}
+
+// The instruction half of the "check before I ask" fix — rides above the recent
+// memories wherever they're injected (chat context + warm reach-out). First
+// person, plain: this is what stops me re-asking something my human already
+// answered. It names both surfaces the recent memories are meant to cross-check.
+export const RECENT_MEM_NOTE =
+  'Before I bring up or ask my human about something on my own — a warm reach-out, or one of the "did that follow?" questions in my Temporal Context — I check here and in what we\'ve just been saying. If they already told me, I do NOT ask again as if I forgot: I take it in, or for a forecast I grade it with schedule_calibrate_link so it retires. I only ask what I genuinely don\'t know yet. (This is not a reason to go quiet — reaching out about something genuinely fresh is still wanted; it only stops me repeating a question already answered.)';
+
+// Recent memories by ward-local date (today back through `days-1` days ago), so
+// a proactive question can be cross-checked against what my human already told
+// me instead of firing blind. Ward-context (no audience gate — these back the
+// ward's own surfaces). Injectable fetch for tests; ANY failure degrades to ''
+// (the block is simply omitted — graceful, never throws into a turn).
+export async function getRecentMemoryLines({ days = 2, limit = 8, now = Date.now(), fetchFn = memByTimerange } = {}) {
+  try {
+    // This helper is exported, so normalize inputs rather than trusting the
+    // caller: days must be >= 1 or fromDate lands AFTER toDate (an inverted,
+    // empty range). A bad/non-finite value falls back to "today only".
+    const d = Number.isFinite(days)  && days  >= 1 ? Math.floor(days)  : 1;
+    const n = Number.isFinite(limit) && limit >= 1 ? Math.floor(limit) : 8;
+    const tz = wardTimeZoneSetting();
+    const toDate   = wardLocalNowISO(tz, now).slice(0, 10);
+    const fromDate = wardLocalNowISO(tz, now - (d - 1) * 24 * 3600_000).slice(0, 10);
+    const res = await fetchFn({ fromDate, toDate, limit: n });
+    const items = Array.isArray(res?.results) ? res.results : [];
+    return items
+      .map(r => {
+        const addr = [r.granularity, r.date].filter(Boolean).join('/') || 'memory';
+        const text = (r.excerpt ?? r.content ?? '').trim();
+        return text ? `  · (${addr}) ${text}` : '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  } catch { return ''; }
 }
 
 export async function searchMemoryRestricted({ query, roomAudience, threshold = 0.70 }) {

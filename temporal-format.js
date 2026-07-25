@@ -503,7 +503,7 @@ export function formatTemporalContext(payload) {
     blocks.push([
       'Recently past, not yet examined — forecasts whose moment has come:',
       ...hindsightLines,
-      "  If I can tell how it actually went — or my human mentions it — I grade the forecast with schedule_calibrate_link (the edge id above): observed if it really happened, certainty up or down. If I don't know, asking is natural while it's still fresh.",
+      "  Before I ask how one of these went, I check my recent memories and what we've said lately — if my human already told me, I do NOT re-ask like I forgot; I grade the forecast with schedule_calibrate_link (the edge id above): observed if it really happened, certainty up or down. Only if I genuinely don't know yet is asking natural, while it's still fresh.",
     ].join('\n'));
   }
 

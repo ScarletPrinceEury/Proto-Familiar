@@ -61,6 +61,34 @@ test('formatTemp: value + band, rounded', () => {
   assert.equal(formatTemp(NaN), '');
 });
 
+// ── °C / °F toggle (weatherUnit) ──────────────────────────────────────
+// The model never converts (exact-values rule) — formatTemp does the math.
+// The band is computed from the unconverted Celsius value and must not
+// shift when the display unit changes.
+
+test('formatTemp: unit-aware conversion, sanity points', () => {
+  assert.equal(formatTemp(0, 'fahrenheit'), '32°F (cold)');
+  assert.equal(formatTemp(100, 'fahrenheit'), '212°F (very hot)');
+  assert.equal(formatTemp(-40, 'celsius'), '-40°C (freezing)');
+  assert.equal(formatTemp(-40, 'fahrenheit'), '-40°F (freezing)');
+  assert.equal(formatTemp(6.4, 'fahrenheit'), '44°F (cold)');
+  assert.equal(formatTemp(NaN, 'fahrenheit'), '');
+});
+
+test('formatTemp: defaults to celsius when unit omitted/unknown', () => {
+  assert.equal(formatTemp(6.4), formatTemp(6.4, 'celsius'));
+  assert.equal(formatTemp(6.4, 'bogus'), formatTemp(6.4, 'celsius'));
+});
+
+test('formatTemp: band is unchanged by unit — only the number/symbol move', () => {
+  for (const c of [-10, -3, 6, 14, 22, 30, 36]) {
+    const cBand = formatTemp(c, 'celsius').match(/\(([^)]+)\)/)?.[1];
+    const fBand = formatTemp(c, 'fahrenheit').match(/\(([^)]+)\)/)?.[1];
+    assert.equal(cBand, fBand, `band mismatch at ${c}°C`);
+    assert.equal(cBand, tempBand(c));
+  }
+});
+
 // ── precip transition (read off the hourly array) ────────────────────
 
 const hourly = (specs) => specs.map(([time, precip_mm, code]) => ({
@@ -104,6 +132,17 @@ test('buildNowWeatherLine: full line with easing', () => {
   };
   const line = buildNowWeatherLine(mirror, { now });
   assert.match(line, /^Weather where my human is: 6°C \(cold\), light rain, easing off around 17:00\.$/);
+});
+
+test('buildNowWeatherLine: fahrenheit unit threads through', () => {
+  const now = T('2026-07-11T14:00:00');
+  const mirror = {
+    fetched_at: '2026-07-11T13:30:00',
+    current: { temp_c: 6, weather_code: 61, precip_mm: 0.4, wind_kmh: 12 },
+    hourly: hourly([['2026-07-11T15:00:00', 0.2], ['2026-07-11T17:00:00', 0]]),
+  };
+  const line = buildNowWeatherLine(mirror, { now, unit: 'fahrenheit' });
+  assert.match(line, /43°F \(cold\)/);
 });
 
 test('buildNowWeatherLine: strong wind is surfaced, calm is not', () => {
@@ -188,6 +227,10 @@ test('formatItemWeather: adverse clause vs benign brief', () => {
   assert.equal(formatItemWeather({ weather_code: 0, temp_c: 'x' }), '');
 });
 
+test('formatItemWeather: unit threads through', () => {
+  assert.match(formatItemWeather({ weather_code: 0, temp_c: 14 }, 'fahrenheit'), /57°F \(mild\)/);
+});
+
 // ── the day arc ──────────────────────────────────────────────────────
 
 const arcHours = (date, specs) => specs.map(([hh, temp, precip, code]) => ({
@@ -206,6 +249,12 @@ test('weatherArc: today + tomorrow, parts + notable, ward label', () => {
   assert.match(arc, /afternoon: light rain, 8–9°C \(cold\)/);
   assert.match(arc, /Notable: rain from ~14:00; easing ~19:00/);
   assert.match(arc, /Tomorrow — .*afternoon: clear, 18°C \(warm\)/);
+});
+
+test('weatherArc: fahrenheit unit threads through, band unchanged', () => {
+  const forecast = { hourly: arcHours('2026-07-11', [['08', 6, 0], ['10', 7, 0]]) };
+  const arc = weatherArc(forecast, { todayDate: '2026-07-11', tomorrowDate: '2026-07-12', unit: 'fahrenheit' });
+  assert.match(arc, /morning: clear, 43–45°F \(cold\)/);
 });
 
 test('weatherArc: no matching days → empty; default label phrasing', () => {

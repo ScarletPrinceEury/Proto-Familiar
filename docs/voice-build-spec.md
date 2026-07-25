@@ -22,6 +22,25 @@ Status: **spec — not yet built.** Voice owns its own MINOR milestone (one
 milestone = one minor; the first landed pass is the `0.X.0`, later passes bump
 patch).
 
+> **Spec review note (re-verified against 0.9.30, 2026-07-24).** The seams this
+> spec rides were checked against the current tree before any pass starts. Most
+> are accurate and named correctly (`registerPushAdapterFactory`,
+> `connectionForFeature`, `decideAmbientReply`/`adaptiveSettleMs`/
+> `activeCooldownSec`, `contactDeadlineFor`/`CONTACT_ESCALATION_DELAY_MS`,
+> `recordThreat({source})`, `recordUserActivity`, the room-legibility fields,
+> `materializeAttachments`, `SERVER_SYNCED_KEYS`, `message-sanitize.mjs`,
+> `wsSend`). Four drift points were corrected in this pass: **(1)** `kind:'audio'`
+> is not actually reserved — the media store hard-codes `kind:'image'` and its
+> mime map is image-only, so the audio-kind support is net-new Pass-1 work, not
+> inherited (§0.2 rewritten); **(2)** the §4.3 defer list named `routine review`
+> (not a ticking loop — pure ride-existing functions) and omitted the
+> `content-regate` loop that shipped 0.9.30 (list refreshed); **(3)** §5 implied
+> the hand-rolled gateway already forwards `VOICE_STATE_UPDATE`/
+> `VOICE_SERVER_UPDATE` — it has op-4 *send* (`wsSend`) but no inbound voice
+> dispatch cases, so those are Pass-3 additions (§5 clarified); **(4)** the
+> background-worker count (CLAUDE.md) is twelve at spec time and becomes thirteen
+> when media-retention lands (pinned to Pass 4, §13).
+
 ---
 
 ## 0. What this builds on
@@ -57,11 +76,19 @@ a sensible pinned default.
 
 ### 0.2 What the vision spec already gave us
 
-- **Assets:** `kind: 'audio'` was reserved in the media-store contract. A
-  voice note is an audio asset; its transcript fills the same cached
-  `description` slot (look-once/listen-once, keep forever). The materializer
-  renders audio assets as transcript stand-ins — audio never rides as
-  provider content-parts in this milestone (§15).
+- **Assets — the *pattern* is inherited; the audio *kind* is a small Pass-1
+  addition, not a reservation already in place.** The media store derives an
+  asset's `kind` from its mime map (`media.js`: "model kind is derived from the
+  map, never from sniffing"), but today that map (`IMAGE_MIME_EXT`) is
+  image-only and `saveAsset` hard-codes `kind:'image'`; `materializeAttachments`
+  renders images only. So Pass 1 lands three concrete things at that seam: an
+  `AUDIO_MIME_EXT` map, `saveAsset` deriving `kind` from the matched map instead
+  of the literal `'image'`, and an audio transcript stand-in branch in the
+  materializer. Once that exists, a voice note is an audio asset whose transcript
+  fills the same cached `description` slot (look-once/listen-once, keep forever)
+  and rides as a transcript stand-in — audio never rides as provider
+  content-parts in this milestone (§15). The store's design *anticipated* audio;
+  it did not pre-wire it.
 - **The spine decision holds:** `message.content` stays a string. A spoken
   turn becomes a *transcribed* message — the entire text pipeline (timestamp
   hygiene, audience gating, memorization, threat scoring, history assembly)
@@ -323,10 +350,14 @@ the machine in the right order, with these six mechanisms:
    start and **defer** — skip the tick, try again next tick — if they are on
    the defer list:
    - **Defers:** pondering, memorization drain, memory sweep, tome
-     graduation, gcal sync, needs-tracking, routine review, media
-     retention (§9). All of them are
-     minutes-scale background work; nothing is lost by running 20 minutes
-     later (their own gates re-qualify work when they resume).
+     graduation, gcal sync, needs-tracking, content-regate, media
+     retention (§9). All of them are minutes-scale background work; nothing is
+     lost by running 20 minutes later (their own gates re-qualify work when they
+     resume). (Reconcile this list against the live `*-loop.js` roster at build
+     time — it is the current set as of 0.9.30. Note **routine review is NOT on
+     it**: `routine-review.js` is pure ride-existing-request functions
+     (`isRoutineReviewDue`/`buildRoutineReviewSection`) folded into an existing
+     turn's context — it never ticks, so there is nothing to defer.)
    - **NEVER defers:** silence-triage, threat recording, reminders + event
      alerts, the outbox, warm reach-out's *safety posture* (it already stands
      down at moderate+ threat on its own rules). These are the caring spine —
@@ -397,9 +428,15 @@ and sufficient on the measured hardware.
 gateway.** Discord voice is a second WebSocket + encrypted UDP/RTP + Opus +
 the DAVE E2EE protocol — hand-rolling it is months of protocol work with
 security-sensitive crypto. `@discordjs/voice` exists to be embedded: its
-gateway-adapter interface takes exactly what our gateway already has (send an
-op-4 payload; forward `VOICE_STATE_UPDATE` / `VOICE_SERVER_UPDATE`
-dispatches). New deps: `@discordjs/voice`, `@discordjs/opus` (native Opus),
+gateway-adapter interface needs two things from our gateway — send an op-4
+payload, and forward `VOICE_STATE_UPDATE` / `VOICE_SERVER_UPDATE` dispatches.
+**The outbound half already exists** (`wsSend({op, d})` sends arbitrary gateway
+ops today — op 1/2/6 use it), so op-4 send is a one-liner. **The inbound half is
+net-new:** the dispatch handler is a per-`t` if-chain (`READY`, `RESUMED`,
+`INTERACTION_CREATE`, `MESSAGE_CREATE`) with no voice cases, so Pass 3 adds two
+small dispatch-forward cases that hand those events to the voice adapter — the
+gateway does *not* forward them today. New deps: `@discordjs/voice`,
+`@discordjs/opus` (native Opus),
 `sodium-native` (transport crypto), pinned at versions with DAVE support
 (verify at Pass 3 — Discord is rolling E2EE out to all voice). The rest of
 the gateway stays ours.
@@ -822,7 +859,9 @@ call — must arrive as an extension of this spine:
   enrollment UI + storage; guest watchdog + `voiceGuestPolicy` presence
   switch; diarization stage for mixed streams; the `voice-call` push adapter
   + delivery recording; the media-retention loop (§9); ward sign-offs from
-  §10 resolved and wired.
+  §10 resolved and wired. **The media-retention loop is a new background
+  worker — bump CLAUDE.md's worker count (twelve at spec time → thirteen) in
+  the same commit, per the loop-off-switch discipline.**
 - Each pass: `docs/architecture.md` in the same commit; per-loop off-switch
   in the same commit as any new loop.
 
