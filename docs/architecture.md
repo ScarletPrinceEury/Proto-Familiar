@@ -772,7 +772,11 @@ moderate+ → stand down, triage owns the moment), quiet hours
 (`warmthQuietHoursStart/End`, default 23–08 local), and a cool-down
 (`nextCheckInMs`, clamped to [15min, 24h], default ~2h). The decision
 (`decideReachoutViaLLM`) reuses `enrich(staticOnly)` + recent session
-messages for continuity, and is given the pending `tell` intents
+messages for continuity, is given **recent memories (today + yesterday) via
+`getRecentMemoryLines`** so it cross-checks whether the thing it would raise was
+already answered (the prompt suppresses a redundant re-ask without dampening a
+genuinely fresh reach-out — the reported "brings it up even though we discussed
+it" fix), and is given the pending `tell` intents
 (`getUnactedIntents`, filtered to kind `tell`) and the warm-villager list
 (`getWarmVillagers`: `relationToFamiliar==='warm'` AND Discord-reachable —
 the dormant tag's first real use). On `reach_out` it routes to either a
@@ -1832,7 +1836,7 @@ doesn't sit in front of it.
 | Block | Contents | Lifetime | Placement |
 |---|---|---|---|
 | `static` | `base_instructions.md` + identity files (self / user / relationship / custom) | Stable across turns in a session | Prepended to the system message at index 0 |
-| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → Google-Calendar projection cue (0.8) → `[CARE CHECK]` (if threat ≠ calm) → `[My stewardship]` (0.8.18, if anything qualifies) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
+| `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → recent-memory cross-check (today+yesterday, `getRecentMemoryLines`, ward-private live turns — so proactive questions don't re-ask something already answered) → Google-Calendar projection cue (0.8) → `[CARE CHECK]` (if threat ≠ calm) → `[My stewardship]` (0.8.18, if anything qualifies) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
 
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
 

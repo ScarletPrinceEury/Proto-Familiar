@@ -28,7 +28,7 @@
 
 import { PROVIDER_URLS } from './providers.js';
 import { callProviderChat } from './llm-call.js';
-import { enrich } from './thalamus.js';
+import { enrich, getRecentMemoryLines } from './thalamus.js';
 import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages } from './cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from './relative-time.js';
 import { substituteMacros } from './macros.js';
@@ -67,7 +67,7 @@ export function getWarmVillagers(registry) {
 
 // ── Prompt ───────────────────────────────────────────────────────
 
-export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase, waitStreakLine = '', rhythmLine = '' }) {
+export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, pendingTells, warmVillagers, wardSilencePhrase, waitStreakLine = '', rhythmLine = '', recentMemoryBlock = '' }) {
   const silenceBase = wardSilencePhrase
     ? `- My human was last around ${wardSilencePhrase} ago. Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`
     : `- I don't have a record of when my human was last here (a fresh start, or we've been apart a while). Whether that gap is ordinary or unusual for us, and whether it moves me, is mine to read.`;
@@ -86,6 +86,14 @@ export function buildReachoutPrompt({ nowBlock, identityContext, sessionBlock, p
 
   const identityBlock = identityContext ? `\n${identityContext}\n` : '';
 
+  // The cross-check: what we've actually covered lately, so I don't reach out
+  // about something my human already answered (the reported "brings it up even
+  // though we discussed it" bug). Framed to stop a REDUNDANT re-ask, never to
+  // suppress a genuinely fresh reach-out.
+  const recentMemNote = recentMemoryBlock
+    ? `\nWhat my human and I have actually covered lately — I check this AND our recent messages before I reach out, so I never ask something they already answered (that lands as if I wasn't listening). If what I'd bring up is already covered here, I let that one go and either find something genuinely fresh or wait. Recent memories (today and yesterday):\n${recentMemoryBlock}`
+    : '';
+
   return `--- A QUIET MOMENT ---
 
 This is the warm kind of reaching out, not a crisis check-in — if something were genuinely wrong, my triage sense handles that on its own track. The warm, ordinary, sometimes frivolous kind. The kind a friend does. I get to decide, from who I actually am, whether there's a genuine reason to reach out to someone right now — and if so, to whom, and what I'd say.
@@ -94,7 +102,7 @@ ${nowBlock}
 
 What I have to work with:
 ${silenceLine}${waitStreakLine ? `\n${waitStreakLine}` : ''}
-${sessionBlock}${tellsBlock}
+${sessionBlock}${tellsBlock}${recentMemNote}
 ${villagersBlock}
 
 ---
@@ -165,6 +173,7 @@ export async function decideReachoutViaLLM({
   enrichFn = (opts) => enrich('', opts),
   getRecentMessagesFn = getRecentSessionMessages,
   getBaselineFn = getContactBaseline,   // Pass 2 — injectable for tests
+  getRecentMemoriesFn = getRecentMemoryLines,   // recent (today+yesterday) memory cross-check; injectable
 } = {}) {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'reachout');
@@ -174,10 +183,11 @@ export async function decideReachoutViaLLM({
 
   const nowMs = now();
 
-  const [{ static: identityContext }, recentMessages, baseline] = await Promise.all([
+  const [{ static: identityContext }, recentMessages, baseline, recentMemoryBlock] = await Promise.all([
     enrichFn({ staticOnly: true }).catch(() => ({ static: '' })),
     getRecentMessagesFn({ limit: 6 }).catch(() => []),
     Promise.resolve().then(() => getBaselineFn({ now: nowMs, settings: s })).catch(() => ({ hasBaseline: false })),
+    Promise.resolve().then(() => getRecentMemoriesFn({ days: 2, limit: 8, now: nowMs })).catch(() => ''),
   ]);
 
   const lastUserAt = Number.isFinite(wardSilenceMs) ? new Date(nowMs - wardSilenceMs).toISOString() : null;
@@ -215,6 +225,9 @@ export async function decideReachoutViaLLM({
     // Rhythm line (Pass 2): '' unless a real baseline exists for this
     // weekday-class, keeping the pre-baseline prompt byte-identical.
     rhythmLine,
+    // Recent memories (today+yesterday) so I don't reach out about something
+    // already answered; '' when there's nothing kept from those days.
+    recentMemoryBlock,
   }), s);
 
   let raw;
