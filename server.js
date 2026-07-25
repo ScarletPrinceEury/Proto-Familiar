@@ -1374,7 +1374,7 @@ function voiceListeningEnabled() {
   try { return readSettingsSync()?.voiceEnabled === true; } catch { return false; }
 }
 
-app.get('/api/voice/status', async (_req, res) => {
+app.get('/api/voice/status', async (req, res) => {
   const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
   const base = {
     ok: true,
@@ -1389,15 +1389,26 @@ app.get('/api/voice/status', async (_req, res) => {
   if (!audioWorker) {
     return res.json({ ...base, worker: { running: false, reason: 'PROTO_FAMILIAR_VOICE_DISABLED=1' } });
   }
-  const worker = audioWorker.status();
-  // Ask the worker itself rather than assuming: a running process that cannot
-  // load the binding is a different state from no process at all.
-  let engine = null;
-  if (worker.running) {
-    const r = await audioWorker.request({ op: 'ping' }, { timeoutMs: 4000 });
-    engine = r.ok ? { available: r.engineAvailable, detail: r.engineDetail ?? null } : { available: false, detail: r.detail ?? r.reason };
+  // PROBE, do not peek. The worker spawns lazily, so a status that only asked
+  // when one was already running could never answer on a fresh boot — the
+  // endpoint whose whole job is "does voice work?" would report `null` forever
+  // because finding out requires starting the thing it reports on. `null` also
+  // reads as "unknown" when it really meant "I did not look", which is the
+  // reported-absence rule broken in miniature.
+  //
+  // Cost of probing: one lazily spawned process that unloads itself after
+  // voiceModelIdleMin. Cheap, and exactly what someone asking this is asking.
+  const probe = req.query.probe !== '0';
+  let engine = { available: false, detail: 'not checked', checked: false };
+  if (probe) {
+    const r = await audioWorker.request({ op: 'ping' }, { timeoutMs: 8000 });
+    engine = r.ok
+      ? { available: Boolean(r.engineAvailable), detail: r.engineDetail ?? null, checked: true }
+      : { available: false, detail: r.detail ?? r.reason, checked: true };
   }
-  res.json({ ...base, worker, engine });
+  // Read AFTER the probe, so `running` and `loadedModels` describe the worker
+  // the probe just talked to rather than the state before it existed.
+  res.json({ ...base, worker: audioWorker.status(), engine });
 });
 
 // Clearing a park is deliberate — the ward has presumably fixed something.
