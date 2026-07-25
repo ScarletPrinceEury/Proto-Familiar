@@ -136,7 +136,7 @@ post-mortem, paid again.
 
 ## Testing
 
-135 tests across seven files. Real `.tar.bz2` fixtures built at test time (not
+125 tests across seven files. Real `.tar.bz2` fixtures built at test time (not
 mocks), a live local HTTP origin for the fetcher's streaming and hashing path,
 a path-traversal attack asserted to write nothing outside the destination, and
 pipeline tests through the real run manager.
