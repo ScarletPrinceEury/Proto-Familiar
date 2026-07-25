@@ -2028,6 +2028,18 @@ function createMessageEl(role, htmlContent, timestamp, attachments = null) {
   // Will be wired up by callers who know the raw text
   actions.appendChild(copyBtn);
 
+  // Read-aloud. Mine to speak, so it sits on my messages only — a ward's own
+  // words read back to them is a different feature nobody asked for.
+  let speakBtn = null;
+  if (role === 'assistant') {
+    speakBtn = document.createElement('button');
+    speakBtn.className = 'msg-action-btn msg-speak-btn';
+    speakBtn.title = 'Read this aloud';
+    speakBtn.setAttribute('aria-label', 'Read this message aloud');
+    speakBtn.textContent = '🔊 Read aloud';
+    actions.appendChild(speakBtn);
+  }
+
   // Topic action buttons — only for user/assistant messages
   if (role === 'user' || role === 'assistant') {
     const topicStartBtn = document.createElement('button');
@@ -2068,7 +2080,123 @@ function createMessageEl(role, htmlContent, timestamp, attachments = null) {
   el.appendChild(avatar);
   el.appendChild(body);
 
-  return { el, bubble, copyBtn, timeEl };
+  return { el, bubble, copyBtn, speakBtn, timeEl };
+}
+
+/**
+ * Read-aloud playback (voice spec §11).
+ *
+ * One utterance at a time, with the next already being fetched while the
+ * current one plays. Measured RTF on the reference laptop is ~0.6, so the
+ * next clip is ready before the current one ends and playback runs continuous
+ * — which is the whole reason the server splits a message into utterances
+ * rather than synthesising it whole.
+ *
+ * Only one thing speaks at a time. Starting a second message stops the first
+ * rather than talking over it.
+ */
+const speech = { token: 0, audio: null, btn: null };
+
+function stopSpeaking() {
+  speech.token++;                     // invalidates any fetch still in flight
+  if (speech.audio) {
+    speech.audio.pause();
+    URL.revokeObjectURL(speech.audio.src);
+    speech.audio = null;
+  }
+  if (speech.btn) {
+    speech.btn.textContent = '🔊 Read aloud';
+    speech.btn.classList.remove('is-speaking');
+    speech.btn = null;
+  }
+}
+
+async function fetchUtterance(text) {
+  const res = await fetch('/api/voice/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, prepared: true }),
+  });
+  // A JSON body here means a refusal — the happy path is audio bytes.
+  if (!res.ok || (res.headers.get('Content-Type') || '').includes('application/json')) {
+    const why = await res.json().catch(() => ({}));
+    return { ok: false, reason: why.reason ?? `HTTP ${res.status}`, detail: why.detail };
+  }
+  return {
+    ok: true,
+    blob: await res.blob(),
+    fellBackFrom: res.headers.get('X-Voice-Fell-Back-From'),
+    fallbackReason: res.headers.get('X-Voice-Reason'),
+  };
+}
+
+function playBlob(blob, token) {
+  return new Promise((resolve) => {
+    const audio = new Audio(URL.createObjectURL(blob));
+    speech.audio = audio;
+    const done = () => { if (speech.token === token) resolve(); };
+    audio.addEventListener('ended', done);
+    audio.addEventListener('error', done);   // a clip that will not play is not a reason to stall the rest
+    audio.play().catch(done);                // autoplay refusal resolves rather than hangs
+  });
+}
+
+async function speakMessage(text, btn) {
+  // Clicking the button that is already speaking means stop.
+  if (speech.btn === btn) return stopSpeaking();
+  stopSpeaking();
+
+  const token = ++speech.token;
+  speech.btn = btn;
+  btn.textContent = '⏹ Stop';
+  btn.classList.add('is-speaking');
+
+  const fail = (reason, detail) => {
+    // Say what went wrong on the button itself. Someone using read-aloud may
+    // be doing so precisely because reading a toast across the screen is the
+    // hard part.
+    btn.textContent = '🔊 Unavailable';
+    btn.title = detail ? `${reason} — ${detail}` : String(reason);
+    setTimeout(() => { if (speech.btn !== btn) { btn.textContent = '🔊 Read aloud'; } }, 200);
+    stopSpeaking();
+  };
+
+  try {
+    const planRes = await fetch('/api/voice/speech-plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const plan = await planRes.json();
+    if (speech.token !== token) return;
+    if (!plan.ok || plan.empty) return fail('there is nothing here to read out');
+
+    // Fetch the first, then keep exactly one utterance ahead — enough to play
+    // without gaps, without synthesising a long message nobody waits through.
+    let pending = fetchUtterance(plan.chunks[0]);
+
+    for (let i = 0; i < plan.chunks.length; i++) {
+      const current = await pending;
+      if (speech.token !== token) return;
+      if (!current.ok) return fail(current.reason, current.detail);
+
+      if (i === 0 && current.fellBackFrom) {
+        btn.title = `Speaking in the default voice — ${decodeURIComponent(current.fallbackReason || 'the chosen one is not downloaded')}`;
+      }
+
+      pending = i + 1 < plan.chunks.length ? fetchUtterance(plan.chunks[i + 1]) : null;
+      await playBlob(current.blob, token);
+      if (speech.token !== token) return;
+    }
+    stopSpeaking();
+  } catch (err) {
+    fail('read-aloud failed', String(err?.message ?? err));
+  }
+}
+
+function wireSpeakButton(btn, getText) {
+  if (!btn) return;
+  btn.addEventListener('click', () => speakMessage(getText(), btn));
 }
 
 function wireCopyButton(btn, getText) {
@@ -2093,10 +2221,10 @@ function appendUserMessage(text, timestamp, attachments = null) {
 }
 
 function appendAssistantShell(timestamp) {
-  const { el, bubble, copyBtn, timeEl } = createMessageEl('assistant', '', timestamp);
+  const { el, bubble, copyBtn, speakBtn, timeEl } = createMessageEl('assistant', '', timestamp);
   $('messages').appendChild(el);
   scrollToBottom();
-  return { el, bubble, copyBtn, timeEl };
+  return { el, bubble, copyBtn, speakBtn, timeEl };
 }
 
 function appendErrorMessage(text) {
@@ -2204,10 +2332,11 @@ function renderAllMessages() {
       const content = typeof msg.content === 'string' ? msg.content.trim() : '';
       if (content) {
         const html = renderMarkdown(stripDisplayTimestamps(content));
-        const { el, copyBtn } = createMessageEl('assistant', html, msg.timestamp);
+        const { el, copyBtn, speakBtn } = createMessageEl('assistant', html, msg.timestamp);
         el.dataset.msgIndex = String(i);
         const captured = msg.content;
         wireCopyButton(copyBtn, () => captured);
+        wireSpeakButton(speakBtn, () => captured);
         container.appendChild(el);
       }
       const toolCalls = msg.tool_calls;
@@ -2235,10 +2364,11 @@ function renderAllMessages() {
     const html = msg.role === 'user'
       ? esc(displayContent).replace(/\n/g, '<br>')
       : renderMarkdown(displayContent);
-    const { el, copyBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments);
+    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
+    wireSpeakButton(speakBtn, () => capturedContent);
     container.appendChild(el);
     i++;
   }
@@ -2937,6 +3067,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(shell.copyBtn, () => content);
+      wireSpeakButton(shell.speakBtn, () => content);
       notifyNewMessage();   // reply: pings only if the tab isn't focused
       clearRetryStatus();
       return;
@@ -3066,7 +3197,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
         throw new Error(`All connections returned empty responses (last: "${conn.name}").`);
       }
 
-      const { el: shellEl, bubble, copyBtn } = appendAssistantShell(timestamp);
+      const { el: shellEl, bubble, copyBtn, speakBtn } = appendAssistantShell(timestamp);
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
@@ -3079,6 +3210,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       saveHistory();
       refreshTopicGutter();
       wireCopyButton(copyBtn, () => content);
+      wireSpeakButton(speakBtn, () => content);
       notifyNewMessage();   // reply: pings only if the tab isn't focused
       clearRetryStatus();
       return;
@@ -10770,7 +10902,7 @@ async function injectOutboxAsChatMessage(item) {
   if (!content) return;
 
   const timestamp = item.ts || new Date().toISOString();
-  const { el, bubble, copyBtn } = appendAssistantShell(timestamp);
+  const { el, bubble, copyBtn, speakBtn } = appendAssistantShell(timestamp);
   bubble.innerHTML = renderMarkdown(content);
   scrollToBottom();
 
@@ -10792,6 +10924,7 @@ async function injectOutboxAsChatMessage(item) {
   saveToServer();
   refreshTopicGutter?.();
   wireCopyButton(copyBtn, () => content);
+  wireSpeakButton(speakBtn, () => content);
   notifyNewMessage({ proactive: true });   // reminders / reach-outs / triage always ping
 
   await acknowledgeOutboxItem(item.id);

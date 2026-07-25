@@ -263,6 +263,8 @@ import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voic
 import { createAudioWorker } from './audio-worker-host.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice } from './voices.js';
+import { prepareForSpeech } from './voice-speech.js';
+import { encodeWav } from './voice-audio-features.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -1433,6 +1435,68 @@ app.get('/api/voice/status', async (req, res) => {
 app.post('/api/voice/unpark', (_req, res) => {
   if (!audioWorker) return res.json({ ok: false, reason: 'voice-disabled' });
   res.json({ ok: true, ...audioWorker.unpark() });
+});
+
+// ── Read-aloud (voice spec §11) ──────────────────────────────────────────
+//
+// Two endpoints rather than one, because they are different kinds of work.
+// Planning is pure text and costs nothing; speaking loads a model and takes a
+// second per utterance. Keeping them apart lets the browser get the whole
+// shape of a message immediately, then fetch audio one utterance at a time —
+// which is what makes read-aloud start playing in about a second instead of
+// after the entire message has been synthesised.
+
+const TTS_MODEL_DIR = path.join(__dirname, MODELS_SUBDIR, 'tts-pocket');
+
+/** Load the speaking model if it is not already up. Idempotent in the worker. */
+async function ensureTtsLoaded() {
+  // A cold load reads ~194 MB of ONNX off disk, which on the reference laptop
+  // is slow enough that the default request timeout would fire mid-load and
+  // report a failure for something that was working.
+  return audioWorker.request({ op: 'load', role: 'tts', modelDir: TTS_MODEL_DIR }, { timeoutMs: 180_000 });
+}
+
+// What would be said, and how it breaks up. No engine, no model, no cost.
+app.post('/api/voice/speech-plan', (req, res) => {
+  const { chunks, spoken, notes, empty } = prepareForSpeech(String(req.body?.text ?? ''));
+  res.json({ ok: true, chunks, spoken, notes, empty });
+});
+
+app.post('/api/voice/tts', async (req, res) => {
+  if (!audioWorker) return res.status(503).json({ ok: false, reason: 'voice-disabled' });
+
+  const raw = String(req.body?.text ?? '');
+  // Speak exactly what was asked when the caller has already planned; plan it
+  // here when they have not, so a bare call still never reads asterisks aloud.
+  const text = req.body?.prepared ? raw : prepareForSpeech(raw).spoken;
+  if (!text.trim()) return res.json({ ok: false, reason: 'nothing-to-say' });
+
+  const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
+  const voice = await resolveVoice({ rootDir: __dirname, settings: s });
+  if (!voice.ok) return res.json({ ok: false, reason: voice.reason, detail: voice.detail });
+
+  const loaded = await ensureTtsLoaded();
+  if (!loaded.ok) return res.json({ ok: false, reason: loaded.reason, detail: loaded.detail });
+
+  const r = await audioWorker.request(
+    { op: 'tts', text, referenceWav: voice.path, speed: Number(s.voiceTts?.speed) || 1.0 },
+    { timeoutMs: 120_000 },
+  );
+  if (!r.ok) return res.json({ ok: false, reason: r.reason, detail: r.detail });
+
+  const wav = encodeWav(r.samples, r.sampleRate);
+  // The fallback rides on the response rather than being swallowed: someone
+  // who picked a voice and is hearing a different one should be told which,
+  // not left wondering whether their choice took.
+  if (voice.fellBackFrom) {
+    res.set('X-Voice-Fell-Back-From', encodeURIComponent(voice.fellBackFrom));
+    res.set('X-Voice-Reason', encodeURIComponent(voice.reason ?? ''));
+  }
+  res.set('X-Voice-Key', encodeURIComponent(voice.key));
+  res.set('X-Voice-Rtf', String(r.realTimeFactor ?? ''));
+  res.set('Content-Type', 'audio/wav');
+  res.set('Cache-Control', 'no-store');
+  res.send(wav);
 });
 
 app.get('/api/voice/clips', async (req, res) => {

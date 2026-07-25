@@ -29,6 +29,45 @@ export const F0_MIN_HZ = 60;
 export const F0_MAX_HZ = 400;
 
 /**
+ * Float samples back into a wav a browser will play.
+ *
+ * The worker returns floats because that is what the engine produces and the
+ * worker's job is inference, not file formats. This is the other end of
+ * `parseWav`, and it lives beside it so the two halves of "what a wav is"
+ * cannot drift apart.
+ *
+ * 16-bit PCM rather than 32-bit float: every browser plays it, it halves the
+ * bytes crossing the wire, and the difference is inaudible in speech. Samples
+ * are clamped before scaling — a value slightly outside [-1, 1] would
+ * otherwise wrap to full-scale noise, which is a loud, startling failure on a
+ * surface people use *because* the screen is hard for them.
+ */
+export function encodeWav(samples, sampleRate = 24000) {
+  const n = samples?.length ?? 0;
+  const buf = Buffer.alloc(44 + n * 2);
+
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(36 + n * 2, 4);
+  buf.write('WAVE', 8, 'ascii');
+  buf.write('fmt ', 12, 'ascii');
+  buf.writeUInt32LE(16, 16);          // fmt chunk size
+  buf.writeUInt16LE(1, 20);           // PCM
+  buf.writeUInt16LE(1, 22);           // mono
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28);  // byte rate
+  buf.writeUInt16LE(2, 32);           // block align
+  buf.writeUInt16LE(16, 34);          // bits per sample
+  buf.write('data', 36, 'ascii');
+  buf.writeUInt32LE(n * 2, 40);
+
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    buf.writeInt16LE(Math.round(v * 32767), 44 + i * 2);
+  }
+  return buf;
+}
+
+/**
  * Parse a RIFF/WAVE buffer into mono float samples.
  *
  * Handles 16/24/32-bit PCM and 32-bit float, mixing any channel count down to
@@ -71,8 +110,11 @@ export function parseWav(buffer) {
 
     const bytesPerSample = fmt.bitsPerSample / 8;
     if (!bytesPerSample || bytesPerSample > 4) return null;
-    const frameCount = Math.floor(dataLen / (bytesPerSample * fmt.channels));
-    if (frameCount <= 0) return null;
+    // A wav with no samples is a wav — structurally valid, just empty. Saying
+    // null here would claim "I could not read this", which is a different
+    // problem with a different fix, and callers cannot tell the two apart from
+    // a null. Emptiness is reported as zero samples; unreadability stays null.
+    const frameCount = Math.max(0, Math.floor(dataLen / (bytesPerSample * fmt.channels)));
 
     const mono = new Float32Array(frameCount);
     const isFloat = fmt.format === 3;
@@ -180,6 +222,10 @@ const percentileOf = (xs, p) => {
 export function measureVoiceClip(buffer, { frameMs = 40, hopMs = 20 } = {}) {
   const wav = parseWav(buffer);
   if (!wav) return { ok: false, reason: 'unreadable' };
+  // Distinct from unreadable on purpose: a clip that arrived empty is a
+  // problem at the source, and telling someone "unreadable" would send them
+  // hunting for a corruption that is not there.
+  if (!wav.samples.length) return { ok: false, reason: 'empty' };
 
   const { samples, sampleRate, durationSec } = wav;
   const frame = Math.max(1, Math.round((frameMs / 1000) * sampleRate));

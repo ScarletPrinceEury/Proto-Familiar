@@ -1162,6 +1162,15 @@ button { cursor: pointer; font-family: var(--font); }
   border-color: var(--accent);
 }
 
+/* Read-aloud, while it is speaking.
+   The state is carried by the label ("⏹ Stop") as well as the colour, because
+   colour alone is not a state anyone can rely on (WCAG SC 1.4.1) — and this
+   button in particular is for people who may not be reading the screen. */
+.msg-speak-btn.is-speaking {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* Topic start/end action buttons — hidden until message is hovered */
 .msg-topic-start-btn,
 .msg-topic-end-btn {
