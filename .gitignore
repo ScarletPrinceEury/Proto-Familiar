@@ -104,6 +104,10 @@ models/
 voices/installed/
 voices/ward/
 
+# Temperature-probe renders — audition material, re-derivable by running the
+# probe again, and pointless to carry in the repo.
+voice-probe/
+
 # Pin-time scratch (measuring what an archive unpacks to) — never committed
 .pin-measure/
 
