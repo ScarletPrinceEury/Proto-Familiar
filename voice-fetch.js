@@ -64,6 +64,20 @@ async function sizeOf(p) {
 }
 
 /**
+ * mkdir that reports instead of throwing.
+ *
+ * Every filesystem call on this path has to be guarded, not just the ones that
+ * look risky: `mkdir` fails on a full disk, a read-only volume, a permission
+ * change, or a parent that turned out to be a file. This module promises the
+ * caller a structured result — a ward-facing button must never surface a stack
+ * trace — and an unguarded `await` is a hole in that promise regardless of how
+ * unlikely it looks.
+ */
+async function mkdirp(dir) {
+  try { await fs.mkdir(dir, { recursive: true }); return true; } catch { return false; }
+}
+
+/**
  * Hash a file that is already on disk. Used to re-verify a blob we think we
  * hold — cheap insurance against a truncated or corrupted store, and the only
  * way "already installed" can be an honest claim rather than a filename check.
@@ -100,18 +114,31 @@ async function materialize(blob, dest, { fileName, sha256, modelDir }) {
     if (await isExtractedFrom(modelDir, sha256)) return { how: 'already-extracted', bytes: null };
     const out = await extractArchive({ archivePath: blob, destDir: modelDir, name: fileName });
     if (!out.ok) return { how: null, failed: out.reason, detail: out.detail };
-    await writeMarker(modelDir, { sha256, archiveName: fileName, files: out.files, bytes: out.bytes });
+    // The marker is what makes an unpacked directory RECOGNISABLE as installed
+    // (`isExtractedFrom`). Without it the files are on disk but every future
+    // check reports the model missing and re-extracts it. So a marker we could
+    // not write is an install that did not happen, and it says so.
+    const marked = await writeMarker(modelDir, { sha256, archiveName: fileName, files: out.files, bytes: out.bytes });
+    if (!marked) return { how: null, failed: 'io', detail: 'unpacked, but the record of which archive produced it could not be written' };
     return { how: 'extracted', bytes: out.bytes, fileCount: out.fileCount };
   }
 
-  await fs.mkdir(path.dirname(dest), { recursive: true });
+  if (!await mkdirp(path.dirname(dest))) {
+    return { how: null, failed: 'io', detail: `could not create ${path.dirname(dest)}` };
+  }
   try { await fs.unlink(dest); } catch { /* not there; fine */ }
   try {
     await fs.link(blob, dest);
     return { how: 'link' };
   } catch {
-    await fs.copyFile(blob, dest);
-    return { how: 'copy' };
+    // Hardlink refused (cross-device, or a Windows setup that disallows it).
+    // A copy is a worse outcome, never a failure — but it can fail too.
+    try {
+      await fs.copyFile(blob, dest);
+      return { how: 'copy' };
+    } catch (err) {
+      return { how: null, failed: 'io', detail: String(err?.message ?? err) };
+    }
   }
 }
 
@@ -121,7 +148,9 @@ async function materialize(blob, dest, { fileName, sha256, modelDir }) {
  * whether the file is acceptable; it only reports what arrived.
  */
 async function downloadToTemp({ url, tmpPath, expectedBytes, onProgress, signal }) {
-  await fs.mkdir(path.dirname(tmpPath), { recursive: true });
+  if (!await mkdirp(path.dirname(tmpPath))) {
+    return { ok: false, reason: 'io', detail: `could not create ${path.dirname(tmpPath)}` };
+  }
   let res;
   try {
     res = await fetch(url, { signal, redirect: 'follow' });
@@ -339,7 +368,9 @@ export async function fetchPlan({
           ok: false, reason: got.reason, installed, failed,
           message: got.reason === 'cancelled'
             ? 'Download cancelled.'
-            : `The download for ${model.label} didn't complete (${got.reason}). Nothing was installed from it.`,
+            : got.reason === 'io'
+              ? `I couldn't write to disk while fetching ${model.label}. Nothing was installed from it.`
+              : `The download for ${model.label} didn't complete (${got.reason}). Nothing was installed from it.`,
         };
       }
 
@@ -352,7 +383,11 @@ export async function fetchPlan({
         };
       }
 
-      await fs.mkdir(path.dirname(blob), { recursive: true });
+      if (!await mkdirp(path.dirname(blob))) {
+        try { await fs.unlink(tmpPath); } catch { /* already gone */ }
+        failed.push({ id: model.id, file: f.name, reason: 'io', detail: `could not create ${path.dirname(blob)}` });
+        return { ok: false, reason: 'io', installed, failed, message: `I couldn't make room on disk for ${model.label}.` };
+      }
       try {
         await fs.rename(tmpPath, blob);
       } catch (err) {

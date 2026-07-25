@@ -78,7 +78,13 @@ export async function extractArchive({ archivePath, destDir, strip = 1, onProgre
 
   const tmpDir = `${destDir}.unpacking`;
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  await fs.mkdir(tmpDir, { recursive: true });
+  try {
+    await fs.mkdir(tmpDir, { recursive: true });
+  } catch (err) {
+    // Guarded like every other filesystem call here: this runs behind a
+    // ward-facing button and must return a result, never throw.
+    return { ok: false, reason: 'io', detail: String(err?.message ?? err), files: [], bytes: 0 };
+  }
 
   const written = [];
   let rejected = 0;
@@ -172,8 +178,15 @@ export async function writeMarker(destDir, { sha256, archiveName, files, bytes }
     bytes,
     extractedAt: new Date().toISOString(),
   };
-  await fs.writeFile(path.join(destDir, MARKER), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
-  return marker;
+  try {
+    await fs.writeFile(path.join(destDir, MARKER), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+    return marker;
+  } catch {
+    // Returns null rather than throwing. The caller treats a missing marker as
+    // a failed install, because files without one are never recognised as
+    // installed and would be re-extracted forever.
+    return null;
+  }
 }
 
 export async function readMarker(destDir) {

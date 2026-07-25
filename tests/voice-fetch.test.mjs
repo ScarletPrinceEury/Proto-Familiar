@@ -304,3 +304,70 @@ test('an archive with no measured unpacked size falls back to the download and f
     assert.equal(need.estimated, true, 'and says the figure is not measured');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// ── The never-throw contract ─────────────────────────────────────────────
+//
+// Raised by review on `downloadToTemp`'s unguarded mkdir. The audit that
+// followed found six unguarded filesystem calls across this module and
+// voice-extract.js, so these test the CONTRACT rather than the one line:
+// every path returns a structured result, because this runs behind a
+// ward-facing button that must never surface a stack trace.
+//
+// A file used as a parent directory forces a portable mkdir failure (ENOTDIR
+// on Linux/macOS, ENOENT on Windows) without needing permission games.
+
+async function dirUnderAFile() {
+  const root = await tmpDir();
+  const blocker = path.join(root, 'not-a-directory');
+  await fs.writeFile(blocker, 'this is a file, so nothing can be created inside it');
+  return { root, unusable: path.join(blocker, 'models') };
+}
+
+test('an unwritable models directory returns a result, it does not throw', async () => {
+  const { root, unusable } = await dirUnderAFile();
+  const body = Buffer.alloc(64, 1);
+  try {
+    await withServer({ '/a': body }, async (base) => {
+      const plan = { all: [model('m1', [{ name: 'a.onnx', url: `${base}/a`, sha256: sha(body), bytes: body.length }])] };
+      const r = await fetchPlan({ plan, modelsDir: unusable });
+      assert.equal(r.ok, false, 'a structured refusal, not an exception');
+      assert.ok(typeof r.message === 'string' && r.message.length > 0, 'and something a ward could read');
+      assert.equal(r.installed.length, 0);
+    });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('every inspection path survives an unusable directory', async () => {
+  const { root, unusable } = await dirUnderAFile();
+  try {
+    const plan = { all: [model('m1', [{ name: 'a.onnx', url: 'https://e.test/a', sha256: 'a'.repeat(64), bytes: 10 }])] };
+    // None of these may throw; all report absence.
+    assert.equal((await inspectInstalled({ plan, modelsDir: unusable })).allComplete, false);
+    assert.equal((await outstandingBytes({ plan, modelsDir: unusable })).bytes, 10);
+    assert.deepEqual(await sweepTemp(unusable), { removed: 0 });
+    const rec = await reclaimModels({ plan, modelsDir: unusable });
+    assert.equal(rec.freedBytes, 0);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('the consent summary survives an unusable directory rather than exploding in the UI', async () => {
+  const { root, unusable } = await dirUnderAFile();
+  try {
+    const m = model('m1', [{ name: 'a.onnx', url: 'https://e.test/a', sha256: 'a'.repeat(64), bytes: 10, diskBytes: 10 }]);
+    const plan = { all: [m], voice: m, capability: [], extras: [] };
+    const s = await consentSummary({ plan, modelsDir: unusable });
+    assert.ok(typeof s.text === 'string');
+    assert.ok('canProceed' in s);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('an unpacked model whose marker cannot be written counts as NOT installed', async () => {
+  // Files on disk with no marker are re-extracted forever and never recognised,
+  // so reporting success there would be a lie that compounds.
+  const dir = await tmpDir();
+  try {
+    const plan = { all: [model('m1', [{ name: 'm.tar.bz2', url: 'https://e.test/a', sha256: 'b'.repeat(64), bytes: 10 }])] };
+    const i = await inspectInstalled({ plan, modelsDir: dir });
+    assert.equal(i.models[0].complete, false);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
