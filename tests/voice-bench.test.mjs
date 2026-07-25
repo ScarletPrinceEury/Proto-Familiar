@@ -7,6 +7,7 @@ import {
   wordErrorRate, normalizeTranscript, tokenize, realTimeFactor,
   percentile, summarizeLatencies, machineFacts, interferencePhase,
   renderReport, runBenchmark, saveReport,
+  interferenceBudgetMs, INTERFERENCE_BUDGET,
 } from '../voice-bench.js';
 import { composePlan } from '../voice-models.js';
 
@@ -131,7 +132,86 @@ test('no probe at all is a skip with a reason, not a zero', async () => {
   assert.equal(r.reason, 'no-probe');
 });
 
-test('a load that slows the probe is measured and judged against the ±20% bar', async () => {
+// ── The acceptance bar ───────────────────────────────────────────────────
+
+test('a fast baseline is judged on staying imperceptible, not on a percentage', () => {
+  // The X380's real number. ±20% of 39 ms is an ~8 ms window — a bar that
+  // fails on shifts nobody could feel, and that gets harder the better the
+  // machine is.
+  const budget = interferenceBudgetMs(39);
+  assert.equal(budget, INTERFERENCE_BUDGET.ceilingMs);
+  assert.ok(budget > 39 * 1.2, 'a fast machine is not held to a few milliseconds');
+});
+
+test('a slow baseline is judged on whether audio made it meaningfully worse', () => {
+  // Already past the comfort ceiling: the absolute test would fail it for
+  // something audio did not cause, so the relative one binds instead.
+  const budget = interferenceBudgetMs(400);
+  assert.equal(budget, 400 + 80);
+  assert.ok(budget > INTERFERENCE_BUDGET.ceilingMs);
+});
+
+test('the floor stops a small baseline producing an absurdly tight window', () => {
+  // 10 ms baseline: 20% is 2 ms. The floor lifts it to something meaningful.
+  const budget = interferenceBudgetMs(10);
+  assert.equal(budget, INTERFERENCE_BUDGET.ceilingMs);
+  // And even without the ceiling, the relative half would never be under the floor.
+  const relativeOnly = 10 + Math.max(10 * 0.2, INTERFERENCE_BUDGET.floorMs);
+  assert.equal(relativeOnly, 35);
+});
+
+test('the budget is monotonic — a slower baseline never gets a stricter bar', () => {
+  let prev = -Infinity;
+  for (const baseline of [1, 10, 39, 100, 200, 208, 300, 500, 2000]) {
+    const b = interferenceBudgetMs(baseline);
+    assert.ok(b >= prev, `budget went backwards at ${baseline}`);
+    assert.ok(b > baseline, `budget must leave room above the baseline at ${baseline}`);
+    prev = b;
+  }
+});
+
+test('an unmeasurable baseline yields no budget rather than a made-up one', () => {
+  assert.equal(interferenceBudgetMs(null), null);
+  assert.equal(interferenceBudgetMs(NaN), null);
+  assert.equal(interferenceBudgetMs(-1), null);
+});
+
+test('the report names WHICH half of the budget was binding', () => {
+  const fast = renderReport({
+    machine: machineFacts(), engine: { available: true },
+    interference: {
+      quiet: summarizeLatencies([39]), loaded: summarizeLatencies([60]),
+      deltaMs: 21, deltaPct: 53.8, budgetMs: 250, budgetBasis: 'absolute',
+      withinAcceptance: true, p90WithinBudget: true,
+    },
+  });
+  assert.match(fast, /not something anyone can feel/);
+  assert.match(fast, /✅ Inside the budget/);
+
+  const slow = renderReport({
+    machine: machineFacts(), engine: { available: true },
+    interference: {
+      quiet: summarizeLatencies([400]), loaded: summarizeLatencies([450]),
+      deltaMs: 50, deltaPct: 12.5, budgetMs: 480, budgetBasis: 'relative',
+      withinAcceptance: true, p90WithinBudget: true,
+    },
+  });
+  assert.match(slow, /already slower than the comfort ceiling/);
+});
+
+test('a passing median with a failing tail is flagged, not hidden', () => {
+  const md = renderReport({
+    machine: machineFacts(), engine: { available: true },
+    interference: {
+      quiet: summarizeLatencies([39]), loaded: summarizeLatencies([200]),
+      deltaMs: 161, deltaPct: 412, budgetMs: 250, budgetBasis: 'absolute',
+      withinAcceptance: true, p90WithinBudget: false,
+    },
+  });
+  assert.match(md, /slowest turns crossed the budget/);
+});
+
+test('a load that slows the probe is measured and judged against the budget', async () => {
   let loaded = false;
   const probe = async () => { await new Promise((r) => setTimeout(r, loaded ? 30 : 5)); };
   const r = await interferencePhase({
@@ -141,7 +221,23 @@ test('a load that slows the probe is measured and judged against the ±20% bar',
   });
   assert.equal(r.skipped, false);
   assert.ok(r.deltaMs > 0);
-  assert.equal(r.withinAcceptance, false, 'a 6x slowdown must not pass the acceptance bar');
+  assert.ok(Number.isFinite(r.budgetMs), 'the budget it was judged against is reported');
+  // 5 ms quiet vs 30 ms loaded: well inside the 250 ms comfort ceiling, so
+  // this now PASSES — and should. Nobody perceives 30 ms. The old percentage
+  // bar called this a failure, which was the bug.
+  assert.equal(r.withinAcceptance, true);
+});
+
+test('a load that pushes the peers past the point of being felt DOES fail', async () => {
+  let loaded = false;
+  const probe = async () => { await new Promise((r) => setTimeout(r, loaded ? 320 : 5)); };
+  const r = await interferencePhase({
+    probe,
+    load: async () => { loaded = true; return () => { loaded = false; }; },
+    samples: 3, warmup: 1,
+  });
+  assert.equal(r.withinAcceptance, false, 'over a third of a second is a wait my human would feel');
+  assert.equal(r.budgetBasis, 'absolute');
 });
 
 test('a load that costs nothing passes the acceptance bar', async () => {

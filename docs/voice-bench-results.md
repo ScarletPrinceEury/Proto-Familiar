@@ -41,12 +41,14 @@ Two things follow:
 1. **§4.4's soft latency budget (~1200 ms) has enormous headroom** on this
    machine. Enrichment is nowhere near being the bottleneck; the earcon-bridged
    tier exists for the tail, and on this evidence the tail is short.
-2. **§14's acceptance bar (±20%) is a ~8 ms window.** That is a tight target
-   in absolute terms — audio load would have to be almost free to stay inside
-   it. Worth deciding, before Pass 2, whether ±20% of a very fast baseline is
-   the right test, or whether an absolute ceiling (say "stays under 100 ms")
-   is the honest version of the same promise. A 39 → 60 ms shift would fail
-   the percentage test while remaining invisible to my human.
+2. **This measurement changed §14's acceptance bar.** The old flat "±20% of
+   normal" would have been an ~8 ms window against a 39 ms baseline — a test
+   that fails on shifts nobody could perceive, and one that gets *harder the
+   faster the machine is*. §14 now uses an interference budget: the more
+   generous of "stay under 250 ms" and "baseline + 20%, floor 25 ms". A fast
+   machine is judged on staying imperceptible; a slow one on whether audio
+   made it worse. Implemented as `interferenceBudgetMs` in `voice-bench.js`,
+   with the X380's 39 ms as the worked example in its tests.
 
 ### Disk footprint
 

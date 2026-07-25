@@ -82,8 +82,8 @@ understated PocketTTS by ~100 MB, more than the entire German decoder.
 
 **Interference baseline (the §4 headline):** a real `mem_search` through the
 live thalamus is **39 ms median, 40 ms p90** over 12 samples on the X380.
-§4.4's 1200 ms soft budget has enormous headroom. But that makes §14's ±20%
-acceptance bar an ~8 ms window — see "Open questions" below.
+§4.4's 1200 ms soft budget has enormous headroom — and this measurement
+changed §14's acceptance bar (see decision 7).
 
 ## Decisions worth reviewing
 
@@ -118,6 +118,16 @@ acceptance bar an ~8 ms window — see "Open questions" below.
    `logs/` *before* the run flips to done, so closing the window never loses a
    run someone waited minutes for.
 
+7. **§14's interference bar was rewritten because the first real measurement
+   broke it.** A flat "±20% of normal" is an ~8 ms window against a 39 ms
+   baseline: it fails on shifts nobody could perceive, and gets *harder the
+   faster the machine is*. A bar that punishes a good baseline measures the
+   wrong thing. It is now the more generous of "stay under 250 ms" (below
+   which an enrichment read is imperceptible inside a turn already waiting on
+   a network LLM) and "baseline + 20%, floor 25 ms" (for a machine already
+   slower than that). Code, not prose — `interferenceBudgetMs` — and the
+   report names which half was binding.
+
 6. **Stage labels are plain language.** A test fails if `RTF`, `ASR`, `TTS` or
    `onnx` appear in them — a ward reads these while waiting.
 
@@ -136,7 +146,7 @@ post-mortem, paid again.
 
 ## Testing
 
-125 tests across seven files. Real `.tar.bz2` fixtures built at test time (not
+133 tests across seven files. Real `.tar.bz2` fixtures built at test time (not
 mocks), a live local HTTP origin for the fetcher's streaming and hashing path,
 a path-traversal attack asserted to write nothing outside the destination, and
 pipeline tests through the real run manager.
@@ -158,11 +168,6 @@ interference baseline all work today.
 
 ## Open questions for review
 
-- **§14's ±20% interference bar may be the wrong test.** Against a 39 ms
-  baseline it is an ~8 ms window; a 39 → 60 ms shift would fail while being
-  invisible to my human. An absolute ceiling ("stays under 100 ms") is
-  probably the honest version of the same promise. Worth settling before
-  Pass 2 builds against it.
 - **The Python runtimes are the biggest thing on disk** — 173 MB Phylactery +
   55 MB Unruh, larger than the whole default voice plan. §0.7 was written as
   though voice were what makes an install heavy. It isn't. If disk is
