@@ -223,6 +223,10 @@
             <div class="action-row" style="margin-top:4px">
               <button id="trace-config-btn" class="btn-secondary">⚙ Trace… (choose signals)</button>
             </div>
+            <p class="field-hint" style="margin-top:10px">Measure whether this machine can hold a spoken conversation — and what it would take up on disk. Takes a few minutes; best run on mains power.</p>
+            <div class="action-row" style="margin-top:4px">
+              <button id="voice-bench-btn" class="btn-secondary">🎤 Voice benchmark</button>
+            </div>
           </div>
         </div>
 
@@ -626,6 +630,60 @@
   </div>
 
   <!-- Diagnostics modal -->
+  <!-- Voice benchmark (voice spec §0.5) — a ward-facing measurement, not a
+       developer script. The report is the deliverable: readable here, copied
+       or downloaded, and saved to logs/ so closing this window loses nothing. -->
+  <div class="modal-backdrop hidden" id="voice-bench-modal" role="dialog" aria-modal="true" aria-labelledby="voice-bench-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2 class="modal-title" id="voice-bench-modal-title">Voice benchmark</h2>
+        <button class="icon-btn modal-close" id="voice-bench-close" aria-label="Close" data-ms-icon="close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="field-hint hint-keep">This measures what your machine can do with speech, and what it would take up on disk. Nothing is sent anywhere. It takes a few minutes — best on mains power, since the numbers change on battery.</p>
+
+        <div id="voice-bench-setup">
+          <div class="field-row">
+            <label for="voice-bench-tier">How much of voice to measure</label>
+            <select id="voice-bench-tier">
+              <option value="read-aloud">Reading aloud only</option>
+              <option value="listening" selected>Listening and speaking</option>
+              <option value="listening-plus">Listening, speaking, and extras</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="voice-bench-lang">Language to listen in</label>
+            <select id="voice-bench-lang"></select>
+          </div>
+          <div class="field-row">
+            <label for="voice-bench-voice">Voice</label>
+            <select id="voice-bench-voice">
+              <option value="pocket" selected>Expressive (can sound like a voice you choose)</option>
+              <option value="piper">Compact (smaller, flatter delivery)</option>
+            </select>
+          </div>
+          <p class="field-hint" id="voice-bench-size">Working out what this would need…</p>
+        </div>
+
+        <div id="voice-bench-progress" class="hidden" aria-live="polite">
+          <p id="voice-bench-stage">Starting…</p>
+          <p class="field-hint" id="voice-bench-detail"></p>
+          <p class="field-hint" id="voice-bench-elapsed"></p>
+        </div>
+
+        <pre id="voice-bench-output" class="pi-pre hidden" style="max-height: 55vh;"></pre>
+        <p class="field-hint hidden" id="voice-bench-saved"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="voice-bench-run"      class="btn-primary">Run the benchmark</button>
+        <button id="voice-bench-cancel"   class="btn-secondary hidden">Stop</button>
+        <button id="voice-bench-copy"     class="btn-secondary hidden">Copy</button>
+        <button id="voice-bench-download" class="btn-secondary hidden">Download .md</button>
+        <button id="voice-bench-again"    class="btn-secondary hidden">Run again</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="diagnostics-modal" role="dialog" aria-modal="true" aria-labelledby="diagnostics-modal-title">
     <div class="modal modal-wide">
       <div class="modal-header">

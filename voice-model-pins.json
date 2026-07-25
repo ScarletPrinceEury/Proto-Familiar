@@ -1,0 +1,50 @@
+{
+  "vad-silero": {
+    "files": [
+      {
+        "name": "silero_vad_v5.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx",
+        "sha256": "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396",
+        "bytes": 2313101,
+        "diskBytes": 2313101
+      }
+    ],
+    "pinnedAt": "2026-07-25"
+  },
+  "asr-streaming-en": {
+    "files": [
+      {
+        "name": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2",
+        "sha256": "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
+        "bytes": 127887156,
+        "diskBytes": 136398588
+      }
+    ],
+    "pinnedAt": "2026-07-25"
+  },
+  "tts-pocket": {
+    "files": [
+      {
+        "name": "sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2",
+        "sha256": "2f3b88823cbbb9bf0b2477ec8ae7b3fec417b3a87b6bb5f256dba66f2ad967cb",
+        "bytes": 98336520,
+        "diskBytes": 203216103
+      }
+    ],
+    "pinnedAt": "2026-07-25"
+  },
+  "asr-streaming-de": {
+    "files": [
+      {
+        "name": "sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06.tar.bz2",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06.tar.bz2",
+        "sha256": "9e27b783c20e67b0d0f13a258c1861fce199917c969d9176a438bee38df64962",
+        "bytes": 57565698,
+        "diskBytes": 71172912
+      }
+    ],
+    "pinnedAt": "2026-07-25"
+  }
+}

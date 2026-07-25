@@ -255,6 +255,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS } from './providers.js';
 import { listProviderModels } from './provider-models.js';
+import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './voice-bench-run.js';
+import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './voice-models.js';
+import { consentSummary, inspectInstalled, MODELS_SUBDIR } from './voice-fetch.js';
+import { measureFootprint } from './voice-footprint.js';
 // Tome / state-file coordination is owned by thalamus — every writer
 // of a shared file goes through these helpers so cross-loop races
 // (HTTP route + autonomous loop hitting the same tome) can't lose
@@ -1233,6 +1237,109 @@ app.post('/api/diagnostics/session-trace', async (req, res) => {
   });
   res.json({ ok: true, turns: out });
 });
+
+// ── Voice benchmark (voice spec §0.5) ────────────────────────────────────
+//
+// Pass 0's deliverable is a REPORT a ward can run without a terminal, read,
+// and send back — the people who own the target machines are wards, not
+// developers. Same shape as the regex tracer above: a button, honest staged
+// progress, copy/download output.
+//
+// Long-running, so it is start/poll/cancel rather than one held request.
+// Localhost/Tailscale-gated like every endpoint.
+
+// What a benchmark WOULD do, before committing to it: the plan, its size, and
+// what is already installed. This is also what the download-consent copy is
+// built from — the figure and the sentence come from one place so they cannot
+// drift (§0.7 rule 3).
+app.get('/api/voice/plan', async (req, res) => {
+  try {
+    const plan = composePlan({
+      capabilityTier: req.query.tier,
+      voiceEngine: req.query.voice,
+      asrLangs: typeof req.query.lang === 'string' && req.query.lang ? req.query.lang.split(',') : undefined,
+    });
+    const modelsDir = path.join(__dirname, MODELS_SUBDIR);
+    const [summary, installed] = await Promise.all([
+      consentSummary({ plan, modelsDir }),
+      inspectInstalled({ plan, modelsDir }),
+    ]);
+    const ev = evaluatePlan(plan);
+    res.json({
+      ok: true,
+      plan: {
+        capabilityTier: plan.capabilityTier,
+        voiceEngine: plan.voiceEngine,
+        asrLangs: plan.asrLangs,
+        unavailableLangs: plan.unavailableLangs,
+      },
+      choices: {
+        tiers: CAPABILITY_TIERS,
+        engines: VOICE_ENGINES,
+        languages: availableAsrLangs(),
+      },
+      size: {
+        totalBytes: ev.totalBytes,
+        totalDiskBytes: ev.totalDiskBytes,
+        peakBytes: ev.peakBytes,
+        estimated: ev.estimated,
+        diskEstimated: ev.diskEstimated,
+        pretty: formatBytes(ev.totalDiskBytes),
+        withinBudget: ev.withinBudget,
+        violations: ev.violations,
+      },
+      consent: { text: summary.text, canProceed: summary.canProceed, preflight: summary.preflight },
+      installed,
+    });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+// What the app currently occupies on disk, split machine vs. mine (§0.7).
+// The Storage view reads this; only machine artifacts are ever reclaimable.
+app.get('/api/voice/footprint', async (_req, res) => {
+  try {
+    res.json({ ok: true, ...(await measureFootprint(__dirname)) });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+app.post('/api/diagnostics/voice-bench', async (req, res) => {
+  const { tier, voice, langs, samples } = req.body ?? {};
+  try {
+    const started = startBenchmark({
+      rootDir: __dirname,
+      appVersion: PKG_VERSION,
+      samples: Number.isFinite(samples) ? Math.max(3, Math.min(50, samples)) : 12,
+      planOptions: {
+        capabilityTier: tier,
+        voiceEngine: voice,
+        asrLangs: Array.isArray(langs) && langs.length ? langs : undefined,
+      },
+      // The interference probe is the §4 headline: a real enrichment-shaped
+      // read through the live peers, so the report says whether a call would
+      // starve the rest of me on THIS machine rather than in principle.
+      probe: async () => { await searchMemory({ query: 'benchmark probe', limit: 3 }); },
+      // No engine adapter yet (Pass 0 tail). A missing engine renders as a
+      // stated absence in the report, never as zeros.
+      engineFactory: null,
+    });
+    res.json({ ok: true, ...started });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+app.get('/api/diagnostics/voice-bench', (_req, res) => {
+  const st = statusOf();
+  const run = st.status === 'done' ? reportPathsRelative(__dirname, st.savedTo) : null;
+  res.json({ ok: true, ...st, savedTo: run });
+});
+
+app.post('/api/diagnostics/voice-bench/cancel', (_req, res) => res.json({ ok: true, ...cancelBenchmark() }));
+app.post('/api/diagnostics/voice-bench/reset',  (_req, res) => res.json({ ok: true, ...resetBenchmark() }));
 
 app.post('/api/interest/engage', async (req, res) => {
   const { topics, responseChars } = req.body ?? {};

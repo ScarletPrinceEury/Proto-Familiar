@@ -4883,6 +4883,22 @@ function init() {
 
   // Trigger tracer (regex/keyword diagnostic)
   $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
+  $('voice-bench-btn')?.addEventListener('click', openVoiceBenchModal);
+  $('voice-bench-close')?.addEventListener('click', closeVoiceBenchModal);
+  $('voice-bench-run')?.addEventListener('click', startVoiceBench);
+  $('voice-bench-again')?.addEventListener('click', resetVoiceBench);
+  $('voice-bench-cancel')?.addEventListener('click', cancelVoiceBench);
+  $('voice-bench-copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('voice-bench-output').textContent);
+      $('voice-bench-copy').textContent = 'Copied ✓';
+      setTimeout(() => { $('voice-bench-copy').textContent = 'Copy'; }, 1500);
+    } catch { alert('Copy failed — select and copy manually.'); }
+  });
+  $('voice-bench-download')?.addEventListener('click', downloadVoiceBench);
+  for (const id of ['voice-bench-tier', 'voice-bench-voice', 'voice-bench-lang']) {
+    $(id)?.addEventListener('change', refreshVoiceBenchPlan);
+  }
   $('trace-config-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: false, autoRun: false }));
   $('trace-run')?.addEventListener('click', runSessionTrace);
   $('trace-modal-close')?.addEventListener('click', () => $('trace-modal')?.classList.add('hidden'));
@@ -7058,6 +7074,180 @@ function downloadDiagnosticReport() {
   const a    = document.createElement('a');
   a.href     = url;
   a.download = `proto-familiar-diagnostics-${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+
+// ── Voice benchmark (voice spec §0.5) ────────────────────────────────────
+//
+// A ward-facing measurement, not a developer script: pick what to measure,
+// see honest staged progress, read the report, copy or download it. The
+// report is also written to logs/ server-side, so closing this window never
+// loses a run someone waited minutes for.
+
+let vbTimer = null;
+
+/** Local fetch helpers — the codebase uses raw fetch per call site; these keep
+ *  this block readable without inventing a shared abstraction for one feature.
+ *  Both swallow failures into null: a diagnostics panel must never throw into
+ *  the UI, it degrades to "I couldn't work that out". */
+async function vbGet(url) {
+  try { return await (await fetch(url)).json(); } catch { return null; }
+}
+async function vbPost(url, body) {
+  try {
+    return await (await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    })).json();
+  } catch { return null; }
+}
+
+async function openVoiceBenchModal() {
+  $('voice-bench-modal').classList.remove('hidden');
+  await populateVoiceBenchLangs();
+  await refreshVoiceBenchPlan();
+  // A run may already be going (someone reopened the window) — pick it up
+  // rather than offering to start a second one.
+  const st = await vbGet('/api/diagnostics/voice-bench');
+  if (st?.running) { showVoiceBenchRunning(); pollVoiceBench(); }
+  else if (st?.status === 'done' && st.markdown) showVoiceBenchResult(st);
+}
+
+function closeVoiceBenchModal() {
+  $('voice-bench-modal').classList.add('hidden');
+  // Polling stops with the window; the run itself keeps going server-side.
+  if (vbTimer) { clearInterval(vbTimer); vbTimer = null; }
+}
+
+async function populateVoiceBenchLangs() {
+  const sel = $('voice-bench-lang');
+  if (!sel || sel.options.length) return;
+  const plan = await vbGet('/api/voice/plan');
+  const langs = plan?.choices?.languages ?? [];
+  const names = { en: 'English', de: 'German', fr: 'French', ko: 'Korean', zh: 'Chinese' };
+  sel.innerHTML = langs.length
+    ? langs.map((l) => `<option value="${l}">${names[l] ?? l}</option>`).join('')
+    : '<option value="">No languages are ready yet</option>';
+}
+
+/**
+ * Show what this choice would cost before anything is downloaded. The figure
+ * and the sentence both come from the server so they cannot drift, and an
+ * estimate is always hedged — "about 200 MB" and "200 MB" are different
+ * promises (§0.7 rule 3).
+ */
+async function refreshVoiceBenchPlan() {
+  const out = $('voice-bench-size');
+  if (!out) return;
+  const tier = $('voice-bench-tier')?.value ?? 'listening';
+  const voice = $('voice-bench-voice')?.value ?? 'pocket';
+  const lang = $('voice-bench-lang')?.value ?? 'en';
+  const p = await vbGet(`/api/voice/plan?tier=${tier}&voice=${voice}&lang=${lang}`);
+  if (!p?.ok) { out.textContent = "I couldn't work out what this would need."; return; }
+
+  const bits = [];
+  bits.push(p.consent?.text ?? '');
+  if (p.installed?.allComplete) bits.push('Everything it needs is already downloaded.');
+  else if (!p.consent?.canProceed) bits.push('Some of these are not available to download yet, so those measurements will be skipped.');
+  if (!p.size?.withinBudget) bits.push('⚠ This is over the size budget the design sets for itself.');
+  if (p.consent?.preflight && p.consent.preflight.ok === false) bits.push(p.consent.preflight.message);
+  out.textContent = bits.filter(Boolean).join(' ');
+}
+
+async function startVoiceBench() {
+  const body = {
+    tier: $('voice-bench-tier')?.value,
+    voice: $('voice-bench-voice')?.value,
+    langs: [$('voice-bench-lang')?.value].filter(Boolean),
+  };
+  const r = await vbPost('/api/diagnostics/voice-bench', body);
+  if (!r?.ok) { $('voice-bench-stage').textContent = `Couldn't start: ${r?.error ?? 'unknown problem'}`; return; }
+  showVoiceBenchRunning();
+  pollVoiceBench();
+}
+
+function showVoiceBenchRunning() {
+  $('voice-bench-setup').classList.add('hidden');
+  $('voice-bench-progress').classList.remove('hidden');
+  $('voice-bench-output').classList.add('hidden');
+  $('voice-bench-run').classList.add('hidden');
+  $('voice-bench-again').classList.add('hidden');
+  $('voice-bench-copy').classList.add('hidden');
+  $('voice-bench-download').classList.add('hidden');
+  $('voice-bench-cancel').classList.remove('hidden');
+}
+
+function pollVoiceBench() {
+  if (vbTimer) clearInterval(vbTimer);
+  vbTimer = setInterval(async () => {
+    const st = await vbGet('/api/diagnostics/voice-bench');
+    if (!st) return;
+    $('voice-bench-stage').textContent = st.stageLabel ?? st.stage ?? '';
+    $('voice-bench-detail').textContent = st.detail ?? '';
+    $('voice-bench-elapsed').textContent = st.elapsedMs ? `${Math.round(st.elapsedMs / 1000)}s so far` : '';
+    if (st.running) return;
+    clearInterval(vbTimer); vbTimer = null;
+    if (st.status === 'done') showVoiceBenchResult(st);
+    else if (st.status === 'cancelled') showVoiceBenchStopped('Stopped. Nothing was saved — a half-finished report would be worse than none.');
+    else showVoiceBenchStopped(`It didn't finish: ${st.error ?? 'unknown problem'}`);
+  }, 1000);
+}
+
+function showVoiceBenchResult(st) {
+  $('voice-bench-progress').classList.add('hidden');
+  $('voice-bench-cancel').classList.add('hidden');
+  $('voice-bench-output').textContent = st.markdown ?? '';
+  $('voice-bench-output').classList.remove('hidden');
+  $('voice-bench-copy').classList.remove('hidden');
+  $('voice-bench-download').classList.remove('hidden');
+  $('voice-bench-again').classList.remove('hidden');
+  const saved = $('voice-bench-saved');
+  if (st.savedTo?.markdown) {
+    saved.textContent = `Also saved to ${st.savedTo.markdown} — it survives closing this window.`;
+    saved.classList.remove('hidden');
+  }
+}
+
+function showVoiceBenchStopped(message) {
+  $('voice-bench-progress').classList.remove('hidden');
+  $('voice-bench-stage').textContent = message;
+  $('voice-bench-detail').textContent = '';
+  $('voice-bench-cancel').classList.add('hidden');
+  $('voice-bench-again').classList.remove('hidden');
+}
+
+async function cancelVoiceBench() {
+  await vbPost('/api/diagnostics/voice-bench/cancel');
+  $('voice-bench-stage').textContent = 'Stopping after the current step…';
+}
+
+async function resetVoiceBench() {
+  await vbPost('/api/diagnostics/voice-bench/reset');
+  if (vbTimer) { clearInterval(vbTimer); vbTimer = null; }
+  $('voice-bench-setup').classList.remove('hidden');
+  $('voice-bench-progress').classList.add('hidden');
+  $('voice-bench-output').classList.add('hidden');
+  $('voice-bench-saved').classList.add('hidden');
+  $('voice-bench-run').classList.remove('hidden');
+  $('voice-bench-again').classList.add('hidden');
+  $('voice-bench-copy').classList.add('hidden');
+  $('voice-bench-download').classList.add('hidden');
+  await refreshVoiceBenchPlan();
+}
+
+function downloadVoiceBench() {
+  const text = $('voice-bench-output').textContent;
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `voice-bench-${stamp}.md`;
   document.body.appendChild(a);
   a.click();
   a.remove();
