@@ -124,6 +124,7 @@ If you're asking yourself... go to:
 - **How do sessions turn into lasting memories?** → [Session memorization](session-memorization)
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
 - **How does image input work?** → [Vision and media](vision-and-media)
+- **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 
 ## Where to go next
 
@@ -140,6 +141,8 @@ If you're asking yourself... go to:
   [location-privacy](../decisions/location-privacy) invariant.
 - [Vision and media](vision-and-media) — multimodal image input, content-addressed storage,
   and modality fallback at the materialization seam.
+- [Voice](voice) — the multi-pass voice milestone: the model supply chain, the disk-footprint
+  budget, the ward-facing benchmark tool, and read-aloud text-to-speech.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
   to turn one off.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a

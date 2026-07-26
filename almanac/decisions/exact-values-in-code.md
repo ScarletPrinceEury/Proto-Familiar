@@ -94,4 +94,10 @@ watched for (consequence-graph work, certainty scores) [@claude-md].
 
 This decision is the general form that [Unruh's local-naive time model](../architecture/unruh)
 and [Phylactery's integer memory ids](../architecture/phylactery) are both specific
-applications of.
+applications of. [Voice](../architecture/voice)'s Pass 0 supply chain applies the same rule to
+model integrity: `scripts/pin-audio-models.mjs` downloads and hashes each voice model itself
+and writes the resulting sha256 and byte counts to `voice-model-pins.json`, so there is no line
+of source code where a hash could be typed by hand and drift from the real file. Pass 1's
+`voice-speech.js` applies the timestamp-stripping half of the rule to spoken output: an
+LLM-emitted `[HH:MM]` is stripped before text-to-speech, because speaking a fabricated time
+asserts it as real the same way displaying one would.

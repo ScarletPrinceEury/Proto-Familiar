@@ -49,6 +49,8 @@ The load-bearing constraint is that `message.content` stays a plain string forev
 
 **Friendly names**: When an asset arrives with a camera-original name like `IMG_1234.jpg`, `PXL_9876.jpg`, `DSC_5432.jpg`, or `Screenshot_timestamp`, `slug-ids.js` normalizes the label to a generic fallback (`img-xxxxxx`) to avoid cluttering the UI with uninformative names [@slug-ids-js]. `meaningSlugId()` preserves any name that does not match the camera-noise patterns [@slug-ids-js].
 
+**Shared with audio**: the [Voice](voice) milestone's Pass 1 extended this same content-addressed store to hold voice-note and read-aloud audio alongside images, deriving kind and file extension from one shared `MEDIA_KINDS` lookup table so an asset can no longer be stored as one media kind while carrying another kind's file extension [@media-js].
+
 ## Materialization: attachments to vision data
 
 `materializeAttachments(apiMessages, {connection, settings, visibleAudiences})` converts stored attachments to LLM-visible image data at chat time, handling audience gating and modality fallback [@vision-js].
