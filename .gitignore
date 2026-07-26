@@ -120,3 +120,11 @@ tomes/.stewardship-state.json.tmp
 # Measured pitch of previewed reference clips — a cache, re-derivable by listening again
 tomes/.voice-clip-features.json
 tomes/.voice-clip-features.json.tmp
+
+# Python bytecode — machine artifacts from any of the Python peers.
+__pycache__/
+*.pyc
+
+# voicebox — Python venv and torch are machine artifacts, never committed
+voicebox/.venv/
+voicebox/uv.lock
