@@ -3508,8 +3508,39 @@ app.put('/api/settings', async (req, res) => {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
     return badRequest(res, 'settings (object) is required');
   }
+  // ⚠️ MERGE, do not replace.
+  //
+  // This used to write the payload wholesale, so any key the browser did not
+  // know about was destroyed on the next sync. `voiceTts` was set on disk,
+  // the UI synced once, and the setting was gone — which is why a voice test
+  // ran on the wrong engine entirely and produced a page of analysis of a
+  // backend nobody had selected.
+  //
+  // The client owns the keys it sends (SERVER_SYNCED_KEYS in public/app.js);
+  // everything else belongs to the server or to a feature whose UI does not
+  // exist yet. Preserving unmentioned keys is what makes it safe to add a
+  // setting before its control, which is the normal order of building one.
+  //
+  // Deleting a server-owned key therefore needs an explicit null rather than
+  // an omission. That is the right asymmetry: silence should mean "I have no
+  // opinion", never "destroy it".
+  let merged = settings;
+  try {
+    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
+    const prior = JSON.parse(raw);
+    if (prior && typeof prior === 'object' && !Array.isArray(prior)) {
+      const kept = {};
+      for (const [k, v] of Object.entries(prior)) {
+        if (!(k in settings)) kept[k] = v;
+      }
+      merged = { ...kept, ...settings };
+      // Explicit null means delete, so a client CAN remove something it owns.
+      for (const [k, v] of Object.entries(settings)) if (v === null) delete merged[k];
+    }
+  } catch { /* no prior settings, or unreadable — the payload stands alone */ }
+
   let serialised;
-  try { serialised = JSON.stringify(settings, null, 2); }
+  try { serialised = JSON.stringify(merged, null, 2); }
   catch (err) { return badRequest(res, `settings not serialisable: ${err.message}`); }
   if (serialised.length > SETTINGS_MAX_BYTES) {
     return badRequest(res, `settings exceed ${SETTINGS_MAX_BYTES}-byte limit`);
@@ -3543,7 +3574,7 @@ app.put('/api/settings', async (req, res) => {
   // picked, or the same connection's key/provider/model edited), respawn
   // the child so it picks up the new env. Fire-and-forget so the PUT
   // returns quickly; reconnect logs itself.
-  const nextCreds = phylacteryCredsSnapshot(settings);
+  const nextCreds = phylacteryCredsSnapshot(merged);
   if (!phylacteryCredsEqual(priorCreds, nextCreds)) {
     console.log('[server] Phylactery API-key designation changed — respawning');
     reconnectPhylactery().catch(err => console.error('[server] reconnectPhylactery failed:', err.message));
@@ -3554,7 +3585,7 @@ app.put('/api/settings', async (req, res) => {
   // the Familiar look around within a tick instead of waiting out a stale
   // "next check in 6h" from before the change. Cheap and safe: the loop's
   // own gates (wake conditions, threat register) still decide what happens.
-  if (settings.noticingEnabled !== false && priorNoticingEnabled === false) {
+  if (merged.noticingEnabled !== false && priorNoticingEnabled === false) {
     resetNoticingCooldown();
   }
 
