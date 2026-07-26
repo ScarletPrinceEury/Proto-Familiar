@@ -126,6 +126,80 @@ def _voice_state_file(reference_wav: str) -> Path:
     return dest
 
 
+def _chunk_text(text: str, max_chars: int = 350) -> list[str]:
+    """Split a message into utterances to generate one after another.
+
+    ── Why this has to exist ───────────────────────────────────────────
+    `generate_audio_stream` generates until EOS. It is built for ONE utterance,
+    so handing it a whole message means it speaks the first part, reaches EOS,
+    and stops — which is exactly what my human heard: it ended after the first
+    paragraph. Upstream's "infinitely long text inputs" is chunking AND
+    `copy_state=False` together; I built the second half and forgot the first.
+
+    The chunks are NOT independent here, which is the whole difference from the
+    ONNX path. Each one continues the same KV cache, so a boundary is a place
+    the model breathes rather than a place it becomes someone else.
+
+    Prefers paragraph breaks, then sentence ends, then clause marks — a seam
+    where a listener already expects a pause.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    # Sentence-ish units first, keeping their terminators.
+    units: list[str] = []
+    buf = ""
+    for i, ch in enumerate(text):
+        buf += ch
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if ch in ".!?" and (not nxt or nxt.isspace()):
+            units.append(buf.strip())
+            buf = ""
+        elif ch == "\n" and nxt == "\n":
+            units.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        units.append(buf.strip())
+
+    # Pack them up to max_chars so short sentences do not become tiny
+    # utterances — a very short one gives the model almost nothing to settle
+    # into, which is the same shape as the runt fragment on the other backend.
+    chunks: list[str] = []
+    cur = ""
+    for unit in units:
+        if not unit:
+            continue
+        if len(unit) > max_chars:
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            # Too long even alone: break at clause marks, then spaces.
+            rest = unit
+            while len(rest) > max_chars:
+                window = rest[:max_chars]
+                cut = max(window.rfind(", "), window.rfind("; "), window.rfind(": "))
+                if cut < max_chars // 3:
+                    cut = window.rfind(" ")
+                if cut < max_chars // 3:
+                    cut = max_chars
+                chunks.append(rest[:cut + 1].strip())
+                rest = rest[cut + 1:].strip()
+            if rest:
+                cur = rest
+            continue
+        candidate = f"{cur} {unit}".strip() if cur else unit
+        if len(candidate) <= max_chars:
+            cur = candidate
+        else:
+            chunks.append(cur)
+            cur = unit
+    if cur:
+        chunks.append(cur)
+
+    return [c for c in chunks if c]
+
+
 def _to_pcm16(samples) -> bytes:
     """Torch float tensor to 16-bit LE, clamped.
 
@@ -212,18 +286,29 @@ def op_tts_stream(msg: dict) -> None:
         first_chunk_ms: float | None = None
         runaway = False
 
-        for chunk in _model.generate_audio_stream(state, text, copy_state=False):
-            n = int(chunk.shape[-1])
-            if n == 0:
-                continue
-            if first_chunk_ms is None:
-                first_chunk_ms = round((time.monotonic() - started) * 1000)
-            if sample_count + n > ceiling:
-                runaway = True
+        pieces = _chunk_text(text)
+        stopped = False
+
+        for piece in pieces:
+            if stopped:
                 break
-            sample_count += n
-            if not send_pcm(stream_id, _to_pcm16(chunk)):
-                break   # the pipe is gone; stop generating into nothing
+            # copy_state=False threads ONE state through every piece, so this
+            # is one continuous trajectory rather than a fresh clone per
+            # utterance. That is the entire reason this worker exists.
+            for chunk in _model.generate_audio_stream(state, piece, copy_state=False):
+                n = int(chunk.shape[-1])
+                if n == 0:
+                    continue
+                if first_chunk_ms is None:
+                    first_chunk_ms = round((time.monotonic() - started) * 1000)
+                if sample_count + n > ceiling:
+                    runaway = True
+                    stopped = True
+                    break
+                sample_count += n
+                if not send_pcm(stream_id, _to_pcm16(chunk)):
+                    stopped = True   # the pipe is gone; stop generating into nothing
+                    break
 
         elapsed_ms = round((time.monotonic() - started) * 1000)
         duration = sample_count / sample_rate if sample_rate else 0.0
