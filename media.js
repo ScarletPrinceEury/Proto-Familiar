@@ -42,6 +42,45 @@ export const IMAGE_MIME_EXT = {
   'image/gif':  'gif',
 };
 
+/**
+ * Audio my human can hand me — voice notes (voice spec §12).
+ *
+ * The same store, the same content-addressing, the same audience tag. What
+ * differs is only what a materializer later does with it: an image becomes a
+ * provider content-part, a voice note becomes a transcript. Keeping both in one
+ * store means the privacy gating, the dedup and the slug ids were written once.
+ *
+ * webm and ogg are what browsers actually record; wav and mp4 are what phones
+ * and desktop tools hand over. m4a shares the mp4 container.
+ */
+export const AUDIO_MIME_EXT = {
+  'audio/webm':      'webm',
+  'audio/ogg':       'ogg',
+  'audio/wav':       'wav',
+  'audio/x-wav':     'wav',
+  'audio/wave':      'wav',
+  'audio/mpeg':      'mp3',
+  'audio/mp4':       'm4a',
+  'audio/x-m4a':     'm4a',
+  'audio/flac':      'flac',
+};
+
+/**
+ * Every media type the store accepts, and which kind each one is.
+ *
+ * ONE map, derived rather than written twice — `saveAsset` used to hard-code
+ * `kind: 'image'` while looking the extension up separately, so any audio that
+ * reached it would have been stored as an image with an audio extension. The
+ * kind now comes from whichever map matched, so the two cannot disagree.
+ */
+export const MEDIA_KINDS = Object.freeze({
+  ...Object.fromEntries(Object.entries(IMAGE_MIME_EXT).map(([m, ext]) => [m, { kind: 'image', ext }])),
+  ...Object.fromEntries(Object.entries(AUDIO_MIME_EXT).map(([m, ext]) => [m, { kind: 'audio', ext }])),
+});
+
+/** What kind of thing is this, if anything we accept? */
+export const mediaKindFor = (mime) => MEDIA_KINDS[mime]?.kind ?? null;
+
 // ── Pure-code image dimensions (no native image library) ──────────
 // Reads width/height from the file header for the four allowed formats. A
 // format we can't parse just yields null dimensions — never an error; the
@@ -178,11 +217,12 @@ export async function resolveAssetId(slugOrId) {
  * @returns {Promise<object>}   the meta, or {ok:false, error}
  */
 export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward-private', label = '' } = {}) {
-  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return { ok: false, error: 'no image bytes' };
-  const ext = IMAGE_MIME_EXT[mime];
-  if (!ext) return { ok: false, error: `unsupported media type ${mime || '(none)'}` };
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return { ok: false, error: 'no bytes' };
+  const matched = MEDIA_KINDS[mime];
+  if (!matched) return { ok: false, error: `unsupported media type ${mime || '(none)'}` };
+  const { kind, ext } = matched;
   if (buffer.length > MEDIA_MAX_BYTES) {
-    return { ok: false, error: `image too large (${buffer.length} > ${MEDIA_MAX_BYTES} bytes)` };
+    return { ok: false, error: `${kind} too large (${buffer.length} > ${MEDIA_MAX_BYTES} bytes)` };
   }
   const id = crypto.createHash('sha256').update(buffer).digest('hex');
   await ensureDir();
@@ -191,14 +231,16 @@ export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward
   const existing = await readJson(metaPath(id), null);
   if (existing) return existing;
 
-  const size = readImageSize(buffer) || {};
+  // Dimensions are an image idea; audio has none, and asking for them would
+  // just parse a wav header as a png one.
+  const size = kind === 'image' ? (readImageSize(buffer) || {}) : {};
   // Mint the arrival slug from the best label present (caption / meaningful
-  // filename); camera-noise names fall back to `img-xxxxxx` inside meaningSlugId.
-  const slug = meaningSlugId(label, { fallbackKind: 'img' });
+  // filename); camera-noise names fall back inside meaningSlugId.
+  const slug = meaningSlugId(label, { fallbackKind: kind === 'audio' ? 'snd' : 'img' });
   const meta = {
     id,
     slugs: [slug],
-    kind: 'image',
+    kind,
     mime,
     ext,
     bytes: buffer.length,
