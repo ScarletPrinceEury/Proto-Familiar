@@ -257,7 +257,7 @@ import { PROVIDER_URLS } from './providers.js';
 import { listProviderModels } from './provider-models.js';
 import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './voice-bench-run.js';
 import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './voice-models.js';
-import { consentSummary, inspectInstalled, MODELS_SUBDIR } from './voice-fetch.js';
+import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { createAudioWorker } from './audio-worker-host.js';
@@ -1463,6 +1463,9 @@ app.get('/api/voice/status', async (req, res) => {
     askedFor: resolved.fellBackFrom ?? resolved.backend,
     reason: resolved.reason ?? null,
     available: await inspectBackends(__dirname),
+    // The sidecar install is a script today. Naming it here means the UI can
+    // surface the choice instead of my human having to know it exists.
+    installCommand: 'node scripts/ensure-voicebox.mjs --install',
   };
   // PROBE, do not peek. The worker spawns lazily, so a status that only asked
   // when one was already running could never answer on a fresh boot — the
@@ -1484,6 +1487,46 @@ app.get('/api/voice/status', async (req, res) => {
   // Read AFTER the probe, so `running` and `loadedModels` describe the worker
   // the probe just talked to rather than the state before it existed.
   res.json({ ...base, worker: worker.status(), engine });
+});
+
+/**
+ * Is the speaking model actually on disk?
+ *
+ * Read-aloud needs a 194 MB download that, until now, only existed as a
+ * terminal command. Someone who clicks the button on a fresh install should be
+ * offered the download — not shown an error whose fix is a CLI incantation they
+ * were never told about. This is what lets the button offer.
+ */
+app.get('/api/voice/models', async (_req, res) => {
+  try {
+    const plan = composePlan({ tier: 'read-aloud', engine: 'pocket' });
+    const state = await inspectInstalled({ plan, modelsDir: path.join(__dirname, MODELS_SUBDIR) });
+    res.json({ ok: true, ...state });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
+});
+
+/**
+ * Fetch the speaking model, from the app rather than a terminal.
+ *
+ * Consent first: this reports what it will cost and refuses on a full disk,
+ * the same as the CLI, because 194 MB arriving unannounced is not a kindness
+ * on a laptop someone is already short of room on.
+ */
+app.post('/api/voice/install-models', async (_req, res) => {
+  try {
+    const plan = composePlan({ tier: 'read-aloud', engine: 'pocket' });
+    const modelsDir = path.join(__dirname, MODELS_SUBDIR);
+    const summary = await consentSummary({ plan, modelsDir });
+    if (summary?.preflight && summary.preflight.ok === false) {
+      return res.json({ ok: false, reason: summary.preflight.reason, needed: summary.outstandingBytes });
+    }
+    const result = await fetchPlan({ plan, modelsDir });
+    res.json({ ok: Boolean(result?.ok ?? true), ...result });
+  } catch (err) {
+    res.json({ ok: false, error: String(err?.message ?? err) });
+  }
 });
 
 // Clearing a park is deliberate — the ward has presumably fixed something.
