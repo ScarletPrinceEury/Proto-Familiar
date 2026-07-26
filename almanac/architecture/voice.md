@@ -360,6 +360,9 @@ questions for the passes that follow [@pr-voice-pass-0]:
 
 ## Where to go next
 
+- [ONNX Runtime: shared budget, not shared process](../decisions/onnx-runtime-shared-budget) —
+  why the audio worker and Phylactery's embedder stay in separate processes with static thread
+  caps instead of one shared ONNX Runtime instance, and the two rejected alternatives.
 - [Phylactery](phylactery) and [Unruh](unruh) — the two Python services whose venvs turned out
   to be the largest disk cost measured in Pass 0.
 - [Vision and media](vision-and-media) — the sibling multimodal-input milestone whose

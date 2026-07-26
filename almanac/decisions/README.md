@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Sixteen decisions live here. Grouped by the question each one answers:
+Seventeen decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -69,6 +69,13 @@ and of what is normal for its bond with the ward:
   reconciliation policy for a Tome receiving writes from more than one source.
 - [Per-feature model routing](per-feature-model-routing) — letting the ward bind each background
   LLM job to its own saved connection instead of one shared provider.
+
+## Voice and shared hardware budgets
+
+- [ONNX Runtime: shared budget, not shared process](onnx-runtime-shared-budget) — why the
+  voice milestone's speech models and Phylactery's embedder stay in separate processes on
+  the project's low-end reference hardware, sharing static thread caps rather than one ONNX
+  Runtime instance.
 
 ## Operating rules applied across components
 

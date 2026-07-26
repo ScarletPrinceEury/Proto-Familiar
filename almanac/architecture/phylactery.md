@@ -156,3 +156,6 @@ toggle [@phylactery-design].
   criterion in full, plus related first-person answers about audit consent and self-continuity.
 - [Content-based memory gating](content-gating) — the per-topic sensitivity axis layered on top
   of the audience field described above, and how it composes with it at recall time.
+- [ONNX Runtime: shared budget, not shared process](../decisions/onnx-runtime-shared-budget) —
+  why the local `all-MiniLM-L6-v2` embedder above stays in this process rather than sharing an
+  ONNX Runtime instance with [Voice](voice)'s speech models.
