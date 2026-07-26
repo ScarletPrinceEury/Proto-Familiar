@@ -2292,6 +2292,95 @@ never rides out in a diagnostic, bench report or shared surface — but
 Familiar that comes back sounding like a stranger is a continuity break. The
 two questions are orthogonal by design.
 
+## Voice — Pass 1 (speaking, and why it took four attempts)
+
+Read-aloud runs as a **two-step HTTP flow** so planning and speaking can be
+paid for separately:
+
+| endpoint | cost | what it does |
+|---|---|---|
+| `POST /api/voice/speech-plan` | none | markdown → speakable text, returns a short-lived `say-xxxxxx` id |
+| `GET /api/voice/tts/:id` | a model + generation | streams a wav from ONE generation |
+
+The browser gets the whole shape of a message immediately, then points an
+`<audio>` at the streaming URL. Responsiveness comes from **streaming out of a
+single generation**, never from splitting the message up — that distinction is
+the entire Pass 1 story.
+
+### The four bugs, in the order they were found
+
+Each looked like the previous one's fix had failed. They were different.
+
+1. **No seed.** PocketTTS re-seeds its sampler *per sentence* inside one
+   `generate` call (`NormalDataGenerator normal_gen(0, stddev, seed)`), and
+   upstream's default is `-1` — random every time. Three sentences came out as
+   three speakers. The seed lives in the untyped `extra` map, which is why
+   neither the JS typedefs nor the compiled strings list it; **the C++ header
+   does**. `voice-generation.js` now fixes it, and refuses `-1` rather than
+   forwarding "surprise me".
+
+2. **The runt fragment.** `SplitLongSentence` splits at `max_char_in_sentence`
+   and drops the remainder into its own chunk — after `MergeShortSentences` has
+   already run, so it is never merged back. A 205-char sentence became
+   `[…199 chars, 'real.']`. `'real.'` hit EOS at step 0, and upstream's
+   `if (eos_step > 0 …)` never fires for zero, so the loop ran its whole frame
+   budget: up to 40 s of degenerating noise. Fixed by prevention (thresholds
+   raised, `capSentenceLength` guarantees a minimum piece) **and** containment
+   (`runawaySampleLimit`, clamped below the frame ceiling so it can always
+   fire).
+
+3. **The reference recording.** Upstream: *"the audio quality of the sample is
+   also reproduced."* Kyutai use `_enhanced` for every VCTK voice; our picker
+   defaulted to `original`. Measured: same pitch, same duration, ~23% more
+   high-frequency energy. The bundled clip is now the enhanced one.
+
+4. **LM state resets per utterance.** `GenerateSingleSentence` opens with
+   `GetLmMainInitState()`. Merging (`min_char_in_sentence` 30 → 400) makes
+   resets rarer — drift moved from per-sentence to per-paragraph — but the port
+   offers no way to continue a trajectory across a call. That is what the
+   sidecar exists for.
+
+### Two backends, one protocol
+
+`voice-backend.js` decides which process speaks. Both talk the framed stdio
+protocol in `audio-frame.js`, so `audio-worker-host.js` supervises them
+identically — parking, backoff and idle unload were written once.
+
+| | `sherpa` (default) | `pocket` (opt-in) |
+|---|---|---|
+| worker | `audio-worker.mjs` | `voicebox/` (Python) |
+| cost | ships; ~216 MB | ~600 MB installed |
+| model | `2026-01` (only ONNX export) | `english_2026-04` |
+| continuity | resets per utterance | `copy_state=False` carries the KV cache |
+
+`sherpa` stays the default because 600 MB is real money on the hardware this
+project exists for. Choosing `pocket` without it installed **falls back and
+says so** — in the log and on `/api/voice/status` — carrying the command that
+fixes it. The worker is built on first use, not at boot, because the engine is
+a setting; the old one is stopped before the new one starts so two engines
+never hold models in RAM at once.
+
+Install with `node scripts/ensure-voicebox.mjs --install`. Deliberately **not**
+in the prestart hook: unlike Phylactery, this is optional, and downloading
+600 MB because someone typed `npm start` would be hostile on a full laptop.
+
+### Text preparation (`voice-speech.js`)
+
+Markdown is written to be *read*; spoken verbatim it becomes "asterisk asterisk
+careful asterisk asterisk". The translation is lossy on purpose. Code blocks
+are **summarised** (`(py code block, 4 lines)`) — unreadable spelled out,
+invisible if dropped. LLM-emitted `[HH:MM]` is stripped, because speaking a
+fabricated time asserts it. Curly quotes and ellipses are normalised to ASCII:
+the tokenizer has 4000 tokens and **no token contains them**, so SentencePiece
+byte-falls-back and an ordinary apostrophe becomes three rarely-seen tokens.
+
+### Media store
+
+`media.js` holds images *and* audio in one content-addressed store —
+`MEDIA_KINDS` derives kind and extension from a single lookup, so a voice note
+can no longer be stored as an image carrying an audio extension. The audience
+tag, dedup and slug ids were written once and cover both.
+
 ## Security design
 
 - **API key handling:** key travels browser → `localhost` only. Server
