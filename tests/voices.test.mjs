@@ -9,7 +9,7 @@ import {
   voiceFileName, resolveVoice, installVoice, saveWardVoice, listLocalVoices,
   bundledVoicePath, installedVoicePath, BUNDLED_FILE, BUNDLED_SUBDIR, WARD_SUBDIR, INSTALLED_SUBDIR,
 } from '../voices.js';
-import { DEFAULT_VOICE, VOICE_PROVENANCE, attributionNotice } from '../voice-catalogue.js';
+import { DEFAULT_VOICE, VOICE_PROVENANCE, attributionNotice, SHORTLIST, preferEnhanced } from '../voice-catalogue.js';
 import { loadCatalogue, clipKey } from '../voice-clips.js';
 
 /**
@@ -136,7 +136,7 @@ test('a missing bundled clip is named, not reported as a vague failure', async (
     const r = await resolveVoice({ rootDir: dir, settings: {} });
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'no-voice-on-disk');
-    assert.match(r.detail, /p255_023\.wav/);
+    assert.match(r.detail, /p255_023_enhanced\.wav/);
   } finally { await cleanup(); }
 });
 
@@ -283,7 +283,7 @@ test('the bundled clip carries its CC BY credit, generated rather than written b
     bundled: { ...DEFAULT_VOICE, file: `voices/bundled/${BUNDLED_FILE}` },
   });
   assert.match(notice, /Shipped in this repository/);
-  assert.match(notice, /p255_023\.wav/);
+  assert.match(notice, /p255_023_enhanced\.wav/);
   assert.match(notice, /University of Edinburgh/, 'the CC BY 4.0 attribution VCTK requires');
   assert.match(notice, /CC BY 4\.0/);
 });
@@ -292,4 +292,35 @@ test('the notice still works with no bundled clip named — the old contract hol
   const notice = attributionNotice();
   assert.doesNotMatch(notice, /Shipped in this repository/);
   assert.match(notice, /VCTK/);
+});
+
+// ── Every offered voice must actually exist ─────────────────────────────
+
+test('the default voice and every shortlist key resolve to a real clip', () => {
+  // Caught a live bug: switching the shortlist to the enhanced recordings
+  // pointed four entries at files that do not exist, because the LibriVox
+  // clips were never given an enhanced pass. A key that resolves to nothing is
+  // a voice my human can choose and then not have.
+  const keys = new Set(loadCatalogue(REPO).clips.map(clipKey));
+  const missing = [DEFAULT_VOICE.key, ...SHORTLIST.map((v) => v.key)].filter((k) => !keys.has(k));
+  assert.deepEqual(missing, [], `offered but absent from the catalogue: ${missing.join(', ')}`);
+});
+
+test('the bundled default is the enhanced recording — upstream reproduces sample quality', () => {
+  // "the audio quality of the sample is also reproduced" — Kyutai's own README.
+  // Measured: same pitch, same duration, ~23% more high-frequency energy.
+  assert.match(DEFAULT_VOICE.key, /\/enhanced$/);
+  assert.equal(BUNDLED_FILE, 'p255_023_enhanced.wav');
+});
+
+test('preferEnhanced upgrades only where an enhanced recording exists', () => {
+  const keys = new Set(loadCatalogue(REPO).clips.map(clipKey));
+  assert.equal(preferEnhanced('vctk/p254_023/original', keys), 'vctk/p254_023/enhanced');
+  assert.equal(
+    preferEnhanced('voice-zero/caro_davy/original', keys),
+    'voice-zero/caro_davy/original',
+    'no enhanced pass exists for the LibriVox clips',
+  );
+  assert.equal(preferEnhanced('vctk/p254_023/enhanced', keys), 'vctk/p254_023/enhanced');
+  for (const bad of [null, undefined, 42]) assert.equal(preferEnhanced(bad, keys), bad);
 });

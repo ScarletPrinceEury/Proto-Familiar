@@ -51,7 +51,7 @@ export const INSTALLED_SUBDIR = path.join(VOICES_SUBDIR, 'installed');
 export const WARD_SUBDIR = path.join(VOICES_SUBDIR, 'ward');
 
 /** The one clip that ships. Named here so the committed file and the catalogue cannot drift apart. */
-export const BUNDLED_FILE = 'p255_023.wav';
+export const BUNDLED_FILE = 'p255_023_enhanced.wav';
 
 /**
  * A catalogue key (`vctk/p255_023/original`) as one flat filename.

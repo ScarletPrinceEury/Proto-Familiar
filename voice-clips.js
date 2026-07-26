@@ -78,7 +78,7 @@ export function listClips({
   rootDir = process.cwd(),
   features = {},
   source = null,
-  variant = 'original',
+  variant = 'enhanced',
   shortlist = false,
   q = '',
   sort = 'source',

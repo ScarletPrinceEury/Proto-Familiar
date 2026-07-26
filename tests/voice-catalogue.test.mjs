@@ -179,7 +179,10 @@ test('every shortlisted voice is a real pinned clip', async () => {
   _resetCatalogue();
   const clips = loadCatalogue(process.cwd()).clips ?? [];
   for (const v of SHORTLIST) {
-    const found = clips.find((c) => `${c.source}/${c.id}/original` === v.key);
+    // Compare the WHOLE key, variant included. This used to build the key with
+    // '/original' hard-coded, which quietly stopped checking anything the
+    // moment the shortlist moved to the enhanced recordings.
+    const found = clips.find((c) => `${c.source}/${c.id}/${c.variant}` === v.key);
     assert.ok(found, `${v.key} is not in the catalogue`);
     assert.match(found.sha256, /^[0-9a-f]{64}$/);
   }

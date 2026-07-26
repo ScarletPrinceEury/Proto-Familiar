@@ -2,7 +2,7 @@
 
 ## Shipped in this repository
 
-`voices/bundled/p255_023.wav` — vctk/p255_023/original
+`voices/bundled/p255_023_enhanced.wav` — vctk/p255_023/enhanced
 
 VCTK (Voice Cloning Toolkit) — CC BY 4.0. VCTK Corpus, University of Edinburgh, CC BY 4.0 — https://datashare.ed.ac.uk/handle/10283/3443
 
