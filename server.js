@@ -264,6 +264,7 @@ import { createAudioWorker } from './audio-worker-host.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice } from './voices.js';
 import { prepareForSpeech } from './voice-speech.js';
+import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
 import { wavHeader, WAV_STREAMING_LENGTH } from './voice-audio-features.js';
 import { KIND_PCM } from './audio-frame.js';
 import { shortSlug } from './slug-ids.js';
@@ -1364,15 +1365,57 @@ app.get('/api/diagnostics/voice-bench', (_req, res) => {
 
 const VOICE_HARD_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
 
-const audioWorker = VOICE_HARD_DISABLED ? null : createAudioWorker({
-  onEvent: (e) => {
+/**
+ * Which engine speaks is a SETTING, and settings change while running. So the
+ * worker is built on first use rather than at boot, and torn down when the
+ * choice changes — otherwise a ward who installs voicebox and switches to it
+ * would keep hearing the old engine until they restarted.
+ */
+let audioWorker = null;
+let audioBackend = null;
+
+function buildAudioWorker(resolved) {
+  return createAudioWorker({
+    command: resolved.command,
+    workerScript: resolved.workerScript,
+    env: resolved.env ?? {},
+    onEvent: (e) => {
     // Failures that matter are observable — the repo rule. A parked worker in
     // particular must never be something a ward has to guess at.
-    if (e.type === 'parked') console.warn(`[voice] worker parked: ${e.reason}`);
-    else if (e.type === 'exit') console.warn(`[voice] worker exited (${e.signal ?? e.code})`);
-    else if (e.type === 'protocol-error') console.warn(`[voice] protocol error: ${e.reason}`);
-  },
-});
+      if (e.type === 'parked') console.warn(`[voice] worker parked: ${e.reason}`);
+      else if (e.type === 'exit') console.warn(`[voice] worker exited (${e.signal ?? e.code})`);
+      else if (e.type === 'protocol-error') console.warn(`[voice] protocol error: ${e.reason}`);
+    },
+  });
+}
+
+/**
+ * The worker for the currently-chosen engine, spawning or re-spawning as
+ * needed. Never throws — every caller is a request path.
+ */
+async function currentAudioWorker() {
+  if (VOICE_HARD_DISABLED) return { worker: null, resolved: null };
+
+  const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
+  const resolved = await resolveBackend({ rootDir: __dirname, settings: s });
+
+  if (audioWorker && audioBackend?.backend === resolved.backend
+      && audioBackend?.workerScript === resolved.workerScript) {
+    return { worker: audioWorker, resolved: audioBackend };
+  }
+
+  // The choice changed. Stop the old one before the new one starts, so two
+  // engines never hold models in RAM at once on a machine with 8 GB.
+  if (audioWorker) { try { audioWorker.stop(); } catch { /* already gone */ } }
+  audioWorker = buildAudioWorker(resolved);
+  audioBackend = resolved;
+  if (resolved.fellBackFrom) {
+    console.warn(`[voice] asked for ${resolved.fellBackFrom}, using ${resolved.backend}: ${resolved.reason}`);
+  } else {
+    console.log(`[voice] speaking through ${resolved.backend}`);
+  }
+  return { worker: audioWorker, resolved };
+}
 
 function voiceListeningEnabled() {
   if (VOICE_HARD_DISABLED) return false;
@@ -1408,9 +1451,19 @@ app.get('/api/voice/status', async (req, res) => {
       reason: voice.reason ?? voice.detail ?? null,
     },
   };
-  if (!audioWorker) {
+  const { worker, resolved } = await currentAudioWorker();
+  if (!worker) {
     return res.json({ ...base, worker: { running: false, reason: 'PROTO_FAMILIAR_VOICE_DISABLED=1' } });
   }
+  // Which engine, and — if the chosen one could not be used — which was asked
+  // for and why. A ward who paid 600 MB for voicebox should never have to
+  // wonder whether it is the one talking.
+  base.backend = {
+    using: resolved.backend,
+    askedFor: resolved.fellBackFrom ?? resolved.backend,
+    reason: resolved.reason ?? null,
+    available: await inspectBackends(__dirname),
+  };
   // PROBE, do not peek. The worker spawns lazily, so a status that only asked
   // when one was already running could never answer on a fresh boot — the
   // endpoint whose whole job is "does voice work?" would report `null` forever
@@ -1423,20 +1476,22 @@ app.get('/api/voice/status', async (req, res) => {
   const probe = req.query.probe !== '0';
   let engine = { available: false, detail: 'not checked', checked: false };
   if (probe) {
-    const r = await audioWorker.request({ op: 'ping' }, { timeoutMs: 8000 });
+    const r = await worker.request({ op: 'ping' }, { timeoutMs: 8000 });
     engine = r.ok
       ? { available: Boolean(r.engineAvailable), detail: r.engineDetail ?? null, checked: true }
       : { available: false, detail: r.detail ?? r.reason, checked: true };
   }
   // Read AFTER the probe, so `running` and `loadedModels` describe the worker
   // the probe just talked to rather than the state before it existed.
-  res.json({ ...base, worker: audioWorker.status(), engine });
+  res.json({ ...base, worker: worker.status(), engine });
 });
 
 // Clearing a park is deliberate — the ward has presumably fixed something.
-app.post('/api/voice/unpark', (_req, res) => {
-  if (!audioWorker) return res.json({ ok: false, reason: 'voice-disabled' });
-  res.json({ ok: true, ...audioWorker.unpark() });
+app.post('/api/voice/unpark', async (_req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  const { worker } = await currentAudioWorker();
+  if (!worker) return res.json({ ok: false, reason: 'voice-disabled' });
+  res.json({ ok: true, ...worker.unpark() });
 });
 
 // ── Read-aloud (voice spec §11) ──────────────────────────────────────────
@@ -1451,11 +1506,11 @@ app.post('/api/voice/unpark', (_req, res) => {
 const TTS_MODEL_DIR = path.join(__dirname, MODELS_SUBDIR, 'tts-pocket');
 
 /** Load the speaking model if it is not already up. Idempotent in the worker. */
-async function ensureTtsLoaded() {
+async function ensureTtsLoaded(worker) {
   // A cold load reads ~194 MB of ONNX off disk, which on the reference laptop
   // is slow enough that the default request timeout would fire mid-load and
   // report a failure for something that was working.
-  return audioWorker.request({ op: 'load', role: 'tts', modelDir: TTS_MODEL_DIR }, { timeoutMs: 180_000 });
+  return worker.request({ op: 'load', role: 'tts', modelDir: TTS_MODEL_DIR }, { timeoutMs: 180_000 });
 }
 
 // Prepared text, waiting to be spoken. Held only long enough for the browser
@@ -1499,7 +1554,8 @@ app.post('/api/voice/speech-plan', (req, res) => {
  * very long one seams, at a paragraph, and the plan says how many times.
  */
 app.get('/api/voice/tts/:id', async (req, res) => {
-  if (!audioWorker) return res.status(503).json({ ok: false, reason: 'voice-disabled' });
+  const { worker } = await currentAudioWorker();
+  if (!worker) return res.status(503).json({ ok: false, reason: 'voice-disabled' });
 
   const held = utterances.get(req.params.id);
   if (!held) return res.status(404).json({ ok: false, reason: 'expired', detail: 'ask for a fresh plan' });
@@ -1508,7 +1564,7 @@ app.get('/api/voice/tts/:id', async (req, res) => {
   const voice = await resolveVoice({ rootDir: __dirname, settings: s });
   if (!voice.ok) return res.status(503).json({ ok: false, reason: voice.reason, detail: voice.detail });
 
-  const loaded = await ensureTtsLoaded();
+  const loaded = await ensureTtsLoaded(worker);
   if (!loaded.ok) return res.status(503).json({ ok: false, reason: loaded.reason, detail: loaded.detail });
 
   const sampleRate = Number(loaded.sampleRate) || 24000;
@@ -1538,13 +1594,13 @@ app.get('/api/voice/tts/:id', async (req, res) => {
       const streamId = takeStreamId();
       // Subscribe BEFORE asking, or the first frames arrive with nobody
       // listening and the start of the sentence is simply missing.
-      const unsubscribe = audioWorker.on((frame) => {
+      const unsubscribe = worker.on((frame) => {
         if (frame.kind === KIND_PCM && frame.streamId === streamId && !aborted) {
           res.write(Buffer.from(frame.pcm));
         }
       });
       try {
-        const r = await audioWorker.request(
+        const r = await worker.request(
           { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature },
           { timeoutMs: 300_000 },
         );

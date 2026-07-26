@@ -66,8 +66,15 @@ export const DEFAULTS = Object.freeze({
  * same protocol without a speech engine installed. Same boundary discipline as
  * the bench's `engineFactory`, for the same reason: supervision has to be
  * testable separately from the thing being supervised.
+ *
+ * `command` exists because the worker is not always Node. `voicebox/` is the
+ * same protocol spoken by a Python process running Kyutai's own implementation
+ * — the one that can hold a voice across a whole message. Supervision does not
+ * care which language is on the other end of the pipe, and this is the only
+ * line that had to learn that.
  */
 export function createAudioWorker({
+  command = process.execPath,
   workerScript = path.join(HERE, 'audio-worker.mjs'),
   nodeArgs = [],
   env = {},
@@ -199,7 +206,7 @@ export function createAudioWorker({
 
       let proc;
       try {
-        proc = spawnImpl(process.execPath, [...nodeArgs, workerScript], {
+        proc = spawnImpl(command, [...nodeArgs, workerScript], {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: {
             ...process.env,
