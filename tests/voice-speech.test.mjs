@@ -170,10 +170,10 @@ test('a pathologically long message seams at paragraphs, and says how often', ()
   // Splitting is a last resort against holding minutes of audio in memory, not
   // a routine step — and where it happens, it happens between paragraphs.
   const para = `${'A sentence of reasonable length goes here. '.repeat(30)}`;
-  const r = prepareForSpeech([para, para, para].join('\n\n'));
+  const r = prepareForSpeech([para, para, para].join('\n\n'), { maxChars: 800 });
   assert.ok(r.parts.length > 1);
   assert.equal(r.seams, r.parts.length - 1, 'the count of places the voice may shift is reported');
-  for (const p of r.parts) assert.ok(p.length <= 3000, `a part exceeded the generation cap: ${p.length}`);
+  for (const p of r.parts) assert.ok(p.length <= 800, `a part exceeded the generation cap: ${p.length}`);
 });
 
 test('splitting for generation loses no words', () => {
@@ -185,9 +185,9 @@ test('splitting for generation loses no words', () => {
 });
 
 test('a single unbroken paragraph over the cap still splits rather than being dropped', () => {
-  const r = prepareForSpeech('One sentence. '.repeat(400));
+  const r = prepareForSpeech('One sentence. '.repeat(400), { maxChars: 800 });
   assert.ok(r.parts.length > 1);
-  assert.ok(r.parts.every((p) => p.length <= 3000));
+  assert.ok(r.parts.every((p) => p.length <= 800));
 });
 
 // ── Vocabulary-safe punctuation ─────────────────────────────────────────
@@ -228,12 +228,15 @@ test('the reported sentence is never chopped into a fragment', () => {
 
 test('a sentence long enough to need splitting never leaves a runt', () => {
   const long = `It assumes there is a pure way to want something, ${'independently generated and pre-existing, '.repeat(8)}and that is a framework built for a different kind of being.`;
-  assert.ok(long.length > MAX_CHAR_IN_SENTENCE);
+  assert.ok(long.length > 340);
 
-  const pieces = capSentenceLength(long).split(/(?<=[.!?])\s+/).filter(Boolean);
+  // Explicit bounds: this is about the logic, not about whatever the shipping
+  // threshold happens to be this week.
+  const pieces = capSentenceLength(long, { maxChars: 340, minChars: 40 })
+    .split(/(?<=[.!?])\s+/).filter(Boolean);
   assert.ok(pieces.length > 1, 'it did split');
   for (const p of pieces) {
-    assert.ok(p.length >= MIN_CHAR_IN_SENTENCE, `a runt survived: ${JSON.stringify(p)}`);
+    assert.ok(p.length >= 40, `a runt survived: ${JSON.stringify(p)}`);
   }
 });
 

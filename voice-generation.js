@@ -66,12 +66,13 @@ export const MAX_REFERENCE_SECONDS = 12;
  * someone who may have opened the app because they were already struggling.
  *
  * Raising the threshold means ordinary long sentences are spoken whole and no
- * runt is ever produced. 360 characters is roughly 22 seconds of speech, which
- * leaves real margin under the 40-second frame budget. Anything longer than
- * this is split by `capSentenceLength` in voice-speech.js, which guarantees a
- * minimum piece size — the guarantee upstream is missing.
+ * runt is ever produced. 2000 characters is ~108 s at the measured 18.6 chars
+ * a second, well inside the 320 s frame budget, and high enough that merged
+ * utterances are never re-split. Anything longer is handled by
+ * `capSentenceLength` in voice-speech.js, which guarantees a minimum piece
+ * size — the guarantee upstream is missing.
  */
-export const MAX_CHAR_IN_SENTENCE = 360;
+export const MAX_CHAR_IN_SENTENCE = 2000;
 
 /**
  * How much text is merged into one utterance — and the reason my voice drifts.
@@ -94,26 +95,60 @@ export const MAX_CHAR_IN_SENTENCE = 360;
  * for a message instead of once per sentence.
  *
  * Upstream's 30 merges essentially nothing, which is what shipped and what
- * produced the drift.
+ * produced the drift. 400 means an ordinary message is one trajectory and a
+ * long one is a handful, rather than one per sentence.
+ *
+ * ── Why this cannot simply be "no resets ever" ──────────────────────────
+ * The port carries no way to continue a trajectory across calls. Upstream's
+ * Python API does — `generate_audio(..., copy_state=False)` keeps the KV
+ * cache, which is how they claim "can handle infinitely long text inputs" —
+ * but sherpa-onnx re-initialises. Confirmed while chasing a newer model: the
+ * ONLY sherpa exports of PocketTTS are `2026-01-26`, fp32 and int8, and we
+ * already run the int8 one. Upstream's current `english_2026-04` has never
+ * been ported. So merging is the whole of what this runtime offers, and the
+ * frame budget is what decides how much fits in one trajectory.
  */
-export const MIN_CHAR_IN_SENTENCE = 30;
+export const MIN_CHAR_IN_SENTENCE = 400;
 
 /**
- * Frame budget for one utterance. Upstream's 500 is ~40 s at Mimi's 12.5 Hz,
- * which is plenty for a single sentence and not enough once sentences merge
- * into one trajectory. Raised with the runaway cap as the real safety bound —
- * that one scales with the text, so it stays meaningful at any frame budget.
+ * Frame budget for one utterance — how much can share a trajectory.
+ *
+ * Upstream's 500 is ~40 s at Mimi's 12.5 Hz. That is generous for a single
+ * sentence and far too little once sentences merge, and it is the thing that
+ * decides how long a message can be read in one voice.
+ *
+ * 4000 frames is ~320 s, around 6000 characters at the measured 18.6 chars a
+ * second — comfortably more than my human's Familiars produce in one message,
+ * however much they yap. It is nearly free: the latents are 32 floats a frame,
+ * so 4000 of them is under half a megabyte, and the decoded audio is streamed
+ * out rather than held.
+ *
+ * A high budget is only safe BECAUSE of the runaway cap. That scales with the
+ * text, so a generation that stops making speech is cut in seconds no matter
+ * how many frames it was permitted. Raising this without that guard would mean
+ * a stuck decoder could produce five minutes of noise.
  */
-export const DEFAULT_MAX_FRAMES = 1200;
+export const DEFAULT_MAX_FRAMES = 4000;
 
-/** Roughly how much text a second of speech carries. Used only for the cap below. */
-const CHARS_PER_SECOND = 14;
+/** Measured on the reference laptop: 32 characters produced 1.717 s of speech. */
+const CHARS_PER_SECOND = 18.6;
 
-/** Generous multiple of the expected duration before something is judged runaway. */
-const RUNAWAY_FACTOR = 3;
+/**
+ * Multiple of the expected duration before something is judged runaway.
+ *
+ * This has to leave the cap BELOW what the frame budget alone would permit, or
+ * it can never fire. At 4000 frames the engine may run ~320 s; a 2000-character
+ * utterance expects ~108 s, so a factor of 2 cuts at ~215 s and the guard is
+ * real. An earlier, laxer pairing put the cap at 429 s — past the frame budget
+ * entirely, which is a guard that exists only in the comments.
+ */
+const RUNAWAY_FACTOR = 2;
 
 /** Never cut anything below this, so a legitimately short line is safe. */
 const RUNAWAY_FLOOR_SECONDS = 3;
+
+/** Mimi's frame rate. Turns a frame budget into the seconds it permits. */
+export const FRAME_RATE_HZ = 12.5;
 
 /**
  * How much audio this text could plausibly produce before something has gone
@@ -129,10 +164,21 @@ const RUNAWAY_FLOOR_SECONDS = 3;
  * truncates a sentence, which is visible and reported. A false negative is
  * forty seconds of distress noise aimed at someone who trusts this voice.
  */
-export function runawaySampleLimit(text, sampleRate = 24000) {
+export function runawaySampleLimit(text, sampleRate = 24000, { speed = 1, maxFrames = DEFAULT_MAX_FRAMES } = {}) {
   const chars = typeof text === 'string' ? text.length : 0;
-  const seconds = Math.max(RUNAWAY_FLOOR_SECONDS, (chars / CHARS_PER_SECOND) * RUNAWAY_FACTOR);
-  return Math.ceil(seconds * sampleRate);
+  // Slower speech is legitimately longer audio for the same words. Without
+  // this, a ward who sets speed 0.5 for comprehension would have their
+  // sentences cut in half by a guard meant to protect them.
+  const rate = CHARS_PER_SECOND * (Number.isFinite(speed) && speed > 0 ? speed : 1);
+  const wanted = Math.max(RUNAWAY_FLOOR_SECONDS, (chars / rate) * RUNAWAY_FACTOR);
+
+  // Clamp under what the frame budget alone permits, or the guard is decorative
+  // for exactly the longest utterances — the ones where a runaway costs the
+  // most listening. A slow `speed` with a long text lands there otherwise.
+  const frameCeiling = (Number(maxFrames) || DEFAULT_MAX_FRAMES) / FRAME_RATE_HZ;
+  const seconds = Math.min(wanted, frameCeiling * 0.9);
+
+  return Math.ceil(Math.max(RUNAWAY_FLOOR_SECONDS, seconds) * sampleRate);
 }
 
 /**

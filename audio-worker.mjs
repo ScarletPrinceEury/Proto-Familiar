@@ -264,7 +264,7 @@ const OPS = {
       // noise. `capSentenceLength` should stop the fragment that triggers it
       // from ever being generated, but I would rather not stake my human's
       // ears on having found the only trigger.
-      const sampleCeiling = runawaySampleLimit(text, held.session.sampleRate ?? 24000);
+      const sampleCeiling = runawaySampleLimit(text, held.session.sampleRate ?? 24000, { speed, maxFrames });
 
       const audio = await held.session.generateAsync({
         text,

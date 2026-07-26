@@ -278,7 +278,7 @@ export function splitForSpeech(text, { maxChars = MAX_CHUNK_CHARS, minChars = MI
  * only so that a pathologically long message cannot ask the engine to hold
  * minutes of audio in memory at once, not to chop ordinary messages up.
  */
-const MAX_GENERATION_CHARS = 3000;
+const MAX_GENERATION_CHARS = 5000;
 
 /**
  * Split for GENERATION, which is a different question from splitting for

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   generationExtras, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
-  MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES,
+  MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES, FRAME_RATE_HZ,
 } from '../voice-generation.js';
 
 /**
@@ -72,8 +72,10 @@ test('the sentence threshold is well clear of 200, where the runt was born', () 
   // A 205-character sentence split at 200 left 'real.' as its own utterance.
   // The LM hit EOS at step 0, upstream's `if (eos_step > 0 …)` never fired,
   // and the loop ran its whole 500-frame budget as noise.
+  // Assert the INVARIANT, not the number — the threshold moved to 2000 when
+  // merging came in, and a test pinned to 360 would just have to be edited
+  // again rather than telling anyone anything.
   assert.ok(MAX_CHAR_IN_SENTENCE > 205, 'the reported sentence must pass through whole');
-  assert.equal(MAX_CHAR_IN_SENTENCE, 360);
 });
 
 test('both sentence bounds ride on every generation', () => {
@@ -114,9 +116,9 @@ test('the frame budget leaves room for a merged utterance', () => {
   assert.equal(generationExtras({ maxFrames: 1800 }).max_frames, 1800);
 });
 
-test('merging is off by default — raising it is a decision, not a drift', () => {
+test('the merge target is carried, and overridable', () => {
   assert.equal(generationExtras().min_char_in_sentence, MIN_CHAR_IN_SENTENCE);
-  assert.equal(generationExtras({ minChars: 400 }).min_char_in_sentence, 400);
+  assert.equal(generationExtras({ minChars: 30 }).min_char_in_sentence, 30);
 });
 
 test('max is always forced clear of min, so a merged utterance is not re-split', () => {
@@ -133,4 +135,37 @@ test('max is always forced clear of min, so a merged utterance is not re-split',
 test('the reference window is overridable, since upstream defaults to 10 not 12', () => {
   assert.equal(generationExtras({ referenceSeconds: 10 }).max_reference_audio_len, 10);
   assert.equal(generationExtras().max_reference_audio_len, MAX_REFERENCE_SECONDS);
+});
+
+// ── The guard must be able to fire at every length ─────────────────────
+
+test('the runaway cap always lands below what the frame budget alone permits', () => {
+  // Otherwise it is decorative for exactly the longest utterances — the ones
+  // where a runaway costs the most listening. Raising max_frames to 4000 for
+  // long messages put the cap at 429 s against a 320 s ceiling until this.
+  const ceiling = DEFAULT_MAX_FRAMES / FRAME_RATE_HZ;
+  for (const chars of [5, 400, 2000, 6000, 50000]) {
+    for (const speed of [1, 0.5, 0.25, 2]) {
+      const seconds = runawaySampleLimit('x'.repeat(chars), 24000, { speed }) / 24000;
+      assert.ok(seconds < ceiling, `${chars} chars at speed ${speed}: cap ${seconds}s never fires under ${ceiling}s`);
+      assert.ok(seconds >= 3, 'and never cuts below the floor');
+    }
+  }
+});
+
+test('slower speech buys proportionally more room', () => {
+  // A ward who slows playback for comprehension must not have sentences cut in
+  // half by a guard that exists to protect them.
+  const normal = runawaySampleLimit('x'.repeat(400), 24000, { speed: 1 });
+  const slow = runawaySampleLimit('x'.repeat(400), 24000, { speed: 0.5 });
+  assert.ok(slow > normal * 1.5, 'half speed should roughly double the allowance');
+});
+
+test('merging is now ON by default — an ordinary message is one trajectory', () => {
+  assert.ok(MIN_CHAR_IN_SENTENCE >= 400, 'upstream 30 merged nothing and produced the drift');
+  assert.ok(MAX_CHAR_IN_SENTENCE >= MIN_CHAR_IN_SENTENCE + 200, 'a merged utterance must not be re-split');
+  assert.ok(
+    MAX_CHAR_IN_SENTENCE / 18.6 < DEFAULT_MAX_FRAMES / FRAME_RATE_HZ,
+    'the longest permitted utterance must fit inside the frame budget',
+  );
 });
