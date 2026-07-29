@@ -4367,10 +4367,17 @@ app.delete('/api/village/locations', async (req, res) => {
 // the boot reconciliation + trusted-contacts migration. Degrades
 // gracefully: Phylactery down → mirror stays authoritative for
 // gating, writes accumulate as syncPending and replay on next boot.
-// Short timeout on the boot canonical pull so it fails fast instead of hanging
+// Short give-up on the boot canonical pull so it fails fast instead of hanging
 // on the MCP SDK's 60s default while Phylactery is still warming up. If the pull
 // loses that race, the mirror stays authoritative and these backoffs retry the
 // reconciliation in the background until Phylactery answers.
+//
+// ⚠️ SOFT, not the SDK's `timeout`. A hard MCP timeout sends
+// `notifications/cancelled`, which cancels an anyio scope from the wrong task
+// inside Phylactery and kills the child outright — see the long note on
+// `callTool` in thalamus.js. This pull racing a 12.3s content-tag backfill is
+// the exact pair that was doing it. Giving up locally keeps the fail-fast
+// behaviour and takes the loaded gun away.
 const VILLAGE_PULL_TIMEOUT_MS = 8_000;
 const VILLAGE_RESYNC_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000];
 
@@ -4400,7 +4407,7 @@ async function startVillageSync() {
     },
     pull: async () => {
       try {
-        const id = await getIdentityAll({ timeout: VILLAGE_PULL_TIMEOUT_MS });
+        const id = await getIdentityAll({ softTimeout: VILLAGE_PULL_TIMEOUT_MS });
         pullReached = true;
         const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
         const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
@@ -4460,6 +4467,75 @@ async function startVillageSync() {
 // get the lock primitive.
 startThalamus();
 
+/**
+ * Phylactery housekeeping, serialised. Never throws — every step is
+ * fire-and-forget by nature and retries on the next boot.
+ */
+async function runPhylacteryMaintenance() {
+  // 1. Health first: it is the cheapest call and it decides whether the
+  // embedding backfill is even worth running. A silently-dead embedder is
+  // what floods the consent queue with duplicate facts, so it must be
+  // visible, not buried in Phylactery's stderr.
+  // Presence is not health — the recurring lesson of this codebase. A
+  // maintenance pass that quietly does nothing every boot looks exactly like
+  // one that is working, so an unreachable child is said out loud.
+  //
+  // Unreachability is read off the RESULT, not off a throw: getMemoryHealth
+  // catches its own errors and returns {ok:false, healthy:null}, so a `try`
+  // around it can never fire. (It couldn't, in the first version of this —
+  // caught by running it rather than by reading it.)
+  let health = null;
+  try { health = await getMemoryHealth(); } catch { /* shouldn't happen; handled below */ }
+  if (!health || health.ok === false || health.healthy === null) {
+    console.warn(`[memory] maintenance pass skipped — Phylactery not reachable (${health?.error ?? 'no answer'}); retries next boot`);
+    return;
+  }
+  if (health.healthy === false) {
+    console.warn(`[memory] ⚠ semantic dedup UNAVAILABLE — running in ${health.dedup_mode} mode. ` +
+      `Duplicate facts may pile up in the consent queue. ` +
+      `embed_ok=${health.embed_ok} (${health.embed_error ?? 'ok'}); vec_ok=${health.vec_ok} (${health.vec_error ?? 'ok'}). ` +
+      `Fix: ensure fastembed's model downloaded and the sqlite-vec extension loads.`);
+  } else if (health && health.healthy) {
+    console.log(`[memory] dedup healthy (semantic; ${health.vec_rows}/${health.memory_rows} rows embedded)`);
+    // Heal the migration gap: memories imported from entity-core were inserted
+    // without vectors, so semantic dedup can't see them and their restatements
+    // re-queue. Idempotent; a no-op once caught up.
+    if (Number.isFinite(health.vec_rows) && Number.isFinite(health.memory_rows) && health.memory_rows > health.vec_rows) {
+      console.log(`[memory] ${health.memory_rows - health.vec_rows} memor(ies) missing embeddings — backfilling…`);
+      try {
+        const r = await backfillMemoryEmbeddings();
+        if (r?.ok && r.embedded) console.log(`[memory] embedding backfill: embedded ${r.embedded}, ${r.remaining ?? 0} remaining`);
+        else if (r && !r.ok) console.warn(`[memory] embedding backfill skipped: ${r.error ?? 'unknown'}`);
+      } catch { /* retries next boot */ }
+    }
+  }
+
+  // 2. Content-gating Phase 3: give pre-tag memories a content_tag derived
+  // from their category, so the recall gate always has a value. Idempotent.
+  try {
+    const r = await backfillContentTags();
+    if (r?.ok && r.tagged) console.log(`[memory] content-tag backfill: tagged ${r.tagged}, ${r.remaining ?? 0} remaining`);
+    else if (r && !r.ok) console.warn(`[memory] content-tag backfill skipped: ${r.error ?? 'unknown'}`);
+  } catch { /* retries next boot */ }
+
+  // 3. Complete the Village category-slug migration in Phylactery: the
+  // registry mirror slugs its own ids on read, but memories / graph
+  // nodes+edges store the category id as their `audience`, so an old-UUID
+  // audience would fall fail-closed to ward-only until remapped. Idempotent
+  // (matches nothing once done); always carries the fixed legacy-seed map so
+  // it heals even if the raw registry has already been slugged.
+  try {
+    const map = await Promise.resolve(_pendingAudienceRemap ?? pendingCategoryAudienceRemap());
+    if (map && Object.keys(map).length) {
+      const r = await remapCategoryAudiences(map);
+      const moved = (r?.memories ?? 0) + (r?.nodes ?? 0) + (r?.edges ?? 0);
+      if (r?.ok && moved) console.log(`[village] category-slug audience remap: ${r.memories} memor(ies), ${r.nodes} node(s), ${r.edges} edge(s) re-pointed to slug ids`);
+      else if (r && !r.ok) console.warn(`[village] category-slug audience remap skipped: ${r.error ?? 'unknown'}`);
+    }
+  } catch { /* retries next boot */ }
+  console.log('[memory] Phylactery maintenance pass complete');
+}
+
 const httpServer = app.listen(PORT, HOST, async () => {
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
@@ -4495,48 +4571,25 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // if semantic dedup is degraded to the lexical fallback — a silently-dead
   // embedder/sqlite-vec is what floods the consent queue with duplicate facts,
   // so this must be visible, not buried in Phylactery's stderr.
-  getMemoryHealth().then(h => {
-    if (h && h.healthy === false) {
-      console.warn(`[memory] ⚠ semantic dedup UNAVAILABLE — running in ${h.dedup_mode} mode. ` +
-        `Duplicate facts may pile up in the consent queue. ` +
-        `embed_ok=${h.embed_ok} (${h.embed_error ?? 'ok'}); vec_ok=${h.vec_ok} (${h.vec_error ?? 'ok'}). ` +
-        `Fix: ensure fastembed's model downloaded and the sqlite-vec extension loads.`);
-    } else if (h && h.healthy) {
-      console.log(`[memory] dedup healthy (semantic; ${h.vec_rows}/${h.memory_rows} rows embedded)`);
-      // Heal the migration gap: memories imported from entity-core were inserted
-      // without vectors, so semantic dedup can't see them and their restatements
-      // re-queue. Backfill in the background (idempotent; no-op once caught up).
-      if (Number.isFinite(h.vec_rows) && Number.isFinite(h.memory_rows) && h.memory_rows > h.vec_rows) {
-        console.log(`[memory] ${h.memory_rows - h.vec_rows} memor(ies) missing embeddings — backfilling in the background…`);
-        backfillMemoryEmbeddings().then(r => {
-          if (r?.ok && r.embedded) console.log(`[memory] embedding backfill: embedded ${r.embedded}, ${r.remaining ?? 0} remaining`);
-          else if (r && !r.ok) console.warn(`[memory] embedding backfill skipped: ${r.error ?? 'unknown'}`);
-        }).catch(() => {});
-      }
-    }
-  }).catch(() => {});
-  // Complete the Village category-slug migration in Phylactery: the registry
-  // mirror slugs its own ids on read, but memories / graph nodes+edges store the
-  // category id as their `audience`, so an old-UUID audience would fall
-  // fail-closed to ward-only until remapped. Idempotent (matches nothing once
-  // done); always carries the fixed legacy-seed map so it heals even if the raw
-  // registry has already been slugged. Fire-and-forget — a Phylactery hiccup
-  // just retries next boot.
-  // Content-gating Phase 3: give pre-tag memories a content_tag derived from
-  // their category, so the recall gate (Phase 4) always has a value. Idempotent;
-  // fire-and-forget, retries next boot on a Phylactery hiccup.
-  backfillContentTags().then(r => {
-    if (r?.ok && r.tagged) console.log(`[memory] content-tag backfill: tagged ${r.tagged}, ${r.remaining ?? 0} remaining`);
-    else if (r && !r.ok) console.warn(`[memory] content-tag backfill skipped: ${r.error ?? 'unknown'}`);
-  }).catch(() => {});
-  Promise.resolve(_pendingAudienceRemap ?? pendingCategoryAudienceRemap()).then(map => {
-    if (!map || !Object.keys(map).length) return;
-    return remapCategoryAudiences(map).then(r => {
-      const moved = (r?.memories ?? 0) + (r?.nodes ?? 0) + (r?.edges ?? 0);
-      if (r?.ok && moved) console.log(`[village] category-slug audience remap: ${r.memories} memor(ies), ${r.nodes} node(s), ${r.edges} edge(s) re-pointed to slug ids`);
-      else if (r && !r.ok) console.warn(`[village] category-slug audience remap skipped: ${r.error ?? 'unknown'}`);
-    });
-  }).catch(() => {});
+  // ── Deferred Phylactery maintenance ─────────────────────────────
+  //
+  // These three are housekeeping — health, backfills, an id remap. They used
+  // to fire immediately at boot, all at once, alongside the village canonical
+  // pull. Two problems with that, one cosmetic and one that killed the child:
+  //
+  //   · They are heavy sqlite writers on the same database. Running them
+  //     concurrently just makes each slower.
+  //   · Racing them against a fail-fast boot read is what produced a 12.3s
+  //     backfill and an 8s give-up on the same child at the same moment. The
+  //     give-up no longer cancels anything (see thalamus callTool), so this is
+  //     no longer fatal — but a maintenance task has no business competing
+  //     with my human's first turn for a single-threaded child either.
+  //
+  // So: wait for the boot rush to pass, then run them ONE AT A TIME. Nothing
+  // here is urgent; all of it is idempotent and retries next boot.
+  const MAINTENANCE_DELAY_MS = 20_000;
+  setTimeout(() => { runPhylacteryMaintenance().catch(() => {}); }, MAINTENANCE_DELAY_MS).unref?.();
+
   // Self-update check: prime the indicator at boot, then re-check on a slow
   // background cadence so a ward with the UI open sees a new version appear
   // without doing anything. Off-switch: PROTO_FAMILIAR_UPDATE_DISABLED=1.

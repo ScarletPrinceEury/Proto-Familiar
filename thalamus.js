@@ -2924,18 +2924,75 @@ export async function updateIdentitySection({ category, filename, heading, conte
 
 const PROTO_INSTANCE_ID = 'proto-familiar';
 
+/**
+ * ⚠️ NEVER pass the MCP SDK's `timeout` option on a Phylactery call.
+ *
+ * This killed the Phylactery child repeatedly, and the chain is worth writing
+ * down because every link looks harmless on its own:
+ *
+ *   1. The SDK's request timeout does not just give up locally — on firing it
+ *      sends `notifications/cancelled` to the child (protocol.js:
+ *      `timeoutHandler = () => cancel(...)`).
+ *   2. Python's receive loop handles that by calling
+ *      `RequestResponder.cancel()`, which does `self._cancel_scope.cancel()`
+ *      — cancelling a scope that was ENTERED BY A DIFFERENT TASK (the
+ *      handler `start_soon`'d off the loop). That is the anyio operation you
+ *      are not supposed to perform, and it takes the session down with it.
+ *   3. The dying session closes its read stream. `stdio_server`'s
+ *      `stdin_reader` is meanwhile blocked in `send()` on a ZERO-CAPACITY
+ *      memory stream (the next request, queued behind the busy handler), so
+ *      it gets `BrokenResourceError` — which it does not catch; it catches
+ *      only `ClosedResourceError`.
+ *   4. The exception escapes the task group and the whole child dies, with a
+ *      forty-line traceback that names none of this.
+ *
+ * The trigger was an 8s timeout on the village boot pull racing a content-tag
+ * backfill that had grown to 12.3s. It got worse over time because that
+ * backfill scales with how much my human has told me — which is a horrible
+ * property for a crash to have.
+ *
+ * So: `softTimeout` gives up LOCALLY and never tells the child anything. The
+ * request stays in flight and its result is discarded. Callers that need to
+ * fail fast at boot get to, without the power to kill the process they are
+ * waiting on. (Unruh's `temporal_context` has always used this shape, which
+ * is why Unruh has never done this.)
+ */
 async function callTool(name, args = {}, opts = {}) {
   await startThalamus();
   if (!mcpClient) throw new Error('phylactery not connected');
+  if (opts.timeout) {
+    throw new Error(
+      `callTool('${name}'): a hard MCP timeout cancels the request and kills the Phylactery child. Use softTimeout.`,
+    );
+  }
   const t0 = Date.now();
   console.log(`[thalamus] → phylactery: ${name}`);
-  // opts.timeout overrides the SDK's 60s default — used by callers that
-  // must fail fast rather than hang (e.g. the village boot pull racing
-  // Phylactery's warm-up).
-  const reqOpts = opts.timeout ? { timeout: opts.timeout } : undefined;
-  const result = await mcpClient.callTool({ name, arguments: args }, undefined, reqOpts);
-  console.log(`[thalamus] ← phylactery: ${name} (${Date.now() - t0}ms)`);
-  return parseToolText(result, {});
+
+  const call = mcpClient.callTool({ name, arguments: args });
+  let timer = null;
+  try {
+    const result = opts.softTimeout
+      ? await Promise.race([
+          call,
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`${name} did not answer within ${opts.softTimeout}ms (still running; result discarded)`)),
+              opts.softTimeout,
+            );
+            timer.unref?.();
+          }),
+        ])
+      : await call;
+    console.log(`[thalamus] ← phylactery: ${name} (${Date.now() - t0}ms)`);
+    return parseToolText(result, {});
+  } finally {
+    // An uncleared race timer keeps the event loop alive. Same leak the voice
+    // describe race had; same fix.
+    if (timer) clearTimeout(timer);
+    // The abandoned call still settles later. Swallow it so a discarded
+    // result never surfaces as an unhandled rejection.
+    call.catch(() => {});
+  }
 }
 
 async function autoSnapshot(reason) {
@@ -3013,8 +3070,8 @@ export async function deleteMemoryById({ id }) {
   }
 }
 
-export async function getIdentityAll({ timeout } = {}) {
-  return callTool('identity_get_all', {}, timeout ? { timeout } : {});
+export async function getIdentityAll({ softTimeout } = {}) {
+  return callTool('identity_get_all', {}, softTimeout ? { softTimeout } : {});
 }
 
 export async function listGraphNodes({ type, limit = 200, offset = 0 } = {}) {

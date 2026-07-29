@@ -58,8 +58,10 @@ Original design by Zari Lewis (Psycheros). See docs/phylactery-build-spec.md.
 
 from __future__ import annotations
 
+import sys
 from typing import Any, Optional
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 from phylactery import __version__
@@ -945,5 +947,38 @@ def main() -> None:
         mcp.run(transport="stdio")
     except (KeyboardInterrupt, BrokenPipeError):
         pass
+    except BaseExceptionGroup as eg:  # noqa: F821 (3.11+)
+        # The stdio teardown race, made survivable.
+        #
+        # `stdio_server`'s stdin_reader blocks in send() on a ZERO-capacity
+        # memory stream whenever a request arrives while a handler is busy. If
+        # the session ends at that moment, the receive side is gone and the
+        # send raises anyio.BrokenResourceError — which stdin_reader does not
+        # catch (it catches only ClosedResourceError). The exception escapes
+        # its task group and we die with a forty-line traceback that names
+        # nothing a reader can act on.
+        #
+        # The trigger we hit was an MCP cancellation (Thalamus no longer sends
+        # one — see callTool in thalamus.js), but the race is the SDK's and
+        # any future cancel path re-opens it. The session is over either way;
+        # what we control is whether that reads as a crash or as a shutdown.
+        # Thalamus reconnects on close regardless, so exiting 0 here loses
+        # nothing and stops handing my human an alarming wall of red for a
+        # child that was already going away.
+        rest = [e for e in _flatten_group(eg)
+                if not isinstance(e, (anyio.BrokenResourceError, anyio.ClosedResourceError))]
+        if rest:
+            raise
+        print("[phylactery] stdio stream closed mid-request — exiting cleanly", file=sys.stderr)
     finally:
         scheduler.stop()
+
+
+def _flatten_group(exc: BaseException) -> list[BaseException]:
+    """Every leaf exception in a (possibly nested) ExceptionGroup."""
+    if isinstance(exc, BaseExceptionGroup):  # noqa: F821 (3.11+)
+        out: list[BaseException] = []
+        for sub in exc.exceptions:
+            out.extend(_flatten_group(sub))
+        return out
+    return [exc]
