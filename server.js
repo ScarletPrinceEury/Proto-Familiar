@@ -262,7 +262,7 @@ import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { createAudioWorker } from './audio-worker-host.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
-import { resolveVoice } from './voices.js';
+import { resolveVoice, installVoice } from './voices.js';
 import { prepareForSpeech } from './voice-speech.js';
 import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
 import { wavHeader, WAV_STREAMING_LENGTH } from './voice-audio-features.js';
@@ -1683,6 +1683,58 @@ app.get('/api/voice/clips', async (req, res) => {
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
   }
+});
+
+/**
+ * Choose the voice I speak in.
+ *
+ * The picker could audition 746 clips and commit to none of them —
+ * `installVoice` existed with tests and NO caller, so every preview was a
+ * dead end. This is the step that was missing.
+ *
+ * Two things happen, in this order, because either alone is a broken promise:
+ *   1. the clip is fetched and checksum-verified, so the choice exists on disk
+ *   2. only then is the setting written, so a saved choice always resolves
+ *
+ * Writing the setting first would leave a Familiar pointed at a voice it does
+ * not have — silently falling back forever while the picker showed a tick.
+ */
+app.post('/api/voice/choose', async (req, res) => {
+  const key = String(req.body?.key ?? '');
+  if (!key) return badRequest(res, 'key (a catalogue voice key) is required');
+
+  // The bundled default is already on disk and has no catalogue install path.
+  if (key !== DEFAULT_VOICE.key) {
+    const installed = await installVoice({ rootDir: __dirname, key });
+    if (!installed.ok) {
+      return res.json({ ok: false, reason: installed.reason, detail: installed.detail });
+    }
+  }
+
+  let saved;
+  try {
+    const prior = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
+    const next = { ...prior, voiceTts: { ...(prior.voiceTts ?? {}), voice: key } };
+    await withLock(SETTINGS_FILE, async () => {
+      const tmp = SETTINGS_FILE + '.tmp';
+      await fsp.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
+      await fsp.rename(tmp, SETTINGS_FILE);
+    });
+    saved = next.voiceTts.voice;
+  } catch (err) {
+    return res.json({ ok: false, reason: 'save-failed', detail: String(err?.message ?? err) });
+  }
+
+  // Confirm by RESOLVING, not by echoing what we just wrote. The whole point
+  // is that a chosen voice is one I can actually open.
+  const voice = await resolveVoice({ rootDir: __dirname, settings: readSettingsSync() || {} });
+  res.json({
+    ok: true,
+    chosen: saved,
+    speaking: voice.key,
+    fellBackFrom: voice.fellBackFrom ?? null,
+    reason: voice.reason ?? null,
+  });
 });
 
 app.get('/api/voice/clips/summary', async (_req, res) => {

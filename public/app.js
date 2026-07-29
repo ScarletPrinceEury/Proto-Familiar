@@ -7375,10 +7375,17 @@ function downloadVoiceBench() {
 // the first time a clip is heard, so sorting by "deeper" or "higher" improves
 // as my human browses rather than demanding a 350 MB download first.
 
-const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null };
+const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null, chosen: null };
 
 async function openVoicePicker() {
   $('voice-picker-modal').classList.remove('hidden');
+  // Ask what is actually in use before drawing any ticks. Rendering from a
+  // stale guess would put a checkmark on the wrong voice, which is worse than
+  // no checkmark at all.
+  try {
+    const st = await vbGet('/api/voice/status?probe=0');
+    VP.chosen = st?.chosenVoice ?? null;
+  } catch { VP.chosen = null; }
   const sel = $('voice-picker-source');
   if (sel && !sel.options.length) {
     const s = await vbGet('/api/voice/clips/summary');
@@ -7448,9 +7455,69 @@ function voiceRow(row) {
     `<div style="font-weight:600">${row.id}${badge}</div>` +
     `<div class="field-hint" style="margin:0">${row.source} · ${pitch}${note || (row.description ? ` · ${row.description}` : '')}</div>`;
 
+  // The button that was missing. Auditioning 746 clips and being unable to
+  // keep any of them made the whole picker a dead end.
+  const use = document.createElement('button');
+  use.className = 'btn-secondary';
+  use.dataset.voiceKey = row.key;
+  const isCurrent = row.key === VP.chosen;
+  use.textContent = isCurrent ? '✓ In use' : 'Use this';
+  use.disabled = isCurrent;
+  use.setAttribute('aria-label', isCurrent ? `${row.id} is the voice in use` : `Speak in ${row.id}`);
+  use.addEventListener('click', () => chooseVoice(row, use));
+
   play.addEventListener('click', () => toggleVoicePreview(row, play, label));
-  el.append(play, label);
+  el.append(play, label, use);
   return el;
+}
+
+/**
+ * Keep a voice.
+ *
+ * The clip downloads first and is checksum-verified server-side, so the choice
+ * exists before it is saved. Progress is shown on the button because a silent
+ * ~1 MB fetch reads as a dead click, and this is a surface built for people
+ * who should not have to wonder whether something is happening.
+ */
+async function chooseVoice(row, button) {
+  stopVoicePreview();
+  const before = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Getting it…';
+  try {
+    const res = await fetch('/api/voice/choose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: row.key }),
+    });
+    const out = await res.json();
+    if (!out.ok) {
+      button.textContent = 'Could not';
+      button.title = out.detail || out.reason || 'the download did not complete';
+      setTimeout(() => { button.textContent = before; button.disabled = false; }, 4000);
+      return;
+    }
+
+    VP.chosen = out.chosen;
+    // Re-label every row, so exactly one shows as in use.
+    for (const b of document.querySelectorAll('#voice-picker-list [data-voice-key]')) {
+      const mine = b.dataset.voiceKey === VP.chosen;
+      b.textContent = mine ? '✓ In use' : 'Use this';
+      b.disabled = mine;
+      b.title = '';
+    }
+
+    // If the engine ended up speaking in something else, say so rather than
+    // showing a tick over a voice that is not being used.
+    if (out.fellBackFrom) {
+      button.textContent = '⚠ Not in use';
+      button.title = out.reason || 'saved, but I am still speaking in the default';
+    }
+  } catch (err) {
+    button.textContent = 'Could not';
+    button.title = String(err?.message ?? err);
+    setTimeout(() => { button.textContent = before; button.disabled = false; }, 4000);
+  }
 }
 
 function stopVoicePreview() {
