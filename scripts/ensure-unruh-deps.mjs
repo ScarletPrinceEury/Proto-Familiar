@@ -26,6 +26,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyOrRepair } from './lib/verify-python-peer.mjs';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT  = path.resolve(__dirname, '..');
@@ -89,4 +90,18 @@ if (sync.status === 0) {
 } else {
   warn(`uv sync exited with status ${sync.status} — Unruh may not work this boot.`);
 }
+
+// A clean `uv sync` is not proof the peer works. It has exited 0 over a venv
+// missing python-dotenv entirely, and over packages whose own files were
+// absent. The only honest check is starting it — and a broken one is repaired
+// here rather than becoming a traceback my human has to read at boot.
+verifyOrRepair({
+  uv,
+  venvDir: UNRUH_VENV,
+  module: 'unruh.server',
+  cwd: UNRUH_ROOT,
+  label: 'unruh',
+  log: say,
+  warn,
+});
 process.exit(0);
