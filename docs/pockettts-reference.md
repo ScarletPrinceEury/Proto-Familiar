@@ -214,6 +214,28 @@ Normalise to ASCII first. The em-dash **is** present.
 
 ---
 
+## What a working configuration looks like
+
+Confirmed by ear on the reference laptop, 2026-07, on a multi-paragraph
+message — one voice throughout, no shift at paragraph boundaries.
+
+```
+backend                  pocket (voicebox/)
+reference clip           p255_023_ENHANCED, the whole file
+generate_audio_stream    the entire message, ONE call
+copy_state               left at its default (True)
+lsd_decode_steps         1  (upstream's default)
+temp                     0.7
+eos_threshold            -4.0
+max_tokens               50 (untouched)
+```
+
+Every failure before this came from overriding one of these:
+pre-chunking the text, `copy_state=False`, 4 decode steps, or the un-enhanced
+reference. **The working configuration is almost entirely upstream's defaults.**
+The one deliberate deviation is the enhanced reference clip, which upstream
+also recommends.
+
 ## Checklist before claiming anything about this library
 
 1. Is the value in `extra`? Then the typedefs and the strings won't show it —
