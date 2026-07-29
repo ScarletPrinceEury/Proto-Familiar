@@ -264,6 +264,7 @@ import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voic
 import { createAudioWorker } from './audio-worker-host.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice } from './voices.js';
+import { mergeSettings } from './settings-merge.js';
 import { prepareForSpeech } from './voice-speech.js';
 import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
 import { wavHeader, WAV_STREAMING_LENGTH } from './voice-audio-features.js';
@@ -3623,36 +3624,13 @@ app.put('/api/settings', async (req, res) => {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
     return badRequest(res, 'settings (object) is required');
   }
-  // ⚠️ MERGE, do not replace.
-  //
-  // This used to write the payload wholesale, so any key the browser did not
-  // know about was destroyed on the next sync. `voiceTts` was set on disk,
-  // the UI synced once, and the setting was gone — which is why a voice test
-  // ran on the wrong engine entirely and produced a page of analysis of a
-  // backend nobody had selected.
-  //
-  // The client owns the keys it sends (SERVER_SYNCED_KEYS in public/app.js);
-  // everything else belongs to the server or to a feature whose UI does not
-  // exist yet. Preserving unmentioned keys is what makes it safe to add a
-  // setting before its control, which is the normal order of building one.
-  //
-  // Deleting a server-owned key therefore needs an explicit null rather than
-  // an omission. That is the right asymmetry: silence should mean "I have no
-  // opinion", never "destroy it".
-  let merged = settings;
-  try {
-    const raw = await fsp.readFile(SETTINGS_FILE, 'utf8');
-    const prior = JSON.parse(raw);
-    if (prior && typeof prior === 'object' && !Array.isArray(prior)) {
-      const kept = {};
-      for (const [k, v] of Object.entries(prior)) {
-        if (!(k in settings)) kept[k] = v;
-      }
-      merged = { ...kept, ...settings };
-      // Explicit null means delete, so a client CAN remove something it owns.
-      for (const [k, v] of Object.entries(settings)) if (v === null) delete merged[k];
-    }
-  } catch { /* no prior settings, or unreadable — the payload stands alone */ }
+  // The merge lives in settings-merge.js so it can be tested — this once
+  // destroyed my human's voiceTts by writing the request body wholesale, and a
+  // data-loss path with no test is a data-loss path waiting for its turn.
+  let prior = null;
+  try { prior = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8')); }
+  catch { /* no prior settings, or unreadable — the payload stands alone */ }
+  const merged = mergeSettings(prior, settings);
 
   let serialised;
   try { serialised = JSON.stringify(merged, null, 2); }
