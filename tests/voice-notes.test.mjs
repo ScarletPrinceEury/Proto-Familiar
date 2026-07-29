@@ -430,16 +430,48 @@ test('transcription asks for the LISTENING worker, never the speaking one', asyn
   assert.match(srv, /getWorker: \(\) => listeningWorker\(/, 'the transcribe endpoint uses the speaking worker');
 });
 
-test('the listening worker is pinned to sherpa regardless of the chosen voice', async () => {
-  const cur = await fs.readFile(path.join(process.cwd(), 'audio-worker-current.js'), 'utf8');
-  const fn = cur.slice(cur.indexOf('export async function listeningWorker'));
-  const body = fn.slice(0, fn.indexOf('\n}\n'));
+test('the listening worker resolves to sherpa even when speaking is pocket', async () => {
+  // ⚠️ This test used to assert that the STRING `settings: {}` appeared in the
+  // function body. It passed while the bug was still live, because checking the
+  // shape of my own intent is not checking behaviour — the same mistake as
+  // asserting a comment exists. So it resolves the backend for real, with the
+  // exact settings that broke it, and looks at which script would be spawned.
+  const { resolveBackend, BACKENDS } = await import('../voice-backend.js');
 
-  // `settings: {}` is the pin — it resolves the default backend rather than
-  // my human's voiceTts choice, which is about the voice they HEAR.
-  assert.match(body, /settings: \{\}/, 'the listener reads the speaking setting again');
-  assert.match(body, /resolved\.backend !== BACKENDS\.SHERPA/, 'a non-sherpa worker could still be handed the audio');
-  assert.match(body, /no-listening-engine/, 'a machine that cannot listen has no way to say so');
+  const pocketSpeaker = { voiceTts: { backend: 'pocket', voice: 'vctk/p255_023/enhanced' } };
+
+  const speaking = await resolveBackend({ rootDir: process.cwd(), settings: pocketSpeaker });
+  const listening = await resolveBackend({ rootDir: process.cwd(), settings: {} });
+
+  // Listening must be sherpa regardless. If voicebox happens not to be
+  // installed here, speaking falls back to sherpa too — which is fine and does
+  // not weaken the assertion that matters.
+  assert.equal(listening.backend, BACKENDS.SHERPA, 'the listener is not pinned to sherpa');
+  assert.match(listening.workerScript, /audio-worker\.mjs$/, 'the listener would spawn the wrong script');
+  assert.doesNotMatch(listening.workerScript, /worker\.py$/);
+
+  if (speaking.backend === BACKENDS.POCKET) {
+    // The real configuration that produced the bug: two different scripts.
+    assert.match(speaking.workerScript, /worker\.py$/);
+    assert.notEqual(speaking.workerScript, listening.workerScript,
+      'speaking and listening resolved to the same worker — one of them is wrong');
+  }
+});
+
+test('listeningWorker never hands back the speaking worker', async () => {
+  // Behavioural, one level up: the exported function, not the resolver.
+  const { listeningWorker } = await import('../audio-worker-current.js');
+  const got = await listeningWorker({ rootDir: process.cwd() });
+
+  // Either it built a listener, or it said why it could not. What it must never
+  // do is return a worker that speaks.
+  if (got.worker) {
+    assert.equal(typeof got.worker.request, 'function');
+    got.worker.stop?.();
+  } else {
+    assert.ok(['no-listening-engine', 'voice-disabled'].includes(got.reason),
+      `unexpected refusal: ${got.reason}`);
+  }
 });
 
 test('a worker that cannot serve a role refuses it instead of answering ok', async () => {

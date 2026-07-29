@@ -2661,7 +2661,16 @@ function transcriptProblem(entry) {
       // choosing the voicebox voice silently broke every voice note. Kept as a
       // distinct message so if it ever happens again it says what it is rather
       // than blaming my human's diction.
-      return { text: 'That went to the engine that speaks rather than the one that listens — this is a bug, not your recording.', fix: { label: '↻ Try again', kind: 'retry' } };
+      //
+      // The restart line is here because the browser picks up new files on a
+      // reload while the Node process keeps running the old code — so the
+      // FIRST time anyone sees this after an update, a stale server is far
+      // more likely than a live bug. Saying so costs a sentence and saves the
+      // wrong bug report.
+      return {
+        text: 'That went to the engine that speaks rather than the one that listens. If you just updated, restart the server — reloading the page does not restart it. If it persists after a restart, it is a bug and not your recording.',
+        fix: { label: '↻ Try again', kind: 'retry' },
+      };
     case 'unreadable-format':
       return { text: "I couldn't read that audio format.", fix: null };
     default:
