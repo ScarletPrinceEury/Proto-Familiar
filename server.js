@@ -1651,6 +1651,12 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         // is already playing a wav. Ending the stream is the only honest
         // signal available; the log is where the reason lives.
         if (!r.ok) { console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`); break; }
+        // A backend that cannot honour a setting must say so. pocket-tts has
+        // no speed control at all, so a ward who slowed playback for
+        // comprehension would otherwise just hear no difference and no reason.
+        if (Array.isArray(r.unsupported) && r.unsupported.length && !res.headersSent) {
+          res.set('X-Voice-Unsupported', r.unsupported.join(','));
+        }
       } finally { unsubscribe(); }
     }
   } catch (err) {

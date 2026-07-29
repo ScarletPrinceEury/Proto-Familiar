@@ -5,19 +5,31 @@ Answers the same ops on the same framed protocol as `audio-worker.mjs`, so the
 Node supervisor treats it identically. What it buys is one thing the ONNX port
 cannot do at all.
 
-── Why this exists ─────────────────────────────────────────────────────
-sherpa-onnx opens every utterance with `model_->GetLmMainInitState()`. The LM
-state is RESET per utterance, so each one is a fresh trajectory that conditions
-on the voice once and then drifts. My human heard the whole progression: first
-every sentence a different person, then — once utterances were merged — every
-paragraph. Merging reduced the number of resets; it could never remove them,
-because the port has no way to continue a trajectory across a call.
+── Why this exists, stated accurately ──────────────────────────────────
+sherpa-onnx opens every utterance with `model_->GetLmMainInitState()` and
+conditions it on a single voice EMBEDDING VECTOR. My human heard the result:
+first every sentence a different person, then — once utterances were merged —
+every paragraph.
 
-Upstream's `generate_audio_stream` handles the whole message in ONE call. It
-splits internally via `split_into_best_sentences` on token boundaries, using
-the model's own tokenizer, and threads its own state across those pieces —
-that is the "infinitely long text inputs" the project claims. One call, one
-continuous trajectory, no resets for the voice to drift at.
+⚠️ This worker does NOT remove that, and I claimed it would when I asked for
+600 MB. Upstream is explicit in its own source:
+
+    # This is a very simplistic way of handling long texts. We could do much
+    # better by using teacher forcing, but it would be a bit slower.
+    # TODO: add the teacher forcing method for long texts where we use the
+    # audio of one chunk as conditioning for the next chunk.
+
+`generate_audio_stream` splits at 50 tokens and, with `copy_state` at its
+default, deep-copies the state for EACH piece — so the pieces are independent
+generations, exactly like sherpa's. Cross-chunk continuity is an unimplemented
+TODO upstream.
+
+What this worker actually buys is narrower and still real: a much stronger
+conditioning signal (a full KV-cache state derived from the reference audio,
+rather than one embedding vector), token-aware splitting using the model's own
+tokenizer, and the newer `english_2026-04` checkpoint. Whether that is enough
+to sound like one person is my human's ears to judge — it is not a structural
+guarantee, and I should not have sold it as one.
 
 ⚠️ `copy_state` is NOT that mechanism, and I read it backwards twice at the
 cost of two live tests. From the source: "If True, preserves the original
@@ -45,6 +57,7 @@ cached state is never consumed; reloading is about latency, not safety.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import struct
 import sys
@@ -60,7 +73,13 @@ from voicebox.frames import FrameReader, KIND_JSON, send, send_pcm
 _THREADS = int(os.environ.get("PF_AUDIO_THREADS_TTS", "2"))
 
 _TEMPERATURE = float(os.environ.get("PF_TTS_TEMPERATURE", "0.7"))
-_DECODE_STEPS = int(os.environ.get("PF_TTS_NUM_STEPS", "4"))
+
+# NOT the same knob as sherpa's num_steps, despite the similar name.
+# Upstream's default here is 1 (DEFAULT_LSD_DECODE_STEPS); ours was sharing
+# PF_TTS_NUM_STEPS with the ONNX path, whose default is 4 — so this backend was
+# quietly doing four times upstream's work on a 15 W laptop. Its own variable
+# now, defaulting to upstream's value.
+_DECODE_STEPS = int(os.environ.get("PF_TTS_LSD_STEPS", "1"))
 _EOS_THRESHOLD = float(os.environ.get("PF_TTS_EOS_THRESHOLD", "-4.0"))
 
 # Matches voice-generation.js. A generation that keeps producing audio well past
@@ -124,81 +143,15 @@ def _voice_state_file(reference_wav: str) -> Path:
     from pocket_tts import export_model_state
 
     state = _model.get_state_for_audio_prompt(reference_wav)
-    dest = _state_dir / f"voice-{abs(hash(reference_wav)):x}.safetensors"
+    # sha256, not hash(). Python randomises str hashing per process
+    # (PYTHONHASHSEED), so hash() named the cache file something different on
+    # every restart — an unstable value used as an exact one, which is the
+    # class of mistake this project has a rule against.
+    digest = hashlib.sha256(str(reference_wav).encode("utf-8")).hexdigest()[:16]
+    dest = _state_dir / f"voice-{digest}.safetensors"
     export_model_state(state, str(dest))
     _voice_states[reference_wav] = dest
     return dest
-
-
-def _chunk_text(text: str, max_chars: int = 350) -> list[str]:
-    """Split text at paragraph, then sentence, then clause boundaries.
-
-    ⚠️ NOT the generation path. `generate_audio_stream` does its own splitting
-    with `split_into_best_sentences` on TOKEN boundaries using the model's own
-    tokenizer — strictly better than counting characters — and threads its own
-    state across the pieces. Chunking here fought that and produced nothing but
-    corruption.
-
-    Kept because it is still the right shape for measuring how long a message
-    is before deciding what to do with it, and because deleting the reasoning
-    would invite someone to re-derive the same wrong idea. If you are about to
-    use this to feed the engine: do not. Hand it the whole text.
-    """
-    text = (text or "").strip()
-    if not text:
-        return []
-
-    # Sentence-ish units first, keeping their terminators.
-    units: list[str] = []
-    buf = ""
-    for i, ch in enumerate(text):
-        buf += ch
-        nxt = text[i + 1] if i + 1 < len(text) else ""
-        if ch in ".!?" and (not nxt or nxt.isspace()):
-            units.append(buf.strip())
-            buf = ""
-        elif ch == "\n" and nxt == "\n":
-            units.append(buf.strip())
-            buf = ""
-    if buf.strip():
-        units.append(buf.strip())
-
-    # Pack them up to max_chars so short sentences do not become tiny
-    # utterances — a very short one gives the model almost nothing to settle
-    # into, which is the same shape as the runt fragment on the other backend.
-    chunks: list[str] = []
-    cur = ""
-    for unit in units:
-        if not unit:
-            continue
-        if len(unit) > max_chars:
-            if cur:
-                chunks.append(cur)
-                cur = ""
-            # Too long even alone: break at clause marks, then spaces.
-            rest = unit
-            while len(rest) > max_chars:
-                window = rest[:max_chars]
-                cut = max(window.rfind(", "), window.rfind("; "), window.rfind(": "))
-                if cut < max_chars // 3:
-                    cut = window.rfind(" ")
-                if cut < max_chars // 3:
-                    cut = max_chars
-                chunks.append(rest[:cut + 1].strip())
-                rest = rest[cut + 1:].strip()
-            if rest:
-                cur = rest
-            continue
-        candidate = f"{cur} {unit}".strip() if cur else unit
-        if len(candidate) <= max_chars:
-            cur = candidate
-        else:
-            chunks.append(cur)
-            cur = unit
-    if cur:
-        chunks.append(cur)
-
-    return [c for c in chunks if c]
 
 
 def _to_pcm16(samples) -> bytes:
@@ -280,7 +233,18 @@ def op_tts_stream(msg: dict) -> None:
         state = _model.get_state_for_audio_prompt(str(state_file))
 
         sample_rate = int(_model.sample_rate)
-        ceiling = _runaway_sample_limit(text, sample_rate, float(msg.get("speed") or 1.0))
+        # ⚠️ pocket-tts has NO speed control — generate_audio_stream takes no
+        # such parameter. The caller sends one because the sherpa path honours
+        # it, so a ward who slows playback for comprehension gets nothing here.
+        # Reported on the closing frame rather than swallowed: a setting that
+        # silently does nothing is worse than one that says it cannot.
+        #
+        # It is also deliberately NOT fed to the runaway cap. Speech is not
+        # actually slower on this backend, so widening the ceiling for it would
+        # loosen a safety bound for a change that never happened.
+        requested_speed = float(msg.get("speed") or 1.0)
+        unsupported = ["speed"] if abs(requested_speed - 1.0) > 0.01 else []
+        ceiling = _runaway_sample_limit(text, sample_rate)
 
         started = time.monotonic()
         sample_count = 0
@@ -333,6 +297,7 @@ def op_tts_stream(msg: dict) -> None:
             "elapsedMs": elapsed_ms,
             "firstChunkMs": first_chunk_ms,
             "runaway": runaway,
+            "unsupported": unsupported,
             "realTimeFactor": round(elapsed_ms / 1000 / duration, 3) if duration > 0 else None,
             "backend": "pocket-tts",
         })
