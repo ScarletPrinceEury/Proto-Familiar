@@ -46,5 +46,17 @@
       }
     ],
     "pinnedAt": "2026-07-25"
+  },
+  "asr-offline": {
+    "files": [
+      {
+        "name": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2",
+        "sha256": "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63",
+        "bytes": 165783878,
+        "diskBytes": 243957894
+      }
+    ],
+    "pinnedAt": "2026-07-29"
   }
 }
