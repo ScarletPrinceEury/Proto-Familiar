@@ -121,12 +121,17 @@ export async function transcribeAsset(idOrSlug, settings = {}, { getWorker } = {
   }
 
   let worker = null;
-  try { ({ worker } = (await getWorker?.()) ?? {}); } catch { worker = null; }
+  let why = null;
+  try { ({ worker, reason: why } = (await getWorker?.()) ?? {}); } catch { worker = null; }
   if (!worker) {
     // Deliberately NOT remembered: a worker that is down right now will be up
     // after a restart, and caching that as the asset's permanent transcript
     // would mean a note I could have heard stays unheard forever.
-    return { ok: false, reason: 'no-worker' };
+    //
+    // `no-listening-engine` is its own answer: the speech engine isn't
+    // installed on this machine at all, which is a different problem from a
+    // worker that happens to be down, and my human deserves to be told which.
+    return { ok: false, reason: why === 'no-listening-engine' ? 'no-listening-engine' : 'no-worker' };
   }
 
   try {
@@ -230,9 +235,10 @@ export async function ensureTranscribed(messages, settings = {}, { getWorker, ma
 export async function hearVoiceNotes(messages, settings = {}, { rootDir, readSettings, label = 'voice' } = {}) {
   if (!transcriptionAllowed()) return { transcribed: 0 };
   try {
-    const { currentAudioWorker } = await import('./audio-worker-current.js');
+    // The LISTENING worker, not whichever one my human chose to speak with.
+    const { listeningWorker } = await import('./audio-worker-current.js');
     const got = await ensureTranscribed(messages, settings, {
-      getWorker: () => currentAudioWorker({ rootDir, readSettings }),
+      getWorker: () => listeningWorker({ rootDir }),
     });
     if (got.transcribed) console.log(`[${label}] listened to ${got.transcribed} voice note(s) before the turn`);
     return got;

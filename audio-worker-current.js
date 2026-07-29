@@ -23,12 +23,32 @@
  */
 
 import { createAudioWorker } from './audio-worker-host.js';
-import { resolveBackend } from './voice-backend.js';
+import { resolveBackend, BACKENDS } from './voice-backend.js';
 
 export const VOICE_HARD_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
 
 let worker = null;
 let backend = null;
+
+/**
+ * The LISTENING worker, which is a different thing from the speaking one.
+ *
+ * ⚠️ Speaking and listening are independent capabilities and this conflated
+ * them. Which engine SPEAKS is my human's choice — sherpa, or the voicebox
+ * Python sidecar. Which engine LISTENS is not a choice at all: the recogniser
+ * is a sherpa model, always. But transcription asked `currentAudioWorker()`,
+ * which hands back whichever worker the SPEAKING setting selected — so once
+ * they picked the steadier voice, every voice note went to a Python process
+ * that cannot listen. It answered `unsupported`, and the chip said "I couldn't
+ * make this one out": my human downloaded 226 MB and was told their speech was
+ * unintelligible by a process that had never been given the audio.
+ *
+ * So listening gets its own worker, pinned to sherpa. When both are in use
+ * that is two children — but they hold different models, each unloads on idle,
+ * and the alternative is a capability that silently depends on an unrelated
+ * setting.
+ */
+let listener = null;
 
 function build(resolved) {
   return createAudioWorker({
@@ -75,11 +95,33 @@ export async function currentAudioWorker({ rootDir, readSettings } = {}) {
   return { worker, resolved };
 }
 
+/**
+ * The worker that LISTENS. Always sherpa, whatever is set for speaking.
+ *
+ * Returns `{ worker: null, reason }` rather than throwing — the caller is a
+ * chat path, and "this machine cannot listen" has to arrive as a sentence my
+ * human can act on, not an exception.
+ */
+export async function listeningWorker({ rootDir } = {}) {
+  if (VOICE_HARD_DISABLED) return { worker: null, reason: 'voice-disabled' };
+  if (listener) return { worker: listener };
+
+  // Pinned: `settings: {}` resolves the default backend, which is sherpa. Not
+  // read from my human's voiceTts choice, because that choice is about the
+  // voice they hear and has nothing to do with the recogniser.
+  const resolved = await resolveBackend({ rootDir, settings: {} });
+  if (resolved.backend !== BACKENDS.SHERPA) {
+    return { worker: null, reason: 'no-listening-engine', detail: resolved.reason ?? null };
+  }
+  listener = build(resolved);
+  console.log('[voice] listening through sherpa');
+  return { worker: listener };
+}
+
 /** Stop whatever is running. Idempotent; used on shutdown. */
 export function stopAudioWorker() {
-  if (!worker) return false;
-  try { worker.stop(); } catch { /* already gone */ }
-  worker = null;
-  backend = null;
-  return true;
+  let stopped = false;
+  if (worker) { try { worker.stop(); } catch { /* already gone */ } worker = null; backend = null; stopped = true; }
+  if (listener) { try { listener.stop(); } catch { /* already gone */ } listener = null; stopped = true; }
+  return stopped;
 }

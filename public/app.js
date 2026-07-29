@@ -2648,6 +2648,20 @@ function transcriptProblem(entry) {
     case 'no-worker':
     case 'load-failed':
       return { text: 'The speech engine is not ready yet — try again in a moment.', fix: { label: '↻ Try again', kind: 'retry' } };
+    case 'no-listening-engine':
+    case 'no-engine':
+      // Two spellings, one situation: the sherpa binding is absent, either
+      // because no worker could be built (`no-listening-engine`) or because the
+      // worker started and found the binding missing (`no-engine`). Both mean
+      // this machine cannot listen, and neither is my human's fault.
+      return { text: 'This machine has no speech engine installed, so I have no way to listen. Everything else still works.', fix: null };
+    case 'unsupported':
+    case 'unsupported-role':
+      // The bug this names: transcription was sent to the SPEAKING worker, so
+      // choosing the voicebox voice silently broke every voice note. Kept as a
+      // distinct message so if it ever happens again it says what it is rather
+      // than blaming my human's diction.
+      return { text: 'That went to the engine that speaks rather than the one that listens — this is a bug, not your recording.', fix: { label: '↻ Try again', kind: 'retry' } };
     case 'unreadable-format':
       return { text: "I couldn't read that audio format.", fix: null };
     default:

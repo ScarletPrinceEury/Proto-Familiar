@@ -412,3 +412,77 @@ test('nothing in the voice-note path consults voiceEnabled', async () => {
   assert.doesNotMatch(notePath, /voiceEnabled/,
     'the voice-note path reads voiceEnabled again — a press is the consent');
 });
+
+// ── Speaking and listening are independent ────────────────────────
+//
+// The bug: transcription asked for `currentAudioWorker()`, which returns the
+// worker chosen by the SPEAKING setting. My human picked the voicebox voice,
+// so every voice note went to a Python process that cannot listen. It answered
+// `unsupported`, the chip fell through to its default, and they were told a
+// clear recording was unintelligible — after downloading 226 MB.
+
+test('transcription asks for the LISTENING worker, never the speaking one', async () => {
+  const src = await fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8');
+  const srv = await fs.readFile(path.join(process.cwd(), 'server.js'), 'utf8');
+
+  assert.match(src, /listeningWorker\(\{ rootDir \}\)/, 'hearVoiceNotes is back on the speaking worker');
+  assert.doesNotMatch(src, /currentAudioWorker/, 'the speaking worker leaked back into the listening path');
+  assert.match(srv, /getWorker: \(\) => listeningWorker\(/, 'the transcribe endpoint uses the speaking worker');
+});
+
+test('the listening worker is pinned to sherpa regardless of the chosen voice', async () => {
+  const cur = await fs.readFile(path.join(process.cwd(), 'audio-worker-current.js'), 'utf8');
+  const fn = cur.slice(cur.indexOf('export async function listeningWorker'));
+  const body = fn.slice(0, fn.indexOf('\n}\n'));
+
+  // `settings: {}` is the pin — it resolves the default backend rather than
+  // my human's voiceTts choice, which is about the voice they HEAR.
+  assert.match(body, /settings: \{\}/, 'the listener reads the speaking setting again');
+  assert.match(body, /resolved\.backend !== BACKENDS\.SHERPA/, 'a non-sherpa worker could still be handed the audio');
+  assert.match(body, /no-listening-engine/, 'a machine that cannot listen has no way to say so');
+});
+
+test('a worker that cannot serve a role refuses it instead of answering ok', async () => {
+  const py = await fs.readFile(path.join(process.cwd(), 'voicebox/src/voicebox/worker.py'), 'utf8');
+  const load = py.slice(py.indexOf('def op_load('), py.indexOf('def op_unload('));
+
+  // It returned ok:True for `asr-offline`, loading the TTS model and reporting
+  // success — so the failure surfaced one step later, at `transcribe`, where
+  // it looked like a transcription problem instead of a routing one.
+  assert.match(load, /unsupported-role/, 'the speaking worker claims roles it cannot serve again');
+  assert.match(load, /role not in \("tts", None\)/);
+});
+
+test('every reason that reaches the browser has words for my human', async () => {
+  const app = await fs.readFile(path.join(process.cwd(), 'public/app.js'), 'utf8');
+  const handler = app.slice(app.indexOf('function transcriptProblem('));
+  const mapped = handler.slice(0, handler.indexOf('\n}\n'));
+
+  // Only what `POST /api/media/:id/transcribe` can actually hand back. Listed
+  // rather than swept for, because a clever regex also picked up reasons that
+  // live only inside the server (`no-speech` is a cached description, not a
+  // returned reason; `timeout` belongs to ensureTranscribed's internal race)
+  // and reported gaps that were not gaps.
+  for (const reason of [
+    'voice-disabled',        // the hard env switch
+    'model-missing',         // added by the endpoint — carries the download offer
+    'no-worker',             // the listener is down right now
+    'no-listening-engine',   // no listening worker could be built
+    'no-engine',             // the worker started and found no sherpa binding
+                             //   — found by a live run AFTER this list was
+                             //   hand-written, which is the argument for
+                             //   running the thing rather than enumerating it
+    'load-failed',           // the model wouldn't load
+    'unreadable-format',     // audio we can't decode without a library
+    'unsupported',           // the speaking worker was handed a listen request
+    'unsupported-role',      // ...and its newer, earlier refusal
+  ]) {
+    assert.ok(mapped.includes(`'${reason}'`),
+      `${reason} falls through to "I couldn't make this one out" — which is how a routing bug came to read as bad diction`);
+  }
+
+  // `transcribe-failed` is the ONE that should reach the default, because
+  // there the default is true: the recogniser ran and got nothing usable.
+  assert.doesNotMatch(mapped, /'transcribe-failed'/);
+  assert.match(mapped, /default:\s*\n\s*return \{ text: "I couldn't make this one out/);
+});

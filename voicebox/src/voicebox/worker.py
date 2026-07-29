@@ -181,6 +181,16 @@ def op_ping(msg: dict) -> None:
 
 
 def op_load(msg: dict) -> None:
+    # Refuse a role this worker cannot serve, instead of answering ok to
+    # everything. It used to say ok:True for `asr-offline` — loading the TTS
+    # model and reporting success — so the caller went on to ask for a
+    # transcript and only THEN found out. A confident yes to the wrong question
+    # is worse than a no: it moves the failure one step away from its cause.
+    role = msg.get("role", "tts")
+    if role not in ("tts", None):
+        send({"reqId": msg.get("reqId"), "ok": False, "reason": "unsupported-role",
+              "detail": f"this worker speaks; it cannot load {role!r}"})
+        return
     ok, err = _ensure_model()
     if not ok:
         send({"reqId": msg.get("reqId"), "ok": False, "reason": "no-engine", "detail": err})

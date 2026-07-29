@@ -261,7 +261,7 @@ import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_E
 import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
-import { currentAudioWorker as currentAudioWorkerShared, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
+import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
 import { hearVoiceNotes, transcribeAsset, transcriptionAllowed } from './voice-transcribe.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice } from './voices.js';
@@ -1534,7 +1534,29 @@ app.post('/api/voice/install-models', async (req, res) => {
     if (summary?.preflight && summary.preflight.ok === false) {
       return res.json({ ok: false, reason: summary.preflight.reason, needed: summary.outstandingBytes });
     }
-    const result = await fetchPlan({ plan, modelsDir });
+    // Progress reaches the terminal. A 158 MB download that prints nothing for
+    // two minutes is indistinguishable from one that is doing nothing, which
+    // is exactly how it looked to my human.
+    const what = req.body?.what === 'listen' ? 'listening' : 'speaking';
+    console.log(`[voice] fetching the ${what} model(s)…`);
+    let lastPct = -1;
+    const result = await fetchPlan({
+      plan, modelsDir,
+      // The field is `phase` — checked against voice-fetch.js rather than
+      // assumed. Written as `stage` first, which would have printed nothing at
+      // all and left this looking fixed.
+      onProgress: (e) => {
+        if (e?.phase === 'download' && Number.isFinite(e.receivedBytes) && Number.isFinite(e.totalBytes) && e.totalBytes > 0) {
+          const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
+          if (pct > lastPct) { lastPct = pct; console.log(`[voice]   ${what} model ${pct}%`); }
+        } else if (e?.phase && e.phase !== 'download') {
+          console.log(`[voice]   ${e.phase}${e.file ? ` ${e.file}` : ''}`);
+        }
+      },
+    });
+    console.log(result?.ok === false
+      ? `[voice] ${what} model download failed: ${result.message ?? result.reason}`
+      : `[voice] ${what} model(s) ready`);
     res.json({ ok: Boolean(result?.ok ?? true), ...result });
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
@@ -1570,7 +1592,11 @@ app.post('/api/media/:id/transcribe', async (req, res) => {
     }
   } catch { /* if we can't tell, let the attempt report the real problem */ }
 
-  const got = await transcribeAsset(req.params.id, settings, { getWorker: currentAudioWorker });
+  // The listening worker — pinned to sherpa. Sending this to the speaking
+  // worker is what made every voice note fail once my human chose voicebox.
+  const got = await transcribeAsset(req.params.id, settings, {
+    getWorker: () => listeningWorker({ rootDir: __dirname }),
+  });
   res.json(got);
 });
 
