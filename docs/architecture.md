@@ -2379,7 +2379,57 @@ byte-falls-back and an ordinary apostrophe becomes three rarely-seen tokens.
 `media.js` holds images *and* audio in one content-addressed store —
 `MEDIA_KINDS` derives kind and extension from a single lookup, so a voice note
 can no longer be stored as an image carrying an audio extension. The audience
-tag, dedup and slug ids were written once and cover both.
+tag, dedup and slug ids were written once and cover both. Size ceilings are
+per-kind (`maxBytesForKind`): 6 MB for an image, 24 MB for audio, because one
+number cannot serve both — the image cap would have cut a voice note off at
+three minutes.
+
+### Voice notes (Pass 1)
+
+The listen-once-keep-forever path, deliberately shaped as vision's twin.
+
+```
+browser                     server                        worker
+───────                     ──────                        ──────
+MediaRecorder (webm/opus)
+  → decodeAudioData
+  → OfflineAudioContext ──── 16 kHz mono wav
+  → encodeWav                     │
+        POST /api/media ──────────┴─→ saveAsset  kind:'audio'
+                                        durationSec read from the header
+        POST /api/media/:id/transcribe
+                                    → transcribeAsset ──→ load  asr-offline
+                                                     ──→ transcribe wavPath
+                                    ← text cached in `description`
+                                      slug graduates: snd-4kf2p1 → bins-tonight-x7
+chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly)
+            materializeAttachments ──→ [voice note bins-tonight-x7, 0:41: …]
+```
+
+- **The browser converts, not the server.** `MediaRecorder` gives webm/opus or
+  mp4/aac; nothing server-side can decode either without a media library, and
+  the recogniser wants 16 kHz mono PCM. The browser already contains a decoder
+  and resampler, so conversion happens where it is free and the store keeps the
+  one format it can always read — with no codec dependency years later.
+- **The transcript lives in `description`**, the same slot an image's caption
+  uses. Every consumer (stand-in builder, slug graduation, memorization's fold)
+  already treats that field as "the words I have for this thing" and needed no
+  change. That is also why a transcript outlives its bytes.
+- **Audio never rides as provider content-parts.** Gated in
+  `materializeAttachments`' live-eligibility check, not at the use site, so a
+  future audio modality is one condition to relax.
+- **`audio-worker-current.js`** owns the single live worker. It used to be
+  inside `server.js`, which would have forced Discord to grow a second copy of
+  the wiring — the shape of the RULE C incident. `voice-transcribe.js`'s
+  `hearVoiceNotes()` is the one call both surfaces make; see the voice spec's
+  §14.5 surface matrix.
+- **Two consents, not one.** `voiceEnabled` (default OFF) governs everything
+  that hears. Read-aloud does not depend on it — it is an accessibility
+  surface. `PROTO_FAMILIAR_VOICE_DISABLED=1` kills both.
+- **The recogniser is SenseVoice** (`asr-offline`, zh/en/ja/ko/yue in one
+  model, punctuation + inverse text normalisation built in). Decoded offline,
+  once, with nobody waiting — so accuracy is the only axis and the streaming
+  models stay unfetched until live calls in Pass 2.
 
 ## Security design
 

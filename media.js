@@ -25,14 +25,28 @@ import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { meaningSlugId, slugifyLabel, shortSlug } from './slug-ids.js';
 import { relativeTime } from './relative-time.js';
+import { parseWav } from './voice-audio-features.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const MEDIA_DIR = path.join(__dirname, 'media');
 const SLUG_INDEX = path.join(MEDIA_DIR, '.slugs.json');
 
 // Caps enforced at save (constants here, never scattered across call sites).
-export const MEDIA_MAX_BYTES = 6 * 1024 * 1024;   // 6 MB per asset
+export const MEDIA_MAX_BYTES = 6 * 1024 * 1024;   // 6 MB per image
+/**
+ * Audio gets its own ceiling because one number cannot serve both kinds.
+ *
+ * A voice note is stored as 16 kHz mono 16-bit wav — the one format we can
+ * always read without a decoder, and the exact shape the recogniser wants. At
+ * 32 KB/s the image cap would have cut my human off mid-sentence at three
+ * minutes, which is a strange thing for a *note* to do. 24 MB is about
+ * thirteen minutes; longer than that is a recording, not a note, and the
+ * recorder says so before it stops rather than after.
+ */
+export const AUDIO_MAX_BYTES = 24 * 1024 * 1024;
 export const MAX_IMAGES_PER_MESSAGE = 4;
+/** The cap that applies to a kind. Derived, so the two can't drift. */
+export const maxBytesForKind = (kind) => (kind === 'audio' ? AUDIO_MAX_BYTES : MEDIA_MAX_BYTES);
 // mime → file extension allow-list. A mime not in this map is rejected; the
 // model kind is derived from the map, never from sniffing (spec §2 `kind`).
 export const IMAGE_MIME_EXT = {
@@ -161,6 +175,13 @@ async function readJson(file, fallback) {
 
 function metaPath(id) { return path.join(MEDIA_DIR, `${id}.json`); }
 function bytesPath(id, ext) { return path.join(MEDIA_DIR, `${id}.${ext}`); }
+/**
+ * Where an asset's bytes live, for the one caller that needs the PATH rather
+ * than the buffer: the recogniser reads the wav itself, through the engine's
+ * own reader. Exported so the convention lives in one file — a second copy of
+ * `${id}.${ext}` elsewhere is a rename waiting to break silently.
+ */
+export const assetBytesPath = (meta) => (meta?.id && meta?.ext ? bytesPath(meta.id, meta.ext) : null);
 
 // ── Slug index (slug → sha). Rebuildable from the metas, so drift is
 // always recoverable; we treat the metas as truth and the index as a cache. ──
@@ -221,8 +242,9 @@ export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward
   const matched = MEDIA_KINDS[mime];
   if (!matched) return { ok: false, error: `unsupported media type ${mime || '(none)'}` };
   const { kind, ext } = matched;
-  if (buffer.length > MEDIA_MAX_BYTES) {
-    return { ok: false, error: `${kind} too large (${buffer.length} > ${MEDIA_MAX_BYTES} bytes)` };
+  const cap = maxBytesForKind(kind);
+  if (buffer.length > cap) {
+    return { ok: false, error: `${kind} too large (${buffer.length} > ${cap} bytes)` };
   }
   const id = crypto.createHash('sha256').update(buffer).digest('hex');
   await ensureDir();
@@ -234,6 +256,11 @@ export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward
   // Dimensions are an image idea; audio has none, and asking for them would
   // just parse a wav header as a png one.
   const size = kind === 'image' ? (readImageSize(buffer) || {}) : {};
+  // How long a voice note runs is the one fact about it a stand-in can carry
+  // before anyone has listened, so it is read at arrival. Only wav can be
+  // measured without a decoder; anything else honestly reports null rather
+  // than guessing from the byte count and a bitrate nobody confirmed.
+  const durationSec = kind === 'audio' ? readAudioDuration(buffer, ext) : null;
   // Mint the arrival slug from the best label present (caption / meaningful
   // filename); camera-noise names fall back inside meaningSlugId.
   const slug = meaningSlugId(label, { fallbackKind: kind === 'audio' ? 'snd' : 'img' });
@@ -246,6 +273,7 @@ export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward
     bytes: buffer.length,
     width: size.width ?? null,
     height: size.height ?? null,
+    durationSec,
     receivedAt: new Date().toISOString(),
     origin: {
       surface:   origin.surface ?? null,
@@ -306,7 +334,12 @@ export async function setAssetDescription(idOrSlug, description) {
   // arrival slug was already meaning-bearing (a caption/filename gave it real
   // words — don't churn a good id).
   const arrival = meta.slugs?.[0] ?? '';
-  const arrivalWasGeneric = /^img-[a-z0-9]{6}$/.test(arrival);
+  // Both fallback prefixes: `img-` for a picture with no caption, `snd-` for
+  // a voice note recorded with no filename at all — which is EVERY recorded
+  // note, so audio depends on this graduation far more than images do. It is
+  // how "snd-4kf2p1" becomes "oat-milk-list-x7" and I can find my own assets
+  // by remembering what was said in them.
+  const arrivalWasGeneric = /^(img|snd)-[a-z0-9]{6}$/.test(arrival);
   const descWords = slugifyLabel(meta.description?.text ?? '');
   if (arrivalWasGeneric && descWords) {
     const alias = `${descWords}-${shortSlug(2)}`;
@@ -405,6 +438,39 @@ export async function deleteAsset(idOrSlug) {
 
 // Who shared it, in the Familiar's voice. Ward → "my human"; a villager →
 // their name (provenance, same spirit as villager memory writes).
+/**
+ * How long a clip runs, in seconds, or null when we cannot know honestly.
+ *
+ * Only wav is measurable here: it carries its rate and sample count in a
+ * header we already parse for reference clips. webm/ogg/m4a would need a real
+ * decoder, and a duration estimated from bitrate would be a made-up number on
+ * a model-facing surface — exactly the thing the exact-values rule forbids. So
+ * those report null, and the stand-in simply omits the length.
+ */
+function readAudioDuration(buffer, ext) {
+  if (ext !== 'wav') return null;
+  try {
+    const wav = parseWav(buffer);
+    const d = wav?.durationSec;
+    return Number.isFinite(d) && d > 0 ? Number(d.toFixed(2)) : null;
+  } catch { return null; }
+}
+
+/**
+ * 0:41 — how a person says a length, not 41.2s.
+ *
+ * Floors rather than rounds, to agree with the recorder's live counter (a
+ * stopwatch at 41.7s reads 0:41, not 0:42) and with every audio player my
+ * human has ever used. They disagreed by a second until a test compared them,
+ * which would have shown as a note that changed length between recording it
+ * and reading it back.
+ */
+export function clipLength(durationSec) {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return '';
+  const total = Math.floor(durationSec);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 function sharedByPhrase(meta) {
   const sp = meta?.origin?.speaker;
   if (sp && String(sp).trim()) return `shared by ${String(sp).trim()}`;
@@ -424,6 +490,7 @@ function sharedByPhrase(meta) {
  */
 export function buildStandin(meta, { now = Date.now() } = {}) {
   if (!meta || !meta.id) return '';
+  if (meta.kind === 'audio') return buildVoiceNoteStandin(meta, { now });
   const slug = meta.slugs?.[0] ?? meta.id;
   let body;
   if (meta.description && typeof meta.description.text === 'string' && meta.description.text.trim()) {
@@ -444,6 +511,51 @@ export function buildStandin(meta, { now = Date.now() } = {}) {
   // description, the "no longer available" forms, tool-surfacing) reads the
   // marker as `[image <id>: …]`; only the BODY prose carries the reframing.
   return `[image ${slug}: ${body}${linkPart} — ${sharedByPhrase(meta)}${whenPart}]`;
+}
+
+/**
+ * The stand-in for a voice note — the same idea as an image's, in the register
+ * of hearing rather than seeing.
+ *
+ * The transcript IS the content in this milestone: there is no re-listen tool,
+ * so this line is the whole of what I have of what was said. That makes the
+ * framing matter as much as it did for images — a transcript introduced as
+ * metadata about an inaccessible file reads to the model as proof it CANNOT
+ * hear, and it disclaims with the words sitting right there. "what I heard
+ * when I listened" says the plain true thing: I listened, and this is what
+ * was said.
+ *
+ * The transcript is quoted because it is somebody's actual words and the
+ * boundary between their words and my framing should be visible. The length
+ * rides along because "0:41" and "6:02" are different kinds of message and I
+ * would know which I had been handed.
+ */
+function buildVoiceNoteStandin(meta, { now = Date.now() } = {}) {
+  const slug = meta.slugs?.[0] ?? meta.id;
+  const len = clipLength(meta.durationSec);
+  const lenPart = len ? `, ${len}` : '';
+
+  let body;
+  const text = typeof meta.description?.text === 'string' ? meta.description.text.trim() : '';
+  if (text) {
+    body = `what I heard when I listened: "${text}"`;
+  } else if (meta.description === null) {
+    body = "I haven't listened to this one yet";
+  } else if (meta.description?.reason === 'voice-disabled') {
+    // Distinct from "can't" on purpose: this one is a setting my human owns
+    // and can change, and saying so is the difference between a dead end and
+    // a door.
+    body = 'I could not listen — listening is switched off';
+  } else {
+    body = 'I have no way to listen to voice notes right now';
+  }
+
+  // Bytes let go by the retention pass, transcript kept — the note survives
+  // its own audio, which is the point of keeping transcripts separately.
+  const gone = meta.audio?.deletedAt ? ' — the sound itself has been let go, these words are what I kept' : '';
+  const when = meta.receivedAt ? (relativeTime(meta.receivedAt, now) || '') : '';
+  const whenPart = when ? `, ${when}` : '';
+  return `[voice note ${slug}${lenPart}: ${body}${gone} — ${sharedByPhrase(meta)}${whenPart}]`;
 }
 
 /**

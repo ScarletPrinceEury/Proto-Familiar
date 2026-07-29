@@ -224,11 +224,43 @@ const BASE_MODELS = Object.freeze([
   {
     id: 'asr-offline',
     role: 'asr-offline',
+    // SenseVoice, not a per-language streaming model: a voice note is decoded
+    // once with no one waiting, so accuracy is the only axis that matters and
+    // latency is free. It also covers zh/en/ja/ko/yue in ONE model, which is
+    // the difference between a bilingual household being supported and being
+    // asked to pick a language before speaking. Punctuation and number
+    // normalisation come built in, so the transcript reads like writing.
     engine: null,
     lang: 'multi',
-    label: 'Offline ASR (sense-voice / moonshine)',
+    label: 'Offline ASR (SenseVoice)',
     why: 'Voice notes, where accuracy matters and latency does not.',
-    estBytes: 150 * MB,
+    // Measured from upstream's own listing: model.int8.onnx is 226 MB and
+    // tokens.txt 308 KB. The 150 MB in the spec was a Pass-0 estimate made
+    // before a model was chosen; this is the real one.
+    estBytes: 240 * MB,
+    upstream: { tag: 'asr-models', asset: 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2' },
+    /**
+     * ⚠️ Not pinned in this commit, and therefore not downloadable yet — the
+     * fetcher refuses unpinned models, which is the checksum discipline
+     * working, not a bug. Run `npm run pin:listening` once, from a machine
+     * with the bandwidth, and commit the result; after that no end user ever
+     * touches a terminal for this.
+     *
+     * The pin can be CHECKED rather than merely trusted. Upstream publishes
+     * the same model on Hugging Face as an LFS file, and an LFS oid IS the
+     * sha256 of the content:
+     *
+     *   model.int8.onnx  237,115,547 bytes
+     *   sha256  12ca1a2ae7ecf3e0019ef2822307ee0b5cadc9196569e379b4c4026f8205276d
+     *   (huggingface.co/api/models/csukuangfj/
+     *    sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/tree/main)
+     *
+     * The pin records the ARCHIVE's hash, not this one, so the two are not
+     * directly comparable — but after extraction that file must hash to the
+     * value above, and if it does not, the download was not what upstream
+     * published. Recorded here so a first-use trust decision has something to
+     * be checked against instead of being taken on faith.
+     */
     files: [],
   },
   {

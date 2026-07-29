@@ -3968,3 +3968,42 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
     max-height: 92vh;
   }
 }
+
+/* ── Voice notes in the composer ───────────────────────────────────
+   A voice chip is wider than an image chip because it carries words:
+   the transcript is the point of the surface, not a caption on it. My
+   human reads what I heard before they send, which is what makes a
+   voice note checkable by someone who can't easily verify it later. */
+.attach-chip-voice {
+  width: auto;
+  min-width: 220px;
+  max-width: 340px;
+  height: auto;
+  padding: 6px 24px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--surface-2, transparent);
+}
+.attach-chip-voice audio { width: 100%; height: 32px; display: block; }
+.attach-chip-transcript {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--text);
+  /* Three lines, then fade — a long note must not push the composer off
+     screen, and the full text is one click away in the message itself. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.attach-chip-transcript.is-quiet { color: var(--text-dim); font-style: italic; }
+
+/* Recording is a state, and a control that looks identical while it works
+   is a control people press twice. Colour AND the pulse AND the button's
+   aria-label all say it, so it does not depend on seeing red (SC 1.4.1). */
+#record-btn.is-recording { color: var(--danger, #d9534f); animation: record-pulse 1.4s ease-in-out infinite; }
+@keyframes record-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  #record-btn.is-recording { animation: none; }
+}

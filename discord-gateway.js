@@ -42,6 +42,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom }
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
+import { hearVoiceNotes } from './voice-transcribe.js';
 import { extractContent } from './llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
@@ -1897,6 +1898,13 @@ async function handleTurn(gw, msg, decision) {
   // to the assembled array so it rides every tool round. Gated turn → the
   // room's visible-audience set (fail-closed); ward → no gate. Degrades to
   // stand-ins on a blind connection; never throws into the reply path.
+  // Hear before answering — the same shared call the web turn makes, for the
+  // same reason, wired in the same commit. This is the RULE C cell that
+  // `ensureDescribed` missed when vision shipped.
+  await hearVoiceNotes(apiMessages, settings, {
+    rootDir: __dirname, readSettings: () => settings, label: 'discord',
+  });
+
   let visionCapableTurn = false;
   if (!discordVisionOff()) {
     try {

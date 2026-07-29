@@ -1167,6 +1167,39 @@ call — must arrive as an extension of this spine:
   Reclaiming a model and then using voice re-fetches it with a size-named
   prompt rather than failing.
 
+## 14.5 Surface matrix — voice notes (Pass 1, RULE C)
+
+Required by CLAUDE.md RULE C: a turn-machinery capability either lands in code
+every surface shares, or the spec carries an explicit matrix in the same commit
+as the feature. Vision shipped without one, Discord never got the `describe`
+wiring web had, and I confidently described images I had never looked at.
+
+**It lands in the shared path.** `hearVoiceNotes()` in `voice-transcribe.js` is
+the single call; both surfaces invoke it and neither owns any transcription
+wiring of its own. The worker moved to `audio-worker-current.js` for the same
+reason — it used to live inside `server.js`, which is what would have forced
+Discord to grow a second copy.
+
+| Cell | Wired | How |
+|---|---|---|
+| Web live turn (`/api/chat`) | ✅ | `hearVoiceNotes(enrichedMessages, …)` before the vision block and before prompt assembly |
+| Web tool rounds | ✅ (N/A by construction) | Attachments are consumed into content at materialize; later rounds carry no un-heard notes |
+| Discord ward DM | ✅ | `hearVoiceNotes(apiMessages, …)` in `handleTurn`, same call, same position |
+| Discord villager / ambient | ✅ | Same call — but arrival-side ingest of Discord audio is **Pass 3**, so today there is nothing to hear there |
+| Background loops (noticing, pondering, triage) | N/A | They assemble no attachments; a loop that starts to must call `hearVoiceNotes` |
+| Composer (pre-send) | ✅ | `POST /api/media/:id/transcribe` — same `transcribeAsset`, so it is one decode shared with the turn |
+
+**Deliberately NOT nested inside either surface's vision block.** Hearing is a
+separate consent from seeing; nesting it there would mean switching vision off
+silently made me deaf as well.
+
+**Budget exhaustion (RULE B).** Every give-up path is visible in all three
+places: my human sees it on the composer chip ("I couldn't make this one
+out — it still sends"), I see it in the stand-in (each reason has its own
+wording — not-yet / switched-off / no-speech / let-go), and it logs. A note
+that could not be transcribed is never silently absent; a gap I cannot see is
+a gap I confabulate over.
+
 ## 15. Out of scope (this milestone)
 
 - Speech-to-speech or audio-native LLM turns (transcripts ride the

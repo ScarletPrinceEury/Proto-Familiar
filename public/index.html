@@ -383,10 +383,16 @@
           </div>
           <!-- Pending image thumbnails (vision) — shown above the composer
                before send; each is removable. Hidden when empty. -->
-          <div id="attach-strip" class="attach-strip hidden" aria-label="Images to send"></div>
+          <div id="attach-strip" class="attach-strip hidden" aria-label="Attachments to send"></div>
           <div class="input-row">
             <button id="attach-btn" class="btn-attach" title="Attach an image" aria-label="Attach an image">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <!-- Voice note. Hidden unless listening is switched on — a
+                 microphone button on a build that cannot listen is a promise
+                 the app does not keep. -->
+            <button id="record-btn" class="btn-attach" title="Record a voice note" aria-label="Record a voice note" hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
             </button>
             <textarea
               id="user-input"
@@ -488,6 +494,13 @@
         <h3 class="section-label" style="margin-top:16px">Which connection each feature uses</h3>
         <p class="field-hint">Every background job that calls a model can run on its own connection — handy for pointing cheap/idle work at a cheaper model while chat stays on your best one. "Primary" means it follows your primary connection above.</p>
         <div id="feature-connection-rows"></div>
+
+        <h3 class="section-label" style="margin-top:16px">Hearing voice notes</h3>
+        <div class="field-row">
+          <label for="voice-enabled-toggle">Let my Familiar hear voice notes I record</label>
+          <input type="checkbox" id="voice-enabled-toggle">
+        </div>
+        <p class="field-hint">Off until you turn it on — a microphone is a bigger ask than a photo, so nothing here happens by default. With it on, a microphone button appears in the message box: record, and the words you said appear under the recording before you send, so you can check I heard you right. The listening happens entirely on this machine and needs a one-time download (~230&nbsp;MB), offered the first time you record. Reading aloud is separate and does <strong>not</strong> need this switch.</p>
 
         <h3 class="section-label" style="margin-top:16px">Seeing images (vision)</h3>
         <div class="field-row">

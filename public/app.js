@@ -375,6 +375,11 @@ const state = {
   // Image→threat scoring (ward-signed, §15.1): a distressing image I share can
   // raise my Familiar's concern, same as if I'd typed it. Raise-only for now.
   visionThreatScoring: true,
+  // Listening (voice notes, and later live calls). Default OFF and NOT implied
+  // by anything else: a microphone is opt-in in a way a pasted photo is not.
+  // Read-aloud deliberately does not depend on this — it is an accessibility
+  // surface, and someone hard of hearing needs it most.
+  voiceEnabled: false,
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -427,6 +432,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
+  'voiceEnabled',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -2546,6 +2552,7 @@ function renderAttachStrip() {
   if (!atts.length) { strip.classList.add('hidden'); return; }
   strip.classList.remove('hidden');
   for (const a of atts) {
+    if (a.kind === 'audio') { strip.appendChild(renderVoiceChip(a)); continue; }
     const chip = document.createElement('div');
     chip.className = 'attach-chip';
     const img = document.createElement('img');
@@ -2576,6 +2583,134 @@ function renderAttachStrip() {
       chip.appendChild(badge);
     }
     strip.appendChild(chip);
+  }
+}
+
+/**
+ * A pending voice note in the composer strip.
+ *
+ * It shows the transcript as soon as there is one, and that is the point of
+ * the whole surface rather than a nicety: my human can see that I heard "oat
+ * milk" and not "oat mail" BEFORE they send, and re-record if I didn't. For
+ * someone who cannot easily check afterwards, a transcript that only appears
+ * after sending is a transcript they have to trust blind.
+ */
+function renderVoiceChip(a) {
+  const chip = document.createElement('div');
+  chip.className = 'attach-chip attach-chip-voice';
+
+  const player = document.createElement('audio');
+  player.controls = true;
+  player.preload = 'metadata';
+  player.src = `/api/media/${encodeURIComponent(a.id)}`;
+  chip.appendChild(player);
+
+  const words = document.createElement('div');
+  words.className = 'attach-chip-transcript';
+  if (a.transcript) {
+    words.textContent = a.transcript;
+    words.title = a.transcript;
+  } else if (a.transcriptState === 'failed') {
+    // Named honestly: the note still sends, and I will read it as a recording
+    // I could not make out rather than pretending it wasn't there.
+    words.textContent = 'I couldn\'t make this one out — it still sends.';
+    words.classList.add('is-quiet');
+  } else if (a.transcriptState === 'none') {
+    words.textContent = 'I didn\'t hear any speech in this one.';
+    words.classList.add('is-quiet');
+  } else {
+    words.textContent = 'listening…';
+    words.classList.add('is-quiet');
+  }
+  chip.appendChild(words);
+
+  const rm = document.createElement('button');
+  rm.type = 'button';
+  rm.className = 'attach-chip-remove';
+  rm.setAttribute('aria-label', 'Remove voice note');
+  rm.textContent = '✕';
+  rm.addEventListener('click', () => removePendingAttachment(a.id));
+  chip.appendChild(rm);
+  return chip;
+}
+
+/**
+ * Record → convert → upload → transcribe. One button, four steps, and the
+ * button says which step it is on, because a control that looks identical
+ * while it works is a control people press twice.
+ */
+let _recording = null;
+
+async function toggleVoiceNote() {
+  const btn = document.getElementById('record-btn');
+  if (!btn) return;
+
+  if (_recording) {
+    const handle = _recording;
+    _recording = null;
+    btn.classList.remove('is-recording');
+    btn.setAttribute('aria-label', 'Record a voice note');
+    btn.title = 'Working on it…';
+    const blob = await handle.stop();
+    if (blob) await attachVoiceNote(blob);
+    btn.title = 'Record a voice note';
+    return;
+  }
+
+  try {
+    const { startRecording } = await import('./voice-recorder.js');
+    _recording = await startRecording({
+      onTick: (_secs, label) => {
+        btn.title = `Recording ${label} — click to stop`;
+        btn.setAttribute('aria-label', `Recording ${label}. Click to stop.`);
+      },
+    });
+    btn.classList.add('is-recording');
+    btn.title = 'Recording — click to stop';
+  } catch (err) {
+    _recording = null;
+    // The common case by far is a denied microphone permission, so it gets
+    // said in those words rather than as a DOMException name.
+    const denied = /NotAllowed|Permission/i.test(String(err?.name ?? err));
+    appendErrorMessage(denied
+      ? 'I need permission to use the microphone before I can hear a voice note.'
+      : `Couldn't start recording: ${err?.message ?? err}`);
+  }
+}
+
+async function attachVoiceNote(blob) {
+  state.pendingAttachments ||= [];
+  try {
+    const { toWav } = await import('./voice-recorder.js');
+    const wav = await toWav(blob);
+    const qs = new URLSearchParams();
+    if (state.sessionId) qs.set('sessionId', state.sessionId);
+    const res = await fetch(`/api/media${qs.toString() ? `?${qs}` : ''}`, {
+      method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav,
+    });
+    if (!res.ok) {
+      let msg = `upload failed (${res.status})`;
+      try { msg = (await res.json())?.error || msg; } catch { /* keep */ }
+      throw new Error(msg);
+    }
+    const meta = await res.json();
+    const entry = { id: meta.slugs?.[0] || meta.id, sha: meta.id, kind: 'audio', transcriptState: 'pending' };
+    state.pendingAttachments.push(entry);
+    renderAttachStrip();
+
+    // Transcribe after the chip exists, so my human sees the note land
+    // immediately and the words arrive under it — rather than staring at
+    // nothing for however long a cold model load takes.
+    try {
+      const t = await fetch(`/api/media/${encodeURIComponent(entry.id)}/transcribe`, { method: 'POST' });
+      const got = await t.json();
+      if (got?.ok && got.text) { entry.transcript = got.text; entry.transcriptState = 'done'; }
+      else if (got?.ok) entry.transcriptState = 'none';
+      else entry.transcriptState = 'failed';
+    } catch { entry.transcriptState = 'failed'; }
+    renderAttachStrip();
+  } catch (err) {
+    appendErrorMessage(`Couldn't attach that voice note: ${err?.message ?? err}`);
   }
 }
 
@@ -3404,6 +3539,11 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
+  if ($('voice-enabled-toggle')) {
+    const was = state.voiceEnabled === true;
+    state.voiceEnabled = $('voice-enabled-toggle').checked;
+    if (was !== state.voiceEnabled) window.dispatchEvent(new Event('voice-enabled-changed'));
+  }
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -3562,6 +3702,7 @@ function writeSettingsToUI() {
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
+  if ($('voice-enabled-toggle')) setIfNotFocused($('voice-enabled-toggle'), 'checked', state.voiceEnabled === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
@@ -4928,6 +5069,16 @@ function init() {
       imageInput.value = '';   // allow re-picking the same file
     });
   }
+  // ── Voice notes ────────────────────────────────────────────────
+  // Its own visibility rule, from its own consent: listening is a separate
+  // switch from seeing, and a microphone button that appears because vision
+  // is on would be lying about what the app is allowed to do.
+  const recordBtn = $('record-btn');
+  const applyRecordVisibility = () => { if (recordBtn) recordBtn.hidden = !state.voiceEnabled; };
+  applyRecordVisibility();
+  window.addEventListener('voice-enabled-changed', applyRecordVisibility);
+  recordBtn?.addEventListener('click', () => { toggleVoiceNote(); });
+
   $('user-input')?.addEventListener('paste', (e) => {
     if (!visionActive()) return;
     const items = Array.from(e.clipboardData?.items || []).filter(it => it.type?.startsWith('image/'));

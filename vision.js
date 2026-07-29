@@ -135,7 +135,7 @@ export async function materializeAttachments(apiMessages, {
   // Fast path: nothing carries media → return the array untouched (identity),
   // so a non-image request is provably unchanged.
   const anyAttachments = messages.some(m => Array.isArray(m?.attachments) && m.attachments.length);
-  if (!anyAttachments) return { messages, imagesLive: 0, imagesStoodIn: 0 };
+  if (!anyAttachments) return { messages, imagesLive: 0, imagesStoodIn: 0, notesStoodIn: 0 };
 
   const capable = await resolveVisionCapable(connection, settings);
   const budget = Number.isFinite(maxLive) ? maxLive
@@ -159,10 +159,14 @@ export async function materializeAttachments(apiMessages, {
 
   // Live budget: only the newest `budget` images may ride live, and only when
   // the connection can see. Counted newest-first across the whole request.
+  // Audio is never eligible: no provider in this milestone takes a voice note
+  // as a content part, and a voice note's content is its transcript anyway
+  // (§9). Gating it here rather than at the use site means a future audio
+  // modality is one condition to relax, not a bug to find.
   const liveIds = new Set();
   if (capable && budget > 0) {
     for (let i = refs.length - 1; i >= 0 && liveIds.size < budget; i--) {
-      if (refs[i].meta) liveIds.add(`${refs[i].mi}:${refs[i].id}`);
+      if (refs[i].meta?.kind === 'image') liveIds.add(`${refs[i].mi}:${refs[i].id}`);
     }
   }
 
@@ -171,7 +175,7 @@ export async function materializeAttachments(apiMessages, {
   // stand-in) here. Some strict providers reject unknown message fields.
   const stripAtt = (m) => { if (!m || !('attachments' in m)) return m; const { attachments, ...rest } = m; return rest; };
 
-  let imagesLive = 0, imagesStoodIn = 0;
+  let imagesLive = 0, imagesStoodIn = 0, notesStoodIn = 0;
   const stoodInUndescribed = [];   // asset ids stood in with no description yet
   const out = [];
   for (let mi = 0; mi < messages.length; mi++) {
@@ -196,7 +200,7 @@ export async function materializeAttachments(apiMessages, {
       const standin = ref.meta ? buildStandin(ref.meta, { now })
         : `[image ${ref.id ?? '?'}: no longer available]`;
       standinLines.push(standin);
-      imagesStoodIn++;
+      if (ref.meta?.kind === 'audio') notesStoodIn++; else imagesStoodIn++;
       // An undescribed asset stood in as text is a candidate for a background
       // describe (§6) — so NEXT time it carries real words, not "not yet described".
       if (ref.meta && ref.meta.description === null) stoodInUndescribed.push(ref.meta.id);
@@ -220,13 +224,22 @@ export async function materializeAttachments(apiMessages, {
   // about is a capability it doesn't have (the discoverability rule). Injected
   // HERE, in the shared seam, so every surface gets it without per-surface
   // wiring. First person, server-injected → literal "my human".
+  // The same reasoning for voice notes: a convention nobody explained is a
+  // capability I don't have. Separate line, separate condition — a turn with
+  // only voice notes should not be told about images it never received.
+  if (notesStoodIn > 0) {
+    out.push({
+      role: 'system',
+      content: '[The [voice note …] notes in this conversation are recordings that were spoken to me. "What I heard when I listened" is exactly that — I listened to the recording, and the quoted words are what was said in it. I talk about them as things I heard. One marked "I haven\'t listened to this one yet" is one I genuinely haven\'t heard.]',
+    });
+  }
   if (imagesStoodIn > 0) {
     out.push({
       role: 'system',
       content: '[The [image …] notes in this conversation are images that were shared with me. "What I saw when I looked" is exactly that — I looked at the image and those are my own words about it. I talk about these images naturally, from what I saw. One marked "I haven\'t looked at this one yet" is one I genuinely haven\'t seen.]',
     });
   }
-  return { messages: out, imagesLive, imagesStoodIn, stoodInUndescribed };
+  return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, stoodInUndescribed };
 }
 
 /**

@@ -153,7 +153,7 @@ import {
 } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
 import { normalizeTag } from './content-tags.js';
-import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
+import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './vision.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
@@ -261,7 +261,8 @@ import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_E
 import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
-import { createAudioWorker } from './audio-worker-host.js';
+import { currentAudioWorker as currentAudioWorkerShared, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
+import { hearVoiceNotes, transcribeAsset, listeningAllowed } from './voice-transcribe.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
@@ -529,6 +530,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       return mat.messages;
     } catch { return preVisionMessages; }
   };
+  // Hear before answering. Outside the vision block on purpose — hearing is a
+  // separate consent from seeing, and a voice note has NO live-modality
+  // fallback: the transcript is the only content there will ever be, so if it
+  // lands after the prompt I answer a message I never heard.
+  await hearVoiceNotes(enrichedMessages, readSettingsSync() || {}, {
+    rootDir: __dirname, readSettings: readSettingsSync, label: 'voice',
+  });
+
   if (!visionDisabled()) {
     try {
       const settingsForVision = readSettingsSync() || {};
@@ -1365,59 +1374,11 @@ app.get('/api/diagnostics/voice-bench', (_req, res) => {
 //
 // PROTO_FAMILIAR_VOICE_DISABLED=1 kills all of it, read-aloud included.
 
-const VOICE_HARD_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
-
-/**
- * Which engine speaks is a SETTING, and settings change while running. So the
- * worker is built on first use rather than at boot, and torn down when the
- * choice changes — otherwise a ward who installs voicebox and switches to it
- * would keep hearing the old engine until they restarted.
- */
-let audioWorker = null;
-let audioBackend = null;
-
-function buildAudioWorker(resolved) {
-  return createAudioWorker({
-    command: resolved.command,
-    workerScript: resolved.workerScript,
-    env: resolved.env ?? {},
-    onEvent: (e) => {
-    // Failures that matter are observable — the repo rule. A parked worker in
-    // particular must never be something a ward has to guess at.
-      if (e.type === 'parked') console.warn(`[voice] worker parked: ${e.reason}`);
-      else if (e.type === 'exit') console.warn(`[voice] worker exited (${e.signal ?? e.code})`);
-      else if (e.type === 'protocol-error') console.warn(`[voice] protocol error: ${e.reason}`);
-    },
-  });
-}
-
-/**
- * The worker for the currently-chosen engine, spawning or re-spawning as
- * needed. Never throws — every caller is a request path.
- */
-async function currentAudioWorker() {
-  if (VOICE_HARD_DISABLED) return { worker: null, resolved: null };
-
-  const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
-  const resolved = await resolveBackend({ rootDir: __dirname, settings: s });
-
-  if (audioWorker && audioBackend?.backend === resolved.backend
-      && audioBackend?.workerScript === resolved.workerScript) {
-    return { worker: audioWorker, resolved: audioBackend };
-  }
-
-  // The choice changed. Stop the old one before the new one starts, so two
-  // engines never hold models in RAM at once on a machine with 8 GB.
-  if (audioWorker) { try { audioWorker.stop(); } catch { /* already gone */ } }
-  audioWorker = buildAudioWorker(resolved);
-  audioBackend = resolved;
-  if (resolved.fellBackFrom) {
-    console.warn(`[voice] asked for ${resolved.fellBackFrom}, using ${resolved.backend}: ${resolved.reason}`);
-  } else {
-    console.log(`[voice] speaking through ${resolved.backend}`);
-  }
-  return { worker: audioWorker, resolved };
-}
+// The worker itself lives in audio-worker-current.js so Discord can reach the
+// same one (RULE C: a capability lands in the shared path, or it drifts). This
+// wrapper only supplies what that module deliberately does not know — where
+// the app root is, and how settings are read.
+const currentAudioWorker = () => currentAudioWorkerShared({ rootDir: __dirname, readSettings: readSettingsSync });
 
 function voiceListeningEnabled() {
   if (VOICE_HARD_DISABLED) return false;
@@ -1499,11 +1460,11 @@ app.get('/api/voice/status', async (req, res) => {
  * offered the download — not shown an error whose fix is a CLI incantation they
  * were never told about. This is what lets the button offer.
  */
-app.get('/api/voice/models', async (_req, res) => {
+app.get('/api/voice/models', async (req, res) => {
   try {
-    const plan = composePlan({ tier: 'read-aloud', engine: 'pocket' });
+    const plan = voicePlanFor(req.query?.what);
     const state = await inspectInstalled({ plan, modelsDir: path.join(__dirname, MODELS_SUBDIR) });
-    res.json({ ok: true, ...state });
+    res.json({ ok: true, what: req.query?.what === 'listen' ? 'listen' : 'speak', ...state });
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
   }
@@ -1516,9 +1477,37 @@ app.get('/api/voice/models', async (_req, res) => {
  * the same as the CLI, because 194 MB arriving unannounced is not a kindness
  * on a laptop someone is already short of room on.
  */
-app.post('/api/voice/install-models', async (_req, res) => {
+/**
+ * Which models a thing actually needs.
+ *
+ * ⚠️ This exists because both call sites passed `{ tier, engine }` and
+ * `composePlan` takes `{ capabilityTier, voiceEngine }`. Neither name matched,
+ * so both silently fell through to the DEFAULT tier — 'listening' — and the
+ * read-aloud button was quietly planning, reporting missing, and downloading
+ * the VAD and streaming-ASR models on top of the voice: ~130 MB nobody asked
+ * for, on machines chosen for being small. No error, no wrong behaviour
+ * visible anywhere; it just cost people disk.
+ *
+ * One helper now, named for what the caller wants rather than for the
+ * library's parameter shape, so the mistake has nowhere left to live.
+ */
+function voicePlanFor(what) {
+  const speak = composePlan({ capabilityTier: 'read-aloud', voiceEngine: 'pocket' });
+  if (what !== 'listen') return speak;
+
+  // Voice notes are decoded offline, once, with nobody waiting — so listening
+  // needs the OFFLINE recogniser ALONE. The streaming models and VAD belong to
+  // live calls (Pass 2); the speaking voice belongs to read-aloud. Someone who
+  // wants to send me a voice note and never wants me to talk should not be
+  // handed 200 MB of my voice to get it, so the plan is narrowed to the extra
+  // rather than composed around a voice they did not ask for.
+  const listen = composePlan({ capabilityTier: 'read-aloud', voiceEngine: 'pocket', extras: ['asr-offline'] });
+  return { ...listen, voice: null, capability: [], all: listen.extras };
+}
+
+app.post('/api/voice/install-models', async (req, res) => {
   try {
-    const plan = composePlan({ tier: 'read-aloud', engine: 'pocket' });
+    const plan = voicePlanFor(req.body?.what);
     const modelsDir = path.join(__dirname, MODELS_SUBDIR);
     const summary = await consentSummary({ plan, modelsDir });
     if (summary?.preflight && summary.preflight.ok === false) {
@@ -1529,6 +1518,39 @@ app.post('/api/voice/install-models', async (_req, res) => {
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
   }
+});
+
+/**
+ * Listen to a voice note now, and give back what was said.
+ *
+ * The chat path already transcribes before it answers, so this exists for the
+ * composer: my human records something, and the words appear under it before
+ * they hit send. Seeing the transcript BEFORE sending is what makes a voice
+ * note trustworthy to someone who cannot easily check afterwards — they can
+ * see it heard "oat milk" and not "oat mail", and re-record if it didn't.
+ *
+ * Idempotent by construction: `transcribeAsset` listens once and caches, so
+ * calling this twice costs one decode.
+ */
+app.post('/api/media/:id/transcribe', async (req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  const settings = readSettingsSync() || {};
+  if (!listeningAllowed(settings)) {
+    return res.json({ ok: false, reason: 'voice-disabled', hint: 'Listening is switched off in Settings.' });
+  }
+  // Checked here rather than left to the engine's throw: "the listening model
+  // has not been downloaded yet" is a thing my human can DO something about,
+  // and it should arrive as an offer with a size on it, not as a load failure.
+  try {
+    const state = await inspectInstalled({ plan: voicePlanFor('listen'), modelsDir: path.join(__dirname, MODELS_SUBDIR) });
+    const missing = (state.models ?? []).filter((m) => !m.complete);
+    if (missing.length) {
+      return res.json({ ok: false, reason: 'model-missing', bytes: state.outstandingBytes ?? null });
+    }
+  } catch { /* if we can't tell, let the attempt report the real problem */ }
+
+  const got = await transcribeAsset(req.params.id, settings, { getWorker: currentAudioWorker });
+  res.json(got);
 });
 
 /**
@@ -2124,15 +2146,25 @@ function visionThreatScoringOn() {
   try { return readSettingsSync()?.visionThreatScoring !== false; } catch { return true; }
 }
 
-app.post('/api/media', express.raw({ type: 'image/*', limit: '12mb' }), async (req, res) => {
-  if (visionDisabled()) return res.status(403).json({ error: 'Vision is turned off right now.' });
+// Images and voice notes come in the same door, because they are the same
+// store: same content-addressing, same audience tag, same slug ids. What
+// differs is which consent governs them — seeing vs hearing — so the gate is
+// picked from the kind rather than assumed.
+app.post('/api/media', express.raw({ type: ['image/*', 'audio/*'], limit: '30mb' }), async (req, res) => {
   const buffer = req.body;
   if (!Buffer.isBuffer(buffer) || !buffer.length) {
-    return res.status(400).json({ error: 'No image bytes received (send raw image/* body).' });
+    return res.status(400).json({ error: 'No bytes received (send a raw image/* or audio/* body).' });
   }
   const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
-  if (!IMAGE_MIME_EXT[mime]) {
-    return res.status(415).json({ error: `Unsupported image type "${mime || '(none)'}". Allowed: ${Object.keys(IMAGE_MIME_EXT).join(', ')}.` });
+  const kind = mediaKindFor(mime);
+  if (!kind) {
+    return res.status(415).json({ error: `Unsupported media type "${mime || '(none)'}". Allowed: ${Object.keys(MEDIA_KINDS).join(', ')}.` });
+  }
+  if (kind === 'image' && visionDisabled()) {
+    return res.status(403).json({ error: 'Vision is turned off right now.' });
+  }
+  if (kind === 'audio' && VOICE_HARD_DISABLED) {
+    return res.status(403).json({ error: 'Voice is turned off right now.' });
   }
   const q = req.query || {};
   const meta = await saveAsset({
@@ -2150,7 +2182,7 @@ app.post('/api/media', express.raw({ type: 'image/*', limit: '12mb' }), async (r
 // loopback/Tailscale gate as every endpoint.
 app.get('/api/media/:id', async (req, res) => {
   const got = await getAsset(req.params.id);
-  if (got?.ok === false) return res.status(404).json({ error: 'Image not found.' });
+  if (got?.ok === false) return res.status(404).json({ error: 'Not found.' });
   res.setHeader('Content-Type', got.meta.mime);
   res.setHeader('Cache-Control', 'private, max-age=31536000, immutable'); // content-addressed → safe forever
   res.send(got.buffer);
@@ -5746,6 +5778,10 @@ async function handleSignal(signal) {
   }, 5000).unref();
   try { httpServer.close(); } catch { /* already closed */ }
   try { await stopMemorizationWorker(); } catch { /* already stopped */ }
+  // The audio worker is a child process holding hundreds of MB of models; it
+  // gets stopped explicitly rather than left to die of stdin EOF, which is
+  // slow on Windows and was already the reason this handler exists.
+  try { stopAudioWorker(); } catch { /* already stopped */ }
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopGcalSyncLoop(); } catch { /* already stopped */ }

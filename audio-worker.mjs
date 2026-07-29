@@ -21,8 +21,9 @@
  * headroom left for Node and the Python children even mid-burst.
  *
  * ── Not yet built ───────────────────────────────────────────────────────
- * Pass 1 is the spine: load, unload, report, synthesise. Streaming ASR, VAD
- * gating and barge-in belong to Pass 2 and are absent rather than stubbed —
+ * Pass 1 is the spine: load, unload, report, synthesise, and transcribe a
+ * finished file. Streaming ASR, VAD gating and barge-in belong to Pass 2 and
+ * are absent rather than stubbed —
  * an op that answers `unsupported` is honest; one that pretends is not.
  */
 
@@ -93,6 +94,38 @@ function buildPocketTts(modelDir) {
   });
 }
 
+/**
+ * Build the offline recogniser from an unpacked SenseVoice directory.
+ *
+ * Two file names, both upstream's, both sitting directly in modelDir once the
+ * extractor has stripped the archive's wrapper.
+ *
+ * `useInverseTextNormalization` is what turns "twenty five" into "25" and adds
+ * the punctuation — the difference between a transcript my human can read back
+ * and a wall of lowercase. It is a number, not a boolean, because the binding
+ * passes it straight through to C++.
+ *
+ * `language` is left empty deliberately: SenseVoice does its own language ID
+ * per utterance, and pinning it to one language would break the bilingual
+ * household this model was chosen for.
+ */
+function buildRecognizer(modelDir) {
+  const at = (f) => path.join(modelDir, f);
+  return new engine.OfflineRecognizer({
+    modelConfig: {
+      senseVoice: {
+        model: at('model.int8.onnx'),
+        language: '',
+        useInverseTextNormalization: 1,
+      },
+      tokens: at('tokens.txt'),
+      numThreads: threads.asr,
+      provider: 'cpu',
+      debug: false,
+    },
+  });
+}
+
 /** Loaded models, by role. Lazy: nothing loads until something needs it. */
 const loaded = new Map();
 let engine = null;
@@ -149,6 +182,7 @@ const OPS = {
 
     try {
       if (role === 'tts') loaded.set(role, { session: buildPocketTts(modelDir), modelDir, at: Date.now() });
+      else if (role === 'asr-offline') loaded.set(role, { session: buildRecognizer(modelDir), modelDir, at: Date.now() });
       else loaded.set(role, { modelDir, at: Date.now() });   // other roles arrive with Pass 2
       reportState();
       // The sample rate rides back on the load, because a streaming caller has
@@ -165,6 +199,56 @@ const OPS = {
     if (role) loaded.delete(role); else loaded.clear();
     reportState();
     send({ reqId, ok: true, unloaded: role ?? 'all' });
+  },
+
+  /**
+   * Listen to a file and return what was said.
+   *
+   * Offline, one shot, nobody waiting — the opposite of the streaming path
+   * Pass 2 brings. The caller hands over a wav path rather than samples
+   * because `readWave` is the engine's own reader and resamples nothing we
+   * would have to reimplement badly.
+   *
+   * `decodeAsync` rather than `decode`: decoding a several-minute note is
+   * blocking C++, and this process still has to answer a ping while it works.
+   *
+   * SenseVoice returns emotion and audio-event tags alongside the text. They
+   * are passed back but NOT used for anything — reading tone into a care
+   * decision is the safety-critical territory §8 says gets its own spec and
+   * its own sign-off, and it does not get to arrive quietly as a side effect
+   * of transcription.
+   */
+  async transcribe({ reqId, wavPath }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    if (!wavPath || typeof wavPath !== 'string') {
+      return send({ reqId, ok: false, reason: 'bad-request', detail: 'wavPath is required' });
+    }
+    const held = loaded.get('asr-offline');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the listening model is not loaded' });
+
+    try {
+      const wave = engine.readWave(wavPath);
+      const started = Date.now();
+      const stream = held.session.createStream();
+      stream.acceptWaveform({ samples: wave.samples, sampleRate: wave.sampleRate });
+      const result = await held.session.decodeAsync(stream);
+      const elapsedMs = Date.now() - started;
+      const durationSec = wave.samples.length / wave.sampleRate;
+
+      send({
+        reqId, ok: true,
+        text: typeof result?.text === 'string' ? result.text.trim() : '',
+        lang: result?.lang ?? null,
+        emotion: result?.emotion ?? null,
+        event: result?.event ?? null,
+        durationSec: Number(durationSec.toFixed(3)),
+        elapsedMs,
+        realTimeFactor: durationSec > 0 ? Number((elapsedMs / 1000 / durationSec).toFixed(3)) : null,
+      });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'transcribe-failed', detail: String(err?.message ?? err) });
+    }
   },
 
   /**
