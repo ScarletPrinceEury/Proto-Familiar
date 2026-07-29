@@ -7384,8 +7384,11 @@ async function openVoicePicker() {
   // no checkmark at all.
   try {
     const st = await vbGet('/api/voice/status?probe=0');
-    VP.chosen = st?.chosenVoice ?? null;
-  } catch { VP.chosen = null; }
+    // Only overwrite on a real answer. A hiccup that cleared this would show
+    // "Use this" on the voice already in use — the tick silently wrong, which
+    // is the state this fetch exists to prevent.
+    if (st?.chosenVoice) VP.chosen = st.chosenVoice;
+  } catch { /* keep whatever we last knew; a stale tick beats a wrong one */ }
   const sel = $('voice-picker-source');
   if (sel && !sel.options.length) {
     const s = await vbGet('/api/voice/clips/summary');
