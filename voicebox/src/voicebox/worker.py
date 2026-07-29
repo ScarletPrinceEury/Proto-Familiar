@@ -13,14 +13,18 @@ every sentence a different person, then — once utterances were merged — ever
 paragraph. Merging reduced the number of resets; it could never remove them,
 because the port has no way to continue a trajectory across a call.
 
-Upstream does:
+Upstream's `generate_audio_stream` handles the whole message in ONE call. It
+splits internally via `split_into_best_sentences` on token boundaries, using
+the model's own tokenizer, and threads its own state across those pieces —
+that is the "infinitely long text inputs" the project claims. One call, one
+continuous trajectory, no resets for the voice to drift at.
 
-    model.generate_audio(state, text, copy_state=False)
-
-`copy_state=False` carries the KV cache forward, which is how the project can
-claim "can handle infinitely long text inputs". One state, threaded through
-every chunk of a message, is one continuous trajectory — no resets, and so no
-seam for the voice to drift at.
+⚠️ `copy_state` is NOT that mechanism, and I read it backwards twice at the
+cost of two live tests. From the source: "If True, preserves the original
+state for reuse. If False, modifies the input state in-place." It is a
+consume-the-state performance flag. Passing False and reusing the state
+corrupts it a little more each call — one good paragraph, then static, then
+nothing. Leave it at its default.
 
 It also runs `english_2026-04`, upstream's current English model. The only
 sherpa export is `2026-01`, an older checkpoint.
@@ -31,12 +35,12 @@ model 219), around 600 MB installed. That is real money against a project whose
 whole premise is running on hardware people already own, which is why this is
 opt-in and why the footprint is reported rather than buried.
 
-── The state cache is the trick ────────────────────────────────────────
-A per-message trajectory needs a FRESH copy of the voice state each time —
-`copy_state=False` mutates what it is given, so a message must not inherit the
-last one's tail. Re-deriving from audio is slow. Exporting the state once to
-safetensors and reloading per message is, in upstream's words, "quite fast as
-it's just reading the kvcache from disk".
+── The state cache is a speed trick, not a correctness one ─────────────
+Deriving the voice state from audio is the slow part and does not change
+between messages, so it is exported once to safetensors and reloaded per
+message — "quite fast as it's just reading the kvcache from disk". With
+`copy_state` left at its default the engine copies before generating, so the
+cached state is never consumed; reloading is about latency, not safety.
 """
 
 from __future__ import annotations
@@ -127,21 +131,18 @@ def _voice_state_file(reference_wav: str) -> Path:
 
 
 def _chunk_text(text: str, max_chars: int = 350) -> list[str]:
-    """Split a message into utterances to generate one after another.
+    """Split text at paragraph, then sentence, then clause boundaries.
 
-    ── Why this has to exist ───────────────────────────────────────────
-    `generate_audio_stream` generates until EOS. It is built for ONE utterance,
-    so handing it a whole message means it speaks the first part, reaches EOS,
-    and stops — which is exactly what my human heard: it ended after the first
-    paragraph. Upstream's "infinitely long text inputs" is chunking AND
-    `copy_state=False` together; I built the second half and forgot the first.
+    ⚠️ NOT the generation path. `generate_audio_stream` does its own splitting
+    with `split_into_best_sentences` on TOKEN boundaries using the model's own
+    tokenizer — strictly better than counting characters — and threads its own
+    state across the pieces. Chunking here fought that and produced nothing but
+    corruption.
 
-    The chunks are NOT independent here, which is the whole difference from the
-    ONNX path. Each one continues the same KV cache, so a boundary is a place
-    the model breathes rather than a place it becomes someone else.
-
-    Prefers paragraph breaks, then sentence ends, then clause marks — a seam
-    where a listener already expects a pause.
+    Kept because it is still the right shape for measuring how long a message
+    is before deciding what to do with it, and because deleting the reasoning
+    would invite someone to re-derive the same wrong idea. If you are about to
+    use this to feed the engine: do not. Hand it the whole text.
     """
     text = (text or "").strip()
     if not text:
@@ -286,29 +287,41 @@ def op_tts_stream(msg: dict) -> None:
         first_chunk_ms: float | None = None
         runaway = False
 
-        pieces = _chunk_text(text)
-        stopped = False
-
-        for piece in pieces:
-            if stopped:
+        # ── The whole message, one call, state left alone ────────────────
+        #
+        # I got `copy_state` backwards twice and it cost two live tests. From
+        # the source:
+        #
+        #   copy_state: Whether to create a deep copy of the model state before
+        #       generation. If True, preserves the original state for reuse.
+        #       If False, modifies the input state in-place. Defaults to True.
+        #
+        # It is a consume-the-state performance flag, NOT a continuity
+        # mechanism. Passing False and reusing the same state corrupted it a
+        # little more each call — my human heard one good paragraph, then
+        # static, then nothing.
+        #
+        # And chunking here was never needed: generate_audio_stream takes
+        # `max_tokens=MAX_TOKEN_PER_CHUNK` and calls split_into_best_sentences
+        # itself. It splits on TOKEN boundaries with the model's own tokenizer,
+        # which is strictly better than my character counting, and it threads
+        # its own state across those pieces. That is the "infinitely long text
+        # inputs" the project claims — it was always inside this one call.
+        #
+        # So: hand it everything and leave the state alone. `_chunk_text` is
+        # kept only for the length guard below.
+        for chunk in _model.generate_audio_stream(state, text):
+            n = int(chunk.shape[-1])
+            if n == 0:
+                continue
+            if first_chunk_ms is None:
+                first_chunk_ms = round((time.monotonic() - started) * 1000)
+            if sample_count + n > ceiling:
+                runaway = True
                 break
-            # copy_state=False threads ONE state through every piece, so this
-            # is one continuous trajectory rather than a fresh clone per
-            # utterance. That is the entire reason this worker exists.
-            for chunk in _model.generate_audio_stream(state, piece, copy_state=False):
-                n = int(chunk.shape[-1])
-                if n == 0:
-                    continue
-                if first_chunk_ms is None:
-                    first_chunk_ms = round((time.monotonic() - started) * 1000)
-                if sample_count + n > ceiling:
-                    runaway = True
-                    stopped = True
-                    break
-                sample_count += n
-                if not send_pcm(stream_id, _to_pcm16(chunk)):
-                    stopped = True   # the pipe is gone; stop generating into nothing
-                    break
+            sample_count += n
+            if not send_pcm(stream_id, _to_pcm16(chunk)):
+                break   # the pipe is gone; stop generating into nothing
 
         elapsed_ms = round((time.monotonic() - started) * 1000)
         duration = sample_count / sample_rate if sample_rate else 0.0
