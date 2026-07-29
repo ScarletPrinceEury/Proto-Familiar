@@ -542,9 +542,9 @@ function buildVoiceNoteStandin(meta, { now = Date.now() } = {}) {
   } else if (meta.description === null) {
     body = "I haven't listened to this one yet";
   } else if (meta.description?.reason === 'voice-disabled') {
-    // Distinct from "can't" on purpose: this one is a setting my human owns
-    // and can change, and saying so is the difference between a dead end and
-    // a door.
+    // Kept for notes stored while this WAS cached (it no longer is — a switch
+    // my human can flip must not become a permanent transcript). Reads as the
+    // door it is rather than a dead end.
     body = 'I could not listen — listening is switched off';
   } else {
     body = 'I have no way to listen to voice notes right now';

@@ -1998,13 +1998,38 @@ function attachmentRow(attachments) {
   const row = document.createElement('div');
   row.className = 'msg-attachments';
   for (const a of atts) {
+    // A voice note is not a picture. This built an <img> for EVERY attachment,
+    // so a wav failed to decode, fired `error`, and my human's own recording
+    // appeared in their conversation as "[image no longer available]" — which
+    // is both wrong and quietly alarming about a file that is perfectly fine.
+    const url = `/api/media/${encodeURIComponent(a.id)}`;
+    const gone = (what) => Object.assign(document.createElement('span'), {
+      className: 'msg-attachment-missing', textContent: `[${what} no longer available]`,
+    });
+    const audioEl = () => {
+      const player = document.createElement('audio');
+      player.className = 'msg-attachment-audio';
+      player.controls = true;
+      player.preload = 'metadata';
+      player.src = url;
+      player.addEventListener('error', () => player.replaceWith(gone('voice note')));
+      return player;
+    };
+
+    if (a.kind === 'audio') { row.appendChild(audioEl()); continue; }
+
     const img = document.createElement('img');
     img.className = 'msg-attachment-thumb';
-    img.src = `/api/media/${encodeURIComponent(a.id)}`;
+    img.src = url;
     img.alt = 'shared image';
     img.loading = 'lazy';
-    img.addEventListener('click', () => window.open(`/api/media/${encodeURIComponent(a.id)}`, '_blank', 'noopener'));
-    img.addEventListener('error', () => { img.replaceWith(Object.assign(document.createElement('span'), { className: 'msg-attachment-missing', textContent: '[image no longer available]' })); });
+    img.addEventListener('click', () => window.open(url, '_blank', 'noopener'));
+    // `kind` rides on attachments the composer just made, but a message
+    // restored from a session log carries only an id — so a failure to decode
+    // means "this may not be a picture", not "this file is gone". Trying audio
+    // before giving up is what stops a perfectly good voice note reading as a
+    // missing image, which is how this bug looked to my human.
+    img.addEventListener('error', () => img.replaceWith(audioEl()), { once: true });
     row.appendChild(img);
   }
   return row;
@@ -2587,6 +2612,86 @@ function renderAttachStrip() {
 }
 
 /**
+ * Ask for the transcript, and keep WHY if there isn't one.
+ *
+ * ⚠️ This used to collapse every failure into "I couldn't make this one out".
+ * My human's first real voice note was perfectly clear; the listening model
+ * simply had not been downloaded and listening was switched off — two things
+ * they could have fixed in seconds. Instead they were told their speech was
+ * unintelligible. The server had the precise reason the whole time and the
+ * client threw it away at the last step, which turned two solvable states into
+ * one dead end.
+ */
+async function transcribePending(entry) {
+  try {
+    const t = await fetch(`/api/media/${encodeURIComponent(entry.id)}/transcribe`, { method: 'POST' });
+    const got = await t.json();
+    if (got?.ok && got.text) { entry.transcript = got.text; entry.transcriptState = 'done'; }
+    else if (got?.ok) entry.transcriptState = 'none';
+    else { entry.transcriptState = 'failed'; entry.reason = got?.reason ?? null; entry.bytes = got?.bytes ?? null; }
+  } catch { entry.transcriptState = 'failed'; entry.reason = null; }
+  renderAttachStrip();
+}
+
+/** Human-readable, and honest about whose problem it is. */
+function transcriptProblem(entry) {
+  switch (entry.reason) {
+    case 'voice-disabled':
+      return { text: 'Listening is switched off — turn on "Hearing voice notes" in Settings.', fix: null };
+    case 'model-missing':
+      return {
+        text: 'I need to download the listening model before I can hear this.',
+        fix: { label: `⬇ Get it (${entry.bytes ? Math.round(entry.bytes / 1024 / 1024) : 158} MB)`, kind: 'download' },
+      };
+    case 'no-worker':
+    case 'load-failed':
+      return { text: 'The speech engine is not ready yet — try again in a moment.', fix: { label: '↻ Try again', kind: 'retry' } };
+    case 'unreadable-format':
+      return { text: "I couldn't read that audio format.", fix: null };
+    default:
+      return { text: "I couldn't make this one out — it still sends.", fix: { label: '↻ Try again', kind: 'retry' } };
+  }
+}
+
+/**
+ * Fetch the listening model, then hear the note that prompted it.
+ *
+ * The download offer had to arrive HERE. The README and the troubleshooting
+ * doc both promise it is offered the first time you record — and it never was,
+ * because `model-missing` was returned by the server and then discarded. A
+ * capability my human cannot reach is not a capability.
+ */
+async function getListeningModel(entry, btn) {
+  btn.disabled = true;
+  btn.textContent = '⬇ Downloading…';
+  try {
+    const res = await fetch('/api/voice/install-models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ what: 'listen' }),
+    });
+    const out = await res.json();
+    if (!out?.ok) {
+      btn.disabled = false;
+      btn.textContent = '⬇ Download failed';
+      btn.title = out?.message || out?.detail || out?.reason || 'the download did not finish';
+      return;
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '⬇ Download failed';
+    btn.title = String(err?.message ?? err);
+    return;
+  }
+  // The note is still sitting right there — hear it now rather than making
+  // them re-record something they already said.
+  entry.transcriptState = 'pending';
+  entry.reason = null;
+  renderAttachStrip();
+  await transcribePending(entry);
+}
+
+/**
  * A pending voice note in the composer strip.
  *
  * It shows the transcript as soon as there is one, and that is the point of
@@ -2611,10 +2716,27 @@ function renderVoiceChip(a) {
     words.textContent = a.transcript;
     words.title = a.transcript;
   } else if (a.transcriptState === 'failed') {
-    // Named honestly: the note still sends, and I will read it as a recording
-    // I could not make out rather than pretending it wasn't there.
-    words.textContent = 'I couldn\'t make this one out — it still sends.';
+    // The precise reason, and the button that fixes it where one exists. The
+    // note still sends either way — my Familiar reads it as a recording they
+    // could not make out rather than pretending it wasn't there.
+    const problem = transcriptProblem(a);
+    words.textContent = problem.text;
     words.classList.add('is-quiet');
+    if (problem.fix) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'attach-chip-fix';
+      btn.textContent = problem.fix.label;
+      btn.addEventListener('click', () => {
+        if (problem.fix.kind === 'download') return getListeningModel(a, btn);
+        a.transcriptState = 'pending';
+        a.reason = null;
+        renderAttachStrip();
+        return transcribePending(a);
+      });
+      words.appendChild(document.createElement('br'));
+      words.appendChild(btn);
+    }
   } else if (a.transcriptState === 'none') {
     words.textContent = 'I didn\'t hear any speech in this one.';
     words.classList.add('is-quiet');
@@ -2701,14 +2823,7 @@ async function attachVoiceNote(blob) {
     // Transcribe after the chip exists, so my human sees the note land
     // immediately and the words arrive under it — rather than staring at
     // nothing for however long a cold model load takes.
-    try {
-      const t = await fetch(`/api/media/${encodeURIComponent(entry.id)}/transcribe`, { method: 'POST' });
-      const got = await t.json();
-      if (got?.ok && got.text) { entry.transcript = got.text; entry.transcriptState = 'done'; }
-      else if (got?.ok) entry.transcriptState = 'none';
-      else entry.transcriptState = 'failed';
-    } catch { entry.transcriptState = 'failed'; }
-    renderAttachStrip();
+    await transcribePending(entry);
   } catch (err) {
     appendErrorMessage(`Couldn't attach that voice note: ${err?.message ?? err}`);
   }

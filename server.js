@@ -538,7 +538,25 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     rootDir: __dirname, readSettings: readSettingsSync, label: 'voice',
   });
 
-  if (!visionDisabled()) {
+  // Attachments are materialized even when vision is off, because hearing is
+  // not seeing. Nested inside the vision gate, a voice note vanished entirely
+  // when my human turned images off — no stand-in, no mention, and the raw
+  // `attachments` field left on the outgoing message for a provider to choke
+  // on. The materializer already refuses to send audio live; what it must not
+  // do is go silent about it.
+  const visionOffThisTurn = visionDisabled();
+  if (visionOffThisTurn) {
+    try {
+      const mat = await materializeAttachments(enrichedMessages, {
+        connection: { provider, model, visionCapable: 'no' },
+        settings: readSettingsSync() || {},
+        visibleAudiences: visionGate,
+      });
+      enrichedMessages = mat.messages;
+      if (mat.notesStoodIn) console.log(`[voice] ${mat.notesStoodIn} voice note stand-in(s) (images are off)`);
+    } catch { /* never throws into a turn */ }
+  }
+  if (!visionOffThisTurn) {
     try {
       const settingsForVision = readSettingsSync() || {};
       const connForVision = findConnection(settingsForVision, { provider, model })

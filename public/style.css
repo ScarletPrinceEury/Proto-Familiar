@@ -4007,3 +4007,22 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 @media (prefers-reduced-motion: reduce) {
   #record-btn.is-recording { animation: none; }
 }
+
+/* The fix-it button on a voice note that couldn't be heard. Small, calm, and
+   only present when there is something to actually do — a dead end with a
+   button on it is worse than a dead end. */
+.attach-chip-fix {
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.attach-chip-fix:hover:not(:disabled) { background: var(--surface-2, transparent); }
+.attach-chip-fix:disabled { opacity: 0.6; cursor: default; }
+
+/* A voice note inside a sent message. */
+.msg-attachment-audio { width: 100%; max-width: 320px; height: 32px; display: block; }

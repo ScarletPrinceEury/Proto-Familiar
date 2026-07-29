@@ -85,10 +85,11 @@ export async function transcribeAsset(idOrSlug, settings = {}, { getWorker } = {
   }
 
   if (!listeningAllowed(settings)) {
-    // Recorded, not just returned: the stand-in has to be able to say which
-    // kind of silence this is, and a reason that lives only in a return value
-    // never reaches my human.
-    await remember(meta.id, { text: '', reason: 'voice-disabled' });
+    // NOT cached. This was, and caching it was wrong for the same reason
+    // `no-worker` isn't cached: a switch my human can flip is a "not yet", not
+    // a fact about the recording. Remembering it would have meant a note they
+    // recorded before turning listening on stayed permanently unheard — the
+    // transcript slot filled with a refusal that outlived its own cause.
     return { ok: false, reason: 'voice-disabled' };
   }
 

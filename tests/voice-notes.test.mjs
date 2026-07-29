@@ -296,3 +296,76 @@ test('a temp dir is not left behind by these tests', async () => {
   await fs.rm(stray, { recursive: true, force: true });
   assert.ok(true);
 });
+
+// ── What the first real voice note broke ──────────────────────────
+//
+// My human recorded "Hello hello, this is Chen and this is a test." Three
+// things went wrong at once, and none of them were the recording:
+//   · it appeared in chat as "[image no longer available]"
+//   · they were told it was unintelligible, when in fact the listening model
+//     had never been downloaded and listening was switched off
+//   · with nothing legible in the turn, the Familiar answered the
+//     post-history prompt instead
+
+test('the chat renderer does not treat a voice note as a picture', async () => {
+  const app = await fs.readFile(path.join(process.cwd(), 'public/app.js'), 'utf8');
+  const row = app.slice(app.indexOf('function attachmentRow('), app.indexOf('function createMessageEl('));
+
+  assert.match(row, /a\.kind === 'audio'/, 'audio has no branch — it will render as an <img> again');
+  // The load-error fallback must try audio BEFORE declaring the file gone: a
+  // message restored from a session log carries only an id, so "failed to
+  // decode as an image" does not mean "missing".
+  assert.match(row, /img\.addEventListener\('error', \(\) => img\.replaceWith\(audioEl\(\)\)/,
+    'an undecodable attachment still goes straight to "no longer available"');
+});
+
+test('every server reason survives to the person who can act on it', async () => {
+  const app = await fs.readFile(path.join(process.cwd(), 'public/app.js'), 'utf8');
+
+  // The bug: all of these collapsed into "I couldn't make this one out",
+  // telling my human their speech was unintelligible when the actual causes
+  // were two settings they could have fixed in seconds.
+  for (const reason of ['voice-disabled', 'model-missing', 'no-worker', 'load-failed', 'unreadable-format']) {
+    assert.ok(app.includes(`'${reason}'`), `${reason} is not distinguished in the UI`);
+  }
+  assert.match(app, /entry\.reason = got\?\.reason/, 'the reason is discarded again');
+});
+
+test('the model download is actually offered — the promise the docs make', async () => {
+  const app = await fs.readFile(path.join(process.cwd(), 'public/app.js'), 'utf8');
+
+  // `model-missing` existed as a distinct server reason precisely so this
+  // could happen, and then nothing called it. README and troubleshooting both
+  // say the download is offered the first time you record.
+  assert.match(app, /async function getListeningModel\(/, 'nothing offers the download');
+  assert.match(app, /'\/api\/voice\/install-models'/, 'the offer does not reach the install endpoint');
+  assert.match(app, /what: 'listen'/, 'the offer would fetch the speaking model, not the listening one');
+  // And it must hear the note that prompted it, rather than making them
+  // re-record something they already said.
+  const fn = app.slice(app.indexOf('async function getListeningModel('));
+  assert.match(fn.slice(0, fn.indexOf('\n}\n')), /transcribePending\(entry\)/,
+    'after downloading, the waiting note is never transcribed');
+});
+
+test('a voice note survives images being switched off', async () => {
+  const srv = await fs.readFile(path.join(process.cwd(), 'server.js'), 'utf8');
+  // Hearing is not seeing. Nested inside the vision gate, a voice note
+  // vanished entirely when vision was off — no stand-in, and the raw
+  // `attachments` field left on the outgoing provider message.
+  assert.match(srv, /const visionOffThisTurn = visionDisabled\(\);/);
+  const block = srv.slice(srv.indexOf('const visionOffThisTurn'), srv.indexOf('if (!visionOffThisTurn)'));
+  assert.match(block, /materializeAttachments/, 'nothing materializes attachments when vision is off');
+  assert.match(block, /visionCapable: 'no'/, 'a blind turn must not try to send live parts');
+});
+
+test('a refusal my human can undo is never cached as the transcript', async () => {
+  const src = await fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8');
+  const fn = src.slice(src.indexOf('export async function transcribeAsset('), src.indexOf('/** Cache-write'));
+  const disabled = fn.slice(fn.indexOf('if (!listeningAllowed'), fn.indexOf('meta.ext !== '));
+
+  // It used to `remember()` here. A note recorded before listening was turned
+  // on would then stay permanently unheard — the transcript slot filled with a
+  // refusal that outlived its own cause.
+  assert.doesNotMatch(disabled, /await remember\(/, 'the voice-disabled refusal is cached again');
+  assert.match(disabled, /NOT cached/);
+});
