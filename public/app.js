@@ -2149,6 +2149,11 @@ async function speakMessage(text, btn) {
     if (speech.token !== token) return;
     if (!plan.ok || plan.empty || !plan.id) return fail('there is nothing here to read out');
 
+    // Before playing, make sure the speaking model is actually here. On a
+    // fresh install it is not, and erroring would leave someone with a button
+    // that fails and no idea that a download is what it wants. Offer it.
+    if (!(await ensureSpeechModel(btn, token))) return;
+
     // One URL, one generation, streamed. The browser starts playing as bytes
     // arrive, which is where the responsiveness comes from now — not from
     // splitting the message up, which is what made it sound like several
@@ -2165,6 +2170,66 @@ async function speakMessage(text, btn) {
   } catch (err) {
     fail('read-aloud failed', String(err?.message ?? err));
   }
+}
+
+/**
+ * Is the speaking model on disk — and if not, offer to fetch it.
+ *
+ * Read-aloud needs a 194 MB download that used to exist only as a terminal
+ * command nobody was told about. A first click now becomes a question with a
+ * size on it, answered by clicking again, rather than an error whose fix lives
+ * in a README.
+ *
+ * Returns true when it is safe to speak.
+ */
+async function ensureSpeechModel(btn, token) {
+  let state;
+  try {
+    state = await (await fetch('/api/voice/models')).json();
+  } catch {
+    return true;   // cannot tell — let the speak attempt report the real problem
+  }
+  if (!state?.ok) return true;
+
+  const missing = (state.models ?? []).filter((m) => m.id === 'tts-pocket' && !m.complete);
+  if (!missing.length) return true;
+
+  // First click: ask. Second click within the offer: do it.
+  if (btn.dataset.offeringDownload !== '1') {
+    btn.dataset.offeringDownload = '1';
+    btn.textContent = '⬇ Get the voice (194 MB)';
+    btn.title = 'Reading aloud needs a one-time download. Click again to start it.';
+    btn.classList.remove('is-speaking');
+    speech.btn = null;
+    speech.token++;   // this click is no longer a playback attempt
+    setTimeout(() => {
+      if (btn.dataset.offeringDownload === '1') {
+        btn.dataset.offeringDownload = '';
+        btn.textContent = '🔊 Read aloud';
+      }
+    }, 15000);
+    return false;
+  }
+
+  btn.dataset.offeringDownload = '';
+  btn.textContent = '⬇ Downloading…';
+  try {
+    const out = await (await fetch('/api/voice/install-models', { method: 'POST' })).json();
+    if (!out.ok) {
+      btn.textContent = '⬇ Download failed';
+      btn.title = out.detail || out.reason || 'the download did not finish';
+      setTimeout(() => { btn.textContent = '🔊 Read aloud'; }, 5000);
+      return false;
+    }
+  } catch (err) {
+    btn.textContent = '⬇ Download failed';
+    btn.title = String(err?.message ?? err);
+    setTimeout(() => { btn.textContent = '🔊 Read aloud'; }, 5000);
+    return false;
+  }
+  if (speech.token !== token) return false;
+  btn.textContent = '⏹ Stop';
+  return true;
 }
 
 function wireSpeakButton(btn, getText) {
@@ -4990,6 +5055,9 @@ function init() {
   $('trace-surfacing-btn')?.addEventListener('click', () => openTraceModal({ surfacingOnly: true, autoRun: true }));
   $('voice-bench-btn')?.addEventListener('click', openVoiceBenchModal);
   $('voice-picker-btn')?.addEventListener('click', openVoicePicker);
+  $('voice-backend-select')?.addEventListener('change', onVoiceBackendChange);
+  $('voice-sidecar-install')?.addEventListener('click', installVoiceSidecar);
+  refreshVoiceBackendPane();
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-more')?.addEventListener('click', () => loadVoicePage(false));
@@ -7376,6 +7444,106 @@ function downloadVoiceBench() {
 // as my human browses rather than demanding a 350 MB download first.
 
 const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null, chosen: null };
+
+/**
+ * The speaking-engine pane.
+ *
+ * Everything here used to require editing settings.json by hand, which for
+ * this project's users is the same as not existing. The pane always reports
+ * the ENGINE ACTUALLY IN USE rather than the stored preference — those differ
+ * whenever the sidecar is chosen but not installed, and a dropdown showing a
+ * choice that is not happening is a lie with a nice widget on it.
+ */
+async function refreshVoiceBackendPane() {
+  const sel = $('voice-backend-select');
+  const state = $('voice-backend-state');
+  const install = $('voice-sidecar-install');
+  if (!sel || !state) return;
+
+  let st;
+  try { st = await vbGet('/api/voice/status?probe=0'); } catch { st = null; }
+  if (!st?.backend) { state.textContent = ''; return; }
+
+  const { using, askedFor, reason, available } = st.backend;
+  sel.value = askedFor ?? using;
+
+  const pocketReady = Boolean(available?.pocket?.available);
+  install?.classList.toggle('hidden', pocketReady);
+
+  if (using === 'pocket') {
+    state.textContent = 'Speaking through the Kyutai sidecar.';
+  } else if (askedFor === 'pocket' && !pocketReady) {
+    // Chosen but unusable. Say which one is really talking and why, rather
+    // than leaving someone to wonder why nothing changed.
+    state.textContent = `Sidecar chosen but not installed — still using the built-in engine. ${reason ?? ''}`.trim();
+  } else {
+    state.textContent = 'Speaking through the built-in engine. It can shift voice between paragraphs on long messages.';
+  }
+}
+
+async function onVoiceBackendChange(ev) {
+  const backend = ev.target.value;
+  const state = $('voice-backend-state');
+  if (state) state.textContent = 'Saving…';
+  try {
+    // ⚠️ The server's merge is TOP-LEVEL only, so sending `voiceTts: {backend}`
+    // would replace the whole object and silently discard the chosen voice and
+    // any tuning. Read the current one and send it back whole.
+    const current = await (await fetch('/api/settings')).json();
+    const voiceTts = { ...(current?.settings?.voiceTts ?? {}), backend };
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { voiceTts } }),
+    });
+  } catch (err) {
+    if (state) state.textContent = `Could not save: ${String(err?.message ?? err)}`;
+    return;
+  }
+  await refreshVoiceBackendPane();
+}
+
+/**
+ * Install the sidecar from here rather than a terminal.
+ *
+ * Kicks off a background install and polls, because torch alone is ~122 MB
+ * before anything unpacks and a request that hangs for minutes reads as
+ * broken however well it is going.
+ */
+async function installVoiceSidecar() {
+  const btn = $('voice-sidecar-install');
+  const state = $('voice-backend-state');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '⬇ Installing…';
+  if (state) state.textContent = 'Downloading ~395 MB (torch is most of it). This takes a while; you can keep using everything else.';
+
+  try {
+    const started = await (await fetch('/api/voice/install-sidecar', { method: 'POST' })).json();
+    if (!started.ok) throw new Error(started.detail || started.reason || 'could not start');
+
+    const poll = setInterval(async () => {
+      let s;
+      try { s = await (await fetch('/api/voice/install-sidecar')).json(); } catch { return; }
+      const job = s?.install;
+      if (!job || !job.done) return;
+      clearInterval(poll);
+      btn.disabled = false;
+      if (job.ok) {
+        btn.textContent = '⬇ Install the sidecar';
+        await refreshVoiceBackendPane();
+        if (state) state.textContent = 'Installed. Choose it above to start using it.';
+      } else {
+        btn.textContent = '⬇ Try again';
+        if (state) state.textContent = `Install failed: ${job.detail ?? 'no detail'}`;
+      }
+    }, 3000);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '⬇ Try again';
+    if (state) state.textContent = `Install failed: ${String(err?.message ?? err)}`;
+  }
+}
 
 async function openVoicePicker() {
   $('voice-picker-modal').classList.remove('hidden');

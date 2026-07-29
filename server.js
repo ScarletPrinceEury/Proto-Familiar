@@ -8,6 +8,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, readFileSync, promises as fsp } from 'fs';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'crypto';
 import { sessionSlugId } from './slug-ids.js';
 import { execFile } from 'child_process';
@@ -1527,6 +1528,62 @@ app.post('/api/voice/install-models', async (_req, res) => {
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
   }
+});
+
+/**
+ * Install the voicebox sidecar, from a button.
+ *
+ * The same work `scripts/ensure-voicebox.mjs --install` does, reachable
+ * without a terminal — because "run this command" is where someone with
+ * executive dysfunction stops, and that is the population this project exists
+ * for.
+ *
+ * Long-running by nature (torch is ~122 MB before anything unpacks), so it
+ * answers immediately with `started` and the UI polls /api/voice/status. A
+ * request that hangs for four minutes looks broken however well it is going.
+ */
+let voiceboxInstall = null;   // { startedAt, done, ok, detail }
+
+app.post('/api/voice/install-sidecar', async (_req, res) => {
+  if (voiceboxInstall && !voiceboxInstall.done) {
+    return res.json({ ok: true, started: true, already: true, startedAt: voiceboxInstall.startedAt });
+  }
+  const found = await inspectBackends(__dirname);
+  if (found[BACKENDS.POCKET].available) {
+    return res.json({ ok: true, already: true, done: true, detail: 'already installed' });
+  }
+
+  voiceboxInstall = { startedAt: new Date().toISOString(), done: false, ok: false, detail: null };
+  const script = path.join(__dirname, 'scripts', 'ensure-voicebox.mjs');
+  const child = spawn(process.execPath, [script, '--install'], {
+    cwd: __dirname,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let tail = '';
+  const keep = (buf) => { tail = (tail + buf.toString()).slice(-2000); };
+  child.stdout.on('data', keep);
+  child.stderr.on('data', keep);
+  child.on('error', (err) => {
+    voiceboxInstall = { ...voiceboxInstall, done: true, ok: false, detail: String(err?.message ?? err) };
+  });
+  child.on('close', async (code) => {
+    const after = await inspectBackends(__dirname).catch(() => null);
+    const ok = code === 0 && Boolean(after?.[BACKENDS.POCKET]?.available);
+    voiceboxInstall = {
+      ...voiceboxInstall, done: true, ok,
+      // The tail of the log, because "it failed" with no reason is the thing
+      // that sends someone to a terminal anyway.
+      detail: ok ? null : (tail.trim().split('\n').slice(-4).join(' ') || `exited ${code}`),
+    };
+    if (ok) console.log('[voice] voicebox installed — switch the engine in Settings to use it');
+  });
+
+  res.json({ ok: true, started: true, startedAt: voiceboxInstall.startedAt });
+});
+
+app.get('/api/voice/install-sidecar', (_req, res) => {
+  res.json({ ok: true, install: voiceboxInstall });
 });
 
 // Clearing a park is deliberate — the ward has presumably fixed something.

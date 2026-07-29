@@ -231,6 +231,16 @@
             <div class="action-row" style="margin-top:4px">
               <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
             </div>
+
+            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. The one that ships works everywhere and needs nothing; the other sounds steadier across a long message but is a large download.</p>
+            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+              <select id="voice-backend-select" aria-label="Speaking engine">
+                <option value="sherpa">Built-in — ships with me, nothing to install</option>
+                <option value="pocket">Kyutai sidecar — steadier, ~600 MB</option>
+              </select>
+              <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
+            </div>
+            <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
           </div>
         </div>
 
