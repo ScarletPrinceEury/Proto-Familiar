@@ -262,7 +262,7 @@ import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './vo
 import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
-import { hearVoiceNotes, transcribeAsset, listeningAllowed } from './voice-transcribe.js';
+import { hearVoiceNotes, transcribeAsset, transcriptionAllowed } from './voice-transcribe.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
@@ -1385,10 +1385,13 @@ app.get('/api/diagnostics/voice-bench', (_req, res) => {
 
 // ── The audio worker (voice spec §2, §11) ────────────────────────────────
 //
-// `voiceEnabled` is default OFF and governs everything that HEARS — a
-// microphone is opt-in in a way a pasted photo is not. Read-aloud does not
-// require it (§11): it is an accessibility surface, and hard-of-hearing wards
-// are exactly who it serves.
+// `voiceEnabled` is default OFF and governs CONTINUOUS listening — a mic that
+// is simply open (live calls, Pass 2). It does NOT gate voice notes: pressing
+// the record button is itself the consent, and the browser asks its own
+// permission on top, so a setting in front of that guards a door already
+// locked while hiding the button that opens it. Read-aloud does not require it
+// either (§11): it is an accessibility surface, and hard-of-hearing wards are
+// exactly who it serves.
 //
 // PROTO_FAMILIAR_VOICE_DISABLED=1 kills all of it, read-aloud included.
 
@@ -1553,8 +1556,8 @@ app.post('/api/voice/install-models', async (req, res) => {
 app.post('/api/media/:id/transcribe', async (req, res) => {
   if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
   const settings = readSettingsSync() || {};
-  if (!listeningAllowed(settings)) {
-    return res.json({ ok: false, reason: 'voice-disabled', hint: 'Listening is switched off in Settings.' });
+  if (!transcriptionAllowed()) {
+    return res.json({ ok: false, reason: 'voice-disabled', hint: 'Voice is hard-disabled (PROTO_FAMILIAR_VOICE_DISABLED=1).' });
   }
   // Checked here rather than left to the engine's throw: "the listening model
   // has not been downloaded yet" is a thing my human can DO something about,

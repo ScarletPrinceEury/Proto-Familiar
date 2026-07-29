@@ -379,6 +379,8 @@ const state = {
   // by anything else: a microphone is opt-in in a way a pasted photo is not.
   // Read-aloud deliberately does not depend on this — it is an accessibility
   // surface, and someone hard of hearing needs it most.
+  // Reserved for CONTINUOUS listening (live calls, Pass 2), which is the thing
+  // that genuinely needs an explicit opt-in. Voice notes do not consult it.
   voiceEnabled: false,
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
@@ -3654,11 +3656,6 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
-  if ($('voice-enabled-toggle')) {
-    const was = state.voiceEnabled === true;
-    state.voiceEnabled = $('voice-enabled-toggle').checked;
-    if (was !== state.voiceEnabled) window.dispatchEvent(new Event('voice-enabled-changed'));
-  }
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -3817,7 +3814,6 @@ function writeSettingsToUI() {
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
-  if ($('voice-enabled-toggle')) setIfNotFocused($('voice-enabled-toggle'), 'checked', state.voiceEnabled === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
@@ -5188,10 +5184,14 @@ function init() {
   // Its own visibility rule, from its own consent: listening is a separate
   // switch from seeing, and a microphone button that appears because vision
   // is on would be lying about what the app is allowed to do.
+  // Always present. It was hidden behind a setting, which made the feature
+  // undiscoverable AND put a switch in front of a deliberate button press —
+  // friction in exactly the place this app exists to remove it. Pressing it is
+  // the consent; the browser asks its own permission on top; and every
+  // degraded case now explains itself on the chip rather than silently
+  // failing, so there is nothing left for a pre-emptive gate to protect.
   const recordBtn = $('record-btn');
-  const applyRecordVisibility = () => { if (recordBtn) recordBtn.hidden = !state.voiceEnabled; };
-  applyRecordVisibility();
-  window.addEventListener('voice-enabled-changed', applyRecordVisibility);
+  if (recordBtn) recordBtn.hidden = false;
   recordBtn?.addEventListener('click', () => { toggleVoiceNote(); });
 
   $('user-input')?.addEventListener('paste', (e) => {

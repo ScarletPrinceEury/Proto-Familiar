@@ -971,12 +971,22 @@ does not.
 
 ## 11. Settings & off-switches
 
-- **Listening and speaking are separate consents.** `voiceEnabled` governs
-  everything that *hears* — mic capture, calls, STT, voice-note
-  transcription — and is **default OFF** (a microphone is opt-in in a way a
-  pasted photo is not). Disabled = no ASR/VAD/speaker models load, adapters
-  never register, voice locations render inert, voice-note transcription
-  degrades to `[voice note — I couldn't listen; voice is disabled]`.
+- **Listening and speaking are separate consents — but a voice note is not
+  "listening" in the sense that needs one.** (Revised in Pass 1 after live
+  testing; the original text gated voice notes behind `voiceEnabled` too.)
+  Pressing the record button IS the consent, and the browser asks its own
+  permission on top; a setting in front of that guards an already-locked door
+  while *hiding the button that opens it* — friction and undiscoverability at
+  once, in an app whose users' executive function is the actual obstacle.
+  So **voice notes need only the deliberate press** and the hard env switch.
+
+  `voiceEnabled` remains, **default OFF**, and governs **continuous**
+  listening — a microphone that is simply open: live calls, VAD, streaming
+  ASR, voice locations (Pass 2+). That genuinely is different in kind. When
+  it is off, no ASR/VAD/speaker models load for calls, adapters never
+  register, and voice locations render inert.
+
+  `PROTO_FAMILIAR_VOICE_DISABLED=1` still kills all of it, notes included.
 - **Read-aloud (TTS-only) does not require `voiceEnabled`** — it's an
   accessibility surface, not a listening one, and hard-of-hearing wards are
   exactly who it serves. Every assistant message in the web UI gets a 🔊

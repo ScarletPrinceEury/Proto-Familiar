@@ -18,7 +18,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { buildStandin, clipLength, maxBytesForKind, mediaKindFor, MEDIA_KINDS, AUDIO_MAX_BYTES, MEDIA_MAX_BYTES } from '../media.js';
-import { transcribeTimeoutMs, listeningAllowed } from '../voice-transcribe.js';
+import { transcribeTimeoutMs, transcriptionAllowed, continuousListeningAllowed } from '../voice-transcribe.js';
 import { materializeAttachments } from '../vision.js';
 import { encodeWav, toMono, elapsedLabel, TARGET_RATE } from '../public/voice-recorder.js';
 import { parseWav } from '../voice-audio-features.js';
@@ -167,18 +167,29 @@ test('the UI and the stand-in agree on how a length is written', () => {
 
 // ── Consents and budgets ──────────────────────────────────────────
 
-test('listening is off unless it was explicitly turned on', () => {
-  assert.equal(listeningAllowed({}), false, 'an unset value must not enable a microphone');
-  assert.equal(listeningAllowed({ voiceEnabled: false }), false);
-  assert.equal(listeningAllowed({ voiceEnabled: 'yes' }), false, 'only a real true counts');
-  assert.equal(listeningAllowed({ voiceEnabled: true }), true);
+test('a voice note needs no setting — the press is the consent', () => {
+  // This was gated behind `voiceEnabled`, default OFF, which ALSO hid the
+  // button. My human's reaction on first use: "if it's more work than just
+  // pressing the little mic button, why?" There was no good answer. A note is
+  // a deliberate act with the browser's own permission prompt on top; a
+  // setting in front of it guards an already-locked door.
+  assert.equal(transcriptionAllowed(), true, 'a deliberate recording needs no prior opt-in');
 });
 
-test('the hard env off-switch beats the setting', () => {
+test('continuous listening — a mic simply left open — still needs an explicit opt-in', () => {
+  // The consent that IS real, reserved for live calls (Pass 2).
+  assert.equal(continuousListeningAllowed({}), false, 'an unset value must not leave a microphone open');
+  assert.equal(continuousListeningAllowed({ voiceEnabled: false }), false);
+  assert.equal(continuousListeningAllowed({ voiceEnabled: 'yes' }), false, 'only a real true counts');
+  assert.equal(continuousListeningAllowed({ voiceEnabled: true }), true);
+});
+
+test('the hard env off-switch kills both', () => {
   const prior = process.env.PROTO_FAMILIAR_VOICE_DISABLED;
   process.env.PROTO_FAMILIAR_VOICE_DISABLED = '1';
   try {
-    assert.equal(listeningAllowed({ voiceEnabled: true }), false);
+    assert.equal(transcriptionAllowed(), false, 'the hard switch must reach voice notes too');
+    assert.equal(continuousListeningAllowed({ voiceEnabled: true }), false);
   } finally {
     if (prior === undefined) delete process.env.PROTO_FAMILIAR_VOICE_DISABLED;
     else process.env.PROTO_FAMILIAR_VOICE_DISABLED = prior;
@@ -235,7 +246,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
     },
   };
 
-  const got = await ensureTranscribed(messages, { voiceEnabled: true }, { getWorker: async () => ({ worker }) });
+  const got = await ensureTranscribed(messages, {}, { getWorker: async () => ({ worker }) });
   assert.equal(got.transcribed, 1, 'the note was not heard');
   assert.deepEqual(calls, ['load', 'transcribe'], 'the model must be loaded before it is asked to listen');
 
@@ -258,7 +269,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
   assert.ok(explainer, 'the [voice note …] convention was never explained to me');
 
   // Listening is once: a second pass costs nothing and changes nothing.
-  const again = await ensureTranscribed(messages, { voiceEnabled: true }, { getWorker: async () => ({ worker }) });
+  const again = await ensureTranscribed(messages, {}, { getWorker: async () => ({ worker }) });
   assert.equal(again.transcribed, 0, 'a cached transcript was re-derived');
   assert.deepEqual(calls, ['load', 'transcribe'], 'the worker was asked twice for one note');
 
@@ -267,7 +278,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
   assert.match(after.slugs[0], /bins/, `slug did not graduate: ${after.slugs[0]}`);
 });
 
-test('PIPELINE: with listening off, nothing is transcribed and the turn still goes out', async (t) => {
+test('PIPELINE: with voice hard-disabled, nothing is transcribed and the turn still goes out', async (t) => {
   const { saveAsset, MEDIA_DIR } = await import('../media.js');
   const { ensureTranscribed } = await import('../voice-transcribe.js');
 
@@ -279,9 +290,17 @@ test('PIPELINE: with listening off, nothing is transcribed and the turn still go
   });
 
   const messages = [{ role: 'user', content: 'here', attachments: [{ id: meta.id }] }];
-  const worker = { request: async () => { throw new Error('the worker must not be reached when listening is off'); } };
+  const worker = { request: async () => { throw new Error('the worker must not be reached when voice is hard-disabled'); } };
 
-  const got = await ensureTranscribed(messages, { voiceEnabled: false }, { getWorker: async () => ({ worker }) });
+  const prior = process.env.PROTO_FAMILIAR_VOICE_DISABLED;
+  process.env.PROTO_FAMILIAR_VOICE_DISABLED = '1';
+  let got;
+  try {
+    got = await ensureTranscribed(messages, {}, { getWorker: async () => ({ worker }) });
+  } finally {
+    if (prior === undefined) delete process.env.PROTO_FAMILIAR_VOICE_DISABLED;
+    else process.env.PROTO_FAMILIAR_VOICE_DISABLED = prior;
+  }
   assert.equal(got.transcribed, 0);
   assert.equal(got.skipped, 'voice-disabled');
 
@@ -361,11 +380,35 @@ test('a voice note survives images being switched off', async () => {
 test('a refusal my human can undo is never cached as the transcript', async () => {
   const src = await fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8');
   const fn = src.slice(src.indexOf('export async function transcribeAsset('), src.indexOf('/** Cache-write'));
-  const disabled = fn.slice(fn.indexOf('if (!listeningAllowed'), fn.indexOf('meta.ext !== '));
+  const disabled = fn.slice(fn.indexOf('if (!transcriptionAllowed'), fn.indexOf('meta.ext !== '));
 
   // It used to `remember()` here. A note recorded before listening was turned
   // on would then stay permanently unheard — the transcript slot filled with a
   // refusal that outlived its own cause.
   assert.doesNotMatch(disabled, /await remember\(/, 'the voice-disabled refusal is cached again');
   assert.match(disabled, /NOT cached/);
+});
+
+test('the microphone button is not hidden behind anything', async () => {
+  const app = await fs.readFile(path.join(process.cwd(), 'public/app.js'), 'utf8');
+  const html = await fs.readFile(path.join(process.cwd(), 'public/index.html'), 'utf8');
+
+  assert.match(html, /id="record-btn"/, 'there is no way to start recording');
+  // It was `recordBtn.hidden = !state.voiceEnabled`, which made the whole
+  // feature undiscoverable AND gated a deliberate press behind a setting.
+  assert.doesNotMatch(app, /recordBtn\.hidden = !state\.voiceEnabled/,
+    'the mic button is hidden behind a setting again');
+  assert.match(app, /if \(recordBtn\) recordBtn\.hidden = false;/);
+  // And the setting it hid behind must be gone from the UI entirely, or it
+  // will read as governing something it does not.
+  assert.doesNotMatch(html, /voice-enabled-toggle/, 'a toggle that gates nothing is still shown');
+});
+
+test('nothing in the voice-note path consults voiceEnabled', async () => {
+  // The rule, stated where it cannot rot: voiceEnabled is for CONTINUOUS
+  // listening (Pass 2). A note is a press.
+  const src = await fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8');
+  const notePath = src.slice(src.indexOf('export async function transcribeAsset('));
+  assert.doesNotMatch(notePath, /voiceEnabled/,
+    'the voice-note path reads voiceEnabled again — a press is the consent');
 });

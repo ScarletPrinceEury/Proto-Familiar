@@ -98,7 +98,10 @@ test('voice notes are reachable end to end, with no terminal step for a user', (
   assert.match(html, /id="record-btn"/, 'there is no way to start recording');
   assert.ok(app.includes('toggleVoiceNote'), 'the record button has no handler');
   assert.ok(app.includes('attachVoiceNote'), 'a recording never becomes an attachment');
-  assert.match(html, /id="voice-enabled-toggle"/, 'listening cannot be switched on');
+  // No toggle by design: pressing the mic IS the consent, so the only thing
+  // that must exist is the button. A setting here would be friction in front
+  // of a deliberate act, and it hid the feature entirely while it existed.
+  assert.doesNotMatch(html, /voice-enabled-toggle/, 'a gate in front of the record button is back');
 
   // The exact `installVoice()` failure, guarded: a module that exists, is
   // tested, and has no caller.

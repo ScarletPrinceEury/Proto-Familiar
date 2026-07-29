@@ -518,10 +518,13 @@ spent on the wrong one.
 
 ### The microphone button isn't there
 
-It only appears when *Hearing voice notes* is on in Settings — it is off by
-default and is a separate switch from reading aloud. If it is on and the button
-is still missing, reload the page once: the toggle takes effect immediately for
-new sessions but an already-open tab was rendered before the setting existed.
+It is always there now, next to the message box — there is no setting to turn
+on. If it is genuinely missing, reload the page once; an older tab was
+rendered before the button existed.
+
+(It used to be hidden behind a *Hearing voice notes* setting. That was wrong:
+pressing the button is already the consent, and hiding it made the feature
+undiscoverable as well as slower to reach.)
 
 ### Recording works but no words appear under it
 

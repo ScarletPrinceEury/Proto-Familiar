@@ -15,13 +15,23 @@
  * parallel field would have meant teaching every one of those consumers about
  * a second place to look.
  *
- * ── Two consents, not one ───────────────────────────────────────────────
- * `voiceEnabled` governs everything that HEARS and is default-OFF. A
- * microphone is opt-in in a way a pasted photo is not, so this refuses rather
- * than transcribing when it is off — and it refuses *legibly*, recording the
- * reason on the asset so the stand-in can say "listening is switched off"
- * instead of leaving my human wondering why nothing happened. Read-aloud is
- * the other direction and needs none of this.
+ * ── Pressing the button IS the consent ──────────────────────────────────
+ * This used to sit behind a `voiceEnabled` setting, default OFF, on the
+ * reasoning that "a microphone is opt-in in a way a pasted photo is not".
+ * That reasoning is sound for AMBIENT listening — a mic that is simply on —
+ * and wrong for this. A voice note is a deliberate act: my human presses a
+ * button, and the browser asks its own permission on top. A setting in front
+ * of that is a second gate guarding a door that is already locked, and it
+ * hid the button entirely, so the feature was undiscoverable as well.
+ *
+ * For someone whose executive function is the actual obstacle, "turn on a
+ * setting before you may speak" is not a safeguard, it is the reason the
+ * thought is lost. So: no setting. The press is the consent.
+ *
+ * `voiceEnabled` still exists and still means something — it is reserved for
+ * CONTINUOUS listening (live calls, Pass 2), which genuinely is different in
+ * kind and does need an explicit opt-in. `PROTO_FAMILIAR_VOICE_DISABLED=1`
+ * remains the hard switch over all of it.
  *
  * ── It never throws ─────────────────────────────────────────────────────
  * Every caller is a chat path. A missing model, a dead worker, an unreadable
@@ -55,12 +65,22 @@ export function transcribeTimeoutMs(durationSec) {
   return Math.min(15 * 60_000, Math.max(60_000, Math.round(d * 4 * 1000)));
 }
 
+/** The hard switch. Kills every part of voice, listening and speaking alike. */
+export const voiceHardDisabled = () => process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
+
 /**
- * Is listening switched on? Default OFF, and an explicit `false` is honoured —
- * `?? true` here would have silently turned my human's microphone on.
+ * May I transcribe a note my human deliberately recorded? Only the hard
+ * switch says no — the press was the consent.
  */
-export const listeningAllowed = (settings = {}) =>
-  settings?.voiceEnabled === true && process.env.PROTO_FAMILIAR_VOICE_DISABLED !== '1';
+export const transcriptionAllowed = () => !voiceHardDisabled();
+
+/**
+ * May I listen CONTINUOUSLY (live calls, Pass 2)? That is the one that needs
+ * an explicit opt-in, default OFF, and an explicit `false` honoured — `?? true`
+ * here would silently leave a microphone open.
+ */
+export const continuousListeningAllowed = (settings = {}) =>
+  settings?.voiceEnabled === true && !voiceHardDisabled();
 
 /**
  * Listen to one voice note and cache what was said.
@@ -84,12 +104,10 @@ export async function transcribeAsset(idOrSlug, settings = {}, { getWorker } = {
     return { ok: true, cached: true, text: meta.description?.text ?? '' };
   }
 
-  if (!listeningAllowed(settings)) {
-    // NOT cached. This was, and caching it was wrong for the same reason
-    // `no-worker` isn't cached: a switch my human can flip is a "not yet", not
-    // a fact about the recording. Remembering it would have meant a note they
-    // recorded before turning listening on stayed permanently unheard — the
-    // transcript slot filled with a refusal that outlived its own cause.
+  if (!transcriptionAllowed()) {
+    // NOT cached — the hard switch can be taken off again, and a refusal that
+    // outlives its own cause would leave a note permanently unheard. Same
+    // reasoning as `no-worker` and `load-failed`.
     return { ok: false, reason: 'voice-disabled' };
   }
 
@@ -165,7 +183,7 @@ async function remember(id, description) {
  * hanging my human's turn.
  */
 export async function ensureTranscribed(messages, settings = {}, { getWorker, max = 4, perNoteTimeoutMs = 120_000 } = {}) {
-  if (!listeningAllowed(settings)) return { transcribed: 0, skipped: 'voice-disabled' };
+  if (!transcriptionAllowed()) return { transcribed: 0, skipped: 'voice-disabled' };
   const list = Array.isArray(messages) ? messages : [];
 
   const ids = [];
@@ -210,7 +228,7 @@ export async function ensureTranscribed(messages, settings = {}, { getWorker, ma
  * switching vision off silently made me deaf as well.
  */
 export async function hearVoiceNotes(messages, settings = {}, { rootDir, readSettings, label = 'voice' } = {}) {
-  if (!listeningAllowed(settings)) return { transcribed: 0 };
+  if (!transcriptionAllowed()) return { transcribed: 0 };
   try {
     const { currentAudioWorker } = await import('./audio-worker-current.js');
     const got = await ensureTranscribed(messages, settings, {

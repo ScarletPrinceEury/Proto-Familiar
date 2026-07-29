@@ -83,13 +83,13 @@ There are two speaking engines. The one that ships works everywhere and needs no
 
 ### Can I talk to my Familiar instead of typing?
 
-You can send them a **voice note**. Turn on *Hearing voice notes* in Settings and a microphone button appears next to the message box: press it, say what you meant to say, press it again. Typing is a real barrier on some days — shaky hands, a thought that will not survive being spelled out, or simply not having the words in you — and losing the thought because typing was too much is a bad reason to lose the thought.
+You can send them a **voice note**. There is a microphone button next to the message box: press it, say what you meant to say, press it again. That is the whole of it — no setting to find first. Typing is a real barrier on some days — shaky hands, a thought that will not survive being spelled out, or simply not having the words in you — and losing the thought because typing was too much is a bad reason to lose the thought.
 
 Before you send, you see the words your Familiar heard, written out under the recording. That is deliberate: you can check they got "oat milk" and not "oat mail" and re-record if they didn't, rather than finding out later from a reply that doesn't make sense.
 
 The listening happens on your own machine, like everything else — nothing is sent to a transcription service. It needs a one-time download (~230 MB), offered the first time you record. It understands English, German, Japanese, Korean, Chinese and Cantonese without you telling it which you are speaking, so a household that switches languages mid-sentence is fine.
 
-This is off until you turn it on. A microphone is a bigger thing to hand over than a photo, so nothing here happens by default — and reading aloud does *not* need it, in case you want one and not the other.
+Your browser will ask permission the first time, which is the gate that matters — pressing the button is you deciding, and nothing listens when you are not holding it down. (Live voice *conversations*, when they arrive, will be a separate opt-in: a microphone that stays open is a different thing from one you press.)
 
 ### What about the people in my life?
 
