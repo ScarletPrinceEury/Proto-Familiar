@@ -83,10 +83,54 @@ test('the engine dropdown exists in the markup, not just in script', () => {
   assert.match(html, /voice-sidecar-install/);
 });
 
+test('voice notes are reachable end to end, with no terminal step for a user', () => {
+  const srv = read('server.js');
+  const app = read('public/app.js');
+  const html = read('public/index.html');
+
+  // The store must take audio at all. It accepted `image/*` only until Pass 1,
+  // so a voice note would have been rejected by the body parser before any
+  // code of ours ran.
+  assert.match(srv, /express\.raw\(\{ type: \['image\/\*', 'audio\/\*'\]/, 'the upload endpoint does not accept audio');
+  assert.ok(srv.includes('/transcribe'), 'nothing can ask for a transcript');
+
+  // The button, its handler, and the conversion the handler depends on.
+  assert.match(html, /id="record-btn"/, 'there is no way to start recording');
+  assert.ok(app.includes('toggleVoiceNote'), 'the record button has no handler');
+  assert.ok(app.includes('attachVoiceNote'), 'a recording never becomes an attachment');
+  assert.match(html, /id="voice-enabled-toggle"/, 'listening cannot be switched on');
+
+  // The exact `installVoice()` failure, guarded: a module that exists, is
+  // tested, and has no caller.
+  const rec = read('public/voice-recorder.js');
+  for (const fn of ['startRecording', 'toWav']) {
+    assert.ok(rec.includes(`export async function ${fn}`), `${fn} is missing`);
+    assert.ok(app.includes(fn), `${fn} exists but nothing in the UI calls it`);
+  }
+  // encodeWav is reached THROUGH toWav rather than from the UI — asserted here
+  // so the chain is unbroken without pretending the UI calls it directly.
+  assert.ok(rec.includes('export function encodeWav'));
+  assert.ok(/encodeWav\(rendered/.test(rec), 'toWav does not actually encode a wav');
+});
+
+test('both surfaces hear voice notes — the RULE C cell vision missed', () => {
+  // Web got ensureDescribed, Discord silently did not, and the Familiar
+  // described images it had never looked at. The shared call is what makes
+  // that impossible to repeat; this asserts both ends still use it.
+  for (const f of ['server.js', 'discord-gateway.js']) {
+    assert.ok(read(f).includes('hearVoiceNotes'), `${f} does not listen before it answers`);
+  }
+  // And that the worker lives somewhere both can reach, rather than inside one.
+  assert.ok(read('voice-transcribe.js').includes('audio-worker-current.js'));
+});
+
 test('docs tell someone voice exists, and what to do when it does not work', () => {
   assert.match(read('README.md'), /talk out loud/i, 'nobody learns the feature exists otherwise');
   assert.match(read('docs/troubleshooting.md'), /Reading aloud \(voice\)/);
   // The single most expensive lesson of the milestone: a whole debugging round
   // went into the wrong backend because nobody checked the boot line.
   assert.match(read('docs/troubleshooting.md'), /speaking through/);
+  // Voice notes get the same treatment: discoverable, and debuggable.
+  assert.match(read('README.md'), /voice note/i, 'nobody learns they can talk instead of typing');
+  assert.match(read('docs/troubleshooting.md'), /microphone button/i);
 });

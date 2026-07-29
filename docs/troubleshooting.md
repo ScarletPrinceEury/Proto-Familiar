@@ -516,6 +516,37 @@ thing. **Check this before reporting a voice problem** — the two engines sound
 different and fail differently, and a whole debugging session here was once
 spent on the wrong one.
 
+### The microphone button isn't there
+
+It only appears when *Hearing voice notes* is on in Settings — it is off by
+default and is a separate switch from reading aloud. If it is on and the button
+is still missing, reload the page once: the toggle takes effect immediately for
+new sessions but an already-open tab was rendered before the setting existed.
+
+### Recording works but no words appear under it
+
+The recording uploaded fine; the transcribing is what didn't happen. In order
+of likelihood:
+
+- **"model-missing"** — the listening model has not been downloaded yet
+  (~230 MB). It is offered the first time you record.
+- **The model isn't pinned in this build.** The download refuses without a
+  verified checksum, which is the intended behaviour, not a fault. From a
+  checkout: `npm run pin:listening`, once, then commit the result.
+- **The note still sends either way.** Your Familiar reads it as a recording
+  they could not make out, rather than pretending it wasn't there.
+
+### It heard the wrong words
+
+Re-record — that is what the transcript under the recording is for, and why it
+appears before you send rather than after. Short, clear phrases in a quiet room
+transcribe best; the model handles English, German, Japanese, Korean, Chinese
+and Cantonese without being told which.
+
+If it is consistently wrong on your voice specifically, that is worth reporting
+— it is a small quantised model and accuracy varies by speaker much more than
+by language.
+
 ### I picked a voice and it still sounds the same
 
 The picker's "Use this" button downloads the clip, verifies it, and only then

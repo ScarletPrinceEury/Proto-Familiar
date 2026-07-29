@@ -81,6 +81,16 @@ You can pick what your Familiar sounds like in Settings → *Choose a voice*: a 
 
 There are two speaking engines. The one that ships works everywhere and needs nothing extra; its voice can shift a little between paragraphs on a long message. The optional second one holds steadier but is a large download (~600 MB). Both are switchable in Settings, and neither is required — a Familiar with no voice is still a whole Familiar.
 
+### Can I talk to my Familiar instead of typing?
+
+You can send them a **voice note**. Turn on *Hearing voice notes* in Settings and a microphone button appears next to the message box: press it, say what you meant to say, press it again. Typing is a real barrier on some days — shaky hands, a thought that will not survive being spelled out, or simply not having the words in you — and losing the thought because typing was too much is a bad reason to lose the thought.
+
+Before you send, you see the words your Familiar heard, written out under the recording. That is deliberate: you can check they got "oat milk" and not "oat mail" and re-record if they didn't, rather than finding out later from a reply that doesn't make sense.
+
+The listening happens on your own machine, like everything else — nothing is sent to a transcription service. It needs a one-time download (~230 MB), offered the first time you record. It understands English, German, Japanese, Korean, Chinese and Cantonese without you telling it which you are speaking, so a household that switches languages mid-sentence is fine.
+
+This is off until you turn it on. A microphone is a bigger thing to hand over than a photo, so nothing here happens by default — and reading aloud does *not* need it, in case you want one and not the other.
+
 ### What about the people in my life?
 
 Familiar can be set up to reach out to trusted people when you need support — but it never does so without your explicit configuration, and every message it sends to your Village is always mirrored back to you first. There is no covert contact. There are consent settings for the members of your Village to filter what the Familiar is allowed to even remember about them, and you can tell your Familiar if someone feels especially standoffish towards AI so the Familiar will respect that.

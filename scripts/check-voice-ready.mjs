@@ -42,7 +42,10 @@ async function main() {
   const modelDir = path.join(ROOT, 'models', 'audio', 'tts-pocket');
   const model = await exists(path.join(modelDir, 'lm_main.int8.onnx'));
 
-  // 3. The optional sidecar.
+  // 3. The listening model — a separate, opt-in download for voice notes.
+  const listening = await exists(path.join(ROOT, 'models', 'audio', 'asr-offline', 'model.int8.onnx'));
+
+  // 4. The optional sidecar.
   let sidecar = false;
   try {
     const { inspectBackends, BACKENDS } = await import('../voice-backend.js');
@@ -70,11 +73,19 @@ async function main() {
     say(sidecar
       ? '    A steadier speaking engine is installed — pick it in Settings.'
       : '    A steadier engine for long messages can be added in Settings (~600 MB, optional).');
+    say('');
+    // Listening is a SEPARATE consent and default-off, so this reports it as
+    // available-if-wanted rather than as something missing. Nothing here is a
+    // problem to fix; it is a thing that exists.
+    say(listening
+      ? '  Voice notes: ready — turn on "Hearing voice notes" in Settings to record.'
+      : '  Voice notes: available. Turn on "Hearing voice notes" in Settings and');
+    if (!listening) say('    your Familiar will offer the one-time download (~230 MB) when you record.');
   }
   say('');
 
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify({ binding, model, sidecar, bindingWhy: bindingWhy || null }));
+    console.log(JSON.stringify({ binding, model, listening, sidecar, bindingWhy: bindingWhy || null }));
   }
   return process.argv.includes('--strict') && !binding ? 1 : 0;
 }
