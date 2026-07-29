@@ -459,6 +459,79 @@ If the badge shows an old version after an update, you likely need to **restart 
 
 `wmic` was removed in Windows 11 24H2, and older `install.bat` used it to build the backup timestamp — when it failed, the backup folder got a malformed name with a colon in it (`Invalid path`). Fixed: the installer now generates the timestamp with PowerShell. Re-run the latest `install.bat` and the backup step works. (Your data was never at risk — the failure was only in naming the backup copy.)
 
+## Reading aloud (voice)
+
+Every symptom below was hit for real during development, so these are the
+actual failures rather than imagined ones.
+
+### The 🔊 button says "Unavailable"
+
+The speech engine did not install. `sherpa-onnx-node` is an *optional*
+dependency, so npm skips it in silence on a platform with no prebuilt binary,
+or if you installed with `--omit=optional`.
+
+Check what the machine actually has:
+
+```
+node scripts/check-voice-ready.mjs
+```
+
+If it reports the engine missing, retry with `npm install sherpa-onnx-node`.
+Everything else keeps working either way — voice is a feature, not a
+requirement.
+
+### The button offers "Get the voice (194 MB)"
+
+That is normal on a fresh install. Reading aloud needs a one-time model
+download, and it asks before taking the space. Click it again to start; the
+button shows progress and reports any failure on itself.
+
+### It reads one paragraph and stops, or makes static
+
+You are almost certainly on an old build — this was a real bug, fixed. Update,
+restart, and try again. If it persists, check which engine is speaking (below):
+the two have different failure modes.
+
+### The voice changes between sentences or paragraphs
+
+Expected on the **built-in** engine to some degree: it restarts its internal
+state at each utterance, so the voice can shift. The Kyutai sidecar holds
+steadier across a long message.
+
+Settings → the speaking-engine dropdown → "Kyutai sidecar". If it is not
+installed yet there is an install button beside it (~600 MB, mostly PyTorch).
+
+### Which engine is actually speaking?
+
+The boot log says so:
+
+```
+[voice] speaking through sherpa      ← the built-in one
+[voice] speaking through pocket      ← the Kyutai sidecar
+```
+
+If it says `asked for pocket, using sherpa: …`, the sidecar was chosen but is
+not usable, and the reason is on that line. The Settings pane shows the same
+thing. **Check this before reporting a voice problem** — the two engines sound
+different and fail differently, and a whole debugging session here was once
+spent on the wrong one.
+
+### I picked a voice and it still sounds the same
+
+The picker's "Use this" button downloads the clip, verifies it, and only then
+saves the choice. If it shows "⚠ Not in use" afterwards, hover it: the tooltip
+says why the engine is still on something else.
+
+### It is very slow the first time
+
+Expected. The sidecar loads a 219 MB model and derives the voice from the
+reference clip on first use — 30–60 seconds is normal. It is cached after
+that; later messages start in about a second.
+
+### Turning it off entirely
+
+`PROTO_FAMILIAR_VOICE_DISABLED=1` disables all of it, read-aloud included.
+
 ## Port conflicts & start-up
 
 ### `Error: listen EADDRINUSE: address already in use 0.0.0.0:8742`

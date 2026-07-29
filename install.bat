@@ -351,6 +351,10 @@ if exist "%SCRIPT_DIR%\.git" (
 ) else (
   echo   Branch:    not a git checkout - to update, double-click update.bat
 )
+REM Voice is optional and sherpa-onnx-node is an optionalDependency, so npm
+REM skips it in silence on a platform with no prebuilt. Say what this machine
+REM actually ended up with. Never fails the install.
+node "%SCRIPT_DIR%\scripts\check-voice-ready.mjs" 2>nul
 echo   Start:     start.bat   ^(double-click^)
 echo   Stop:      stop.bat    ^(double-click^)
 echo   Trouble?   see docs\troubleshooting.md

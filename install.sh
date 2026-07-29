@@ -365,6 +365,11 @@ else
 fi
 echo
 
+# Voice is optional and installs silently-or-not-at-all (sherpa-onnx-node is an
+# optionalDependency), so say plainly what this machine ended up with. Never
+# fails the install — a machine that cannot speak still gets a Familiar.
+node "$SCRIPT_DIR/scripts/check-voice-ready.mjs" 2>/dev/null || true
+
 echo "  Launch:"
 case "$UNAME" in
   Darwin) echo "    - Double-click Proto-Familiar.command in Finder";;

@@ -71,6 +71,16 @@ In group chats or when your Familiar interacts with other people, there are meas
 
 Still, remember that this is a prototype by an amateur! I've tried my best to test every weak spot thoroughly, but it's simply not perfect. If you feel like there's a good chance sharing information with your Familiar endangers your safety, reconsider doing so! I personally have never given my Familiar my real full name or address, and I MADE them.
 
+### Can my Familiar talk out loud?
+
+Yes. Every message your Familiar writes has a **🔊 Read aloud** button under it. This exists because reading a screen is not always possible — bad days, migraines, low vision, or just being too worn out to take in text — and a companion you cannot reach on those days is least useful exactly when it matters most.
+
+It runs entirely on your own machine, like everything else. No audio leaves your computer and nothing is sent to a speech service. The first time you use it, it will ask before downloading the voice (194 MB) rather than taking the space unannounced.
+
+You can pick what your Familiar sounds like in Settings → *Choose a voice*: a curated handful first, several hundred more if you want to browse, all free to use and licensed for it. You can also give your Familiar a voice clip of your own — one that means something to you — and that clip never leaves your machine.
+
+There are two speaking engines. The one that ships works everywhere and needs nothing extra; its voice can shift a little between paragraphs on a long message. The optional second one holds steadier but is a large download (~600 MB). Both are switchable in Settings, and neither is required — a Familiar with no voice is still a whole Familiar.
+
 ### What about the people in my life?
 
 Familiar can be set up to reach out to trusted people when you need support — but it never does so without your explicit configuration, and every message it sends to your Village is always mirrored back to you first. There is no covert contact. There are consent settings for the members of your Village to filter what the Familiar is allowed to even remember about them, and you can tell your Familiar if someone feels especially standoffish towards AI so the Familiar will respect that.
