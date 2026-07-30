@@ -5,6 +5,7 @@ import {
   generationExtras, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
   MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES, FRAME_RATE_HZ,
+  pendingTailStart,
 } from '../voice-generation.js';
 
 /**
@@ -103,6 +104,34 @@ test('the cap never returns zero or NaN, whatever it is handed', () => {
   for (const bad of ['', null, undefined, 0, {}, []]) {
     const v = runawaySampleLimit(bad, 24000);
     assert.ok(Number.isFinite(v) && v > 0, `runawaySampleLimit(${String(bad)}) = ${v}`);
+  }
+});
+
+// ── The un-streamed tail: the last sentence must not be dropped ─────────
+
+test('a callback that under-delivers leaves a tail to send from where it stopped', () => {
+  // The reported bug: the message stopped a sentence early because the engine
+  // handed its final chunk back in the clip, not through onProgress. The clip
+  // is longer than what streamed, and the remainder starts where streaming did.
+  assert.equal(pendingTailStart(48000, 72000), 48000);
+});
+
+test('nothing is re-sent when the callback already delivered the whole clip', () => {
+  // The ordinary case: streamed === total, so there is no tail and the listener
+  // is never handed audio they already heard.
+  assert.equal(pendingTailStart(72000, 72000), -1);
+  assert.equal(pendingTailStart(72001, 72000), -1);
+});
+
+test('a runaway stop is never reconciled — the tail there is the noise we cut', () => {
+  // Past the streamed count on a runaway is exactly the degenerating audio the
+  // cap stopped on purpose. Re-appending it would defeat the guard.
+  assert.equal(pendingTailStart(48000, 200000, { runaway: true }), -1);
+});
+
+test('junk counts never invent a tail', () => {
+  for (const [s, t] of [[NaN, 100], [100, NaN], [undefined, 100], [100, undefined]]) {
+    assert.equal(pendingTailStart(s, t), -1, `pendingTailStart(${s}, ${t})`);
   }
 });
 

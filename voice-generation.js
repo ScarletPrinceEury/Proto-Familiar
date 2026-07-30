@@ -182,6 +182,30 @@ export function runawaySampleLimit(text, sampleRate = 24000, { speed = 1, maxFra
 }
 
 /**
+ * Where the un-streamed tail of a finished generation begins, or -1 if there
+ * is none to send.
+ *
+ * The streaming path forwards only what the engine's progress callback hands
+ * over sample-by-sample, then trusts that to have been everything. It is not
+ * always: an engine may deliver its final chunk only in the returned clip and
+ * never through the callback, so the last sentence is generated but never
+ * reaches the pipe — heard as a message that stops a sentence early. The full
+ * clip is authoritative (it is the whole thing, including what already
+ * streamed), so anything past what was streamed is exactly that dropped tail.
+ *
+ * Returns the index to slice the full clip from, so the caller sends only the
+ * remainder — never re-sending what the listener already heard. -1 when there
+ * is nothing to add, which is the ordinary case (the callback delivered it
+ * all) and MUST also hold on a runaway stop, where the bytes past the streamed
+ * count are the degenerating noise the cap cut on purpose, not speech.
+ */
+export function pendingTailStart(streamedSamples, totalSamples, { runaway = false } = {}) {
+  if (runaway) return -1;
+  if (!Number.isFinite(streamedSamples) || !Number.isFinite(totalSamples)) return -1;
+  return totalSamples > streamedSamples ? streamedSamples : -1;
+}
+
+/**
  * A number, or the fallback — without JavaScript's helpful coercions.
  *
  * `Number(null)`, `Number('')` and `Number([])` are all 0, so a settings file

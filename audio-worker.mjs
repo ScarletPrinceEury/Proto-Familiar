@@ -31,7 +31,7 @@ import path from 'node:path';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON } from './audio-frame.js';
 import { floatToPcm16 } from './voice-audio-features.js';
 import {
-  generationExtras, runawaySampleLimit,
+  generationExtras, runawaySampleLimit, pendingTailStart,
   DEFAULT_NUM_STEPS, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
 } from './voice-generation.js';
 
@@ -385,11 +385,27 @@ const OPS = {
         },
       });
 
+      // Reconcile the stream against the authoritative full clip. `onProgress`
+      // is supposed to hand over every sample, but an engine may deliver its
+      // final chunk only in the returned `audio` — so the last sentence was
+      // generated yet never reached the pipe, and the message stops a sentence
+      // early. Emit exactly the remainder the callback did not (`pendingTailStart`
+      // returns where it begins, or -1). Skipped on a runaway stop, where the
+      // bytes past the streamed count are the noise the cap cut on purpose.
+      const tailStart = pendingTailStart(sampleCount, audio?.samples?.length ?? 0, { runaway });
+      if (tailStart >= 0) {
+        const tail = audio.samples.slice(tailStart);
+        try {
+          process.stdout.write(encodePcm(streamId, floatToPcm16(tail)));
+          sampleCount += tail.length;
+        } catch { /* the pipe is gone; the completion frame still reports what was sent */ }
+      }
+
       const elapsedMs = Date.now() - started;
       const sampleRate = audio?.sampleRate ?? held.session.sampleRate;
-      // Trust what was actually streamed. `audio.samples` is the whole clip
-      // again, and reporting its length as the streamed count would overstate
-      // what the caller received if the engine stopped early.
+      // Report what was actually streamed (now including any reconciled tail),
+      // not `audio.samples.length` — on a runaway stop the clip is longer than
+      // what the caller was allowed to receive.
       const durationSec = sampleCount / sampleRate;
 
       send({
