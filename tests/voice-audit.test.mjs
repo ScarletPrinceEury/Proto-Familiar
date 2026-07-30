@@ -173,3 +173,25 @@ test('nothing in the voice surface is documented as working while being unreacha
     assert.ok(new RegExp(`\\b${name}\\b`).test(surfaces), `${name} is unreachable again — ${promise}`);
   }
 });
+
+// ── The checker itself must stay honest ───────────────────────────
+
+test('the wiring audit runs clean, and the script it runs still exists', async () => {
+  // A checker nobody runs is the same as no checker — which is the whole
+  // lesson of this milestone, applied to the tool written to catch it.
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+
+  const pkg = JSON.parse(await read('package.json'));
+  assert.ok(pkg.scripts['audit:wiring'], 'npm run audit:wiring is gone, so nobody will run it');
+
+  let out;
+  try {
+    out = (await run(process.execPath, ['scripts/audit-wiring.mjs'], { cwd: ROOT })).stdout;
+  } catch (err) {
+    // Non-zero exit means findings; show them rather than a bare failure.
+    assert.fail(`the wiring audit found problems:\n${err.stdout ?? err.message}`);
+  }
+  assert.match(out, /0 finding\(s\)/);
+});

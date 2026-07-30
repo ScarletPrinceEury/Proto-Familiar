@@ -459,6 +459,97 @@ If the badge shows an old version after an update, you likely need to **restart 
 
 `wmic` was removed in Windows 11 24H2, and older `install.bat` used it to build the backup timestamp — when it failed, the backup folder got a malformed name with a colon in it (`Invalid path`). Fixed: the installer now generates the timestamp with PowerShell. Re-run the latest `install.bat` and the backup step works. (Your data was never at risk — the failure was only in naming the backup copy.)
 
+## Turning things off
+
+Every background loop and optional feature has a hard environment switch. Set
+it to `1` before starting and that piece stays inert — no model loads, no loop
+ticks, nothing to un-configure afterwards. Useful for narrowing down which part
+is misbehaving, and for running lean on a small machine.
+
+This list is generated from the code by `npm run audit:wiring`, which fails if
+a switch exists that no doc mentions. It was added because two switches
+(`PROTO_FAMILIAR_PHYLACTERY_DISABLED` and `PROTO_FAMILIAR_ZAI_MCP_COMMAND`) had
+been shipped with no documentation at all — a hard off-switch nobody can find
+is not an off-switch.
+
+**Voice and media**
+
+| Switch | Stops |
+|---|---|
+| `PROTO_FAMILIAR_VOICE_DISABLED` | all of voice — reading aloud, voice notes, the worker |
+| `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
+| `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
+| `PROTO_FAMILIAR_ZAI_VISION_DISABLED` | the z.ai Coding-Plan vision route |
+
+**Reaching out and noticing**
+
+| Switch | Stops |
+|---|---|
+| `PROTO_FAMILIAR_NOTICING_DISABLED` | noticing on its own |
+| `PROTO_FAMILIAR_WARMTH_DISABLED` | warm reach-outs |
+| `PROTO_FAMILIAR_TRIAGE_DISABLED` | silence triage (**safety** — read §10 of the voice spec first) |
+| `PROTO_FAMILIAR_THREAT_DISABLED` | crisis-signal scoring (**safety**) |
+| `PROTO_FAMILIAR_PONDERING_DISABLED` | autonomous pondering |
+| `PROTO_FAMILIAR_WAIT_STREAK_DISABLED` | the wait-streak nudge |
+
+**Time, reminders, calendar**
+
+| Switch | Stops |
+|---|---|
+| `PROTO_FAMILIAR_REMINDERS_DISABLED` | the reminders scheduler |
+| `PROTO_FAMILIAR_EVENT_ALERTS_DISABLED` | "coming up" pings before an event |
+| `PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED` | stamping events that quietly went by |
+| `PROTO_FAMILIAR_GCAL_DISABLED` | Google Calendar sync |
+| `PROTO_FAMILIAR_STEWARDSHIP_DISABLED` | readiness / prerequisite surfacing |
+| `PROTO_FAMILIAR_ROUTINE_REVIEW_DISABLED` | routine review |
+| `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED` | needs-window tracking |
+| `PROTO_FAMILIAR_SPINE_STATES_DISABLED` | spine states |
+| `PROTO_FAMILIAR_BASELINES_DISABLED` | contact baselines |
+| `PROTO_FAMILIAR_WEATHER_DISABLED` | the weather sense |
+
+**Memory**
+
+| Switch | Stops |
+|---|---|
+| `PROTO_FAMILIAR_MEMORIZE_DISABLED` | turning conversations into memories |
+| `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED` | the slow catch-up pass for missed days |
+| `PROTO_FAMILIAR_MEMORY_LIFECYCLE_DISABLED` | consolidation / decay |
+| `PROTO_FAMILIAR_FOLLOWUPS_DISABLED` | catching "I'll do that later" commitments |
+| `PROTO_FAMILIAR_TOME_GRADUATION_DISABLED` | graduating tome knowledge |
+| `PROTO_FAMILIAR_CONTENT_REGATE_DISABLED` | re-tagging private notes for sharing |
+| `PROTO_FAMILIAR_PHYLACTERY_DISABLED` | identity and memory entirely — your Familiar loses both |
+
+**Village and tools**
+
+| Switch | Stops |
+|---|---|
+| `PROTO_FAMILIAR_DISCORD_DISABLED` | the Discord gateway |
+| `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED` | tools on Discord turns |
+| `PROTO_FAMILIAR_DISCORD_BATCH_DISABLED` | coalescing a burst into one reply |
+| `PROTO_FAMILIAR_WEBSEARCH_DISABLED` | web search |
+| `PROTO_FAMILIAR_TOOL_SURFACING_DISABLED` | surfacing relevant tools per turn |
+| `PROTO_FAMILIAR_QUIET_TOOLS_DISABLED` | quiet tool calls |
+| `PROTO_FAMILIAR_GUIDE_CHAT_DISABLED` | the setup guide chat |
+| `PROTO_FAMILIAR_UPDATE_DISABLED` | checking for updates |
+
+**Overrides (not off-switches)**
+
+| Variable | Does |
+|---|---|
+| `PROTO_FAMILIAR_UPDATE_BRANCH` | which branch the updater checks |
+| `PROTO_FAMILIAR_ZAI_MCP_COMMAND` | overrides the command used to launch z.ai's vision MCP server |
+
+### Settings only reachable by editing the file
+
+A few tuning knobs are read from `settings.json` but have no control in the app.
+Editing them by hand works and **survives** — the settings merge preserves keys
+the UI does not know about, which is exactly what that merge exists for.
+
+| Key | Default | Does |
+|---|---|---|
+| `readinessLeadHours` | 48 | how far ahead an unresolved prerequisite is surfaced |
+| `discordMediaPerHour` | 20 | per-room hourly cap on images ingested from Discord |
+
 ## Reading aloud (voice)
 
 Every symptom below was hit for real during development, so these are the
