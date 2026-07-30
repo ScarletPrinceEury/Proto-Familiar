@@ -518,3 +518,46 @@ test('every reason that reaches the browser has words for my human', async () =>
   assert.doesNotMatch(mapped, /'transcribe-failed'/);
   assert.match(mapped, /default:\s*\n\s*return \{ text: "I couldn't make this one out/);
 });
+
+// ── The real worker's own dispatch table ──────────────────────────
+//
+// ⚠️ THE BUG THIS EXISTS FOR. `audio-worker.mjs`'s OPS object had TWO
+// `transcribe` keys: the real implementation, and a leftover "not implemented
+// yet" stub further down. A later duplicate key silently wins in JavaScript, so
+// the real one was dead from the day it landed and every voice note came back
+// `unsupported`. `node --check` does not flag a duplicate key. And every test
+// above stubs the worker, so none of them ever loaded this table.
+//
+// My human found it on the fourth attempt, after I had "fixed" the routing
+// twice. Stubs test the caller; only spawning the real thing tests the worker.
+
+test('PIPELINE: the real audio worker dispatches transcribe to the real handler', async () => {
+  const { createAudioWorker } = await import('../audio-worker-host.js');
+  const worker = createAudioWorker({
+    command: process.execPath,
+    workerScript: path.join(process.cwd(), 'audio-worker.mjs'),
+  });
+  try {
+    const r = await worker.request({ op: 'transcribe', wavPath: '/definitely/not/here.wav' }, { timeoutMs: 20_000 });
+
+    // It must FAIL — there is no engine or model in CI — but it must fail as
+    // the real handler, never as "this worker does not do transcription".
+    assert.equal(r.ok, false);
+    assert.notEqual(r.reason, 'unsupported',
+      'the leftover stub is back: a duplicate OPS key is shadowing the real transcribe');
+    assert.ok(
+      ['no-engine', 'not-loaded', 'bad-request', 'transcribe-failed'].includes(r.reason),
+      `unexpected reason from the real handler: ${r.reason} (${r.detail ?? ''})`,
+    );
+  } finally {
+    worker.stop();
+  }
+});
+
+test('no op is declared twice in the worker — a duplicate key wins silently', async () => {
+  const body = await fs.readFile(path.join(process.cwd(), 'audio-worker.mjs'), 'utf8');
+  const ops = [...body.matchAll(/^ {2}async (\w+)\(/gm)].map((m) => m[1]);
+  const dupes = ops.filter((k, i) => ops.indexOf(k) !== i);
+  assert.deepEqual(dupes, [], `duplicate OPS keys shadow each other: ${dupes.join(', ')}`);
+  assert.ok(ops.includes('transcribe'), 'the transcribe op vanished entirely');
+});

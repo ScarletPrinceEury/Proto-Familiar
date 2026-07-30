@@ -302,15 +302,26 @@ test('a missing engine is a reported reason, never a crash — no restart, no pa
   } finally { w.stop(); }
 });
 
-test('an unimplemented op answers unsupported rather than silence', async () => {
+test('an op that does not exist answers unknown-op rather than silence', async () => {
   // Silence would let a caller believe something happened when it had not —
   // the confabulation failure the 0.9 post-mortem is about.
+  //
+  // ⚠️ This test used to send `op: 'transcribe'` and assert `unsupported`,
+  // written when transcription was a stub. When the real handler landed, a
+  // leftover duplicate `transcribe` key further down the OPS table shadowed it
+  // — and THIS TEST KEPT PASSING, because `unsupported` was exactly what the
+  // stub returned. The suite did not merely miss the bug; it defended it for
+  // four rounds of my human's testing.
+  //
+  // So it now uses a name that genuinely has no handler. Never assert a
+  // placeholder's response for an op the codebase is expected to implement:
+  // the assertion outlives the placeholder and pins the wrong behaviour.
   const w = createAudioWorker({ workerScript: REAL_WORKER, idleMs: 0 });
   try {
-    const r = await w.request({ op: 'transcribe' }, { timeoutMs: 8000 });
+    const r = await w.request({ op: 'definitely-not-an-op' }, { timeoutMs: 8000 });
     assert.equal(r.ok, false);
-    assert.equal(r.reason, 'unsupported');
-    assert.match(r.detail, /voice notes/);
+    assert.equal(r.reason, 'unknown-op');
+    assert.match(r.detail, /definitely-not-an-op/);
   } finally { w.stop(); }
 });
 

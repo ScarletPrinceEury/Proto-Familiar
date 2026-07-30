@@ -9,7 +9,7 @@
  * name a module never exported, or a `$('some-id')` whose id is not in the
  * markup.
  *
- * Seven checks, each mapping to a bug that shipped:
+ * Eight checks, each mapping to a bug that shipped:
  *   1. imports that name something the source module does not export
  *   2. calls to identifiers nothing declares (the ReferenceError class)
  *   3. `$('id')` lookups with no matching id in index.html
@@ -17,6 +17,8 @@
  *   5. settings keys read server-side that nothing ever writes
  *   6. interactive controls in the markup that no script references
  *   7. env off-switches referenced in code but absent from the docs
+ *   8. two keys of the same name in one object literal (a dispatch-table stub
+ *      shadowed the real handler and cost four rounds of live testing)
  *
  * Reports and exits non-zero. Deliberately a script, not a test: it sweeps the
  * whole repo and is meant to be run deliberately, not on every `npm test`.
@@ -386,10 +388,43 @@ for (const f of files) {
   }
 }
 
+// ── 8. Duplicate members in a top-level dispatch table ───────────
+//
+// ⚠️ The bug that cost four rounds of my human's testing. `audio-worker.mjs`'s
+// OPS table had TWO `transcribe` keys — the real implementation, and a leftover
+// "not implemented yet" stub below it. The later one silently wins, so the real
+// handler was dead from the day it landed and every voice note answered
+// `unsupported`. `node --check` accepts a duplicate key without complaint.
+//
+// Scoped to `const NAME = {` at column 0 through its matching `};` at column 0
+// — a dispatch table, which is the shape that bit. A general duplicate-key
+// detector needs a parser: I tried two broader versions first and they reported
+// 1759 then 431 findings, all of them separate objects that merely shared an
+// indent. Narrow and true beats broad and ignored.
+{
+  for (const [f, body] of Object.entries(code)) {
+    if (!body) continue;
+    const lines = body.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const open = lines[i].match(/^(?:export )?const ([A-Za-z_$][\w$]*)\s*=\s*(?:Object\.freeze\()?\{\s*$/);
+      if (!open) continue;
+      const seen = new Map();
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^\}\)?;?\s*$/.test(lines[j])) break;             // table closed
+        const m = lines[j].match(/^  (?:async\s+)?['"]?([A-Za-z_$][\w$]*)['"]?\s*(?:\(|:)/);
+        if (!m) continue;
+        if (seen.has(m[1])) {
+          note('duplicate key', `${f}: \`${open[1]}\` declares \`${m[1]}\` at lines ${seen.get(m[1])} and ${j + 1} — the later one silently wins`);
+        } else seen.set(m[1], j + 1);
+      }
+    }
+  }
+}
+
 // ── Report ────────────────────────────────────────────────────────
 const byCheck = {};
 for (const f of findings) (byCheck[f.check] ??= []).push(f.msg);
-const order = ['import/export', 'undeclared call', 'dead lookup', 'setting unread', 'settings key drift', 'unwired control', 'undocumented switch'];
+const order = ['import/export', 'undeclared call', 'duplicate key', 'dead lookup', 'setting unread', 'settings key drift', 'unwired control', 'undocumented switch'];
 console.log('');
 for (const c of order) {
   const list = byCheck[c] ?? [];

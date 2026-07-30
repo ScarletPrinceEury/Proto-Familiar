@@ -409,15 +409,13 @@ const OPS = {
     }
   },
 
-  /**
-   * Not implemented yet.
-   *
-   * Answering `unsupported` keeps the contract — every request gets a reply —
-   * while being plain the capability is absent. Silence, or a plausible-looking
-   * empty result, would let a caller believe something happened when it did
-   * not: the confabulation failure the 0.9 post-mortem is about.
-   */
-  async transcribe({ reqId }) { send({ reqId, ok: false, reason: 'unsupported', detail: 'transcription arrives with voice notes' }); },
+  // ⚠️ A `transcribe` STUB used to sit here, left over from before the real one
+  // was written above. Two keys of the same name in one object literal: the
+  // later silently wins, so the real implementation was dead from the day it
+  // landed and every voice note got `unsupported`. `node --check` does not
+  // flag a duplicate key, and every test stubbed the worker rather than
+  // exercising this table — so nothing caught it but my human, four times.
+  // Do not add a placeholder for an op that already has an implementation.
 };
 
 const reader = createFrameReader({

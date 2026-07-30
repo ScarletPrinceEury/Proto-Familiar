@@ -3990,14 +3990,23 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   font-size: 0.8rem;
   line-height: 1.35;
   color: var(--text);
-  /* Three lines, then fade — a long note must not push the composer off
-     screen, and the full text is one click away in the message itself. */
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  /* Clamped so a long transcript cannot push the composer off screen — but
+     scrollable, not truncated. ⚠️ It was a hard 3-line clamp, and when an
+     error message grew past three lines my human got "...If it persists
+     after.." with the rest simply gone, including the sentence telling them
+     what to do. A clamp on TEXT is fine; a clamp on an INSTRUCTION eats the
+     instruction. */
+  max-height: 5.5em;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.attach-chip-transcript.is-quiet { color: var(--text-dim); font-style: italic; }
+/* Anything the chip says that is a problem-and-fix gets the room to say it. */
+.attach-chip-transcript.is-quiet {
+  color: var(--text-dim);
+  font-style: italic;
+  max-height: none;
+  overflow: visible;
+}
 
 /* Recording is a state, and a control that looks identical while it works
    is a control people press twice. Colour AND the pulse AND the button's
