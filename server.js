@@ -264,11 +264,11 @@ import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voic
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
 import { hearVoiceNotes, transcribeAsset, transcriptionAllowed } from './voice-transcribe.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
-import { resolveVoice, installVoice } from './voices.js';
+import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
 import { prepareForSpeech } from './voice-speech.js';
 import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
-import { wavHeader, WAV_STREAMING_LENGTH } from './voice-audio-features.js';
+import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip } from './voice-audio-features.js';
 import { KIND_PCM } from './audio-frame.js';
 import { shortSlug } from './slug-ids.js';
 // Tome / state-file coordination is owned by thalamus — every writer
@@ -1799,7 +1799,16 @@ app.get('/api/voice/clips', async (req, res) => {
       rootDir: __dirname,
       features,
       source: req.query.source || null,
-      variant: req.query.variant || 'original',
+      // 'best', not 'original'.
+      //
+      // ⚠️ This defaulted to 'original', which quietly undid the whole reason
+      // `preferEnhanced` exists. The curated shortlist has the enhanced cut
+      // baked into each entry, so the ten offered voices were fine — but a ward
+      // who browsed the other 736 was handed the un-enhanced recording, which
+      // is audibly muffled and was the exact complaint that started the
+      // enhanced investigation. `listClips` had the right default; this line
+      // overrode it.
+      variant: req.query.variant || 'best',
       shortlist: req.query.shortlist === '1',
       q: req.query.q || '',
       sort: req.query.sort || 'source',
@@ -1862,6 +1871,53 @@ app.post('/api/voice/choose', async (req, res) => {
     fellBackFrom: voice.fellBackFrom ?? null,
     reason: voice.reason ?? null,
   });
+});
+
+/**
+ * Keep a voice clip my human handed me, and speak in it.
+ *
+ * ⚠️ `saveWardVoice` shipped with tests and NO caller — the same shape as
+ * `installVoice` before it, in the same file, which is embarrassing enough to
+ * write down. The README promises "you can also give your Familiar a voice clip
+ * of your own — one that means something to you", and until this endpoint
+ * existed that promise had no path through the app at all.
+ *
+ * The clip lands in `voices/ward/`, which is gitignored on purpose: it may be
+ * someone else's copyrighted performance, and personal use is theirs to make
+ * while redistribution is not. `mayLeaveTheMachine()` fails closed for it and
+ * `redactForSharing` keeps it out of every shared surface.
+ *
+ * Choosing it is the same two-step as any other voice — the file exists before
+ * the setting points at it, never the other way round.
+ */
+app.post('/api/voice/ward-voice', express.raw({ type: 'audio/*', limit: '25mb' }), async (req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  const name = String(req.query?.name ?? '').trim();
+  const saved = await saveWardVoice({ rootDir: __dirname, name, bytes: req.body });
+  if (!saved.ok) return res.status(400).json(saved);
+
+  // Measured the same way every other clip is, so the picker can say what it
+  // sounds like instead of showing a filename and hoping.
+  let measured = null;
+  try { measured = measureVoiceClip(req.body); } catch { /* a clip that won't measure still works */ }
+
+  const chose = req.query?.choose !== '0';
+  if (chose) {
+    try {
+      const prior = JSON.parse(await fsp.readFile(SETTINGS_FILE, 'utf8').catch(() => '{}'));
+      const merged = mergeSettings(prior, { voiceTts: { ...(prior.voiceTts ?? {}), voice: saved.key } });
+      await fsp.writeFile(SETTINGS_FILE, JSON.stringify(merged, null, 2), 'utf8');
+    } catch (err) {
+      return res.json({ ...saved, chosen: false, error: `saved, but could not select it: ${err.message}` });
+    }
+  }
+  res.json({ ...saved, chosen: chose, measurement: measured?.ok ? measured : null });
+});
+
+/** What is already on this machine, so the picker can mark it. */
+app.get('/api/voice/local', async (_req, res) => {
+  try { res.json({ ok: true, ...(await listLocalVoices(__dirname)) }); }
+  catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
 });
 
 app.get('/api/voice/clips/summary', async (_req, res) => {

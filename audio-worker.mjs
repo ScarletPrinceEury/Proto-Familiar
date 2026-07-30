@@ -112,6 +112,14 @@ function buildPocketTts(modelDir) {
 function buildRecognizer(modelDir) {
   const at = (f) => path.join(modelDir, f);
   return new engine.OfflineRecognizer({
+    // Stated rather than inherited. SenseVoice is a 16 kHz, 80-dimension fbank
+    // model; sherpa's C++ FeatureExtractorConfig defaults to exactly that, so
+    // omitting this block PROBABLY works — but the Node binding builds the
+    // struct from whatever JS properties are present, and I could not verify
+    // from the installed package whether an absent `featConfig` leaves the C++
+    // defaults or zeroes them. A silently zeroed sample rate would produce
+    // garbage, not an error. So the two values that matter are written down.
+    featConfig: { sampleRate: 16000, featureDim: 80 },
     modelConfig: {
       senseVoice: {
         model: at('model.int8.onnx'),

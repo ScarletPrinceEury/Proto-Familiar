@@ -495,6 +495,13 @@
         <p class="field-hint">Every background job that calls a model can run on its own connection — handy for pointing cheap/idle work at a cheaper model while chat stays on your best one. "Primary" means it follows your primary connection above.</p>
         <div id="feature-connection-rows"></div>
 
+        <h3 class="section-label" style="margin-top:16px">Reading aloud</h3>
+        <div class="field-row">
+          <label for="read-aloud-default-toggle">Read every new reply aloud automatically</label>
+          <input type="checkbox" id="read-aloud-default-toggle">
+        </div>
+        <p class="field-hint">Off by default. With it on, each reply is spoken as it arrives — no need to press 🔊 on every message. Press the button again, or just start typing, to cut it off. There is a 🔊 button under each of your Familiar's messages either way, and neither needs the voice-note microphone.</p>
+
         <h3 class="section-label" style="margin-top:16px">Voice notes</h3>
         <p class="field-hint">Nothing to switch on. The microphone button sits next to the message box — press it, say what you meant to say, press it again. The words you said appear under the recording before you send, so you can check they were heard right. It all happens on this machine; the first recording offers the one-time download (~158&nbsp;MB) it needs.</p>
 
@@ -687,6 +694,13 @@
           <button id="voice-picker-more" class="btn-secondary hidden">Show more</button>
         </div>
         <p class="field-hint" id="voice-picker-note"></p>
+        <!-- A voice of my human's own. The README has always promised this; the
+             endpoint it needs did not exist until the Pass 1 audit. -->
+        <div class="field-row" style="gap:8px; flex-wrap:wrap">
+          <button id="voice-own-btn" class="btn-secondary" type="button">＋ Use a clip of my own</button>
+          <span class="field-hint" id="voice-own-note" style="flex:1 1 220px"></span>
+        </div>
+        <input type="file" id="voice-own-input" accept="audio/wav,.wav" hidden>
       </div>
       <div class="modal-footer">
         <span class="field-hint" id="voice-picker-chosen" style="flex:1"></span>

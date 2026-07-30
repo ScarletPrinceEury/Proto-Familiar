@@ -990,13 +990,15 @@ does not.
 - **Read-aloud (TTS-only) does not require `voiceEnabled`** — it's an
   accessibility surface, not a listening one, and hard-of-hearing wards are
   exactly who it serves. Every assistant message in the web UI gets a 🔊
-  **"read this aloud" button** (`POST /api/voice/tts` → the worker loads the
-  TTS model alone → audio streams to the browser; `speakable()` applies; the
-  first-ever use offers the model download with a size note before
-  fetching). A `readAloudByDefault` toggle speaks each new reply as it
-  arrives, barge-in by pressing the button again or typing. Lands in
-  **Pass 1** — it needs no call engine, no adapters, just the worker and one
-  endpoint.
+  **"read this aloud" button**. Shipped as TWO endpoints rather than the one
+  sketched here, because they are different kinds of work: `POST
+  /api/voice/speech-plan` is pure text and costs nothing, then `GET
+  /api/voice/tts/:id` synthesises one utterance at a time. Splitting them is
+  what makes playback start in about a second instead of after the whole
+  message. `speakable()` applies; the first-ever use offers the model download
+  with a size note before fetching. `readAloudByDefault` speaks each new reply
+  as it arrives, with barge-in by pressing the button again **or typing** —
+  both shipped in the Pass 1 audit, having been missed in the original pass.
 - Hard off-switch `PROTO_FAMILIAR_VOICE_DISABLED=1` ships in the same commit
   as Pass 1 and kills *all* of it — worker, calls, read-aloud.
 - Per-surface: `voiceDiscordEnabled`, `voiceWebEnabled`; per-location voice
@@ -1209,6 +1211,37 @@ out — it still sends"), I see it in the stand-in (each reason has its own
 wording — not-yet / switched-off / no-speech / let-go), and it logs. A note
 that could not be transcribed is never silently absent; a gap I cannot see is
 a gap I confabulate over.
+
+## 14.6 Pass 1 audit (post-shipping)
+
+Ward-requested after the fourth voice-note bug in a row: *"how about you do a
+full audit of your work on the voice spec so we don't have to hunt down ten
+more small oversights?"* Walking the spec against the source found six live
+defects that nobody had hit yet. Recorded because the *pattern* matters more
+than the individual fixes.
+
+| Finding | Was |
+|---|---|
+| Browse-all served `variant: 'original'` | Every voice past the curated ten offered at the muffled quality the enhanced work existed to fix. `preferEnhanced` had no caller. Now `'best'`: one row per voice, enhanced where upstream made one. |
+| `saveWardVoice` had no caller | The README promised "a voice clip of your own" with no path through the app. Now `POST /api/voice/ward-voice` + a control in the picker. |
+| `measureVoiceClip` used un-imported | Inside a `try/catch`, so the ReferenceError was swallowed and no clip would ever have been measured. Invisible forever. |
+| `readAloudByDefault` had zero references | Spec'd in Pass 1. An **accessibility** feature: pressing 🔊 on every message is not an alternative to text, it is a tax on needing one. Barge-in by typing was missing too. |
+| Voice notes uncapped per message | Images cap at 4; notes did not. Twenty notes × 24 MB from one message, of which only the newest four would ever be transcribed. |
+| `featConfig` omitted from the recogniser | Probably fine (sherpa's C++ defaults are 16000/80) but unverifiable from the installed package, and a zeroed sample rate produces garbage rather than an error. Now stated. |
+
+**The recurring shape, four times in one milestone:** a function written,
+tested, documented — and wired to nothing. `installVoice()` was the first;
+`saveWardVoice` was the fourth, in the same file. The CLAUDE.md rule ("every
+capability must be reachable BY the Familiar") was written for the Familiar's
+tools and applies just as hard to the ward's. **A test that a function behaves
+is not a test that anything calls it.**
+
+**Known and deliberately left:** `belongsInIdentityBackup()` is documented in
+`architecture.md` as governing whether voices survive a restore, and nothing
+consults it — Phylactery's backup is Python and never asks. Voices do NOT
+currently survive a backup/restore. `reclaimModels()` has no surface either.
+Both are recorded here rather than quietly fixed, because they want a decision
+about where backup responsibility lives rather than a patch.
 
 ## 15. Out of scope (this milestone)
 

@@ -382,6 +382,14 @@ const state = {
   // Reserved for CONTINUOUS listening (live calls, Pass 2), which is the thing
   // that genuinely needs an explicit opt-in. Voice notes do not consult it.
   voiceEnabled: false,
+  // Speak each new reply as it arrives, without pressing anything.
+  //
+  // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
+  // own work rather than by my human hitting it, which is lucky, because the
+  // people it matters most to are the ones who cannot comfortably read the
+  // screen: pressing 🔊 on every single message is not an accessible
+  // alternative to text, it is a tax on needing one.
+  readAloudByDefault: false,
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -434,7 +442,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
-  'voiceEnabled',
+  'voiceEnabled', 'readAloudByDefault',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -2265,6 +2273,23 @@ async function ensureSpeechModel(btn, token) {
   return true;
 }
 
+/**
+ * Speak the reply that just landed, as if my human had pressed its 🔊 button.
+ *
+ * Deliberately reuses the button rather than a parallel path: the button owns
+ * the download offer, the barge-in, the "⏹ Stop" label and every failure
+ * message. A second way to start speaking would be a second way to get all of
+ * that subtly wrong.
+ *
+ * Barge-in comes free — `speakMessage` stops whatever is playing when a new
+ * one starts, and typing is handled by the input listener below.
+ */
+function speakLatestReply() {
+  const buttons = document.querySelectorAll('.msg-speak-btn');
+  const btn = buttons[buttons.length - 1];
+  if (btn) btn.click();
+}
+
 function wireSpeakButton(btn, getText) {
   if (!btn) return;
   btn.addEventListener('click', () => speakMessage(getText(), btn));
@@ -2484,6 +2509,9 @@ function extractErrorText(payload, fallback) {
 
 // ── Composer image attachments (vision) ──────────────────────────
 const VISION_MAX_PER_MESSAGE = 4;      // mirrors media.js MAX_IMAGES_PER_MESSAGE
+// Matches ensureTranscribed's per-turn budget in voice-transcribe.js. If these
+// two ever disagree, the excess notes are ones I accepted and will not hear.
+const VOICE_NOTES_MAX_PER_MESSAGE = 4;
 const VISION_DOWNSCALE_EDGE  = 1568;   // long-edge cap before upload (spec §4)
 
 function visionActive() {
@@ -2827,6 +2855,16 @@ async function toggleVoiceNote() {
 
 async function attachVoiceNote(blob) {
   state.pendingAttachments ||= [];
+  // Capped like images are. Uncapped, this uploaded before checking anything —
+  // twenty notes at up to 24 MB each is half a gigabyte written to disk from
+  // one message, and only the newest four would have been transcribed anyway
+  // (ensureTranscribed's budget), so the rest would ride as "haven't listened
+  // to this one yet" and never be heard.
+  const notes = state.pendingAttachments.filter(a => a.kind === 'audio').length;
+  if (notes >= VOICE_NOTES_MAX_PER_MESSAGE) {
+    appendErrorMessage(`I can listen to up to ${VOICE_NOTES_MAX_PER_MESSAGE} voice notes in one message.`);
+    return;
+  }
   try {
     const { toWav } = await import('./voice-recorder.js');
     const wav = await toWav(blob);
@@ -2980,6 +3018,7 @@ async function sendMessage(userInput) {
       await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     }
     if (_roundCapHitThisTurn) offerContinueRounds();
+    if (state.readAloudByDefault) speakLatestReply();
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
     debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
@@ -3679,6 +3718,7 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
+  if ($('read-aloud-default-toggle')) state.readAloudByDefault = $('read-aloud-default-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
     state.eventAlertLeadMinutes = Number.isInteger(n) && n >= 5 && n <= 1440 ? n : 60;
@@ -3837,6 +3877,7 @@ function writeSettingsToUI() {
   if ($('gcal-lookahead')) setIfNotFocused($('gcal-lookahead'), 'value', state.gcalLookaheadDays ?? 365);
   if ($('event-alerts-toggle')) setIfNotFocused($('event-alerts-toggle'), 'checked', state.eventAlertsEnabled !== false);
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
+  if ($('read-aloud-default-toggle')) setIfNotFocused($('read-aloud-default-toggle'), 'checked', state.readAloudByDefault === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
@@ -5186,6 +5227,11 @@ function init() {
 
   $('user-input').addEventListener('input', function() {
     autoResize(this);
+    // Barge-in by typing (spec §11). If I am reading a reply aloud and my human
+    // starts typing, they have something to say and I stop — the same courtesy
+    // any person extends. Only fires while something is actually playing, so it
+    // costs nothing the rest of the time.
+    if (speech.audio || speech.btn) stopSpeaking();
   });
 
   // ── Composer image attachments (vision) ────────────────────────
@@ -5354,6 +5400,12 @@ function init() {
   $('voice-picker-source')?.addEventListener('change', () => loadVoicePage(true));
   $('voice-picker-sort')?.addEventListener('change', () => loadVoicePage(true));
   $('voice-picker-all')?.addEventListener('change', () => loadVoicePage(true));
+  $('voice-own-btn')?.addEventListener('click', () => $('voice-own-input')?.click());
+  $('voice-own-input')?.addEventListener('change', async () => {
+    const f = $('voice-own-input').files?.[0];
+    $('voice-own-input').value = '';   // allow re-picking the same file
+    if (f) await useMyOwnVoiceClip(f);
+  });
   $('voice-bench-close')?.addEventListener('click', closeVoiceBenchModal);
   $('voice-bench-run')?.addEventListener('click', startVoiceBench);
   $('voice-bench-again')?.addEventListener('click', resetVoiceBench);
@@ -7834,6 +7886,84 @@ async function installVoiceSidecar() {
   }
 }
 
+/**
+ * Hand my Familiar a voice clip of my own.
+ *
+ * ⚠️ `saveWardVoice` existed with tests and no caller — the same shape as
+ * `installVoice` before it, in the same file. The README promised this feature
+ * the whole time and there was no path to it through the app.
+ *
+ * wav only, because that is what the recogniser and the cloner can both read
+ * without a decoder we do not ship, and saying so plainly beats accepting an
+ * mp3 and failing later with something vague.
+ */
+/**
+ * Re-label every row so exactly one reads "in use", and name it in the footer.
+ *
+ * Extracted because a second caller appeared (a ward's own clip) and a copy of
+ * this loop would have been the copy-paste rule broken in the same breath as
+ * fixing an unreachable function. It also fills `#voice-picker-chosen`, which
+ * has been in the markup unwritten since the picker shipped.
+ */
+function markChosenVoiceRows() {
+  for (const b of document.querySelectorAll('#voice-picker-list [data-voice-key]')) {
+    const mine = b.dataset.voiceKey === VP.chosen;
+    b.textContent = mine ? '✓ In use' : 'Use this';
+    b.disabled = mine;
+    b.title = '';
+  }
+  const label = $('voice-picker-chosen');
+  if (label) {
+    label.textContent = VP.chosen
+      ? (VP.chosen.startsWith('ward:')
+          ? `Speaking in your own clip: ${VP.chosen.slice(5)}`
+          : `Speaking in ${VP.chosen}`)
+      : '';
+  }
+}
+
+async function useMyOwnVoiceClip(file) {
+  const note = $('voice-own-note');
+  const say = (t) => { if (note) note.textContent = t; };
+
+  if (!/\.wav$/i.test(file.name)) {
+    say('It needs to be a .wav file — that is the one format the voice engine can read directly.');
+    return;
+  }
+  say('Saving…');
+  try {
+    const qs = new URLSearchParams({ name: file.name.replace(/[^\w.-]/g, '_') });
+    const res = await fetch(`/api/voice/ward-voice?${qs}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav' },
+      body: await file.arrayBuffer(),
+    });
+    const out = await res.json();
+    if (!out?.ok) {
+      say(out?.detail || out?.reason || 'that clip could not be saved');
+      return;
+    }
+    const m = out.measurement;
+    // Upstream recommends 10–20s of clean speech; a two-second clip clones
+    // badly and it is kinder to say so than to let them wonder why it sounds
+    // wrong. Said as information, not a refusal — it is their clip.
+    const short = m?.durationSec && m.durationSec < 6
+      ? ` It is only ${m.durationSec.toFixed(1)}s — 10 to 20 seconds of clear speech clones best.`
+      : '';
+    say(`Saved, and now my voice.${short} It stays on this machine.`);
+    // The real mechanism, not an invented one: VP.chosen is what the row
+    // labels read. (I first wrote `refreshVoiceChosenLabel?.()` here, a
+    // function that does not exist — and `foo?.()` on an undeclared name
+    // throws a ReferenceError rather than shrugging, so it would have broken
+    // the whole handler.)
+    VP.chosen = out.key;
+    markChosenVoiceRows();
+    loadVoicePage(true);
+  } catch (err) {
+    say(String(err?.message ?? err));
+  }
+}
+
 async function openVoicePicker() {
   $('voice-picker-modal').classList.remove('hidden');
   // Ask what is actually in use before drawing any ticks. Rendering from a
@@ -7959,13 +8089,7 @@ async function chooseVoice(row, button) {
     }
 
     VP.chosen = out.chosen;
-    // Re-label every row, so exactly one shows as in use.
-    for (const b of document.querySelectorAll('#voice-picker-list [data-voice-key]')) {
-      const mine = b.dataset.voiceKey === VP.chosen;
-      b.textContent = mine ? '✓ In use' : 'Use this';
-      b.disabled = mine;
-      b.title = '';
-    }
+    markChosenVoiceRows();
 
     // If the engine ended up speaking in something else, say so rather than
     // showing a tick over a voice that is not being used.

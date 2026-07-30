@@ -2292,6 +2292,14 @@ never rides out in a diagnostic, bench report or shared surface — but
 Familiar that comes back sounding like a stranger is a continuity break. The
 two questions are orthogonal by design.
 
+⚠️ **Aspirational, not wired (found in the Pass 1 audit).**
+`belongsInIdentityBackup()` has no caller: Phylactery's backup is Python and
+never asks this JavaScript function anything, so **voices do not currently
+survive a backup/restore**. The predicate encodes the right intent and is
+tested; what is missing is a decision about where backup responsibility for
+non-Phylactery files lives. Do not read this paragraph as describing working
+behaviour.
+
 ## Voice — Pass 1 (speaking, and why it took four attempts)
 
 Read-aloud runs as a **two-step HTTP flow** so planning and speaking can be

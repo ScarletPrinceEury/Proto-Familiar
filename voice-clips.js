@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { measureVoiceClip, describeMeasurement } from './voice-audio-features.js';
-import { sourceByKey, SHORTLIST, shortlistKeys, DEFAULT_VOICE } from './voice-catalogue.js';
+import { sourceByKey, SHORTLIST, shortlistKeys, DEFAULT_VOICE, preferEnhanced } from './voice-catalogue.js';
 
 const CACHE_FILE = path.join('tomes', '.voice-clip-features.json');
 
@@ -89,8 +89,21 @@ export function listClips({
   const needle = String(q ?? '').trim().toLowerCase();
 
   const short = shortlistKeys();
+  // 'best' = one row per voice, the enhanced cut where upstream made one and
+  // the original where they did not (8 of 377 — LibriVox and alba-mackenna).
+  //
+  // A plain `variant: 'enhanced'` filter HIDES those eight entirely, and
+  // `'original'` offers everyone the un-enhanced recording, which is audibly
+  // muffled and was the exact complaint that started the enhanced
+  // investigation. Neither is what someone browsing for a voice wants, so
+  // there is a third option and it is the one the picker uses.
+  const bestKeys = variant === 'best'
+    ? new Set(all.map((c) => preferEnhanced(clipKey(c), new Set(all.map(clipKey)))))
+    : null;
+
   let rows = all.filter((c) => {
-    if (variant && variant !== 'any' && c.variant !== variant) return false;
+    if (bestKeys) { if (!bestKeys.has(clipKey(c))) return false; }
+    else if (variant && variant !== 'any' && c.variant !== variant) return false;
     if (shortlist && !short.has(clipKey(c))) return false;
     if (source && c.source !== source) return false;
     if (needle && !`${c.id} ${c.source}`.toLowerCase().includes(needle)) return false;
