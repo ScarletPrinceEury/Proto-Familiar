@@ -30,24 +30,7 @@ export const VOICE_HARD_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DISABLED ===
 let worker = null;
 let backend = null;
 
-/**
- * The LISTENING worker, which is a different thing from the speaking one.
- *
- * ⚠️ Speaking and listening are independent capabilities and this conflated
- * them. Which engine SPEAKS is my human's choice — sherpa, or the voicebox
- * Python sidecar. Which engine LISTENS is not a choice at all: the recogniser
- * is a sherpa model, always. But transcription asked `currentAudioWorker()`,
- * which hands back whichever worker the SPEAKING setting selected — so once
- * they picked the steadier voice, every voice note went to a Python process
- * that cannot listen. It answered `unsupported`, and the chip said "I couldn't
- * make this one out": my human downloaded 226 MB and was told their speech was
- * unintelligible by a process that had never been given the audio.
- *
- * So listening gets its own worker, pinned to sherpa. When both are in use
- * that is two children — but they hold different models, each unloads on idle,
- * and the alternative is a capability that silently depends on an unrelated
- * setting.
- */
+/** The listening worker — separate from `worker`, and pinned to sherpa. */
 let listener = null;
 
 function build(resolved) {
@@ -97,6 +80,15 @@ export async function currentAudioWorker({ rootDir, readSettings } = {}) {
 
 /**
  * The worker that LISTENS. Always sherpa, whatever is set for speaking.
+ *
+ * ⚠️ Which engine SPEAKS is my human's choice; which engine LISTENS is not —
+ * the recogniser is a sherpa model, always. Transcription used to call
+ * `currentAudioWorker()`, which returns whichever worker the SPEAKING setting
+ * chose, so picking the voicebox voice sent every voice note to a Python
+ * process that cannot listen. Do not merge these two back together.
+ *
+ * Two children when both are in use, which is fine: different models, each
+ * unloads on idle.
  *
  * Returns `{ worker: null, reason }` rather than throwing — the caller is a
  * chat path, and "this machine cannot listen" has to arrive as a sentence my

@@ -13,7 +13,7 @@
  * propagate a limit on what recipients may do with the whole thing, which is
  * exactly what the GPL exists to prevent. That rule is easy to state and easy
  * to forget six months later when someone adds "just one more nice voice."
- * So `shippableVoices()` filters on the licence field and a test asserts no
+ * So `shippableSources()` filters on the licence field and a test asserts no
  * non-redistributable source can reach the shipped set. The rule enforces
  * itself.
  *

@@ -2238,8 +2238,12 @@ async function ensureSpeechModel(btn, token) {
   // First click: ask. Second click within the offer: do it.
   if (btn.dataset.offeringDownload !== '1') {
     btn.dataset.offeringDownload = '1';
-    btn.textContent = '⬇ Get the voice (194 MB)';
-    btn.title = 'Reading aloud needs a one-time download. Click again to start it.';
+    // 94 MB is what downloads; 194 MB is what it occupies once unpacked. The
+    // button said 194 next to the word "get", which is the disk figure on a
+    // download label — the two numbers were being used interchangeably across
+    // the README, Settings and the installer, each picking a different one.
+    btn.textContent = '⬇ Get the voice (94 MB)';
+    btn.title = 'Reading aloud needs a one-time download: 94 MB to fetch, 194 MB once unpacked. Click again to start it.';
     btn.classList.remove('is-speaking');
     speech.btn = null;
     speech.token++;   // this click is no longer a playback attempt
@@ -2671,6 +2675,9 @@ function transcriptProblem(entry) {
     case 'model-missing':
       return {
         text: 'I need to download the listening model before I can hear this.',
+        // entry.bytes is the outstanding DOWNLOAD size when the server knows
+        // it; 158 is the pinned fallback. Not the 233 MB unpacked figure —
+        // a "get it" button should state what it will pull down.
         fix: { label: `⬇ Get it (${entry.bytes ? Math.round(entry.bytes / 1024 / 1024) : 158} MB)`, kind: 'download' },
       };
     case 'no-worker':

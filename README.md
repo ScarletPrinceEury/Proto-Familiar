@@ -75,7 +75,7 @@ Still, remember that this is a prototype by an amateur! I've tried my best to te
 
 Yes. Every message your Familiar writes has a **🔊 Read aloud** button under it. This exists because reading a screen is not always possible — bad days, migraines, low vision, or just being too worn out to take in text — and a companion you cannot reach on those days is least useful exactly when it matters most.
 
-It runs entirely on your own machine, like everything else. No audio leaves your computer and nothing is sent to a speech service. The first time you use it, it will ask before downloading the voice (194 MB) rather than taking the space unannounced.
+It runs entirely on your own machine, like everything else. No audio leaves your computer and nothing is sent to a speech service. The first time you use it, it will ask before downloading the voice — 94 MB to fetch, 194 MB once unpacked — rather than taking the space unannounced.
 
 You can pick what your Familiar sounds like in Settings → *Choose a voice*: a curated handful first, several hundred more if you want to browse, all free to use and licensed for it. You can also give your Familiar a voice clip of your own — one that means something to you — and that clip never leaves your machine.
 
@@ -87,7 +87,7 @@ You can send them a **voice note**. There is a microphone button next to the mes
 
 Before you send, you see the words your Familiar heard, written out under the recording. That is deliberate: you can check they got "oat milk" and not "oat mail" and re-record if they didn't, rather than finding out later from a reply that doesn't make sense.
 
-The listening happens on your own machine, like everything else — nothing is sent to a transcription service. It needs a one-time download (~230 MB), offered the first time you record. It understands English, German, Japanese, Korean, Chinese and Cantonese without you telling it which you are speaking, so a household that switches languages mid-sentence is fine.
+The listening happens on your own machine, like everything else — nothing is sent to a transcription service. It needs a one-time download the first time you record: 158 MB to fetch, 233 MB once unpacked (and briefly both at once while it unpacks). It understands English, German, Japanese, Korean, Chinese and Cantonese without you telling it which you are speaking, so a household that switches languages mid-sentence is fine.
 
 Your browser will ask permission the first time, which is the gate that matters — pressing the button is you deciding, and nothing listens when you are not holding it down. (Live voice *conversations*, when they arrive, will be a separate opt-in: a microphone that stays open is a different thing from one you press.)
 

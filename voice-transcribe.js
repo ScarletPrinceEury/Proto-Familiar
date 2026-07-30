@@ -16,22 +16,13 @@
  * a second place to look.
  *
  * ── Pressing the button IS the consent ──────────────────────────────────
- * This used to sit behind a `voiceEnabled` setting, default OFF, on the
- * reasoning that "a microphone is opt-in in a way a pasted photo is not".
- * That reasoning is sound for AMBIENT listening — a mic that is simply on —
- * and wrong for this. A voice note is a deliberate act: my human presses a
- * button, and the browser asks its own permission on top. A setting in front
- * of that is a second gate guarding a door that is already locked, and it
- * hid the button entirely, so the feature was undiscoverable as well.
+ * Voice notes consult ONLY `PROTO_FAMILIAR_VOICE_DISABLED`. Do not put
+ * `voiceEnabled` back in front of them: it gated them once, which hid the
+ * button and so hid the feature, and a deliberate press already carries the
+ * browser's own permission prompt.
  *
- * For someone whose executive function is the actual obstacle, "turn on a
- * setting before you may speak" is not a safeguard, it is the reason the
- * thought is lost. So: no setting. The press is the consent.
- *
- * `voiceEnabled` still exists and still means something — it is reserved for
- * CONTINUOUS listening (live calls, Pass 2), which genuinely is different in
- * kind and does need an explicit opt-in. `PROTO_FAMILIAR_VOICE_DISABLED=1`
- * remains the hard switch over all of it.
+ * `voiceEnabled` is for CONTINUOUS listening (live calls, Pass 2) — a mic
+ * left open is a different thing and does need an explicit opt-in.
  *
  * ── It never throws ─────────────────────────────────────────────────────
  * Every caller is a chat path. A missing model, a dead worker, an unreadable
@@ -45,7 +36,11 @@ import { getAssetMeta, setAssetDescription, assetBytesPath } from './media.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Where `ensure-audio-models.mjs` unpacks the recogniser. */
+/**
+ * Where the recogniser is unpacked. Written by `POST /api/voice/install-models`
+ * with `{what:'listen'}` (the path a ward actually takes), or by
+ * `scripts/ensure-audio-models.mjs --extras=asr-offline` from a terminal.
+ */
 export const ASR_MODEL_DIR = path.join(__dirname, 'models', 'audio', 'asr-offline');
 
 /**

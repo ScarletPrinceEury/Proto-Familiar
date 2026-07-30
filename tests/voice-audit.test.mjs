@@ -195,3 +195,62 @@ test('the wiring audit runs clean, and the script it runs still exists', async (
   }
   assert.match(out, /0 finding\(s\)/);
 });
+
+// ── Comment and copy accuracy ─────────────────────────────────────
+
+test('the model download prompts quote the download size, not the unpacked one', async () => {
+  // ⚠️ The listening model was quoted as ~230 MB in the README, ~158 MB in
+  // Settings, and ~230 MB by the installer — 158 is the DOWNLOAD, 233 is the
+  // disk figure. The voice had the mirror problem: the button read "Get the
+  // voice (194 MB)", its unpacked size, on a label about fetching. Someone
+  // short of disk got a different number from every surface.
+  //
+  // Scoped to the four prompts that name a model download. A blanket sweep of
+  // every "N MB" in the repo was tried first and matched upload caps, sidecar
+  // parts and an illustrative figure in a comment — three rounds of widening an
+  // allowlist, which is the test being wrong rather than the copy.
+  const pins = JSON.parse(await read('voice-model-pins.json'));
+  const mb = (b) => Math.round(b / 1024 / 1024);
+  const dl = { asr: mb(pins['asr-offline'].files[0].bytes), tts: mb(pins['tts-pocket'].files[0].bytes) };
+  const disk = { asr: mb(pins['asr-offline'].files[0].diskBytes), tts: mb(pins['tts-pocket'].files[0].diskBytes) };
+  assert.notEqual(dl.asr, disk.asr, 'the two figures must differ or this proves nothing');
+
+  const app = await read('public/app.js');
+  const html = await read('public/index.html');
+  const readme = await read('README.md');
+  const ready = await read('scripts/check-voice-ready.mjs');
+
+  // The read-aloud button: download size on a fetch label.
+  assert.match(app, new RegExp(`Get the voice \\(${dl.tts} MB\\)`),
+    `the button should say ${dl.tts} MB (download), not ${disk.tts} MB (unpacked)`);
+
+  // Every surface that describes the listening download must state BOTH, so
+  // neither number can stand alone and be mistaken for the other.
+  for (const [name, body] of [['index.html', html], ['README.md', readme], ['check-voice-ready', ready]]) {
+    const line = body.split(/\n/).find((l) => new RegExp(`${dl.asr}[^0-9]{0,12}MB`).test(l));
+    assert.ok(line, `${name} does not mention the ${dl.asr} MB download at all`);
+    assert.ok(new RegExp(`${disk.asr}`).test(line),
+      `${name} quotes the download without the ${disk.asr} MB unpacked size: "${line.trim().slice(0, 110)}"`);
+  }
+});
+
+test('no comment claims a file or function that does not exist', async () => {
+  // Two stale names found by sweep: a comment referenced `shippableVoices()`
+  // (the function is `shippableSources`) and another the manifest field
+  // `upstreamAsset` (it is `upstream.asset`). Both would send a reader looking
+  // for something that was never there.
+  const cat = await read('voice-catalogue.js');
+  assert.doesNotMatch(cat, /`shippableVoices\(\)`/, 'stale function name is back');
+  assert.match(cat, /`shippableSources\(\)`/);
+
+  const pin = await read('scripts/pin-audio-models.mjs');
+  assert.doesNotMatch(pin, /`upstreamAsset`/, 'stale field name is back');
+
+  // The audit script's own header must count its own checks correctly — it
+  // said "Five checks" while listing seven.
+  const audit = await read('scripts/audit-wiring.mjs');
+  const claimed = audit.match(/\* (\w+) checks, each mapping/)?.[1];
+  const listed = [...audit.matchAll(/^ \*\s+\d\. /gm)].length;
+  const words = { Two: 2, Three: 3, Four: 4, Five: 5, Six: 6, Seven: 7, Eight: 8, Nine: 9 };
+  assert.equal(words[claimed], listed, `header claims ${claimed} checks but lists ${listed}`);
+});

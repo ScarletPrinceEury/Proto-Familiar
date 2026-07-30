@@ -63,7 +63,7 @@ async function main() {
   } else if (!model) {
     say('  Reading aloud: ready — the voice downloads the first time you use it.');
     say('    Open a conversation and press "🔊 Read aloud" under any of your');
-    say('    Familiar\'s messages. It will ask before downloading (194 MB).');
+    say('    Familiar\'s messages. It asks first: 94 MB to fetch, 194 MB unpacked.');
   } else {
     say('  Reading aloud: ready to go.');
     say('    Press "🔊 Read aloud" under any of your Familiar\'s messages.');
@@ -80,7 +80,7 @@ async function main() {
     say(listening
       ? '  Voice notes: ready — turn on "Hearing voice notes" in Settings to record.'
       : '  Voice notes: available. Turn on "Hearing voice notes" in Settings and');
-    if (!listening) say('    your Familiar will offer the one-time download (~230 MB) when you record.');
+    if (!listening) say('    your Familiar offers the download when you record: 158 MB to fetch, 233 MB unpacked.');
   }
   say('');
 

@@ -623,7 +623,7 @@ The recording uploaded fine; the transcribing is what didn't happen. In order
 of likelihood:
 
 - **"model-missing"** — the listening model has not been downloaded yet
-  (~230 MB). It is offered the first time you record.
+  (158 MB to fetch, 233 MB unpacked). It is offered the first time you record.
 - **The model isn't pinned in this build.** The download refuses without a
   verified checksum, which is the intended behaviour, not a fault. From a
   checkout: `npm run pin:listening`, once, then commit the result.

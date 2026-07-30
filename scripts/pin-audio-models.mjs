@@ -181,7 +181,7 @@ async function main() {
 
   const rest = argv.slice(1);
 
-  // `--upstream` builds the URL from the model's recorded `upstreamAsset`
+  // `--upstream` builds the URL from the model's recorded `upstream.asset`
   // instead of asking anyone to retype it. One fewer place a character can go
   // wrong, and the language table stays the single source of truth for which
   // asset a language means.

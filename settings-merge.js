@@ -7,20 +7,14 @@
  * which sent a whole voice test through the wrong engine and produced a page of
  * analysis of a backend nobody had chosen.
  *
- * The blast radius is every server-owned setting: anything a script writes,
- * anything a background loop owns, and — worst — any setting added BEFORE its
- * UI control exists, which is the normal order in which one gets built. The old
- * behaviour rewarded building the control first and punished building the
- * feature first.
+ * It reached every server-owned setting: anything a script or background loop
+ * writes, and any setting added before its UI control exists — which is the
+ * normal build order.
  *
  * ── The rule ────────────────────────────────────────────────────────────
  * The client owns the keys it SENDS (`SERVER_SYNCED_KEYS` in public/app.js).
- * Anything it does not mention belongs to somebody else and is preserved.
- * Deleting a key therefore needs an explicit `null`.
- *
- * That asymmetry is the whole point: silence must mean "I have no opinion",
- * never "destroy it". A client that has never heard of a setting says nothing
- * about it, and saying nothing is exactly what a partial sync looks like.
+ * Anything it does not mention is preserved; silence means "no opinion", never
+ * "destroy it". Deleting therefore needs an explicit `null`.
  *
  * ── Top level only, deliberately ────────────────────────────────────────
  * A key's VALUE is replaced wholesale, not deep-merged. A client that owns

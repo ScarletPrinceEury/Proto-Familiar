@@ -9,12 +9,14 @@
  * name a module never exported, or a `$('some-id')` whose id is not in the
  * markup.
  *
- * Five checks, each mapping to a bug that shipped:
+ * Seven checks, each mapping to a bug that shipped:
  *   1. imports that name something the source module does not export
  *   2. calls to identifiers nothing declares (the ReferenceError class)
  *   3. `$('id')` lookups with no matching id in index.html
- *   4. settings keys the client syncs that no one reads, and vice versa
- *   5. env off-switches referenced in code but absent from the docs
+ *   4. settings keys the client syncs that no one reads
+ *   5. settings keys read server-side that nothing ever writes
+ *   6. interactive controls in the markup that no script references
+ *   7. env off-switches referenced in code but absent from the docs
  *
  * Reports and exits non-zero. Deliberately a script, not a test: it sweeps the
  * whole repo and is meant to be run deliberately, not on every `npm test`.
