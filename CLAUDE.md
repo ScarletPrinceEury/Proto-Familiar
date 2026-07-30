@@ -198,6 +198,71 @@ These are real mistakes that shipped and had to be walked back. Each one looked 
 
 5. **The mirror of #2: relying on the LLM's ack to close out a "tell" (0.9.32).** A deferred "tell" — a warm thing the Familiar wanted to bring up — used to be marked done only when the model remembered to call `acknowledge_deferred_intent` *after* voicing it. In practice it said the tell and skipped the bookkeeping call often enough that the tell stayed unacted and kept re-surfacing in `[Deferred intents]` — the Familiar asked my human the same warm question three times in one chat. Where #2 was "acknowledging without doing the work," this is the opposite shape: doing the work (saying the thing) and then not marking it done, because closing the loop was a *separate* tool call riding on the model remembering it. Lesson: **when a step's entire "action" is something the model already just said out loud, don't make completion depend on a second LLM-initiated call — have the code consume it.** `getUnactedIntents({markSurfaced:true})` now stamps a shown tell `surfaced_at` and the next live turn marks it `acted_on` in code, no ack required. This doesn't generalize to every acknowledge-style flow, though — filing intents (tome/memory/identity) still need the tool call before the mark-done, because they carry a real side-effect (something must actually get written) that a tell doesn't have. The test before auto-consuming anything in code: does "the model said it" already equal "the action happened"? Only then is code allowed to close it out on the model's behalf.
 
+### ⚠️ Recorded VERIFICATION errors — the voice Pass 1 post-mortem
+
+Eleven rounds of my human finding defects I could have found myself. The code
+mistakes were ordinary; the *verification* mistakes are the ones that made them
+expensive, and they repeat, so they are law now.
+
+1. **A duplicate object key silently wins, and `node --check` does not care.**
+   `audio-worker.mjs`'s OPS dispatch table declared `transcribe` twice — the real
+   handler, and a leftover "not implemented yet" stub below it. The later key
+   wins, so the real implementation was dead from the day it landed and every
+   voice note answered `unsupported`. It cost FOUR rounds of live testing while
+   I "fixed" the routing twice. **Never leave a placeholder for an op that has
+   an implementation**, and `npm run audit:wiring` now fails on a duplicate
+   member in a top-level dispatch table.
+
+2. **A test can assert a bug and defend it for weeks.** The same incident had a
+   test sending `op:'transcribe'` and asserting `reason === 'unsupported'` —
+   written when the stub was the only implementation. When the real handler
+   arrived the test kept passing, because `unsupported` was exactly what the
+   stub returned. The suite did not merely miss the bug; it protected it.
+   **Never assert a placeholder's response for something the codebase is
+   expected to implement** — the assertion outlives the placeholder and pins
+   the wrong behaviour.
+
+3. **Stubs test the CALLER, never the thing at the end of the route.** Every
+   voice-note test stubbed the worker, so none of them ever loaded the real OPS
+   table. A pipeline test that spawns the real child found it immediately.
+   Where a capability crosses a process boundary, at least one test must cross
+   it too.
+
+4. **A regression test I have not watched fail is not a regression test.** The
+   fix for it is trivial: reintroduce the bug, confirm red, restore, confirm
+   green. Doing this caught a test that asserted the STRING `settings: {}`
+   appeared in a function body — it passed against the broken routing just as
+   happily, because checking the shape of my own intent checks nothing.
+
+5. **Assert behaviour, not source text.** Two tests broke on correct code
+   because they pinned exact call syntax (`speakLatestReply();`) or a quote
+   character. When a test fails on a refactor that changed nothing real, the
+   test was describing syntax.
+
+6. **A silent `catch {}` around an unimported name is invisible forever.**
+   `measureVoiceClip` was called without being imported, inside a try/catch, so
+   the ReferenceError was swallowed and no clip was ever measured. Same class
+   as root cause #4 of the 0.9 vision post-mortem. Every catch on a path that
+   is supposed to DO something either logs or narrows to expected errors.
+
+7. **A hand-maintained list of cases is a list I forget to update.** The
+   "every failure reason has a message" check missed `no-engine` (found by a
+   live run) and would have missed `stopped` (created by fixing an unrelated
+   race). Derive such lists from the source that emits them.
+
+8. **Over-broad matching produces noise, and noise is indistinguishable from
+   no check.** Three separate sweeps this milestone reported 236, 1759 and 431
+   findings, none real — prose in comments, template literals eaten by a
+   backtick strip, separate objects sharing an indent. **When widening an
+   allowlist for the third time, the scope is wrong, not the code.** Narrow and
+   true beats broad and ignored.
+
+9. **Read the installed source; do not recall the API.** Four confident wrong
+   claims about PocketTTS (the seed twice, `copy_state`, `maxNumSentences`),
+   plus `e.stage` where the field was `e.phase`, plus a comment naming a
+   manifest field (`upstreamAsset`) that never existed. `docs/pockettts-reference.md`
+   exists because of this; the habit it encodes generalises.
+
 ### What the research actually supports about prompting (use this, don't over-claim)
 
 These guidelines are backed by the literature, not folklore. Each is tagged with how solid the evidence is, because *overstating* the case (point 6) undermines the rest.

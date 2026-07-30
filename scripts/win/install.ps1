@@ -561,6 +561,22 @@ try {
 } finally { Pop-Location }
 Ok "Dependencies up to date"
 
+# --- Can this machine speak and listen? ---
+# `sherpa-onnx-node` is an optionalDependency, so npm skips it in SILENCE on a
+# platform with no prebuilt binary. The install then "succeeds" and voice simply
+# never works, with nothing anywhere saying why.
+#
+# install.sh and install.bat have reported this since Pass 1; this PowerShell
+# path did not, so a Windows user who installed this way was the only one left
+# guessing. Never fails the install — voice is a feature, not a precondition.
+Step "Checking voice..."
+Push-Location $projectRoot
+try {
+    & node (Join-Path $projectRoot "scripts\check-voice-ready.mjs")
+} catch {
+    Warn "  Could not check voice readiness (harmless; everything else works)."
+} finally { Pop-Location }
+
 # --- uv (install if missing, in both modes) ---
 # uv is the Python package/runtime manager Phylactery + Unruh use. Astral's installer
 # writes to %USERPROFILE%\.local\bin\uv.exe by default. winget has a uv

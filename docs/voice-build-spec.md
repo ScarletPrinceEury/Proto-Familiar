@@ -1072,7 +1072,9 @@ call — must arrive as an extension of this spine:
   estimate before anything is built on them. The pre-flight free-space check
   ships here too: the bench is the first thing that downloads models, so it
   is the first thing that must refuse gracefully on a full disk.
-- **Pass 1 — the spine.** `audio-worker.mjs` + supervision + thread caps;
+- **Pass 1 — the spine. ✅ COMPLETE (0.10.x), confirmed working on the
+  reference laptop: read-aloud in one voice throughout a multi-paragraph
+  message, and a voice note recorded, transcribed and answered.** `audio-worker.mjs` + supervision + thread caps;
   model fetcher with pinned checksums; voice-note path end-to-end (asset →
   offline transcript → stand-in in chat); **read-aloud** (per-message 🔊 +
   `readAloudByDefault` + `POST /api/voice/tts`, the curated voice menu with
@@ -1242,6 +1244,39 @@ consults it — Phylactery's backup is Python and never asks. Voices do NOT
 currently survive a backup/restore. `reclaimModels()` has no surface either.
 Both are recorded here rather than quietly fixed, because they want a decision
 about where backup responsibility lives rather than a patch.
+
+## 14.7 What actually shipped, and what it cost
+
+Pass 1 landed, but only after eleven rounds of ward testing. The code defects
+were ordinary. What made them expensive was verification, and the details are
+recorded in CLAUDE.md's "Recorded VERIFICATION errors" so the next milestone
+inherits them rather than repeating them.
+
+**The single most expensive one:** the OPS dispatch table in
+`audio-worker.mjs` declared `transcribe` twice — the real handler, and a
+leftover Pass-2 placeholder below it. A duplicate key silently wins, so the
+real implementation was dead from the day it landed and every voice note
+answered `unsupported`. Four rounds went into "fixing" the routing, which had
+been correct throughout. `node --check` accepts a duplicate key; every test
+stubbed the worker so none loaded the real table; and a test was ASSERTING the
+placeholder's response, so the suite defended the bug.
+
+**Shipped surface, for the record:**
+
+| | |
+|---|---|
+| Recording | `public/voice-recorder.js` — MediaRecorder → `decodeAudioData` → `OfflineAudioContext` → 16 kHz mono wav, capped at 12 min (21.97 MB, inside the 24 MB store cap) |
+| Store | `media.js`, `kind:'audio'`, per-kind size caps, duration read from the wav header at arrival |
+| Listening | `asr-offline` = SenseVoice int8 2025-09-09, zh/en/ja/ko/yue in one model, pinned (158 MB down / 233 MB unpacked) |
+| Routing | `audio-worker-current.js` `listeningWorker()` — always sherpa, independent of which engine SPEAKS |
+| Turn wiring | `voice-transcribe.js` `hearVoiceNotes()`, called by both web and Discord turns, outside the vision gate |
+| Consent | the button press, plus the browser's own permission prompt. `voiceEnabled` is reserved for CONTINUOUS listening (Pass 2) |
+| Reading aloud | per-message 🔊, `readAloudByDefault`, barge-in by button or by typing |
+| A ward's own voice | `POST /api/voice/ward-voice` + a control in the picker |
+
+**Guards added because each of these was live:** `npm run audit:wiring` (eight
+checks), a pipeline test that spawns the real worker, a derived check that every
+failure reason has words for my human, and a duplicate-dispatch-key check.
 
 ## 15. Out of scope (this milestone)
 

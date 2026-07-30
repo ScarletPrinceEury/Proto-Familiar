@@ -2392,7 +2392,12 @@ per-kind (`maxBytesForKind`): 6 MB for an image, 24 MB for audio, because one
 number cannot serve both — the image cap would have cut a voice note off at
 three minutes.
 
-### Voice notes (Pass 1)
+### Voice notes (Pass 1) — shipped 0.10.x
+
+New HTTP surface: `POST /api/media` (now `image/*` **and** `audio/*`),
+`POST /api/media/:id/transcribe`, `POST /api/voice/ward-voice`,
+`GET /api/voice/local`, and `POST /api/voice/install-models` taking
+`{what:'speak'|'listen'}`.
 
 The listen-once-keep-forever path, deliberately shaped as vision's twin.
 
@@ -2426,11 +2431,28 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
 - **Audio never rides as provider content-parts.** Gated in
   `materializeAttachments`' live-eligibility check, not at the use site, so a
   future audio modality is one condition to relax.
-- **`audio-worker-current.js`** owns the single live worker. It used to be
-  inside `server.js`, which would have forced Discord to grow a second copy of
-  the wiring — the shape of the RULE C incident. `voice-transcribe.js`'s
-  `hearVoiceNotes()` is the one call both surfaces make; see the voice spec's
-  §14.5 surface matrix.
+- **`audio-worker-current.js`** owns TWO workers, deliberately.
+  `currentAudioWorker()` follows my human's speaking choice (sherpa or the
+  voicebox sidecar); `listeningWorker()` is pinned to sherpa always, because the
+  recogniser is a sherpa model and which voice SPEAKS has nothing to do with it.
+  Conflating them meant that choosing the voicebox voice sent every voice note
+  to a Python process that cannot listen. Both live here rather than in
+  `server.js` so Discord reaches the same ones — the shape of the RULE C
+  incident. `voice-transcribe.js`'s `hearVoiceNotes()` is the one call both
+  surfaces make; see the voice spec's §14.5 surface matrix.
+- **⚠️ Never leave a placeholder for an op that has an implementation.** The
+  OPS table in `audio-worker.mjs` carried `transcribe` twice — real handler,
+  plus a leftover stub — and the duplicate key silently won, killing voice notes
+  for four rounds of testing. `npm run audit:wiring` check 8 now fails on a
+  duplicate member in a top-level dispatch table, and a pipeline test spawns the
+  real worker rather than a stub. Full account in the voice spec §14.7 and
+  CLAUDE.md's verification-errors section.
+- **Failure reasons are enumerated, not improvised.** Everything the worker or
+  its supervisor can return has words for my human in `transcriptProblem()`
+  (public/app.js), and a test derives the list from the emitting source — a
+  hand-written version missed `no-engine`, and an unmapped reason shows as
+  "I couldn't make this one out", which blames my human's diction for a routing
+  bug.
 - **Two consents, not one.** `voiceEnabled` (default OFF) governs everything
   that hears. Read-aloud does not depend on it — it is an accessibility
   surface. `PROTO_FAMILIAR_VOICE_DISABLED=1` kills both.

@@ -77,6 +77,14 @@ async function main() {
     console.error('Usage: node scripts/transcript-to-markdown.mjs <session.jsonl> [--out=FILE] [--full]');
     return 1;
   }
+  // Refuse an extra positional rather than ignoring it. The destination is
+  // `--out=FILE`; passing a path as argv[3] silently wrote to the default
+  // instead, which looks exactly like success while going somewhere else.
+  const strays = process.argv.slice(3).filter((a) => !a.startsWith('--'));
+  if (strays.length) {
+    console.error(`Unexpected argument: ${strays[0]}\nThe destination is --out=FILE, e.g. --out=docs/my-transcript.md`);
+    return 1;
+  }
 
   const out = [];
   let turns = 0;

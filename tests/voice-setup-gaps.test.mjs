@@ -30,18 +30,38 @@ test('both installers actually run npm install', () => {
   assert.match(read('install.bat'), /npm install/);
 });
 
-test('both installers report whether this machine can speak', () => {
+test('EVERY installer reports whether this machine can speak and listen', () => {
   // sherpa-onnx-node is OPTIONAL, so npm skips it in silence where there is no
   // prebuilt. Without this the install "succeeds" and voice just never works.
-  for (const f of ['install.sh', 'install.bat']) {
-    assert.match(read(f), /check-voice-ready/, `${f} never checks`);
+  //
+  // ⚠️ Discovered, not listed. This test named only install.sh and install.bat,
+  // so `scripts/win/install.ps1` — a third, real installer that runs its own
+  // `npm install` — shipped without the check, and a Windows user who installed
+  // that way was the only one left guessing. Any file that runs npm install
+  // must also say whether voice arrived.
+  const installers = ['install.sh', 'install.bat', 'scripts/win/install.ps1'];
+  for (const f of installers) {
+    const body = read(f);
+    if (!body) continue;                       // path not present in this checkout
+    if (!/npm (install|ci)/.test(body)) continue;   // not an installer
+    assert.match(body, /check-voice-ready/, `${f} runs npm install but never reports whether voice works`);
   }
 });
 
-test('every updater ends up in an installer, so updates inherit both', () => {
-  assert.match(read('update.sh'), /install\.sh/);
-  assert.match(read('update.bat'), /install\.bat/i);
-  assert.match(read('update.command'), /update\.sh/);
+test('every updater INVOKES an installer, not merely mentions one', () => {
+  // ⚠️ This asserted that the string `install.bat` appeared in update.bat — and
+  // it appears in four comments, so the test passed regardless of whether the
+  // call existed. Verified by hand instead, which is exactly the work a test is
+  // supposed to save. It now requires an actual invocation.
+  const stripComments = (body, marker) =>
+    body.split('\n').filter((l) => !new RegExp(`^\\s*${marker}`, 'i').test(l)).join('\n');
+
+  assert.match(stripComments(read('update.sh'), '#'), /bash "\$DEST\/install\.sh"|install\.sh"/,
+    'update.sh does not actually run install.sh');
+  assert.match(stripComments(read('update.bat'), 'REM'), /call\s+"[^"]*install\.bat"/i,
+    'update.bat does not actually call install.bat — new code would land on old dependencies');
+  assert.match(stripComments(read('update.command'), '#'), /bash \.\/update\.sh/,
+    'update.command does not actually run update.sh');
 });
 
 test('the bundled voice ships in the repository', () => {
