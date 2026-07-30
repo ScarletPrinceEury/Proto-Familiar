@@ -1557,9 +1557,18 @@ app.post('/api/voice/install-models', async (req, res) => {
         }
       },
     });
-    console.log(result?.ok === false
-      ? `[voice] ${what} model download failed: ${result.message ?? result.reason}`
-      : `[voice] ${what} model(s) ready`);
+    if (result?.ok === false) {
+      // Surface the underlying cause, not just the friendly message. The one
+      // line that says WHY an unpack failed (a decode error, a missing codec,
+      // a locked file) lives in `result.failed[].detail`; dropping it here is
+      // what made this class of failure undiagnosable from the terminal.
+      const cause = Array.isArray(result.failed)
+        ? result.failed.map((f) => f?.detail).filter(Boolean).join('; ')
+        : '';
+      console.log(`[voice] ${what} model download failed: ${result.message ?? result.reason}${cause ? ` — ${cause}` : ''}`);
+    } else {
+      console.log(`[voice] ${what} model(s) ready`);
+    }
     res.json({ ok: Boolean(result?.ok ?? true), ...result });
   } catch (err) {
     res.json({ ok: false, error: String(err?.message ?? err) });
