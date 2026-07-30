@@ -1901,9 +1901,7 @@ async function handleTurn(gw, msg, decision) {
   // Hear before answering — the same shared call the web turn makes, for the
   // same reason, wired in the same commit. This is the RULE C cell that
   // `ensureDescribed` missed when vision shipped.
-  await hearVoiceNotes(apiMessages, settings, {
-    rootDir: __dirname, readSettings: () => settings, label: 'discord',
-  });
+  await hearVoiceNotes(apiMessages, { rootDir: __dirname, label: 'discord' });
 
   let visionCapableTurn = false;
   if (!discordVisionOff()) {

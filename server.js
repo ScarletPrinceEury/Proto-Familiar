@@ -43,7 +43,7 @@ import {
   getHandoff, markHandoffConsumed,
   getDueReminders, getRemindersHealth, markEventAlerted, stampElapsedEvents,
   ingestGcal,
-  shutdownUnruh, shutdownPhylactery,
+  shutdownUnruh, shutdownPhylactery, markPeersShuttingDown,
   reportSurfacingOutcomes, listBookmarks,
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
@@ -534,9 +534,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // separate consent from seeing, and a voice note has NO live-modality
   // fallback: the transcript is the only content there will ever be, so if it
   // lands after the prompt I answer a message I never heard.
-  await hearVoiceNotes(enrichedMessages, readSettingsSync() || {}, {
-    rootDir: __dirname, readSettings: readSettingsSync, label: 'voice',
-  });
+  await hearVoiceNotes(enrichedMessages, { rootDir: __dirname, label: 'voice' });
 
   // Attachments are materialized even when vision is off, because hearing is
   // not seeing. Nested inside the vision gate, a voice note vanished entirely
@@ -554,7 +552,12 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       });
       enrichedMessages = mat.messages;
       if (mat.notesStoodIn) console.log(`[voice] ${mat.notesStoodIn} voice note stand-in(s) (images are off)`);
-    } catch { /* never throws into a turn */ }
+    } catch (err) {
+      // Never throws into a turn — but never SILENT either. A bare `catch {}`
+      // here would swallow a ReferenceError and make voice notes vanish with
+      // vision off, which is root cause #4 of the 0.9 post-mortem exactly.
+      console.warn(`[voice] could not stand in for attachments with vision off: ${String(err?.message ?? err)}`);
+    }
   }
   if (!visionOffThisTurn) {
     try {
@@ -1594,7 +1597,7 @@ app.post('/api/media/:id/transcribe', async (req, res) => {
 
   // The listening worker — pinned to sherpa. Sending this to the speaking
   // worker is what made every voice note fail once my human chose voicebox.
-  const got = await transcribeAsset(req.params.id, settings, {
+  const got = await transcribeAsset(req.params.id, {
     getWorker: () => listeningWorker({ rootDir: __dirname }),
   });
   res.json(got);
@@ -5926,6 +5929,11 @@ async function handleSignal(signal) {
   if (_shuttingDown) return;
   _shuttingDown = true;
   console.log(`\n[server] ${signal} received — shutting down…`);
+  // FIRST, before any await. A signal reaches the whole process group, so the
+  // MCP children are already dying; without these flags set their onclose
+  // handlers schedule reconnects mid-shutdown and spawn replacements while we
+  // are trying to exit.
+  try { markPeersShuttingDown(); } catch { /* thalamus never started */ }
   // Hard-exit safety net: never let a stuck handle keep the process
   // alive past this window. SIGKILL-equivalent if anything misbehaves.
   setTimeout(() => {

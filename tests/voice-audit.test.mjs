@@ -106,8 +106,12 @@ test('readAloudByDefault exists — it was spec Pass 1 and had zero references',
   assert.match(app, /'readAloudByDefault'/, 'not synced to the server, so it will not persist');
   assert.match(html, /id="read-aloud-default-toggle"/, 'no way to switch it on');
   assert.match(app, /function speakLatestReply\(/, 'nothing speaks the new reply');
-  assert.match(app, /if \(state\.readAloudByDefault\) speakLatestReply\(\);/,
+  assert.match(app, /if \(state\.readAloudByDefault\) speakLatestReply\(/,
     'the toggle is not consulted when a turn completes');
+  // ...and it must pass the pre-turn baseline, or a failed turn re-reads the
+  // PREVIOUS reply aloud, which sounds like the failure having succeeded.
+  assert.match(app, /speakLatestReply\(_speakButtonsBeforeTurn\)/,
+    'read-aloud-by-default can speak a reply that is not from this turn');
 
   // Barge-in by typing, also spec'd and also missing.
   assert.match(app, /if \(speech\.audio \|\| speech\.btn\) stopSpeaking\(\);/,

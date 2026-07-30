@@ -36,6 +36,10 @@ export const MAX_SECONDS = 12 * 60;
 export function toMono(audioBuffer) {
   const n = audioBuffer.length;
   const channels = audioBuffer.numberOfChannels;
+  // A real AudioBuffer always has at least one channel, but dividing by zero
+  // here yields NaN samples, which clamp to silence — indistinguishable from
+  // "the microphone didn't work". Cheaper to refuse than to debug.
+  if (!channels) return new Float32Array(n);
   if (channels === 1) return audioBuffer.getChannelData(0);
   const out = new Float32Array(n);
   for (let c = 0; c < channels; c++) {

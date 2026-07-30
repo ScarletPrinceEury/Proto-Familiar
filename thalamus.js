@@ -524,6 +524,25 @@ function scheduleUnruhReconnect() {
 // timers no-op when they fire, then closes the MCP clients so the
 // child processes die cleanly from stdin EOF rather than being
 // orphaned by a hard process.exit().
+/**
+ * Set the shutting-down flags and nothing else.
+ *
+ * ⚠️ Call this FIRST in a shutdown handler, before awaiting anything. The
+ * handler used to await ten loop-stops before reaching `shutdownUnruh` /
+ * `shutdownPhylactery` — but a signal reaches the whole process group, so the
+ * uv children die immediately, their `onclose` fires while the flags are still
+ * false, and the reconnect machinery schedules a retry *during* shutdown. Those
+ * retries then spawn NEW children while the process is trying to exit, which is
+ * how "graceful shutdown timed out" and stray leftover processes happen.
+ *
+ * Separated from the close calls so the flags can be set instantly without
+ * tearing the clients down before the loops that use them have stopped.
+ */
+export function markPeersShuttingDown() {
+  unruhShuttingDown = true;
+  phylacteryShuttingDown = true;
+}
+
 export function shutdownUnruh() {
   unruhShuttingDown = true;
   try { unruhClient?.close?.(); } catch { /* best-effort */ }

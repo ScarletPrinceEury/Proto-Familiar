@@ -279,6 +279,13 @@ export function createAudioWorker({
     async request(message, { timeoutMs = requestTimeoutMs } = {}) {
       const up = await ensureStarted();
       if (!up.ok) return up;
+      // ⚠️ `stop()` can land in the gap created by that await — it runs
+      // synchronously, tears the child down and sets `child = null`, all before
+      // this line resumes. Writing then threw a TypeError that surfaced to the
+      // caller as `write-failed: Cannot read properties of null (reading
+      // 'stdin')`. Harmless but incomprehensible, and reachable in production
+      // because shutdown stops the worker while a read-aloud may be in flight.
+      if (stopped || !child) return { ok: false, reason: 'stopped', detail: 'the worker was stopped' };
 
       const reqId = `r${nextReqId++}`;
       clearIdle();
@@ -307,6 +314,7 @@ export function createAudioWorker({
     async sendPcm(streamId, pcm) {
       const up = await ensureStarted();
       if (!up.ok) return up;
+      if (stopped || !child) return { ok: false, reason: 'stopped', detail: 'the worker was stopped' };
       try {
         child.stdin.write(encodePcm(streamId, pcm));
         return { ok: true };

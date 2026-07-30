@@ -81,14 +81,13 @@ export const continuousListeningAllowed = (settings = {}) =>
  * Listen to one voice note and cache what was said.
  *
  * @param {string} idOrSlug
- * @param {object} settings
  * @param {object} deps
  * @param {Function} deps.getWorker  async () => ({ worker }) — injected rather
  *   than imported, because the worker is owned by server.js and importing it
  *   here would be a cycle. It also makes this testable with a fake.
  * @returns {Promise<{ok:boolean, text?:string, reason?:string, cached?:boolean}>}
  */
-export async function transcribeAsset(idOrSlug, settings = {}, { getWorker } = {}) {
+export async function transcribeAsset(idOrSlug, { getWorker } = {}) {
   const meta = await getAssetMeta(idOrSlug);
   if (!meta) return { ok: false, reason: 'not-found' };
   if (meta.kind !== 'audio') return { ok: false, reason: 'not-audio' };
@@ -182,7 +181,7 @@ async function remember(id, description) {
  * cold model load falls back to a stand-in that says "not yet" rather than
  * hanging my human's turn.
  */
-export async function ensureTranscribed(messages, settings = {}, { getWorker, max = 4, perNoteTimeoutMs = 120_000 } = {}) {
+export async function ensureTranscribed(messages, { getWorker, max = 4, perNoteTimeoutMs = 120_000 } = {}) {
   if (!transcriptionAllowed()) return { transcribed: 0, skipped: 'voice-disabled' };
   const list = Array.isArray(messages) ? messages : [];
 
@@ -194,16 +193,27 @@ export async function ensureTranscribed(messages, settings = {}, { getWorker, ma
   }
   if (!ids.length) return { transcribed: 0 };
 
-  let done = 0;
-  // Newest-first: if the budget runs out, the note my human just recorded is
-  // the one that got heard.
-  for (const id of ids.reverse().slice(0, max)) {
+  // ⚠️ Filter BEFORE capping. This sliced the raw id list first, so the budget
+  // counted items EXAMINED rather than notes transcribed — four images newer
+  // than a voice note consumed the whole allowance on `continue`s and the note
+  // was never heard, despite no work having been done. Newest-first so that if
+  // the budget genuinely runs out, the note my human just recorded is the one
+  // that got heard.
+  const pending = [];
+  for (const id of [...ids].reverse()) {
+    if (pending.length >= max) break;
     const meta = await getAssetMeta(id);
     if (!meta || meta.kind !== 'audio' || meta.description !== null) continue;
+    pending.push(id);
+  }
+  if (!pending.length) return { transcribed: 0 };
+
+  let done = 0;
+  for (const id of pending) {
     let timer = null;
     try {
       const raced = await Promise.race([
-        transcribeAsset(id, settings, { getWorker }),
+        transcribeAsset(id, { getWorker }),
         new Promise((resolve) => { timer = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), perNoteTimeoutMs); }),
       ]);
       if (raced?.ok) done++;
@@ -227,12 +237,12 @@ export async function ensureTranscribed(messages, settings = {}, { getWorker, ma
  * governed by whether the model can see, and nesting it there would mean
  * switching vision off silently made me deaf as well.
  */
-export async function hearVoiceNotes(messages, settings = {}, { rootDir, readSettings, label = 'voice' } = {}) {
+export async function hearVoiceNotes(messages, { rootDir, label = 'voice' } = {}) {
   if (!transcriptionAllowed()) return { transcribed: 0 };
   try {
     // The LISTENING worker, not whichever one my human chose to speak with.
     const { listeningWorker } = await import('./audio-worker-current.js');
-    const got = await ensureTranscribed(messages, settings, {
+    const got = await ensureTranscribed(messages, {
       getWorker: () => listeningWorker({ rootDir }),
     });
     if (got.transcribed) console.log(`[${label}] listened to ${got.transcribed} voice note(s) before the turn`);

@@ -246,7 +246,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
     },
   };
 
-  const got = await ensureTranscribed(messages, {}, { getWorker: async () => ({ worker }) });
+  const got = await ensureTranscribed(messages, { getWorker: async () => ({ worker }) });
   assert.equal(got.transcribed, 1, 'the note was not heard');
   assert.deepEqual(calls, ['load', 'transcribe'], 'the model must be loaded before it is asked to listen');
 
@@ -269,7 +269,7 @@ test('PIPELINE: a voice note is transcribed BEFORE the prompt is assembled', asy
   assert.ok(explainer, 'the [voice note …] convention was never explained to me');
 
   // Listening is once: a second pass costs nothing and changes nothing.
-  const again = await ensureTranscribed(messages, {}, { getWorker: async () => ({ worker }) });
+  const again = await ensureTranscribed(messages, { getWorker: async () => ({ worker }) });
   assert.equal(again.transcribed, 0, 'a cached transcript was re-derived');
   assert.deepEqual(calls, ['load', 'transcribe'], 'the worker was asked twice for one note');
 
@@ -296,7 +296,7 @@ test('PIPELINE: with voice hard-disabled, nothing is transcribed and the turn st
   process.env.PROTO_FAMILIAR_VOICE_DISABLED = '1';
   let got;
   try {
-    got = await ensureTranscribed(messages, {}, { getWorker: async () => ({ worker }) });
+    got = await ensureTranscribed(messages, { getWorker: async () => ({ worker }) });
   } finally {
     if (prior === undefined) delete process.env.PROTO_FAMILIAR_VOICE_DISABLED;
     else process.env.PROTO_FAMILIAR_VOICE_DISABLED = prior;
@@ -508,6 +508,9 @@ test('every reason that reaches the browser has words for my human', async () =>
     'unreadable-format',     // audio we can't decode without a library
     'unsupported',           // the speaking worker was handed a listen request
     'unsupported-role',      // ...and its newer, earlier refusal
+    'stopped',               // stop() landed mid-request (shutdown)
+    'timeout', 'not-loaded', 'write-failed', 'spawn-failed', 'parked',
+    'bad-request', 'op-failed',
   ]) {
     assert.ok(mapped.includes(`'${reason}'`),
       `${reason} falls through to "I couldn't make this one out" — which is how a routing bug came to read as bad diction`);
@@ -560,4 +563,121 @@ test('no op is declared twice in the worker — a duplicate key wins silently', 
   const dupes = ops.filter((k, i) => ops.indexOf(k) !== i);
   assert.deepEqual(dupes, [], `duplicate OPS keys shadow each other: ${dupes.join(', ')}`);
   assert.ok(ops.includes('transcribe'), 'the transcribe op vanished entirely');
+});
+
+test('the transcription budget counts notes heard, not attachments looked at', async (t) => {
+  // ⚠️ `.slice(0, max)` was applied to the RAW id list, so four images newer
+  // than a voice note consumed the entire allowance on `continue`s and the note
+  // was never transcribed — with no work done and nothing said about it. The
+  // cap has to bound work, not iteration.
+  const { saveAsset, MEDIA_DIR, setAssetDescription } = await import('../media.js');
+  const { ensureTranscribed } = await import('../voice-transcribe.js');
+
+  const made = [];
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6300010000050001', 'hex');
+
+  // One note, then FIVE newer images — more images than the budget.
+  const samples = new Float32Array(8000).fill(0.05);
+  const note = await saveAsset({ buffer: Buffer.from(encodeWav(samples, TARGET_RATE)), mime: 'audio/wav', origin: { surface: 'test' } });
+  made.push([note.id, 'wav']);
+  const imgs = [];
+  for (let i = 0; i < 5; i++) {
+    // Distinct bytes per image, or content-addressing dedups them into one.
+    const buf = Buffer.concat([png, Buffer.from([i])]);
+    const im = await saveAsset({ buffer: buf, mime: 'image/png', origin: { surface: 'test' }, label: `probe ${i}` });
+    await setAssetDescription(im.id, { text: `image ${i}` });
+    imgs.push(im.id);
+    made.push([im.id, 'png']);
+  }
+  t.after(async () => {
+    for (const [id, ext] of made) {
+      await fs.rm(path.join(MEDIA_DIR, `${id}.json`), { force: true });
+      await fs.rm(path.join(MEDIA_DIR, `${id}.${ext}`), { force: true });
+    }
+  });
+
+  const messages = [{
+    role: 'user', content: 'here',
+    attachments: [{ id: note.id }, ...imgs.map((id) => ({ id }))],
+  }];
+
+  let asked = 0;
+  const worker = {
+    request: async (msg) => {
+      if (msg.op === 'load') return { ok: true };
+      asked++;
+      return { ok: true, text: 'heard it', lang: 'en' };
+    },
+  };
+
+  const got = await ensureTranscribed(messages, { getWorker: async () => ({ worker }), max: 4 });
+  assert.equal(got.transcribed, 1, 'the note behind five newer images was starved by the budget');
+  assert.equal(asked, 1, 'exactly one transcription should have been attempted');
+});
+
+test('EVERY reason the worker or its supervisor can emit has words for my human', async () => {
+  // ⚠️ Derived, not hand-listed. The hand-written version of this check missed
+  // `no-engine` (found by a live run) and would have missed `stopped` (created
+  // by fixing a stop-during-request race). A list I maintain is a list I forget
+  // to update; the source of truth is the code that emits them.
+  const [worker, host, hostAlso, app] = await Promise.all([
+    fs.readFile(path.join(process.cwd(), 'audio-worker.mjs'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'audio-worker-host.js'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'voice-transcribe.js'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'public/app.js'), 'utf8'),
+  ]);
+
+  const emitted = new Set();
+  for (const body of [worker, host, hostAlso]) {
+    for (const m of body.matchAll(/reason: '([a-z][a-z-]*)'/g)) emitted.add(m[1]);
+    for (const m of body.matchAll(/reason = '([a-z][a-z-]*)'/g)) emitted.add(m[1]);
+    for (const m of body.matchAll(/reason: ([a-z]\w*\?\.reason \?\? )?'([a-z][a-z-]*)'/g)) if (m[2]) emitted.add(m[2]);
+  }
+  // Reasons that never travel to a voice-note chip: they belong to speaking, to
+  // the unpark endpoint, or are consumed before the response is built.
+  const NOT_ON_THIS_PATH = new Set([
+    'no-voice',        // TTS needs a reference clip; irrelevant to listening
+    'tts-failed',      // speaking
+    'not-parked',      // the unpark endpoint's own answer
+    'unknown-op',      // only reachable by sending an op that does not exist
+    'no-speech',       // a cached description, not a returned reason
+    'voice-disabled', 'model-missing', 'unreadable-format', 'no-worker',
+    'no-listening-engine', 'not-found', 'not-audio', 'transcribe-failed',
+  ]);
+
+  const handler = app.slice(app.indexOf('function transcriptProblem('));
+  const mapped = handler.slice(0, handler.indexOf('\n}\n'));
+
+  const unmapped = [...emitted]
+    .filter((r) => !NOT_ON_THIS_PATH.has(r) && !mapped.includes(`'${r}'`));
+  assert.deepEqual(unmapped, [],
+    `these reasons can reach my human as "I couldn't make this one out": ${unmapped.join(', ')}`);
+});
+
+test('PIPELINE: a voice note still stands in when vision is switched off', async (t) => {
+  // The vision-off branch of /api/chat is its own code path and was never
+  // exercised. `provider`/`model` happen to be in scope there — but a bare
+  // `catch {}` around it would have hidden a ReferenceError and made voice
+  // notes vanish silently, which is root cause #4 of the 0.9 post-mortem.
+  const { saveAsset, MEDIA_DIR, setAssetDescription } = await import('../media.js');
+
+  const samples = new Float32Array(TARGET_RATE).fill(0.02);
+  const note = await saveAsset({ buffer: Buffer.from(encodeWav(samples, TARGET_RATE)), mime: 'audio/wav', origin: { surface: 'test' } });
+  await setAssetDescription(note.id, { text: 'vision is off but you can still hear me' });
+  t.after(async () => {
+    await fs.rm(path.join(MEDIA_DIR, `${note.id}.json`), { force: true });
+    await fs.rm(path.join(MEDIA_DIR, `${note.id}.wav`), { force: true });
+  });
+
+  // Exactly what the vision-off branch passes.
+  const out = await materializeAttachments(
+    [{ role: 'user', content: 'listen', attachments: [{ id: note.id }] }],
+    { connection: { provider: 'p', model: 'm', visionCapable: 'no' }, settings: {}, visibleAudiences: null },
+  );
+
+  assert.equal(typeof out.messages[0].content, 'string');
+  assert.match(out.messages[0].content, /vision is off but you can still hear me/);
+  assert.equal(out.notesStoodIn, 1, 'the note produced no stand-in — it would be invisible to the turn');
+  // And `attachments` must be stripped, or a strict provider rejects the message.
+  assert.ok(!('attachments' in out.messages[0]), 'the internal attachments field leaked to the provider');
 });

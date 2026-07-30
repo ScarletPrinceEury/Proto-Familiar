@@ -1612,6 +1612,7 @@ let _pendingAttachments = null;
 // Set when the server reports the tool-round budget ran out mid-reach
 // (_roundCapHit) — after the reply lands we offer a one-click "Go on".
 let _roundCapHitThisTurn = false;
+let _speakButtonsBeforeTurn = -1;
 
 function elapsedBetweenUserMessages() {
   const stamps = [];
@@ -2288,8 +2289,13 @@ async function ensureSpeechModel(btn, token) {
  * Barge-in comes free — `speakMessage` stops whatever is playing when a new
  * one starts, and typing is handled by the input listener below.
  */
-function speakLatestReply() {
+function speakLatestReply(knownBefore = -1) {
   const buttons = document.querySelectorAll('.msg-speak-btn');
+  // ⚠️ Only speak a reply that appeared in THIS turn. An error message gets no
+  // speak button (they are only added for role 'assistant'), so a turn that
+  // failed without throwing would have re-read the PREVIOUS reply aloud — which
+  // sounds exactly like the failed turn having succeeded.
+  if (knownBefore >= 0 && buttons.length <= knownBefore) return;
   const btn = buttons[buttons.length - 1];
   if (btn) btn.click();
 }
@@ -2708,6 +2714,22 @@ function transcriptProblem(entry) {
       };
     case 'unreadable-format':
       return { text: "I couldn't read that audio format.", fix: null };
+    case 'not-loaded':
+    case 'stopped':
+    case 'timeout':
+    case 'write-failed':
+    case 'spawn-failed':
+      // Every one of these means the listening PROCESS was in the wrong state,
+      // not that the recording was bad. Enumerated from what the worker and its
+      // supervisor can actually return — `stopped` reached the chip the moment
+      // I fixed a stop-during-request race, and without a case here it would
+      // have shown "I couldn't make this one out" all over again.
+      return { text: 'The listening engine was busy or restarting — try again in a moment.', fix: { label: '↻ Try again', kind: 'retry' } };
+    case 'parked':
+      return { text: 'The listening engine kept failing, so I stopped restarting it. A server restart clears this.', fix: null };
+    case 'bad-request':
+    case 'op-failed':
+      return { text: "Something went wrong on my side asking for the transcript — that's a bug, not your recording.", fix: { label: '↻ Try again', kind: 'retry' } };
     default:
       return { text: "I couldn't make this one out — it still sends.", fix: { label: '↻ Try again', kind: 'retry' } };
   }
@@ -3018,6 +3040,9 @@ async function sendMessage(userInput) {
   debugRecord('send', `provider=${state.provider} model=${state.model} streaming=${state.streaming} msgs=${apiMessages.length} input=${userInput.length}ch`);
   try {
     _roundCapHitThisTurn = false;
+    // Counted before the turn so read-aloud-by-default can tell a NEW reply
+    // from the last one; see speakLatestReply.
+    _speakButtonsBeforeTurn = document.querySelectorAll('.msg-speak-btn').length;
     removeContinueRoundsOffer();   // a new turn supersedes any standing offer
     if (state.streaming) {
       await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
@@ -3025,7 +3050,7 @@ async function sendMessage(userInput) {
       await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
     }
     if (_roundCapHitThisTurn) offerContinueRounds();
-    if (state.readAloudByDefault) speakLatestReply();
+    if (state.readAloudByDefault) speakLatestReply(_speakButtonsBeforeTurn);
     setStatus('ok');
     state.turnCount = (state.turnCount ?? 0) + 1;
     debugRecord('recv', `ok in ${Math.round(performance.now() - sendStart)}ms thalamus=${lastThalamus ? `static=${(lastThalamus.static ?? '').length}ch dynamic=${(lastThalamus.dynamic ?? '').length}ch@d${lastThalamus.depth}` : 'none'}`);
