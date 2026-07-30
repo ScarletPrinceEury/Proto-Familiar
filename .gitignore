@@ -128,3 +128,11 @@ __pycache__/
 # voicebox — Python venv and torch are machine artifacts, never committed
 voicebox/.venv/
 voicebox/uv.lock
+
+# Session transcripts — generated from a Claude Code session log by
+# `scripts/transcript-to-markdown.mjs`, for codealmanac to ingest locally.
+# Not committed: they are megabytes of raw conversation that regenerate from
+# the source log, and the durable version of what they contain belongs in the
+# almanac and in docs/ rather than in a wall of chat.
+docs/voice-development-transcript.md
+docs/*-transcript.md
