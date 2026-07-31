@@ -165,8 +165,21 @@ in the same commit (parent §13 discipline). PATCH bump each.
    (getUserMedia → 16 kHz s16le → socket; Web Audio playback — on-hardware
    verified, no mic in CI), **the real `onTurn` wiring** in server.js
    (transcript → `/api/chat` turn → `speakable()` → TTS worker stream), and
-   session logging. **`onTurn` is where D2 (ward voice → threat) gets wired** —
-   ward sign-off at that seam.
+   session logging.
+
+   ✅ **`onTurn` orchestration + the D2 gate landed (0.10.23).**
+   `voice-call-turn.js` (`createVoiceTurnRunner`) composes score → run →
+   `speakable()` → synthesize with injected chat/TTS/threat seams, so the ORDER
+   and the safety gate are tested without a provider. **D2 is wired here and is
+   ward-signed:** the ward's TRANSCRIPT is scored (never model prose — the
+   vision-0.9.2 discipline), ward-only, gated (`threatEnabled`), and
+   fire-and-forget so the tier update never delays the spoken reply and a
+   failing scorer never breaks the turn. `ws@^8` added for the WS server.
+   **Remaining: the server-side glue** — create the singleton engine at boot
+   (real `listeningWorker` + real `runTurn`/`synthesize`/`scoreThreat` deps),
+   the WS endpoint binding a web adapter per connection, `clearStaleCallState`
+   at boot, the browser capture/playback UI, and session logging. On-hardware
+   verified (no mic/provider/TTS model in CI).
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** First audio after
    the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
    what actually played (parent §6.2 — non-negotiable, exact-values rule: the
