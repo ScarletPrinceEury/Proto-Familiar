@@ -7837,7 +7837,7 @@ async function refreshVoiceBackendPane() {
   try { st = await vbGet('/api/voice/status?probe=0'); } catch { st = null; }
   if (!st?.backend) { state.textContent = ''; return; }
 
-  const { using, askedFor, reason, available } = st.backend;
+  const { using, askedFor, available } = st.backend;
   sel.value = askedFor ?? using;
 
   const pocketReady = Boolean(available?.pocket?.available);
@@ -7846,9 +7846,11 @@ async function refreshVoiceBackendPane() {
   if (using === 'pocket') {
     state.textContent = 'Speaking through the Kyutai sidecar.';
   } else if (askedFor === 'pocket' && !pocketReady) {
-    // Chosen but unusable. Say which one is really talking and why, rather
-    // than leaving someone to wonder why nothing changed.
-    state.textContent = `Sidecar chosen but not installed — still using the built-in engine. ${reason ?? ''}`.trim();
+    // Chosen but unusable. Say which one is really talking, and point at the
+    // Install button right above (shown whenever the sidecar isn't ready) —
+    // never at a terminal command. The raw server `reason` is developer-facing
+    // ("run: uv sync …") and would send my human to a shell they don't need.
+    state.textContent = 'Sidecar chosen but not installed — still using the built-in engine. Use the “⬇ Install the sidecar” button above to set it up; no terminal needed.';
   } else {
     state.textContent = 'Speaking through the built-in engine. It can shift voice between paragraphs on long messages.';
   }

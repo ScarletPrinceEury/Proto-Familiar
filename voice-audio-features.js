@@ -53,6 +53,25 @@ export function floatToPcm16(samples) {
 }
 
 /**
+ * The inverse: s16le PCM bytes back to Float32 in [-1, 1].
+ *
+ * The streaming ASR path (Pass 2) needs this — capture crosses the worker pipe
+ * as 16 kHz mono s16le (`audio-frame.js` KIND_PCM), and sherpa's
+ * `acceptWaveform` wants Float32. Dividing by 32768 (not 32767) is the standard
+ * decode: it maps the full int16 range [-32768, 32767] into [-1, 1) without a
+ * value ever exceeding 1. `bytes` is a Buffer (the frame payload) or any
+ * byte view; an odd length drops the trailing half-sample rather than reading
+ * past the end.
+ */
+export function pcm16ToFloat(bytes) {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes?.buffer ?? bytes ?? []);
+  const n = buf.length >> 1;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = buf.readInt16LE(i * 2) / 32768;
+  return out;
+}
+
+/**
  * A wav header on its own.
  *
  * Separate from the samples because a STREAMED wav has to declare its size
