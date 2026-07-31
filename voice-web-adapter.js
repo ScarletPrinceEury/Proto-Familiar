@@ -60,7 +60,10 @@ export function createWebCallAdapter({ hooks, send, log = () => {} } = {}) {
      */
     async playAudio(_id, reply) {
       if (reply == null) return;
-      control({ t: 'speak-start' });
+      // The reply MAY carry a sample rate (TTS output rate) so the browser can
+      // configure playback; a bare async-iterable (the default) omits it.
+      const sampleRate = reply?.sampleRate;
+      control(sampleRate ? { t: 'speak-start', sampleRate } : { t: 'speak-start' });
       try {
         for await (const chunk of reply) {
           if (chunk && chunk.length) send(chunk);
