@@ -175,11 +175,23 @@ in the same commit (parent §13 discipline). PATCH bump each.
    vision-0.9.2 discipline), ward-only, gated (`threatEnabled`), and
    fire-and-forget so the tier update never delays the spoken reply and a
    failing scorer never breaks the turn. `ws@^8` added for the WS server.
-   **Remaining: the server-side glue** — create the singleton engine at boot
-   (real `listeningWorker` + real `runTurn`/`synthesize`/`scoreThreat` deps),
-   the WS endpoint binding a web adapter per connection, `clearStaleCallState`
-   at boot, the browser capture/playback UI, and session logging. On-hardware
-   verified (no mic/provider/TTS model in CI).
+   ✅ **The whole path is now assembled (0.10.24–0.10.25), pending on-hardware
+   verification.** `voice-call-server.js` (`attachVoiceCall`) wires the singleton
+   engine at boot (real `listeningWorker` + the real `runTurn`/`synthesize`/
+   `scoreThreat` deps), the WS endpoint at `/api/voice/call` (one browser ↔ the
+   engine via the web adapter, torn down on close), and `clearStaleCallState`.
+   `voicePlanFor('call')` makes the `listening` tier (streaming ASR + VAD +
+   voice) installable — the streaming model existed in the registry but no plan
+   fetched it. `public/voice-call.js` is the browser end: "Start call" opens the
+   socket + mic, "Hold to talk" streams 16 kHz s16le up (ScriptProcessor +
+   linear resample), the reply plays back through the AudioContext. Attached via
+   a graceful dynamic import so a missing `ws` never breaks boot.
+   **⚠️ Unverified in cloud** — needs a mic, a live provider, and the call models
+   on disk, so my human is the one who confirms it on the reference laptop.
+   **Remaining before 2b is truly done:** session logging, and the on-hardware
+   shakeout (latency, resample quality, the ScriptProcessor→AudioWorklet
+   upgrade). Then 2c (barge-in) / 2d (governor) / 2e (voice-mode prompt +
+   intentions) / 2f (VAD open-mic).
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** First audio after
    the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
    what actually played (parent §6.2 — non-negotiable, exact-values rule: the
