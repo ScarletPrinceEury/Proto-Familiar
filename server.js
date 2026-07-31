@@ -1517,6 +1517,12 @@ app.get('/api/voice/models', async (req, res) => {
  */
 function voicePlanFor(what) {
   const speak = composePlan({ capabilityTier: 'read-aloud', voiceEngine: 'pocket' });
+  if (what === 'call') {
+    // A live voice call (Pass 2b) needs the STREAMING recogniser + VAD (the
+    // 'listening' tier) AND a speaking voice — I both listen and talk in a
+    // call, unlike a voice note (offline, listen-only) or read-aloud (speak-only).
+    return composePlan({ capabilityTier: 'listening', voiceEngine: 'pocket' });
+  }
   if (what !== 'listen') return speak;
 
   // Voice notes are decoded offline, once, with nobody waiting — so listening
@@ -4683,6 +4689,25 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startNoticing();
   startMemorySweep();
   startVillageSync();
+  // Live voice calls (Pass 2b): attach the WebSocket call endpoint. Dynamic
+  // import + try/catch so a missing `ws` dep (before the auto-install runs) or
+  // any wiring failure degrades to "no live calls" rather than taking the
+  // server down — chat, read-aloud, and voice notes keep working regardless
+  // (the no-module-may-break-the-chat-path rule).
+  try {
+    const { attachVoiceCall } = await import('./voice-call-server.js');
+    attachVoiceCall({
+      httpServer, rootDir: __dirname, port: PORT,
+      readSettings: readSettingsSync,
+      getListeningWorker: async () => (await listeningWorker({ rootDir: __dirname })).worker,
+      getTtsWorker: async () => (await currentAudioWorker()).worker,
+      resolveVoiceForSettings: (s) => resolveVoice({ rootDir: __dirname, settings: s }),
+      ensureTtsLoaded,
+      connectionForFeature,
+    });
+  } catch (err) {
+    console.warn(`[voice-call] not attached (${err?.message ?? err}) — live calls unavailable; everything else works`);
+  }
   // Weather sense (W-A): prime the read-mirror at boot so the [Now] line is
   // fresh before the first 30s reminders tick. Self-gated + fire-and-forget;
   // inert until the ward has added a location.

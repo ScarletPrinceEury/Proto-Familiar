@@ -141,10 +141,57 @@ in the same commit (parent §13 discipline). PATCH bump each.
    `vad` role loads but the first cut uses the recogniser's own endpointing,
    which is proven correct) and the endpoint-rule values against the §6.1
    latency budget.
-2. **2b — `call-engine.js` + the web adapter (push-to-talk).** Turn-taking,
-   the `CallAdapter` contract (parent §3), session logging, the call-state
-   file. Push-to-talk first — no VAD-open-mic yet — so turn boundaries are
-   explicit and the engine is testable before endpointing tuning matters.
+2. **2b — `call-engine.js` + the web adapter (push-to-talk).** ✅ **Engine spine
+   landed (0.10.21).** `call-engine.js` carries the `CallAdapter` contract +
+   registry (`registerCallAdapter`), the one-call lifecycle (`voiceMaxCalls`),
+   the `tomes/.call-state.json` file with `clearStaleCallState` (boot) +
+   `isCallActiveFromFile` (the §4.3 governor read, fail-safe to inactive),
+   speaker→stream routing to the worker, endpoint→turn assembly, and
+   `endUtterance` — push-to-talk's explicit turn boundary (the release), which
+   finalises via the proven 2a stop→reopen rather than a new "force endpoint"
+   op. The turn runner is an injected `onTurn` seam. Verified end-to-end through
+   the REAL worker (fake transport-only adapter + a streamed wav → transcript
+   turn → playback), plus pure tests for the registry, lifecycle, busy/disabled,
+   and the call-state file. Hard off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`.
+   ✅ **Web adapter module landed (0.10.22).** `voice-web-adapter.js` — the web
+   `CallAdapter` (transport-only, §6.4): a tiny wire protocol (browser→server
+   binary PCM + `{t:'release'|'barge'}`; server→browser `speak-start` / TTS PCM
+   / `speak-end` / `stop`), `send` injected so it tests without a socket,
+   `reply` an async iterable of PCM the TTS worker streams. Verified pure AND
+   integrated into the real call engine (a press/release round-trips audio in
+   and a spoken reply out). **Remaining (next slice): the WS endpoint** (needs a
+   WS *server* — the repo only has the native client for Discord — likely the
+   `ws` dep, now auto-installed on update), **the browser capture/playback UI**
+   (getUserMedia → 16 kHz s16le → socket; Web Audio playback — on-hardware
+   verified, no mic in CI), **the real `onTurn` wiring** in server.js
+   (transcript → `/api/chat` turn → `speakable()` → TTS worker stream), and
+   session logging.
+
+   ✅ **`onTurn` orchestration + the D2 gate landed (0.10.23).**
+   `voice-call-turn.js` (`createVoiceTurnRunner`) composes score → run →
+   `speakable()` → synthesize with injected chat/TTS/threat seams, so the ORDER
+   and the safety gate are tested without a provider. **D2 is wired here and is
+   ward-signed:** the ward's TRANSCRIPT is scored (never model prose — the
+   vision-0.9.2 discipline), ward-only, gated (`threatEnabled`), and
+   fire-and-forget so the tier update never delays the spoken reply and a
+   failing scorer never breaks the turn. `ws@^8` added for the WS server.
+   ✅ **The whole path is now assembled (0.10.24–0.10.25), pending on-hardware
+   verification.** `voice-call-server.js` (`attachVoiceCall`) wires the singleton
+   engine at boot (real `listeningWorker` + the real `runTurn`/`synthesize`/
+   `scoreThreat` deps), the WS endpoint at `/api/voice/call` (one browser ↔ the
+   engine via the web adapter, torn down on close), and `clearStaleCallState`.
+   `voicePlanFor('call')` makes the `listening` tier (streaming ASR + VAD +
+   voice) installable — the streaming model existed in the registry but no plan
+   fetched it. `public/voice-call.js` is the browser end: "Start call" opens the
+   socket + mic, "Hold to talk" streams 16 kHz s16le up (ScriptProcessor +
+   linear resample), the reply plays back through the AudioContext. Attached via
+   a graceful dynamic import so a missing `ws` never breaks boot.
+   **⚠️ Unverified in cloud** — needs a mic, a live provider, and the call models
+   on disk, so my human is the one who confirms it on the reference laptop.
+   **Remaining before 2b is truly done:** session logging, and the on-hardware
+   shakeout (latency, resample quality, the ScriptProcessor→AudioWorklet
+   upgrade). Then 2c (barge-in) / 2d (governor) / 2e (voice-mode prompt +
+   intentions) / 2f (VAD open-mic).
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** First audio after
    the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
    what actually played (parent §6.2 — non-negotiable, exact-values rule: the
