@@ -141,10 +141,21 @@ in the same commit (parent §13 discipline). PATCH bump each.
    `vad` role loads but the first cut uses the recogniser's own endpointing,
    which is proven correct) and the endpoint-rule values against the §6.1
    latency budget.
-2. **2b — `call-engine.js` + the web adapter (push-to-talk).** Turn-taking,
-   the `CallAdapter` contract (parent §3), session logging, the call-state
-   file. Push-to-talk first — no VAD-open-mic yet — so turn boundaries are
-   explicit and the engine is testable before endpointing tuning matters.
+2. **2b — `call-engine.js` + the web adapter (push-to-talk).** ✅ **Engine spine
+   landed (0.10.21).** `call-engine.js` carries the `CallAdapter` contract +
+   registry (`registerCallAdapter`), the one-call lifecycle (`voiceMaxCalls`),
+   the `tomes/.call-state.json` file with `clearStaleCallState` (boot) +
+   `isCallActiveFromFile` (the §4.3 governor read, fail-safe to inactive),
+   speaker→stream routing to the worker, endpoint→turn assembly, and
+   `endUtterance` — push-to-talk's explicit turn boundary (the release), which
+   finalises via the proven 2a stop→reopen rather than a new "force endpoint"
+   op. The turn runner is an injected `onTurn` seam. Verified end-to-end through
+   the REAL worker (fake transport-only adapter + a streamed wav → transcript
+   turn → playback), plus pure tests for the registry, lifecycle, busy/disabled,
+   and the call-state file. Hard off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`.
+   **Remaining (next slice): the web adapter itself** — the WebSocket transport +
+   browser capture/playback UI + the real `onTurn` wiring in server.js
+   (enrich → provider → `speakable()` → TTS) + session logging.
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** First audio after
    the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
    what actually played (parent §6.2 — non-negotiable, exact-values rule: the

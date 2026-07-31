@@ -2473,6 +2473,18 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   and a spawned-child pipeline test (guarded by `PF_ASR_STREAMING_MODEL_DIR`,
   skipped in CI) streams a wav through the actual worker and asserts partials +
   a final. The `call-engine.js` that drives these (and fetches the model) is 2b.
+- **`call-engine.js` is the platform-neutral call spine (2b).** It owns
+  everything that is not transport — the `CallAdapter` registry, the one-call
+  lifecycle, `tomes/.call-state.json` (`{active, callId, since}`; the compute
+  governor's gate, read fail-safe via `isCallActiveFromFile`, cleared at boot by
+  `clearStaleCallState`), speaker→stream routing to the streaming worker,
+  endpoint→turn assembly, and `endUtterance` (push-to-talk's explicit boundary,
+  finalising via the 2a stop→reopen). An adapter provides transport only
+  (`joinCall`/`leaveCall`/`playAudio`/`stopPlayback`, pushing inbound audio
+  through engine hooks) so the next platform is a transport-only job; the turn
+  runner is an injected `onTurn` seam server.js wires to the chat path. Hard
+  off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`. The web adapter + the real
+  `onTurn` wiring are the next 2b slice.
 
 ## Security design
 
