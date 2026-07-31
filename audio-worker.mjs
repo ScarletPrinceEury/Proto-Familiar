@@ -28,8 +28,8 @@
  */
 
 import path from 'node:path';
-import { encodeJson, encodePcm, createFrameReader, KIND_JSON } from './audio-frame.js';
-import { floatToPcm16 } from './voice-audio-features.js';
+import { encodeJson, encodePcm, createFrameReader, KIND_JSON, KIND_PCM } from './audio-frame.js';
+import { floatToPcm16, pcm16ToFloat } from './voice-audio-features.js';
 import {
   generationExtras, runawaySampleLimit, pendingTailStart,
   DEFAULT_NUM_STEPS, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
@@ -134,8 +134,85 @@ function buildRecognizer(modelDir) {
   });
 }
 
+/**
+ * Streaming ASR endpoint rules (Pass 2).
+ *
+ * These are sherpa's own trailing-silence endpoint rules, named here so the
+ * one place they live is legible and tunable against the latency budget on the
+ * ward's hardware (the parent spec's §6.1 mouth-to-ear target). Verified on the
+ * real engine with the en-20M streaming zipformer: chunk-by-chunk decoding is
+ * byte-identical to a whole-file decode, and no false endpoint fires
+ * mid-utterance at these values.
+ *   rule1 — end after this much trailing silence with NOTHING decoded yet.
+ *   rule2 — end after this much trailing silence AFTER something was decoded.
+ *   rule3 — end once the utterance reaches this many frames regardless.
+ */
+const ASR_ENDPOINT = Object.freeze({
+  rule1MinTrailingSilence: 2.4,
+  rule2MinTrailingSilence: 1.2,
+  rule3MinUtteranceLength: 300,
+});
+
+/**
+ * Build the streaming (online) recognizer — the Pass 2 counterpart to
+ * `buildRecognizer`'s offline one. A zipformer TRANSDUCER: encoder + decoder +
+ * joiner, each an int8 onnx sitting directly in modelDir once the archive's
+ * wrapper is stripped. `featConfig` is stated for the same reason it is on the
+ * offline recognizer — the binding builds the C++ struct from whatever JS
+ * properties are present, and a silently zeroed sample rate transcribes
+ * garbage rather than erroring.
+ */
+function buildOnlineRecognizer(modelDir) {
+  const at = (f) => path.join(modelDir, f);
+  return new engine.OnlineRecognizer({
+    featConfig: { sampleRate: 16000, featureDim: 80 },
+    modelConfig: {
+      transducer: {
+        encoder: at('encoder-epoch-99-avg-1.int8.onnx'),
+        decoder: at('decoder-epoch-99-avg-1.int8.onnx'),
+        joiner: at('joiner-epoch-99-avg-1.int8.onnx'),
+      },
+      tokens: at('tokens.txt'),
+      numThreads: threads.asr,
+      provider: 'cpu',
+      debug: false,
+    },
+    decodingMethod: 'greedy_search',
+    enableEndpoint: true,
+    ...ASR_ENDPOINT,
+  });
+}
+
+/**
+ * Build the Silero VAD. Loadable as its own role so the streaming path can gate
+ * decode on detected speech (the parent spec's "VAD-gates everything" thermal
+ * argument). `bufferSizeInSeconds` bounds the internal ring the detector holds
+ * while it waits to confirm a segment.
+ */
+function buildVad(modelDir, bufferSizeInSeconds = 30) {
+  return new engine.Vad({
+    sileroVad: {
+      model: path.join(modelDir, 'silero_vad_v5.onnx'),
+      threshold: 0.5,
+      minSilenceDuration: 0.25,
+      minSpeechDuration: 0.25,
+      maxSpeechDuration: 8,
+      windowSize: 512,
+    },
+    sampleRate: 16000,
+    numThreads: threads.vad,
+    debug: false,
+  }, bufferSizeInSeconds);
+}
+
 /** Loaded models, by role. Lazy: nothing loads until something needs it. */
 const loaded = new Map();
+/**
+ * Active streaming-ASR sessions, by streamId (Pass 2). One entry per live
+ * listening stream; each holds its own online stream so two speakers in a
+ * group call never share decode state.
+ */
+const decoders = new Map();
 let engine = null;
 let engineError = null;
 
@@ -162,7 +239,51 @@ async function ensureEngine() {
 }
 
 function reportState() {
-  send({ op: 'state', loadedModels: [...loaded.keys()], liveDecoders: 0, threads });
+  send({ op: 'state', loadedModels: [...loaded.keys()], liveDecoders: decoders.size, threads });
+}
+
+/**
+ * Feed one PCM frame into a live streaming-ASR session and emit transcript
+ * frames as they form.
+ *
+ * The loop is sherpa's proven online contract (verified on the real engine,
+ * chunk-by-chunk identical to a whole-file decode): accept the samples, decode
+ * while the stream is ready, read the running result. A partial is emitted only
+ * when the text actually CHANGES — one PCM frame arrives every few tens of ms,
+ * and re-sending an unchanged partial would flood the pipe. On an endpoint the
+ * final text is emitted and the stream reset so the next utterance starts
+ * clean.
+ *
+ * Unsolicited frames (no `reqId`): the host routes them to its listeners, which
+ * is where the call engine subscribes — the same path `ttsStream`'s PCM takes
+ * outward. Never throws into the frame reader: a decode failure ends this one
+ * session with an `asr-error` and leaves every other stream untouched.
+ */
+function feedDecoder(streamId, pcmBytes) {
+  const dec = decoders.get(streamId);
+  if (!dec) return; // audio for a stream that isn't listening — ignore, don't error
+  try {
+    const samples = pcm16ToFloat(pcmBytes);
+    if (samples.length === 0) return;
+    dec.stream.acceptWaveform({ samples, sampleRate: 16000 });
+    while (dec.recognizer.isReady(dec.stream)) dec.recognizer.decode(dec.stream);
+
+    const text = dec.recognizer.getResult(dec.stream).text.trim();
+    if (text && text !== dec.lastPartial) {
+      dec.lastPartial = text;
+      send({ op: 'asr-partial', streamId, text });
+    }
+    if (dec.recognizer.isEndpoint(dec.stream)) {
+      const finalText = dec.recognizer.getResult(dec.stream).text.trim();
+      dec.recognizer.reset(dec.stream);
+      dec.lastPartial = '';
+      if (finalText) send({ op: 'asr-final', streamId, text: finalText });
+    }
+  } catch (err) {
+    decoders.delete(streamId);
+    reportState();
+    send({ op: 'asr-error', streamId, detail: String(err?.message ?? err) });
+  }
 }
 
 const OPS = {
@@ -191,7 +312,9 @@ const OPS = {
     try {
       if (role === 'tts') loaded.set(role, { session: buildPocketTts(modelDir), modelDir, at: Date.now() });
       else if (role === 'asr-offline') loaded.set(role, { session: buildRecognizer(modelDir), modelDir, at: Date.now() });
-      else loaded.set(role, { modelDir, at: Date.now() });   // other roles arrive with Pass 2
+      else if (role === 'asr-streaming') loaded.set(role, { session: buildOnlineRecognizer(modelDir), modelDir, at: Date.now() });
+      else if (role === 'vad') loaded.set(role, { session: buildVad(modelDir), modelDir, at: Date.now() });
+      else loaded.set(role, { modelDir, at: Date.now() });   // roles beyond these arrive later
       reportState();
       // The sample rate rides back on the load, because a streaming caller has
       // to write a wav header BEFORE any audio exists. Asking the engine beats
@@ -425,6 +548,55 @@ const OPS = {
     }
   },
 
+  /**
+   * Open a live streaming-ASR session on `streamId`. After this returns ok, the
+   * caller pushes 16 kHz mono s16le PCM frames for the same streamId (the host's
+   * `sendPcm`) and receives `asr-partial` / `asr-final` frames back until it
+   * calls `asrStreamStop`. One session per streamId — opening an already-open
+   * one is a no-op, not a second decode state, so a stutter in the call setup
+   * cannot double-decode a speaker.
+   */
+  async asrStream({ reqId, streamId }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    if (!Number.isFinite(streamId)) return send({ reqId, ok: false, reason: 'bad-request', detail: 'streamId is required' });
+    const held = loaded.get('asr-streaming');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the streaming listening model is not loaded' });
+    if (decoders.has(streamId)) return send({ reqId, ok: true, streamId, alreadyOpen: true });
+    try {
+      const stream = held.session.createStream();
+      decoders.set(streamId, { recognizer: held.session, stream, lastPartial: '' });
+      reportState();
+      send({ reqId, ok: true, streamId, sampleRate: 16000 });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'asr-open-failed', detail: String(err?.message ?? err) });
+    }
+  },
+
+  /**
+   * Close a streaming-ASR session: flush whatever the recognizer still holds
+   * after the last PCM (my human stopped talking / the call ended), emit a last
+   * `asr-final` for that tail, and drop the session. Idempotent — stopping a
+   * streamId that isn't open still answers ok, so a double hang-up is harmless.
+   */
+  async asrStreamStop({ reqId, streamId }) {
+    const dec = decoders.get(streamId);
+    if (!dec) return send({ reqId, ok: true, streamId, wasOpen: false });
+    try {
+      dec.stream.inputFinished();
+      while (dec.recognizer.isReady(dec.stream)) dec.recognizer.decode(dec.stream);
+      const tail = dec.recognizer.getResult(dec.stream).text.trim();
+      decoders.delete(streamId);
+      reportState();
+      if (tail) send({ op: 'asr-final', streamId, text: tail, final: true });
+      send({ reqId, ok: true, streamId, wasOpen: true });
+    } catch (err) {
+      decoders.delete(streamId);
+      reportState();
+      send({ reqId, ok: false, reason: 'asr-stop-failed', detail: String(err?.message ?? err) });
+    }
+  },
+
   // ⚠️ A `transcribe` STUB used to sit here, left over from before the real one
   // was written above. Two keys of the same name in one object literal: the
   // later silently wins, so the real implementation was dead from the day it
@@ -436,7 +608,11 @@ const OPS = {
 
 const reader = createFrameReader({
   onFrame: async (frame) => {
-    if (frame.kind !== KIND_JSON) return;   // Pass 2 routes PCM at decoders
+    // Inbound audio for a live listening stream (Pass 2). Routed straight to
+    // its decoder — synchronous, cheap, and never awaited, so a burst of PCM
+    // frames can't queue behind a slow JSON op.
+    if (frame.kind === KIND_PCM) { feedDecoder(frame.streamId, frame.pcm); return; }
+    if (frame.kind !== KIND_JSON) return;
     const msg = frame.message ?? {};
     const op = OPS[msg.op];
     if (!op) return send({ reqId: msg.reqId, ok: false, reason: 'unknown-op', detail: String(msg.op) });

@@ -127,12 +127,20 @@ into the voice-mode block, not new behavior.
 Each sub-pass ships with its off-switch and its `docs/architecture.md` update
 in the same commit (parent §13 discipline). PATCH bump each.
 
-1. **2a — the worker pipeline.** `audio-worker.mjs` gains VAD → streaming ASR →
-   endpointing → final transcript (currently "absent rather than stubbed").
-   Pure worker-side; testable with a fixture wav through the real child (the
-   pipeline-test discipline from the 0.9 post-mortem — a stub cannot catch a
-   dispatch-table or ReferenceError bug). Off-switch: rides `voiceEnabled` +
-   `PROTO_FAMILIAR_VOICE_DISABLED=1`.
+1. **2a — the worker pipeline. ✅ LANDED (0.10.20).** `audio-worker.mjs` gained
+   an `asr-streaming` role (online zipformer transducer) + a `vad` role
+   (Silero), the `asrStream` / `asrStreamStop` ops, and `KIND_PCM` routing into
+   `feedDecoder` (accept → decode-while-ready → `getResult`; unsolicited
+   `asr-partial` / `asr-final` frames; endpoint→reset). `pcm16ToFloat` is the
+   new capture-side inverse of `floatToPcm16`. Endpoint rules named in
+   `ASR_ENDPOINT` for hardware tuning. Verified on the real engine (chunked ==
+   whole-file decode) with a spawned-child pipeline test guarded by
+   `PF_ASR_STREAMING_MODEL_DIR` (skips in CI). Rides `voiceEnabled` +
+   `PROTO_FAMILIAR_VOICE_DISABLED=1`; the ops are inert until 2b drives them.
+   **Deferred to on-hardware tuning:** VAD-gating of the decode loop (the
+   `vad` role loads but the first cut uses the recogniser's own endpointing,
+   which is proven correct) and the endpoint-rule values against the §6.1
+   latency budget.
 2. **2b — `call-engine.js` + the web adapter (push-to-talk).** Turn-taking,
    the `CallAdapter` contract (parent §3), session logging, the call-state
    file. Push-to-talk first — no VAD-open-mic yet — so turn boundaries are

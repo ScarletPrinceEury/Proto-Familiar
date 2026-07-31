@@ -2460,6 +2460,19 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   model, punctuation + inverse text normalisation built in). Decoded offline,
   once, with nobody waiting — so accuracy is the only axis and the streaming
   models stay unfetched until live calls in Pass 2.
+- **Streaming ASR is the Pass 2 worker spine (2a, landed).** Alongside the
+  offline recogniser the worker now loads an `asr-streaming` role (an online
+  zipformer transducer) and a `vad` role (Silero). `asrStream` opens a
+  per-`streamId` session; inbound `KIND_PCM` frames route straight to
+  `feedDecoder`, which runs sherpa's online contract (accept → decode-while-
+  ready → `getResult`) and emits unsolicited `asr-partial` / `asr-final` frames
+  as text forms and endpoints fire; `asrStreamStop` flushes the tail and drops
+  the session. Endpoint rules live in one named constant (`ASR_ENDPOINT`),
+  tunable against the §6.1 latency budget on the ward's hardware. Verified on
+  the real engine — chunked decoding is byte-identical to a whole-file decode,
+  and a spawned-child pipeline test (guarded by `PF_ASR_STREAMING_MODEL_DIR`,
+  skipped in CI) streams a wav through the actual worker and asserts partials +
+  a final. The `call-engine.js` that drives these (and fetches the model) is 2b.
 
 ## Security design
 
