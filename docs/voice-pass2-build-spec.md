@@ -57,7 +57,7 @@ classification for a live call:
 | needs-tracking | **defer** | same; also already stands down at moderate+ threat |
 | content-regate | **defer** | same |
 | **reachout (warm)** | **defer** | redundant during a live call — the ward is *maximally* present, which is exactly the state warm reach-out exists to break. Its own ward-active gate (`WARD_ACTIVE_THRESHOLD_MS`) already suppresses a knock when the ward spoke recently; **the call-state file must feed that gate** so a live call counts as "ward active." Deferring warmth here is not a safety softening — triage is the separate track, and warmth already stands down at moderate+ threat. |
-| **noticing** | **⚠ ward decision — see D1** | noticing is ward-signed to *not* stand down at threat, and acts on the ward's safety-adjacent surface. During a call the ward is present and talking, so a noticing *knock* is redundant — but "defer noticing" is a change to *when/whether noticing acts*, which is triage-class and needs sign-off. Recommendation below. |
+| **noticing** | **run, speak not banner** (ward-signed, D1) | Noticing keeps ticking — it is ward-signed to *not* stand down, and an aging intention or a widening contact gap is exactly what's useful to surface when things are hard. Because its `reach_out_to_ward` rides the outbox, during a call its output is **spoken in the conversation** rather than raised as a banner over a call already happening. This narrows *nothing* about when noticing acts — wake conditions and threat posture are untouched — it only changes the delivery channel to the one the ward is already in, so it stays inside noticing's existing sign-off. |
 | silence-triage | **never defer** | the caring spine; a call is the opposite of a reason to slow it (parent §4.3). It still runs; its check-in is *spoken*, not bannered (parent §7). |
 | threat recording | **never defer** | nil CPU; network-bound |
 | reminders + event alerts | **never defer** | spoken during the call (parent §7) |
@@ -158,13 +158,21 @@ in the same commit (parent §13 discipline). PATCH bump each.
 
 Per CLAUDE.md, these do not ship on my judgment:
 
-- **Ward voice transcripts → threat tier.** Parent acceptance: "Ward voice
-  transcripts move the threat tier (if signed ON); a villager's voice never
-  does; partials never do." This feeds the same `scoreMessage`/`recordThreat`
-  spine as vision (0.9.2) and text. Default and wiring need sign-off (D2). The
-  `crisis-signals.js`/`threat-tracker.js` internals stay UNCHANGED —
-  orchestration around them only, exactly as vision did.
-- **Noticing during a call (D1).** A change to when/whether noticing acts.
+- **Ward voice transcripts → threat tier (D2 — RESOLVED: ON by default, with
+  off-switch).** A ward's spoken words feed the same `scoreMessage`/`recordThreat`
+  spine as vision (0.9.2) and text; a villager's voice never does; partials
+  never do (parent acceptance). The `crisis-signals.js`/`threat-tracker.js`
+  internals stay UNCHANGED — orchestration around them only, exactly as vision
+  did. Gated by `voiceThreatScoring` (default ON) +
+  `PROTO_FAMILIAR_VOICE_THREAT_DISABLED=1`, also standing down under the global
+  `PROTO_FAMILIAR_THREAT_DISABLED=1`. Full sign-off still applies to the *wiring*
+  (the score source is the transcribed text, never raw model prose — the vision
+  discipline) even though the default is settled.
+- **Noticing during a call (D1 — RESOLVED: run, speak not banner).** Noticing
+  keeps ticking during a call; its outbox-delivered reach-out is spoken
+  in-conversation rather than bannered. Delivery-channel only — noticing's wake
+  conditions and threat posture are untouched, so it stays inside its existing
+  sign-off rather than narrowing when it acts.
 - **Triage spoken during a call.** Triage never defers and its check-in is
   spoken; the deliberation path is unchanged (`callProviderChat`, cap 4000,
   the 0.8.82 ward-signed fix). Confirm the spoken delivery does not alter the
@@ -198,23 +206,19 @@ matrix. Pass 2's cells, each to be marked wired-or-N/A in the shipping commit:
 
 ## Open ward decisions
 
-- **D1 — Noticing during a live call.** Recommendation: **defer the noticing
-  *reach-out* during a call** (the ward is present and talking; a knock is
-  redundant), but because noticing is triage-class this is your call. Two
-  sub-options if not a plain defer: (a) let noticing still *run* but route any
-  output to *spoken* rather than a banner (it rides the outbox, so this is
-  free — 2.3); (b) leave noticing fully live. My lean is (a): it never
-  suppresses a genuinely useful notice, it just changes the channel to the one
-  the ward is already using.
-- **D2 — Ward voice transcripts → threat, default ON or OFF?** Vision shipped
-  threat scoring ON by default with a per-image gate. Voice is more intimate
-  and more continuous; the same "false-positive check-ins are cheap, missed
-  distress is not" logic argues ON, but a live spoken call is also where a
-  false positive is most jarring mid-sentence. Your call on the default; the
-  off-switch exists either way.
+- **D1 — Noticing during a live call. ✅ RESOLVED: run, speak not banner.**
+  Noticing keeps ticking during a call; because its reach-out rides the outbox,
+  its output is spoken in-conversation rather than bannered. Delivery-channel
+  only — wake conditions and threat posture untouched (see 2.1, §4).
+- **D2 — Ward voice transcripts → threat. ✅ RESOLVED: ON by default, with an
+  off-switch.** A distressed spoken message can raise the tier, feeding the same
+  threat spine as vision/text; gated by `voiceThreatScoring` (default ON) +
+  `PROTO_FAMILIAR_VOICE_THREAT_DISABLED=1` (see §4, §6). Wiring still gets the
+  full vision-discipline sign-off (score the transcript, never raw prose).
 - **D3 — Is Pass 2 the milestone-complete `0.X.0`, or does the milestone
-  complete at Pass 4?** Affects nothing in the build; only which pass drops the
-  suffix / lands the milestone note. (Patch-only until then, regardless.)
+  complete at Pass 4? — OPEN (non-gating).** Affects nothing in the build; only
+  which pass drops the suffix / lands the milestone note. Patch-only until then,
+  regardless.
 
 ## Grounding references
 
