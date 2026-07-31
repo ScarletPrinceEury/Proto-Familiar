@@ -1790,6 +1790,11 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         // is already playing a wav. Ending the stream is the only honest
         // signal available; the log is where the reason lives.
         if (!r.ok) { console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`); break; }
+        // A runaway stop means the runaway cap cut this part short — the tail
+        // the listener did not hear. It cannot be reported in the body (a wav
+        // is already playing), but it must not be silent either: the log is
+        // where "why did it stop mid-sentence" gets an answer.
+        if (r.runaway) console.warn(`[voice] read-aloud truncated part (runaway cap) after ${r.durationSec ?? '?'}s — the tail was cut`);
         // A backend that cannot honour a setting must say so. pocket-tts has
         // no speed control at all, so a ward who slowed playback for
         // comprehension would otherwise just hear no difference and no reason.
