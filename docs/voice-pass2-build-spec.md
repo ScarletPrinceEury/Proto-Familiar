@@ -153,9 +153,20 @@ in the same commit (parent §13 discipline). PATCH bump each.
    the REAL worker (fake transport-only adapter + a streamed wav → transcript
    turn → playback), plus pure tests for the registry, lifecycle, busy/disabled,
    and the call-state file. Hard off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`.
-   **Remaining (next slice): the web adapter itself** — the WebSocket transport +
-   browser capture/playback UI + the real `onTurn` wiring in server.js
-   (enrich → provider → `speakable()` → TTS) + session logging.
+   ✅ **Web adapter module landed (0.10.22).** `voice-web-adapter.js` — the web
+   `CallAdapter` (transport-only, §6.4): a tiny wire protocol (browser→server
+   binary PCM + `{t:'release'|'barge'}`; server→browser `speak-start` / TTS PCM
+   / `speak-end` / `stop`), `send` injected so it tests without a socket,
+   `reply` an async iterable of PCM the TTS worker streams. Verified pure AND
+   integrated into the real call engine (a press/release round-trips audio in
+   and a spoken reply out). **Remaining (next slice): the WS endpoint** (needs a
+   WS *server* — the repo only has the native client for Discord — likely the
+   `ws` dep, now auto-installed on update), **the browser capture/playback UI**
+   (getUserMedia → 16 kHz s16le → socket; Web Audio playback — on-hardware
+   verified, no mic in CI), **the real `onTurn` wiring** in server.js
+   (transcript → `/api/chat` turn → `speakable()` → TTS worker stream), and
+   session logging. **`onTurn` is where D2 (ward voice → threat) gets wired** —
+   ward sign-off at that seam.
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** First audio after
    the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
    what actually played (parent §6.2 — non-negotiable, exact-values rule: the
