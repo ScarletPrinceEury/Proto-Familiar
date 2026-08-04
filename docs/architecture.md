@@ -2395,9 +2395,24 @@ three minutes.
 ### Voice notes (Pass 1) — shipped 0.10.x
 
 New HTTP surface: `POST /api/media` (now `image/*` **and** `audio/*`),
-`POST /api/media/:id/transcribe`, `POST /api/voice/ward-voice`,
-`GET /api/voice/local`, and `POST /api/voice/install-models` taking
-`{what:'speak'|'listen'}`.
+`POST /api/media/:id/transcribe`, `POST /api/media/:id/transcript` (the ward's
+correction), `POST /api/voice/ward-voice`, `GET /api/voice/local`, and
+`POST /api/voice/install-models` taking `{what:'speak'|'listen'|'call'}`.
+
+- **A transcript my human can correct** (`correctTranscript` in
+  `voice-transcribe.js`). A recogniser mishears names and anyone whose speech it
+  wasn't trained on — "wish me luck" came back as "Wish May Look" — and the
+  transcript is not decoration: it is what the Familiar reads in the turn, what
+  memorisation folds, and what the asset's slug was minted from, so a
+  mis-hearing is wrong everywhere at once. The correction keeps what the
+  recogniser actually heard as `description.auto` (never overwritten by a second
+  correction) and marks `corrected:true`, so nothing downstream mistakes it for
+  the Familiar's own hearing. It also **re-graduates the slug** from the
+  corrected words (`setAssetDescription(..., {regraduate:true})`) — a note
+  findable only as `wish-may-look-x7` becomes findable by what was said — while
+  every old slug keeps resolving forever (ids are opaque; nothing may break).
+  The composer chip carries the edit affordance, so the fix happens before the
+  note is ever sent.
 
 The listen-once-keep-forever path, deliberately shaped as vision's twin.
 

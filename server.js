@@ -262,7 +262,7 @@ import { consentSummary, inspectInstalled, fetchPlan, MODELS_SUBDIR } from './vo
 import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
-import { hearVoiceNotes, transcribeAsset, transcriptionAllowed } from './voice-transcribe.js';
+import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
@@ -2344,6 +2344,19 @@ app.post('/api/media/:id/link', async (req, res) => {
 app.delete('/api/media/:id/link/:nodeId', async (req, res) => {
   const r = await removeAssetLink(req.params.id, req.params.nodeId);
   if (r?.ok === false) return res.status(400).json(r);
+  res.json(r);
+});
+
+/**
+ * My human corrects a transcript I misheard.
+ *
+ * The transcript IS the content of a voice note — what I read in the turn, what
+ * memorisation folds, what the slug was minted from — so a mis-hearing is wrong
+ * everywhere until the person who said it can fix it.
+ */
+app.post('/api/media/:id/transcript', async (req, res) => {
+  const r = await correctTranscript(req.params.id, req.body?.text);
+  if (r?.ok === false) return res.status(r.reason === 'not-found' ? 404 : 400).json(r);
   res.json(r);
 });
 
