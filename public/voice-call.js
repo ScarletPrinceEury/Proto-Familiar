@@ -87,6 +87,15 @@
   async function startCall() {
     if (live) { endCall(); return; }
     setState('Connecting…');
+    // The mic API only exists in a secure context (https:// or localhost). Over
+    // Tailscale on plain http:// the whole `navigator.mediaDevices` is absent —
+    // say so plainly instead of throwing "undefined is not an object".
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setState(window.isSecureContext === false
+        ? 'A voice call needs a secure connection. Open http://localhost:8742 on this machine, or serve over HTTPS (e.g. `tailscale serve`) to call from your phone.'
+        : 'This browser did not expose a microphone. Use a current browser on https:// or localhost.');
+      return;
+    }
     try {
       ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
       await ctx.resume();

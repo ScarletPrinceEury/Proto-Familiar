@@ -64,7 +64,14 @@ export async function currentAudioWorker({ rootDir, readSettings } = {}) {
   const resolved = await resolveBackend({ rootDir, settings: s });
 
   if (worker && backend?.backend === resolved.backend && backend?.workerScript === resolved.workerScript) {
-    return { worker, resolved: backend };
+    // The WORKER can be reused (same engine + script), but the RESOLUTION
+    // METADATA must not be stale: choosing the sidecar when it isn't installed
+    // still resolves to sherpa, yet now carries fellBackFrom:'pocket'. Returning
+    // the cached `backend` (fellBackFrom:null) is what made the engine picker
+    // snap back to the default with no "chosen but not installed" prompt — the
+    // status endpoint reads fellBackFrom from here. Refresh it, keep the worker.
+    backend = resolved;
+    return { worker, resolved };
   }
 
   if (worker) { try { worker.stop(); } catch { /* already gone */ } }
