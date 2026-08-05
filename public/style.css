@@ -2628,6 +2628,20 @@ button { cursor: pointer; font-family: var(--font); }
   touch-action: none;
 }
 .ke-graph-map canvas:active { cursor: grabbing; }
+
+/*
+ * Push-to-talk: the browser must not treat a held button as a pan/scroll
+ * gesture or a long-press callout — both fire pointercancel and end the hold
+ * instantly, so a hold degrades into a tap and no speech is captured. The JS
+ * captures the pointer; this keeps the gesture from being claimed in the first
+ * place.
+ */
+#voice-call-talk {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
 .ke-graph-status {
   position: absolute;
   top: 50%; left: 50%;
