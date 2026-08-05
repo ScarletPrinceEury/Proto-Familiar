@@ -2329,12 +2329,26 @@ paid for separately:
 | endpoint | cost | what it does |
 |---|---|---|
 | `POST /api/voice/speech-plan` | none | markdown → speakable text, returns a short-lived `say-xxxxxx` id |
-| `GET /api/voice/tts/:id` | a model + generation | streams a wav from ONE generation |
+| `GET /api/voice/tts/:id` | a model + generation | streams a wav — engine-branched (see below) |
 
 The browser gets the whole shape of a message immediately, then points an
-`<audio>` at the streaming URL. Responsiveness comes from **streaming out of a
-single generation**, never from splitting the message up — that distinction is
-the entire Pass 1 story.
+`<audio>` at the streaming URL. `GET /api/voice/tts/:id` takes **one of two
+paths, by engine** (`resolved.backend`):
+
+- **`pocket` (sidecar, default):** streams out of ONE generation per
+  `splitForGeneration` part (ordinary messages are a single part). The KV cache
+  carries the whole message, so there is nothing to drift and no tail to drop —
+  responsiveness from streaming, completeness for free. Never pre-split into
+  small utterances; that would force a clone per piece and reintroduce seams.
+- **`sherpa` (built-in fallback):** **buffered self-healing**
+  (`speakUnitsSelfHealing`, `voice-generation.js`). The message is split into
+  small units (`SMALL_UTTERANCE_CHARS`), each generated to a full clip and
+  checked against `renderDroppedWords` *before* any of its audio is written. A
+  short one is re-spoken with a bumped seed (which breaks sherpa's deterministic
+  early-EOS); if it stays short it drops to sentence granularity, each verified
+  and emitted once. Costs a small delay before the first words; buys the
+  guarantee that no sentence silently vanishes. Any still-short sentence is
+  counted and logged — never dressed up as success.
 
 ### The four bugs, in the order they were found
 
@@ -2373,14 +2387,20 @@ Each looked like the previous one's fix had failed. They were different.
    different voices at different points of the message" — within one message,
    built-in engine only, never the sidecar). 400 makes an *ordinary* message one
    trajectory but leaves a long one as several, and every extra utterance is
-   another voice. The threshold is now derived from the text
-   (`wholeUtteranceMin`, capped by what the frame budget can hold), so a whole
-   generation part is ONE utterance — one trajectory, one voice. Measured on the
-   real engine: a 782-character reply rendered as multiple utterances at 400
-   (37.0 s) versus one at the full length (31.1 s); the new default is
-   byte-identical to the one-utterance render. Any remaining seam now falls only
-   where `splitForGeneration` deliberately put it — a paragraph boundary — which
-   is the one place a shift was always going to be survivable.
+   another voice.
+
+   **The one-utterance "fix" was reverted — it dropped words.** Sizing the whole
+   message as one utterance (`wholeUtteranceMin`, briefly shipped) does give one
+   voice, but PocketTTS was trained on sentence-length audio and reaches EOS
+   early on a very long "sentence", swallowing the tail: measured, an 899-char
+   message rendered in half the duration (36 chars/s — impossible for real
+   speech). So there is **no single built-in setting that wins both** — small
+   drifts the voice, large drops content. That is the whole reason `pocket` is
+   the default now (its KV cache needs no resets), and the reason the built-in
+   read-aloud path *verifies and re-speaks* instead of trusting one big
+   generation (see "read-aloud", above). `MIN_CHAR_IN_SENTENCE` stays 400 for
+   the hand-it-one-trajectory paths; the self-healing path deliberately uses the
+   much smaller `SMALL_UTTERANCE_CHARS` so a dropped sentence is detectable.
 
 ### Two backends, one protocol
 
@@ -2388,23 +2408,33 @@ Each looked like the previous one's fix had failed. They were different.
 protocol in `audio-frame.js`, so `audio-worker-host.js` supervises them
 identically — parking, backoff and idle unload were written once.
 
-| | `sherpa` (default) | `pocket` (opt-in) |
+| | `pocket` (default) | `sherpa` (built-in fallback) |
 |---|---|---|
-| worker | `audio-worker.mjs` | `voicebox/` (Python) |
-| cost | ships; ~216 MB | ~600 MB installed |
-| model | `2026-01` (only ONNX export) | `english_2026-04` |
-| continuity | resets per utterance | `copy_state=False` carries the KV cache |
+| worker | `voicebox/` (Python) | `audio-worker.mjs` |
+| cost | ~600 MB installed | ships; ~216 MB |
+| model | `english_2026-04` | `2026-01` (only ONNX export) |
+| continuity | `copy_state=False` carries the KV cache | resets per utterance |
 
-`sherpa` stays the default because 600 MB is real money on the hardware this
-project exists for. Choosing `pocket` without it installed **falls back and
-says so** — in the log and on `/api/voice/status` — carrying the command that
-fixes it. The worker is built on first use, not at boot, because the engine is
-a setting; the old one is stopped before the new one starts so two engines
-never hold models in RAM at once.
+`pocket` is the **default** because it does not drop the tail of a long message
+the way sherpa's per-utterance reset does. But nothing downloads at boot: a
+machine with no venv still speaks immediately, because `resolveBackend` **falls
+back to sherpa and says so** (`fellBackFrom: 'pocket'`, in the log and on
+`/api/voice/status`). The ~600 MB is fetched **on first use** —
+`autoInstallSidecarIfDefault` fires from the read-aloud path (never from status
+polling, so opening Settings pulls nothing), with visible, cancellable progress;
+selecting `pocket` in Settings starts the same download (the selection is the
+consent). The worker is built on first use; the old one is stopped before the
+new starts so two engines never hold models in RAM at once.
 
-Install with `node scripts/ensure-voicebox.mjs --install`. Deliberately **not**
-in the prestart hook: unlike Phylactery, this is optional, and downloading
-600 MB because someone typed `npm start` would be hostile on a full laptop.
+**Listening is not governed by this default.** `listeningWorker()` resolves
+sherpa **by name** (not via the default, which is now `pocket`) — the recogniser
+is always a sherpa model, and routing a voice note to the Python speaker would
+make it fail. Flipping the speaking default must never move the listener.
+
+Install can still be run by hand with `node scripts/ensure-voicebox.mjs
+--install`. Deliberately **not** in the prestart hook: downloading 600 MB
+because someone typed `npm start` would be hostile on a full laptop — hence
+first-*use*, not first-*boot*.
 
 ### Text preparation (`voice-speech.js`)
 

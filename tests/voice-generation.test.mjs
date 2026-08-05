@@ -6,7 +6,17 @@ import {
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
   MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES, FRAME_RATE_HZ,
   pendingTailStart, expectedSpeechSeconds,
+  renderDroppedWords, bestRender, SMALL_UTTERANCE_CHARS,
+  speakUnitsSelfHealing,
 } from '../voice-generation.js';
+
+const RATE = 18.6;   // chars/second the helpers assume; the fake engine matches it
+const sentencesOf = (t) => t.split(/(?<=[.!?])\s+/).filter(Boolean);
+// A fake engine that renders `spoken` chars of `text` into that many "samples",
+// so duration = spokenChars/RATE. `earlyStopAt` lets a unit drop its tail.
+const fakeRender = (text, { spokenChars = text.length } = {}) => ({
+  ok: true, samples: new Array(Math.max(0, spokenChars)).fill(0), durationSec: spokenChars / RATE,
+});
 
 /**
  * These exist because the bug they prevent shipped twice.
@@ -166,6 +176,147 @@ test('expectedSpeechSeconds is junk-safe and never negative', () => {
   for (const bad of [null, undefined, 42, {}, []]) assert.equal(expectedSpeechSeconds(bad), 0);
   assert.ok(expectedSpeechSeconds('abc', { speed: 0 }) > 0, 'a zero speed falls back rather than dividing by zero');
   assert.ok(Number.isFinite(expectedSpeechSeconds('abc', { speed: NaN })));
+});
+
+// ── Self-healing read-aloud: catch a dropped tail and re-speak it ───────
+
+test('a small unit is small on purpose — detection reliability needs it', () => {
+  // The self-healing path verifies each unit by duration, which only works when
+  // one dropped sentence is a large fraction of the unit. This must stay well
+  // below the merge target used for the hand-it-one-trajectory path.
+  assert.ok(SMALL_UTTERANCE_CHARS < MIN_CHAR_IN_SENTENCE);
+  assert.ok(SMALL_UTTERANCE_CHARS >= 80, 'but not so small the whole message is one-sentence resets');
+});
+
+test('renderDroppedWords flags audio far shorter than the words predict', () => {
+  const text = 'x'.repeat(160);            // ~8.6 s expected at 18.6 chars/s
+  const full = expectedSpeechSeconds(text);
+  assert.equal(renderDroppedWords(text, full * 0.95), false, 'a near-full render is fine');
+  assert.equal(renderDroppedWords(text, full * 0.5), true, 'half the audio is a dropped sentence');
+  assert.equal(renderDroppedWords(text, 0), true, 'no audio at all is the worst drop');
+  assert.equal(renderDroppedWords(text, NaN), true, 'a missing duration is treated as a drop');
+});
+
+test('renderDroppedWords does not flag a merely brisk render', () => {
+  // Real renders come back faster than the 18.6 floor (~25 was measured). The
+  // 0.7 ratio must sit above that so a quick-but-complete render is not re-spoken.
+  const text = 'x'.repeat(200);
+  const brisk = text.length / 25;   // 25 chars/second
+  assert.equal(renderDroppedWords(text, brisk), false);
+});
+
+test('renderDroppedWords refuses to judge something too short to judge', () => {
+  // A couple of words is below the noise floor; calling it "dropped" would fire
+  // constantly on legitimately tiny renders.
+  assert.equal(renderDroppedWords('Yes.', 0.1), false);
+  assert.equal(renderDroppedWords('', 0), false);
+});
+
+test('bestRender prefers the first complete attempt, else the longest', () => {
+  const text = 'x'.repeat(160);
+  const full = expectedSpeechSeconds(text);
+  // First attempt dropped, second complete → take the complete one.
+  const a = { samples: [1], durationSec: full * 0.5 };
+  const b = { samples: [1, 2], durationSec: full * 0.95 };
+  assert.equal(bestRender([a, b], text), b);
+  // An earlier complete attempt wins over a later one, so the voice changes least.
+  const c = { samples: [3], durationSec: full * 0.9 };
+  assert.equal(bestRender([b, c], text), b);
+  // All dropped → the longest partial beats silence.
+  assert.equal(bestRender([a, { samples: [9], durationSec: full * 0.6 }], text).durationSec, full * 0.6);
+  // Nothing usable → null, never a crash.
+  assert.equal(bestRender([], text), null);
+  assert.equal(bestRender([{ samples: [], durationSec: 5 }], text), null);
+});
+
+// ── The self-healing loop, driven through a fake engine ─────────────────
+
+test('a unit that renders whole is emitted once, in order, unchanged', async () => {
+  const emitted = [];
+  const summary = await speakUnitsSelfHealing(['x'.repeat(150), 'y'.repeat(150)], {
+    generate: (text) => fakeRender(text),
+    emit: (s) => emitted.push(s.length),
+    splitToSentences: sentencesOf,
+  });
+  assert.deepEqual(emitted, [150, 150]);
+  assert.equal(summary.emitted, 2);
+  assert.equal(summary.droppedSentences, 0);
+});
+
+test('a unit that early-stops is re-spoken, and only the complete take is emitted', async () => {
+  // The engine drops half of any unit on seed N, but renders it whole on seed N+1.
+  // This is the exact shape of the reported drop: the tail vanishes, then a seed
+  // bump fixes it. The listener must hear the WHOLE unit, exactly once.
+  const emitted = [];
+  const unit = 'a'.repeat(180);
+  const summary = await speakUnitsSelfHealing([unit], {
+    baseSeed: 100,
+    generate: (text, seed) => fakeRender(text, { spokenChars: seed === 100 ? Math.floor(text.length * 0.4) : text.length }),
+    emit: (s) => emitted.push(s.length),
+    splitToSentences: sentencesOf,
+  });
+  assert.deepEqual(emitted, [180], 'the whole unit, once — not the short take too');
+  assert.ok(summary.reSpoken >= 1, 'it took a retry');
+  assert.equal(summary.droppedSentences, 0);
+});
+
+test('a unit that stays short falls to sentences, each rendered whole', async () => {
+  // The unit ALWAYS early-stops however the seed moves — so the loop must drop to
+  // sentence granularity, where each short sentence renders fully. No word lost.
+  const emitted = [];
+  const unit = 'Alpha beta gamma delta. Epsilon zeta eta theta. Iota kappa lambda mu.';
+  const sents = sentencesOf(unit);
+  const summary = await speakUnitsSelfHealing([unit], {
+    generate: (text) => {
+      const isWholeUnit = text === unit;
+      return fakeRender(text, { spokenChars: isWholeUnit ? Math.floor(text.length * 0.3) : text.length });
+    },
+    emit: (s) => emitted.push(s.length),
+    splitToSentences: sentencesOf,
+  });
+  assert.equal(emitted.length, sents.length, 'one emit per sentence');
+  assert.deepEqual(emitted, sents.map((s) => s.length), 'and each whole');
+  assert.equal(summary.droppedSentences, 0);
+});
+
+test('a sentence that will not render whole is counted, never emitted as a lie', async () => {
+  const emitted = [];
+  // Sentences long enough to be judgeable (>~37 chars, so expected > 2 s).
+  const unit = 'The first clause runs on for a good while here. The second clause also runs on for a good while here.';
+  const summary = await speakUnitsSelfHealing([unit], {
+    // Everything early-stops, always: the unit AND both sentences.
+    generate: (text) => fakeRender(text, { spokenChars: Math.floor(text.length * 0.3) }),
+    emit: (s) => emitted.push(s.length),
+    splitToSentences: sentencesOf,
+  });
+  // Best-effort partials may be emitted, but every short sentence is COUNTED so
+  // the caller can log it — silence is never dressed up as success.
+  assert.ok(summary.droppedSentences >= 1, `expected drops to be counted, got ${summary.droppedSentences}`);
+});
+
+test('a worker death stops the loop instead of hammering a dead engine', async () => {
+  const emitted = [];
+  let calls = 0;
+  const summary = await speakUnitsSelfHealing(['a'.repeat(150), 'b'.repeat(150), 'c'.repeat(150)], {
+    generate: (text) => { calls += 1; return calls === 1 ? fakeRender(text) : { ok: false, reason: 'worker-died' }; },
+    emit: (s) => emitted.push(s.length),
+    splitToSentences: sentencesOf,
+    isFatal: (r) => r === 'worker-died',
+  });
+  assert.deepEqual(emitted, [150], 'the first unit spoke, then the death stopped everything');
+  assert.ok(calls <= 2, 'it did not keep asking a dead worker');
+});
+
+test('an abort mid-message stops promptly and emits nothing further', async () => {
+  const emitted = [];
+  let aborted = false;
+  await speakUnitsSelfHealing(['a'.repeat(150), 'b'.repeat(150)], {
+    generate: (text) => { aborted = true; return fakeRender(text); },   // abort after the first render starts
+    emit: (s) => { if (!aborted || emitted.length === 0) emitted.push(s.length); },
+    isAborted: () => aborted && emitted.length > 0,
+    splitToSentences: sentencesOf,
+  });
+  assert.ok(emitted.length <= 1, 'a closed stream is not written to');
 });
 
 // ── Chunking: fewer LM resets, fewer places to drift ────────────────────
