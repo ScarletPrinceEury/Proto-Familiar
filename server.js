@@ -267,7 +267,7 @@ import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscrip
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
-import { prepareForSpeech } from './voice-speech.js';
+import { prepareForSpeech, splitForUtterances } from './voice-speech.js';
 import { expectedSpeechSeconds } from './voice-generation.js';
 
 /**
@@ -1790,8 +1790,15 @@ app.get('/api/voice/tts/:id', async (req, res) => {
   let aborted = false;
   res.on('close', () => { aborted = true; });
 
+  // Split into pieces that are each exactly ONE engine utterance, rather than
+  // handing over a whole message and letting sherpa split it out of sight. The
+  // audio is equivalent (the LM resets per utterance either way — measured 1.7%
+  // apart), but each piece now returns its own duration, so one that swallowed
+  // its words can be seen and re-tried instead of arriving as a silent hole.
+  const speakUnits = held.parts.flatMap((p) => splitForUtterances(p));
+
   try {
-    for (const part of held.parts) {
+    for (const part of speakUnits) {
       if (aborted) break;
       const streamId = takeStreamId();
       // Subscribe BEFORE asking, or the first frames arrive with nobody
@@ -1802,8 +1809,12 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         }
       });
       try {
+        // minChars = this piece's own length: it is already utterance-sized, so
+        // this stops the engine re-splitting it and keeps one piece to one
+        // trajectory. (Sizing the WHOLE message this way is what lost half a
+        // reply in 0.10.28 — bounded pieces are the difference.)
         const r = await worker.request(
-          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature },
+          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature, minChars: part.length },
           { timeoutMs: 300_000 },
         );
         // A failure mid-message cannot be reported in the body — the browser
@@ -1838,7 +1849,14 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         // comparison is the only place a swallowed paragraph can surface.
         const expected = expectedSpeechSeconds(part, { speed });
         if (expected > 4 && Number.isFinite(r.durationSec) && r.durationSec < expected * 0.6) {
-          console.warn(`[voice] read-aloud came back short: ${r.durationSec}s for ~${expected.toFixed(1)}s of text — the engine may have skipped sentences`);
+          // NOT re-spoken here: this piece's partial audio has already been
+          // streamed to my human, so generating it again would make them hear
+          // the first half twice. Recovering properly means buffering a piece
+          // and only emitting it once it looks complete — which is affordable
+          // for every piece after the first (generation runs faster than
+          // playback, so there is slack while the previous one plays) but would
+          // delay the very first words. That trade is my human's call, not mine.
+          console.warn(`[voice] read-aloud came back short: ${r.durationSec}s for ~${expected.toFixed(1)}s of text (${part.length} chars) — the engine dropped words from this piece. Re-run with PF_TTS_DEBUG=1 to see which sentence.`);
         }
         // A backend that cannot honour a setting must say so. pocket-tts has
         // no speed control at all, so a ward who slowed playback for
