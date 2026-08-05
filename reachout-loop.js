@@ -90,7 +90,7 @@ export async function runOneReachoutTick({
   getWarmVillagers,      // async () => [{ id, name, discordId, ... }]
   isQuietHours,          // async () => boolean
   decideReachout,        // async ({ pendingTells, warmVillagers, wardSilenceMs }) => decision
-  deliverWardKnock,      // async ({ message, tell }) => { ok, deduped? }
+  deliverWardKnock,      // async ({ message, tell, about, why }) => { ok, deduped? }
   deliverVillagerReach,  // async ({ villager, message }) => { ok, error? }
   now = Date.now,
   // Wait-streak recording (injectable for tests; defaults never throw).
@@ -184,7 +184,7 @@ export async function runOneReachoutTick({
   const tell = (decision.tellUid && Number.isInteger(decision.tellIndex))
     ? { uid: decision.tellUid, index: decision.tellIndex }
     : null;
-  const res = await deliverWardKnock({ message: decision.message, tell }).catch(err => ({ ok: false, error: err?.message }));
+  const res = await deliverWardKnock({ message: decision.message, tell, about: decision.about, why: decision.why }).catch(err => ({ ok: false, error: err?.message }));
   return {
     acted:  !!res?.ok && !res?.deduped,
     reason: !res?.ok ? 'delivery_failed' : (res?.deduped ? 'rate_limited' : 'reached_ward'),

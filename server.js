@@ -101,6 +101,7 @@ import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
+import { recordReachOut } from './reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
@@ -5688,7 +5689,7 @@ function startReachout() {
     decideReachout: decideReachoutViaLLM,
     // Ward knock → gentle banner + push. Dedup bucket so a hiccup can't
     // double-banner. If this knock finally says a flagged "tell", mark it.
-    deliverWardKnock: async ({ message, tell }) => {
+    deliverWardKnock: async ({ message, tell, about, why }) => {
       const enq = await enqueueAndDispatch({
         kind:     'reachout',
         originId: reachoutBucketOriginId(),
@@ -5696,6 +5697,12 @@ function startReachout() {
         body:     message,
         ts:       new Date().toISOString(),
       });
+      // Remember that I knocked, and what I meant by it — my human answers hours
+      // later and I otherwise meet the reply with no idea I ever spoke.
+      if (enq?.id && !enq?.deduped) {
+        recordReachOut({ message, about, why, channel: 'ward-banner' })
+          .catch(err => console.error('[reachout] recordReachOut failed:', err?.message ?? err));
+      }
       if (enq?.id && !enq?.deduped && tell?.uid && Number.isInteger(tell.index)) {
         markIntentActedOn({ uid: tell.uid, index: tell.index })
           .catch(err => console.error('[reachout] markIntentActedOn failed:', err?.message ?? err));
@@ -5907,7 +5914,15 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
         kind: 'reachout', originId: `noticing-${Date.now()}`,
         title: 'a thought from me', body: msg, ts: new Date().toISOString(),
       }).catch(() => null);
-      if (enq?.id && !enq?.deduped) { effectiveNames.push(name); return 'Sent — my human will see it.'; }
+      if (enq?.id && !enq?.deduped) {
+        recordReachOut({
+          message: msg,
+          about: String(a.about ?? '').trim(),
+          why: String(a.why ?? '').trim(),
+          channel: 'noticing',
+        }).catch(err => console.error('[noticing] recordReachOut failed:', err?.message ?? err));
+        effectiveNames.push(name); return 'Sent — my human will see it.';
+      }
       return enq?.deduped ? 'I just reached out very recently, so I hold this rather than double-knock.' : 'I couldn\'t send that right now.';
     }
     // Registry tools: count the effective name, then dispatch normally.

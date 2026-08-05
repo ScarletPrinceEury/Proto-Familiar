@@ -1852,6 +1852,27 @@ Within `dynamic`, the order is deliberate:
 3. **Graph excerpt** — entity-relationship context
 4. **Recent ponderings** — the Familiar's own quiet thoughts (honesty loop). Each entry's `created_at` is rendered via `relativeTime()`.
 5. **Deferred intents** — only on live turns. Up to 5 `wants_to_save` entries the Familiar flagged during free cycles but hasn't acted on yet, PLUS any `followup` entries memorization caught (things the Familiar said it would do but didn't). Shows the kind (tome/memory/identity/followup), the summary, the routing tool (or, for a followup, "the right tool" — no single one is named), and the (uid, index) pair for `acknowledge_deferred_intent`. See "Deferred-action pattern" below.
+5b. **What I said when I knocked** (`reach-out-log.js`) — only on live
+   ward-private turns. A between-sessions reach-out ("a thought from me") is
+   delivered through the outbox and, until this existed, nothing put it back in
+   front of the Familiar: my human answered hours later in chat and the reply
+   arrived as a non-sequitur — *"I don't remember asking about anything?"* about
+   a question the Familiar itself had asked. Worse, the message alone never said
+   WHICH occurrence was meant, so even once reminded it could not answer
+   *"last week's or the week before?"*.
+
+   So a knock is recorded with three things: what was **said**, what it was
+   **about** (the specific occurrence, named), and **why**. Both delivery paths
+   record — the warm reach-out loop (`about`/`why` ride the decision JSON it
+   already returns, no extra LLM call) and noticing's `reach_out_to_ward` (same
+   two fields on the tool, so the Familiar can say what it meant). The
+   `[I reached out first — this is what I said]` block renders the last few for
+   48 h, and `markSurfaced` ages each out in code after `MAX_SHOWN` turns —
+   the surfaced-tell discipline, so nothing depends on an acknowledge call the
+   model would forget. Deliberately NOT the outbox: that is a delivery queue
+   whose items are acknowledged and gone, while this is the Familiar's own
+   memory of having spoken and must outlive delivery.
+
 6. **Projection cue** (0.8 §4, generalized 0.8.107) — only on live turns. Appointments not yet thought-through, capped per turn and aged out after a few turns / a short window (code-driven, no acknowledgement call), with a one-shot last-chance re-surface within 48h of the event. Candidates are gathered in code (`gatherProjectionCandidates`): Unruh's `temporal_context.gcal_projection` flags (fresh sync arrivals) unioned with any bare upcoming event in the briefing window — unresolved, untouched by consequence edges, ≥6h runway — so hand-added and chat-created events get the cue too, not just synced ones. Auto-clears the moment the Familiar links one. Invites authoring both futures via `schedule_link`; never nags. See `gcal-projection.js`.
 7. **`[CARE CHECK]`** — only present when threat tier ≠ calm; carries identity-anchored guidance per tier
 8. **`[My stewardship]`** (0.8.18, `stewardship.js`) — the executive layer: a tiny conditional agenda (opening brief / aging floaters / anchor-drift), cap 3 items, ABSENT most turns. Stands down at moderate+ threat (so it never overlaps the CARE CHECK above). Code selects what qualifies; the Familiar owns how it raises each. See "File Structure" and docs/stewardship-build-spec.md.
