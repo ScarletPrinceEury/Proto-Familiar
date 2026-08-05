@@ -5,7 +5,7 @@ import {
   generationExtras, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
   MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES, FRAME_RATE_HZ,
-  pendingTailStart, wholeUtteranceMin, MAX_UTTERANCE_CHARS, expectedSpeechSeconds,
+  pendingTailStart, expectedSpeechSeconds,
 } from '../voice-generation.js';
 
 /**
@@ -135,41 +135,14 @@ test('junk counts never invent a tail', () => {
   }
 });
 
-// ── One message, one trajectory, one voice ──────────────────────────────
+// ── The merge threshold: a trade, not a win ─────────────────────────────
 
-test('the merge threshold covers the whole text, so a message is one utterance', () => {
-  // The reported bug: "it swaps through different voices at different points of
-  // the message" — sherpa resets the LM per utterance, so every extra utterance
-  // is another voice. A fixed 400 left a long message as several.
-  const long = 'x'.repeat(1200);
-  assert.equal(wholeUtteranceMin(long), 1200, 'the threshold reaches the end of the text');
-  assert.ok(wholeUtteranceMin(long) > MIN_CHAR_IN_SENTENCE, 'and past the old fixed floor');
-});
-
-test('a short line never drops below the old floor', () => {
-  assert.equal(wholeUtteranceMin('Hey.'), MIN_CHAR_IN_SENTENCE);
-  assert.equal(wholeUtteranceMin(''), MIN_CHAR_IN_SENTENCE);
-});
-
-test('the threshold is capped by what one trajectory can actually hold', () => {
-  // Past the frame budget a single utterance stops fitting at all, so the cap
-  // is the ceiling rather than the text length.
-  assert.equal(wholeUtteranceMin('y'.repeat(99999)), MAX_UTTERANCE_CHARS);
-});
-
-test('junk input never produces a threshold that would disable merging', () => {
-  for (const bad of [null, undefined, 42, {}, []]) {
-    assert.equal(wholeUtteranceMin(bad), MIN_CHAR_IN_SENTENCE, `wholeUtteranceMin(${String(bad)})`);
-  }
-});
-
-test('raising the floor can never leave max below it (the runt-split guard)', () => {
-  // generationExtras clamps max to min+200; without that, a min above
-  // max_char_in_sentence would re-open the runt-fragment split.
-  const min = wholeUtteranceMin('z'.repeat(3000));
-  const extras = generationExtras({ minChars: min });
-  assert.equal(extras.min_char_in_sentence, min);
-  assert.ok(extras.max_char_in_sentence >= min + 200, 'max stays clear of min');
+test('the merge floor stays where the text still renders in full', () => {
+  // Measured: at one-utterance-per-message the engine reaches EOS early and
+  // drops half the words (36.3 chars/s for an 899-char message, vs ~21 at 300).
+  // So this is deliberately NOT "as large as possible".
+  assert.ok(MIN_CHAR_IN_SENTENCE >= 300, 'too small drifts the voice, a reset per utterance');
+  assert.ok(MIN_CHAR_IN_SENTENCE <= 600, 'too large makes the model stop early and swallow text');
 });
 
 test('an expected duration exists so a swallowed paragraph can be noticed', () => {

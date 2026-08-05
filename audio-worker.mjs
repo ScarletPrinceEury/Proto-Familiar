@@ -29,9 +29,9 @@
 
 import path from 'node:path';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON, KIND_PCM } from './audio-frame.js';
-import { floatToPcm16, pcm16ToFloat } from './voice-audio-features.js';
+import { floatToPcm16, pcm16ToFloat, createSilenceTracker } from './voice-audio-features.js';
 import {
-  generationExtras, runawaySampleLimit, pendingTailStart, wholeUtteranceMin,
+  generationExtras, runawaySampleLimit, pendingTailStart,
   DEFAULT_NUM_STEPS, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
 } from './voice-generation.js';
 
@@ -59,6 +59,7 @@ const threads = {
 const NUM_STEPS = Number(process.env.PF_TTS_NUM_STEPS) || DEFAULT_NUM_STEPS;
 const TTS_SEED = Number(process.env.PF_TTS_SEED) || DEFAULT_TTS_SEED;
 const TTS_TEMPERATURE = Number(process.env.PF_TTS_TEMPERATURE) || DEFAULT_TTS_TEMPERATURE;
+const TTS_DEBUG = process.env.PF_TTS_DEBUG === '1';
 
 /**
  * Build the PocketTTS session from an unpacked model directory.
@@ -82,7 +83,11 @@ function buildPocketTts(modelDir) {
         tokenScoresJson: at('token_scores.json'),
         voiceEmbeddingCacheCapacity: 50,
       },
-      debug: false,
+      // PF_TTS_DEBUG=1 makes sherpa log "Processing i/total: <sentence>" for
+      // every utterance it generates. Off by default (it is noisy), but it is
+      // the only way to learn WHICH sentence produced a silence my human heard,
+      // since nothing else in the engine reports one.
+      debug: TTS_DEBUG,
       numThreads: threads.tts,
       provider: 'cpu',
     },
@@ -405,11 +410,7 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        // Default the merge threshold to THIS text's length, so the whole part
-        // is one utterance — one LM trajectory, one voice. A fixed floor left a
-        // long message as several trajectories, which my human heard as the
-        // voice changing partway through. An explicit `minChars` still wins.
-        extra: generationExtras({ seed, temperature, minChars: minChars ?? wholeUtteranceMin(text), maxChars, maxFrames, referenceSeconds }),
+        extra: generationExtras({ seed, temperature, minChars, maxChars, maxFrames, referenceSeconds }),
       });
 
       const started = Date.now();
@@ -469,17 +470,17 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        // Default the merge threshold to THIS text's length, so the whole part
-        // is one utterance — one LM trajectory, one voice. A fixed floor left a
-        // long message as several trajectories, which my human heard as the
-        // voice changing partway through. An explicit `minChars` still wins.
-        extra: generationExtras({ seed, temperature, minChars: minChars ?? wholeUtteranceMin(text), maxChars, maxFrames, referenceSeconds }),
+        extra: generationExtras({ seed, temperature, minChars, maxChars, maxFrames, referenceSeconds }),
       });
 
       const started = Date.now();
       let sampleCount = 0;
       let firstChunkMs = null;
       let runaway = false;
+      // The engine can decode a normal-length generation into silence — my
+      // human heard twenty-two seconds of it mid-message, with nothing
+      // anywhere recording that it happened. Now it is measured.
+      const silence = createSilenceTracker(held.session.sampleRate ?? 24000);
 
       // Containment for a bug I cannot patch. If the LM reaches EOS on its
       // first step, upstream's `if (eos_step > 0 …)` never fires and the loop
@@ -504,6 +505,7 @@ const OPS = {
             return 0;
           }
 
+          silence.push(samples);
           sampleCount += samples.length;
           try {
             process.stdout.write(encodePcm(streamId, floatToPcm16(samples)));
@@ -549,6 +551,9 @@ const OPS = {
         // may notice, and they should be able to find out why rather than
         // wonder whether they misheard.
         runaway,
+        // Reported on every render, not only when it looks wrong, so "does this
+        // happen often, and with which voice" is answerable from the logs.
+        longestSilenceSec: silence.longestSeconds(),
         realTimeFactor: durationSec > 0 ? Number((elapsedMs / 1000 / durationSec).toFixed(3)) : null,
       });
     } catch (err) {

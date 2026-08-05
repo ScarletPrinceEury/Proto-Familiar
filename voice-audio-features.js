@@ -330,3 +330,53 @@ export function describeMeasurement(f) {
   const weak = f.pitchSamples < 10 ? ' (measured from very little speech — worth a listen)' : '';
   return `${band} pitch, around ${p} Hz${movement}${weak}.`;
 }
+
+/**
+ * Is this chunk of audio essentially silence?
+ *
+ * Cheap on purpose — it runs inside the TTS progress callback, which fires for
+ * every decoded chunk while my human is waiting to hear me. A coarse stride is
+ * plenty: real speech is nowhere near this threshold anywhere in a chunk, and
+ * digital silence is flat.
+ */
+export function chunkIsSilent(samples, { threshold = 0.005, stride = 16 } = {}) {
+  const n = samples?.length ?? 0;
+  if (n === 0) return true;
+  let peak = 0;
+  for (let i = 0; i < n; i += stride) {
+    const v = Math.abs(samples[i] ?? 0);
+    if (v > peak) peak = v;
+    if (peak > threshold) return false;
+  }
+  return true;
+}
+
+/**
+ * Track the longest unbroken run of silence across a stream of chunks.
+ *
+ * Why this exists: my human heard twenty-two seconds of nothing in the middle
+ * of a read-aloud, then my voice came back changed and a sentence had gone
+ * missing. Nothing anywhere recorded that it happened — not an error, not a
+ * flag, not a log line — so all we had was their ear. The engine can decode a
+ * normal-length generation into silence, and if it does I would rather say so
+ * than let it pass as a reply I actually spoke.
+ */
+export function createSilenceTracker(sampleRate = 24000) {
+  let runSamples = 0;
+  let longest = 0;
+  return {
+    /** Feed one decoded chunk. */
+    push(samples, silent = chunkIsSilent(samples)) {
+      if (silent) {
+        runSamples += samples?.length ?? 0;
+        if (runSamples > longest) longest = runSamples;
+      } else {
+        runSamples = 0;
+      }
+    },
+    /** Longest silent stretch seen so far, in seconds. */
+    longestSeconds() {
+      return Number((longest / (sampleRate || 24000)).toFixed(2));
+    },
+  };
+}

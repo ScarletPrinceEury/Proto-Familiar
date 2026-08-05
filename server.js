@@ -101,6 +101,7 @@ import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
+import { recordReachOut } from './reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './last-activity.js';
 import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
@@ -266,7 +267,7 @@ import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscrip
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
-import { prepareForSpeech } from './voice-speech.js';
+import { prepareForSpeech, splitForUtterances } from './voice-speech.js';
 import { expectedSpeechSeconds } from './voice-generation.js';
 
 /**
@@ -1789,8 +1790,15 @@ app.get('/api/voice/tts/:id', async (req, res) => {
   let aborted = false;
   res.on('close', () => { aborted = true; });
 
+  // Split into pieces that are each exactly ONE engine utterance, rather than
+  // handing over a whole message and letting sherpa split it out of sight. The
+  // audio is equivalent (the LM resets per utterance either way — measured 1.7%
+  // apart), but each piece now returns its own duration, so one that swallowed
+  // its words can be seen and re-tried instead of arriving as a silent hole.
+  const speakUnits = held.parts.flatMap((p) => splitForUtterances(p));
+
   try {
-    for (const part of held.parts) {
+    for (const part of speakUnits) {
       if (aborted) break;
       const streamId = takeStreamId();
       // Subscribe BEFORE asking, or the first frames arrive with nobody
@@ -1801,8 +1809,12 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         }
       });
       try {
+        // minChars = this piece's own length: it is already utterance-sized, so
+        // this stops the engine re-splitting it and keeps one piece to one
+        // trajectory. (Sizing the WHOLE message this way is what lost half a
+        // reply in 0.10.28 — bounded pieces are the difference.)
         const r = await worker.request(
-          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature },
+          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature, minChars: part.length },
           { timeoutMs: 300_000 },
         );
         // A failure mid-message cannot be reported in the body — the browser
@@ -1822,14 +1834,29 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         // is already playing), but it must not be silent either: the log is
         // where "why did it stop mid-sentence" gets an answer.
         if (r.runaway) console.warn(`[voice] read-aloud truncated part (runaway cap) after ${r.durationSec ?? '?'}s — the tail was cut`);
+        // A long silence inside a render is the engine decoding a normal-length
+        // generation into nothing. My human heard 22 s of it once, mid-message,
+        // with the voice changed on the other side and a sentence missing — and
+        // nothing recorded that it happened. Now it is named, with the numbers
+        // needed to tell whether it correlates with a voice or a length.
+        if (Number(r.longestSilenceSec) >= 3) {
+          console.warn(`[voice] read-aloud went silent for ${r.longestSilenceSec}s inside a ${r.durationSec}s render (${part.length} chars) — the engine produced no audio for that stretch. Re-run with PF_TTS_DEBUG=1 to log which sentence.`);
+        }
         // A render far shorter than the words predict means the engine dropped
         // sentences without saying so: its Generate skips any sentence that
         // produces no samples, and abandons the rest of the message the moment
         // a progress callback returns false. Neither raises an error, so this
         // comparison is the only place a swallowed paragraph can surface.
         const expected = expectedSpeechSeconds(part, { speed });
-        if (expected > 4 && Number.isFinite(r.durationSec) && r.durationSec < expected * 0.45) {
-          console.warn(`[voice] read-aloud came back short: ${r.durationSec}s for ~${expected.toFixed(1)}s of text — the engine may have skipped sentences`);
+        if (expected > 4 && Number.isFinite(r.durationSec) && r.durationSec < expected * 0.6) {
+          // NOT re-spoken here: this piece's partial audio has already been
+          // streamed to my human, so generating it again would make them hear
+          // the first half twice. Recovering properly means buffering a piece
+          // and only emitting it once it looks complete — which is affordable
+          // for every piece after the first (generation runs faster than
+          // playback, so there is slack while the previous one plays) but would
+          // delay the very first words. That trade is my human's call, not mine.
+          console.warn(`[voice] read-aloud came back short: ${r.durationSec}s for ~${expected.toFixed(1)}s of text (${part.length} chars) — the engine dropped words from this piece. Re-run with PF_TTS_DEBUG=1 to see which sentence.`);
         }
         // A backend that cannot honour a setting must say so. pocket-tts has
         // no speed control at all, so a ward who slowed playback for
@@ -5688,7 +5715,7 @@ function startReachout() {
     decideReachout: decideReachoutViaLLM,
     // Ward knock → gentle banner + push. Dedup bucket so a hiccup can't
     // double-banner. If this knock finally says a flagged "tell", mark it.
-    deliverWardKnock: async ({ message, tell }) => {
+    deliverWardKnock: async ({ message, tell, about, why }) => {
       const enq = await enqueueAndDispatch({
         kind:     'reachout',
         originId: reachoutBucketOriginId(),
@@ -5696,6 +5723,12 @@ function startReachout() {
         body:     message,
         ts:       new Date().toISOString(),
       });
+      // Remember that I knocked, and what I meant by it — my human answers hours
+      // later and I otherwise meet the reply with no idea I ever spoke.
+      if (enq?.id && !enq?.deduped) {
+        recordReachOut({ message, about, why, channel: 'ward-banner' })
+          .catch(err => console.error('[reachout] recordReachOut failed:', err?.message ?? err));
+      }
       if (enq?.id && !enq?.deduped && tell?.uid && Number.isInteger(tell.index)) {
         markIntentActedOn({ uid: tell.uid, index: tell.index })
           .catch(err => console.error('[reachout] markIntentActedOn failed:', err?.message ?? err));
@@ -5907,7 +5940,15 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours }) {
         kind: 'reachout', originId: `noticing-${Date.now()}`,
         title: 'a thought from me', body: msg, ts: new Date().toISOString(),
       }).catch(() => null);
-      if (enq?.id && !enq?.deduped) { effectiveNames.push(name); return 'Sent — my human will see it.'; }
+      if (enq?.id && !enq?.deduped) {
+        recordReachOut({
+          message: msg,
+          about: String(a.about ?? '').trim(),
+          why: String(a.why ?? '').trim(),
+          channel: 'noticing',
+        }).catch(err => console.error('[noticing] recordReachOut failed:', err?.message ?? err));
+        effectiveNames.push(name); return 'Sent — my human will see it.';
+      }
       return enq?.deduped ? 'I just reached out very recently, so I hold this rather than double-knock.' : 'I couldn\'t send that right now.';
     }
     // Registry tools: count the effective name, then dispatch normally.
