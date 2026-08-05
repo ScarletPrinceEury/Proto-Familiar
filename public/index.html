@@ -232,13 +232,14 @@
               <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
             </div>
 
-            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. The one that ships works everywhere and needs nothing; the other sounds steadier across a long message but is a large download.</p>
+            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. Kyutai is the default — it holds one voice steadily across a whole message and never drops a sentence, but it is a large download that fetches itself the first time I speak. The built-in one ships with me and needs nothing; it can shift voice between paragraphs on a long message.</p>
             <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
               <select id="voice-backend-select" aria-label="Speaking engine">
+                <option value="pocket">Kyutai sidecar — steadier, ~600 MB (default)</option>
                 <option value="sherpa">Built-in — ships with me, nothing to install</option>
-                <option value="pocket">Kyutai sidecar — steadier, ~600 MB</option>
               </select>
               <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
+              <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
             </div>
             <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
 
