@@ -2343,10 +2343,23 @@ Each looked like the previous one's fix had failed. They were different.
    high-frequency energy. The bundled clip is now the enhanced one.
 
 4. **LM state resets per utterance.** `GenerateSingleSentence` opens with
-   `GetLmMainInitState()`. Merging (`min_char_in_sentence` 30 → 400) makes
-   resets rarer — drift moved from per-sentence to per-paragraph — but the port
-   offers no way to continue a trajectory across a call. That is what the
-   sidecar exists for.
+   `GetLmMainInitState()`. Merging (`min_char_in_sentence` 30 → 400) made resets
+   rarer — drift moved from per-sentence to per-paragraph — but the port offers
+   no way to continue a trajectory across a call. That is what the sidecar
+   exists for.
+
+   **A fixed 400 was not enough, and my human heard it** ("it swaps through
+   different voices at different points of the message" — within one message,
+   built-in engine only, never the sidecar). 400 makes an *ordinary* message one
+   trajectory but leaves a long one as several, and every extra utterance is
+   another voice. The threshold is now derived from the text
+   (`wholeUtteranceMin`, capped by what the frame budget can hold), so a whole
+   generation part is ONE utterance — one trajectory, one voice. Measured on the
+   real engine: a 782-character reply rendered as multiple utterances at 400
+   (37.0 s) versus one at the full length (31.1 s); the new default is
+   byte-identical to the one-utterance render. Any remaining seam now falls only
+   where `splitForGeneration` deliberately put it — a paragraph boundary — which
+   is the one place a shift was always going to be survivable.
 
 ### Two backends, one protocol
 

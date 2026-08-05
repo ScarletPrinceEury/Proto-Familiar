@@ -111,6 +111,50 @@ export const MAX_CHAR_IN_SENTENCE = 2000;
 export const MIN_CHAR_IN_SENTENCE = 400;
 
 /**
+ * The most text this runtime will try to hold in ONE trajectory.
+ *
+ * The ceiling is the frame budget, not taste: `DEFAULT_MAX_FRAMES` (4000) at
+ * Mimi's 12.5 Hz is ~320 s, and speech runs ~18.6 chars a second, so ~5900
+ * characters is the point where one utterance stops fitting at all. 5000 keeps
+ * clear of that and matches the largest part `splitForGeneration` will hand
+ * over, so in practice a whole part is always one trajectory.
+ */
+export const MAX_UTTERANCE_CHARS = 5000;
+
+/**
+ * The merge threshold that makes THIS text a single utterance.
+ *
+ * ── The bug this fixes ──────────────────────────────────────────────────
+ * My human: "it swaps through different voices I've picked in the past at
+ * different points of the message" — within one message, and only on the
+ * built-in engine, never on the Kyutai sidecar. That is exactly what the LM
+ * reset predicts: sherpa re-initialises `GetLmMainInitState()` per utterance,
+ * so every utterance is a fresh trajectory and the voice can land somewhere
+ * else; the sidecar carries a KV-cache state instead and never resets.
+ *
+ * A fixed 400 made an ORDINARY message one trajectory but left a long one as
+ * "a handful" — and a handful of trajectories is a handful of voices. Measured
+ * on the real engine: a 782-character reply rendered as multiple utterances at
+ * 400 (37.0 s) versus one at the whole length (31.1 s), different audio either
+ * way. So the threshold cannot be a constant; it has to cover the text it is
+ * given.
+ *
+ * Merging is the ONLY lever this runtime offers (see above — the port cannot
+ * continue a trajectory across calls), so covering the whole part is as good as
+ * it gets: one part, one trajectory, one voice. Any remaining seam then falls
+ * where `splitForGeneration` deliberately put it — a paragraph boundary — which
+ * is the one place a shift was always going to be survivable.
+ *
+ * The `max + 200` clamp in `generationExtras` rides along automatically, so
+ * raising the floor can never leave `max_char_in_sentence` below it and trigger
+ * the runt-fragment split.
+ */
+export function wholeUtteranceMin(text) {
+  const n = typeof text === 'string' ? text.length : 0;
+  return Math.max(MIN_CHAR_IN_SENTENCE, Math.min(n, MAX_UTTERANCE_CHARS));
+}
+
+/**
  * Frame budget for one utterance — how much can share a trajectory.
  *
  * Upstream's 500 is ~40 s at Mimi's 12.5 Hz. That is generous for a single

@@ -191,6 +191,15 @@ Every utterance is a fresh trajectory. `min_char_in_sentence` (via
 `MergeShortSentences`) makes resets *rarer* by merging more text into one
 utterance — it cannot remove them. Upstream's 30 merges nothing.
 
+**Set it from the TEXT, not to a constant.** A fixed floor (we shipped 400)
+makes an ordinary message one trajectory and leaves a long one as several —
+which my human heard as the voice changing partway through a reply, on this
+engine only. `wholeUtteranceMin(text)` in `voice-generation.js` covers the whole
+part instead, capped by what the frame budget can hold. Verified on the real
+engine: 782 chars → 37.0 s across several utterances at 400, 31.1 s as one.
+`generationExtras` already clamps `max_char_in_sentence` to `min + 200`, so
+raising the floor cannot re-open the runt-fragment split above.
+
 ---
 
 ## Voices and reference clips
