@@ -81,11 +81,52 @@
     playHead = startAt + audio.duration;
   }
 
+  // ── First-call setup: fetch the speech models if they aren't here yet ──
+  //
+  // The streaming recogniser + VAD (the "Listening" tier) are what a call
+  // listens with. Reusing the existing install endpoint, which only fetches
+  // what is missing, so a machine that already has read-aloud pays for the ASR
+  // alone. Synchronous by nature (the download IS the setup); the message says
+  // it happens once so a wait does not read as a hang.
+  async function ensureCallModels() {
+    let st = null;
+    try { st = await (await fetch('/api/voice/models?what=call')).json(); } catch { /* treat as missing */ }
+    if (st?.ok && st.allComplete) return { ok: true };
+
+    setState('Setting up your first call — downloading the speech models (about 150 MB). This happens once; hang on…');
+    let r = null;
+    try {
+      r = await (await fetch('/api/voice/install-models', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ what: 'call' }),
+      })).json();
+    } catch {
+      return { ok: false, message: 'Could not download the call models — check the connection and try Start again.' };
+    }
+    if (!r?.ok) {
+      const why = r?.reason || r?.error
+        || (Array.isArray(r?.failed) ? r.failed.map((f) => f?.detail).filter(Boolean).join('; ') : '')
+        || 'the download did not finish';
+      return { ok: false, message: `Could not set up the call: ${why}. Press Start to try again.` };
+    }
+    return { ok: true };
+  }
+
   // ── Socket lifecycle ───────────────────────────────────────────────────
   let replyRate = 24000;
+  let starting = false;   // guards the async setup so a second click can't race the model install
 
   async function startCall() {
     if (live) { endCall(); return; }
+    if (starting) return;   // already connecting / downloading — a second press must not start a second install
+    starting = true;
+    try {
+      await beginCall();
+    } finally {
+      starting = false;
+    }
+  }
+
+  async function beginCall() {
     setState('Connecting…');
     // The mic API only exists in a secure context (https:// or localhost). Over
     // Tailscale on plain http:// the whole `navigator.mediaDevices` is absent —
@@ -96,6 +137,12 @@
         : 'This browser did not expose a microphone. Use a current browser on https:// or localhost.');
       return;
     }
+    // The call needs the streaming speech models (the "Listening" tier). Rather
+    // than error and tell my human to go install them, fetch them here on the
+    // first call — once — so a call just works. Done AFTER the secure-context
+    // check, so a phone that can't use the mic never pulls 150 MB it can't use.
+    const models = await ensureCallModels();
+    if (!models.ok) { setState(models.message); return; }
     try {
       ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
       await ctx.resume();
