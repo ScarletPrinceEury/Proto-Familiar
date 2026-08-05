@@ -1828,7 +1828,7 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         // a progress callback returns false. Neither raises an error, so this
         // comparison is the only place a swallowed paragraph can surface.
         const expected = expectedSpeechSeconds(part, { speed });
-        if (expected > 4 && Number.isFinite(r.durationSec) && r.durationSec < expected * 0.45) {
+        if (expected > 4 && Number.isFinite(r.durationSec) && r.durationSec < expected * 0.6) {
           console.warn(`[voice] read-aloud came back short: ${r.durationSec}s for ~${expected.toFixed(1)}s of text — the engine may have skipped sentences`);
         }
         // A backend that cannot honour a setting must say so. pocket-tts has

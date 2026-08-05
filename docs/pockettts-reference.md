@@ -239,6 +239,50 @@ Every utterance is a fresh trajectory. `min_char_in_sentence` (via
 `MergeShortSentences`) makes resets *rarer* by merging more text into one
 utterance — it cannot remove them. Upstream's 30 merges nothing.
 
+**⚠️ Do NOT set it from the text length.** I tried exactly that — merge the
+whole message into one utterance, get one trajectory and one voice — and it
+loses words. PocketTTS generates per sentence and was trained on
+sentence-length audio, so an over-long "sentence" reaches EOS early and stops.
+Measured on the real engine, one 899-character message, same seed and voice:
+
+| `min_char_in_sentence` | duration | chars/sec | |
+|---|---|---|---|
+| 300 | 42.96 s | 20.9 | full |
+| 500 | 38.32 s | 23.5 | ok |
+| 899 (one utterance) | 24.80 s | **36.3** | **half the text gone** |
+
+Speech is ~18–25 chars/second; 36 is not fast speech, it is missing words. So
+this is a genuine trade with no winning setting — small values drift the voice
+(a reset per utterance), large values swallow content. **400 is where the text
+still renders in full.** Wanting both is what the sidecar is for: it carries a
+KV-cache state and needs no resets at all.
+
+### The voice-embedding cache is NOT a source of voice swapping
+
+Checked while hunting exactly that. `GetVoiceEmbedding` hashes the reference
+audio **after** resampling and after the `max_reference_audio_len` truncation,
+then `cache_.Get(hash)`; the hit path allocates from the stored shape and copies
+the stored floats, so a hit returns the same embedding the miss would have
+computed. Different clips hash differently. The embedding is also fetched ONCE
+per `Generate` and shared by every sentence via `View(&voice_embedding)` — so
+within one call the speaker cannot change. Drift within a message comes from the
+LM reset, not from this cache.
+
+### ⚠️ `maxNumSentences` is inert
+
+PocketTTS's `Generate` never reads it — it does its own `SplitByPunctuation`
+unconditionally. Not a consistency lever. The seed is.
+
+### ⚠️ LM state resets per utterance
+
+```cpp
+auto lm_main_state = model_->GetLmMainInitState();
+```
+
+Every utterance is a fresh trajectory. `min_char_in_sentence` (via
+`MergeShortSentences`) makes resets *rarer* by merging more text into one
+utterance — it cannot remove them. Upstream's 30 merges nothing.
+
 **Set it from the TEXT, not to a constant.** A fixed floor (we shipped 400)
 makes an ordinary message one trajectory and leaves a long one as several —
 which my human heard as the voice changing partway through a reply, on this
