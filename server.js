@@ -1823,6 +1823,14 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         // is already playing), but it must not be silent either: the log is
         // where "why did it stop mid-sentence" gets an answer.
         if (r.runaway) console.warn(`[voice] read-aloud truncated part (runaway cap) after ${r.durationSec ?? '?'}s — the tail was cut`);
+        // A long silence inside a render is the engine decoding a normal-length
+        // generation into nothing. My human heard 22 s of it once, mid-message,
+        // with the voice changed on the other side and a sentence missing — and
+        // nothing recorded that it happened. Now it is named, with the numbers
+        // needed to tell whether it correlates with a voice or a length.
+        if (Number(r.longestSilenceSec) >= 3) {
+          console.warn(`[voice] read-aloud went silent for ${r.longestSilenceSec}s inside a ${r.durationSec}s render (${part.length} chars) — the engine produced no audio for that stretch. Re-run with PF_TTS_DEBUG=1 to log which sentence.`);
+        }
         // A render far shorter than the words predict means the engine dropped
         // sentences without saying so: its Generate skips any sentence that
         // produces no samples, and abandons the rest of the message the moment
