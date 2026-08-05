@@ -232,13 +232,14 @@
               <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
             </div>
 
-            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. The one that ships works everywhere and needs nothing; the other sounds steadier across a long message but is a large download.</p>
+            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. Kyutai is the default — it holds one voice steadily across a whole message and never drops a sentence, but it is a large download that fetches itself the first time I speak. The built-in one ships with me and needs nothing; it can shift voice between paragraphs on a long message.</p>
             <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
               <select id="voice-backend-select" aria-label="Speaking engine">
+                <option value="pocket">Kyutai sidecar — steadier, ~600 MB (default)</option>
                 <option value="sherpa">Built-in — ships with me, nothing to install</option>
-                <option value="pocket">Kyutai sidecar — steadier, ~600 MB</option>
               </select>
               <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
+              <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
             </div>
             <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
 
@@ -248,6 +249,15 @@
               <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>
             </div>
             <p class="field-hint" id="voice-call-state" style="margin-top:6px" aria-live="polite"></p>
+
+            <div class="action-row" id="voice-call-lang-row" style="margin-top:8px; align-items:center; gap:8px" hidden>
+              <label for="voice-call-lang" style="font-size:0.85em">Call language</label>
+              <select id="voice-call-lang" aria-label="Call speech-recognition language"></select>
+            </div>
+            <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+              <input type="checkbox" id="voice-call-threat-toggle" checked>
+              <span>Let a call inform my safety read — my Familiar can notice distress in my voice, as it does in my messages. On by default.</span>
+            </label>
           </div>
         </div>
 

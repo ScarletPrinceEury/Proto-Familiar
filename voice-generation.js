@@ -153,6 +153,138 @@ export function expectedSpeechSeconds(text, { speed = 1 } = {}) {
 }
 
 /**
+ * How large a built-in-engine utterance may be when we intend to VERIFY it.
+ *
+ * The opposite tuning from MIN_CHAR_IN_SENTENCE. That value is for handing the
+ * engine one big trajectory and hoping it renders whole; this is for the
+ * self-healing read-aloud path, which generates each unit, checks it came back
+ * complete, and re-speaks it if not. There, small is the whole point:
+ *
+ *   A 414-char unit that early-stops on its last two sentences (the reported
+ *   "Granny is fully formed... Tiffany is becoming." drop) came back at ~23
+ *   chars/second — INSIDE the normal band, because the dropped text still
+ *   counts toward the length. A 20% tail loss is invisible to any duration
+ *   check at that size. Shrink the unit to ~2 short sentences and the same
+ *   dropped sentence halves the unit's duration — now it is unmistakable, and
+ *   re-speakable. Detection reliability is a function of unit size, so the
+ *   verifying path chooses the size that makes detection reliable and accepts
+ *   the extra voice drift (which the built-in engine has anyway).
+ */
+export const SMALL_UTTERANCE_CHARS = 140;
+
+/**
+ * Did this render drop words — the signal the self-healing path acts on.
+ *
+ * True when the audio is far shorter than the text predicts. Reliable ONLY for
+ * small units (see SMALL_UTTERANCE_CHARS): the 0.7 ratio is ~26 chars/second,
+ * comfortably above real speech (18-25) so a naturally-quick render is not
+ * flagged, and comfortably below a swallowed one (30+). Anything too short to
+ * judge (a couple of words) is never called dropped — the noise floor there is
+ * higher than the signal.
+ */
+export function renderDroppedWords(text, durationSec, { speed = 1 } = {}) {
+  const expected = expectedSpeechSeconds(text, { speed });
+  if (expected < 2) return false;
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return true;
+  return durationSec < expected * 0.7;
+}
+
+/**
+ * Choose the most-complete render from one or more attempts.
+ *
+ * The retry perturbs the seed, which breaks the deterministic early-EOS but
+ * gives a different (still same-speaker) trajectory. Prefer the first attempt
+ * that is NOT short — order matters, so the earliest good one wins and the
+ * voice changes as little as possible. If every attempt dropped words, fall
+ * back to the longest one: partial audio the listener can hear beats none.
+ * Returns null only when handed nothing usable.
+ */
+export function bestRender(renders, text, { speed = 1 } = {}) {
+  const usable = (renders || []).filter((r) => r && Array.isArray(r.samples) && r.samples.length);
+  if (!usable.length) return null;
+  const complete = usable.find((r) => !renderDroppedWords(text, r.durationSec, { speed }));
+  if (complete) return complete;
+  return usable.reduce((a, b) => ((b.durationSec ?? 0) > (a.durationSec ?? 0) ? b : a));
+}
+
+/**
+ * Speak `units` completely on the built-in engine, re-speaking any that dropped
+ * words — the self-healing read-aloud loop, as pure orchestration.
+ *
+ * Effects are injected so this is testable without an engine (the handler wires
+ * them to the worker; a test wires them to a fake that simulates early-EOS):
+ *
+ *   generate(text, seed) → { ok, samples, durationSec, reason }
+ *   emit(samples)        → void   (write verified audio out, in order)
+ *   splitToSentences(t)  → string[]
+ *   isAborted()          → bool   (my human closed the stream)
+ *   isFatal(reason)      → bool   (worker died — stop, don't retry the rest)
+ *
+ * Guarantees, and why each matters:
+ *   • Audio is emitted IN ORDER, once per unit — a re-speak REPLACES a short
+ *     attempt (it is never emitted), so nothing is heard twice (the reason the
+ *     old streaming path could not recover).
+ *   • A unit that stays short after seed retries drops to sentence-level
+ *     renders, each emitted once — a single short sentence almost always
+ *     renders whole, so this is where completeness is actually won.
+ *   • Nothing is ever emitted for a dropped sentence silently: it is counted
+ *     and returned, so the caller logs it.
+ *
+ * Returns { emitted, reSpoken, droppedSentences } for logging and tests.
+ */
+export async function speakUnitsSelfHealing(units, {
+  generate, emit, splitToSentences,
+  isAborted = () => false, isFatal = () => false,
+  speed = 1, baseSeed = DEFAULT_TTS_SEED, unitTries = 3, sentenceTries = 2,
+} = {}) {
+  const summary = { emitted: 0, reSpoken: 0, droppedSentences: 0 };
+
+  // Generate `text`, retrying with a bumped seed while it comes back short. The
+  // seed change breaks the deterministic early-EOS without changing the words.
+  const renderComplete = async (text, tries) => {
+    const attempts = [];
+    for (let i = 0; i < tries && !isAborted(); i++) {
+      const r = await generate(text, baseSeed + i);
+      if (!r?.ok) return { render: bestRender(attempts, text, { speed }), fatal: isFatal(r?.reason) ? (r?.reason ?? true) : null };
+      attempts.push(r);
+      if (i > 0) summary.reSpoken += 1;
+      if (!renderDroppedWords(text, r.durationSec, { speed })) break;
+    }
+    return { render: bestRender(attempts, text, { speed }), fatal: null };
+  };
+
+  for (const unit of units) {
+    if (isAborted()) break;
+    const { render, fatal } = await renderComplete(unit, unitTries);
+
+    if (render && !renderDroppedWords(unit, render.durationSec, { speed })) {
+      emit(render.samples); summary.emitted += 1;
+    } else {
+      const sentences = splitToSentences(unit);
+      if (sentences.length <= 1) {
+        // Cannot subdivide further; the best partial beats silence, but it is a drop.
+        if (render?.samples?.length) { emit(render.samples); summary.emitted += 1; }
+        summary.droppedSentences += 1;
+      } else {
+        for (const sent of sentences) {
+          if (isAborted()) break;
+          const s = await renderComplete(sent, sentenceTries);
+          const got = s.render?.samples?.length ? s.render : null;
+          if (got) { emit(got.samples); summary.emitted += 1; }   // best-effort audio, always
+          // Counted as dropped if there was nothing, OR if the best take is STILL
+          // short — a partial sentence emitted silently would be exactly the
+          // "budget exhaustion is never silence" failure. Emit it, but log it.
+          if (!got || renderDroppedWords(sent, got.durationSec, { speed })) summary.droppedSentences += 1;
+          if (s.fatal) return summary;
+        }
+      }
+    }
+    if (fatal) break;
+  }
+  return summary;
+}
+
+/**
  * Frame budget for one utterance — how much can share a trajectory.
  *
  * Upstream's 500 is ~40 s at Mimi's 12.5 Hz. That is generous for a single

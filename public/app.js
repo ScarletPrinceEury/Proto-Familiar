@@ -382,6 +382,15 @@ const state = {
   // Reserved for CONTINUOUS listening (live calls, Pass 2), which is the thing
   // that genuinely needs an explicit opt-in. Voice notes do not consult it.
   voiceEnabled: false,
+  // Live call: let my Familiar hear distress in my voice the way it reads my
+  // messages (the D2 gate). Ward-signed ON by default; the code default is also
+  // ON, so a fresh install with no saved value still scores. Turning it off is a
+  // real choice, surfaced in Settings, mirroring the vision-threat toggle.
+  voiceThreatScoring: true,
+  // Which language the streaming recogniser listens in during a call. The picker
+  // only offers languages whose model is installed (from /api/voice/status), so
+  // this stays 'en' unless a second model was pinned and chosen.
+  voiceAsrLanguage: 'en',
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -442,7 +451,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
-  'voiceEnabled', 'readAloudByDefault',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -3831,6 +3840,8 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
+  if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
+  if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('read-aloud-default-toggle')) state.readAloudByDefault = $('read-aloud-default-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
@@ -3992,6 +4003,8 @@ function writeSettingsToUI() {
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
   if ($('read-aloud-default-toggle')) setIfNotFocused($('read-aloud-default-toggle'), 'checked', state.readAloudByDefault === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
+  if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
+  if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
@@ -5216,6 +5229,7 @@ function init() {
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
+    'voice-call-threat-toggle', 'voice-call-lang',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -5505,6 +5519,7 @@ function init() {
   $('voice-picker-btn')?.addEventListener('click', openVoicePicker);
   $('voice-backend-select')?.addEventListener('change', onVoiceBackendChange);
   $('voice-sidecar-install')?.addEventListener('click', installVoiceSidecar);
+  $('voice-sidecar-cancel')?.addEventListener('click', cancelVoiceSidecar);
   refreshVoiceBackendPane();
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
@@ -7900,6 +7915,29 @@ function downloadVoiceBench() {
 const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null, chosen: null };
 
 /**
+ * Fill the call-language picker from the languages actually installed.
+ *
+ * The row stays hidden unless there is a real choice: with only English pinned
+ * (the default) there is nothing to pick, so an English-only ward sees no
+ * clutter — but a ward who pinned a second streaming model gets the control,
+ * and the recogniser can only ever be pointed at a language it has a model for.
+ */
+function populateCallLanguages(langs) {
+  const row = $('voice-call-lang-row');
+  const sel = $('voice-call-lang');
+  if (!row || !sel) return;
+  const list = Array.isArray(langs) ? langs.filter((l) => /^[a-z]{2}$/.test(l)) : [];
+  if (list.length <= 1) { row.hidden = true; return; }
+
+  const names = (() => { try { return new Intl.DisplayNames(undefined, { type: 'language' }); } catch { return null; } })();
+  const label = (code) => { try { return names?.of(code) || code.toUpperCase(); } catch { return code.toUpperCase(); } };
+  const want = state.voiceAsrLanguage ?? 'en';
+  sel.innerHTML = list.map((l) => `<option value="${l}">${label(l)}</option>`).join('');
+  sel.value = list.includes(want) ? want : (list.includes('en') ? 'en' : list[0]);
+  row.hidden = false;
+}
+
+/**
  * The speaking-engine pane.
  *
  * Everything here used to require editing settings.json by hand, which for
@@ -7912,26 +7950,41 @@ async function refreshVoiceBackendPane() {
   const sel = $('voice-backend-select');
   const state = $('voice-backend-state');
   const install = $('voice-sidecar-install');
+  const cancel = $('voice-sidecar-cancel');
   if (!sel || !state) return;
 
   let st;
   try { st = await vbGet('/api/voice/status?probe=0'); } catch { st = null; }
+  populateCallLanguages(st?.asrLanguages);
   if (!st?.backend) { state.textContent = ''; return; }
 
   const { using, askedFor, available } = st.backend;
   sel.value = askedFor ?? using;
 
   const pocketReady = Boolean(available?.pocket?.available);
-  install?.classList.toggle('hidden', pocketReady);
+
+  // A download may already be running — started by the button, or automatically
+  // the first time voice was used while the pocket default was not yet present.
+  // If so, show its progress here rather than an Install button, so opening this
+  // pane mid-download reads as "it's happening", not "nothing has been done".
+  let job = null;
+  try { job = (await (await fetch('/api/voice/install-sidecar')).json())?.install; } catch { job = null; }
+  const downloading = Boolean(job && !job.done);
+
+  install?.classList.toggle('hidden', pocketReady || downloading);
+  cancel?.classList.toggle('hidden', !downloading);
 
   if (using === 'pocket') {
     state.textContent = 'Speaking through the Kyutai sidecar.';
+  } else if (askedFor === 'pocket' && downloading) {
+    state.textContent = 'Downloading the Kyutai sidecar (~395 MB, torch is most of it). I’m speaking on the built-in engine until it lands; you can keep using everything else, or cancel above.';
+    if (!VP.installPolling) pollSidecarInstall();
   } else if (askedFor === 'pocket' && !pocketReady) {
-    // Chosen but unusable. Say which one is really talking, and point at the
-    // Install button right above (shown whenever the sidecar isn't ready) —
-    // never at a terminal command. The raw server `reason` is developer-facing
-    // ("run: uv sync …") and would send my human to a shell they don't need.
-    state.textContent = 'Sidecar chosen but not installed — still using the built-in engine. Use the “⬇ Install the sidecar” button above to set it up; no terminal needed.';
+    // Chosen (it's the default) but not downloaded yet. It will fetch itself the
+    // first time I speak — but the button is here for someone who wants it now.
+    // Never point at a terminal: the raw server `reason` ("run: uv sync …") is
+    // developer-facing and would send my human to a shell they don't need.
+    state.textContent = 'Kyutai is the default but isn’t downloaded yet — it’ll fetch itself (~395 MB) the first time I speak. Speaking on the built-in engine until then, or use the button above to get it now.';
   } else {
     state.textContent = 'Speaking through the built-in engine. It can shift voice between paragraphs on long messages.';
   }
@@ -7956,6 +8009,16 @@ async function onVoiceBackendChange(ev) {
     if (state) state.textContent = `Could not save: ${String(err?.message ?? err)}`;
     return;
   }
+
+  // Picking Kyutai IS the consent to download it — so if it isn't installed,
+  // start the fetch now rather than making my human hunt for a second button.
+  // Selecting the built-in never downloads anything.
+  if (backend === 'pocket') {
+    try {
+      const st = await vbGet('/api/voice/status?probe=0');
+      if (!st?.backend?.available?.pocket?.available) { await installVoiceSidecar(); return; }
+    } catch { /* fall through to a plain refresh */ }
+  }
   await refreshVoiceBackendPane();
 }
 
@@ -7966,39 +8029,60 @@ async function onVoiceBackendChange(ev) {
  * before anything unpacks and a request that hangs for minutes reads as
  * broken however well it is going.
  */
+/**
+ * Poll a running sidecar install to completion, updating the pane as it goes.
+ *
+ * Shared by the button, the auto-download-on-first-use path, and a pane refresh
+ * that finds a download already running — so however it started, the UI tells
+ * the same story and never spawns two pollers (VP.installPolling guards that).
+ */
+async function pollSidecarInstall() {
+  if (VP.installPolling) return;
+  VP.installPolling = true;
+  const state = $('voice-backend-state');
+  const poll = setInterval(async () => {
+    let s;
+    try { s = await (await fetch('/api/voice/install-sidecar')).json(); } catch { return; }
+    const job = s?.install;
+    if (!job || !job.done) return;
+    clearInterval(poll);
+    VP.installPolling = false;
+    if (job.ok) {
+      if (state) state.textContent = 'Kyutai is installed — I’m speaking through it now.';
+    } else if (job.cancelled || job.detail === 'cancelled') {
+      if (state) state.textContent = 'Download cancelled. Still speaking on the built-in engine; pick Kyutai again to retry.';
+    } else if (state) {
+      state.textContent = `Kyutai download failed: ${job.detail ?? 'no detail'}. Still speaking on the built-in engine.`;
+    }
+    await refreshVoiceBackendPane();
+  }, 3000);
+}
+
+/**
+ * Install the sidecar from here rather than a terminal, for someone who wants
+ * it now instead of waiting for the first-use auto-download.
+ */
 async function installVoiceSidecar() {
   const btn = $('voice-sidecar-install');
   const state = $('voice-backend-state');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.textContent = '⬇ Installing…';
-  if (state) state.textContent = 'Downloading ~395 MB (torch is most of it). This takes a while; you can keep using everything else.';
-
+  if (btn) { btn.disabled = true; btn.textContent = '⬇ Installing…'; }
+  if (state) state.textContent = 'Downloading ~395 MB (torch is most of it). This takes a while; you can keep using everything else, or cancel below.';
   try {
     const started = await (await fetch('/api/voice/install-sidecar', { method: 'POST' })).json();
     if (!started.ok) throw new Error(started.detail || started.reason || 'could not start');
-
-    const poll = setInterval(async () => {
-      let s;
-      try { s = await (await fetch('/api/voice/install-sidecar')).json(); } catch { return; }
-      const job = s?.install;
-      if (!job || !job.done) return;
-      clearInterval(poll);
-      btn.disabled = false;
-      if (job.ok) {
-        btn.textContent = '⬇ Install the sidecar';
-        await refreshVoiceBackendPane();
-        if (state) state.textContent = 'Installed. Choose it above to start using it.';
-      } else {
-        btn.textContent = '⬇ Try again';
-        if (state) state.textContent = `Install failed: ${job.detail ?? 'no detail'}`;
-      }
-    }, 3000);
+    await refreshVoiceBackendPane();   // flips Install→Cancel and starts the poll
   } catch (err) {
-    btn.disabled = false;
-    btn.textContent = '⬇ Try again';
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Try again'; }
     if (state) state.textContent = `Install failed: ${String(err?.message ?? err)}`;
   }
+}
+
+/** Cancel an in-flight download — changed mind, or the disk is tight. */
+async function cancelVoiceSidecar() {
+  const state = $('voice-backend-state');
+  if (state) state.textContent = 'Cancelling…';
+  try { await fetch('/api/voice/install-sidecar', { method: 'DELETE' }); } catch { /* the poll will still settle it */ }
+  await refreshVoiceBackendPane();
 }
 
 /**

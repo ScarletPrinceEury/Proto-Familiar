@@ -169,11 +169,34 @@
     if (!start) return;
     start.addEventListener('click', startCall);
     if (talk) {
-      // Pointer events cover mouse + touch; keep the release bound to the window
-      // so dragging off the button still finalises the utterance.
-      talk.addEventListener('pointerdown', (e) => { e.preventDefault(); pressTalk(); });
+      // Hold-to-talk has to survive the browser's gesture handling. On a
+      // touchscreen (and a trackpad long-press) a plain held button is read as
+      // a scroll/long-press gesture, which fires `pointercancel` almost at
+      // once — releasing the hold instantly, so it behaves like a tap and never
+      // captures speech. Two things stop that:
+      //   1. CAPTURE the pointer on down, so every later move/up/cancel targets
+      //      this button even if the finger drifts off it, and the browser does
+      //      not hand the gesture to a scroller.
+      //   2. `touch-action: none` (in CSS) so the hold is never claimed as a pan.
+      const press = (e) => {
+        e.preventDefault();
+        try { talk.setPointerCapture(e.pointerId); } catch { /* some pointers can't be captured */ }
+        pressTalk();
+      };
+      const release = (e) => {
+        try { if (e?.pointerId != null) talk.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+        releaseTalk();
+      };
+      talk.addEventListener('pointerdown', press);
+      talk.addEventListener('pointerup', release);
+      talk.addEventListener('pointercancel', release);
+      // A window-level pointerup is the fallback for the rare case capture did
+      // not take and the finger lifted off the button — releaseTalk is
+      // idempotent, so a double release is harmless.
       window.addEventListener('pointerup', releaseTalk);
-      talk.addEventListener('pointercancel', releaseTalk);
+      // A long-press must not raise the context menu or selection callout: both
+      // steal the gesture and end the hold early — the reported "only a click".
+      talk.addEventListener('contextmenu', (e) => e.preventDefault());
     }
   }
 

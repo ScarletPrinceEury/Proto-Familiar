@@ -267,8 +267,11 @@ import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscrip
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
-import { prepareForSpeech, splitForUtterances } from './voice-speech.js';
-import { expectedSpeechSeconds } from './voice-generation.js';
+import { prepareForSpeech, splitForUtterances, splitForSpeech } from './voice-speech.js';
+import {
+  speakUnitsSelfHealing,
+  SMALL_UTTERANCE_CHARS, DEFAULT_TTS_SEED, MAX_CHAR_IN_SENTENCE,
+} from './voice-generation.js';
 
 /**
  * Failures where nothing further can be spoken, so the read-aloud loop stops
@@ -277,7 +280,7 @@ import { expectedSpeechSeconds } from './voice-generation.js';
  */
 const FATAL_TTS_REASONS = new Set(['no-worker', 'no-engine', 'not-loaded', 'stopped', 'worker-died', 'worker-stopped', 'parked', 'spawn-failed']);
 import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
-import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip } from './voice-audio-features.js';
+import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './voice-audio-features.js';
 import { KIND_PCM } from './audio-frame.js';
 import { shortSlug } from './slug-ids.js';
 // Tome / state-file coordination is owned by thalamus — every writer
@@ -1433,6 +1436,10 @@ app.get('/api/voice/status', async (req, res) => {
     // apply — a ward reading this should not have to work out which gate bit.
     hardDisabled: VOICE_HARD_DISABLED,
     listeningEnabled: voiceListeningEnabled(),
+    // The streaming-ASR languages actually installed (pinned), so the call
+    // language picker can only offer what can be heard — a menu that named a
+    // language with no model would be listening in silence.
+    asrLanguages: availableAsrLangs(),
     // Read-aloud needs a reference clip as much as it needs the engine:
     // PocketTTS clones zero-shot and has no built-in voice to fall back on.
     readAloudAvailable: !VOICE_HARD_DISABLED && voice.ok,
@@ -1639,48 +1646,92 @@ app.post('/api/media/:id/transcribe', async (req, res) => {
  * answers immediately with `started` and the UI polls /api/voice/status. A
  * request that hangs for four minutes looks broken however well it is going.
  */
-let voiceboxInstall = null;   // { startedAt, done, ok, detail }
+let voiceboxInstall = null;   // { startedAt, done, ok, detail, cancelled }
+let voiceboxInstallChild = null;
 
-app.post('/api/voice/install-sidecar', async (_req, res) => {
+/**
+ * Kick off the sidecar download, or report that one is already running / done.
+ *
+ * The same work `scripts/ensure-voicebox.mjs --install` does, reachable from two
+ * places: the Settings button (an explicit ask), and the first time voice is
+ * actually USED while the default (pocket) is not yet installed — which is the
+ * "download on first use" the pocket default is built around.
+ *
+ * Idempotent: a second caller while one is running joins the one in flight, so a
+ * read-aloud click and a settings click cannot spawn two ~600 MB downloads.
+ *
+ * Long-running by nature (torch is ~122 MB before anything unpacks), so callers
+ * get `started` immediately and poll GET /api/voice/install-sidecar.
+ */
+async function startVoiceboxInstall() {
   if (voiceboxInstall && !voiceboxInstall.done) {
-    return res.json({ ok: true, started: true, already: true, startedAt: voiceboxInstall.startedAt });
+    return { started: true, already: true, startedAt: voiceboxInstall.startedAt };
   }
-  const found = await inspectBackends(__dirname);
-  if (found[BACKENDS.POCKET].available) {
-    return res.json({ ok: true, already: true, done: true, detail: 'already installed' });
+  const found = await inspectBackends(__dirname).catch(() => null);
+  if (found?.[BACKENDS.POCKET]?.available) {
+    return { already: true, done: true, detail: 'already installed' };
   }
 
-  voiceboxInstall = { startedAt: new Date().toISOString(), done: false, ok: false, detail: null };
+  voiceboxInstall = { startedAt: new Date().toISOString(), done: false, ok: false, detail: null, cancelled: false };
   const script = path.join(__dirname, 'scripts', 'ensure-voicebox.mjs');
   const child = spawn(process.execPath, [script, '--install'], {
     cwd: __dirname,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  voiceboxInstallChild = child;
   let tail = '';
   const keep = (buf) => { tail = (tail + buf.toString()).slice(-2000); };
   child.stdout.on('data', keep);
   child.stderr.on('data', keep);
   child.on('error', (err) => {
     voiceboxInstall = { ...voiceboxInstall, done: true, ok: false, detail: String(err?.message ?? err) };
+    voiceboxInstallChild = null;
   });
   child.on('close', async (code) => {
     const after = await inspectBackends(__dirname).catch(() => null);
-    const ok = code === 0 && Boolean(after?.[BACKENDS.POCKET]?.available);
+    const cancelled = voiceboxInstall?.cancelled === true;
+    const ok = !cancelled && code === 0 && Boolean(after?.[BACKENDS.POCKET]?.available);
     voiceboxInstall = {
       ...voiceboxInstall, done: true, ok,
       // The tail of the log, because "it failed" with no reason is the thing
       // that sends someone to a terminal anyway.
-      detail: ok ? null : (tail.trim().split('\n').slice(-4).join(' ') || `exited ${code}`),
+      detail: ok ? null : cancelled ? 'cancelled' : (tail.trim().split('\n').slice(-4).join(' ') || `exited ${code}`),
     };
-    if (ok) console.log('[voice] voicebox installed — switch the engine in Settings to use it');
+    voiceboxInstallChild = null;
+    if (ok) console.log('[voice] voicebox installed — the sidecar speaks from now on');
   });
 
-  res.json({ ok: true, started: true, startedAt: voiceboxInstall.startedAt });
+  return { started: true, startedAt: voiceboxInstall.startedAt };
+}
+
+/**
+ * If the resolved worker fell back from pocket to sherpa — the default is
+ * chosen but not downloaded — start the download in the background. Fire and
+ * forget: the caller keeps speaking on sherpa this turn, and the sidecar takes
+ * over once it lands. Called only from real speak paths, never from status
+ * polling, so opening Settings does not pull 600 MB.
+ */
+function autoInstallSidecarIfDefault(resolved) {
+  if (resolved?.fellBackFrom !== BACKENDS.POCKET) return;
+  if (voiceboxInstall && (!voiceboxInstall.done || voiceboxInstall.ok || voiceboxInstall.cancelled)) return;
+  startVoiceboxInstall().catch(() => { /* the fallback is already speaking; a failed start is not fatal */ });
+}
+
+app.post('/api/voice/install-sidecar', async (_req, res) => {
+  res.json({ ok: true, ...(await startVoiceboxInstall()) });
 });
 
 app.get('/api/voice/install-sidecar', (_req, res) => {
   res.json({ ok: true, install: voiceboxInstall });
+});
+
+/** Cancel an in-flight download — the ward changed their mind, or the disk is tight. */
+app.delete('/api/voice/install-sidecar', (_req, res) => {
+  if (!voiceboxInstall || voiceboxInstall.done) return res.json({ ok: true, running: false });
+  voiceboxInstall.cancelled = true;
+  try { voiceboxInstallChild?.kill('SIGTERM'); } catch { /* already gone */ }
+  res.json({ ok: true, cancelled: true });
 });
 
 // Clearing a park is deliberate — the ward has presumably fixed something.
@@ -1756,8 +1807,13 @@ app.post('/api/voice/speech-plan', (req, res) => {
  * very long one seams, at a paragraph, and the plan says how many times.
  */
 app.get('/api/voice/tts/:id', async (req, res) => {
-  const { worker } = await currentAudioWorker();
+  const { worker, resolved } = await currentAudioWorker();
   if (!worker) return res.status(503).json({ ok: false, reason: 'voice-disabled' });
+
+  // First real use of voice while pocket (the default) is chosen but not yet
+  // downloaded: start the ~600 MB fetch in the background. This turn still
+  // speaks — on the sherpa fallback — and the sidecar takes over once it lands.
+  autoInstallSidecarIfDefault(resolved);
 
   const held = utterances.get(req.params.id);
   if (!held) return res.status(404).json({ ok: false, reason: 'expired', detail: 'ask for a fresh plan' });
@@ -1790,81 +1846,86 @@ app.get('/api/voice/tts/:id', async (req, res) => {
   let aborted = false;
   res.on('close', () => { aborted = true; });
 
-  // Split into pieces that are each exactly ONE engine utterance, rather than
-  // handing over a whole message and letting sherpa split it out of sight. The
-  // audio is equivalent (the LM resets per utterance either way — measured 1.7%
-  // apart), but each piece now returns its own duration, so one that swallowed
-  // its words can be seen and re-tried instead of arriving as a silent hole.
-  const speakUnits = held.parts.flatMap((p) => splitForUtterances(p));
+  const captureUnsupported = (r) => {
+    // A backend that cannot honour a setting must say so. pocket-tts has no
+    // speed control, so a ward who slowed playback would otherwise hear no
+    // difference and no reason.
+    if (Array.isArray(r?.unsupported) && r.unsupported.length && !res.headersSent) {
+      res.set('X-Voice-Unsupported', r.unsupported.join(','));
+    }
+  };
+
+  // The sidecar carries a KV cache across a whole call, so it does NOT drop the
+  // tail of a long message the way the built-in engine does. It also must not be
+  // pre-split into small utterances — that would force a fresh clone per piece
+  // and reintroduce the seams it exists to avoid. So the two engines take
+  // different paths: the sidecar streams whole generation units; the built-in
+  // buffers and verifies small ones.
+  const isSidecar = resolved?.backend === BACKENDS.POCKET;
 
   try {
-    for (const part of speakUnits) {
-      if (aborted) break;
-      const streamId = takeStreamId();
-      // Subscribe BEFORE asking, or the first frames arrive with nobody
-      // listening and the start of the sentence is simply missing.
-      const unsubscribe = worker.on((frame) => {
-        if (frame.kind === KIND_PCM && frame.streamId === streamId && !aborted) {
-          res.write(Buffer.from(frame.pcm));
-        }
+    if (isSidecar) {
+      // Stream whole-message units live. held.parts only seams at paragraphs on
+      // a very long message; ordinary ones are a single part, one trajectory.
+      for (const part of held.parts) {
+        if (aborted) break;
+        const streamId = takeStreamId();
+        // Subscribe BEFORE asking, or the first frames arrive with nobody
+        // listening and the start of the sentence is simply missing.
+        const unsubscribe = worker.on((frame) => {
+          if (frame.kind === KIND_PCM && frame.streamId === streamId && !aborted) {
+            res.write(Buffer.from(frame.pcm));
+          }
+        });
+        try {
+          const r = await worker.request(
+            { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature },
+            { timeoutMs: 300_000 },
+          );
+          if (!r.ok) {
+            console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`);
+            if (FATAL_TTS_REASONS.has(r.reason)) break;
+            continue;
+          }
+          if (r.runaway) console.warn(`[voice] read-aloud truncated part (runaway cap) after ${r.durationSec ?? '?'}s — the tail was cut`);
+          if (Number(r.longestSilenceSec) >= 3) {
+            console.warn(`[voice] read-aloud went silent for ${r.longestSilenceSec}s inside a ${r.durationSec}s render (${part.length} chars). Re-run with PF_TTS_DEBUG=1 to log which sentence.`);
+          }
+          captureUnsupported(r);
+        } finally { unsubscribe(); }
+      }
+    } else {
+      // ── Built-in engine: buffered self-healing ──────────────────────────
+      // Small units, so an early-EOS drop is a large, detectable fraction of
+      // the unit. Each is generated to a full clip, checked, and re-spoken (a
+      // perturbed seed breaks the deterministic early stop) before any of its
+      // audio is written — so no sentence vanishes and nothing is heard twice.
+      // Costs a small delay before the first words; buys completeness. The loop
+      // itself lives in voice-generation.js so it can be tested without an
+      // engine; here we just wire it to the worker.
+      const baseSeed = Number.isFinite(Number(seed)) ? Number(seed) : DEFAULT_TTS_SEED;
+      const units = held.parts.flatMap((p) => splitForUtterances(p, { targetChars: SMALL_UTTERANCE_CHARS }));
+
+      const summary = await speakUnitsSelfHealing(units, {
+        speed, baseSeed,
+        isAborted: () => aborted,
+        isFatal: (reason) => FATAL_TTS_REASONS.has(reason),
+        splitToSentences: (t) => splitForSpeech(t, { maxChars: MAX_CHAR_IN_SENTENCE - 20, minChars: 1 }),
+        generate: async (text, useSeed) => {
+          const r = await worker.request(
+            { op: 'tts', text, referenceWav: voice.path, speed, numSteps, seed: useSeed, temperature, minChars: text.length },
+            { timeoutMs: 300_000 },
+          );
+          if (!r.ok) { console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`); return r; }
+          captureUnsupported(r);
+          return r;
+        },
+        emit: (samples) => { if (samples?.length && !aborted) res.write(floatToPcm16(samples)); },
       });
-      try {
-        // minChars = this piece's own length: it is already utterance-sized, so
-        // this stops the engine re-splitting it and keeps one piece to one
-        // trajectory. (Sizing the WHOLE message this way is what lost half a
-        // reply in 0.10.28 — bounded pieces are the difference.)
-        const r = await worker.request(
-          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path, speed, numSteps, seed, temperature, minChars: part.length },
-          { timeoutMs: 300_000 },
-        );
-        // A failure mid-message cannot be reported in the body — the browser
-        // is already playing a wav. Ending the stream is the only honest
-        // signal available; the log is where the reason lives.
-        if (!r.ok) {
-          console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`);
-          // ONE bad part must not silence the parts that could still speak.
-          // This used to `break`, so a single failure mid-message swallowed
-          // every paragraph after it — heard as whole sections simply missing.
-          // Only a worker-level death means nothing further can be spoken.
-          if (FATAL_TTS_REASONS.has(r.reason)) break;
-          continue;
-        }
-        // A runaway stop means the runaway cap cut this part short — the tail
-        // the listener did not hear. It cannot be reported in the body (a wav
-        // is already playing), but it must not be silent either: the log is
-        // where "why did it stop mid-sentence" gets an answer.
-        if (r.runaway) console.warn(`[voice] read-aloud truncated part (runaway cap) after ${r.durationSec ?? '?'}s — the tail was cut`);
-        // A long silence inside a render is the engine decoding a normal-length
-        // generation into nothing. My human heard 22 s of it once, mid-message,
-        // with the voice changed on the other side and a sentence missing — and
-        // nothing recorded that it happened. Now it is named, with the numbers
-        // needed to tell whether it correlates with a voice or a length.
-        if (Number(r.longestSilenceSec) >= 3) {
-          console.warn(`[voice] read-aloud went silent for ${r.longestSilenceSec}s inside a ${r.durationSec}s render (${part.length} chars) — the engine produced no audio for that stretch. Re-run with PF_TTS_DEBUG=1 to log which sentence.`);
-        }
-        // A render far shorter than the words predict means the engine dropped
-        // sentences without saying so: its Generate skips any sentence that
-        // produces no samples, and abandons the rest of the message the moment
-        // a progress callback returns false. Neither raises an error, so this
-        // comparison is the only place a swallowed paragraph can surface.
-        const expected = expectedSpeechSeconds(part, { speed });
-        if (expected > 4 && Number.isFinite(r.durationSec) && r.durationSec < expected * 0.6) {
-          // NOT re-spoken here: this piece's partial audio has already been
-          // streamed to my human, so generating it again would make them hear
-          // the first half twice. Recovering properly means buffering a piece
-          // and only emitting it once it looks complete — which is affordable
-          // for every piece after the first (generation runs faster than
-          // playback, so there is slack while the previous one plays) but would
-          // delay the very first words. That trade is my human's call, not mine.
-          console.warn(`[voice] read-aloud came back short: ${r.durationSec}s for ~${expected.toFixed(1)}s of text (${part.length} chars) — the engine dropped words from this piece. Re-run with PF_TTS_DEBUG=1 to see which sentence.`);
-        }
-        // A backend that cannot honour a setting must say so. pocket-tts has
-        // no speed control at all, so a ward who slowed playback for
-        // comprehension would otherwise just hear no difference and no reason.
-        if (Array.isArray(r.unsupported) && r.unsupported.length && !res.headersSent) {
-          res.set('X-Voice-Unsupported', r.unsupported.join(','));
-        }
-      } finally { unsubscribe(); }
+
+      if (summary.droppedSentences > 0) {
+        console.warn(`[voice] read-aloud: ${summary.droppedSentences} sentence(s) stayed short after retries (of ${units.length} units, ${summary.reSpoken} re-spoken). Re-run with PF_TTS_DEBUG=1 to see which.`);
+      }
     }
   } catch (err) {
     console.warn(`[voice] read-aloud stream error: ${String(err?.message ?? err)}`);
