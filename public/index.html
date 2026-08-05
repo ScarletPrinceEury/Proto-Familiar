@@ -243,7 +243,7 @@
             </div>
             <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
 
-            <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth, push-to-talk. Needs the call models: install the “listening” voice tier first. Hold the button to talk; release and your Familiar answers in their voice.</p>
+            <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth, push-to-talk. The first call downloads the speech models it needs (~150 MB, once); after that, hold the button to talk and release, and your Familiar answers in their voice. From a phone this needs an HTTPS address (e.g. <code>tailscale serve</code>) — browsers only allow the microphone on a secure connection.</p>
             <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
               <button id="voice-call-btn" class="btn-secondary">📞 Start voice call</button>
               <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>

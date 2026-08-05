@@ -81,11 +81,52 @@
     playHead = startAt + audio.duration;
   }
 
+  // ── First-call setup: fetch the speech models if they aren't here yet ──
+  //
+  // The streaming recogniser + VAD (the "Listening" tier) are what a call
+  // listens with. Reusing the existing install endpoint, which only fetches
+  // what is missing, so a machine that already has read-aloud pays for the ASR
+  // alone. Synchronous by nature (the download IS the setup); the message says
+  // it happens once so a wait does not read as a hang.
+  async function ensureCallModels() {
+    let st = null;
+    try { st = await (await fetch('/api/voice/models?what=call')).json(); } catch { /* treat as missing */ }
+    if (st?.ok && st.allComplete) return { ok: true };
+
+    setState('Setting up your first call — downloading the speech models (about 150 MB). This happens once; hang on…');
+    let r = null;
+    try {
+      r = await (await fetch('/api/voice/install-models', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ what: 'call' }),
+      })).json();
+    } catch {
+      return { ok: false, message: 'Could not download the call models — check the connection and try Start again.' };
+    }
+    if (!r?.ok) {
+      const why = r?.reason || r?.error
+        || (Array.isArray(r?.failed) ? r.failed.map((f) => f?.detail).filter(Boolean).join('; ') : '')
+        || 'the download did not finish';
+      return { ok: false, message: `Could not set up the call: ${why}. Press Start to try again.` };
+    }
+    return { ok: true };
+  }
+
   // ── Socket lifecycle ───────────────────────────────────────────────────
   let replyRate = 24000;
+  let starting = false;   // guards the async setup so a second click can't race the model install
 
   async function startCall() {
     if (live) { endCall(); return; }
+    if (starting) return;   // already connecting / downloading — a second press must not start a second install
+    starting = true;
+    try {
+      await beginCall();
+    } finally {
+      starting = false;
+    }
+  }
+
+  async function beginCall() {
     setState('Connecting…');
     // The mic API only exists in a secure context (https:// or localhost). Over
     // Tailscale on plain http:// the whole `navigator.mediaDevices` is absent —
@@ -96,6 +137,12 @@
         : 'This browser did not expose a microphone. Use a current browser on https:// or localhost.');
       return;
     }
+    // The call needs the streaming speech models (the "Listening" tier). Rather
+    // than error and tell my human to go install them, fetch them here on the
+    // first call — once — so a call just works. Done AFTER the secure-context
+    // check, so a phone that can't use the mic never pulls 150 MB it can't use.
+    const models = await ensureCallModels();
+    if (!models.ok) { setState(models.message); return; }
     try {
       ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
       await ctx.resume();
@@ -125,13 +172,41 @@
         else if (m.t === 'speak-start') { replyRate = Number(m.sampleRate) || replyRate; playHead = ctx.currentTime; setState('…'); }
         else if (m.t === 'speak-end') { setState('On a call. Hold to talk.'); }
         else if (m.t === 'stop') { playHead = ctx.currentTime; }
-        else if (m.t === 'error') { setState(`Call ended: ${m.reason || 'error'}${m.detail ? ` — ${m.detail}` : ''}`); endCall(); }
+        else if (m.t === 'error') { setState(callErrorMessage(m.reason, m.detail)); endCall(); }
         return;
       }
       playPcm(ev.data, replyRate); // binary → TTS PCM
     };
     ws.onclose = () => { if (live) setState('Call ended.'); teardown(); };
     ws.onerror = () => setState('Connection error.');
+  }
+
+  // Turn the server's terse reason into something my human can act on. The most
+  // common one is a missing streaming-ASR model: the call refuses at load, which
+  // used to read as the cryptic "Call ended: load-failed" — no hint that the fix
+  // is a one-click install. A call that never reaches `ready` also never shows
+  // the Hold-to-talk button, so this message is the ONLY thing my human sees.
+  function callErrorMessage(reason, detail) {
+    const tail = detail ? ` (${detail})` : '';
+    switch (reason) {
+      case 'load-failed':
+      case 'no-listening-engine':
+      case 'not-loaded':
+        return 'The call needs the streaming speech model, which isn’t installed. Open the voice models section and install the “Listening” tier, then try again.';
+      case 'no-worker':
+      case 'no-engine':
+      case 'spawn-failed':
+        return 'The speech engine could not start, so there’s nothing to listen with. Check the voice models are installed, then try again.' + tail;
+      case 'voice-disabled':
+        return 'Voice is switched off. Turn on the voice/listening setting first.';
+      case 'busy':
+        return 'A call is already in progress. End it before starting another.';
+      case 'no-adapter':
+      case 'join-failed':
+        return 'The call could not connect.' + tail;
+      default:
+        return `Call ended: ${reason || 'error'}${tail}`;
+    }
   }
 
   function pressTalk() {
@@ -168,6 +243,11 @@
     const talk = $('voice-call-talk');
     if (!start) return;
     start.addEventListener('click', startCall);
+    // Until a call is live the Hold-to-talk button is hidden, so on a phone my
+    // human long-presses THIS button and gets the browser's context menu instead
+    // of anything useful. Suppress it here too — the CSS stops the callout, this
+    // stops the menu event.
+    start.addEventListener('contextmenu', (e) => e.preventDefault());
     if (talk) {
       // Hold-to-talk has to survive the browser's gesture handling. On a
       // touchscreen (and a trackpad long-press) a plain held button is read as
