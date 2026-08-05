@@ -2797,6 +2797,17 @@ function renderVoiceChip(a) {
   if (a.transcript) {
     words.textContent = a.transcript;
     words.title = a.transcript;
+    // A recogniser mishears names and anyone whose speech it wasn't trained on
+    // ("wish me luck" → "Wish May Look"). The transcript IS what the Familiar
+    // reads, so the person who said it gets to fix it before it's sent.
+    const fix = document.createElement('button');
+    fix.type = 'button';
+    fix.className = 'attach-chip-fix';
+    fix.textContent = '✏️ Fix wording';
+    fix.setAttribute('aria-label', 'Correct this transcript');
+    fix.addEventListener('click', () => startTranscriptEdit(a, words));
+    words.appendChild(document.createElement('br'));
+    words.appendChild(fix);
   } else if (a.transcriptState === 'failed') {
     // The precise reason, and the button that fixes it where one exists. The
     // note still sends either way — my Familiar reads it as a recording they
@@ -2836,6 +2847,76 @@ function renderVoiceChip(a) {
   rm.addEventListener('click', () => removePendingAttachment(a.id));
   chip.appendChild(rm);
   return chip;
+}
+
+/**
+ * Edit a voice note's transcript in place.
+ *
+ * Saved to the asset, not just to the screen: the transcript is what the
+ * Familiar actually reads for this note, so a correction has to reach the
+ * server or it fixes nothing that matters.
+ */
+function startTranscriptEdit(a, words) {
+  const original = a.transcript ?? '';
+  words.textContent = '';
+  words.classList.add('is-editing');   // lifts the height clamp while editing
+
+  const box = document.createElement('textarea');
+  box.className = 'attach-chip-transcript-edit';
+  box.value = original;
+  box.rows = 3;
+  box.setAttribute('aria-label', 'Transcript');
+
+  const row = document.createElement('div');
+  row.className = 'action-row';
+
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'attach-chip-fix';
+  save.textContent = 'Save';
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'attach-chip-fix';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => renderAttachStrip());
+
+  save.addEventListener('click', async () => {
+    const text = box.value.trim();
+    if (!text || text === original) return renderAttachStrip();
+    save.disabled = true;
+    save.textContent = 'Saving…';
+    try {
+      const res = await fetch(`/api/media/${encodeURIComponent(a.id)}/transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const out = await res.json();
+      if (!out.ok) throw new Error(out.detail || out.reason || 'could not save');
+      a.transcript = out.text;
+      a.transcriptState = 'ok';
+    } catch (err) {
+      save.disabled = false;
+      save.textContent = 'Save';
+      box.title = String(err?.message ?? err);
+      return;
+    }
+    renderAttachStrip();
+  });
+
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); renderAttachStrip(); }
+    // Enter saves; Shift-Enter is a newline, the same bargain as the composer.
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save.click(); }
+  });
+
+  row.appendChild(save);
+  row.appendChild(cancel);
+  words.appendChild(box);
+  words.appendChild(row);
+  box.focus();
+  box.select();
 }
 
 /**

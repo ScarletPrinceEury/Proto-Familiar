@@ -31,7 +31,7 @@ import path from 'node:path';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON, KIND_PCM } from './audio-frame.js';
 import { floatToPcm16, pcm16ToFloat } from './voice-audio-features.js';
 import {
-  generationExtras, runawaySampleLimit, pendingTailStart,
+  generationExtras, runawaySampleLimit, pendingTailStart, wholeUtteranceMin,
   DEFAULT_NUM_STEPS, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
 } from './voice-generation.js';
 
@@ -405,7 +405,11 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        extra: generationExtras({ seed, temperature, minChars, maxChars, maxFrames, referenceSeconds }),
+        // Default the merge threshold to THIS text's length, so the whole part
+        // is one utterance — one LM trajectory, one voice. A fixed floor left a
+        // long message as several trajectories, which my human heard as the
+        // voice changing partway through. An explicit `minChars` still wins.
+        extra: generationExtras({ seed, temperature, minChars: minChars ?? wholeUtteranceMin(text), maxChars, maxFrames, referenceSeconds }),
       });
 
       const started = Date.now();
@@ -465,7 +469,11 @@ const OPS = {
         referenceAudio: ref.samples,
         referenceSampleRate: ref.sampleRate,
         numSteps,
-        extra: generationExtras({ seed, temperature, minChars, maxChars, maxFrames, referenceSeconds }),
+        // Default the merge threshold to THIS text's length, so the whole part
+        // is one utterance — one LM trajectory, one voice. A fixed floor left a
+        // long message as several trajectories, which my human heard as the
+        // voice changing partway through. An explicit `minChars` still wins.
+        extra: generationExtras({ seed, temperature, minChars: minChars ?? wholeUtteranceMin(text), maxChars, maxFrames, referenceSeconds }),
       });
 
       const started = Date.now();

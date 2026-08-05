@@ -5,7 +5,7 @@ import {
   generationExtras, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
   MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES, FRAME_RATE_HZ,
-  pendingTailStart,
+  pendingTailStart, wholeUtteranceMin, MAX_UTTERANCE_CHARS, expectedSpeechSeconds,
 } from '../voice-generation.js';
 
 /**
@@ -133,6 +133,66 @@ test('junk counts never invent a tail', () => {
   for (const [s, t] of [[NaN, 100], [100, NaN], [undefined, 100], [100, undefined]]) {
     assert.equal(pendingTailStart(s, t), -1, `pendingTailStart(${s}, ${t})`);
   }
+});
+
+// ── One message, one trajectory, one voice ──────────────────────────────
+
+test('the merge threshold covers the whole text, so a message is one utterance', () => {
+  // The reported bug: "it swaps through different voices at different points of
+  // the message" — sherpa resets the LM per utterance, so every extra utterance
+  // is another voice. A fixed 400 left a long message as several.
+  const long = 'x'.repeat(1200);
+  assert.equal(wholeUtteranceMin(long), 1200, 'the threshold reaches the end of the text');
+  assert.ok(wholeUtteranceMin(long) > MIN_CHAR_IN_SENTENCE, 'and past the old fixed floor');
+});
+
+test('a short line never drops below the old floor', () => {
+  assert.equal(wholeUtteranceMin('Hey.'), MIN_CHAR_IN_SENTENCE);
+  assert.equal(wholeUtteranceMin(''), MIN_CHAR_IN_SENTENCE);
+});
+
+test('the threshold is capped by what one trajectory can actually hold', () => {
+  // Past the frame budget a single utterance stops fitting at all, so the cap
+  // is the ceiling rather than the text length.
+  assert.equal(wholeUtteranceMin('y'.repeat(99999)), MAX_UTTERANCE_CHARS);
+});
+
+test('junk input never produces a threshold that would disable merging', () => {
+  for (const bad of [null, undefined, 42, {}, []]) {
+    assert.equal(wholeUtteranceMin(bad), MIN_CHAR_IN_SENTENCE, `wholeUtteranceMin(${String(bad)})`);
+  }
+});
+
+test('raising the floor can never leave max below it (the runt-split guard)', () => {
+  // generationExtras clamps max to min+200; without that, a min above
+  // max_char_in_sentence would re-open the runt-fragment split.
+  const min = wholeUtteranceMin('z'.repeat(3000));
+  const extras = generationExtras({ minChars: min });
+  assert.equal(extras.min_char_in_sentence, min);
+  assert.ok(extras.max_char_in_sentence >= min + 200, 'max stays clear of min');
+});
+
+test('an expected duration exists so a swallowed paragraph can be noticed', () => {
+  // sherpa's Generate skips any sentence that renders empty, and abandons the
+  // whole remainder if a progress callback returns false — both silent. The
+  // only signal is audio that is far shorter than the words predict.
+  const short = expectedSpeechSeconds('Hey there.');
+  const long = expectedSpeechSeconds('x'.repeat(1000));
+  assert.ok(long > short * 10, 'more words, more seconds');
+  assert.ok(long > 30 && long < 80, `1000 chars should land in the tens of seconds, got ${long}`);
+});
+
+test('a slower speed expects longer audio, so it is not read as a drop', () => {
+  // Without this, a ward who slowed speech for comprehension would trip the
+  // short-render warning on every perfectly complete message.
+  assert.ok(expectedSpeechSeconds('x'.repeat(500), { speed: 0.5 })
+          > expectedSpeechSeconds('x'.repeat(500), { speed: 1 }));
+});
+
+test('expectedSpeechSeconds is junk-safe and never negative', () => {
+  for (const bad of [null, undefined, 42, {}, []]) assert.equal(expectedSpeechSeconds(bad), 0);
+  assert.ok(expectedSpeechSeconds('abc', { speed: 0 }) > 0, 'a zero speed falls back rather than dividing by zero');
+  assert.ok(Number.isFinite(expectedSpeechSeconds('abc', { speed: NaN })));
 });
 
 // ── Chunking: fewer LM resets, fewer places to drift ────────────────────

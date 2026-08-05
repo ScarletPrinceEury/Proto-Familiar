@@ -4000,6 +4000,27 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* Correcting a mis-heard transcript needs the room the clamp above denies —
+   an edit box you cannot see all of is worse than no edit box. */
+.attach-chip-transcript.is-editing {
+  max-height: none;
+  overflow: visible;
+}
+.attach-chip-transcript-edit {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  /* 16px on coarse pointers so iOS does not zoom the whole page on focus —
+     the same rule the rest of the inputs follow (WCAG/mobile section). */
+  color: var(--text);
+  background: var(--surface-1, transparent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  resize: vertical;
+}
+@media (pointer: coarse) { .attach-chip-transcript-edit { font-size: 16px; } }
 /* Anything the chip says that is a problem-and-fix gets the room to say it. */
 .attach-chip-transcript.is-quiet {
   color: var(--text-dim);
