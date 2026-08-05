@@ -249,6 +249,15 @@
               <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>
             </div>
             <p class="field-hint" id="voice-call-state" style="margin-top:6px" aria-live="polite"></p>
+
+            <div class="action-row" id="voice-call-lang-row" style="margin-top:8px; align-items:center; gap:8px" hidden>
+              <label for="voice-call-lang" style="font-size:0.85em">Call language</label>
+              <select id="voice-call-lang" aria-label="Call speech-recognition language"></select>
+            </div>
+            <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+              <input type="checkbox" id="voice-call-threat-toggle" checked>
+              <span>Let a call inform my safety read — my Familiar can notice distress in my voice, as it does in my messages. On by default.</span>
+            </label>
           </div>
         </div>
 

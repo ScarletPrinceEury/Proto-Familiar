@@ -232,8 +232,14 @@ export function attachVoiceCall(deps) {
   return { engine, wss };
 }
 
-/** The ward's chosen streaming-ASR language, defaulting to English. */
+/**
+ * The ward's chosen streaming-ASR language, defaulting to English.
+ *
+ * `voiceAsrLanguage` is the one canonical setting — synced from the picker in
+ * the voice pane. (An earlier `voiceLanguage` fallback was dropped: nothing
+ * ever wrote it, so it only invited a second, drifting source of truth.)
+ */
 function asrLang(settings) {
-  const l = String(settings?.voiceAsrLanguage ?? settings?.voiceLanguage ?? 'en').toLowerCase().trim();
+  const l = String(settings?.voiceAsrLanguage ?? 'en').toLowerCase().trim();
   return /^[a-z]{2}$/.test(l) ? l : 'en';
 }

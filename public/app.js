@@ -382,6 +382,15 @@ const state = {
   // Reserved for CONTINUOUS listening (live calls, Pass 2), which is the thing
   // that genuinely needs an explicit opt-in. Voice notes do not consult it.
   voiceEnabled: false,
+  // Live call: let my Familiar hear distress in my voice the way it reads my
+  // messages (the D2 gate). Ward-signed ON by default; the code default is also
+  // ON, so a fresh install with no saved value still scores. Turning it off is a
+  // real choice, surfaced in Settings, mirroring the vision-threat toggle.
+  voiceThreatScoring: true,
+  // Which language the streaming recogniser listens in during a call. The picker
+  // only offers languages whose model is installed (from /api/voice/status), so
+  // this stays 'en' unless a second model was pinned and chosen.
+  voiceAsrLanguage: 'en',
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -442,7 +451,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
-  'voiceEnabled', 'readAloudByDefault',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -3831,6 +3840,8 @@ function readSettingsFromUI() {
     if (was !== state.visionEnabled) window.dispatchEvent(new Event('vision-enabled-changed'));
   }
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
+  if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
+  if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('read-aloud-default-toggle')) state.readAloudByDefault = $('read-aloud-default-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
@@ -3992,6 +4003,8 @@ function writeSettingsToUI() {
   if ($('vision-enabled-toggle')) setIfNotFocused($('vision-enabled-toggle'), 'checked', state.visionEnabled !== false);
   if ($('read-aloud-default-toggle')) setIfNotFocused($('read-aloud-default-toggle'), 'checked', state.readAloudByDefault === true);
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
+  if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
+  if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
@@ -5216,6 +5229,7 @@ function init() {
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
+    'voice-call-threat-toggle', 'voice-call-lang',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -7901,6 +7915,29 @@ function downloadVoiceBench() {
 const VP = { offset: 0, limit: 40, total: 0, searchTimer: null, playing: null, chosen: null };
 
 /**
+ * Fill the call-language picker from the languages actually installed.
+ *
+ * The row stays hidden unless there is a real choice: with only English pinned
+ * (the default) there is nothing to pick, so an English-only ward sees no
+ * clutter — but a ward who pinned a second streaming model gets the control,
+ * and the recogniser can only ever be pointed at a language it has a model for.
+ */
+function populateCallLanguages(langs) {
+  const row = $('voice-call-lang-row');
+  const sel = $('voice-call-lang');
+  if (!row || !sel) return;
+  const list = Array.isArray(langs) ? langs.filter((l) => /^[a-z]{2}$/.test(l)) : [];
+  if (list.length <= 1) { row.hidden = true; return; }
+
+  const names = (() => { try { return new Intl.DisplayNames(undefined, { type: 'language' }); } catch { return null; } })();
+  const label = (code) => { try { return names?.of(code) || code.toUpperCase(); } catch { return code.toUpperCase(); } };
+  const want = state.voiceAsrLanguage ?? 'en';
+  sel.innerHTML = list.map((l) => `<option value="${l}">${label(l)}</option>`).join('');
+  sel.value = list.includes(want) ? want : (list.includes('en') ? 'en' : list[0]);
+  row.hidden = false;
+}
+
+/**
  * The speaking-engine pane.
  *
  * Everything here used to require editing settings.json by hand, which for
@@ -7918,6 +7955,7 @@ async function refreshVoiceBackendPane() {
 
   let st;
   try { st = await vbGet('/api/voice/status?probe=0'); } catch { st = null; }
+  populateCallLanguages(st?.asrLanguages);
   if (!st?.backend) { state.textContent = ''; return; }
 
   const { using, askedFor, available } = st.backend;

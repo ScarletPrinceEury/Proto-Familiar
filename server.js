@@ -1436,6 +1436,10 @@ app.get('/api/voice/status', async (req, res) => {
     // apply — a ward reading this should not have to work out which gate bit.
     hardDisabled: VOICE_HARD_DISABLED,
     listeningEnabled: voiceListeningEnabled(),
+    // The streaming-ASR languages actually installed (pinned), so the call
+    // language picker can only offer what can be heard — a menu that named a
+    // language with no model would be listening in silence.
+    asrLanguages: availableAsrLangs(),
     // Read-aloud needs a reference clip as much as it needs the engine:
     // PocketTTS clones zero-shot and has no built-in voice to fall back on.
     readAloudAvailable: !VOICE_HARD_DISABLED && voice.ok,
