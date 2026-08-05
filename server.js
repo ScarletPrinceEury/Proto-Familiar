@@ -267,6 +267,14 @@ import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
 import { prepareForSpeech } from './voice-speech.js';
+import { expectedSpeechSeconds } from './voice-generation.js';
+
+/**
+ * Failures where nothing further can be spoken, so the read-aloud loop stops
+ * rather than retrying every remaining part against a dead worker. Anything
+ * else is a per-part problem and must NOT silence the parts that still work.
+ */
+const FATAL_TTS_REASONS = new Set(['no-worker', 'no-engine', 'not-loaded', 'stopped', 'worker-died', 'worker-stopped', 'parked', 'spawn-failed']);
 import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
 import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip } from './voice-audio-features.js';
 import { KIND_PCM } from './audio-frame.js';
@@ -1716,7 +1724,12 @@ function keepUtterance(parts) {
 
 /** Stream ids are 16-bit on the wire, so they wrap rather than grow. */
 let nextStreamId = 1;
-const takeStreamId = () => (nextStreamId = (nextStreamId % 65535) + 1);
+// Bounded BELOW the band `voice-call-server.js` uses for a live call's TTS
+// (40000+). Both share one worker, and a listener filters frames by streamId —
+// so if the two bands ever met, one stream's audio would be written into the
+// other's wav, which is heard as the voice changing mid-sentence.
+const READ_ALOUD_STREAM_ID_MAX = 39999;
+const takeStreamId = () => (nextStreamId = (nextStreamId % READ_ALOUD_STREAM_ID_MAX) + 1);
 
 // What would be said, and how. No engine, no model, no cost.
 app.post('/api/voice/speech-plan', (req, res) => {
@@ -1795,12 +1808,29 @@ app.get('/api/voice/tts/:id', async (req, res) => {
         // A failure mid-message cannot be reported in the body — the browser
         // is already playing a wav. Ending the stream is the only honest
         // signal available; the log is where the reason lives.
-        if (!r.ok) { console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`); break; }
+        if (!r.ok) {
+          console.warn(`[voice] read-aloud failed: ${r.reason} ${r.detail ?? ''}`);
+          // ONE bad part must not silence the parts that could still speak.
+          // This used to `break`, so a single failure mid-message swallowed
+          // every paragraph after it — heard as whole sections simply missing.
+          // Only a worker-level death means nothing further can be spoken.
+          if (FATAL_TTS_REASONS.has(r.reason)) break;
+          continue;
+        }
         // A runaway stop means the runaway cap cut this part short — the tail
         // the listener did not hear. It cannot be reported in the body (a wav
         // is already playing), but it must not be silent either: the log is
         // where "why did it stop mid-sentence" gets an answer.
         if (r.runaway) console.warn(`[voice] read-aloud truncated part (runaway cap) after ${r.durationSec ?? '?'}s — the tail was cut`);
+        // A render far shorter than the words predict means the engine dropped
+        // sentences without saying so: its Generate skips any sentence that
+        // produces no samples, and abandons the rest of the message the moment
+        // a progress callback returns false. Neither raises an error, so this
+        // comparison is the only place a swallowed paragraph can surface.
+        const expected = expectedSpeechSeconds(part, { speed });
+        if (expected > 4 && Number.isFinite(r.durationSec) && r.durationSec < expected * 0.45) {
+          console.warn(`[voice] read-aloud came back short: ${r.durationSec}s for ~${expected.toFixed(1)}s of text — the engine may have skipped sentences`);
+        }
         // A backend that cannot honour a setting must say so. pocket-tts has
         // no speed control at all, so a ward who slowed playback for
         // comprehension would otherwise just hear no difference and no reason.

@@ -155,6 +155,26 @@ export function wholeUtteranceMin(text) {
 }
 
 /**
+ * Roughly how long this text should take to say.
+ *
+ * Not a promise — voices differ, and the measured rate on the reference laptop
+ * (18.6 chars/second) is a floor rather than a law; a real render came back at
+ * ~25. It exists so a render that is FAR shorter than the words can be noticed
+ * instead of passing as a complete reply.
+ *
+ * Why that matters: sherpa's `Generate` does `if (cur.samples.empty()) continue;`
+ * — a sentence that produces no audio is skipped in silence, and the loop also
+ * stops entirely if a progress callback ever returns false. Both lose words with
+ * no error anywhere. Comparing what came back against what the text predicts is
+ * the only signal we get.
+ */
+export function expectedSpeechSeconds(text, { speed = 1 } = {}) {
+  const chars = typeof text === 'string' ? text.length : 0;
+  const rate = CHARS_PER_SECOND * (Number.isFinite(speed) && speed > 0 ? speed : 1);
+  return chars / rate;
+}
+
+/**
  * Frame budget for one utterance — how much can share a trajectory.
  *
  * Upstream's 500 is ~40 s at Mimi's 12.5 Hz. That is generous for a single

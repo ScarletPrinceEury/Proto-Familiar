@@ -5,7 +5,7 @@ import {
   generationExtras, DEFAULT_TTS_SEED, DEFAULT_TTS_TEMPERATURE,
   DEFAULT_NUM_STEPS, MAX_REFERENCE_SECONDS,
   MAX_CHAR_IN_SENTENCE, MIN_CHAR_IN_SENTENCE, runawaySampleLimit, DEFAULT_MAX_FRAMES, FRAME_RATE_HZ,
-  pendingTailStart, wholeUtteranceMin, MAX_UTTERANCE_CHARS,
+  pendingTailStart, wholeUtteranceMin, MAX_UTTERANCE_CHARS, expectedSpeechSeconds,
 } from '../voice-generation.js';
 
 /**
@@ -170,6 +170,29 @@ test('raising the floor can never leave max below it (the runt-split guard)', ()
   const extras = generationExtras({ minChars: min });
   assert.equal(extras.min_char_in_sentence, min);
   assert.ok(extras.max_char_in_sentence >= min + 200, 'max stays clear of min');
+});
+
+test('an expected duration exists so a swallowed paragraph can be noticed', () => {
+  // sherpa's Generate skips any sentence that renders empty, and abandons the
+  // whole remainder if a progress callback returns false — both silent. The
+  // only signal is audio that is far shorter than the words predict.
+  const short = expectedSpeechSeconds('Hey there.');
+  const long = expectedSpeechSeconds('x'.repeat(1000));
+  assert.ok(long > short * 10, 'more words, more seconds');
+  assert.ok(long > 30 && long < 80, `1000 chars should land in the tens of seconds, got ${long}`);
+});
+
+test('a slower speed expects longer audio, so it is not read as a drop', () => {
+  // Without this, a ward who slowed speech for comprehension would trip the
+  // short-render warning on every perfectly complete message.
+  assert.ok(expectedSpeechSeconds('x'.repeat(500), { speed: 0.5 })
+          > expectedSpeechSeconds('x'.repeat(500), { speed: 1 }));
+});
+
+test('expectedSpeechSeconds is junk-safe and never negative', () => {
+  for (const bad of [null, undefined, 42, {}, []]) assert.equal(expectedSpeechSeconds(bad), 0);
+  assert.ok(expectedSpeechSeconds('abc', { speed: 0 }) > 0, 'a zero speed falls back rather than dividing by zero');
+  assert.ok(Number.isFinite(expectedSpeechSeconds('abc', { speed: NaN })));
 });
 
 // ── Chunking: fewer LM resets, fewer places to drift ────────────────────
