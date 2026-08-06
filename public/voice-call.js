@@ -198,7 +198,7 @@
       case 'spawn-failed':
         return 'The speech engine could not start, so there’s nothing to listen with. Check the voice models are installed, then try again.' + tail;
       case 'voice-disabled':
-        return 'Voice is switched off. Turn on the voice/listening setting first.';
+        return 'Voice calls are switched off on this server (the PROTO_FAMILIAR_VOICE_CALL_DISABLED / VOICE_DISABLED env switch). Clear it to allow calls.';
       case 'busy':
         return 'A call is already in progress. End it before starting another.';
       case 'no-adapter':
