@@ -33,6 +33,7 @@ import { MODELS_SUBDIR } from './voice-fetch.js';
 import { KIND_PCM } from './audio-frame.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { sessionSlugId } from './slug-ids.js';
+import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 
 const WS_PATH = '/api/voice/call';
 // How long a single spoken turn may take before the call gives up and resets my
@@ -275,6 +276,34 @@ export function attachVoiceCall(deps) {
     if (!w) return { ok: false, reason: 'no-worker' };
     return fn(w);
   }
+
+  // ── Spoken-not-banner (spec §7, ward-signed) ────────────────────────────
+  // While a call is live, proactive outbox items — triage check-ins, reminders,
+  // event alerts, noticing reach-outs — are SPOKEN into the call instead of
+  // bannered over it. A push adapter is the union point: `dispatchOutboxPush`
+  // already fans every item out to the configured channels, so this adds one
+  // that only exists during a call and speaks the item at the next gap.
+  //
+  // SAFETY: this changes nothing about escalation or the threat tier. Speaking
+  // the item resolves as a confirmed delivery ONLY once it was actually heard
+  // (the engine resolves false if the call ends first), and `dispatchOutboxPush`
+  // records that under delivery['voice-call'] — which `contactDeadlineFor` reads
+  // exactly as it reads a Discord-DM delivery. Ward decision: heard = delivered;
+  // the human's own state/response (via the threat tier) still drives escalation.
+  registerPushAdapterFactory(() => {
+    if (!engine.isCallActive()) return null;   // only a live call speaks; otherwise the normal channels deliver
+    return {
+      name: 'voice-call',
+      deliver: async (item) => {
+        try {
+          const text = speakableText(formatItemForPush(item))?.text?.trim();
+          if (!text) return { ok: false, error: 'nothing speakable in this item' };
+          const heard = await engine.speakProactive(() => synthesize(text));
+          return heard ? { ok: true } : { ok: false, error: 'call ended before it could be spoken' };
+        } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+      },
+    };
+  });
 
   clearStaleCallState(path.join(rootDir, 'tomes')).catch(() => {});
 

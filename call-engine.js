@@ -63,6 +63,55 @@ export function createCallEngine({
   let nextStreamId = 1;
   let unsub = null;
 
+  // ── Proactive speech (spec §7 — "spoken not banner") ────────────────────
+  // Outbox items (triage check-ins, reminders, noticing) are SPOKEN into a live
+  // call rather than bannered over it. Queued and delivered only at a natural
+  // GAP — never over my human or a reply (ward decision: always wait for a gap).
+  // `speakProactive` resolves true only once the item was ACTUALLY spoken (or
+  // false if the call ended first), so the caller records delivery on a real
+  // "heard" — which is exactly what the escalation clock keys on. No escalation
+  // or threat logic lives here; this only adds a delivery channel.
+  const proactiveQueue = [];   // { makeReply, resolve }
+  let speaking = false;        // a turn reply OR a proactive item is playing right now
+  let lastUserAudioAt = 0;     // last inbound audio frame — tells us my human is mid-utterance
+  let proactiveTimer = null;
+  const PROACTIVE_QUIET_MS = 1500;   // this much quiet from my human before it counts as a gap
+
+  function speakProactive(makeReply) {
+    return new Promise((resolve) => {
+      proactiveQueue.push({ makeReply, resolve });
+      drainProactive();
+    });
+  }
+
+  function drainProactive() {
+    if (proactiveTimer) { clearTimeout(proactiveTimer); proactiveTimer = null; }
+    if (speaking || !call || proactiveQueue.length === 0) return;
+    // Wait for the gap: not while a reply is playing, not while my human is still
+    // talking. Re-check after a quiet interval rather than dropping the item.
+    const quietFor = now() - lastUserAudioAt;
+    if (call.adapter?.isSpeaking?.() || quietFor < PROACTIVE_QUIET_MS) {
+      proactiveTimer = setTimeout(() => { proactiveTimer = null; drainProactive(); }, PROACTIVE_QUIET_MS);
+      proactiveTimer.unref?.();
+      return;
+    }
+    const c = call;
+    const { makeReply, resolve } = proactiveQueue.shift();
+    speaking = true;
+    (async () => {
+      let spoken = false;
+      try {
+        const reply = await makeReply();
+        if (reply && call === c) { await c.adapter.playAudio(c.callId, reply); spoken = true; }
+      } catch (err) { log(`proactive speech failed: ${err?.message ?? err}`); }
+      finally {
+        speaking = false;
+        resolve(spoken && call === c);
+        drainProactive();
+      }
+    })();
+  }
+
   async function writeCallState(active) {
     try {
       mkdirSync(tomesDir, { recursive: true });
@@ -127,6 +176,8 @@ export function createCallEngine({
 
   async function handleAudio({ callId, speakerRef, pcm } = {}) {
     if (!call || call.callId !== callId) return;   // stray audio for no call / an old one
+    lastUserAudioAt = now();   // my human is speaking — proactive speech waits for the gap after
+
     let s = call.streams.get(speakerRef);
     if (!s) {
       const streamId = nextStreamId++;
@@ -180,8 +231,10 @@ export function createCallEngine({
     // to say. playAudio(null) signals the browser to leave "Thinking…" and wait
     // for the next press — otherwise a silent turn (no connection, empty reply,
     // timeout) hangs the UI forever, which is the "thinks and never answers" bug.
-    try { await c.adapter.playAudio(c.callId, reply); }
+    try { speaking = true; await c.adapter.playAudio(c.callId, reply); }
     catch (err) { log(`playAudio failed: ${err?.message ?? err}`); }
+    finally { speaking = false; }
+    drainProactive();   // a turn just ended — a good moment to speak anything queued
   }
 
   async function startCall(adapterId, target) {
@@ -213,6 +266,10 @@ export function createCallEngine({
     if (!call) return { ok: true, wasActive: false };
     const c = call;
     call = null;   // flip first — isCallActive() must read false the instant teardown begins
+    // Anything queued to be spoken never got heard — resolve it as NOT delivered
+    // so the caller doesn't record a "heard" the escalation clock would trust.
+    if (proactiveTimer) { clearTimeout(proactiveTimer); proactiveTimer = null; }
+    while (proactiveQueue.length) { try { proactiveQueue.shift().resolve(false); } catch { /* */ } }
     try { if (unsub) unsub(); } catch { /* already gone */ }
     unsub = null;
     for (const s of c.streams.values()) {
@@ -228,6 +285,7 @@ export function createCallEngine({
     registerCallAdapter,
     startCall,
     endCall,
+    speakProactive,   // spoken-not-banner: queue text to speak at the next gap; resolves true once heard
     isCallActive: () => Boolean(call),
     currentCallId: () => call?.callId ?? null,
     adapterIds: () => [...adapters.keys()],

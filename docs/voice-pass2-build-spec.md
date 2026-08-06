@@ -234,10 +234,30 @@ in the same commit (parent §13 discipline). PATCH bump each.
    `call-engine.js`, fail-safe to inactive, so a missing/broken state file never
    wedges a loop off. Triage / threat / reminders+event-alerts / outbox dispatch
    are **not** gated (the never-defer rows).
-   **Remaining:** the "spoken not banner" routing (D1 — noticing/triage/reminders
-   deliver *into the call as speech* rather than an outbox banner over it; the
-   deferral half is done, the delivery-channel half is not), the two-tier
-   `enrich()` latency budget + earcon, and Phylactery `maintenance_defer`.
+   **Spoken-not-banner ✅ (speaking core, ward-signed).** While a call is live,
+   proactive outbox items (triage check-ins, reminders, event alerts, noticing)
+   are SPOKEN into the call. Mechanism (the §7 union point): a **push-adapter
+   factory** registered in `voice-call-server.js` that returns an adapter only
+   when `engine.isCallActive()`; `dispatchOutboxPush` already fans every item to
+   the configured channels, so this is one adapter, not one hook per loop. The
+   engine gained `speakProactive(makeReply)` — it QUEUES the item and speaks it
+   only at a natural GAP (no reply playing, ≥1.5 s of quiet from my human — ward
+   decision: **always wait for a gap, never barge**), and resolves `true` only
+   once it was **actually heard** (false if the call ends first). **Safety
+   (ward-signed):** nothing in escalation or the threat tier changed. Speaking
+   records `delivery['voice-call'] = delivered`, which `contactDeadlineFor` reads
+   exactly as it reads a Discord-DM delivery — ward decision: **heard =
+   delivered; the human's own state/response (via voice threat scoring) still
+   drives escalation.** No auto-acknowledge of a triage item on being heard (that
+   would be "heard = handled", the option the ward rejected).
+   **Remaining (web de-dup + tuning):** the web client still injects a
+   voice-delivered item as a muted chat message (banners themselves were retired
+   in 0.3.9, so this is a record, not a banner over the call) — a small follow-up
+   can suppress the redundant ping for items already spoken, and should review the
+   web auto-ack of a triage item during a call against the escalation decision
+   (pre-existing behaviour, not a regression from this change). Also still open:
+   the two-tier `enrich()` latency budget + earcon (low value now that synthesis
+   streams) and Phylactery `maintenance_defer`.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
    language fix (2.4).** ✅ **Landed.** A `[VOICE CALL — I'm speaking, not
    typing]` dynamic block, injected into the call turn only (a `voiceMode` flag
