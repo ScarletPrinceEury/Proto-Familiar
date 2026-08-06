@@ -200,8 +200,13 @@ export function attachVoiceCall(deps) {
   // ── The WebSocket endpoint ──────────────────────────────────────────────
   const wss = new WebSocketServer({ server: httpServer, path: WS_PATH });
   wss.on('connection', async (ws) => {
-    const s = readSettings();
-    if (callsDisabled() || s?.voiceEnabled === false) {
+    // A live call is push-to-talk: my human clicks Start, the browser asks for
+    // mic permission (a hard OS-level gate), and audio only streams while the
+    // button is held. That IS the consent — the same rule voice notes already
+    // follow ("a press is the consent"), so a call is NOT gated behind the
+    // voiceEnabled continuous-listening opt-in. It hid the feature with no way
+    // to turn it on. Only the hard env off-switch (callsDisabled) stops a call.
+    if (callsDisabled()) {
       try { ws.send(JSON.stringify({ t: 'error', reason: 'voice-disabled' })); } catch { /* */ }
       ws.close(); return;
     }
