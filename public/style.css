@@ -861,6 +861,13 @@ button { cursor: pointer; font-family: var(--font); }
 }
 #tailscale-https-btn { white-space: nowrap; }
 
+/* Push-to-talk, actively recording: unmistakable feedback that the hold took. */
+#voice-call-talk.is-talking {
+  background: #c0392b;
+  color: #fff;
+  border-color: #c0392b;
+}
+
 /* ── Self-update button + popover ────────────────────────────── */
 .update-wrap {
   position: relative;

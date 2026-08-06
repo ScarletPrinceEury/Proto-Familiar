@@ -28,6 +28,7 @@
   let sourceNode = null;
   let procNode = null;
   let talking = false;
+  let sentChunks = 0;     // audio chunks sent during the current press — live feedback + a dead-mic tell
   let playHead = 0;       // AudioContext time the next reply chunk should start at
   let live = false;
 
@@ -61,7 +62,13 @@
   function onAudioProcess(e) {
     if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
     const input = e.inputBuffer.getChannelData(0);
-    try { ws.send(floatTo16kS16(input, ctx.sampleRate)); } catch { /* socket went away */ }
+    try {
+      ws.send(floatTo16kS16(input, ctx.sampleRate));
+      sentChunks += 1;
+      // Show the count climbing so capture is visibly alive; throttled so it is
+      // not a per-frame DOM write.
+      if (sentChunks % 4 === 0) setState(`Listening… (${sentChunks})`);
+    } catch { /* socket went away */ }
   }
 
   // ── Playback: s16le at the reply's rate → queued AudioBuffer ───────────
@@ -213,13 +220,23 @@
   function pressTalk() {
     if (!live || !ws || ws.readyState !== WebSocket.OPEN) return;
     talking = true;
+    sentChunks = 0;
+    // Visible proof the press registered — without this the button looks
+    // identical held or not, so "is it even working?" has no answer. The chunk
+    // count then climbs as audio is captured, so a dead mic is visible too.
+    const b = $('voice-call-talk');
+    if (b) { b.classList.add('is-talking'); b.textContent = '🔴 Recording — release to send'; }
     setState('Listening…');
   }
   function releaseTalk() {
     if (!talking) return;
     talking = false;
+    const b = $('voice-call-talk');
+    if (b) { b.classList.remove('is-talking'); b.textContent = '🎙 Hold to talk'; }
     try { ws.send(JSON.stringify({ t: 'release' })); } catch { /* */ }
-    setState('Thinking…');
+    // If nothing was captured, say so plainly rather than spinning on "Thinking…"
+    // for a turn that will never have input.
+    setState(sentChunks > 0 ? 'Thinking…' : 'Didn’t catch any audio — is the mic working? Hold and speak again.');
   }
 
   function teardown() {

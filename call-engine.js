@@ -108,6 +108,10 @@ export function createCallEngine({
     if (!msg || !call) return;
     if (msg.op === 'asr-final') {
       const text = String(msg.text ?? '').trim();
+      // Logged either way: an EMPTY asr-final (the recogniser heard audio but
+      // resolved no words) looks identical to "no audio arrived" without this,
+      // and the two have completely different fixes.
+      log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'}`);
       if (text) handleTurn(speakerForStream(msg.streamId), text).catch((e) => log(`turn failed: ${e?.message ?? e}`));
     }
     // asr-partial is reserved for live captions + barge-in (Pass 2c / web adapter).
@@ -120,9 +124,15 @@ export function createCallEngine({
       const streamId = nextStreamId++;
       const r = await worker.request({ op: 'asrStream', streamId });
       if (!r?.ok) { log(`asrStream open failed for ${speakerRef}: ${r?.reason ?? '?'}`); return; }
-      s = { streamId };
+      s = { streamId, frames: 0, bytes: 0 };
       call.streams.set(speakerRef, s);
+      // The first audio frame of a press — proof the capture path works end to
+      // end. If this never appears in the log, my human's mic audio is not
+      // reaching the server (a client capture / socket problem), not an ASR one.
+      log(`${speakerRef} started speaking — ASR stream ${streamId} open`);
     }
+    s.frames += 1;
+    s.bytes += pcm?.length ?? 0;
     await worker.sendPcm(s.streamId, pcm);
   }
 
@@ -136,9 +146,17 @@ export function createCallEngine({
   async function finalizeUtterance({ callId, speakerRef } = {}) {
     if (!call || call.callId !== callId) return;
     const s = call.streams.get(speakerRef);
-    if (!s) return;
+    if (!s) {
+      // A release with no open stream means NO audio arrived during the press —
+      // the recogniser has nothing to finalise, so there will be no asr-final
+      // and no turn. This is the signature of a client that isn't sending audio.
+      log(`${speakerRef} released, but no audio was captured this press — nothing to transcribe`);
+      return;
+    }
+    log(`${speakerRef} released after ${s.frames} audio frame(s) (${s.bytes} bytes) — finalising`);
     await worker.request({ op: 'asrStreamStop', streamId: s.streamId });   // emits asr-final → handleTurn
     if (call && call.streams.get(speakerRef) === s) {
+      s.frames = 0; s.bytes = 0;
       await worker.request({ op: 'asrStream', streamId: s.streamId });     // reopen for the next press
     }
   }
