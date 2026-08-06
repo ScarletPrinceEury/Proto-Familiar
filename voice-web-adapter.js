@@ -85,14 +85,23 @@ export function createWebCallAdapter({ hooks, send, log = () => {} } = {}) {
   };
 
   /**
-   * Feed one inbound socket message. `data` is a Buffer (binary PCM) or a
-   * string / non-binary payload (a control JSON). Never throws: a malformed
-   * control frame is logged and dropped, because a browser bug must not take
-   * the call down.
+   * Feed one inbound socket message. `isBinary` — the flag the `ws` library
+   * passes — is the ONLY discriminator: binary PCM audio vs a control JSON.
+   *
+   * ⚠️ Do NOT fall back to `Buffer.isBuffer(data)` to detect audio. The `ws`
+   * library delivers TEXT frames as Buffers too, so that check classified every
+   * control frame (`{"t":"release"}`) as audio and fed it to the recogniser as
+   * PCM — the release never fired, the utterance never finalised, and a held
+   * call transcribed nothing. (The old test hid this by passing control frames
+   * as plain strings, a shape ws never actually sends.) `String(data)` decodes a
+   * Buffer or a string equally, so parsing is shape-agnostic; routing must not be.
+   *
+   * Never throws: a malformed control frame is logged and dropped, because a
+   * browser bug must not take the call down.
    */
   function onMessage(data, isBinary) {
     if (!callId) return; // audio arriving before joinCall, or after leave — ignore
-    if (isBinary || Buffer.isBuffer(data)) {
+    if (isBinary) {
       hooks.pushAudio({ callId, speakerRef: 'ward', pcm: data });
       return;
     }
