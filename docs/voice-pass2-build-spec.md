@@ -188,10 +188,15 @@ in the same commit (parent §13 discipline). PATCH bump each.
    a graceful dynamic import so a missing `ws` never breaks boot.
    **⚠️ Unverified in cloud** — needs a mic, a live provider, and the call models
    on disk, so my human is the one who confirms it on the reference laptop.
-   **Remaining before 2b is truly done:** session logging, and the on-hardware
-   shakeout (latency, resample quality, the ScriptProcessor→AudioWorklet
-   upgrade). Then 2c (barge-in) / 2d (governor) / 2e (voice-mode prompt +
-   intentions) / 2f (VAD open-mic).
+   **Session logging ✅ landed:** a call keeps its FULL transcript (separate from
+   the capped LLM `histories`) and, on hang-up, enqueues it for memorization via
+   `enqueueSessionByDay` — the exact path web chat and Discord use, consent-gated,
+   `audienceTag:'ward-private'`. So a spoken conversation is remembered as facts
+   like any other session instead of vanishing when the socket closes.
+   **Remaining before 2b is truly done:** the on-hardware shakeout (latency,
+   resample quality) and the ScriptProcessor→AudioWorklet capture upgrade. A
+   session-log FILE (for `read_file` review + contact-baselines) is an optional
+   extra beyond the memorization enqueue.
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** ✅ **Streaming +
    barge landed.** `synthesize()` is now a pull-based async generator: the
    engine already emits PCM incrementally within the one clone-per-part
