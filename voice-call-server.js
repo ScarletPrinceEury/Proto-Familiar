@@ -131,7 +131,11 @@ export function attachVoiceCall(deps) {
         signal: ctrl.signal,
         body: JSON.stringify({
           provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
-          messages, stream: false, runToolLoop: true, enrich: true,
+          // NO tool loop on a call. A spoken "Eury?" wants a fast "Hey?", not a
+          // 19-tool research task — and a tool loop that ends in tool_calls with
+          // no final text is dead air. Removing it is the single biggest latency
+          // win for a live turn; tools during a call are a later, opt-in refinement.
+          messages, stream: false, runToolLoop: false, enrich: true,
           userMessage: transcript,
           // Tell the turn it is spoken, so the reply comes out speech-shaped
           // (short, no markdown) instead of screen-shaped (2e).
