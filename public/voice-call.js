@@ -27,6 +27,7 @@
   let micStream = null;
   let sourceNode = null;
   let procNode = null;
+  let usingWorklet = false;   // capture via AudioWorklet (preferred) vs ScriptProcessor (fallback)
   let talking = false;
   let sentChunks = 0;     // audio chunks sent during the current press — live feedback + a dead-mic tell
   let playHead = 0;       // AudioContext time the next reply chunk should start at
@@ -89,9 +90,12 @@
     return buf;
   }
 
-  function onAudioProcess(e) {
+  // One captured mono block (Float32 at ctx.sampleRate), from EITHER the
+  // AudioWorklet or the ScriptProcessor fallback — both call this so the barge
+  // detection, resample and send live in one place.
+  function processCaptureBlock(input) {
     if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
-    const input = e.inputBuffer.getChannelData(0);
+    if (!input || !input.length) return;
     // Open mic: my human talking over a playing reply is a barge. Detect the
     // onset by level and stop the reply, so the mic captures the new utterance
     // cleanly and the echo stops. (Push-to-talk barges explicitly on press.)
@@ -131,6 +135,29 @@
     // Track it so a barge can stop everything still scheduled to play.
     playingSources.push(src);
     src.onended = () => { playingSources = playingSources.filter((s) => s !== src); };
+  }
+
+  // Wire the mic into a capture node. Prefer an AudioWorklet — it runs off the
+  // main thread (no glitching under load) and ScriptProcessorNode is deprecated.
+  // Fall back to ScriptProcessor if the worklet module can't load, so capture
+  // ALWAYS works: the fallback is the path my human already made calls on.
+  async function setupCapture() {
+    sourceNode = ctx.createMediaStreamSource(micStream);
+    try {
+      await ctx.audioWorklet.addModule('voice-call-capture-worklet.js');
+      const node = new AudioWorkletNode(ctx, 'capture-processor', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 });
+      node.port.onmessage = (e) => processCaptureBlock(e.data);
+      sourceNode.connect(node);   // a worklet with no outputs pulls its input without a destination connection
+      procNode = node;
+      usingWorklet = true;
+    } catch (err) {
+      const sp = ctx.createScriptProcessor(4096, 1, 1);
+      sp.onaudioprocess = (e) => processCaptureBlock(e.inputBuffer.getChannelData(0));
+      sourceNode.connect(sp);
+      sp.connect(ctx.destination);   // ScriptProcessor must reach a destination to pull
+      procNode = sp;
+      usingWorklet = false;
+    }
   }
 
   // Stop every scheduled reply chunk at once — barge-in, or a server `stop`.
@@ -213,13 +240,7 @@
       return;
     }
 
-    sourceNode = ctx.createMediaStreamSource(micStream);
-    // ScriptProcessorNode is deprecated but universally supported and enough for
-    // push-to-talk; an AudioWorklet is a later refinement.
-    procNode = ctx.createScriptProcessor(4096, 1, 1);
-    procNode.onaudioprocess = onAudioProcess;
-    sourceNode.connect(procNode);
-    procNode.connect(ctx.destination); // required for the node to pull; it sends nothing while !talking
+    await setupCapture();
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/api/voice/call`);
@@ -309,7 +330,13 @@
   }
 
   function teardown() {
-    try { if (procNode) { procNode.disconnect(); procNode.onaudioprocess = null; } } catch { /* */ }
+    try {
+      if (procNode) {
+        if (usingWorklet) { try { procNode.port.onmessage = null; } catch { /* */ } }
+        else { try { procNode.onaudioprocess = null; } catch { /* */ } }
+        procNode.disconnect();
+      }
+    } catch { /* */ }
     try { if (sourceNode) sourceNode.disconnect(); } catch { /* */ }
     try { if (micStream) micStream.getTracks().forEach((t) => t.stop()); } catch { /* */ }
     procNode = sourceNode = micStream = null;

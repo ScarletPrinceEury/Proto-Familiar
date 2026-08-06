@@ -193,10 +193,17 @@ in the same commit (parent §13 discipline). PATCH bump each.
    `enqueueSessionByDay` — the exact path web chat and Discord use, consent-gated,
    `audienceTag:'ward-private'`. So a spoken conversation is remembered as facts
    like any other session instead of vanishing when the socket closes.
-   **Remaining before 2b is truly done:** the on-hardware shakeout (latency,
-   resample quality) and the ScriptProcessor→AudioWorklet capture upgrade. A
-   session-log FILE (for `read_file` review + contact-baselines) is an optional
-   extra beyond the memorization enqueue.
+   **AudioWorklet capture ✅ landed:** `setupCapture()` prefers an
+   `AudioWorkletNode` (`voice-call-capture-worklet.js`, runs off the main thread —
+   no glitching under load, and ScriptProcessorNode is deprecated) and **falls
+   back to the ScriptProcessor** if the worklet module can't load, so capture
+   always works — the fallback is the exact path my human already made calls on.
+   Both feed one `processCaptureBlock(samples)` (barge detection + resample +
+   send), so there is no duplicated capture logic. The worklet coalesces 128-frame
+   quanta to ~2048-sample blocks to match the old delivery granularity.
+   **Remaining before 2b is truly done:** just the on-hardware shakeout (latency,
+   resample quality). A session-log FILE (for `read_file` review + contact-
+   baselines) is an optional extra beyond the memorization enqueue.
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** ✅ **Streaming +
    barge landed.** `synthesize()` is now a pull-based async generator: the
    engine already emits PCM incrementally within the one clone-per-part
