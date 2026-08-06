@@ -146,10 +146,14 @@ export function createCallEngine({
   async function handleTurn(speakerRef, transcript) {
     const c = call;
     if (!c) return;
-    let reply;
+    let reply = null;
     try { reply = await onTurn(transcript, { callId: c.callId, speakerRef }); }
-    catch (err) { log(`onTurn threw: ${err?.message ?? err}`); return; }
-    if (reply == null || call !== c) return;   // nothing to say, or the call ended mid-turn
+    catch (err) { log(`onTurn threw: ${err?.message ?? err}`); }
+    if (call !== c) return;   // the call ended mid-turn — nothing to deliver to
+    // Always hand the turn's outcome to the adapter, even when there is nothing
+    // to say. playAudio(null) signals the browser to leave "Thinking…" and wait
+    // for the next press — otherwise a silent turn (no connection, empty reply,
+    // timeout) hangs the UI forever, which is the "thinks and never answers" bug.
     try { await c.adapter.playAudio(c.callId, reply); }
     catch (err) { log(`playAudio failed: ${err?.message ?? err}`); }
   }

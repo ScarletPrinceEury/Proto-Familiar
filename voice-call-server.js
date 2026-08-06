@@ -33,6 +33,11 @@ import { MODELS_SUBDIR } from './voice-fetch.js';
 import { KIND_PCM } from './audio-frame.js';
 
 const WS_PATH = '/api/voice/call';
+// How long a single spoken turn may take before the call gives up and resets my
+// human off "Thinking…". Generous — the first turn pays MCP cold-start + context
+// enrichment + the model — but finite, so a hang can never masquerade as
+// thinking forever.
+const VOICE_TURN_TIMEOUT_MS = 90_000;
 // A rolling 16-bit-safe stream id in a high band, kept clear of read-aloud's
 // low ids so a read-aloud and a call in the same second don't share one.
 let ttsStreamSeq = 40000;
@@ -82,10 +87,19 @@ export function attachVoiceCall(deps) {
     const hist = histories.get(ctx.callId) ?? [];
     const messages = [...hist, { role: 'user', content: transcript }];
     let reply = '';
+    // A hung turn must not hang the call forever. The enriched, tool-looping
+    // chat path can be slow — an MCP cold start on the first turn, a thinking
+    // model — but it has to end, so the caller can reset my human off "Thinking…"
+    // and they can try again. Generous, so a legitimately slow reply is not cut,
+    // but finite.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), VOICE_TURN_TIMEOUT_MS);
+    const started = Date.now();
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
         body: JSON.stringify({
           provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
           messages, stream: false, runToolLoop: true, enrich: true,
@@ -94,11 +108,25 @@ export function attachVoiceCall(deps) {
           sessionAudience: 'ward-private',
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       reply = data?.choices?.[0]?.message?.content ?? '';
+      // Silence with a reason. An error status or an empty body used to vanish
+      // here — my human heard nothing and no log said why. Now every no-reply
+      // path names itself, so "it thinks and never answers" is diagnosable.
+      if (!res.ok) {
+        log(`voice turn /api/chat returned ${res.status}: ${JSON.stringify(data)?.slice(0, 300)}`);
+      } else if (!reply) {
+        log(`voice turn produced no content after ${Date.now() - started}ms (thinking model with empty content? tool loop with no final text?)`);
+      }
     } catch (err) {
-      log(`voice turn /api/chat failed: ${err?.message ?? err}`);
+      if (err?.name === 'AbortError') {
+        log(`voice turn timed out after ${VOICE_TURN_TIMEOUT_MS}ms — giving up so the call can reset`);
+      } else {
+        log(`voice turn /api/chat failed: ${err?.message ?? err}`);
+      }
       return null;
+    } finally {
+      clearTimeout(timer);
     }
     if (reply) {
       const next = [...messages, { role: 'assistant', content: reply }];

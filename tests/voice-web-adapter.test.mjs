@@ -53,11 +53,14 @@ test('playAudio frames the reply with speak-start / PCM / speak-end', async () =
   assert.deepEqual(rec.sent[3], { t: 'speak-end' });
 });
 
-test('playAudio(null) says nothing at all — a valid silent turn', async () => {
+test('playAudio(null) announces the silent turn so the UI can reset', async () => {
+  // A silent turn used to send nothing, which left the browser stuck on
+  // "Thinking…" forever waiting for a reply that never comes. It now emits
+  // no-reply so the client leaves that state and waits for the next press.
   const { rec, adapter } = harness();
   await adapter.joinCall();
   await adapter.playAudio('web-1', null);
-  assert.equal(rec.sent.length, 0);
+  assert.deepEqual(rec.sent, [{ t: 'no-reply' }]);
 });
 
 test('stopPlayback and a barge frame both signal stop', async () => {
