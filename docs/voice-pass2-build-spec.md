@@ -196,11 +196,21 @@ in the same commit (parent §13 discipline). PATCH bump each.
    the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
    what actually played (parent §6.2 — non-negotiable, exact-values rule: the
    played-sample count is code's, never the model's).
-4. **2d — the compute governor.** Call-state deferral (the reconciled 2.1
-   list), the two-tier `enrich()` latency budget (soft ~1200 ms / earcon-bridged
-   hard ~3000 ms — 39 ms measured baseline gives enormous headroom, so the
-   tiers are for the tail only), Phylactery `maintenance_defer`, the earcon
-   asset. Off-switch per new deferral behavior.
+4. **2d — the compute governor.** ✅ **Call-state deferral landed.** The eight
+   deferrable loops from the §2.1 table — pondering, memorization drain, memory
+   sweep, tome graduation, gcal sync, needs-tracking, content-regate, warm
+   reach-out — now check `isCallActiveFromFile()` at their tick entry and skip
+   while a call is live (a silent defer that the existing `finally`/overlap-guard
+   already unwinds, so the next tick runs normally once the call ends). This is
+   the churn the ward watched during a live call (pondering + memorization firing
+   mid-conversation). The gate is the governor read-side already exported by
+   `call-engine.js`, fail-safe to inactive, so a missing/broken state file never
+   wedges a loop off. Triage / threat / reminders+event-alerts / outbox dispatch
+   are **not** gated (the never-defer rows).
+   **Remaining:** the "spoken not banner" routing (D1 — noticing/triage/reminders
+   deliver *into the call as speech* rather than an outbox banner over it; the
+   deferral half is done, the delivery-channel half is not), the two-tier
+   `enrich()` latency budget + earcon, and Phylactery `maintenance_defer`.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
    language fix (2.4).** ✅ **Landed.** A `[VOICE CALL — I'm speaking, not
    typing]` dynamic block, injected into the call turn only (a `voiceMode` flag
