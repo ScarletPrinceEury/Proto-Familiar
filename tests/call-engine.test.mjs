@@ -93,6 +93,51 @@ test('audio → transcript → turn → playback, then a clean end', async () =>
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('hybrid ASR: offlineFinal loads the offline model and flags the stream; off does neither', async () => {
+  // ON: offlineFinal() true + a model dir → startCall loads asr-offline, and every
+  // asrStream the engine opens carries offlineFinal:true so the worker re-transcribes.
+  {
+    const dir = await tmp();
+    try {
+      const worker = fakeWorker();
+      const rec = { played: [] };
+      const engine = createCallEngine({
+        worker, onTurn: async () => null, tomesDir: dir,
+        streamingModelDir: '/models/stream', offlineModelDir: '/models/offline',
+        offlineFinal: () => true,
+      });
+      engine.registerCallAdapter(fakeAdapterFactory(rec));
+      await engine.startCall('fake');
+      const loads = worker.calls.requests.filter((r) => r.op === 'load');
+      assert.ok(loads.some((r) => r.role === 'asr-offline'), 'offline model was loaded');
+      await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+      const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+      assert.equal(open.offlineFinal, true, 'the stream is opened in offline-final mode');
+      await engine.endCall();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  }
+  // OFF: no offline load, and the stream opens streaming-only.
+  {
+    const dir = await tmp();
+    try {
+      const worker = fakeWorker();
+      const rec = { played: [] };
+      const engine = createCallEngine({
+        worker, onTurn: async () => null, tomesDir: dir,
+        streamingModelDir: '/models/stream', offlineModelDir: '/models/offline',
+        offlineFinal: () => false,
+      });
+      engine.registerCallAdapter(fakeAdapterFactory(rec));
+      await engine.startCall('fake');
+      assert.ok(!worker.calls.requests.some((r) => r.op === 'load' && r.role === 'asr-offline'), 'offline model not loaded when off');
+      await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+      const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+      assert.equal(open.offlineFinal, false, 'the stream is opened streaming-only');
+      await engine.endCall();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  }
+});
+
 test('endUtterance (push-to-talk release) stops the stream and reopens it for the next press', async () => {
   const dir = await tmp();
   try {

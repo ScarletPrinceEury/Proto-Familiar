@@ -394,6 +394,11 @@ const state = {
   // How a call captures: 'push' (hold the button) or 'open' (hands-free — the mic
   // stays live and the recogniser's own endpointing segments what I say).
   voiceCallMode: 'push',
+  // Hybrid call transcription: the streaming model finds where I stop talking,
+  // then the accurate offline model (the one voice notes use) re-transcribes the
+  // utterance. Default ON — far fewer garbled words — at the cost of a small
+  // per-utterance delay the ward can trade away by turning this off.
+  voiceCallOfflineTranscribe: true,
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -454,7 +459,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
-  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -3846,6 +3851,7 @@ function readSettingsFromUI() {
   if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
+  if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
   if ($('read-aloud-default-toggle')) state.readAloudByDefault = $('read-aloud-default-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
@@ -4010,6 +4016,7 @@ function writeSettingsToUI() {
   if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
+  if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);

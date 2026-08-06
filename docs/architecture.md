@@ -2564,6 +2564,18 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   runner is an injected `onTurn` seam server.js wires to the chat path. Hard
   off-switch `PROTO_FAMILIAR_VOICE_CALL_DISABLED=1`. The web adapter + the real
   `onTurn` wiring are the next 2b slice.
+  - **Hybrid ASR (ward-configurable, default ON).** The streaming 20 M zipformer
+    is lossy (uppercase, no punctuation, weak on hard words). Since a call
+    utterance has an explicit boundary (Discord speaking-end / web release), the
+    engine uses streaming only for endpointing and re-transcribes the finished
+    clip with the accurate offline model (SenseVoice — the same one voice notes
+    use). `audio-worker.mjs` buffers the utterance and `emitFinal` runs the
+    offline pass on finalize, falling back to the streaming text if the offline
+    model isn't loaded or errors (graceful). The engine loads `asr-offline`
+    alongside `asr-streaming` at call start when enabled and opens each stream
+    with `offlineFinal`. Setting `voiceCallOfflineTranscribe`; off-switch
+    `PROTO_FAMILIAR_VOICE_OFFLINE_ASR_DISABLED=1`. Benefits web and Discord calls
+    equally (both share the engine + worker).
 - **`voice-discord-adapter.js` is the Discord transport (Pass 3).** A second
   `CallAdapter` behind the same contract, so `call-engine.js` is untouched. Its
   only real work is the two format seams: inbound Opus (48 kHz stereo, decoded

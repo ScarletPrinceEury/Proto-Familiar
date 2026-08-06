@@ -53,6 +53,8 @@ export function createCallEngine({
   worker,                 // listeningWorker(): { request, sendPcm, on }
   onTurn,                 // async (transcript, ctx) => reply | null   (injected)
   streamingModelDir = '', // asr-streaming model dir; loaded once on call start
+  offlineModelDir = '',   // asr-offline (SenseVoice) dir; loaded when offlineFinal is on
+  offlineFinal = () => false, // hybrid ASR: re-transcribe each utterance with the offline model
   tomesDir = DEFAULT_TOMES_DIR,
   maxCalls = 1,
   now = () => Date.now(),
@@ -181,7 +183,7 @@ export function createCallEngine({
     let s = call.streams.get(speakerRef);
     if (!s) {
       const streamId = nextStreamId++;
-      const r = await worker.request({ op: 'asrStream', streamId });
+      const r = await worker.request({ op: 'asrStream', streamId, offlineFinal: call.offlineFinal === true });
       if (!r?.ok) { log(`asrStream open failed for ${speakerRef}: ${r?.reason ?? '?'}`); return; }
       s = { streamId, frames: 0, bytes: 0 };
       call.streams.set(speakerRef, s);
@@ -216,7 +218,7 @@ export function createCallEngine({
     await worker.request({ op: 'asrStreamStop', streamId: s.streamId });   // emits asr-final → handleTurn
     if (call && call.streams.get(speakerRef) === s) {
       s.frames = 0; s.bytes = 0;
-      await worker.request({ op: 'asrStream', streamId: s.streamId });     // reopen for the next press
+      await worker.request({ op: 'asrStream', streamId: s.streamId, offlineFinal: call.offlineFinal === true });     // reopen for the next press
     }
   }
 
@@ -270,11 +272,23 @@ export function createCallEngine({
       if (!load?.ok) return { ok: false, reason: load?.reason ?? 'load-failed', detail: load?.detail };
     }
 
+    // Hybrid ASR (ward-configurable): the streaming model finds the utterance
+    // boundary; the accurate offline model (SenseVoice) transcribes it. Load the
+    // offline model too, best-effort — if it can't load we fall back to
+    // streaming-only rather than failing the call (graceful degradation).
+    const useOffline = Boolean(offlineFinal()) && Boolean(offlineModelDir);
+    let offlineReady = false;
+    if (useOffline) {
+      const off = await worker.request({ op: 'load', role: 'asr-offline', modelDir: offlineModelDir }, { timeoutMs: 60000 }).catch(() => null);
+      offlineReady = Boolean(off?.ok);
+      if (!offlineReady) log(`offline transcription model failed to load (${off?.reason ?? 'unknown'}) — call falls back to streaming transcripts`);
+    }
+
     let joined;
     try { joined = await adapter.joinCall(target); }
     catch (err) { return { ok: false, reason: 'join-failed', detail: String(err?.message ?? err) }; }
 
-    call = { callId: joined?.callId ?? `call-${now()}`, adapter, startedAt: now(), streams: new Map() };
+    call = { callId: joined?.callId ?? `call-${now()}`, adapter, startedAt: now(), streams: new Map(), offlineFinal: offlineReady };
     unsub = worker.on(onWorkerFrame);
     await writeCallState(true);
     log(`call ${call.callId} started on ${adapter.id}`);
