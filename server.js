@@ -49,6 +49,7 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
+import { foldReasoningIntoContent } from './llm-call.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
@@ -1098,23 +1099,37 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const text = await upstream.text();
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
-    if (thalamusEnvelope && upstream.ok) {
-      try {
-        const parsed = JSON.parse(text);
-        parsed._thalamus = thalamusEnvelope;
-        // M8 idle-mode outcome reporting: fire-and-forget after response sent.
-        const responseText = parsed.choices?.[0]?.message?.content ?? '';
-        if (enriched.surfacedBookmarks?.length > 0) {
-          reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
-            .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
-        }
-        if (enriched.surfacedTasks?.length > 0 && responseText) {
-          tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
-            .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
-        }
-        return res.send(JSON.stringify(parsed));
-      } catch { /* upstream returned non-JSON — pass through unchanged */ }
+    // RULE A at the one seam every non-stream reply crosses. A thinking model
+    // (GLM/DeepSeek) parks its answer in `reasoning_content` when `content` is
+    // empty. A raw passthrough of `.content` hands every non-stream caller —
+    // the voice turn, guide-chat, the handoff summariser — an empty string, so
+    // the reply silently vanishes. Fold the recovered text into
+    // choices[0].message.content HERE, so no caller has to remember. A response
+    // carrying tool_calls is left untouched: an empty content beside tool_calls
+    // is legitimate, and reasoning is not an answer there.
+    let parsed = null;
+    if (upstream.ok) {
+      try { parsed = JSON.parse(text); } catch { parsed = null; }
+      if (parsed?.choices?.[0]?.message) foldReasoningIntoContent(parsed.choices[0].message);
     }
+    if (thalamusEnvelope && parsed) {
+      parsed._thalamus = thalamusEnvelope;
+      // M8 idle-mode outcome reporting: fire-and-forget after response sent.
+      const responseText = parsed.choices?.[0]?.message?.content ?? '';
+      if (enriched.surfacedBookmarks?.length > 0) {
+        reportSurfacingOutcomes({ responseText, bookmarks: enriched.surfacedBookmarks })
+          .catch(err => console.error('[server] reportSurfacingOutcomes failed:', err?.message ?? err));
+      }
+      if (enriched.surfacedTasks?.length > 0 && responseText) {
+        tagRaisedOutcomes({ responseText, tasks: enriched.surfacedTasks })
+          .catch(err => console.error('[server] tagRaisedOutcomes failed:', err?.message ?? err));
+      }
+      return res.send(JSON.stringify(parsed));
+    }
+    // Successful JSON without an envelope: re-serialise so the recovered
+    // content rides out. A non-JSON body or an upstream error passes through
+    // byte-for-byte unchanged.
+    if (parsed) return res.send(JSON.stringify(parsed));
     return res.send(text);
   }
 

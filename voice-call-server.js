@@ -34,6 +34,7 @@ import { KIND_PCM } from './audio-frame.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
+import { extractContent } from './llm-call.js';
 
 const WS_PATH = '/api/voice/call';
 // How long a single spoken turn may take before the call gives up and resets my
@@ -135,7 +136,18 @@ export function attachVoiceCall(deps) {
           // 19-tool research task — and a tool loop that ends in tool_calls with
           // no final text is dead air. Removing it is the single biggest latency
           // win for a live turn; tools during a call are a later, opt-in refinement.
+          //
+          // RULE A (0.9 post-mortem): with runToolLoop:false this request lands on
+          // /api/chat's RAW non-stream passthrough — which, unlike the tool-loop
+          // path, applies NEITHER of callProviderChat's guarantees. So we
+          // replicate BOTH here: a generous max_tokens (a thinking model bills its
+          // reasoning against the cap; with no cap it spends the provider default
+          // reasoning and returns empty content — dead silence on the call), and
+          // extractContent at the reply boundary below (the answer may sit in
+          // reasoning_content, not content). This is the same fix Discord paid for
+          // in 0.9.7; the voice path is the surface that hadn't gotten the memo.
           messages, stream: false, runToolLoop: false, enrich: true,
+          max_tokens: 4000,
           userMessage: transcript,
           // Tell the turn it is spoken, so the reply comes out speech-shaped
           // (short, no markdown) instead of screen-shaped (2e).
@@ -145,7 +157,10 @@ export function attachVoiceCall(deps) {
         }),
       });
       const data = await res.json().catch(() => null);
-      reply = data?.choices?.[0]?.message?.content ?? '';
+      // extractContent, not raw .content — a thinking model parks its answer in
+      // reasoning_content when content is empty (RULE A). Reading .content alone
+      // was the silence: the reply existed, we just weren't looking where it landed.
+      reply = extractContent(data?.choices?.[0]?.message ?? {});
       // Silence with a reason. An error status or an empty body used to vanish
       // here — my human heard nothing and no log said why. Now every no-reply
       // path names itself, so "it thinks and never answers" is diagnosable.
