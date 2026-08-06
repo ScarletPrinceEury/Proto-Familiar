@@ -164,7 +164,7 @@ export function createCallEngine({
       const meta = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s`;
       log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'} [${meta}]`);
       if (text) {
-        handleTurn(speakerForStream(msg.streamId), text).catch((e) => log(`turn failed: ${e?.message ?? e}`));
+        handleTurn(speakerForStream(msg.streamId), text);   // serialised dispatcher; errors handled inside
       } else if (call?.adapter) {
         // Nothing recognised — release my human from "Thinking…" so the call is
         // usable again, instead of waiting on a turn that will never start.
@@ -220,7 +220,26 @@ export function createCallEngine({
     }
   }
 
-  async function handleTurn(speakerRef, transcript) {
+  // Turns are SERIALISED. Open mic fires an asr-final per utterance, so a burst
+  // of them ("Eury?" … "Hey?" … "can you hear me?") would otherwise launch
+  // overlapping heavy turns that thrash and none replies in time. One turn runs
+  // at a time; anything said DURING it coalesces to the LATEST, so the freshest
+  // thing my human said gets answered rather than a stale backlog.
+  let turnBusy = false;
+  let pendingTurn = null;
+
+  function handleTurn(speakerRef, transcript) {
+    if (turnBusy) { pendingTurn = { speakerRef, transcript }; return; }
+    turnBusy = true;
+    runOneTurn(speakerRef, transcript).finally(() => {
+      turnBusy = false;
+      const next = pendingTurn;
+      pendingTurn = null;
+      if (next && call) handleTurn(next.speakerRef, next.transcript);
+    });
+  }
+
+  async function runOneTurn(speakerRef, transcript) {
     const c = call;
     if (!c) return;
     let reply = null;
