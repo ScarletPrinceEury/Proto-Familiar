@@ -192,10 +192,25 @@ in the same commit (parent §13 discipline). PATCH bump each.
    shakeout (latency, resample quality, the ScriptProcessor→AudioWorklet
    upgrade). Then 2c (barge-in) / 2d (governor) / 2e (voice-mode prompt +
    intentions) / 2f (VAD open-mic).
-3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** First audio after
-   the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
-   what actually played (parent §6.2 — non-negotiable, exact-values rule: the
-   played-sample count is code's, never the model's).
+3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** ✅ **Streaming +
+   barge landed.** `synthesize()` is now a pull-based async generator: the
+   engine already emits PCM incrementally within the one clone-per-part
+   generation, so it yields each frame as it lands instead of buffering the whole
+   reply. **First audio arrives after the first chunk, not the whole reply, with
+   no extra clones and no voice drift** (the read-aloud lesson — a part is still
+   ONE generation). **Barge-in:** pressing to talk while a reply is playing sends
+   `{t:'barge'}` and stops local playback instantly (client-side, no network
+   wait); the adapter's `playAudio` loop then breaks on its `barged` flag, which
+   runs the generator's `return()`/`finally` so TTS **stops generating the rest**
+   of the reply instead of finishing something nobody is hearing. Covered by a
+   watched-fail adapter test (a reply held mid-stream, barged, asserts no
+   post-barge chunk + a clean `speak-end`).
+   **Remaining:** `spokenUpTo` — recording in the call history HOW MUCH of the
+   reply was actually heard before the interrupt (the exact played-sample → text
+   mapping). The barge stops the audio correctly; what it does not yet do is tell
+   the next turn "you were cut off after word N", so the Familiar can't yet know
+   precisely where it was interrupted. That mapping (sample count is code's,
+   never the model's — the exact-values rule) is the piece still to build.
 4. **2d — the compute governor.** ✅ **Call-state deferral landed.** The eight
    deferrable loops from the §2.1 table — pondering, memorization drain, memory
    sweep, tome graduation, gcal sync, needs-tracking, content-regate, warm

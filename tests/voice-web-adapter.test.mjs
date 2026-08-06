@@ -78,6 +78,28 @@ test('playAudio(null) announces the silent turn so the UI can reset', async () =
   assert.deepEqual(rec.sent, [{ t: 'no-reply' }]);
 });
 
+test('barge-in stops a reply mid-stream — no chunks after the barge, then speak-end', async () => {
+  const { rec, adapter, onMessage } = harness();
+  await adapter.joinCall();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  async function* reply() {
+    yield Buffer.alloc(10);   // arrives before the barge — should be sent
+    await gate;               // hold here while my human talks over it
+    yield Buffer.alloc(20);   // arrives after the barge — must NOT be sent
+  }
+  const p = adapter.playAudio('web-1', reply());
+  await tick();               // let speak-start + the first chunk go out
+  onMessage(Buffer.from(JSON.stringify({ t: 'barge' })), false);   // my human interrupts
+  release();                  // the generator now offers the second chunk
+  await p;
+
+  const bins = rec.sent.filter((x) => x.bin != null).map((x) => x.bin);
+  assert.deepEqual(bins, [10], 'only the pre-barge chunk reached the browser');
+  assert.ok(rec.sent.some((x) => x.t === 'stop'), 'a stop was sent');
+  assert.equal(rec.sent.at(-1).t, 'speak-end', 'and the reply closed cleanly');
+});
+
 test('stopPlayback and a barge frame both signal stop', async () => {
   const { rec, adapter, onMessage } = harness();
   await adapter.joinCall();

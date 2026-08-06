@@ -138,14 +138,17 @@ export function attachVoiceCall(deps) {
     return reply;
   }
 
-  // ── onTurn dep: reply text → TTS PCM (one clone for the whole reply) ─────
-  // PocketTTS clones zero-shot per call, so the WHOLE reply is one ttsStream —
-  // splitting per sentence would give a different voice each time (the exact
-  // read-aloud lesson). We collect the streamed PCM and hand it back as one
-  // chunk; the async-iterable also carries the sample rate so the browser can
-  // play it. (Frame-level streaming for lower first-audio latency is a 2c/tuning
-  // refinement; buffering the reply is correct and one-voiced.)
-  async function synthesize(text) {
+  // ── onTurn dep: reply text → TTS PCM, STREAMED as it is generated (2c) ───
+  // PocketTTS clones zero-shot per call, so each `prepareForSpeech` part is ONE
+  // ttsStream — splitting a part per sentence would re-clone and drift the voice
+  // (the read-aloud lesson). But the engine already emits PCM *incrementally*
+  // during that one generation, so rather than buffer a whole part before
+  // yielding (the old behaviour — my human heard nothing until the entire reply
+  // finished), this yields each frame as it lands. First audio arrives after the
+  // first chunk, not the whole reply, with no extra clones and no drift. The
+  // async iterable still carries the sample rate for the browser, and an abort
+  // signal (barge-in) stops it between frames.
+  async function synthesize(text, { signal } = {}) {
     const s = readSettings();
     const parts = prepareForSpeech(text).parts;
     if (parts.length === 0) return emptyStream();
@@ -158,28 +161,44 @@ export function attachVoiceCall(deps) {
     if (!loaded?.ok) { log(`TTS model not loaded (${loaded?.reason}) — reply goes unspoken`); return emptyStream(); }
     const sampleRate = Number(loaded.sampleRate) || 24000;
 
-    const chunks = [];
-    for (const part of parts) {
+    // Bridge the worker's frame CALLBACK into a pull-based async generator: a
+    // queue holds frames that have arrived; the generator awaits the next one
+    // when the queue is empty, and ends when the request settles or a barge
+    // aborts. This is what lets `for await` in the adapter play frame-by-frame.
+    async function* streamPart(part) {
       const streamId = nextTtsStreamId();
+      const queue = [];
+      let wake = null;
+      let settled = false;
+      const bump = () => { if (wake) { wake(); wake = null; } };
       const unsub = ttsWorker.on((frame) => {
-        if (frame.kind === KIND_PCM && frame.streamId === streamId && frame.pcm?.length) {
-          chunks.push(Buffer.from(frame.pcm));
-        }
+        if (frame.kind === KIND_PCM && frame.streamId === streamId && frame.pcm?.length) { queue.push(Buffer.from(frame.pcm)); bump(); }
       });
+      const req = ttsWorker.request({ op: 'ttsStream', streamId, text: part, referenceWav: voice.path }, { timeoutMs: 300_000 })
+        .then((r) => { if (!r?.ok) log(`ttsStream part failed: ${r?.reason ?? '?'}`); })
+        .catch((err) => log(`ttsStream threw: ${err?.message ?? err}`))
+        .finally(() => { settled = true; bump(); });
       try {
-        const r = await ttsWorker.request(
-          { op: 'ttsStream', streamId, text: part, referenceWav: voice.path },
-          { timeoutMs: 300_000 },
-        );
-        if (!r?.ok) log(`ttsStream part failed: ${r?.reason ?? '?'}`);
-      } catch (err) {
-        log(`ttsStream threw: ${err?.message ?? err}`);
-      } finally { unsub(); }
+        while (true) {
+          if (signal?.aborted) break;
+          if (queue.length) { yield queue.shift(); continue; }
+          if (settled) break;
+          await new Promise((res) => { wake = res; });
+        }
+      } finally {
+        unsub();
+        await req.catch(() => {});   // let the request settle so a late frame can't leak past teardown
+      }
     }
-    const pcm = Buffer.concat(chunks);
+
     return {
       sampleRate,
-      async *[Symbol.asyncIterator]() { if (pcm.length) yield pcm; },
+      async *[Symbol.asyncIterator]() {
+        for (const part of parts) {
+          if (signal?.aborted) return;
+          yield* streamPart(part);
+        }
+      },
     };
   }
 
