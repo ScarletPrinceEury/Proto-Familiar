@@ -238,15 +238,29 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       // instead of a bare "join-failed" (the failures-that-matter-are-observable
       // rule). One-time dependency report names the encryption/Opus libs in play.
       try { log(`voice deps: ${deps.generateDependencyReport?.() ?? 'n/a'}`); } catch { /* */ }
-      connection.on('stateChange', (oldS, newS) => log(`voice connection: ${oldS?.status} → ${newS?.status}`));
+      connection.on('stateChange', (oldS, newS) => {
+        // A WebSocket-close disconnect carries the code+reason that names the
+        // failure (4006 session invalid, 4014 disconnected, etc.) — surface it.
+        const extra = newS?.closeCode != null ? ` (ws close ${newS.closeCode})` : (newS?.reason != null ? ` (reason ${newS.reason})` : '');
+        log(`voice connection: ${oldS?.status} → ${newS?.status}${extra}`);
+      });
       connection.on('error', (err) => log(`voice connection error: ${err?.message ?? err}`));
+      // The voice handshake (voice WS + UDP IP-discovery + encryption) is a
+      // sub-protocol we can't see from the main gateway. Buffer @discordjs/voice's
+      // own debug trace and flush it ONLY on failure — silent on a healthy call,
+      // but a full post-mortem when it stalls (where connecting → signalling loops
+      // hide the real cause: a ws close code vs a UDP timeout).
+      const trace = [];
+      connection.on('debug', (m) => { trace.push(m); if (trace.length > 120) trace.shift(); });
 
       try {
         await deps.entersState(connection, deps.VoiceConnectionStatus.Ready, 30_000);
       } catch (err) {
         // Name WHERE it stalled — the last state is the clue (stuck in
-        // 'signalling' = no VOICE_SERVER_UPDATE; 'connecting' = UDP/encryption).
+        // 'signalling' = no VOICE_SERVER_UPDATE / voice-ws rejected;
+        // 'connecting' = UDP IP-discovery / encryption).
         const stuckAt = connection?.state?.status ?? 'unknown';
+        if (trace.length) log(`voice handshake trace (newest last):\n  ${trace.slice(-40).join('\n  ')}`);
         try { connection.destroy(); } catch { /* */ }
         connection = null;
         throw new Error(`voice connection never reached Ready (stuck at '${stuckAt}'): ${err?.message ?? err}`);
