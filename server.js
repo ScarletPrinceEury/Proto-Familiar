@@ -452,7 +452,7 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // server-injected-block convention — no macros), only on a real call turn. The
   // deferred-intents surface it should weave in rides the normal enrich() blocks.
   if (voiceMode && enrichMode === 'full') {
-    const block = `\n\n[VOICE CALL — I'm speaking, not typing]\nI'm on a live voice call with my human right now, so my reply gets read aloud. I keep it the way I'd actually talk: short, plain sentences, no markdown, no bullet points or headings, no asterisks or emoji — spoken aloud those are either read out literally or stripped, and either way they don't belong in speech. A sentence or two is usually plenty; when there's more to say I lead with the part that matters. If something's been waiting for me to bring up — a thought I meant to share, a check-in — I just work it into what I'm saying, the way it would come up in a real conversation, not as a separate announcement.`;
+    const block = `\n\n[VOICE CALL — I'm speaking, not typing]\nI'm on a live voice call with my human right now, so my reply gets read aloud. I keep it the way I'd actually talk: plain spoken sentences, no markdown, no bullet points or headings, no asterisks or emoji — spoken aloud those are either read out literally or stripped, and either way they don't belong in speech. I say as much as the moment actually wants — sometimes that's a quick line, but I don't clip myself to a one-liner when there's something real to get into; I talk like I'm in the room with them, and let it run as long as it naturally would out loud, leading with the part that matters. If something's been waiting for me to bring up — a thought I meant to share, a check-in — I just work it into what I'm saying, the way it would come up in a real conversation, not as a separate announcement.`;
     enrichedResult = { ...enrichedResult, dynamic: (enrichedResult.dynamic || '') + block };
   }
 
@@ -4941,15 +4941,32 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // (the no-module-may-break-the-chat-path rule).
   try {
     const { attachVoiceCall } = await import('./voice-call-server.js');
-    attachVoiceCall({
-      httpServer, rootDir: __dirname, port: PORT,
-      readSettings: readSettingsSync,
+    const sharedVoiceWorkers = {
       getListeningWorker: async () => (await listeningWorker({ rootDir: __dirname })).worker,
       getTtsWorker: async () => (await currentAudioWorker()).worker,
       resolveVoiceForSettings: (s) => resolveVoice({ rootDir: __dirname, settings: s }),
       ensureTtsLoaded,
+    };
+    attachVoiceCall({
+      httpServer, rootDir: __dirname, port: PORT,
+      readSettings: readSettingsSync,
+      ...sharedVoiceWorkers,
       connectionForFeature,
     });
+    // Discord voice (Pass 3) shares the SAME ASR/TTS workers — one call at a
+    // time across both transports. Failure here never blocks web calls or chat.
+    try {
+      const { attachDiscordVoice } = await import('./voice-discord-server.js');
+      const { setDiscordVoiceController } = await import('./discord-gateway.js');
+      const discordVoice = attachDiscordVoice({
+        rootDir: __dirname,
+        readSettings: readSettingsSync,
+        ...sharedVoiceWorkers,
+      });
+      setDiscordVoiceController(discordVoice);
+    } catch (err) {
+      console.warn(`[discord-voice] not attached (${err?.message ?? err}) — Discord voice unavailable; everything else works`);
+    }
   } catch (err) {
     console.warn(`[voice-call] not attached (${err?.message ?? err}) — live calls unavailable; everything else works`);
   }
