@@ -37,9 +37,24 @@ test('inbound binary is PCM for the ward; it is ignored until a call is joined',
 test('a release control frame finalises the utterance', async () => {
   const { rec, adapter, onMessage } = harness();
   await adapter.joinCall();
-  onMessage(JSON.stringify({ t: 'release' }), false);
+  // ⚠️ The `ws` library delivers TEXT frames as Buffers (isBinary=false), NOT as
+  // strings. This test used to pass a string, which hid a bug where a Buffer
+  // control frame was misrouted as audio and the release never fired. Send it
+  // the way ws actually does.
+  onMessage(Buffer.from(JSON.stringify({ t: 'release' })), false);
   assert.equal(rec.ended.length, 1);
   assert.equal(rec.ended[0].speakerRef, 'ward');
+});
+
+test('a control frame arriving as a Buffer (real ws shape) is NOT treated as audio', async () => {
+  // The exact regression: a held call opened an ASR stream but never finalised,
+  // because {"t":"release"} came in as a Buffer and Buffer.isBuffer routed it to
+  // pushAudio. Routing must key on isBinary alone.
+  const { rec, adapter, onMessage } = harness();
+  await adapter.joinCall();
+  onMessage(Buffer.from(JSON.stringify({ t: 'release' })), false);
+  assert.equal(rec.audio.length, 0, 'a text frame must never be fed to the recogniser');
+  assert.equal(rec.ended.length, 1, 'and it must finalise the utterance');
 });
 
 test('playAudio frames the reply with speak-start / PCM / speak-end', async () => {
@@ -67,15 +82,15 @@ test('stopPlayback and a barge frame both signal stop', async () => {
   const { rec, adapter, onMessage } = harness();
   await adapter.joinCall();
   await adapter.stopPlayback();
-  onMessage(JSON.stringify({ t: 'barge' }), false);
+  onMessage(Buffer.from(JSON.stringify({ t: 'barge' })), false);
   assert.deepEqual(rec.sent, [{ t: 'stop' }, { t: 'stop' }]);
 });
 
 test('a malformed or unknown control frame is dropped, never thrown', async () => {
   const { rec, adapter, onMessage } = harness();
   await adapter.joinCall();
-  onMessage('not json', false);
-  onMessage(JSON.stringify({ t: 'who-knows' }), false);
+  onMessage(Buffer.from('not json'), false);
+  onMessage(Buffer.from(JSON.stringify({ t: 'who-knows' })), false);
   assert.equal(rec.ended.length, 0);
   assert.equal(rec.audio.length, 0);
 });
@@ -134,7 +149,7 @@ test('web adapter + call engine: a press/release round-trips audio in and a spok
     await tick();
     assert.ok(worker.calls.requests.some((r) => r.op === 'asrStream'), 'engine opened a stream');
     assert.equal(worker.calls.pcm.length, 1, 'PCM was forwarded to the worker');
-    web.onMessage(JSON.stringify({ t: 'release' }), false);
+    web.onMessage(Buffer.from(JSON.stringify({ t: 'release' })), false);   // real ws shape: a Buffer, not a string
     await tick();
     assert.ok(worker.calls.requests.some((r) => r.op === 'asrStreamStop'), 'release finalised the utterance');
 
