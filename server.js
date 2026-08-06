@@ -4001,6 +4001,92 @@ app.post('/api/tailscale', async (req, res) => {
   });
 });
 
+/**
+ * `tailscale serve` — the OTHER half of remote access, and the one the phone
+ * needs for a voice call.
+ *
+ * The toggle above only opens the access GATE (who may reach the plain-http
+ * server). It does nothing about TLS. But a browser will not hand over the
+ * microphone on a plain-http origin, so a phone on the tailnet can load the UI
+ * and still be unable to call. `tailscale serve --bg <port>` fixes exactly that:
+ * Tailscale terminates HTTPS with its own cert and proxies to our local port,
+ * giving `https://<machine>.<tailnet>.ts.net/` — a secure context the mic works
+ * on. This is deliberately its OWN control, not a side effect of the gate: it
+ * changes outward exposure and can fail on preconditions the app cannot set.
+ *
+ * The one precondition the app cannot fix: HTTPS must be enabled for the tailnet
+ * in the admin console. When it is not, `serve` says so and we pass that along
+ * rather than pretending it worked.
+ */
+async function runTailscaleServe(args) {
+  try {
+    const { stdout, stderr } = await execFileP('tailscale', ['serve', ...args], { timeout: 8000 });
+    return { ok: true, stdout: String(stdout || ''), stderr: String(stderr || '') };
+  } catch (err) {
+    // A non-zero exit lands here; the reason my human needs is in stderr.
+    const detail = String(err?.stderr || err?.message || err).trim();
+    return { ok: false, detail, code: err?.code ?? null };
+  }
+}
+
+// Turn `serve`'s terse failure into a next step. The app cannot enable tailnet
+// HTTPS or grant operator rights, so when those are the blocker it must say so.
+function tailscaleServeHint(detail) {
+  const d = (detail || '').toLowerCase();
+  if (/https|cert|not enabled|feature/.test(d)) {
+    return 'HTTPS is not enabled for this tailnet. Turn it on once in the Tailscale admin console (DNS → HTTPS Certificates), then try again.';
+  }
+  if (/operator|permission|denied|access|sudo|root/.test(d)) {
+    return 'Tailscale would not let this account run serve. Run `tailscale set --operator=$USER` once (or start the app with the right privileges), then try again.';
+  }
+  if (/not found|enoent|command/.test(d)) {
+    return 'The Tailscale CLI was not found. Install Tailscale and sign in, then try again.';
+  }
+  return detail || 'tailscale serve failed.';
+}
+
+// Is our port already served over HTTPS? Parsed from `serve status --json`, best
+// effort — a shape we do not recognise reads as "not serving" rather than a lie.
+async function tailscaleHttpsStatus() {
+  const ts = await detectTailscale();
+  const url = ts?.hostname ? `https://${ts.hostname}/` : null;
+  const r = await runTailscaleServe(['status', '--json']);
+  if (!r.ok) return { serving: false, url: null, hostname: ts?.hostname || null, available: ts !== null };
+  let serving = false;
+  try {
+    const j = JSON.parse(r.stdout || '{}');
+    // Web config is keyed by "<host>:443"; a handler proxying to our local port
+    // means we are the one being served.
+    const web = j?.Web || {};
+    serving = Object.values(web).some((entry) => {
+      const handlers = entry?.Handlers || {};
+      return Object.values(handlers).some((h) => String(h?.Proxy || '').includes(`:${PORT}`));
+    });
+  } catch { /* unrecognised → not serving */ }
+  return { serving, url: serving ? url : null, hostname: ts?.hostname || null, available: ts !== null };
+}
+
+app.get('/api/tailscale/https', async (_req, res) => {
+  res.json({ ok: true, ...(await tailscaleHttpsStatus()) });
+});
+
+app.post('/api/tailscale/https', async (_req, res) => {
+  const r = await runTailscaleServe(['--bg', String(PORT)]);
+  if (!r.ok) {
+    return res.json({ ok: false, reason: 'serve-failed', detail: r.detail, hint: tailscaleServeHint(r.detail) });
+  }
+  const status = await tailscaleHttpsStatus();
+  res.json({ ok: true, ...status });
+});
+
+app.delete('/api/tailscale/https', async (_req, res) => {
+  // `reset` clears serve config for this node. We only ever set the one proxy,
+  // so this is the honest off switch; named plainly in the UI copy.
+  const r = await runTailscaleServe(['reset']);
+  if (!r.ok) return res.json({ ok: false, reason: 'reset-failed', detail: r.detail, hint: tailscaleServeHint(r.detail) });
+  res.json({ ok: true, serving: false, url: null });
+});
+
 // ── Threat / care-check endpoints (step 4b) ─────────────────────────
 // GET    /api/threat          current effective state
 // GET    /api/threat/history  recent audit entries (newest first)

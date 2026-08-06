@@ -4745,6 +4745,45 @@ function renderTailscaleState(state) {
     statusEl.textContent = 'Off — only this machine can reach Proto-Familiar.';
   }
 }
+// ── tailscale serve / HTTPS (what a phone's microphone needs) ──────────────
+async function refreshTailscaleHttps() {
+  const btn = $('tailscale-https-btn');
+  const status = $('tailscale-https-status');
+  if (!btn || !status) return;
+  let s = null;
+  try { s = await (await fetch('/api/tailscale/https')).json(); } catch { /* leave as-is */ }
+  if (!s) { status.textContent = ''; return; }
+  if (s.serving && s.url) {
+    btn.textContent = 'Turn off HTTPS';
+    btn.dataset.on = '1';
+    status.innerHTML = `Serving over HTTPS: <a href="${s.url}" target="_blank" rel="noopener">${s.url}</a> — open THIS on your phone to call.`;
+  } else {
+    btn.textContent = 'Enable HTTPS';
+    btn.dataset.on = '';
+    status.textContent = s.available === false
+      ? 'Tailscale CLI not detected on this machine.'
+      : 'Off — the phone can load the app but not use the microphone.';
+  }
+}
+
+async function toggleTailscaleHttps() {
+  const btn = $('tailscale-https-btn');
+  const status = $('tailscale-https-status');
+  if (!btn) return;
+  const turningOff = btn.dataset.on === '1';
+  btn.disabled = true;
+  if (status) status.textContent = turningOff ? 'Turning off…' : 'Setting up HTTPS…';
+  try {
+    const r = await (await fetch('/api/tailscale/https', { method: turningOff ? 'DELETE' : 'POST' })).json();
+    if (!r?.ok && status) status.textContent = r?.hint || r?.detail || 'That did not work.';
+  } catch (err) {
+    if (status) status.textContent = `Could not reach the server: ${String(err?.message ?? err)}`;
+  } finally {
+    btn.disabled = false;
+    await refreshTailscaleHttps();
+  }
+}
+
 function initTailscaleToggle() {
   const btn      = $('tailscale-btn');
   const popover  = $('tailscale-popover');
@@ -4753,6 +4792,7 @@ function initTailscaleToggle() {
   fetchTailscaleState().then(renderTailscaleState).catch(err => {
     console.warn('tailscale state load failed', err);
   });
+  $('tailscale-https-btn')?.addEventListener('click', toggleTailscaleHttps);
 
   btn.addEventListener('click', async () => {
     const willOpen = popover.classList.contains('hidden');
@@ -4760,6 +4800,7 @@ function initTailscaleToggle() {
     if (willOpen) {
       try { renderTailscaleState(await fetchTailscaleState()); }
       catch (err) { console.warn('tailscale refresh failed', err); }
+      refreshTailscaleHttps();
     }
   });
 

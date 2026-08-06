@@ -67,6 +67,14 @@
             <p id="tailscale-status" class="tailscale-status">Loading…</p>
             <ul id="tailscale-urls" class="tailscale-urls"></ul>
             <p class="tailscale-hint">When enabled, this server is reachable from anything that can hit your machine on the network. On a plain LAN that includes anyone on the same Wi-Fi; on a Tailnet, anyone signed into your tailnet.</p>
+
+            <hr class="tailscale-sep">
+            <div class="tailscale-row">
+              <span class="tailscale-state-label">Serve over HTTPS (needed for phone voice calls)</span>
+              <button id="tailscale-https-btn" class="btn-secondary" type="button">Enable HTTPS</button>
+            </div>
+            <p id="tailscale-https-status" class="tailscale-status"></p>
+            <p class="tailscale-hint">A phone browser only allows the microphone over HTTPS. This runs <code>tailscale serve</code> so your Familiar is reachable at an <code>https://…ts.net</code> address the mic can use. Needs HTTPS enabled once for your tailnet in the Tailscale admin console.</p>
           </div>
         </div>
         <button id="theme-toggle" class="icon-btn" aria-label="Toggle light/dark theme" title="Toggle theme"><span id="theme-icon-dark" data-ms-icon="light_mode" data-ms-size="18"></span><span id="theme-icon-light" data-ms-icon="dark_mode" data-ms-size="18" style="display:none"></span></button>
