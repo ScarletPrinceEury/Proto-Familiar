@@ -108,11 +108,19 @@ export function createCallEngine({
     if (!msg || !call) return;
     if (msg.op === 'asr-final') {
       const text = String(msg.text ?? '').trim();
-      // Logged either way: an EMPTY asr-final (the recogniser heard audio but
-      // resolved no words) looks identical to "no audio arrived" without this,
-      // and the two have completely different fixes.
-      log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'}`);
-      if (text) handleTurn(speakerForStream(msg.streamId), text).catch((e) => log(`turn failed: ${e?.message ?? e}`));
+      // The peak + duration make an empty result diagnosable: a low peak means
+      // silence (a dead/muted mic or the wrong input device); a healthy peak with
+      // no words means real sound the model did not recognise (format, accent,
+      // too quiet, too short). Speech is roughly peak > 0.05.
+      const meta = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s`;
+      log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'} [${meta}]`);
+      if (text) {
+        handleTurn(speakerForStream(msg.streamId), text).catch((e) => log(`turn failed: ${e?.message ?? e}`));
+      } else if (call?.adapter) {
+        // Nothing recognised — release my human from "Thinking…" so the call is
+        // usable again, instead of waiting on a turn that will never start.
+        try { call.adapter.playAudio(call.callId, null); } catch (e) { log(`reset after empty asr failed: ${e?.message ?? e}`); }
+      }
     }
     // asr-partial is reserved for live captions + barge-in (Pass 2c / web adapter).
   }
