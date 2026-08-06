@@ -31,7 +31,7 @@ import { createSynthesizer } from './voice-synthesize.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { ASR_MODEL_DIR, voiceOfflineAsrEnabled } from './voice-transcribe.js';
+import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel } from './voice-transcribe.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
@@ -222,6 +222,7 @@ export function attachVoiceCall(deps) {
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
     offlineModelDir: ASR_MODEL_DIR,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
+    ensureOffline: () => ensureOfflineAsrModel({ rootDir, log }),
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });

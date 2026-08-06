@@ -31,8 +31,11 @@
  */
 
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getAssetMeta, setAssetDescription, assetBytesPath } from './media.js';
+import { composePlan } from './voice-models.js';
+import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -54,6 +57,43 @@ export const ASR_MODEL_DIR = path.join(__dirname, 'models', 'audio', 'asr-offlin
 export function voiceOfflineAsrEnabled(settings) {
   if (process.env.PROTO_FAMILIAR_VOICE_OFFLINE_ASR_DISABLED === '1') return false;
   return settings?.voiceCallOfflineTranscribe !== false;
+}
+
+/** Is the offline recogniser actually unpacked on disk (not just the dir)? */
+export function offlineModelPresent() {
+  return existsSync(path.join(ASR_MODEL_DIR, 'model.int8.onnx'));
+}
+
+let _offlineFetchInFlight = null;
+/**
+ * Make sure the offline recogniser is downloaded — the half that makes hybrid
+ * call transcription an actual capability rather than a dead setting (the
+ * every-capability-reachable rule). Idempotent + in-flight-guarded: a no-op when
+ * already present, and concurrent calls share one download. Fetches ONLY the
+ * `asr-offline` extra (not a whole voice), reusing the same plan the
+ * `/api/voice/install-models {what:'listen'}` path uses. Never throws.
+ */
+export function ensureOfflineAsrModel({ rootDir, log = () => {} } = {}) {
+  if (offlineModelPresent()) return Promise.resolve({ ok: true, already: true });
+  if (_offlineFetchInFlight) return _offlineFetchInFlight;
+  const plan = composePlan({ capabilityTier: 'read-aloud', voiceEngine: 'pocket', extras: ['asr-offline'] });
+  const narrowed = { ...plan, voice: null, capability: [], all: plan.extras };
+  const modelsDir = path.join(rootDir, MODELS_SUBDIR);
+  log('accurate call-transcription model (SenseVoice) not installed — fetching it in the background; calls use basic transcription until it is ready');
+  let lastPct = -1;
+  _offlineFetchInFlight = fetchPlan({
+    plan: narrowed, modelsDir,
+    onProgress: (e) => {
+      if (e?.phase === 'download' && e.totalBytes > 0) {
+        const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
+        if (pct > lastPct) { lastPct = pct; log(`transcription model ${pct}%`); }
+      } else if (e?.phase && e.phase !== 'download') { log(`transcription model ${e.phase}${e.file ? ` ${e.file}` : ''}`); }
+    },
+  })
+    .then((r) => { log(r?.ok === false ? `transcription model download failed: ${r?.message ?? r?.reason}` : 'transcription model ready — the next call will use it'); return r; })
+    .catch((err) => { log(`transcription model fetch errored: ${err?.message ?? err}`); return { ok: false }; })
+    .finally(() => { _offlineFetchInFlight = null; });
+  return _offlineFetchInFlight;
 }
 
 /**
