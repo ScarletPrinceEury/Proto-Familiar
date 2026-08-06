@@ -171,6 +171,7 @@
         if (m.t === 'ready') { setLive(true); setState('On a call. Hold to talk.'); }
         else if (m.t === 'speak-start') { replyRate = Number(m.sampleRate) || replyRate; playHead = ctx.currentTime; setState('…'); }
         else if (m.t === 'speak-end') { setState('On a call. Hold to talk.'); }
+        else if (m.t === 'no-reply') { setState('No reply that time — hold to talk and try again.'); }
         else if (m.t === 'stop') { playHead = ctx.currentTime; }
         else if (m.t === 'error') { setState(callErrorMessage(m.reason, m.detail)); endCall(); }
         return;

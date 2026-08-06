@@ -17,6 +17,7 @@
  *   - `{"t":"speak-start"}`   → a spoken reply begins (browser opens playback)
  *   - binary frame            → 24 kHz mono s16le TTS PCM to play
  *   - `{"t":"speak-end"}`     → the reply is complete
+ *   - `{"t":"no-reply"}`      → the turn finished with nothing to say (reset the UI)
  *   - `{"t":"stop"}`          → stop playback now (barge-in)
  *
  * `send` is injected (the real one is a WebSocket's `send`), so the adapter is
@@ -59,7 +60,11 @@ export function createWebCallAdapter({ hooks, send, log = () => {} } = {}) {
      * first-audio latency at one sentence, not the whole reply.
      */
     async playAudio(_id, reply) {
-      if (reply == null) return;
+      // A silent turn still has to be announced, or the browser sits on
+      // "Thinking…" forever waiting for a reply that is never coming. `no-reply`
+      // tells it the turn finished with nothing to say (or an error the server
+      // logged) so it can reset and wait for the next press.
+      if (reply == null) { control({ t: 'no-reply' }); return; }
       // The reply MAY carry a sample rate (TTS output rate) so the browser can
       // configure playback; a bare async-iterable (the default) omits it.
       const sampleRate = reply?.sampleRate;
