@@ -1139,6 +1139,53 @@ function isUpdateCommand(content) {
   return /^\/update(\s+now)?\s*$/i.test(String(content ?? '').trim());
 }
 
+/**
+ * Parse a voice-call command (Pass 3). `!call` / `!join` → 'join' (join the
+ * ward's current VC), `!leave` / `!hangup` → 'leave'. Anything else → null.
+ * A plain-text path for when the ward would rather type than talk (spec §3.5).
+ */
+export function parseVoiceCommand(content) {
+  const t = String(content ?? '').trim().toLowerCase();
+  if (/^!(call|join)$/.test(t)) return 'join';
+  if (/^!(leave|hangup)$/.test(t)) return 'leave';
+  return null;
+}
+
+async function handleVoiceCommand(gw, msg, action) {
+  const token = gw.config.token;
+  const send = (text) => sendChannelMessage(token, msg.channel_id, text).catch(err =>
+    console.error('[discord] voice command reply failed:', err?.message ?? err));
+  if (!gw.voiceController) { await send("Voice calls aren't wired up on my end right now."); return; }
+  if (!msg.guild_id) { await send('Voice calls happen in a server voice channel — say this in the server, not a DM.'); return; }
+
+  if (action === 'leave') {
+    const r = await gw.voiceController.leaveVoiceCall();
+    await send(r?.wasActive ? "I've left the voice channel." : "I wasn't in a voice channel.");
+    return;
+  }
+  // join: the ward must be in a voice channel for me to know where to go.
+  const channelId = voiceChannelOf(msg.guild_id, msg.author?.id);
+  if (!channelId) { await send('Hop into a voice channel first, then say `!call` and I\'ll join you.'); return; }
+  const r = await gw.voiceController.joinVoiceCall({
+    guildId: msg.guild_id,
+    channelId,
+    wardUserId: (readSettingsSync().discordWardUserId ?? '').trim(),
+    nameForUser: (id) => nameForVoiceUser(gw, msg.guild_id, id),
+  });
+  if (r?.ok) await send("I'm in — talk to me.");
+  else if (r?.reason === 'disabled') await send('Voice calls are switched off right now.');
+  else if (r?.reason === 'busy' || r?.reason === 'busy-other-transport') await send("I'm already on a call.");
+  else if (r?.reason === 'deps-unavailable') await send("I can't start voice — the audio libraries didn't load. Everything else still works.");
+  else await send(`I couldn't join (${r?.reason ?? 'unknown'}).`);
+}
+
+/** Best-effort display name for a speaker slug — the registry name if known,
+ *  else the raw id. Kept simple for Pass 3a; 3b enriches this via the gate. */
+function nameForVoiceUser(gw, guildId, userId) {
+  if (userId && userId === (readSettingsSync().discordWardUserId ?? '').trim()) return 'Ward';
+  return `user-${userId}`;
+}
+
 async function handleUpdateCommand(gw, msg, content) {
   const channelId = msg.channel_id;
   const token = gw.config.token;
@@ -2113,6 +2160,8 @@ const gw = {
   // the gateway socket the library must send op 4 through.
   voiceAdapters: new Map(),
   voiceRosterListener: null,
+  voiceStates: new Map(),      // guildId → Map<userId, channelId> — who is in which VC
+  voiceController: null,        // { joinVoiceCall, leaveVoiceCall } from voice-discord-server (Pass 3)
 };
 
 function clearTimers() {
@@ -2148,6 +2197,22 @@ export function discordVoiceAdapterCreator(guildId) {
 
 /** The active voice call registers here to learn who joins/leaves its channel. */
 export function setVoiceRosterListener(fn) { gw.voiceRosterListener = typeof fn === 'function' ? fn : null; }
+
+/** server.js hands the voice-discord-server's join/leave here so `!call` can drive it. */
+export function setDiscordVoiceController(ctl) { gw.voiceController = ctl && typeof ctl.joinVoiceCall === 'function' ? ctl : null; }
+
+/** Track who is in which voice channel from VOICE_STATE_UPDATE, so `!call` can
+ *  find the ward's current VC. `channel_id: null` means they left voice. */
+function recordVoiceState(d) {
+  if (!d?.guild_id || !d?.user_id) return;
+  let g = gw.voiceStates.get(d.guild_id);
+  if (!g) { g = new Map(); gw.voiceStates.set(d.guild_id, g); }
+  if (d.channel_id) g.set(d.user_id, d.channel_id);
+  else g.delete(d.user_id);
+}
+
+/** The voice channel a user is currently in, or null. */
+function voiceChannelOf(guildId, userId) { return gw.voiceStates.get(guildId)?.get(userId) ?? null; }
 
 /** The bot's own user id — the voice adapter reserves 'ward' for the ward and
  *  needs this to know which VOICE_STATE_UPDATE is its own connection. */
@@ -2232,6 +2297,7 @@ function onDispatch(t, d) {
   // set). Wrapped: a voice hiccup never tears the gateway down.
   if (t === 'VOICE_STATE_UPDATE') {
     try {
+      recordVoiceState(d);
       const methods = gw.voiceAdapters.get(d?.guild_id);
       if (methods && d?.user_id === gw.botUserId) methods.onVoiceStateUpdate(d);
       gw.voiceRosterListener?.(d);
@@ -2295,6 +2361,15 @@ function onDispatch(t, d) {
         if (decision.isWard && isUpdateCommand(d.content)) {
           await handleUpdateCommand(gw, d, d.content);
           return;
+        }
+
+        // Ward-only voice-call control (Pass 3): `!call`/`!join` → join the
+        // ward's current VC, `!leave` → leave. A plain-text path for when my
+        // human would rather type than talk; a villager typing it falls through
+        // to normal handling (it's just chat to them).
+        {
+          const voiceAction = decision.isWard ? parseVoiceCommand(d.content) : null;
+          if (voiceAction) { await handleVoiceCommand(gw, d, voiceAction); return; }
         }
 
         // V8 lurk: read the room without replying.

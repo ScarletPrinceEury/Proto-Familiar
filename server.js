@@ -4941,15 +4941,32 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // (the no-module-may-break-the-chat-path rule).
   try {
     const { attachVoiceCall } = await import('./voice-call-server.js');
-    attachVoiceCall({
-      httpServer, rootDir: __dirname, port: PORT,
-      readSettings: readSettingsSync,
+    const sharedVoiceWorkers = {
       getListeningWorker: async () => (await listeningWorker({ rootDir: __dirname })).worker,
       getTtsWorker: async () => (await currentAudioWorker()).worker,
       resolveVoiceForSettings: (s) => resolveVoice({ rootDir: __dirname, settings: s }),
       ensureTtsLoaded,
+    };
+    attachVoiceCall({
+      httpServer, rootDir: __dirname, port: PORT,
+      readSettings: readSettingsSync,
+      ...sharedVoiceWorkers,
       connectionForFeature,
     });
+    // Discord voice (Pass 3) shares the SAME ASR/TTS workers — one call at a
+    // time across both transports. Failure here never blocks web calls or chat.
+    try {
+      const { attachDiscordVoice } = await import('./voice-discord-server.js');
+      const { setDiscordVoiceController } = await import('./discord-gateway.js');
+      const discordVoice = attachDiscordVoice({
+        rootDir: __dirname,
+        readSettings: readSettingsSync,
+        ...sharedVoiceWorkers,
+      });
+      setDiscordVoiceController(discordVoice);
+    } catch (err) {
+      console.warn(`[discord-voice] not attached (${err?.message ?? err}) — Discord voice unavailable; everything else works`);
+    }
   } catch (err) {
     console.warn(`[voice-call] not attached (${err?.message ?? err}) — live calls unavailable; everything else works`);
   }

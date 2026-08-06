@@ -2578,10 +2578,20 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   (`GUILD_VOICE_STATES` intent bit 7; `discordVoiceAdapterCreator(guildId)` whose
   `sendPayload` is `wsSend`, so the library sends op 4 itself; `VOICE_STATE_UPDATE`
   + `VOICE_SERVER_UPDATE` dispatch forwarding; a `setVoiceRosterListener` seam for
-  who-is-in-the-channel). Engine-wiring (a `voice-discord-server`), the Discord
-  turn path through the audience gate, the per-location call-mode dropdown, and
-  the join/leave tools + commands are the following Pass 3 slices — ward-verified
-  live (no gateway/UDP/Opus in CI). Deps are pure-JS/WASM (`@discordjs/voice`,
+  who-is-in-the-channel). `voice-discord-server.js` (`attachDiscordVoice`) wires
+  it to a `call-engine`, shares the web path's ASR/TTS workers (the streamed
+  synthesizer is now `voice-synthesize.js`, used by both transports — extracted,
+  not copy-pasted), guards one-call-at-a-time across both transports via
+  `isCallActiveFromFile`, and exposes `joinVoiceCall`/`leaveVoiceCall`.
+  `server.js` attaches it at boot and registers it as the gateway's voice
+  controller (`setDiscordVoiceController`), so a ward-only `!call`/`!join` (join
+  the ward's current VC, found from tracked voice states) and `!leave` drive it.
+  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. The Pass 3a turn is a
+  canned spoken acknowledgement (audio-OUT proof); the real multi-speaker Discord
+  turn path through the audience gate (3b — a ward-sign-off privacy path), the
+  per-location call-mode dropdown, and the `join_voice_call`/`leave_voice_call`
+  Familiar tools (3c) are the following slices — ward-verified live (no
+  gateway/UDP/Opus in CI). Deps are pure-JS/WASM (`@discordjs/voice`,
   `opusscript`, `libsodium-wrappers`) so no native compiler is needed.
 
 ## Security design

@@ -149,10 +149,20 @@ integration seam that needs the most care and its own tests.
     `discord-gateway.js` (`GUILD_VOICE_STATES` intent, `discordVoiceAdapterCreator`,
     `VOICE_STATE_UPDATE`/`VOICE_SERVER_UPDATE` forwarding, `setVoiceRosterListener`).
     Unit-tested against a fake connection (`tests/voice-discord-adapter.test.mjs`).
-  - **Next (still 3a):** a `voice-discord-server` that owns a call engine, shares
-    the ASR/TTS workers, registers the adapter, and exposes join/leave (with a
-    canned `onTurn` for the spine) + the `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`
-    off-switch. Then ward-tested live before 3b.
+  - **Landed (engine wiring + trigger):** `voice-discord-server.js`
+    (`attachDiscordVoice`) owns a call engine, shares the web path's ASR/TTS
+    workers (extracted into `voice-synthesize.js` — no copy-paste), registers the
+    adapter per join, forwards the gateway roster, and guards one-call-at-a-time
+    across BOTH transports via `isCallActiveFromFile`. Its `onTurn` is the canned
+    3a acknowledgement (audio OUT proof). Off-switch
+    `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. Reachable via a ward-only
+    `!call`/`!join` (join the ward's current VC, found from tracked
+    `VOICE_STATE_UPDATE`s) and `!leave`, wired into the gateway's MESSAGE_CREATE
+    ahead of any turn; `server.js` attaches it at boot and hands the controller to
+    the gateway (`setDiscordVoiceController`). **3a is now ward-testable live.**
+  - **Next:** ward tests 3a live, then 3b (the real Discord turn path through the
+    audience gate — a ward-sign-off privacy path) and 3c (call-mode dropdown, the
+    `join_voice_call`/`leave_voice_call` Familiar tools + natural-language join).
 - **3b — multi-speaker + the Discord turn path.** Per-speaker audience
   resolution, reply spoken with the speaker's clearance, roster → audience set,
   threat scoring ward-only.

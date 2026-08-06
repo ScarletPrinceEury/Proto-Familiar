@@ -26,11 +26,11 @@ import { WebSocketServer } from 'ws';
 import { createCallEngine, clearStaleCallState, callsDisabled } from './call-engine.js';
 import { createWebCallAdapter } from './voice-web-adapter.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
-import { prepareForSpeech, speakableText } from './voice-speech.js';
+import { speakableText } from './voice-speech.js';
+import { createSynthesizer } from './voice-synthesize.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { KIND_PCM } from './audio-frame.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
@@ -42,10 +42,6 @@ const WS_PATH = '/api/voice/call';
 // enrichment + the model — but finite, so a hang can never masquerade as
 // thinking forever.
 const VOICE_TURN_TIMEOUT_MS = 90_000;
-// A rolling 16-bit-safe stream id in a high band, kept clear of read-aloud's
-// low ids so a read-aloud and a call in the same second don't share one.
-let ttsStreamSeq = 40000;
-const nextTtsStreamId = () => (ttsStreamSeq = ttsStreamSeq >= 65500 ? 40000 : ttsStreamSeq + 1);
 
 /** The D2 gate: is ward-voice→threat scoring on right now? Ward-signed ON by default. */
 function voiceThreatEnabled(settings) {
@@ -189,73 +185,10 @@ export function attachVoiceCall(deps) {
     return reply;
   }
 
-  // ── onTurn dep: reply text → TTS PCM, STREAMED as it is generated (2c) ───
-  // PocketTTS clones zero-shot per call, so each `prepareForSpeech` part is ONE
-  // ttsStream — splitting a part per sentence would re-clone and drift the voice
-  // (the read-aloud lesson). But the engine already emits PCM *incrementally*
-  // during that one generation, so rather than buffer a whole part before
-  // yielding (the old behaviour — my human heard nothing until the entire reply
-  // finished), this yields each frame as it lands. First audio arrives after the
-  // first chunk, not the whole reply, with no extra clones and no drift. The
-  // async iterable still carries the sample rate for the browser, and an abort
-  // signal (barge-in) stops it between frames.
-  async function synthesize(text, { signal } = {}) {
-    const s = readSettings();
-    const parts = prepareForSpeech(text).parts;
-    if (parts.length === 0) return emptyStream();
-
-    const ttsWorker = await getTtsWorker();
-    if (!ttsWorker) { log('no TTS worker — reply goes unspoken'); return emptyStream(); }
-    const voice = await resolveVoiceForSettings(s);
-    if (!voice?.ok) { log(`no voice resolved (${voice?.reason}) — reply goes unspoken`); return emptyStream(); }
-    const loaded = await ensureTtsLoaded(ttsWorker);
-    if (!loaded?.ok) { log(`TTS model not loaded (${loaded?.reason}) — reply goes unspoken`); return emptyStream(); }
-    const sampleRate = Number(loaded.sampleRate) || 24000;
-
-    // Bridge the worker's frame CALLBACK into a pull-based async generator: a
-    // queue holds frames that have arrived; the generator awaits the next one
-    // when the queue is empty, and ends when the request settles or a barge
-    // aborts. This is what lets `for await` in the adapter play frame-by-frame.
-    async function* streamPart(part) {
-      const streamId = nextTtsStreamId();
-      const queue = [];
-      let wake = null;
-      let settled = false;
-      const bump = () => { if (wake) { wake(); wake = null; } };
-      const unsub = ttsWorker.on((frame) => {
-        if (frame.kind === KIND_PCM && frame.streamId === streamId && frame.pcm?.length) { queue.push(Buffer.from(frame.pcm)); bump(); }
-      });
-      const req = ttsWorker.request({ op: 'ttsStream', streamId, text: part, referenceWav: voice.path }, { timeoutMs: 300_000 })
-        .then((r) => { if (!r?.ok) log(`ttsStream part failed: ${r?.reason ?? '?'}`); })
-        .catch((err) => log(`ttsStream threw: ${err?.message ?? err}`))
-        .finally(() => { settled = true; bump(); });
-      try {
-        while (true) {
-          if (signal?.aborted) break;
-          if (queue.length) { yield queue.shift(); continue; }
-          if (settled) break;
-          await new Promise((res) => { wake = res; });
-        }
-      } finally {
-        unsub();
-        await req.catch(() => {});   // let the request settle so a late frame can't leak past teardown
-      }
-    }
-
-    return {
-      sampleRate,
-      async *[Symbol.asyncIterator]() {
-        for (const part of parts) {
-          if (signal?.aborted) return;
-          yield* streamPart(part);
-        }
-      },
-    };
-  }
-
-  function emptyStream() {
-    return { sampleRate: 24000, async *[Symbol.asyncIterator]() { /* nothing */ } };
-  }
+  // ── onTurn dep: reply text → TTS PCM, streamed as it is generated (2c) ───
+  // The shared synthesizer (voice-synthesize.js) — the Discord transport uses
+  // the exact same one, so it lives in one place, not copy-pasted per adapter.
+  const synthesize = createSynthesizer({ readSettings, getTtsWorker, resolveVoiceForSettings, ensureTtsLoaded, log });
 
   // ── onTurn dep: D2 — the ward's spoken words can raise the threat tier ───
   async function scoreThreat(transcript) {
