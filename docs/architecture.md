@@ -2591,14 +2591,17 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   turn path through the audience gate (3b — a ward-sign-off privacy path), the
   per-location call-mode dropdown, and the `join_voice_call`/`leave_voice_call`
   Familiar tools (3c) are the following slices — ward-verified live (no
-  gateway/UDP/Opus in CI). Deps are pure-JS/WASM (`@discordjs/voice`,
-  `opusscript`, and for packet encryption `@noble/ciphers` — pure-JS, primary —
-  with `libsodium-wrappers` as a WASM fallback) so no native compiler is needed.
-  `@discordjs/voice` tries encryption libs in order and uses the first that
-  loads; `loadDiscordVoiceDeps` probes the same list up front, logs the active
-  cipher, and fails the join FAST with a clear message if none load (a broken
-  libsodium-wrappers ESM build — seen on Windows AND Linux — otherwise stalls the
-  connection at `signalling` for 30s instead of naming the cause).
+  gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
+  older voice gateway with no DAVE and can no longer complete Discord's current
+  voice handshake — it stalls `connecting → signalling`; 0.19 is gateway v8 +
+  DAVE + the multi-transition fix), `opusscript` (pure-JS Opus, only needed once
+  audio flows), `@noble/ciphers` (pure-JS transport encryption, primary) with
+  `libsodium-wrappers` as a WASM fallback, and `@snazzah/davey` (DAVE E2EE — a
+  napi-rs native module that ships PREBUILT binaries, so no compiler; pulled in by
+  `@discordjs/voice`). `loadDiscordVoiceDeps` probes the transport ciphers up
+  front, logs the active one, and fails the join FAST with a clear message if none
+  load (a broken libsodium ESM build — seen on Windows AND Linux — otherwise
+  stalls for 30s instead of naming the cause).
 
 ## Security design
 

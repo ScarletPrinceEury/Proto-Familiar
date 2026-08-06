@@ -41,18 +41,35 @@ the engine.
 ### 3.1 Dependencies (pure-JS / WASM only)
 
 Declared in `package.json` → auto-installed by `ensure-node-deps.mjs` on start,
-so the ward never runs `npm install`. **Pure-JS/WASM to avoid a native
+so the ward never runs `npm install`. **Prefer pure-JS/WASM to avoid a native
 compiler** on the ward's machine (the reason `@discordjs/opus` / `sodium-native`
 are rejected):
 
-- `@discordjs/voice` — the voice connection state machine + UDP/ICE + RTP.
+- `@discordjs/voice` (**≥0.19.2**) — the voice connection state machine +
+  UDP/ICE + RTP. **Must be ≥0.19**: 0.18 uses an older voice gateway version with
+  no DAVE support and can no longer complete the current Discord voice handshake
+  (it stalls `connecting → signalling` and times out — the live-3a bug). 0.19.0
+  moved to **voice gateway v8** + DAVE; 0.19.1 fixed simultaneous state
+  transitions (the `connecting → connecting → signalling` symptom) and pins Davey.
 - `opusscript` — pure-JS Opus encode/decode (slower than native, fine for one
   channel; `@discordjs/voice` picks it up automatically when native is absent).
-- `libsodium-wrappers` — WASM xsalsa20/aead for voice packet encryption.
+  **Not needed for the connection handshake** — Opus only matters once audio
+  flows, after Ready — so its absence never blocks a join.
+- `@noble/ciphers` — pure-JS transport-packet encryption
+  (`aead_xchacha20_poly1305_rtpsize`), the reliable primary. `libsodium-wrappers`
+  stays as a WASM fallback but its ESM build is broken on current installs
+  (Windows AND Linux), so `@discordjs/voice`'s loader skips it and lands on noble.
+- `@snazzah/davey` — **DAVE end-to-end encryption**, now a hard dependency of
+  `@discordjs/voice` because Discord is making DAVE required. It is a native
+  (napi-rs) module, but ships **prebuilt platform binaries** (Windows/macOS/Linux
+  × x64/arm64), so it installs **without a compiler** on the ward's machine —
+  which is why it's an acceptable exception to the pure-JS rule (there is no
+  pure-JS MLS/E2EE alternative, and DAVE is no longer optional). Pulled in
+  transitively by `@discordjs/voice`; not listed in our own `dependencies`.
 
-All three degrade gracefully: if any fail to install, Discord voice is
-unavailable with a loud, honest log, and everything else keeps working
-(the no-module-may-break-the-chat-path rule).
+All degrade gracefully: if a required lib fails to load, `loadDiscordVoiceDeps`
+returns null and the join reports `deps-unavailable` with an honest log, and
+everything else keeps working (the no-module-may-break-the-chat-path rule).
 
 ### 3.2 Gateway voice bridge (`discord-gateway.js`)
 
