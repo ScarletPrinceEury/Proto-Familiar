@@ -55,6 +55,7 @@ export function createCallEngine({
   streamingModelDir = '', // asr-streaming model dir; loaded once on call start
   offlineModelDir = '',   // asr-offline (SenseVoice) dir; loaded when offlineFinal is on
   offlineFinal = () => false, // hybrid ASR: re-transcribe each utterance with the offline model
+  ensureOffline = null,   // async () => fetch the offline model if missing (no-op if present)
   tomesDir = DEFAULT_TOMES_DIR,
   maxCalls = 1,
   now = () => Date.now(),
@@ -279,9 +280,15 @@ export function createCallEngine({
     const useOffline = Boolean(offlineFinal()) && Boolean(offlineModelDir);
     let offlineReady = false;
     if (useOffline) {
+      // Make sure the model is on disk — fetch it in the background if not (no-op
+      // when present). The download is minutes long, so THIS call can't wait on
+      // it; it falls back to streaming and the next call picks up the offline
+      // model. This is what makes the hybrid setting a real capability instead of
+      // a switch with no model behind it.
+      if (ensureOffline) ensureOffline().catch(() => {});
       const off = await worker.request({ op: 'load', role: 'asr-offline', modelDir: offlineModelDir }, { timeoutMs: 60000 }).catch(() => null);
       offlineReady = Boolean(off?.ok);
-      if (!offlineReady) log(`offline transcription model failed to load (${off?.reason ?? 'unknown'}) — call falls back to streaming transcripts`);
+      if (!offlineReady) log(`accurate transcription model not ready yet — this call uses streaming transcripts (the model may be downloading; the next call will use it)`);
     }
 
     let joined;

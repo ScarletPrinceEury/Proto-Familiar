@@ -26,7 +26,7 @@ import { createSynthesizer } from './voice-synthesize.js';
 import { speakableText } from './voice-speech.js';
 import { slugifyLabel } from './slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { ASR_MODEL_DIR, voiceOfflineAsrEnabled } from './voice-transcribe.js';
+import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel } from './voice-transcribe.js';
 
 /** Hard off-switch — same pattern as every other loop/feature. */
 export function discordVoiceDisabled() {
@@ -83,6 +83,7 @@ export function attachDiscordVoice(deps) {
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
     offlineModelDir: ASR_MODEL_DIR,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
+    ensureOffline: () => ensureOfflineAsrModel({ rootDir, log }),
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });
