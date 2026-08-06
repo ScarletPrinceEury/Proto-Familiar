@@ -141,6 +141,18 @@ integration seam that needs the most care and its own tests.
   IN (a speaker's Opus → transcript logged) + audio OUT (a canned reply spoken).
   Proves the Discord voice protocol end to end with the least logic. Ward-tested
   live.
+  - **Landed (transport core):** the deps (`@discordjs/voice`, `opusscript`,
+    `libsodium-wrappers` — pure-JS/WASM); `voice-discord-adapter.js` (join/leave,
+    per-speaker Opus decode → 16 kHz mono → `pushAudio`, speaking-end →
+    `endUtterance`, roster, `playAudio` 24 kHz→48 kHz → `AudioResource(Raw)`,
+    barge via `stopPlayback`) with pure resample helpers; the gateway bridge in
+    `discord-gateway.js` (`GUILD_VOICE_STATES` intent, `discordVoiceAdapterCreator`,
+    `VOICE_STATE_UPDATE`/`VOICE_SERVER_UPDATE` forwarding, `setVoiceRosterListener`).
+    Unit-tested against a fake connection (`tests/voice-discord-adapter.test.mjs`).
+  - **Next (still 3a):** a `voice-discord-server` that owns a call engine, shares
+    the ASR/TTS workers, registers the adapter, and exposes join/leave (with a
+    canned `onTurn` for the spine) + the `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`
+    off-switch. Then ward-tested live before 3b.
 - **3b — multi-speaker + the Discord turn path.** Per-speaker audience
   resolution, reply spoken with the speaker's clearance, roster → audience set,
   threat scoring ward-only.

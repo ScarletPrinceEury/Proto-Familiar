@@ -1,6 +1,6 @@
 {
   "name": "proto-familiar",
-  "version": "0.10.57-alpha",
+  "version": "0.10.58-alpha",
   "description": "Lightweight LLM frontend for z.ai, NanoGPT, and Google AI Studio",
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -22,10 +22,13 @@
     "audit:wiring": "node scripts/audit-wiring.mjs"
   },
   "dependencies": {
+    "@discordjs/voice": "^0.18.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@mozilla/readability": "^0.5.0",
     "express": "^4.18.2",
+    "libsodium-wrappers": "^0.7.16",
     "linkedom": "^0.18.12",
+    "opusscript": "^0.1.1",
     "tar": "^7.5.22",
     "turndown": "^7.2.4",
     "unbzip2-stream": "^1.4.3",

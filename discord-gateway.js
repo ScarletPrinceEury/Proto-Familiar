@@ -70,11 +70,13 @@ const MAP_FILE  = path.join(__dirname, 'tomes', '.discord-map.json');
 
 const API_BASE = 'https://discord.com/api/v10';
 
-// GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
+// GUILDS | GUILD_VOICE_STATES | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
 // MESSAGE_CONTENT is a privileged intent — the ward must enable it on
 // the bot's application page (Developer Portal → Bot → Privileged
 // Gateway Intents) or guild messages arrive with empty content.
-export const GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
+// GUILD_VOICE_STATES (bit 7) is NOT privileged and is what delivers the
+// VOICE_STATE_UPDATE dispatches the voice bridge needs (Pass 3).
+export const GATEWAY_INTENTS = (1 << 0) | (1 << 7) | (1 << 9) | (1 << 12) | (1 << 15);
 
 const DISCORD_REPLY_LIMIT   = 1900;       // hard API limit 2000; headroom
 const HISTORY_LIMIT         = 30;         // messages of session history per turn
@@ -2105,6 +2107,12 @@ const gw = {
   reconnectTimer: null,
   supervisorTimer: null,
   status: { running: false, connected: false, botUser: null, lastError: null, lastEventAt: null, turns: 0, failures: 0 },
+  // Voice bridge (Pass 3): guildId → the @discordjs/voice library methods handed
+  // to us at join, plus a roster listener the active voice call registers so it
+  // learns who joins/leaves its channel. Kept here because only this module owns
+  // the gateway socket the library must send op 4 through.
+  voiceAdapters: new Map(),
+  voiceRosterListener: null,
 };
 
 function clearTimers() {
@@ -2116,6 +2124,34 @@ function wsSend(payload) {
   try { gw.ws?.send(JSON.stringify(payload)); }
   catch (err) { console.error('[discord] ws send failed:', err?.message ?? err); }
 }
+
+// ── Voice bridge (Pass 3, spec §3.2) ────────────────────────────────────────
+// @discordjs/voice is plugged into our raw-WebSocket gateway via its documented
+// no-discord.js path: a DiscordGatewayAdapterCreator whose sendPayload is our
+// wsSend (so the library sends the op-4 Voice State Update itself — we never
+// hand-build it), and whose lifecycle is fed by forwarding the two voice
+// dispatch events (below, in onDispatch). One voice connection at a time.
+
+/** The creator @discordjs/voice's joinVoiceChannel calls; keyed by guild. */
+export function discordVoiceAdapterCreator(guildId) {
+  return (methods) => {
+    gw.voiceAdapters.set(guildId, methods);
+    return {
+      sendPayload(payload) {
+        if (gw.ws && gw.connected) { wsSend(payload); return true; }
+        return false;   // library disconnects the voice connection on a false
+      },
+      destroy() { gw.voiceAdapters.delete(guildId); },
+    };
+  };
+}
+
+/** The active voice call registers here to learn who joins/leaves its channel. */
+export function setVoiceRosterListener(fn) { gw.voiceRosterListener = typeof fn === 'function' ? fn : null; }
+
+/** The bot's own user id — the voice adapter reserves 'ward' for the ward and
+ *  needs this to know which VOICE_STATE_UPDATE is its own connection. */
+export function discordBotUserId() { return gw.botUserId; }
 
 function startHeartbeat(intervalMs) {
   clearInterval(gw.heartbeatTimer);
@@ -2188,6 +2224,23 @@ function onDispatch(t, d) {
     gw.status.connected = true;
     gw.reconnectAttempts = 0;
     console.log('[discord] gateway session resumed');
+    return;
+  }
+  // Voice bridge dispatches (Pass 3). Forward to @discordjs/voice's library
+  // methods for OUR OWN connection, and hand every voice-state change to the
+  // active call's roster listener (who is in the channel drives the audience
+  // set). Wrapped: a voice hiccup never tears the gateway down.
+  if (t === 'VOICE_STATE_UPDATE') {
+    try {
+      const methods = gw.voiceAdapters.get(d?.guild_id);
+      if (methods && d?.user_id === gw.botUserId) methods.onVoiceStateUpdate(d);
+      gw.voiceRosterListener?.(d);
+    } catch (err) { console.error('[discord] VOICE_STATE_UPDATE handling failed:', err?.message ?? err); }
+    return;
+  }
+  if (t === 'VOICE_SERVER_UPDATE') {
+    try { gw.voiceAdapters.get(d?.guild_id)?.onVoiceServerUpdate(d); }
+    catch (err) { console.error('[discord] VOICE_SERVER_UPDATE handling failed:', err?.message ?? err); }
     return;
   }
   if (t === 'INTERACTION_CREATE') {
