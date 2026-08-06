@@ -238,9 +238,21 @@ in the same commit (parent §13 discipline). PATCH bump each.
    surface itself rides the normal `enrich()` blocks the call turn already gets.
    First-person, plain-spoken (CLAUDE.md non-negotiable). Off implicitly when not
    a call (`voiceMode` absent).
-6. **2f — VAD open-mic toggle.** The open-mic mode on top of the proven
-   push-to-talk engine, once endpointing (2a) is tuned against the latency
-   budget.
+6. **2f — VAD open-mic toggle.** ✅ **Landed.** A `voiceCallMode` setting
+   (`push` | `open`) with a picker in the voice-call pane. In **open** mode the
+   mic goes live the moment the call is `ready` and stays open — no holding — and
+   the streaming recogniser's OWN endpointing (`enableEndpoint: true`, rule2 =
+   1.2 s trailing silence, already configured in `buildOnlineRecognizer`) segments
+   what my human says into turns; the client never sends `{t:'release'}`. The talk
+   button becomes a **mute toggle** rather than a hold target. **Barge in open
+   mode** is onset-detected: a frame louder than `BARGE_PEAK` while a reply plays
+   is my human talking over it → the client sends `{t:'barge'}`, stops local
+   playback, and the reply's synthesis is cut (2c). Server needs no change — the
+   continuous stream + endpointing is exactly the "continuous/VAD adapter" the
+   engine reserved (`finalizeUtterance`/release is push-only). **Refinement left:**
+   the endpoint rules against the §6.1 latency budget (the deferred 2a tuning) and
+   a smarter onset VAD than a peak threshold; the peak gate is a conservative
+   first cut (a false barge only cuts a reply my human can ask to repeat).
 
 ## 4. Safety-critical seams (ward sign-off required)
 

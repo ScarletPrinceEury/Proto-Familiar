@@ -33,14 +33,42 @@
   let live = false;
   let replyPlaying = false;   // a spoken reply is currently playing (barge-in gate)
   let playingSources = [];    // scheduled AudioBufferSourceNodes, so a barge can stop them mid-reply
+  let callMode = 'push';      // 'push' (hold to talk) or 'open' (hands-free, mic always live)
+
+  // In open mic, a frame this loud while a reply is playing counts as my human
+  // talking over it — the onset that triggers a barge. Above residual echo (the
+  // reply leaking into the mic, mostly removed by echoCancellation), below normal
+  // speech. Tuned conservatively; a false barge only cuts a reply my human can ask to repeat.
+  const BARGE_PEAK = 0.12;
 
   function setState(msg) { const el = $('voice-call-state'); if (el) el.textContent = msg || ''; }
+
+  // The talk button says different things in the two modes: a hold target in
+  // push-to-talk, a mute toggle in open mic. Kept in one place so every state
+  // change (go live, mute, barge) renders consistently.
+  function updateTalkButton() {
+    const talk = $('voice-call-talk');
+    if (!talk) return;
+    if (callMode === 'open') {
+      talk.classList.toggle('is-talking', talking);
+      talk.textContent = talking ? '🎙 Open mic — tap to mute' : '🔇 Muted — tap to talk';
+    } else {
+      talk.classList.toggle('is-talking', talking);
+      talk.textContent = talking ? '🔴 Recording — release to send' : '🎙 Hold to talk';
+    }
+  }
+
   function setLive(on) {
     live = on;
     const start = $('voice-call-btn');
     const talk = $('voice-call-talk');
     if (start) start.textContent = on ? '⏹ End call' : '📞 Start voice call';
     if (talk) talk.hidden = !on;
+    // Open mic starts capturing the moment the call is live — no press needed;
+    // the recogniser's own endpointing segments what I say into turns.
+    if (on && callMode === 'open') { talking = true; sentChunks = 0; }
+    if (!on) talking = false;
+    updateTalkButton();
   }
 
   // ── Capture: ctx-rate Float32 → 16 kHz mono s16le ──────────────────────
@@ -64,12 +92,24 @@
   function onAudioProcess(e) {
     if (!talking || !ws || ws.readyState !== WebSocket.OPEN) return;
     const input = e.inputBuffer.getChannelData(0);
+    // Open mic: my human talking over a playing reply is a barge. Detect the
+    // onset by level and stop the reply, so the mic captures the new utterance
+    // cleanly and the echo stops. (Push-to-talk barges explicitly on press.)
+    if (callMode === 'open' && replyPlaying) {
+      let peak = 0;
+      for (let i = 0; i < input.length; i++) { const a = input[i] < 0 ? -input[i] : input[i]; if (a > peak) peak = a; }
+      if (peak >= BARGE_PEAK) {
+        try { ws.send(JSON.stringify({ t: 'barge' })); } catch { /* socket gone */ }
+        stopLocalPlayback();
+        replyPlaying = false;
+      }
+    }
     try {
       ws.send(floatTo16kS16(input, ctx.sampleRate));
       sentChunks += 1;
-      // Show the count climbing so capture is visibly alive; throttled so it is
-      // not a per-frame DOM write.
-      if (sentChunks % 4 === 0) setState(`Listening… (${sentChunks})`);
+      // Push-to-talk shows the count climbing as hold feedback; open mic is always
+      // listening, so a per-frame counter would just churn — leave its status be.
+      if (callMode === 'push' && sentChunks % 4 === 0) setState(`Listening… (${sentChunks})`);
     } catch { /* socket went away */ }
   }
 
@@ -146,6 +186,8 @@
   }
 
   async function beginCall() {
+    // Lock in the capture mode for this call from the Settings control.
+    callMode = ($('voice-call-mode')?.value === 'open') ? 'open' : 'push';
     setState('Connecting…');
     // The mic API only exists in a secure context (https:// or localhost). Over
     // Tailscale on plain http:// the whole `navigator.mediaDevices` is absent —
@@ -231,9 +273,18 @@
 
   function pressTalk() {
     if (!live || !ws || ws.readyState !== WebSocket.OPEN) return;
-    // Barge-in (2c): pressing to talk while a reply is playing interrupts it —
-    // stop the audio locally right away (no waiting on the network) and tell the
-    // server to stop generating and sending the rest.
+    if (callMode === 'open') {
+      // Open mic: the button is a mute toggle, not a hold. No explicit release —
+      // the recogniser's endpointing segments what I say into turns.
+      talking = !talking;
+      if (talking) sentChunks = 0;
+      updateTalkButton();
+      setState(talking ? 'Open mic — just talk.' : 'Muted — tap to talk again.');
+      return;
+    }
+    // Push-to-talk. Pressing while a reply is playing barges it (2c): stop the
+    // audio locally right away (no network wait) and tell the server to stop
+    // generating and sending the rest.
     if (replyPlaying) {
       try { ws.send(JSON.stringify({ t: 'barge' })); } catch { /* socket gone */ }
       stopLocalPlayback();
@@ -241,18 +292,16 @@
     }
     talking = true;
     sentChunks = 0;
-    // Visible proof the press registered — without this the button looks
-    // identical held or not, so "is it even working?" has no answer. The chunk
-    // count then climbs as audio is captured, so a dead mic is visible too.
-    const b = $('voice-call-talk');
-    if (b) { b.classList.add('is-talking'); b.textContent = '🔴 Recording — release to send'; }
+    // Visible proof the press registered — the button looks identical held or
+    // not otherwise; the chunk count then climbs so a dead mic is visible too.
+    updateTalkButton();
     setState('Listening…');
   }
   function releaseTalk() {
+    if (callMode === 'open') return;   // no hold in open mic — release is a no-op
     if (!talking) return;
     talking = false;
-    const b = $('voice-call-talk');
-    if (b) { b.classList.remove('is-talking'); b.textContent = '🎙 Hold to talk'; }
+    updateTalkButton();
     try { ws.send(JSON.stringify({ t: 'release' })); } catch { /* */ }
     // If nothing was captured, say so plainly rather than spinning on "Thinking…"
     // for a turn that will never have input.

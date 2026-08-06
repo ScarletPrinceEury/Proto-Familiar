@@ -391,6 +391,9 @@ const state = {
   // only offers languages whose model is installed (from /api/voice/status), so
   // this stays 'en' unless a second model was pinned and chosen.
   voiceAsrLanguage: 'en',
+  // How a call captures: 'push' (hold the button) or 'open' (hands-free — the mic
+  // stays live and the recogniser's own endpointing segments what I say).
+  voiceCallMode: 'push',
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -451,7 +454,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
-  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -3842,6 +3845,7 @@ function readSettingsFromUI() {
   if ($('vision-threat-toggle')) state.visionThreatScoring = $('vision-threat-toggle').checked;
   if ($('voice-call-threat-toggle')) state.voiceThreatScoring = $('voice-call-threat-toggle').checked;
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
+  if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('read-aloud-default-toggle')) state.readAloudByDefault = $('read-aloud-default-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
@@ -4005,6 +4009,7 @@ function writeSettingsToUI() {
   if ($('vision-threat-toggle')) setIfNotFocused($('vision-threat-toggle'), 'checked', state.visionThreatScoring !== false);
   if ($('voice-call-threat-toggle')) setIfNotFocused($('voice-call-threat-toggle'), 'checked', state.voiceThreatScoring !== false);
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
+  if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
@@ -5270,7 +5275,7 @@ function init() {
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
-    'voice-call-threat-toggle', 'voice-call-lang',
+    'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
