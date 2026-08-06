@@ -164,7 +164,10 @@ export function createCallEngine({
       // silence (a dead/muted mic or the wrong input device); a healthy peak with
       // no words means real sound the model did not recognise (format, accent,
       // too quiet, too short). Speech is roughly peak > 0.05.
-      const meta = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s`;
+      // asrEngine + any offline note make "is the accurate model actually being
+      // used?" answerable from one line, instead of guessing from text quality.
+      const eng = msg.asrEngine ? ` ${msg.asrEngine}${msg.asrOfflineNote ? ` (${msg.asrOfflineNote})` : ''}` : '';
+      const meta = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s${eng}`;
       log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'} [${meta}]`);
       if (text) {
         handleTurn(speakerForStream(msg.streamId), text);   // serialised dispatcher; errors handled inside
@@ -286,9 +289,10 @@ export function createCallEngine({
       // model. This is what makes the hybrid setting a real capability instead of
       // a switch with no model behind it.
       if (ensureOffline) ensureOffline().catch(() => {});
-      const off = await worker.request({ op: 'load', role: 'asr-offline', modelDir: offlineModelDir }, { timeoutMs: 60000 }).catch(() => null);
+      const off = await worker.request({ op: 'load', role: 'asr-offline', modelDir: offlineModelDir }, { timeoutMs: 60000 }).catch((e) => ({ ok: false, reason: String(e?.message ?? e) }));
       offlineReady = Boolean(off?.ok);
-      if (!offlineReady) log(`accurate transcription model not ready yet — this call uses streaming transcripts (the model may be downloading; the next call will use it)`);
+      if (offlineReady) log(`hybrid ASR on — the accurate offline model is loaded${off?.alreadyLoaded ? ' (already resident)' : ''}`);
+      else log(`accurate transcription model not ready (${off?.reason ?? 'unknown'}) — this call uses streaming transcripts (the model may be downloading; the next call will use it)`);
     }
 
     let joined;
