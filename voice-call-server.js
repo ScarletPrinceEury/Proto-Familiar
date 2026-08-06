@@ -104,6 +104,9 @@ export function attachVoiceCall(deps) {
           provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
           messages, stream: false, runToolLoop: true, enrich: true,
           userMessage: transcript,
+          // Tell the turn it is spoken, so the reply comes out speech-shaped
+          // (short, no markdown) instead of screen-shaped (2e).
+          voiceMode: true,
           // A live spoken turn is the ward on their own private surface.
           sessionAudience: 'ward-private',
         }),

@@ -202,9 +202,17 @@ in the same commit (parent §13 discipline). PATCH bump each.
    tiers are for the tail only), Phylactery `maintenance_defer`, the earcon
    asset. Off-switch per new deferral behavior.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
-   language fix (2.4).** The block that tells the Familiar it is in a live
-   spoken turn, carrying the deferred-intents surface and the corrected
-   proactivity framing. First-person throughout (CLAUDE.md non-negotiable).
+   language fix (2.4).** ✅ **Landed.** A `[VOICE CALL — I'm speaking, not
+   typing]` dynamic block, injected into the call turn only (a `voiceMode` flag
+   on `/api/chat` appends it to `enrichedResult.dynamic`, the same seam as
+   `[PENDING CHECK-IN NOTICES]`; literal "my human", the server-injected-block
+   convention, no macros). It tells the Familiar the reply is read aloud — short,
+   plain sentences, no markdown/bullets/emoji — and to weave anything it has been
+   waiting to bring up (a tell, a check-in) into the conversation naturally
+   rather than as a separate announcement (the §7 framing). The deferred-intents
+   surface itself rides the normal `enrich()` blocks the call turn already gets.
+   First-person, plain-spoken (CLAUDE.md non-negotiable). Off implicitly when not
+   a call (`voiceMode` absent).
 6. **2f — VAD open-mic toggle.** The open-mic mode on top of the proven
    push-to-talk engine, once endpointing (2a) is tuned against the latency
    budget.
