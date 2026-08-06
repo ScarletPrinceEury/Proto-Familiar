@@ -44,6 +44,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ASR_MODEL_DIR = path.join(__dirname, 'models', 'audio', 'asr-offline');
 
 /**
+ * Hybrid call transcription: re-transcribe each finished call utterance with this
+ * accurate offline model instead of trusting the lossy streaming one. Default ON
+ * (the streaming zipformer's "ENGRAVED"/"TOLL STO" errors make calls hard to
+ * follow); the ward can turn it off — `voiceCallOfflineTranscribe:false` — if the
+ * small per-utterance latency ever bothers them on their hardware. Hard
+ * off-switch `PROTO_FAMILIAR_VOICE_OFFLINE_ASR_DISABLED=1`.
+ */
+export function voiceOfflineAsrEnabled(settings) {
+  if (process.env.PROTO_FAMILIAR_VOICE_OFFLINE_ASR_DISABLED === '1') return false;
+  return settings?.voiceCallOfflineTranscribe !== false;
+}
+
+/**
  * Loading 226 MB of ONNX off a laptop disk is slow enough that an ordinary
  * request timeout would report a failure for something that was working —
  * the same trap the TTS load hit, so the same generous window.

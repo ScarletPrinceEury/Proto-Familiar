@@ -264,6 +264,41 @@ function reportState() {
  * outward. Never throws into the frame reader: a decode failure ends this one
  * session with an `asr-error` and leaves every other stream untouched.
  */
+/** Concatenate this utterance's buffered Float32 chunks into one clip. */
+function joinUtterance(chunks, total) {
+  const out = new Float32Array(total);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+
+/**
+ * Emit the utterance's final transcript. With `offlineFinal` on and the offline
+ * model loaded, the streaming recogniser was only for endpointing: re-transcribe
+ * the buffered clip with SenseVoice — punctuation, casing, and far better words
+ * than the 20 M streaming zipformer — and emit THAT. Falls back to the streaming
+ * text if the offline model isn't loaded, the clip is empty, or it errors, so a
+ * hybrid failure degrades to the old behaviour rather than dropping the turn.
+ * `clip` is captured by the caller BEFORE the buffer is cleared, so this can run
+ * async without racing the next utterance.
+ */
+async function emitFinal(streamId, dec, streamingText, clip, meta) {
+  const base = { op: 'asr-final', streamId, text: streamingText, final: true, ...meta };
+  const offline = dec.offlineFinal ? loaded.get('asr-offline')?.session : null;
+  if (offline && clip && clip.length > 0) {
+    try {
+      const os = offline.createStream();
+      os.acceptWaveform({ samples: clip, sampleRate: 16000 });
+      const r = await offline.decodeAsync(os);
+      const text = (typeof r?.text === 'string' ? r.text : '').trim();
+      if (text) { send({ ...base, text, asrEngine: 'offline' }); return; }
+    } catch (err) {
+      send({ op: 'asr-note', streamId, detail: `offline re-transcribe failed, using streaming text: ${String(err?.message ?? err)}` });
+    }
+  }
+  send({ ...base, asrEngine: 'streaming' });
+}
+
 function feedDecoder(streamId, pcmBytes) {
   const dec = decoders.get(streamId);
   if (!dec) return; // audio for a stream that isn't listening — ignore, don't error
@@ -276,6 +311,9 @@ function feedDecoder(streamId, pcmBytes) {
     // otherwise.
     for (let i = 0; i < samples.length; i++) { const a = samples[i] < 0 ? -samples[i] : samples[i]; if (a > dec.peak) dec.peak = a; }
     dec.samples += samples.length;
+    // Buffer this utterance's audio for the offline re-transcription (cheap: a
+    // few seconds of 16 kHz float; cleared on every final).
+    if (dec.offlineFinal) { dec.utterance.push(samples); dec.uSamples += samples.length; }
     dec.stream.acceptWaveform({ samples, sampleRate: 16000 });
     while (dec.recognizer.isReady(dec.stream)) dec.recognizer.decode(dec.stream);
 
@@ -288,7 +326,11 @@ function feedDecoder(streamId, pcmBytes) {
       const finalText = dec.recognizer.getResult(dec.stream).text.trim();
       dec.recognizer.reset(dec.stream);
       dec.lastPartial = '';
-      if (finalText) send({ op: 'asr-final', streamId, text: finalText });
+      // Capture + clear the utterance buffer BEFORE the async offline pass, so
+      // the next utterance starts clean and can't race this clip.
+      const clip = dec.offlineFinal ? joinUtterance(dec.utterance, dec.uSamples) : null;
+      dec.utterance = []; dec.uSamples = 0;
+      if (finalText || clip) emitFinal(streamId, dec, finalText, clip, {}).catch(() => {});
     }
   } catch (err) {
     decoders.delete(streamId);
@@ -575,7 +617,7 @@ const OPS = {
    * one is a no-op, not a second decode state, so a stutter in the call setup
    * cannot double-decode a speaker.
    */
-  async asrStream({ reqId, streamId }) {
+  async asrStream({ reqId, streamId, offlineFinal }) {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!Number.isFinite(streamId)) return send({ reqId, ok: false, reason: 'bad-request', detail: 'streamId is required' });
@@ -584,7 +626,14 @@ const OPS = {
     if (decoders.has(streamId)) return send({ reqId, ok: true, streamId, alreadyOpen: true });
     try {
       const stream = held.session.createStream();
-      decoders.set(streamId, { recognizer: held.session, stream, lastPartial: '', peak: 0, samples: 0 });
+      // `offlineFinal`: re-transcribe each finished utterance with the accurate
+      // offline model (SenseVoice) and emit THAT as asr-final, using the streaming
+      // recogniser only for endpointing. `utterance` buffers this utterance's raw
+      // 16 kHz samples since the last final so the offline pass has the audio.
+      decoders.set(streamId, {
+        recognizer: held.session, stream, lastPartial: '', peak: 0, samples: 0,
+        offlineFinal: offlineFinal === true, utterance: [], uSamples: 0,
+      });
       reportState();
       send({ reqId, ok: true, streamId, sampleRate: 16000 });
     } catch (err) {
@@ -607,14 +656,17 @@ const OPS = {
       const tail = dec.recognizer.getResult(dec.stream).text.trim();
       const peak = Number(dec.peak.toFixed(4));
       const seconds = Number((dec.samples / 16000).toFixed(2));
+      // Capture the utterance clip before dropping the session.
+      const clip = dec.offlineFinal ? joinUtterance(dec.utterance, dec.uSamples) : null;
       decoders.delete(streamId);
       reportState();
       // ALWAYS emit the final, even when empty. A push-to-talk release with no
       // recognised words used to send nothing, so the caller waited forever with
       // no way to know the recogniser had finished with nothing to say. The
       // peak + duration ride along so the host can tell silence from unrecognised
-      // speech in one log line.
-      send({ op: 'asr-final', streamId, text: tail, final: true, peak, seconds });
+      // speech in one log line. With offlineFinal, the accurate SenseVoice text
+      // replaces `tail` (awaited so this stop's asr-final carries it).
+      await emitFinal(streamId, dec, tail, clip, { peak, seconds });
       send({ reqId, ok: true, streamId, wasOpen: true, peak, seconds });
     } catch (err) {
       decoders.delete(streamId);
