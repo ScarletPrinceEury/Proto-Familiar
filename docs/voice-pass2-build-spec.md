@@ -188,10 +188,22 @@ in the same commit (parent §13 discipline). PATCH bump each.
    a graceful dynamic import so a missing `ws` never breaks boot.
    **⚠️ Unverified in cloud** — needs a mic, a live provider, and the call models
    on disk, so my human is the one who confirms it on the reference laptop.
-   **Remaining before 2b is truly done:** session logging, and the on-hardware
-   shakeout (latency, resample quality, the ScriptProcessor→AudioWorklet
-   upgrade). Then 2c (barge-in) / 2d (governor) / 2e (voice-mode prompt +
-   intentions) / 2f (VAD open-mic).
+   **Session logging ✅ landed:** a call keeps its FULL transcript (separate from
+   the capped LLM `histories`) and, on hang-up, enqueues it for memorization via
+   `enqueueSessionByDay` — the exact path web chat and Discord use, consent-gated,
+   `audienceTag:'ward-private'`. So a spoken conversation is remembered as facts
+   like any other session instead of vanishing when the socket closes.
+   **AudioWorklet capture ✅ landed:** `setupCapture()` prefers an
+   `AudioWorkletNode` (`voice-call-capture-worklet.js`, runs off the main thread —
+   no glitching under load, and ScriptProcessorNode is deprecated) and **falls
+   back to the ScriptProcessor** if the worklet module can't load, so capture
+   always works — the fallback is the exact path my human already made calls on.
+   Both feed one `processCaptureBlock(samples)` (barge detection + resample +
+   send), so there is no duplicated capture logic. The worklet coalesces 128-frame
+   quanta to ~2048-sample blocks to match the old delivery granularity.
+   **Remaining before 2b is truly done:** just the on-hardware shakeout (latency,
+   resample quality). A session-log FILE (for `read_file` review + contact-
+   baselines) is an optional extra beyond the memorization enqueue.
 3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** ✅ **Streaming +
    barge landed.** `synthesize()` is now a pull-based async generator: the
    engine already emits PCM incrementally within the one clone-per-part
@@ -222,10 +234,30 @@ in the same commit (parent §13 discipline). PATCH bump each.
    `call-engine.js`, fail-safe to inactive, so a missing/broken state file never
    wedges a loop off. Triage / threat / reminders+event-alerts / outbox dispatch
    are **not** gated (the never-defer rows).
-   **Remaining:** the "spoken not banner" routing (D1 — noticing/triage/reminders
-   deliver *into the call as speech* rather than an outbox banner over it; the
-   deferral half is done, the delivery-channel half is not), the two-tier
-   `enrich()` latency budget + earcon, and Phylactery `maintenance_defer`.
+   **Spoken-not-banner ✅ (speaking core, ward-signed).** While a call is live,
+   proactive outbox items (triage check-ins, reminders, event alerts, noticing)
+   are SPOKEN into the call. Mechanism (the §7 union point): a **push-adapter
+   factory** registered in `voice-call-server.js` that returns an adapter only
+   when `engine.isCallActive()`; `dispatchOutboxPush` already fans every item to
+   the configured channels, so this is one adapter, not one hook per loop. The
+   engine gained `speakProactive(makeReply)` — it QUEUES the item and speaks it
+   only at a natural GAP (no reply playing, ≥1.5 s of quiet from my human — ward
+   decision: **always wait for a gap, never barge**), and resolves `true` only
+   once it was **actually heard** (false if the call ends first). **Safety
+   (ward-signed):** nothing in escalation or the threat tier changed. Speaking
+   records `delivery['voice-call'] = delivered`, which `contactDeadlineFor` reads
+   exactly as it reads a Discord-DM delivery — ward decision: **heard =
+   delivered; the human's own state/response (via voice threat scoring) still
+   drives escalation.** No auto-acknowledge of a triage item on being heard (that
+   would be "heard = handled", the option the ward rejected).
+   **Remaining (web de-dup + tuning):** the web client still injects a
+   voice-delivered item as a muted chat message (banners themselves were retired
+   in 0.3.9, so this is a record, not a banner over the call) — a small follow-up
+   can suppress the redundant ping for items already spoken, and should review the
+   web auto-ack of a triage item during a call against the escalation decision
+   (pre-existing behaviour, not a regression from this change). Also still open:
+   the two-tier `enrich()` latency budget + earcon (low value now that synthesis
+   streams) and Phylactery `maintenance_defer`.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
    language fix (2.4).** ✅ **Landed.** A `[VOICE CALL — I'm speaking, not
    typing]` dynamic block, injected into the call turn only (a `voiceMode` flag
@@ -238,9 +270,21 @@ in the same commit (parent §13 discipline). PATCH bump each.
    surface itself rides the normal `enrich()` blocks the call turn already gets.
    First-person, plain-spoken (CLAUDE.md non-negotiable). Off implicitly when not
    a call (`voiceMode` absent).
-6. **2f — VAD open-mic toggle.** The open-mic mode on top of the proven
-   push-to-talk engine, once endpointing (2a) is tuned against the latency
-   budget.
+6. **2f — VAD open-mic toggle.** ✅ **Landed.** A `voiceCallMode` setting
+   (`push` | `open`) with a picker in the voice-call pane. In **open** mode the
+   mic goes live the moment the call is `ready` and stays open — no holding — and
+   the streaming recogniser's OWN endpointing (`enableEndpoint: true`, rule2 =
+   1.2 s trailing silence, already configured in `buildOnlineRecognizer`) segments
+   what my human says into turns; the client never sends `{t:'release'}`. The talk
+   button becomes a **mute toggle** rather than a hold target. **Barge in open
+   mode** is onset-detected: a frame louder than `BARGE_PEAK` while a reply plays
+   is my human talking over it → the client sends `{t:'barge'}`, stops local
+   playback, and the reply's synthesis is cut (2c). Server needs no change — the
+   continuous stream + endpointing is exactly the "continuous/VAD adapter" the
+   engine reserved (`finalizeUtterance`/release is push-only). **Refinement left:**
+   the endpoint rules against the §6.1 latency budget (the deferred 2a tuning) and
+   a smarter onset VAD than a peak threshold; the peak gate is a conservative
+   first cut (a false barge only cuts a reply my human can ask to repeat).
 
 ## 4. Safety-critical seams (ward sign-off required)
 

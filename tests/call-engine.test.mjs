@@ -133,6 +133,47 @@ test('stray audio for no call, and an empty final, are ignored not crashed', asy
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('speakProactive speaks at a gap and resolves once actually heard', async () => {
+  const dir = await tmp();
+  try {
+    const rec = { played: [] };
+    const engine = createCallEngine({ worker: fakeWorker(), onTurn: async () => null, tomesDir: dir });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake');
+    // No inbound audio yet → lastUserAudioAt is 0 → the gap is open right now.
+    const reply = { sampleRate: 24000, async *[Symbol.asyncIterator]() { yield Buffer.alloc(8); } };
+    const heard = await engine.speakProactive(() => reply);
+    assert.equal(heard, true, 'resolves true only once spoken');
+    assert.ok(rec.played.some((p) => p.reply === reply), 'the proactive reply reached the adapter');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('a queued proactive item resolves false if the call ends before a gap opens', async () => {
+  const dir = await tmp();
+  try {
+    const rec = { played: [] };
+    const engine = createCallEngine({ worker: fakeWorker(), onTurn: async () => null, tomesDir: dir });
+    // isSpeaking() always true → the gap never opens on its own, so the item stays queued.
+    engine.registerCallAdapter((hooks) => {
+      rec.hooks = hooks;
+      return {
+        id: 'fake', capabilities: { perSpeakerStreams: true },
+        joinCall: async () => ({ callId: 'c1' }),
+        leaveCall: async () => {},
+        playAudio: async (id, reply) => { rec.played.push({ id, reply }); },
+        isSpeaking: () => true,
+      };
+    });
+    await engine.startCall('fake');
+    const p = engine.speakProactive(() => ({ async *[Symbol.asyncIterator]() { yield Buffer.alloc(8); } }));
+    await tick();
+    await engine.endCall();
+    assert.equal(await p, false, 'ending the call resolves the un-spoken item as NOT heard');
+    assert.equal(rec.played.length, 0, 'and it never played — the escalation clock must not count it');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('one call at a time; a second start is refused as busy', async () => {
   const dir = await tmp();
   try {

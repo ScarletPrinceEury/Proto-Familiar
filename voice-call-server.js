@@ -31,6 +31,9 @@ import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { KIND_PCM } from './audio-frame.js';
+import { enqueueSessionByDay } from './memorization.js';
+import { sessionSlugId } from './slug-ids.js';
+import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 
 const WS_PATH = '/api/voice/call';
 // How long a single spoken turn may take before the call gives up and resets my
@@ -75,6 +78,32 @@ export function attachVoiceCall(deps) {
   // live entry; a new call gets a new id and a fresh history).
   const histories = new Map();
   const HISTORY_MAX = 20;
+
+  // The FULL call transcript, kept separate from `histories` (which is capped for
+  // the LLM context). On hang-up it is memorized like any ward-private session —
+  // otherwise a whole spoken conversation vanishes, unremembered and un-reviewable.
+  // callId → { sessionId, messages: [{role, content}], startedAt }.
+  const callSessions = new Map();
+
+  // Enqueue a finished call's transcript for memorization, the same path web chat
+  // and Discord use (`enqueueSessionByDay` → consent-gated fact extraction). Called
+  // once, on hang-up. Never throws into the teardown.
+  async function memorizeCall(callId) {
+    const sess = callSessions.get(callId);
+    callSessions.delete(callId);
+    if (!sess || sess.messages.length < 2) return;
+    try {
+      const s = readSettings();
+      const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
+      if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with — transcript not stored'); return; }
+      const r = await enqueueSessionByDay({
+        sessionId: sess.sessionId, messages: sess.messages,
+        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+        audienceTag: 'ward-private',   // a web call is my human on their own private surface
+      });
+      log(`call ${callId} ended — queued ${sess.messages.length} lines for memory (${r.enqueued} enqueued, ${r.skipped} skipped)`);
+    } catch (err) { log(`memorizeCall failed: ${err?.message ?? err}`); }
+  }
 
   // ── onTurn dep: a full chat turn via /api/chat ──────────────────────────
   async function runTurn(transcript, ctx) {
@@ -134,6 +163,9 @@ export function attachVoiceCall(deps) {
     if (reply) {
       const next = [...messages, { role: 'assistant', content: reply }];
       histories.set(ctx.callId, next.slice(-HISTORY_MAX));
+      // Accumulate the FULL exchange for the end-of-call memorization (uncapped).
+      const sess = callSessions.get(ctx.callId);
+      if (sess) sess.messages.push({ role: 'user', content: transcript }, { role: 'assistant', content: reply });
     }
     return reply;
   }
@@ -245,6 +277,34 @@ export function attachVoiceCall(deps) {
     return fn(w);
   }
 
+  // ── Spoken-not-banner (spec §7, ward-signed) ────────────────────────────
+  // While a call is live, proactive outbox items — triage check-ins, reminders,
+  // event alerts, noticing reach-outs — are SPOKEN into the call instead of
+  // bannered over it. A push adapter is the union point: `dispatchOutboxPush`
+  // already fans every item out to the configured channels, so this adds one
+  // that only exists during a call and speaks the item at the next gap.
+  //
+  // SAFETY: this changes nothing about escalation or the threat tier. Speaking
+  // the item resolves as a confirmed delivery ONLY once it was actually heard
+  // (the engine resolves false if the call ends first), and `dispatchOutboxPush`
+  // records that under delivery['voice-call'] — which `contactDeadlineFor` reads
+  // exactly as it reads a Discord-DM delivery. Ward decision: heard = delivered;
+  // the human's own state/response (via the threat tier) still drives escalation.
+  registerPushAdapterFactory(() => {
+    if (!engine.isCallActive()) return null;   // only a live call speaks; otherwise the normal channels deliver
+    return {
+      name: 'voice-call',
+      deliver: async (item) => {
+        try {
+          const text = speakableText(formatItemForPush(item))?.text?.trim();
+          if (!text) return { ok: false, error: 'nothing speakable in this item' };
+          const heard = await engine.speakProactive(() => synthesize(text));
+          return heard ? { ok: true } : { ok: false, error: 'call ended before it could be spoken' };
+        } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+      },
+    };
+  });
+
   clearStaleCallState(path.join(rootDir, 'tomes')).catch(() => {});
 
   // ── The WebSocket endpoint ──────────────────────────────────────────────
@@ -267,10 +327,16 @@ export function attachVoiceCall(deps) {
 
     const send = (data) => { try { ws.send(data); } catch (err) { log(`ws send failed: ${err?.message ?? err}`); } };
     let web = null;
+    let activeCallId = null;   // set once the call is live, so close can memorize it
     engine.registerCallAdapter((hooks) => { web = createWebCallAdapter({ hooks, send, log }); return web.adapter; });
 
     ws.on('message', (data, isBinary) => { try { web?.onMessage(data, isBinary); } catch (err) { log(`onMessage failed: ${err?.message ?? err}`); } });
-    ws.on('close', () => { try { web?.onClose(); } catch { /* */ } engine.endCall().catch(() => {}); });
+    ws.on('close', () => {
+      try { web?.onClose(); } catch { /* */ }
+      engine.endCall().catch(() => {});
+      // Memorize the conversation on hang-up (fire-and-forget; never blocks teardown).
+      if (activeCallId) memorizeCall(activeCallId).catch(() => {});
+    });
     ws.on('error', (err) => log(`ws error: ${err?.message ?? err}`));
 
     const start = await engine.startCall('web');
@@ -279,6 +345,8 @@ export function attachVoiceCall(deps) {
       send(JSON.stringify({ t: 'error', reason: start.reason, detail: start.detail ?? null }));
       ws.close(); return;
     }
+    activeCallId = start.callId;
+    callSessions.set(start.callId, { sessionId: sessionSlugId(), messages: [], startedAt: Date.now() });
     send(JSON.stringify({ t: 'ready', callId: start.callId }));
     log(`web call ${start.callId} live`);
   });
