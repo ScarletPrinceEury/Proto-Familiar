@@ -107,18 +107,26 @@ export function monoToStereo48(pcmMono, inRate = 24000) {
  * honest "Discord voice unavailable" instead of a boot crash (graceful
  * degradation — no module may take down the chat path).
  */
-export async function loadDiscordVoiceDeps() {
+export async function loadDiscordVoiceDeps({ log = () => {} } = {}) {
   const voice = await import('@discordjs/voice');
   const { default: OpusScript } = await import('opusscript');
-  // libsodium is what @discordjs/voice uses for packet encryption; importing it
-  // here forces the WASM to be ready before the first packet and turns a missing
-  // encryption lib into a clear failure at join, not a silent audio black hole.
-  await import('libsodium-wrappers').then((m) => m.ready).catch(() => {});
+  // libsodium is what @discordjs/voice uses for packet encryption. Its WASM must
+  // be READY before the first voice packet, or the connection handshakes and
+  // then silently never reaches Ready (the "joins but join-failed" symptom). We
+  // await it for real and surface a failure — a missing/broken encryption lib is
+  // the single most common cause of a voice connection that won't come up.
+  try {
+    const sodium = await import('libsodium-wrappers');
+    await (sodium.ready ?? sodium.default?.ready);
+  } catch (err) {
+    log(`libsodium not ready — voice packets can't be encrypted: ${err?.message ?? err}`);
+  }
   return {
     joinVoiceChannel: voice.joinVoiceChannel,
     createAudioPlayer: voice.createAudioPlayer,
     createAudioResource: voice.createAudioResource,
     entersState: voice.entersState,
+    generateDependencyReport: voice.generateDependencyReport,
     EndBehaviorType: voice.EndBehaviorType,
     StreamType: voice.StreamType,
     VoiceConnectionStatus: voice.VoiceConnectionStatus,
@@ -199,7 +207,26 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
         selfDeaf: false,   // I have to HEAR my human to answer them
         selfMute: false,
       });
-      await deps.entersState(connection, deps.VoiceConnectionStatus.Ready, 20_000);
+
+      // Observability first: the voice handshake is a multi-step dance over a
+      // second WebSocket + UDP that we can't see from the main gateway. Log every
+      // state transition and error so a stall is diagnosable from the terminal
+      // instead of a bare "join-failed" (the failures-that-matter-are-observable
+      // rule). One-time dependency report names the encryption/Opus libs in play.
+      try { log(`voice deps: ${deps.generateDependencyReport?.() ?? 'n/a'}`); } catch { /* */ }
+      connection.on('stateChange', (oldS, newS) => log(`voice connection: ${oldS?.status} → ${newS?.status}`));
+      connection.on('error', (err) => log(`voice connection error: ${err?.message ?? err}`));
+
+      try {
+        await deps.entersState(connection, deps.VoiceConnectionStatus.Ready, 30_000);
+      } catch (err) {
+        // Name WHERE it stalled — the last state is the clue (stuck in
+        // 'signalling' = no VOICE_SERVER_UPDATE; 'connecting' = UDP/encryption).
+        const stuckAt = connection?.state?.status ?? 'unknown';
+        try { connection.destroy(); } catch { /* */ }
+        connection = null;
+        throw new Error(`voice connection never reached Ready (stuck at '${stuckAt}'): ${err?.message ?? err}`);
+      }
 
       player = deps.createAudioPlayer({ behaviors: { noSubscriber: deps.NoSubscriberBehavior.Pause } });
       connection.subscribe(player);

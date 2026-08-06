@@ -59,7 +59,10 @@ function makeFakeDeps() {
   player.play = (resource) => { player.played.push(resource); };
   player.stop = () => { player.emit('idle'); return true; };
   const receiver = { speaking: new EventEmitter(), subscribed: [], subscribe(userId) { const s = makeFakeReadable(); this.subscribed.push({ userId, stream: s }); return s; } };
-  const connection = { receiver, subscribedPlayer: null, subscribe(p) { this.subscribedPlayer = p; }, destroy() { this.destroyed = true; } };
+  const connection = Object.assign(new EventEmitter(), {
+    receiver, subscribedPlayer: null, state: { status: 'ready' },
+    subscribe(p) { this.subscribedPlayer = p; }, destroy() { this.destroyed = true; },
+  });
   const deps = {
     joinVoiceChannel: (opts) => { deps._joinOpts = opts; return connection; },
     createAudioPlayer: () => player,
