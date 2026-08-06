@@ -127,6 +127,15 @@ integration seam that needs the most care and its own tests.
   VC; `!leave` → leave. A plain non-tool path for when the ward would rather
   type than talk.
 
+> **Notepad — easier location setup (post-3, ward request).** Registering a
+> Discord voice location today means hand-entering the `guild:…:channel:…`
+> syntax in the Village modal, which is unintuitive. Better: when a location
+> from a NEW Discord server first **knocks** and gets registered, also let the
+> ward name the **server** (stored against its guild id). Then new locations are
+> a dropdown — pick the server by name, then enter/pick the channel by name or
+> id. Turns the raw-id syntax into two friendly pickers. Not blocking Pass 3;
+> queued for a setup-UX pass afterwards.
+
 ### 3.6 Off-switches (graceful degradation, same commit as the feature)
 
 - `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1` — hard off.

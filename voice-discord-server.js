@@ -106,7 +106,7 @@ export function attachDiscordVoice(deps) {
     // and the single ASR/TTS worker). The governor read is fail-safe.
     if (await isCallActiveFromFile(path.join(rootDir, 'tomes'))) return { ok: false, reason: 'busy-other-transport' };
 
-    const voiceDeps = await loadDiscordVoiceDeps().catch((err) => { log(`voice deps unavailable: ${err?.message ?? err}`); return null; });
+    const voiceDeps = await loadDiscordVoiceDeps({ log }).catch((err) => { log(`voice deps unavailable: ${err?.message ?? err}`); return null; });
     if (!voiceDeps) return { ok: false, reason: 'deps-unavailable' };
 
     const adapterCreator = discordVoiceAdapterCreator(guildId);
@@ -130,8 +130,12 @@ export function attachDiscordVoice(deps) {
     });
 
     const r = await engine.startCall('discord', { guildId, channelId });
-    if (!r.ok) { setVoiceRosterListener(null); activeAdapter = null; }
-    else log(`voice call live in guild ${guildId} channel ${channelId} (${r.callId})`);
+    if (!r.ok) {
+      setVoiceRosterListener(null); activeAdapter = null;
+      // Surface WHY — startCall carries the adapter's detail; without this the
+      // ward only ever sees "join-failed" with no clue where it died.
+      log(`join failed: ${r.reason}${r.detail ? ` — ${r.detail}` : ''}`);
+    } else log(`voice call live in guild ${guildId} channel ${channelId} (${r.callId})`);
     return r;
   }
 
