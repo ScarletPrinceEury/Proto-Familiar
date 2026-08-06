@@ -284,6 +284,11 @@ function joinUtterance(chunks, total) {
  */
 async function emitFinal(streamId, dec, streamingText, clip, meta) {
   const base = { op: 'asr-final', streamId, text: streamingText, final: true, ...meta };
+  // Why offline was or wasn't used — rides out on the frame so the host can log
+  // it. Blind success/failure here is what made "hybrid isn't engaging"
+  // undiagnosable: we couldn't tell not-loaded from empty-result from a throw.
+  const hasModel = Boolean(loaded.get('asr-offline')?.session);
+  const clipSec = clip ? Number((clip.length / 16000).toFixed(2)) : 0;
   const offline = dec.offlineFinal ? loaded.get('asr-offline')?.session : null;
   if (offline && clip && clip.length > 0) {
     try {
@@ -291,12 +296,18 @@ async function emitFinal(streamId, dec, streamingText, clip, meta) {
       os.acceptWaveform({ samples: clip, sampleRate: 16000 });
       const r = await offline.decodeAsync(os);
       const text = (typeof r?.text === 'string' ? r.text : '').trim();
-      if (text) { send({ ...base, text, asrEngine: 'offline' }); return; }
+      if (text) { send({ ...base, text, asrEngine: 'offline', clipSec }); return; }
+      send({ ...base, asrEngine: 'streaming', asrOfflineNote: `offline returned empty on ${clipSec}s clip`, clipSec });
+      return;
     } catch (err) {
-      send({ op: 'asr-note', streamId, detail: `offline re-transcribe failed, using streaming text: ${String(err?.message ?? err)}` });
+      send({ ...base, asrEngine: 'streaming', asrOfflineNote: `offline threw: ${String(err?.message ?? err)}`, clipSec });
+      return;
     }
   }
-  send({ ...base, asrEngine: 'streaming' });
+  // Not attempted — say precisely why (flag off, model not loaded, empty clip).
+  const why = !dec.offlineFinal ? (hasModel ? 'flag-off' : 'flag-off,model-not-loaded')
+    : (!hasModel ? 'model-not-loaded' : (!clip || clip.length === 0 ? 'empty-clip' : 'unknown'));
+  send({ ...base, asrEngine: 'streaming', asrOfflineNote: `not attempted: ${why}`, clipSec });
 }
 
 function feedDecoder(streamId, pcmBytes) {
