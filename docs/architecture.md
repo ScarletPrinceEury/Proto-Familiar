@@ -2592,7 +2592,13 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   per-location call-mode dropdown, and the `join_voice_call`/`leave_voice_call`
   Familiar tools (3c) are the following slices — ward-verified live (no
   gateway/UDP/Opus in CI). Deps are pure-JS/WASM (`@discordjs/voice`,
-  `opusscript`, `libsodium-wrappers`) so no native compiler is needed.
+  `opusscript`, and for packet encryption `@noble/ciphers` — pure-JS, primary —
+  with `libsodium-wrappers` as a WASM fallback) so no native compiler is needed.
+  `@discordjs/voice` tries encryption libs in order and uses the first that
+  loads; `loadDiscordVoiceDeps` probes the same list up front, logs the active
+  cipher, and fails the join FAST with a clear message if none load (a broken
+  libsodium-wrappers ESM build — seen on Windows AND Linux — otherwise stalls the
+  connection at `signalling` for 30s instead of naming the cause).
 
 ## Security design
 

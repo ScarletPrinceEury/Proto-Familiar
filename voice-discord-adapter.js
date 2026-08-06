@@ -107,20 +107,44 @@ export function monoToStereo48(pcmMono, inRate = 24000) {
  * honest "Discord voice unavailable" instead of a boot crash (graceful
  * degradation — no module may take down the chat path).
  */
+// The encryption libraries @discordjs/voice will try, in ITS order. We probe the
+// same list so we (a) load/warm whichever one works, (b) log which cipher is
+// actually active, and (c) fail the join FAST with a clear message if none load
+// — instead of a doomed connection that stalls at 'signalling' for 30s. Several
+// options with automatic fallback: if libsodium's WASM/ESM is broken on a
+// machine (it is, on some Windows installs), @noble/ciphers — pure-JS, no WASM,
+// no packaging fragility — carries it. libsodium stays first so a machine where
+// it works still uses the faster native path.
+const ENCRYPTION_LIBS = ['sodium-native', 'sodium', 'libsodium-wrappers', '@stablelib/xchacha20poly1305', '@noble/ciphers/chacha'];
+
+/** Probe the encryption libs in @discordjs/voice's order; return the first that
+ *  actually loads (and is `ready`, for libsodium), or null if none work. */
+async function probeEncryption(log) {
+  for (const name of ENCRYPTION_LIBS) {
+    try {
+      const lib = await import(name);
+      if (name === 'libsodium-wrappers') await (lib.ready ?? lib.default?.ready);
+      return name;
+    } catch (err) {
+      log(`encryption lib ${name} unavailable (${err?.message ?? err}) — trying next`);
+    }
+  }
+  return null;
+}
+
 export async function loadDiscordVoiceDeps({ log = () => {} } = {}) {
   const voice = await import('@discordjs/voice');
   const { default: OpusScript } = await import('opusscript');
-  // libsodium is what @discordjs/voice uses for packet encryption. Its WASM must
-  // be READY before the first voice packet, or the connection handshakes and
-  // then silently never reaches Ready (the "joins but join-failed" symptom). We
-  // await it for real and surface a failure — a missing/broken encryption lib is
-  // the single most common cause of a voice connection that won't come up.
-  try {
-    const sodium = await import('libsodium-wrappers');
-    await (sodium.ready ?? sodium.default?.ready);
-  } catch (err) {
-    log(`libsodium not ready — voice packets can't be encrypted: ${err?.message ?? err}`);
+  // A voice connection with no usable encryption library handshakes and then
+  // silently never reaches Ready (the "joins but join-failed" symptom). Probe up
+  // front so a broken encryption stack is a clear, fast failure — not a 30s
+  // stall — and so the log names the cipher actually in play.
+  const cipher = await probeEncryption(log);
+  if (!cipher) {
+    log('NO working encryption library — Discord voice cannot connect. Reinstall deps (npm install) so @noble/ciphers is present.');
+    return null;   // caller degrades to a clear "deps-unavailable", never a doomed join
   }
+  log(`voice encryption via ${cipher}`);
   return {
     joinVoiceChannel: voice.joinVoiceChannel,
     createAudioPlayer: voice.createAudioPlayer,
