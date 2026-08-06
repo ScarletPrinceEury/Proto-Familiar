@@ -270,6 +270,12 @@ function feedDecoder(streamId, pcmBytes) {
   try {
     const samples = pcm16ToFloat(pcmBytes);
     if (samples.length === 0) return;
+    // Track the loudest sample and how much audio was fed, so a stop can report
+    // whether this was silence (a dead/muted mic) or real sound the model simply
+    // did not turn into words — two very different fixes that look identical
+    // otherwise.
+    for (let i = 0; i < samples.length; i++) { const a = samples[i] < 0 ? -samples[i] : samples[i]; if (a > dec.peak) dec.peak = a; }
+    dec.samples += samples.length;
     dec.stream.acceptWaveform({ samples, sampleRate: 16000 });
     while (dec.recognizer.isReady(dec.stream)) dec.recognizer.decode(dec.stream);
 
@@ -578,7 +584,7 @@ const OPS = {
     if (decoders.has(streamId)) return send({ reqId, ok: true, streamId, alreadyOpen: true });
     try {
       const stream = held.session.createStream();
-      decoders.set(streamId, { recognizer: held.session, stream, lastPartial: '' });
+      decoders.set(streamId, { recognizer: held.session, stream, lastPartial: '', peak: 0, samples: 0 });
       reportState();
       send({ reqId, ok: true, streamId, sampleRate: 16000 });
     } catch (err) {
@@ -599,10 +605,17 @@ const OPS = {
       dec.stream.inputFinished();
       while (dec.recognizer.isReady(dec.stream)) dec.recognizer.decode(dec.stream);
       const tail = dec.recognizer.getResult(dec.stream).text.trim();
+      const peak = Number(dec.peak.toFixed(4));
+      const seconds = Number((dec.samples / 16000).toFixed(2));
       decoders.delete(streamId);
       reportState();
-      if (tail) send({ op: 'asr-final', streamId, text: tail, final: true });
-      send({ reqId, ok: true, streamId, wasOpen: true });
+      // ALWAYS emit the final, even when empty. A push-to-talk release with no
+      // recognised words used to send nothing, so the caller waited forever with
+      // no way to know the recogniser had finished with nothing to say. The
+      // peak + duration ride along so the host can tell silence from unrecognised
+      // speech in one log line.
+      send({ op: 'asr-final', streamId, text: tail, final: true, peak, seconds });
+      send({ reqId, ok: true, streamId, wasOpen: true, peak, seconds });
     } catch (err) {
       decoders.delete(streamId);
       reportState();
