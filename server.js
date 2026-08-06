@@ -321,7 +321,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -444,6 +444,17 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // into the dynamic block so the Familiar knows it reached out while
   // the user was away — and doesn't act confused about having done so.
   let enrichedResult = enriched;
+
+  // A live voice call is spoken, not typed. Tell the Familiar so — its reply is
+  // read aloud, so markdown, bullets, and length that reads fine on screen come
+  // out wrong in the ear. Injected as a dynamic block (literal "my human", the
+  // server-injected-block convention — no macros), only on a real call turn. The
+  // deferred-intents surface it should weave in rides the normal enrich() blocks.
+  if (voiceMode && enrichMode === 'full') {
+    const block = `\n\n[VOICE CALL — I'm speaking, not typing]\nI'm on a live voice call with my human right now, so my reply gets read aloud. I keep it the way I'd actually talk: short, plain sentences, no markdown, no bullet points or headings, no asterisks or emoji — spoken aloud those are either read out literally or stripped, and either way they don't belong in speech. A sentence or two is usually plenty; when there's more to say I lead with the part that matters. If something's been waiting for me to bring up — a thought I meant to share, a check-in — I just work it into what I'm saying, the way it would come up in a real conversation, not as a separate announcement.`;
+    enrichedResult = { ...enrichedResult, dynamic: (enrichedResult.dynamic || '') + block };
+  }
+
   if (enrichMode === 'full') {
     try {
       const pending = await listOutbox({ pendingOnly: true, limit: 20 });
@@ -454,7 +465,9 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
           .map(i => `  - At ${i.ts}: "${i.body}" ${formatDeliveryNote(i, { hasPushChannel: pushConfigured })}`)
           .join('\n');
         const block = `\n\n[PENDING CHECK-IN NOTICES]\nWhile my human was away, I reached out to them with the following (they have not yet acknowledged):\n${notices}\n\nI am aware I did this. If their first message back opens a door to it, I may acknowledge having reached out — but I should not lead with it or press.`;
-        enrichedResult = { ...enriched, dynamic: (enriched.dynamic || '') + block };
+        // Build on enrichedResult, not `enriched` — a prior block (e.g. voice mode)
+        // may already have appended to `dynamic`, and spreading the base would drop it.
+        enrichedResult = { ...enrichedResult, dynamic: (enrichedResult.dynamic || '') + block };
       }
     } catch { /* non-critical */ }
   }

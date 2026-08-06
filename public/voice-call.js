@@ -31,6 +31,8 @@
   let sentChunks = 0;     // audio chunks sent during the current press — live feedback + a dead-mic tell
   let playHead = 0;       // AudioContext time the next reply chunk should start at
   let live = false;
+  let replyPlaying = false;   // a spoken reply is currently playing (barge-in gate)
+  let playingSources = [];    // scheduled AudioBufferSourceNodes, so a barge can stop them mid-reply
 
   function setState(msg) { const el = $('voice-call-state'); if (el) el.textContent = msg || ''; }
   function setLive(on) {
@@ -86,6 +88,16 @@
     const startAt = Math.max(ctx.currentTime, playHead);
     src.start(startAt);
     playHead = startAt + audio.duration;
+    // Track it so a barge can stop everything still scheduled to play.
+    playingSources.push(src);
+    src.onended = () => { playingSources = playingSources.filter((s) => s !== src); };
+  }
+
+  // Stop every scheduled reply chunk at once — barge-in, or a server `stop`.
+  function stopLocalPlayback() {
+    for (const s of playingSources) { try { s.stop(); } catch { /* already ended */ } }
+    playingSources = [];
+    if (ctx) playHead = ctx.currentTime;
   }
 
   // ── First-call setup: fetch the speech models if they aren't here yet ──
@@ -176,10 +188,10 @@
       if (typeof ev.data === 'string') {
         let m; try { m = JSON.parse(ev.data); } catch { return; }
         if (m.t === 'ready') { setLive(true); setState('On a call. Hold to talk.'); }
-        else if (m.t === 'speak-start') { replyRate = Number(m.sampleRate) || replyRate; playHead = ctx.currentTime; setState('…'); }
-        else if (m.t === 'speak-end') { setState('On a call. Hold to talk.'); }
-        else if (m.t === 'no-reply') { setState('No reply that time — hold to talk and try again.'); }
-        else if (m.t === 'stop') { playHead = ctx.currentTime; }
+        else if (m.t === 'speak-start') { replyRate = Number(m.sampleRate) || replyRate; playHead = ctx.currentTime; replyPlaying = true; setState('…'); }
+        else if (m.t === 'speak-end') { replyPlaying = false; setState('On a call. Hold to talk.'); }
+        else if (m.t === 'no-reply') { replyPlaying = false; setState('No reply that time — hold to talk and try again.'); }
+        else if (m.t === 'stop') { replyPlaying = false; stopLocalPlayback(); }
         else if (m.t === 'error') { setState(callErrorMessage(m.reason, m.detail)); endCall(); }
         return;
       }
@@ -219,6 +231,14 @@
 
   function pressTalk() {
     if (!live || !ws || ws.readyState !== WebSocket.OPEN) return;
+    // Barge-in (2c): pressing to talk while a reply is playing interrupts it —
+    // stop the audio locally right away (no waiting on the network) and tell the
+    // server to stop generating and sending the rest.
+    if (replyPlaying) {
+      try { ws.send(JSON.stringify({ t: 'barge' })); } catch { /* socket gone */ }
+      stopLocalPlayback();
+      replyPlaying = false;
+    }
     talking = true;
     sentChunks = 0;
     // Visible proof the press registered — without this the button looks

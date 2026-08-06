@@ -36,6 +36,8 @@
  */
 export function createWebCallAdapter({ hooks, send, log = () => {} } = {}) {
   let callId = null;
+  let speaking = false;   // a reply is currently streaming out
+  let barged = false;     // my human talked over it — stop sending this reply
 
   const control = (obj) => { try { send(JSON.stringify(obj)); } catch (err) { log(`web send failed: ${err?.message ?? err}`); } };
 
@@ -68,20 +70,31 @@ export function createWebCallAdapter({ hooks, send, log = () => {} } = {}) {
       // The reply MAY carry a sample rate (TTS output rate) so the browser can
       // configure playback; a bare async-iterable (the default) omits it.
       const sampleRate = reply?.sampleRate;
+      barged = false;
+      speaking = true;
       control(sampleRate ? { t: 'speak-start', sampleRate } : { t: 'speak-start' });
       try {
         for await (const chunk of reply) {
+          // Barge-in (2c): my human started talking over the reply. Stop sending
+          // AND stop pulling — breaking the for-await runs the synthesis
+          // generator's return()/finally, so TTS stops generating the rest
+          // instead of finishing a reply nobody is listening to.
+          if (barged) break;
           if (chunk && chunk.length) send(chunk);
         }
       } catch (err) {
         log(`web playback stream failed: ${err?.message ?? err}`);
       } finally {
+        speaking = false;
         control({ t: 'speak-end' });
       }
     },
     async stopPlayback() {
+      barged = true;   // makes an in-flight playAudio loop break on its next chunk
       control({ t: 'stop' });
     },
+    /** Is a reply streaming out right now? Lets the engine gate a barge on real playback. */
+    isSpeaking() { return speaking; },
   };
 
   /**

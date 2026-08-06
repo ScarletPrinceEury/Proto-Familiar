@@ -192,19 +192,52 @@ in the same commit (parent §13 discipline). PATCH bump each.
    shakeout (latency, resample quality, the ScriptProcessor→AudioWorklet
    upgrade). Then 2c (barge-in) / 2d (governor) / 2e (voice-mode prompt +
    intentions) / 2f (VAD open-mic).
-3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** First audio after
-   the first sentence; barge-in halts in ≤250 ms with `spokenUpTo` matching
-   what actually played (parent §6.2 — non-negotiable, exact-values rule: the
-   played-sample count is code's, never the model's).
-4. **2d — the compute governor.** Call-state deferral (the reconciled 2.1
-   list), the two-tier `enrich()` latency budget (soft ~1200 ms / earcon-bridged
-   hard ~3000 ms — 39 ms measured baseline gives enormous headroom, so the
-   tiers are for the tail only), Phylactery `maintenance_defer`, the earcon
-   asset. Off-switch per new deferral behavior.
+3. **2c — sentence-streamed TTS + barge-in + `speakable()`.** ✅ **Streaming +
+   barge landed.** `synthesize()` is now a pull-based async generator: the
+   engine already emits PCM incrementally within the one clone-per-part
+   generation, so it yields each frame as it lands instead of buffering the whole
+   reply. **First audio arrives after the first chunk, not the whole reply, with
+   no extra clones and no voice drift** (the read-aloud lesson — a part is still
+   ONE generation). **Barge-in:** pressing to talk while a reply is playing sends
+   `{t:'barge'}` and stops local playback instantly (client-side, no network
+   wait); the adapter's `playAudio` loop then breaks on its `barged` flag, which
+   runs the generator's `return()`/`finally` so TTS **stops generating the rest**
+   of the reply instead of finishing something nobody is hearing. Covered by a
+   watched-fail adapter test (a reply held mid-stream, barged, asserts no
+   post-barge chunk + a clean `speak-end`).
+   **Remaining:** `spokenUpTo` — recording in the call history HOW MUCH of the
+   reply was actually heard before the interrupt (the exact played-sample → text
+   mapping). The barge stops the audio correctly; what it does not yet do is tell
+   the next turn "you were cut off after word N", so the Familiar can't yet know
+   precisely where it was interrupted. That mapping (sample count is code's,
+   never the model's — the exact-values rule) is the piece still to build.
+4. **2d — the compute governor.** ✅ **Call-state deferral landed.** The eight
+   deferrable loops from the §2.1 table — pondering, memorization drain, memory
+   sweep, tome graduation, gcal sync, needs-tracking, content-regate, warm
+   reach-out — now check `isCallActiveFromFile()` at their tick entry and skip
+   while a call is live (a silent defer that the existing `finally`/overlap-guard
+   already unwinds, so the next tick runs normally once the call ends). This is
+   the churn the ward watched during a live call (pondering + memorization firing
+   mid-conversation). The gate is the governor read-side already exported by
+   `call-engine.js`, fail-safe to inactive, so a missing/broken state file never
+   wedges a loop off. Triage / threat / reminders+event-alerts / outbox dispatch
+   are **not** gated (the never-defer rows).
+   **Remaining:** the "spoken not banner" routing (D1 — noticing/triage/reminders
+   deliver *into the call as speech* rather than an outbox banner over it; the
+   deferral half is done, the delivery-channel half is not), the two-tier
+   `enrich()` latency budget + earcon, and Phylactery `maintenance_defer`.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
-   language fix (2.4).** The block that tells the Familiar it is in a live
-   spoken turn, carrying the deferred-intents surface and the corrected
-   proactivity framing. First-person throughout (CLAUDE.md non-negotiable).
+   language fix (2.4).** ✅ **Landed.** A `[VOICE CALL — I'm speaking, not
+   typing]` dynamic block, injected into the call turn only (a `voiceMode` flag
+   on `/api/chat` appends it to `enrichedResult.dynamic`, the same seam as
+   `[PENDING CHECK-IN NOTICES]`; literal "my human", the server-injected-block
+   convention, no macros). It tells the Familiar the reply is read aloud — short,
+   plain sentences, no markdown/bullets/emoji — and to weave anything it has been
+   waiting to bring up (a tell, a check-in) into the conversation naturally
+   rather than as a separate announcement (the §7 framing). The deferred-intents
+   surface itself rides the normal `enrich()` blocks the call turn already gets.
+   First-person, plain-spoken (CLAUDE.md non-negotiable). Off implicitly when not
+   a call (`voiceMode` absent).
 6. **2f — VAD open-mic toggle.** The open-mic mode on top of the proven
    push-to-talk engine, once endpointing (2a) is tuned against the latency
    budget.
