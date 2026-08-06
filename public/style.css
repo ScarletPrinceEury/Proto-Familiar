@@ -854,6 +854,12 @@ button { cursor: pointer; font-family: var(--font); }
   font-size: 0.75rem;
   line-height: 1.4;
 }
+.tailscale-sep {
+  border: none;
+  border-top: 1px solid var(--border, #333);
+  margin: 12px 0 8px;
+}
+#tailscale-https-btn { white-space: nowrap; }
 
 /* ── Self-update button + popover ────────────────────────────── */
 .update-wrap {
