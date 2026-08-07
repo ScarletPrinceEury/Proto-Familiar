@@ -29,13 +29,13 @@ import { createSynthesizer } from './voice-synthesize.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
 import { voiceThreatEnabled } from './voice-call-server.js';
-import { speakableText } from './voice-speech.js';
+import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { slugifyLabel, sessionSlugId } from './slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel } from './voice-transcribe.js';
+import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 
 /** Hard off-switch — same pattern as every other loop/feature. */
 export function discordVoiceDisabled() {
@@ -159,6 +159,10 @@ export function attachDiscordVoice(deps) {
     offlineModelDir: ASR_MODEL_DIR,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
     ensureOffline: () => ensureOfflineAsrModel({ rootDir, log }),
+    // Coalesce sentences into one turn (don't reply over a longer thought) and
+    // drop ambient-noise transcripts (traffic the recogniser heard as Chinese).
+    turnSettleMs: () => voiceCallSettleMs(readSettings()),
+    transcriptFilter: (t) => !isLikelyNoiseTranscript(t, { language: asrLang(readSettings()) }),
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });

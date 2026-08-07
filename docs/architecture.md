@@ -2616,8 +2616,15 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   `voiceJoin`/`voiceLeave` into the ward turn's tool ctx (no import cycle; it owns
   the controller + who's-in-which-VC), resolving the channel from the ward's
   current VC or a `<#id>` they mentioned so the Familiar names no argument. The
-  per-location call-mode dropdown (off/auto/summon + auto-join) is the remaining
-  3c piece. Ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
+  per-location **call-mode dropdown** (`village.js` `callMode` off/summon/auto;
+  default summon so `!call` always works, auto-join opt-in) governs joining: `off`
+  refuses even `!call` (`locationCallModeFor`), `auto` joins hands-free when the
+  ward enters a VC (`maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`). **Noise/silence
+  polish** lives in `call-engine.js` as two options both call servers pass:
+  `transcriptFilter` (drops ambient noise the recogniser guessed as CJK, via
+  `isLikelyNoiseTranscript`) and `turnSettleMs` (coalesces sentences within a pause
+  into one turn so the Familiar doesn't interrupt; ward-tunable `voiceCallSettleMs`,
+  Discord always / web open-mic only). Ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
   older voice gateway with no DAVE and can no longer complete Discord's current
   voice handshake — it stalls `connecting → signalling`; 0.19 is gateway v8 +
   DAVE + the multi-transition fix), `opusscript` (pure-JS Opus, only needed once

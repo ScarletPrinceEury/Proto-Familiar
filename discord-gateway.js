@@ -37,7 +37,7 @@ import { sessionSlugId } from './slug-ids.js';
 
 import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
-import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC } from './village.js';
+import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
@@ -1166,6 +1166,10 @@ async function handleVoiceCommand(gw, msg, action) {
   // join: the ward must be in a voice channel for me to know where to go.
   const channelId = voiceChannelOf(msg.guild_id, msg.author?.id);
   if (!channelId) { await send('Hop into a voice channel first, then say `!call` and I\'ll join you.'); return; }
+  // 'off' is the ward's explicit "no voice here" — honour it even for !call.
+  if ((await locationCallModeFor(msg.guild_id, channelId)) === 'off') {
+    await send("Voice is switched off for this channel — set its call mode to *summon* or *auto* in the location settings first."); return;
+  }
   const r = await gw.voiceController.joinVoiceCall({
     guildId: msg.guild_id,
     channelId,
@@ -2019,6 +2023,7 @@ async function handleTurn(gw, msg, decision) {
           const mentionedId = (String(msg.content ?? '').match(/<#(\d+)>/) || [])[1] || null;
           const channelId = voiceChannelOf(msg.guild_id, msg.author?.id) || mentionedId;
           if (!channelId) return { ok: false, reason: 'no-channel' };
+          if ((await locationCallModeFor(msg.guild_id, channelId)) === 'off') return { ok: false, reason: 'off' };
           return gw.voiceController.joinVoiceCall({
             guildId: msg.guild_id, channelId,
             wardUserId: (settings.discordWardUserId ?? '').trim(),
@@ -2222,17 +2227,50 @@ export function setVoiceRosterListener(fn) { gw.voiceRosterListener = typeof fn 
 export function setDiscordVoiceController(ctl) { gw.voiceController = ctl && typeof ctl.joinVoiceCall === 'function' ? ctl : null; }
 
 /** Track who is in which voice channel from VOICE_STATE_UPDATE, so `!call` can
- *  find the ward's current VC. `channel_id: null` means they left voice. */
+ *  find the ward's current VC. `channel_id: null` means they left voice. Returns
+ *  the user's PREVIOUS channel so auto-join can tell an ENTER from a mic toggle. */
 function recordVoiceState(d) {
-  if (!d?.guild_id || !d?.user_id) return;
+  if (!d?.guild_id || !d?.user_id) return null;
   let g = gw.voiceStates.get(d.guild_id);
   if (!g) { g = new Map(); gw.voiceStates.set(d.guild_id, g); }
+  const prev = g.get(d.user_id) ?? null;
   if (d.channel_id) g.set(d.user_id, d.channel_id);
   else g.delete(d.user_id);
+  return prev;
 }
 
 /** The voice channel a user is currently in, or null. */
 function voiceChannelOf(guildId, userId) { return gw.voiceStates.get(guildId)?.get(userId) ?? null; }
+
+/** A voice channel's call mode from its registered location (Pass 3c). Unknown /
+ *  unregistered → summon (explicit works, no auto) — never off, so an unconfigured
+ *  channel doesn't refuse an explicit `!call`. */
+async function locationCallModeFor(guildId, channelId) {
+  try {
+    const reg = await getRegistry();
+    const key = `discord:guild:${guildId}:channel:${channelId}`;
+    return locationCallMode((reg.locations ?? []).find(l => l.key === key));
+  } catch { return DEFAULT_CALL_MODE; }
+}
+
+/** Auto-join (Pass 3c): when the WARD enters a voice channel whose location is set
+ *  to 'auto', join them — hands-free presence, opt-in per location. Only on a real
+ *  ENTER (channel changed), only the ward, never if already on a call. */
+async function maybeAutoJoinVoice(d, prevChannel) {
+  try {
+    if (!gw.voiceController || !d?.guild_id || !d?.channel_id) return;
+    if (d.channel_id === prevChannel) return;                    // a mute/deafen toggle, not an entry
+    const wardId = (readSettingsSync().discordWardUserId ?? '').trim();
+    if (!wardId || d.user_id !== wardId) return;                 // only my human's entry auto-summons me
+    if (gw.voiceController.isCallActive?.()) return;             // already on a call somewhere
+    if ((await locationCallModeFor(d.guild_id, d.channel_id)) !== 'auto') return;
+    const r = await gw.voiceController.joinVoiceCall({
+      guildId: d.guild_id, channelId: d.channel_id,
+      wardUserId: wardId, nameForUser: (id) => nameForVoiceUser(gw, d.guild_id, id),
+    });
+    console.log(r?.ok ? `[discord] auto-joined ${d.guild_id}/${d.channel_id} (call mode: auto)` : `[discord] auto-join skipped (${r?.reason ?? 'unknown'})`);
+  } catch (err) { console.error('[discord] auto-join failed:', err?.message ?? err); }
+}
 
 /** The bot's own user id — the voice adapter reserves 'ward' for the ward and
  *  needs this to know which VOICE_STATE_UPDATE is its own connection. */
@@ -2317,10 +2355,11 @@ function onDispatch(t, d) {
   // set). Wrapped: a voice hiccup never tears the gateway down.
   if (t === 'VOICE_STATE_UPDATE') {
     try {
-      recordVoiceState(d);
+      const prevChannel = recordVoiceState(d);
       const methods = gw.voiceAdapters.get(d?.guild_id);
       if (methods && d?.user_id === gw.botUserId) methods.onVoiceStateUpdate(d);
       gw.voiceRosterListener?.(d);
+      maybeAutoJoinVoice(d, prevChannel).catch(() => {});   // ward entered a VC? auto-join if that location says so
     } catch (err) { console.error('[discord] VOICE_STATE_UPDATE handling failed:', err?.message ?? err); }
     return;
   }

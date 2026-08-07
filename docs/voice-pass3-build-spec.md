@@ -214,9 +214,23 @@ integration seam that needs the most care and its own tests.
     target channel from the ward's current VC or a `<#id>` they mentioned, so the
     Familiar names no argument (every-capability-operable). Tested in
     `discord-tools.test.mjs`. So "come hang out in #voice" → she joins.
-  - **Remaining:** the per-location call-mode dropdown (`off`/`auto`/`summon`,
-    stored like `presenceMode`) + the `auto` behavior (join when the ward enters a
-    VC in that guild).
+  - **Landed:** the per-location call-mode dropdown (`village.js` `callMode`:
+    `off`/`summon`/`auto`, stored like `mode`; the Village location editor UI; both
+    `/api/village/locations` endpoints). Default **summon** (not off) — the
+    proactivity-sensitive part is auto-join, which stays opt-in; refusing an
+    explicit `!call` because an unconfigured dropdown said off would just break the
+    ward's own command. `off` fully disables (even `!call`/the tool, gated via
+    `locationCallModeFor`); `auto` adds hands-free join when the ward ENTERS a VC
+    (gateway `maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`, ward-only, only on a
+    real entry, never mid-call).
+- **Noise/silence polish (Pass 3, live-testing feedback).** Two engine options:
+  `transcriptFilter` drops ambient-noise transcripts (traffic/fan the multilingual
+  recogniser guessed as CJK — `isLikelyNoiseTranscript` in `voice-speech.js`, a
+  non-CJK speaker's mostly-CJK result is noise), and `turnSettleMs` coalesces
+  utterances within a pause into ONE turn so the Familiar doesn't answer over a
+  longer thought (ward-tunable `voiceCallSettleMs`, default 1.5s; Discord always,
+  web open-mic only — push-to-talk's release is the definitive end). A settle
+  flush also waits for the mic to actually go quiet (`SETTLE_MIN_QUIET_MS`).
 
 ## 5. Ward sign-off items
 
