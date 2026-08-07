@@ -2242,6 +2242,16 @@ function recordVoiceState(d) {
 /** The voice channel a user is currently in, or null. */
 function voiceChannelOf(guildId, userId) { return gw.voiceStates.get(guildId)?.get(userId) ?? null; }
 
+/** Everyone currently in a given voice channel (user ids). The voice audience
+ *  gate needs the COMPLETE set present — an undercount loosens the gate. */
+export function discordVoiceChannelMembers(guildId, channelId) {
+  const g = gw.voiceStates.get(guildId);
+  if (!g) return [];
+  const out = [];
+  for (const [uid, cid] of g) if (cid === channelId) out.push(uid);
+  return out;
+}
+
 /** A voice channel's call mode from its registered location (Pass 3c). Unknown /
  *  unregistered → summon (explicit works, no auto) — never off, so an unconfigured
  *  channel doesn't refuse an explicit `!call`. */
@@ -2353,6 +2363,20 @@ function onDispatch(t, d) {
   // methods for OUR OWN connection, and hand every voice-state change to the
   // active call's roster listener (who is in the channel drives the audience
   // set). Wrapped: a voice hiccup never tears the gateway down.
+  if (t === 'GUILD_CREATE') {
+    // Seed who is already in each voice channel BEFORE we connected — otherwise a
+    // villager sitting silently in the VC isn't counted, and the voice audience
+    // gate would read the room as more private than it is (a leak). GUILD_VOICE_
+    // STATES (bit 7) is what populates d.voice_states here.
+    try {
+      if (d?.id && Array.isArray(d.voice_states)) {
+        let g = gw.voiceStates.get(d.id);
+        if (!g) { g = new Map(); gw.voiceStates.set(d.id, g); }
+        for (const vs of d.voice_states) { if (vs?.user_id && vs?.channel_id) g.set(vs.user_id, vs.channel_id); }
+      }
+    } catch (err) { console.error('[discord] GUILD_CREATE voice-state seed failed:', err?.message ?? err); }
+    return;
+  }
   if (t === 'VOICE_STATE_UPDATE') {
     try {
       const prevChannel = recordVoiceState(d);

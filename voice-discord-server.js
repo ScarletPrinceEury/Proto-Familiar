@@ -8,12 +8,15 @@
  * is just the glue — register the adapter, start/stop the one call, forward the
  * gateway's roster events, and run the turn.
  *
- * Pass 3b scope (WARD ONLY): the ward's voice runs a real ward-private chat turn
- * (shared with the web call via voice-chat-turn.js), spoken back. Non-ward
- * speakers are transcribed for the log but NOT answered and NOT stored — the
- * villager clearance path (their voice gated to their audience via audience.js)
- * is a ward-sign-off privacy path (spec §5) and the deliberate next step. Threat
- * scoring stays ward-only (the turn-runner gates it). See the runTurn comment.
+ * Pass 3b (ward-signed §5): the ward's voice runs a real ward-private turn; a
+ * REGISTERED VILLAGER's voice runs a turn gated to the ROOM's audience (recall
+ * scoped, ward-private withheld, the outgoing filter applied — all by /api/chat
+ * when sessionAudience is the room input), stored at the room's tag, and given NO
+ * ward-private history. A STRANGER (unregistered speaker) is transcribed for the
+ * log but never answered or stored (fail-closed). Threat scoring stays ward-only
+ * (the turn-runner gates it). Memorization is split per audience tag so nothing
+ * is stored above its clearance. The gated turn carries no tools (a villager
+ * can't drive tool writes by voice — the safe bound; text keeps its tool gate).
  *
  * Graceful degradation: the transport deps are loaded lazily at join, so a
  * missing/failed install (or the env off-switch) makes a join return a reason,
@@ -24,7 +27,9 @@ import path from 'node:path';
 
 import { createCallEngine, isCallActiveFromFile } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener } from './discord-gateway.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers } from './discord-gateway.js';
+import { findVillagerByAlias, getRegistry } from './village.js';
+import { audienceTagFor } from './audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
@@ -70,39 +75,83 @@ export function attachDiscordVoice(deps) {
   const synthesize = createSynthesizer({ readSettings, getTtsWorker, resolveVoiceForSettings, ensureTtsLoaded, log });
   const runVoiceChatTurn = createVoiceChatTurn({ port, readSettings, connectionForFeature, log });
 
-  // Per-call ward chat history (capped, for LLM context) and the full transcript
-  // (uncapped, for end-of-call memorization) — keyed by callId, exactly like the
-  // web call server. One call at a time, so at most one live entry.
-  const histories = new Map();
+  // Per-call state. `wardHistory` is the ward's own capped context (ward-private);
+  // it is NEVER handed to a villager turn — that would leak my human's private
+  // exchanges into a room-gated reply. `refToUser` maps a speaker slug back to the
+  // Discord user id so a villager can be resolved. `callMeta` holds the room. All
+  // keyed by callId; one call at a time.
   const HISTORY_MAX = 20;
-  const callSessions = new Map();   // callId → { sessionId, messages:[], startedAt }
+  const wardHistory = new Map();        // callId → [{role,content}] (ward-private)
+  const refToUser = new Map();          // speakerRef → discord user id
+  const callMeta = new Map();           // callId → { guildId, channelId, locationKey, wardUserId }
+  // Memorization sessions, one PER AUDIENCE TAG (ward-private for the ward's turns,
+  // the room's tag for a villager's), so nothing is stored above its clearance.
+  const memSessions = new Map();        // callId → Map<audienceTag, { sessionId, messages }>
 
-  // ── The turn (Pass 3b — WARD ONLY) ──────────────────────────────────────
-  // ⚠️ Ward-sign-off privacy path (spec §5). A live Discord voice call is
-  // multi-speaker, but who the Familiar ANSWERS and STORES per speaker mirrors
-  // the text audience gate and must be reviewed by the ward before it goes live.
-  // So this pass answers the WARD only: their voice runs a real ward-private turn
-  // (full context + enrich); anyone else is transcribed for the log but NOT
-  // answered and NOT stored (fail-closed). Extending to villagers — their voice
-  // gated to their clearance through audience.js — is the next, ward-reviewed
-  // step. Do NOT loosen this to answer/store non-ward voice without sign-off.
+  function accumulate(callId, audienceTag, userMsg, assistantMsg) {
+    let byTag = memSessions.get(callId);
+    if (!byTag) { byTag = new Map(); memSessions.set(callId, byTag); }
+    let sess = byTag.get(audienceTag);
+    if (!sess) { sess = { sessionId: sessionSlugId(), messages: [] }; byTag.set(audienceTag, sess); }
+    sess.messages.push({ role: 'user', content: userMsg }, { role: 'assistant', content: assistantMsg });
+  }
+
+  // Build the audience input for a room turn: WHO is present in the voice channel
+  // (everyone but the ward and me), resolved to villagers/strangers. A complete
+  // roster matters — an undercount reads the room as more private than it is.
+  async function roomAudienceInput(meta) {
+    const members = discordVoiceChannelMembers(meta.guildId, meta.channelId);
+    const participants = [];
+    for (const uid of members) {
+      if (uid === meta.wardUserId) continue;                 // the ward isn't a gating participant
+      let villager = null;
+      try { villager = await findVillagerByAlias({ platform: 'discord', id: uid }); } catch { /* treat as stranger */ }
+      // A stranger (unregistered) tightens the gate to the strangers ceiling.
+      participants.push({ id: villager?.id ?? null, name: villager?.name ?? 'someone' });
+    }
+    return { location: meta.locationKey, participants };
+  }
+
+  // ── The turn (Pass 3b, ward-signed §5) ──────────────────────────────────
+  // WARD: a real ward-private turn (full context). REGISTERED VILLAGER: a turn
+  // gated to the ROOM's audience — recall scoped, ward-private withheld, the
+  // outgoing filter applied (all by /api/chat when sessionAudience is the room
+  // input), stored at the room's tag, and given NO ward-private history. STRANGER
+  // (unregistered speaker): transcribed for the log but never answered or stored
+  // (fail-closed). Threat scoring stays ward-only (the runner gates it).
   async function runTurn(transcript, ctx) {
     const heard = String(transcript ?? '').trim();
     if (!heard) return null;
-    if (ctx?.speakerRef !== 'ward') {
-      // Heard (transcribed, logged) but not answered or stored — the villager
-      // clearance path is deferred pending ward sign-off.
-      log(`heard from ${ctx?.speakerRef ?? '?'} (not the ward) — not answered this pass (villager voice pending sign-off)`);
+    const meta = callMeta.get(ctx.callId);
+
+    if (ctx?.speakerRef === 'ward') {
+      const hist = wardHistory.get(ctx.callId) ?? [];
+      const reply = await runVoiceChatTurn({ transcript: heard, history: hist, sessionAudience: 'ward-private' });
+      if (reply) {
+        wardHistory.set(ctx.callId, [...hist, { role: 'user', content: heard }, { role: 'assistant', content: reply }].slice(-HISTORY_MAX));
+        accumulate(ctx.callId, 'ward-private', heard, reply);
+      }
+      return reply;
+    }
+
+    // Non-ward: resolve the speaker to a registered villager.
+    const userId = refToUser.get(ctx.speakerRef);
+    let villager = null;
+    try { villager = userId ? await findVillagerByAlias({ platform: 'discord', id: userId }) : null; } catch { /* */ }
+    if (!villager || !meta) {
+      log(`heard from ${ctx?.speakerRef ?? '?'} (unregistered) — not answered (stranger, fail-closed)`);
       return null;
     }
-    const hist = histories.get(ctx.callId) ?? [];
-    const reply = await runVoiceChatTurn({ transcript: heard, history: hist, sessionAudience: 'ward-private' });
-    if (reply) {
-      const next = [...hist, { role: 'user', content: heard }, { role: 'assistant', content: reply }];
-      histories.set(ctx.callId, next.slice(-HISTORY_MAX));
-      const sess = callSessions.get(ctx.callId);
-      if (sess) sess.messages.push({ role: 'user', content: heard }, { role: 'assistant', content: reply });
-    }
+
+    // A registered villager: gate the turn to the ROOM. sessionAudience is the
+    // room input (object), so /api/chat scopes recall, withholds ward-private, and
+    // runs the outgoing filter. NO cross-turn history — a villager's turn must
+    // never carry the ward's private context.
+    const audienceInput = await roomAudienceInput(meta);
+    let audienceTag = 'shared-room';
+    try { audienceTag = audienceTagFor(audienceInput, await getRegistry()) || 'shared-room'; } catch { /* */ }
+    const reply = await runVoiceChatTurn({ transcript: heard, history: [], sessionAudience: audienceInput });
+    if (reply) accumulate(ctx.callId, audienceTag, heard, reply);
     return reply;
   }
 
@@ -124,24 +173,27 @@ export function attachDiscordVoice(deps) {
     log,
   });
 
-  // Enqueue the ward's finished call for memorization on hang-up — the same
-  // ward-private path web calls use. Only the ward's turns were stored (villager
-  // voice was never accumulated), so nothing here can leak a villager's words.
+  // On hang-up, memorize each audience session at ITS OWN tag — the ward's turns
+  // at ward-private, a villager's at the room's tag — so nothing is stored above
+  // its clearance (the whole point of keeping them separate while the call ran).
   async function memorizeCall(callId) {
-    const sess = callSessions.get(callId);
-    callSessions.delete(callId);
-    if (!sess || sess.messages.length < 2) return;
-    try {
-      const s = readSettings();
-      const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-      if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with'); return; }
-      const r = await enqueueSessionByDay({
-        sessionId: sess.sessionId, messages: sess.messages,
-        provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
-        audienceTag: 'ward-private',
-      });
-      log(`voice call ${callId} ended — queued ${sess.messages.length} lines for memory (${r.enqueued} enqueued, ${r.skipped} skipped)`);
-    } catch (err) { log(`memorizeCall failed: ${err?.message ?? err}`); }
+    const byTag = memSessions.get(callId);
+    memSessions.delete(callId);
+    if (!byTag) return;
+    const s = readSettings();
+    const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
+    if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with'); return; }
+    for (const [audienceTag, sess] of byTag) {
+      if (!sess || sess.messages.length < 2) continue;
+      try {
+        const r = await enqueueSessionByDay({
+          sessionId: sess.sessionId, messages: sess.messages,
+          provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
+          audienceTag,
+        });
+        log(`voice call ${callId} ended — queued ${sess.messages.length} lines for memory at ${audienceTag} (${r.enqueued} enqueued, ${r.skipped} skipped)`);
+      } catch (err) { log(`memorizeCall (${audienceTag}) failed: ${err?.message ?? err}`); }
+    }
   }
 
   const engine = createCallEngine({
@@ -192,13 +244,23 @@ export function attachDiscordVoice(deps) {
     const voiceDeps = await loadDiscordVoiceDeps({ log }).catch((err) => { log(`voice deps unavailable: ${err?.message ?? err}`); return null; });
     if (!voiceDeps) return { ok: false, reason: 'deps-unavailable' };
 
+    const slugId = (name) => slugifyLabel(name) || 'speaker';
+    // Wrap nameForUser so every time the adapter mints a speaker slug we record
+    // slug → user id — that's how a villager's spoken turn is resolved back to
+    // their registry entry (and thus their clearance).
+    const trackedNameForUser = (id) => {
+      const name = nameForUser ? nameForUser(id) : `user-${id}`;
+      refToUser.set(id === wardUserId ? 'ward' : slugId(name), id);
+      return name;
+    };
+
     const adapterCreator = discordVoiceAdapterCreator(guildId);
     engine.registerCallAdapter((hooks) => {
       const { adapter } = createDiscordCallAdapter({
         hooks,
-        joinSpec: { guildId, channelId, adapterCreator, wardUserId, nameForUser },
+        joinSpec: { guildId, channelId, adapterCreator, wardUserId, nameForUser: trackedNameForUser },
         deps: voiceDeps,
-        slugId: (name) => slugifyLabel(name) || 'speaker',
+        slugId,
         log,
       });
       activeAdapter = adapter;
@@ -220,8 +282,8 @@ export function attachDiscordVoice(deps) {
       log(`join failed: ${r.reason}${r.detail ? ` — ${r.detail}` : ''}`);
     } else {
       log(`voice call live in guild ${guildId} channel ${channelId} (${r.callId})`);
-      // Open the memorization session for this call (ward turns accumulate into it).
-      callSessions.set(r.callId, { sessionId: sessionSlugId(), messages: [], startedAt: Date.now() });
+      // Remember the room, so a villager turn can build the audience gate + tag.
+      callMeta.set(r.callId, { guildId, channelId, locationKey: `discord:guild:${guildId}:channel:${channelId}`, wardUserId });
     }
     return r;
   }
@@ -231,9 +293,13 @@ export function attachDiscordVoice(deps) {
     const callId = engine.currentCallId();
     const r = await engine.endCall();
     activeAdapter = null;
-    // Memorize the ward's call, then drop its history. Fire-and-forget so a slow
-    // extraction never holds up teardown.
-    if (callId) { memorizeCall(callId).catch(() => {}); histories.delete(callId); }
+    // Memorize each audience session, then drop all per-call state. Fire-and-forget
+    // so a slow extraction never holds up teardown.
+    if (callId) {
+      memorizeCall(callId).catch(() => {});
+      wardHistory.delete(callId); callMeta.delete(callId);
+    }
+    refToUser.clear();
     return r;
   }
 

@@ -200,11 +200,21 @@ integration seam that needs the most care and its own tests.
     web server. **Non-ward speakers are transcribed for the log but NOT answered
     and NOT stored (fail-closed).** Tested: `voice-chat-turn.test.mjs` (RULE-A
     body, extractContent, audience passthrough).
-  - **Deferred (needs ward sign-off, §5):** villager voice gated to their
-    clearance via `audience.js` — answering + storing a villager's spoken words.
-    Do NOT loosen the ward-only gate without the ward. Onset capture already
-    covers multi-speaker (subscription per speaker); the missing half is the
-    per-speaker audience resolution + clearance-scoped tools on the turn.
+  - **Landed (ward signed off, §5):** a REGISTERED VILLAGER's voice runs a turn
+    gated to the ROOM's audience. `voice-discord-server` resolves the speaker slug
+    → user id (`refToUser`, from the wrapped `nameForUser`) → villager
+    (`findVillagerByAlias`); builds the audience input `{location, participants}`
+    from the COMPLETE VC roster (`discordVoiceChannelMembers`, seeded from
+    `GUILD_CREATE` voice_states so a silently-present villager still counts — an
+    undercount would loosen the gate); and passes that object as `sessionAudience`
+    to `/api/chat`, which scopes recall (`audiences`/`topicGrants` → enrich),
+    withholds ward-private, and tags storage. Guarantees: the villager turn carries
+    **no ward-private history** and its recall is audience-scoped, so it cannot
+    leak my human's private content; memorization is split per audience tag
+    (`memSessions`) so nothing stores above its clearance; a STRANGER
+    (unregistered speaker) is transcribed but never answered/stored (fail-closed);
+    threat scoring stays ward-only. The gated turn carries **no tools** (a villager
+    can't drive tool writes by voice — the safe bound; text keeps its tool gate).
 - **3c — control surfaces.** The per-location mode dropdown, the join/leave tools
   + natural-language join, the commands.
   - **Landed:** the `!call`/`!join`/`!leave` commands (3a) and the ward-only
