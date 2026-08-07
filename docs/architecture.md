@@ -2426,6 +2426,20 @@ selecting `pocket` in Settings starts the same download (the selection is the
 consent). The worker is built on first use; the old one is stopped before the
 new starts so two engines never hold models in RAM at once.
 
+**Runtime fall-back, not just install-time.** `resolveBackend` only knows whether
+pocket's *files* are present — it can't see that torch's native library won't
+load (Windows "[WinError 126] … c10.dll" from a missing Visual C++ runtime, a
+corrupt install). So `currentAudioWorker` **verifies a freshly-built pocket
+worker actually loads** (one `ping`, which runs the torch import + model load, so
+it doubles as a warm-up) and, if it can't, tears it down and rebuilds on sherpa —
+same `fellBackFrom: 'pocket'` shape. The result is cached (`pocketBroken`) so a
+known-bad pocket isn't respawned every turn, and cleared by `stopAudioWorker` so
+a repair (Fix Kyutai) + fresh worker is re-verified rather than demoted forever.
+This is why a missing VC++ runtime now means a *lesser voice*, not silence.
+`POST /api/voice/fix-kyutai` rebuilds the venv and proves torch imports before
+declaring success (returning the redist hint when the OS runtime is the real
+gap); it stops the audio worker first so Windows can delete the venv python.
+
 **Listening is not governed by this default.** `listeningWorker()` resolves
 sherpa **by name** (not via the default, which is now `pocket`) — the recogniser
 is always a sherpa model, and routing a voice note to the Python speaker would
