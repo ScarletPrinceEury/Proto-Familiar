@@ -250,6 +250,10 @@
               <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
             </div>
             <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
+            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+              <button id="voice-fix-kyutai" class="btn-secondary" type="button">🔧 Fix Kyutai</button>
+            </div>
+            <p class="field-hint" id="voice-fix-kyutai-state" style="margin-top:6px">If read-aloud fails even though Kyutai is installed — a broken update leaves torch unable to load its files (on Windows, "WinError 126 … c10.dll") — this deletes the environment and rebuilds it from scratch, then checks torch actually loads. It takes a while (torch is a large download).</p>
 
             <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth. The first call downloads the speech models it needs (~150 MB, once). Two modes: <strong>push-to-talk</strong> (hold the button to speak) or <strong>open mic</strong> (hands-free — just talk, and the pause when you stop is your turn). Talk over your Familiar to interrupt. From a phone this needs an HTTPS address (e.g. <code>tailscale serve</code>) — browsers only allow the microphone on a secure connection.</p>
             <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">

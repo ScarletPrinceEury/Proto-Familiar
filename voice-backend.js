@@ -41,6 +41,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 
 export const BACKENDS = Object.freeze({
   SHERPA: 'sherpa',
@@ -168,4 +169,74 @@ export async function resolveBackend({ rootDir = process.cwd(), settings = {} } 
     fellBackFrom: null,
     reason: null,
   };
+}
+
+// ── Repair the voicebox (Kyutai) environment ──────────────────────────────
+// "Fix Kyutai": rebuild the Python venv when it's present but BROKEN — the
+// classic symptom being torch's native DLL failing to load (Windows
+// "[WinError 126] … c10.dll", a corrupt/partial install left behind by an
+// update). inspectBackends only checks the interpreter + worker EXIST, so it
+// reads "available" even when torch won't import; this actually verifies it.
+
+function runCmd(cmd, args, { cwd, env, onLog = () => {} } = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawn(cmd, args, { cwd, env: { ...process.env, ...(env || {}) }, windowsHide: true }); }
+    catch (err) { resolve({ ok: false, detail: `could not start ${cmd}: ${err?.message ?? err}` }); return; }
+    let tail = '';
+    const grab = (buf) => { const s = String(buf); tail = (tail + s).slice(-4000); s.split(/\r?\n/).forEach((l) => { if (l.trim()) onLog(l.trim()); }); };
+    child.stdout?.on('data', grab);
+    child.stderr?.on('data', grab);
+    child.on('error', (err) => resolve({ ok: false, detail: `${cmd} failed to run: ${err?.message ?? err}` }));
+    child.on('close', (code) => resolve(code === 0 ? { ok: true, output: tail } : { ok: false, detail: tail || `${cmd} exited ${code}`, code }));
+  });
+}
+
+async function haveUv() {
+  const r = await runCmd(process.platform === 'win32' ? 'uv.exe' : 'uv', ['--version']);
+  return r.ok;
+}
+
+/**
+ * Delete the voicebox venv and rebuild it, then PROVE torch loads. Never throws.
+ * @returns {{ok:true, torch?:string} | {ok:false, reason:string, detail?:string, hint?:string}}
+ */
+export async function rebuildVoicebox({ rootDir = process.cwd(), onLog = () => {} } = {}) {
+  const root = asRoot(rootDir);
+  const dir = path.join(root, VOICEBOX_SUBDIR);
+  if (!(await exists(path.join(dir, 'pyproject.toml')))) {
+    return { ok: false, reason: 'no-voicebox', detail: 'voicebox/ is missing from this checkout — nothing to repair.' };
+  }
+  if (!(await haveUv())) {
+    return { ok: false, reason: 'no-uv', detail: 'uv is not installed or not on PATH.', hint: 'Install uv: https://docs.astral.sh/uv/getting-started/installation/' };
+  }
+
+  // Remove the broken venv for a clean rebuild. On Windows a running worker can
+  // hold python.exe open; the caller stops the audio worker first.
+  onLog('removing the old Kyutai environment…');
+  await fs.rm(path.join(dir, '.venv'), { recursive: true, force: true }).catch(() => {});
+
+  onLog('rebuilding (uv sync --reinstall — torch is most of it, this takes a while)…');
+  const sync = await runCmd(process.platform === 'win32' ? 'uv.exe' : 'uv', ['sync', '--reinstall', '--directory', dir], { onLog });
+  if (!sync.ok) return { ok: false, reason: 'sync-failed', detail: sync.detail };
+
+  const py = await voiceboxPython(root);
+  if (!py) return { ok: false, reason: 'no-python', detail: 'the environment did not rebuild — no interpreter found.' };
+
+  // The real test: does torch actually import now? A rebuilt venv can still fail
+  // if the OS is missing torch's runtime dependency — on Windows, the Microsoft
+  // Visual C++ Redistributable — which no reinstall can supply.
+  onLog('verifying torch loads…');
+  const probe = await runCmd(py, ['-c', 'import torch; print(torch.__version__)'], { env: { PYTHONPATH: path.join(dir, 'src') }, onLog });
+  if (!probe.ok) {
+    const winDll = /WinError 126|DLL load failed|c10\.dll/i.test(probe.detail || '');
+    return {
+      ok: false, reason: 'torch-broken', detail: probe.detail,
+      hint: winDll
+        ? "torch still can't load its native library. On Windows this is almost always a missing Microsoft Visual C++ Redistributable — install vc_redist.x64 (aka.ms/vs/17/release/vc_redist.x64.exe) and try again."
+        : 'torch rebuilt but still fails to import; see the detail for the underlying error.',
+    };
+  }
+  onLog(`torch ${probe.output?.trim() || 'ok'} — Kyutai is repaired.`);
+  return { ok: true, torch: (probe.output || '').trim() };
 }
