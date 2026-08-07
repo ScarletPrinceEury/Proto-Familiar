@@ -2581,9 +2581,12 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   only real work is the two format seams: inbound Opus (48 kHz stereo, decoded
   by `opusscript`) → 16 kHz mono for the ASR, and the engine's 24 kHz mono reply
   → 48 kHz stereo for `createAudioResource(Raw)`. Discord's own SPEAKING
-  start/end events are the utterance boundary (no push-to-talk, no VAD):
-  speaking-start opens a per-speaker subscription+decoder, speaking-end calls
-  `endUtterance` and tears them down. The `@discordjs/voice` functions + the
+  start/end events are the utterance boundary (no push-to-talk, no VAD), but the
+  per-speaker subscription+decoder is opened once and kept OPEN for the whole
+  call — subscribing reactively on each speaking-start clipped the first ~30–60 ms
+  of every utterance ("Okay"→"KY"), so the events now only gate whether decoded
+  audio feeds the engine or a small pre-roll buffer (flushed at onset); the
+  subscription is torn down on channel-leave, not utterance-end. The `@discordjs/voice` functions + the
   Opus decoder are injected, so the whole adapter is unit-tested against a fake
   connection (`tests/voice-discord-adapter.test.mjs`); the resample helpers are
   pure and exported. The gateway voice bridge lives in `discord-gateway.js`
