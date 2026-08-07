@@ -2436,9 +2436,21 @@ same `fellBackFrom: 'pocket'` shape. The result is cached (`pocketBroken`) so a
 known-bad pocket isn't respawned every turn, and cleared by `stopAudioWorker` so
 a repair (Fix Kyutai) + fresh worker is re-verified rather than demoted forever.
 This is why a missing VC++ runtime now means a *lesser voice*, not silence.
-`POST /api/voice/fix-kyutai` rebuilds the venv and proves torch imports before
-declaring success (returning the redist hint when the OS runtime is the real
-gap); it stops the audio worker first so Windows can delete the venv python.
+
+**Why a clean Windows box hits this at all:** torch's Windows wheels are built
+against the MSVC runtime, and `uv`'s standalone Python doesn't ship it the way
+conda does (astral-sh/uv#18413) — a dev machine usually already has the redist
+from something else, a fresh one doesn't, so "same hardware, mine works, theirs
+doesn't." `ensureWindowsMsvcRuntime` (voice-backend.js) closes that gap: on
+Windows it installs cgohlke's `msvc-runtime` wheel into the venv, dropping the
+runtime DLLs next to the venv python where the loader finds them — no admin, no
+system-wide redist. It runs from **every** install/repair path (the
+`ensure-voicebox.mjs` CLI, the Settings/first-use auto-install it shells, and
+`rebuildVoicebox`), best-effort (older Python has no wheel → the built-in engine
+still covers it). `POST /api/voice/fix-kyutai` rebuilds the venv, adds the
+runtime, and proves torch imports before declaring success (returning the
+official-redist hint only when even that isn't enough); it stops the audio
+worker first so Windows can delete the venv python.
 
 **Listening is not governed by this default.** `listeningWorker()` resolves
 sherpa **by name** (not via the default, which is now `pocket`) — the recogniser
