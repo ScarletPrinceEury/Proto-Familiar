@@ -207,6 +207,16 @@ integration seam that needs the most care and its own tests.
     per-speaker audience resolution + clearance-scoped tools on the turn.
 - **3c — control surfaces.** The per-location mode dropdown, the join/leave tools
   + natural-language join, the commands.
+  - **Landed:** the `!call`/`!join`/`!leave` commands (3a) and the ward-only
+    `join_voice_call`/`leave_voice_call` Familiar tools (`VOICE_CALL_TOOLS`,
+    appended for the ward in `composeDiscordTools`, hard-switch-gated). The gateway
+    injects `voiceJoin`/`voiceLeave` into the ward turn's tool ctx and resolves the
+    target channel from the ward's current VC or a `<#id>` they mentioned, so the
+    Familiar names no argument (every-capability-operable). Tested in
+    `discord-tools.test.mjs`. So "come hang out in #voice" → she joins.
+  - **Remaining:** the per-location call-mode dropdown (`off`/`auto`/`summon`,
+    stored like `presenceMode`) + the `auto` behavior (join when the ward enters a
+    VC in that guild).
 
 ## 5. Ward sign-off items
 

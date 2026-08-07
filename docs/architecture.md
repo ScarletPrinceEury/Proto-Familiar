@@ -2609,9 +2609,15 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   mirroring the web server. Non-ward speakers are transcribed for the log but NOT
   answered and NOT stored (fail-closed); extending to villagers (their voice gated
   to their clearance via `audience.js`) is the deliberate next step and a
-  **ward-sign-off privacy path (spec §5)**. The per-location call-mode dropdown and
-  the `join_voice_call`/`leave_voice_call` Familiar tools (3c) are the following
-  slices — ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
+  **ward-sign-off privacy path (spec §5)**. **Pass 3c (partial):** the ward-only
+  `join_voice_call`/`leave_voice_call` Familiar tools (`cerebellum.js`
+  `VOICE_CALL_TOOLS`, appended for the ward in `composeDiscordTools`, off under the
+  hard switch) let her join/leave on natural language — the gateway injects
+  `voiceJoin`/`voiceLeave` into the ward turn's tool ctx (no import cycle; it owns
+  the controller + who's-in-which-VC), resolving the channel from the ward's
+  current VC or a `<#id>` they mentioned so the Familiar names no argument. The
+  per-location call-mode dropdown (off/auto/summon + auto-join) is the remaining
+  3c piece. Ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
   older voice gateway with no DAVE and can no longer complete Discord's current
   voice handshake — it stalls `connecting → signalling`; 0.19 is gateway v8 +
   DAVE + the multi-transition fix), `opusscript` (pure-JS Opus, only needed once

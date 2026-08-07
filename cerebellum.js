@@ -2852,6 +2852,30 @@ export const TOOL_EXECUTORS = {
     }
   },
 
+  join_voice_call: async (_args, ctx = {}) => {
+    if (typeof ctx.voiceJoin !== 'function') return "I can only join a voice call from a Discord chat with {{user}} — I'm not on Discord right now.";
+    let r; try { r = await ctx.voiceJoin(); } catch (err) { return `I couldn't join the voice channel just now (${err?.message ?? err}).`; }
+    // Loud on purpose (not quietOk): joining is a rare, meaningful action, and the
+    // confirmation lets me tell {{user}} in the text channel that I'm on my way in.
+    if (r?.ok) return "I've joined the voice channel — I can hear {{user}} now.";
+    switch (r?.reason) {
+      case 'no-channel':          return "I couldn't tell which voice channel to join — {{user}} needs to be in one (or point me to it) first.";
+      case 'busy':
+      case 'busy-other-transport':return "I'm already on a call right now.";
+      case 'disabled':            return 'My voice calls are switched off at the moment.';
+      case 'deps-unavailable':    return "I can't start voice — the audio libraries didn't load. Everything else still works.";
+      case 'not-in-guild':
+      case 'no-controller':       return 'I can only join a voice channel from within a Discord server.';
+      default:                    return `I couldn't join the voice channel (${r?.reason ?? 'unknown'}).`;
+    }
+  },
+
+  leave_voice_call: async (_args, ctx = {}) => {
+    if (typeof ctx.voiceLeave !== 'function') return "I'm not on Discord voice right now, so there's nothing to leave.";
+    let r; try { r = await ctx.voiceLeave(); } catch (err) { return `I had trouble leaving the voice channel (${err?.message ?? err}).`; }
+    return r?.wasActive ? "I've left the voice channel." : "I wasn't in a voice channel.";
+  },
+
   rewrite_identity_section: async ({ category, filename, section, content }) => {
     if (!VALID_IDENTITY_CATEGORIES.has(category)) return 'Failed to rewrite section: invalid category';
     if (!filename || !VALID_FILENAME_RE.test(filename)) return 'Failed to rewrite section: invalid filename';
@@ -4217,6 +4241,31 @@ export const RELAY_TO_WARD_TOOL = {
   },
 };
 
+// Discord voice-call tools (Pass 3c). WARD-ONLY, and only appear on a Discord
+// turn (appended in composeDiscordTools) — they mean nothing on the web chat.
+// No arguments: the gateway resolves WHICH channel from the ward's current VC /
+// the channel they mentioned (the every-capability-operable rule — the Familiar
+// can't be asked to name a snowflake it can't see). The gateway injects
+// ctx.voiceJoin / ctx.voiceLeave; the executors below just call them.
+export const VOICE_CALL_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'join_voice_call',
+      description: "I use this to go join {{user}} in a voice channel on Discord — when they've asked me to hang out there, or said something like \"come to #voice\" or \"let's talk in voice\". I join the voice channel they're in (or the one they pointed me to), and then I can actually hear them and talk back. I only reach for it when they genuinely want me there.",
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'leave_voice_call',
+      description: "I use this to leave the voice channel I'm in — when we're done talking, {{user}} asks me to hop off, or the call has run its course.",
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+];
+
 // The state-mutating tools a villager can reach (schedule:'full' / memories:true).
 // Exported so the gateway can audit-log exactly these on a villager turn — every
 // villager-caused write records who caused it. Destructive deletes and the
@@ -4333,7 +4382,13 @@ export function discordWriteProvenance(ctx = {}) {
  *   - stranger / neither → [] (no tools, unchanged from today).
  */
 export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools, visionCapable = false } = {}) {
-  if (isWard) return composeActiveTools(customTools, settings, { visionCapable });
+  if (isWard) {
+    const base = composeActiveTools(customTools, settings, { visionCapable });
+    // Discord-only, ward-only: the Familiar can join/leave a voice channel on
+    // natural language ("come to #voice"). Off when Discord voice is hard-disabled.
+    if (process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED === '1') return base;
+    return [...base, ...VOICE_CALL_TOOLS.map(t => substituteToolMacros(t, settings))];
+  }
   if (!isVillager) return [];
   const allow = villagerToolNames(grants);
   const picked = BUILTIN_TOOLS.filter(t => allow.has(t.function?.name));
