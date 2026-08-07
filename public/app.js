@@ -8161,7 +8161,17 @@ async function fixKyutai() {
   if (btn) { btn.disabled = true; btn.textContent = '🔧 Rebuilding…'; }
   if (state) state.textContent = 'Deleting the old environment and rebuilding it (torch is a large download, so this takes a while)…';
   try {
-    const started = await (await fetch('/api/voice/fix-kyutai', { method: 'POST' })).json();
+    const res = await fetch('/api/voice/fix-kyutai', { method: 'POST' });
+    // A 404 here means the running server is the OLD code — the files were
+    // updated on disk (that's why this button exists), but the server wasn't
+    // restarted, so this route doesn't exist yet. The button reloaded with the
+    // page; the route did not. Say that plainly instead of a cryptic error.
+    if (res.status === 404) {
+      if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
+      if (state) state.textContent = 'This button is here but the server doesn’t know it yet — you updated the files but haven’t restarted. Close Proto-Familiar and relaunch it (reloading the page is not enough), then try again.';
+      return;
+    }
+    const started = await res.json();
     if (!started.ok) throw new Error(started.reason || 'could not start');
     pollFixKyutai();
   } catch (err) {
