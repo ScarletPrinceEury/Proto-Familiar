@@ -4959,9 +4959,10 @@ const httpServer = app.listen(PORT, HOST, async () => {
       const { attachDiscordVoice } = await import('./voice-discord-server.js');
       const { setDiscordVoiceController } = await import('./discord-gateway.js');
       const discordVoice = attachDiscordVoice({
-        rootDir: __dirname,
+        rootDir: __dirname, port: PORT,
         readSettings: readSettingsSync,
         ...sharedVoiceWorkers,
+        connectionForFeature,
       });
       setDiscordVoiceController(discordVoice);
     } catch (err) {

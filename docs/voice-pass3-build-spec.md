@@ -192,6 +192,19 @@ integration seam that needs the most care and its own tests.
 - **3b — multi-speaker + the Discord turn path.** Per-speaker audience
   resolution, reply spoken with the speaker's clearance, roster → audience set,
   threat scoring ward-only.
+  - **Landed (WARD ONLY):** the ward's voice runs a real ward-private chat turn —
+    `voice-chat-turn.js` (the shared `/api/chat` spoken turn with the RULE-A
+    guarantees, extracted so the web call uses it too) wrapped by the existing
+    `createVoiceTurnRunner` (ward-only threat scoring — spec §5 — speakable,
+    synthesize), with per-call history + end-of-call memorization mirroring the
+    web server. **Non-ward speakers are transcribed for the log but NOT answered
+    and NOT stored (fail-closed).** Tested: `voice-chat-turn.test.mjs` (RULE-A
+    body, extractContent, audience passthrough).
+  - **Deferred (needs ward sign-off, §5):** villager voice gated to their
+    clearance via `audience.js` — answering + storing a villager's spoken words.
+    Do NOT loosen the ward-only gate without the ward. Onset capture already
+    covers multi-speaker (subscription per speaker); the missing half is the
+    per-speaker audience resolution + clearance-scoped tools on the turn.
 - **3c — control surfaces.** The per-location mode dropdown, the join/leave tools
   + natural-language join, the commands.
 
