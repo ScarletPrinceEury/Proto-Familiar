@@ -177,6 +177,77 @@
             <button id="notif-sound-test" class="btn-ghost" type="button" title="Play a test chime" style="margin-left:6px">▶</button>
           </div>
           <div class="field-hint">A soft chime when a new message arrives while this tab is open — always for proactive ones (reminders, check-ins), and for replies only when the tab isn't focused, so an active conversation stays quiet.</div>
+
+          <h3 class="section-label" style="margin-top:16px">Voice</h3>
+          <div class="field-row">
+            <label for="read-aloud-default-toggle">Read every new reply aloud automatically</label>
+            <input type="checkbox" id="read-aloud-default-toggle">
+          </div>
+          <p class="field-hint">Off by default. With it on, each reply is spoken as it arrives — no need to press 🔊 on every message. Press the button again, or just start typing, to cut it off. There is a 🔊 button under each of your Familiar's messages either way, and neither needs the voice-note microphone.</p>
+          <p class="field-hint" style="margin-top:10px"><strong>Voice notes:</strong> the microphone button sits next to the message box — press it, say what you meant, press it again. The words appear under the recording before you send, so you can check they were heard right. It all happens on this machine.</p>
+
+          <p class="field-hint" style="margin-top:14px">Listen to the reference voices my Familiar could speak with, and pick one.</p>
+          <div class="action-row" style="margin-top:4px">
+            <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
+          </div>
+
+          <p class="field-hint" style="margin-top:14px">Which engine does the speaking. Kyutai is the default — it holds one voice steadily across a whole message and never drops a sentence. The built-in one ships with me and needs nothing; it can shift voice between paragraphs on a long message.</p>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <select id="voice-backend-select" aria-label="Speaking engine">
+              <option value="pocket">Kyutai sidecar — steadier, ~600 MB (default)</option>
+              <option value="sherpa">Built-in — ships with me, nothing to install</option>
+            </select>
+            <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
+            <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
+          </div>
+          <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <button id="voice-fix-kyutai" class="btn-secondary" type="button">🔧 Fix Kyutai</button>
+          </div>
+          <p class="field-hint" id="voice-fix-kyutai-state" style="margin-top:6px">If read-aloud fails even though Kyutai is installed — a broken update leaves torch unable to load its files (on Windows, "WinError 126 … c10.dll") — this deletes the environment and rebuilds it from scratch, then checks torch actually loads. It takes a while (torch is a large download).</p>
+
+          <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">How the voice sounds</h4>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <label for="voice-speed" style="font-size:0.85em; min-width:8.5em">Speed <span id="voice-speed-val" style="font-variant-numeric:tabular-nums">1.0×</span></label>
+            <input type="range" id="voice-speed" min="0.5" max="2" step="0.05" value="1" style="flex:1" aria-label="Speaking speed">
+          </div>
+          <div class="action-row" style="margin-top:6px; align-items:center; gap:10px">
+            <label for="voice-temp" style="font-size:0.85em; min-width:8.5em">Expressiveness <span id="voice-temp-val" style="font-variant-numeric:tabular-nums">0.70</span></label>
+            <input type="range" id="voice-temp" min="0.1" max="1.5" step="0.05" value="0.7" style="flex:1" aria-label="Speaking temperature (expressiveness)">
+          </div>
+          <p class="field-hint" id="voice-tuning-state" style="margin-top:6px">Speed changes how fast I talk (the built-in engine only — Kyutai always speaks at its natural pace). Expressiveness is the model's temperature: higher is more varied and lively, lower is flatter and steadier. Changing expressiveness reloads Kyutai, so it takes effect on the next thing I speak.</p>
+
+          <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth. The first call downloads the speech models it needs (~150 MB, once). Two modes: <strong>push-to-talk</strong> (hold the button to speak) or <strong>open mic</strong> (hands-free — just talk, and the pause when you stop is your turn). Talk over your Familiar to interrupt. From a phone this needs an HTTPS address (e.g. <code>tailscale serve</code>) — browsers only allow the microphone on a secure connection.</p>
+          <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
+            <button id="voice-call-btn" class="btn-secondary">📞 Start voice call</button>
+            <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>
+          </div>
+          <div class="action-row" style="margin-top:6px; align-items:center; gap:8px">
+            <label for="voice-call-mode" style="font-size:0.85em">Mode</label>
+            <select id="voice-call-mode" aria-label="Voice call mode">
+              <option value="push">Push-to-talk — hold the button to speak</option>
+              <option value="open">Open mic — hands-free, just talk</option>
+            </select>
+          </div>
+          <p class="field-hint" id="voice-call-state" style="margin-top:6px" aria-live="polite"></p>
+
+          <div class="action-row" id="voice-call-lang-row" style="margin-top:8px; align-items:center; gap:8px" hidden>
+            <label for="voice-call-lang" style="font-size:0.85em">Call language</label>
+            <select id="voice-call-lang" aria-label="Call speech-recognition language"></select>
+          </div>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-call-threat-toggle" checked>
+            <span>Let a call inform my safety read — my Familiar can notice distress in my voice, as it does in my messages. On by default.</span>
+          </label>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-call-offline-toggle" checked>
+            <span>Transcribe calls with the accurate model — re-reads each thing I say with the same model as voice notes, so far fewer words come out garbled. Adds a small delay. On by default.</span>
+          </label>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
+            <label for="voice-call-settle" style="font-size:0.85em">Wait for a pause before replying</label>
+            <input type="number" id="voice-call-settle" min="0" max="4000" step="250" style="width:6em" aria-label="Milliseconds of pause before the Familiar answers on a call">
+            <span class="field-hint">ms — higher = I let you finish a longer thought before I answer (0 = reply the moment you stop). Applies to Discord calls and web open-mic.</span>
+          </div>
         </div>
 
         <!-- Tomes -->
@@ -234,57 +305,6 @@
             <p class="field-hint" style="margin-top:10px">Measure whether this machine can hold a spoken conversation — and what it would take up on disk. Takes a few minutes; best run on mains power.</p>
             <div class="action-row" style="margin-top:4px">
               <button id="voice-bench-btn" class="btn-secondary">🎤 Voice benchmark</button>
-            </div>
-            <p class="field-hint" style="margin-top:10px">Listen to the reference voices my Familiar could speak with, and pick one.</p>
-            <div class="action-row" style="margin-top:4px">
-              <button id="voice-picker-btn" class="btn-secondary">🗣 Choose a voice</button>
-            </div>
-
-            <p class="field-hint" style="margin-top:14px">Which engine does the speaking. Kyutai is the default — it holds one voice steadily across a whole message and never drops a sentence, but it is a large download that fetches itself the first time I speak. The built-in one ships with me and needs nothing; it can shift voice between paragraphs on a long message.</p>
-            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
-              <select id="voice-backend-select" aria-label="Speaking engine">
-                <option value="pocket">Kyutai sidecar — steadier, ~600 MB (default)</option>
-                <option value="sherpa">Built-in — ships with me, nothing to install</option>
-              </select>
-              <button id="voice-sidecar-install" class="btn-secondary hidden">⬇ Install the sidecar</button>
-              <button id="voice-sidecar-cancel" class="btn-secondary hidden">✕ Cancel download</button>
-            </div>
-            <p class="field-hint" id="voice-backend-state" style="margin-top:6px"></p>
-            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
-              <button id="voice-fix-kyutai" class="btn-secondary" type="button">🔧 Fix Kyutai</button>
-            </div>
-            <p class="field-hint" id="voice-fix-kyutai-state" style="margin-top:6px">If read-aloud fails even though Kyutai is installed — a broken update leaves torch unable to load its files (on Windows, "WinError 126 … c10.dll") — this deletes the environment and rebuilds it from scratch, then checks torch actually loads. It takes a while (torch is a large download).</p>
-
-            <p class="field-hint" style="margin-top:14px">Live voice call (beta) — a real back-and-forth. The first call downloads the speech models it needs (~150 MB, once). Two modes: <strong>push-to-talk</strong> (hold the button to speak) or <strong>open mic</strong> (hands-free — just talk, and the pause when you stop is your turn). Talk over your Familiar to interrupt. From a phone this needs an HTTPS address (e.g. <code>tailscale serve</code>) — browsers only allow the microphone on a secure connection.</p>
-            <div class="action-row" style="margin-top:4px; align-items:center; gap:10px">
-              <button id="voice-call-btn" class="btn-secondary">📞 Start voice call</button>
-              <button id="voice-call-talk" class="btn-secondary" hidden>🎙 Hold to talk</button>
-            </div>
-            <div class="action-row" style="margin-top:6px; align-items:center; gap:8px">
-              <label for="voice-call-mode" style="font-size:0.85em">Mode</label>
-              <select id="voice-call-mode" aria-label="Voice call mode">
-                <option value="push">Push-to-talk — hold the button to speak</option>
-                <option value="open">Open mic — hands-free, just talk</option>
-              </select>
-            </div>
-            <p class="field-hint" id="voice-call-state" style="margin-top:6px" aria-live="polite"></p>
-
-            <div class="action-row" id="voice-call-lang-row" style="margin-top:8px; align-items:center; gap:8px" hidden>
-              <label for="voice-call-lang" style="font-size:0.85em">Call language</label>
-              <select id="voice-call-lang" aria-label="Call speech-recognition language"></select>
-            </div>
-            <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
-              <input type="checkbox" id="voice-call-threat-toggle" checked>
-              <span>Let a call inform my safety read — my Familiar can notice distress in my voice, as it does in my messages. On by default.</span>
-            </label>
-            <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
-              <input type="checkbox" id="voice-call-offline-toggle" checked>
-              <span>Transcribe calls with the accurate model — re-reads each thing I say with the same model as voice notes, so far fewer words come out garbled. Adds a small delay. On by default.</span>
-            </label>
-            <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
-              <label for="voice-call-settle" style="font-size:0.85em">Wait for a pause before replying</label>
-              <input type="number" id="voice-call-settle" min="0" max="4000" step="250" style="width:6em" aria-label="Milliseconds of pause before the Familiar answers on a call">
-              <span class="field-hint">ms — higher = I let you finish a longer thought before I answer (0 = reply the moment you stop). Applies to Discord calls and web open-mic.</span>
             </div>
           </div>
         </div>
@@ -539,16 +559,6 @@
         <h3 class="section-label" style="margin-top:16px">Which connection each feature uses</h3>
         <p class="field-hint">Every background job that calls a model can run on its own connection — handy for pointing cheap/idle work at a cheaper model while chat stays on your best one. "Primary" means it follows your primary connection above.</p>
         <div id="feature-connection-rows"></div>
-
-        <h3 class="section-label" style="margin-top:16px">Reading aloud</h3>
-        <div class="field-row">
-          <label for="read-aloud-default-toggle">Read every new reply aloud automatically</label>
-          <input type="checkbox" id="read-aloud-default-toggle">
-        </div>
-        <p class="field-hint">Off by default. With it on, each reply is spoken as it arrives — no need to press 🔊 on every message. Press the button again, or just start typing, to cut it off. There is a 🔊 button under each of your Familiar's messages either way, and neither needs the voice-note microphone.</p>
-
-        <h3 class="section-label" style="margin-top:16px">Voice notes</h3>
-        <p class="field-hint">Nothing to switch on. The microphone button sits next to the message box — press it, say what you meant to say, press it again. The words you said appear under the recording before you send, so you can check they were heard right. It all happens on this machine; the first recording offers the one-time download it needs — 158&nbsp;MB to fetch, 233&nbsp;MB once unpacked.</p>
 
         <h3 class="section-label" style="margin-top:16px">Seeing images (vision)</h3>
         <div class="field-row">

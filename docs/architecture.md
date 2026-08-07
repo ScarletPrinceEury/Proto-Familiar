@@ -2452,6 +2452,27 @@ runtime, and proves torch imports before declaring success (returning the
 official-redist hint only when even that isn't enough); it stops the audio
 worker first so Windows can delete the venv python.
 
+**Provisioned at install, not just first use.** The three installers (`install.sh`,
+`install.bat`, `scripts/win/install.ps1`) run the voice setup on a **fresh install**
+(Kyutai via `ensure-voicebox.mjs --install` + the listening models via
+`ensure-audio-models.mjs`), so a new user isn't left to discover a download or
+troubleshoot a half-set-up engine. Heavy, so it's fresh-install-only and skippable
+with `PF_SKIP_VOICE_INSTALL=1`; every step is non-fatal (a machine that can't fetch
+voice still gets a Familiar on the built-in engine). First-use auto-download still
+exists as the fallback for installs that skipped it.
+
+**Speed & expressiveness (`voiceTts.speed`, `voiceTts.temperature`).** User-tunable
+in Settings → Chat → Voice. The two engines honour them differently: **sherpa** takes
+both **per request** (threaded from settings into each TTS call); **pocket** takes no
+speed (`generate_audio_stream` has none — reported `unsupported`) and bakes
+temperature in at **model-load** time via `PF_TTS_TEMPERATURE`, so `resolveBackend`
+puts the chosen temperature in the pocket worker's spawn env and `currentAudioWorker`
+respawns the worker when that env changes (an env-signature compare) — which is why a
+temperature change takes effect on the next spoken message, not mid-utterance. The UI
+says as much. All voice settings now live under **Chat** (the engine picker, Fix
+Kyutai, voice call, tuning, read-aloud); only the **Voice benchmark** stays in
+Diagnostics.
+
 **Listening is not governed by this default.** `listeningWorker()` resolves
 sherpa **by name** (not via the default, which is now `pocket`) — the recogniser
 is always a sherpa model, and routing a voice note to the Python speaker would
