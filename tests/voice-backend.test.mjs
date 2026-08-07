@@ -7,6 +7,7 @@ import path from 'node:path';
 import {
   BACKENDS, DEFAULT_BACKEND, POCKET_FOOTPRINT,
   voiceboxPython, inspectBackends, resolveBackend, VOICEBOX_SUBDIR,
+  ensureWindowsMsvcRuntime,
 } from '../voice-backend.js';
 
 async function tmpRoot() {
@@ -157,4 +158,12 @@ test('the footprint is stated in parts, so the cost is legible before it is paid
   assert.ok(Math.abs(summed - POCKET_FOOTPRINT.downloadBytes) < 30 * 1024 * 1024,
     'the parts should roughly account for the total, or one of them is wrong');
   assert.ok(POCKET_FOOTPRINT.parts.some((p) => /torch/.test(p.what)));
+});
+
+test('ensureWindowsMsvcRuntime is a no-op off Windows and never throws', async (t) => {
+  if (process.platform === 'win32') return t.skip('Windows path is exercised on Windows only');
+  // Off Windows torch needs no MSVC runtime, so this must skip cleanly rather
+  // than spawn uv or blow up an install/repair that is otherwise fine.
+  const r = await ensureWindowsMsvcRuntime({ rootDir: '/definitely/not/here' });
+  assert.deepEqual(r, { ok: true, skipped: 'not-windows' });
 });

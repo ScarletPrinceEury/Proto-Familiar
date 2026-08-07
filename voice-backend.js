@@ -198,6 +198,41 @@ async function haveUv() {
 }
 
 /**
+ * Give torch its Windows runtime, so a clean machine doesn't hit WinError 126.
+ *
+ * This is the real reason "same hardware, mine works, theirs doesn't": torch's
+ * Windows wheels are built against the Microsoft Visual C++ runtime
+ * (vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll), and `uv`'s standalone
+ * Python does NOT ship it the way conda does (astral-sh/uv#18413). A dev box
+ * usually already has the redist from something else; a fresh one doesn't, and
+ * torch's c10.dll then can't find its dependency and refuses to load.
+ *
+ * cgohlke's `msvc-runtime` wheel carries exactly those DLLs and drops them next
+ * to the venv's python.exe (sys.prefix / Scripts), where the loader finds them —
+ * no admin, no system-wide redist install, no separate step for my human. Runs
+ * as part of every install/repair so the environment is self-contained.
+ *
+ * Best-effort by design: it only has wheels for Python 3.11+, so on an older
+ * interpreter (or any resolve failure) it logs and returns — the built-in engine
+ * still speaks, and a hard failure here must never sink the whole install.
+ * No-op off Windows, where torch needs nothing of the sort.
+ */
+export async function ensureWindowsMsvcRuntime({ rootDir = process.cwd(), onLog = () => {} } = {}) {
+  if (process.platform !== 'win32') return { ok: true, skipped: 'not-windows' };
+  const py = await voiceboxPython(asRoot(rootDir));
+  if (!py) return { ok: false, reason: 'no-python', detail: 'no venv interpreter to install the runtime into' };
+
+  onLog('ensuring the Visual C++ runtime torch needs (msvc-runtime)…');
+  const r = await runCmd('uv.exe', ['pip', 'install', '--python', py, 'msvc-runtime'], { onLog });
+  if (!r.ok) {
+    // Not fatal: an older Python has no wheel, and the built-in engine covers us.
+    onLog('could not add the runtime automatically — the built-in voice still works; the Visual C++ redistributable would enable Kyutai.');
+    return { ok: false, reason: 'runtime-install-failed', detail: r.detail };
+  }
+  return { ok: true, installed: true };
+}
+
+/**
  * Delete the voicebox venv and rebuild it, then PROVE torch loads. Never throws.
  * @returns {{ok:true, torch?:string} | {ok:false, reason:string, detail?:string, hint?:string}}
  */
@@ -223,6 +258,11 @@ export async function rebuildVoicebox({ rootDir = process.cwd(), onLog = () => {
   const py = await voiceboxPython(root);
   if (!py) return { ok: false, reason: 'no-python', detail: 'the environment did not rebuild — no interpreter found.' };
 
+  // The usual reason a rebuilt venv still can't load torch: the OS never had the
+  // Visual C++ runtime, which uv doesn't provide. Supply it into the venv itself
+  // so this repair is self-contained rather than sending my human to Microsoft.
+  await ensureWindowsMsvcRuntime({ rootDir: root, onLog });
+
   // The real test: does torch actually import now? A rebuilt venv can still fail
   // if the OS is missing torch's runtime dependency — on Windows, the Microsoft
   // Visual C++ Redistributable — which no reinstall can supply.
@@ -233,7 +273,7 @@ export async function rebuildVoicebox({ rootDir = process.cwd(), onLog = () => {
     return {
       ok: false, reason: 'torch-broken', detail: probe.detail,
       hint: winDll
-        ? "torch still can't load its native library. On Windows this is almost always a missing Microsoft Visual C++ Redistributable — install vc_redist.x64 (aka.ms/vs/17/release/vc_redist.x64.exe) and try again."
+        ? "I rebuilt the environment and tried to add the Visual C++ runtime torch needs, but it still can't load its native library. As a last resort install the official Microsoft Visual C++ Redistributable (vc_redist.x64 — aka.ms/vs/17/release/vc_redist.x64.exe) and restart. Meanwhile the built-in voice still speaks."
         : 'torch rebuilt but still fails to import; see the detail for the underlying error.',
     };
   }
