@@ -2223,8 +2223,14 @@ async function speakMessage(text, btn) {
     const audio = new Audio(`/api/voice/tts/${encodeURIComponent(plan.id)}`);
     speech.audio = audio;
     audio.addEventListener('ended', () => { if (speech.token === token) stopSpeaking(); });
-    audio.addEventListener('error', () => {
-      if (speech.token === token) fail('the voice could not start', 'the speech engine may not be installed');
+    audio.addEventListener('error', async () => {
+      if (speech.token !== token) return;
+      // The <audio> element only knows "it broke" — the real reason (e.g. torch's
+      // native DLL refusing to load) sits in the server. Probe for it so the
+      // button names the actual fix instead of the network tab holding the only
+      // clue. Re-check the token after the await: the ward may have moved on.
+      const detail = await probeSpeechFailure();
+      if (speech.token === token) fail('the voice could not start', speechFailureHint(detail));
     });
     await audio.play().catch(() => {
       if (speech.token === token) fail('playback was blocked', 'the browser refused to start audio');
@@ -2232,6 +2238,32 @@ async function speakMessage(text, btn) {
   } catch (err) {
     fail('read-aloud failed', String(err?.message ?? err));
   }
+}
+
+/**
+ * Ask the server WHY speaking just failed. The status probe pings the worker,
+ * so a speaking engine that can't load (torch's DLL, a missing binding) reports
+ * its real error here rather than only in the failed audio request. Returns the
+ * detail string, or '' if even the probe couldn't say.
+ */
+async function probeSpeechFailure() {
+  try {
+    const st = await (await fetch('/api/voice/status')).json();
+    return String(st?.engine?.detail || st?.backend?.reason || st?.voice?.reason || '');
+  } catch { return ''; }
+}
+
+/**
+ * Turn a speak-failure detail into guidance the ward can act on. The DLL-load
+ * signature (Windows "WinError 126", torch's c10.dll) is the one with a concrete
+ * fix, so it points at the 🔧 Fix Kyutai repair — which rebuilds the environment
+ * and, if the real cause is a missing Visual C++ Redistributable, says so.
+ */
+function speechFailureHint(detail) {
+  if (/WinError 126|DLL load failed|c10\.dll|not usable|no-engine/i.test(detail || '')) {
+    return 'the speaking engine can’t load its libraries — open Settings → Voice and press 🔧 Fix Kyutai';
+  }
+  return detail ? `the speech engine isn’t usable — ${detail}` : 'the speech engine may not be installed';
 }
 
 /**
