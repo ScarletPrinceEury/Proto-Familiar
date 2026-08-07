@@ -5581,6 +5581,7 @@ function init() {
   $('voice-backend-select')?.addEventListener('change', onVoiceBackendChange);
   $('voice-sidecar-install')?.addEventListener('click', installVoiceSidecar);
   $('voice-sidecar-cancel')?.addEventListener('click', cancelVoiceSidecar);
+  $('voice-fix-kyutai')?.addEventListener('click', fixKyutai);
   refreshVoiceBackendPane();
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
@@ -8144,6 +8145,61 @@ async function cancelVoiceSidecar() {
   if (state) state.textContent = 'Cancelling…';
   try { await fetch('/api/voice/install-sidecar', { method: 'DELETE' }); } catch { /* the poll will still settle it */ }
   await refreshVoiceBackendPane();
+}
+
+/**
+ * Rebuild a broken Kyutai environment, then poll to completion.
+ *
+ * The failure this repairs is torch's native library refusing to load after a
+ * bad update — the files are there (so nothing offers to reinstall), but they
+ * don't work. The server deletes the venv and rebuilds it, so like the sidecar
+ * install this is a started-then-poll job, not a request that waits it out.
+ */
+async function fixKyutai() {
+  const btn = $('voice-fix-kyutai');
+  const state = $('voice-fix-kyutai-state');
+  if (btn) { btn.disabled = true; btn.textContent = '🔧 Rebuilding…'; }
+  if (state) state.textContent = 'Deleting the old environment and rebuilding it (torch is a large download, so this takes a while)…';
+  try {
+    const started = await (await fetch('/api/voice/fix-kyutai', { method: 'POST' })).json();
+    if (!started.ok) throw new Error(started.reason || 'could not start');
+    pollFixKyutai();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
+    if (state) state.textContent = `Couldn't start the repair: ${String(err?.message ?? err)}`;
+  }
+}
+
+/** Poll a running Kyutai rebuild, showing the latest log line as it goes. */
+function pollFixKyutai() {
+  if (VP.fixKyutaiPolling) return;
+  VP.fixKyutaiPolling = true;
+  const btn = $('voice-fix-kyutai');
+  const state = $('voice-fix-kyutai-state');
+  const poll = setInterval(async () => {
+    let s;
+    try { s = await (await fetch('/api/voice/fix-kyutai')).json(); } catch { return; }
+    const job = s?.repair;
+    if (!job) return;
+    if (!job.done) {
+      const last = job.log?.[job.log.length - 1];
+      if (last && state) state.textContent = `Rebuilding… ${last}`;
+      return;
+    }
+    clearInterval(poll);
+    VP.fixKyutaiPolling = false;
+    if (btn) { btn.disabled = false; btn.textContent = '🔧 Fix Kyutai'; }
+    if (state) {
+      if (job.ok) {
+        state.textContent = `Kyutai is repaired${job.torch ? ` (torch ${job.torch})` : ''}. Try reading a reply aloud again.`;
+      } else {
+        // The hint carries the actionable next step (e.g. install the MSVC
+        // redistributable); the detail is the raw error for someone digging.
+        state.textContent = `Repair failed: ${job.hint || job.detail || job.reason || 'no detail'}`;
+      }
+    }
+    await refreshVoiceBackendPane();
+  }, 3000);
 }
 
 /**

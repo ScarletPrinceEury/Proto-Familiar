@@ -280,7 +280,7 @@ import {
  * else is a per-part problem and must NOT silence the parts that still work.
  */
 const FATAL_TTS_REASONS = new Set(['no-worker', 'no-engine', 'not-loaded', 'stopped', 'worker-died', 'worker-stopped', 'parked', 'spawn-failed']);
-import { resolveBackend, inspectBackends, BACKENDS } from './voice-backend.js';
+import { resolveBackend, inspectBackends, BACKENDS, rebuildVoicebox } from './voice-backend.js';
 import { wavHeader, WAV_STREAMING_LENGTH, measureVoiceClip, floatToPcm16 } from './voice-audio-features.js';
 import { KIND_PCM } from './audio-frame.js';
 import { shortSlug } from './slug-ids.js';
@@ -1760,6 +1760,58 @@ app.delete('/api/voice/install-sidecar', (_req, res) => {
   voiceboxInstall.cancelled = true;
   try { voiceboxInstallChild?.kill('SIGTERM'); } catch { /* already gone */ }
   res.json({ ok: true, cancelled: true });
+});
+
+// ── Fix Kyutai: repair a broken voicebox venv ─────────────────────────────
+// The tester's symptom: read-aloud fails with torch's native DLL refusing to
+// load ("[WinError 126] … c10.dll") — a corrupt/partial install an update left
+// behind. inspectBackends reports pocket "available" (the files exist) even
+// though torch won't import, so the ordinary reinstall path never fires. This
+// deletes the venv, rebuilds it, and PROVES torch loads before calling it done.
+//
+// Long-running (torch is most of a ~600 MB reinstall), so the same started +
+// poll shape as the sidecar install: POST kicks it off, GET reports progress.
+let voiceboxRepair = null;   // { startedAt, done, ok, reason, detail, hint, torch, log:[] }
+
+async function startVoiceboxRepair() {
+  if (voiceboxRepair && !voiceboxRepair.done) {
+    return { started: true, already: true, startedAt: voiceboxRepair.startedAt };
+  }
+  voiceboxRepair = { startedAt: new Date().toISOString(), done: false, ok: false, reason: null, detail: null, hint: null, torch: null, log: [] };
+  const started = voiceboxRepair;
+
+  // On Windows a running worker holds python.exe / the torch DLLs open, so the
+  // venv can't be deleted out from under it. Release it before the rebuild; a
+  // real speak path spawns a fresh worker afterwards.
+  try { stopAudioWorker(); } catch { /* already stopped */ }
+
+  // Fire and forget — the caller polls. Bound the kept log so a chatty uv sync
+  // can't grow it without limit.
+  rebuildVoicebox({
+    rootDir: __dirname,
+    onLog: (m) => {
+      console.log(`[voice] fix-kyutai: ${m}`);
+      started.log = [...started.log, m].slice(-40);
+    },
+  }).then((result) => {
+    Object.assign(started, result, { done: true });
+    console.log(result.ok
+      ? `[voice] fix-kyutai: repaired (torch ${result.torch || 'ok'})`
+      : `[voice] fix-kyutai: failed (${result.reason})`);
+  }).catch((err) => {
+    Object.assign(started, { done: true, ok: false, reason: 'crashed', detail: String(err?.message ?? err) });
+  });
+
+  return { started: true, startedAt: voiceboxRepair.startedAt };
+}
+
+app.post('/api/voice/fix-kyutai', async (_req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  res.json({ ok: true, ...(await startVoiceboxRepair()) });
+});
+
+app.get('/api/voice/fix-kyutai', (_req, res) => {
+  res.json({ ok: true, repair: voiceboxRepair });
 });
 
 // Clearing a park is deliberate — the ward has presumably fixed something.
