@@ -56,6 +56,8 @@ export function createCallEngine({
   offlineModelDir = '',   // asr-offline (SenseVoice) dir; loaded when offlineFinal is on
   offlineFinal = () => false, // hybrid ASR: re-transcribe each utterance with the offline model
   ensureOffline = null,   // async () => fetch the offline model if missing (no-op if present)
+  turnSettleMs = () => 0, // coalesce utterances within this gap into one turn (0 = reply per utterance)
+  transcriptFilter = () => true, // (text) => keep? — drop ambient-noise transcripts (false = drop)
   tomesDir = DEFAULT_TOMES_DIR,
   maxCalls = 1,
   now = () => Date.now(),
@@ -167,13 +169,17 @@ export function createCallEngine({
       // asrEngine + any offline note make "is the accurate model actually being
       // used?" answerable from one line, instead of guessing from text quality.
       const eng = msg.asrEngine ? ` ${msg.asrEngine}${msg.asrOfflineNote ? ` (${msg.asrOfflineNote})` : ''}` : '';
-      const meta = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s${eng}`;
+      // A transcript the noise filter rejects (ambient noise the recogniser
+      // guessed as words — traffic heard as Chinese) is treated like silence: no
+      // turn, no memory. Named in the log so a real drop is diagnosable.
+      const noise = Boolean(text) && !transcriptFilter(text);
+      const meta = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s${eng}${noise ? ' DROPPED-noise' : ''}`;
       log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'} [${meta}]`);
-      if (text) {
-        handleTurn(speakerForStream(msg.streamId), text);   // serialised dispatcher; errors handled inside
-      } else if (call?.adapter) {
-        // Nothing recognised — release my human from "Thinking…" so the call is
-        // usable again, instead of waiting on a turn that will never start.
+      if (text && !noise) {
+        queueUtterance(speakerForStream(msg.streamId), text);   // settle → serialised dispatcher
+      } else if (call?.adapter && !settlePending()) {
+        // Nothing to act on (silence or dropped noise) AND nothing is settling —
+        // release my human from "Thinking…" so the call is usable again.
         try { call.adapter.playAudio(call.callId, null); } catch (e) { log(`reset after empty asr failed: ${e?.message ?? e}`); }
       }
     }
@@ -224,6 +230,39 @@ export function createCallEngine({
       s.frames = 0; s.bytes = 0;
       await worker.request({ op: 'asrStream', streamId: s.streamId, offlineFinal: call.offlineFinal === true });     // reopen for the next press
     }
+  }
+
+  // SETTLE: a pause between sentences shouldn't make the Familiar answer over my
+  // human. When `turnSettleMs` > 0, an utterance's text isn't fired straight into
+  // a turn — it's buffered, and a timer waits for the gap to persist. More speech
+  // within the gap appends and resets the timer, so several sentences separated by
+  // breaths become ONE turn, and the reply only comes once my human has actually
+  // stopped. (0 = the old behaviour: reply per utterance — right for push-to-talk,
+  // where the release IS the end.)
+  const SETTLE_MIN_QUIET_MS = 350;   // don't fire until the mic has actually gone quiet this long
+  let settleBuf = [];
+  let settleRef = null;
+  let settleTimer = null;
+  function settlePending() { return settleBuf.length > 0; }
+  function armSettle(ms) { if (settleTimer) clearTimeout(settleTimer); settleTimer = setTimeout(flushSettle, ms); settleTimer.unref?.(); }
+  function flushSettle() {
+    if (!settleBuf.length) { if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; } return; }
+    // Still hearing audio? My human is mid-sentence (a long clause after the last
+    // recognised one) — wait for a real gap instead of answering over them.
+    if (now() - lastUserAudioAt < SETTLE_MIN_QUIET_MS) { armSettle(SETTLE_MIN_QUIET_MS); return; }
+    if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+    const transcript = settleBuf.join(' ').replace(/\s+/g, ' ').trim();
+    const ref = settleRef;
+    settleBuf = []; settleRef = null;
+    if (transcript) handleTurn(ref, transcript);
+  }
+  function queueUtterance(speakerRef, text) {
+    const ms = Math.max(0, Number(turnSettleMs()) || 0);
+    if (ms <= 0) { handleTurn(speakerRef, text); return; }
+    if (settleRef && settleRef !== speakerRef) flushSettle();   // a different speaker → don't merge voices
+    settleRef = speakerRef;
+    settleBuf.push(text);
+    armSettle(ms);
   }
 
   // Turns are SERIALISED. Open mic fires an asr-final per utterance, so a burst
@@ -313,6 +352,8 @@ export function createCallEngine({
     // Anything queued to be spoken never got heard — resolve it as NOT delivered
     // so the caller doesn't record a "heard" the escalation clock would trust.
     if (proactiveTimer) { clearTimeout(proactiveTimer); proactiveTimer = null; }
+    if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+    settleBuf = []; settleRef = null;
     while (proactiveQueue.length) { try { proactiveQueue.shift().resolve(false); } catch { /* */ } }
     try { if (unsub) unsub(); } catch { /* already gone */ }
     unsub = null;

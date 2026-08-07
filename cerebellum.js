@@ -2862,6 +2862,7 @@ export const TOOL_EXECUTORS = {
       case 'no-channel':          return "I couldn't tell which voice channel to join — {{user}} needs to be in one (or point me to it) first.";
       case 'busy':
       case 'busy-other-transport':return "I'm already on a call right now.";
+      case 'off':                 return "Voice is switched off for that channel — {{user}} would need to set its call mode to summon or auto first.";
       case 'disabled':            return 'My voice calls are switched off at the moment.';
       case 'deps-unavailable':    return "I can't start voice — the audio libraries didn't load. Everything else still works.";
       case 'not-in-guild':

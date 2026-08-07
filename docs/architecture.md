@@ -2601,23 +2601,34 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   `server.js` attaches it at boot and registers it as the gateway's voice
   controller (`setDiscordVoiceController`), so a ward-only `!call`/`!join` (join
   the ward's current VC, found from tracked voice states) and `!leave` drive it.
-  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. **Pass 3b (WARD ONLY):**
-  the ward's voice runs a real ward-private chat turn via `voice-chat-turn.js` —
-  the shared `/api/chat` spoken turn (RULE-A guarantees) that the web call also
-  uses — wrapped by the same `createVoiceTurnRunner` (ward-only threat scoring,
-  speakable, synthesize), with per-call history + end-of-call memorization
-  mirroring the web server. Non-ward speakers are transcribed for the log but NOT
-  answered and NOT stored (fail-closed); extending to villagers (their voice gated
-  to their clearance via `audience.js`) is the deliberate next step and a
-  **ward-sign-off privacy path (spec §5)**. **Pass 3c (partial):** the ward-only
+  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. **Pass 3b:** the ward's
+  voice runs a real ward-private chat turn via `voice-chat-turn.js` — the shared
+  `/api/chat` spoken turn (RULE-A guarantees) the web call also uses — wrapped by
+  the same `createVoiceTurnRunner` (ward-only threat scoring, speakable,
+  synthesize). A **registered villager**'s voice runs a turn gated to the ROOM's
+  audience (ward-signed §5): the speaker slug resolves → user id (`refToUser`) →
+  villager, the audience input `{location, participants}` is built from the
+  complete VC roster (`discordVoiceChannelMembers`, seeded from `GUILD_CREATE`
+  voice_states), and that object is the `sessionAudience` — so `/api/chat` scopes
+  recall (`audiences`/`topicGrants`), withholds ward-private, tags storage. The
+  villager turn carries **no ward-private history**, so it can't leak; storage is
+  split per audience tag; a **stranger** is transcribed but never answered/stored
+  (fail-closed); threat stays ward-only. The gated turn carries no tools. **Pass 3c (partial):** the ward-only
   `join_voice_call`/`leave_voice_call` Familiar tools (`cerebellum.js`
   `VOICE_CALL_TOOLS`, appended for the ward in `composeDiscordTools`, off under the
   hard switch) let her join/leave on natural language — the gateway injects
   `voiceJoin`/`voiceLeave` into the ward turn's tool ctx (no import cycle; it owns
   the controller + who's-in-which-VC), resolving the channel from the ward's
   current VC or a `<#id>` they mentioned so the Familiar names no argument. The
-  per-location call-mode dropdown (off/auto/summon + auto-join) is the remaining
-  3c piece. Ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
+  per-location **call-mode dropdown** (`village.js` `callMode` off/summon/auto;
+  default summon so `!call` always works, auto-join opt-in) governs joining: `off`
+  refuses even `!call` (`locationCallModeFor`), `auto` joins hands-free when the
+  ward enters a VC (`maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`). **Noise/silence
+  polish** lives in `call-engine.js` as two options both call servers pass:
+  `transcriptFilter` (drops ambient noise the recogniser guessed as CJK, via
+  `isLikelyNoiseTranscript`) and `turnSettleMs` (coalesces sentences within a pause
+  into one turn so the Familiar doesn't interrupt; ward-tunable `voiceCallSettleMs`,
+  Discord always / web open-mic only). Ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
   older voice gateway with no DAVE and can no longer complete Discord's current
   voice handshake — it stalls `connecting → signalling`; 0.19 is gateway v8 +
   DAVE + the multi-transition fix), `opusscript` (pure-JS Opus, only needed once

@@ -277,6 +277,11 @@
               <input type="checkbox" id="voice-call-offline-toggle" checked>
               <span>Transcribe calls with the accurate model — re-reads each thing I say with the same model as voice notes, so far fewer words come out garbled. Adds a small delay. On by default.</span>
             </label>
+            <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
+              <label for="voice-call-settle" style="font-size:0.85em">Wait for a pause before replying</label>
+              <input type="number" id="voice-call-settle" min="0" max="4000" step="250" style="width:6em" aria-label="Milliseconds of pause before the Familiar answers on a call">
+              <span class="field-hint">ms — higher = I let you finish a longer thought before I answer (0 = reply the moment you stop). Applies to Discord calls and web open-mic.</span>
+            </div>
           </div>
         </div>
 

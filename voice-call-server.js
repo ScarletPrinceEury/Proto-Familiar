@@ -26,12 +26,12 @@ import { WebSocketServer } from 'ws';
 import { createCallEngine, clearStaleCallState, callsDisabled } from './call-engine.js';
 import { createWebCallAdapter } from './voice-web-adapter.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
-import { speakableText } from './voice-speech.js';
+import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { createSynthesizer } from './voice-synthesize.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
-import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel } from './voice-transcribe.js';
+import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
@@ -155,6 +155,10 @@ export function attachVoiceCall(deps) {
     offlineModelDir: ASR_MODEL_DIR,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
     ensureOffline: () => ensureOfflineAsrModel({ rootDir, log }),
+    // Settle only in open-mic mode — push-to-talk's release IS the definitive end,
+    // so it replies immediately. Noise filter applies in both modes.
+    turnSettleMs: () => (readSettings()?.voiceCallMode === 'open' ? voiceCallSettleMs(readSettings()) : 0),
+    transcriptFilter: (t) => !isLikelyNoiseTranscript(t, { language: asrLang(readSettings()) }),
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });

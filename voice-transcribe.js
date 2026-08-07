@@ -59,6 +59,18 @@ export function voiceOfflineAsrEnabled(settings) {
   return settings?.voiceCallOfflineTranscribe !== false;
 }
 
+/**
+ * How long to wait for my human to actually STOP before I answer — the settle
+ * window that stops me interrupting a longer thought (a pause between sentences
+ * is not my cue to speak). Ward-tunable `voiceCallSettleMs` (clamped [0, 4000]);
+ * default 1.5s. 0 disables (push-to-talk, where the release is the definitive end).
+ */
+export function voiceCallSettleMs(settings) {
+  const n = Number(settings?.voiceCallSettleMs);
+  if (Number.isFinite(n) && n >= 0) return Math.min(4000, Math.floor(n));
+  return 1500;
+}
+
 /** Is the offline recogniser actually unpacked on disk (not just the dir)? */
 export function offlineModelPresent() {
   return existsSync(path.join(ASR_MODEL_DIR, 'model.int8.onnx'));

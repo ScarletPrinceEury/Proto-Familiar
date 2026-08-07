@@ -138,6 +138,52 @@ test('hybrid ASR: offlineFinal loads the offline model and flags the stream; off
   }
 });
 
+test('transcriptFilter drops an ambient-noise transcript — no turn fires', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const turns = [];
+    const engine = createCallEngine({
+      worker, onTurn: async (t) => { turns.push(t); return 'x'; }, tomesDir: dir,
+      transcriptFilter: (t) => t !== 'noise',   // reject the string "noise"
+    });
+    engine.registerCallAdapter(fakeAdapterFactory({ played: [] }));
+    await engine.startCall('fake');
+
+    worker.emit({ op: 'asr-final', streamId: 1, text: 'noise' });
+    await tick();
+    assert.equal(turns.length, 0, 'the noise transcript was dropped, no turn');
+
+    worker.emit({ op: 'asr-final', streamId: 1, text: 'real words' });
+    await tick();
+    assert.deepEqual(turns, ['real words'], 'a real transcript still turns');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('turnSettleMs coalesces utterances within the gap into ONE turn', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const turns = [];
+    const engine = createCallEngine({
+      worker, onTurn: async (t) => { turns.push(t); return 'x'; }, tomesDir: dir,
+      turnSettleMs: () => 40,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory({ played: [] }));
+    await engine.startCall('fake');
+
+    // Two sentences separated by a short pause → one settled turn, joined.
+    worker.emit({ op: 'asr-final', streamId: 1, text: 'first sentence' });
+    await tick(15);
+    worker.emit({ op: 'asr-final', streamId: 1, text: 'second sentence' });
+    assert.equal(turns.length, 0, 'nothing fires while my human is still going');
+    await tick(90);
+    assert.deepEqual(turns, ['first sentence second sentence'], 'one turn, both sentences');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('endUtterance (push-to-talk release) stops the stream and reopens it for the next press', async () => {
   const dir = await tmp();
   try {

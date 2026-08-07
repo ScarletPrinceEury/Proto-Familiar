@@ -399,6 +399,9 @@ const state = {
   // utterance. Default ON — far fewer garbled words — at the cost of a small
   // per-utterance delay the ward can trade away by turning this off.
   voiceCallOfflineTranscribe: true,
+  // How long (ms) to wait for a pause before the Familiar answers on a call, so
+  // it doesn't interrupt a longer thought. 0 = reply as soon as an utterance ends.
+  voiceCallSettleMs: 1500,
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -459,7 +462,7 @@ const SERVER_SYNCED_KEYS = [
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
-  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -3852,6 +3855,10 @@ function readSettingsFromUI() {
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
+  if ($('voice-call-settle') && $('voice-call-settle').value !== '') {
+    const n = parseInt($('voice-call-settle').value, 10);
+    if (Number.isFinite(n) && n >= 0) state.voiceCallSettleMs = Math.min(4000, n);
+  }
   if ($('read-aloud-default-toggle')) state.readAloudByDefault = $('read-aloud-default-toggle').checked;
   if ($('event-alerts-lead')) {
     const n = parseInt($('event-alerts-lead').value, 10);
@@ -4017,6 +4024,7 @@ function writeSettingsToUI() {
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
+  if ($('voice-call-settle')) setIfNotFocused($('voice-call-settle'), 'value', String(state.voiceCallSettleMs ?? 1500));
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
   if ($('event-alerts-lead')) setIfNotFocused($('event-alerts-lead'), 'value', state.eventAlertLeadMinutes ?? 60);
@@ -12882,6 +12890,15 @@ function vlRenderLocDetail(loc) {
         <option value="active">Active — can chime in without being mentioned</option>
       </select>
     </div>
+    <div>
+      <div class="vl-field-label">Voice call <span class="field-hint">(whether the Familiar joins this as a voice channel)</span></div>
+      <select id="vl-l-callmode" style="width:100%">
+        <option value="summon">Summon — joins only when asked (!call, or “come to voice”)</option>
+        <option value="auto">Auto — also joins when you enter this voice channel</option>
+        <option value="off">Off — never joins here</option>
+      </select>
+      <p class="field-hint">For a voice-channel location. Default <b>summon</b>: the Familiar joins when you ask, never on its own. <b>Auto</b> adds hands-free joining the moment you enter. <b>Off</b> fully disables voice here, even <code>!call</code>.</p>
+    </div>
     <div id="vl-l-active-opts" style="display:none;padding-left:8px;border-left:2px solid var(--border,#333)">
       <div class="vl-field-label">Active cadence</div>
       <select id="vl-l-active-strategy" style="width:100%">
@@ -12922,6 +12939,8 @@ function vlRenderLocDetail(loc) {
     modeSel.addEventListener('change', toggleActiveOpts);
     toggleActiveOpts();
   }
+  const callModeSel = $('vl-l-callmode');
+  if (callModeSel) callModeSel.value = ['off', 'summon', 'auto'].includes(loc?.callMode) ? loc.callMode : 'summon';
   const readBotsBox = $('vl-l-readbots');
   if (readBotsBox) readBotsBox.checked = loc?.readBots === true;
 
@@ -12944,12 +12963,13 @@ async function vlSaveLocation(key) {
   const cdRaw = $('vl-l-active-cooldown')?.value.trim();
   const activeCooldownSec = cdRaw ? parseInt(cdRaw, 10) : undefined;
   const readBots = $('vl-l-readbots')?.checked === true;
+  const callMode = $('vl-l-callmode')?.value || 'summon';
   status.textContent = 'Saving…';
   try {
     const r = await fetch('/api/village/locations', {
       method: key ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots }),
+      body: JSON.stringify({ key: locKey, label, assignedCategoryId, connectionId, rateLimit, mode, activeStrategy, activeCooldownSec, readBots, callMode }),
     });
     if (!r.ok) throw new Error(await vlErrMsg(r));
     const saved = await r.json();
