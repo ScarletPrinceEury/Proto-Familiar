@@ -2581,9 +2581,12 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   only real work is the two format seams: inbound Opus (48 kHz stereo, decoded
   by `opusscript`) → 16 kHz mono for the ASR, and the engine's 24 kHz mono reply
   → 48 kHz stereo for `createAudioResource(Raw)`. Discord's own SPEAKING
-  start/end events are the utterance boundary (no push-to-talk, no VAD):
-  speaking-start opens a per-speaker subscription+decoder, speaking-end calls
-  `endUtterance` and tears them down. The `@discordjs/voice` functions + the
+  start/end events are the utterance boundary (no push-to-talk, no VAD), but the
+  per-speaker subscription+decoder is opened once and kept OPEN for the whole
+  call — subscribing reactively on each speaking-start clipped the first ~30–60 ms
+  of every utterance ("Okay"→"KY"), so the events now only gate whether decoded
+  audio feeds the engine or a small pre-roll buffer (flushed at onset); the
+  subscription is torn down on channel-leave, not utterance-end. The `@discordjs/voice` functions + the
   Opus decoder are injected, so the whole adapter is unit-tested against a fake
   connection (`tests/voice-discord-adapter.test.mjs`); the resample helpers are
   pure and exported. The gateway voice bridge lives in `discord-gateway.js`
@@ -2598,12 +2601,23 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   `server.js` attaches it at boot and registers it as the gateway's voice
   controller (`setDiscordVoiceController`), so a ward-only `!call`/`!join` (join
   the ward's current VC, found from tracked voice states) and `!leave` drive it.
-  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. The Pass 3a turn is a
-  canned spoken acknowledgement (audio-OUT proof); the real multi-speaker Discord
-  turn path through the audience gate (3b — a ward-sign-off privacy path), the
-  per-location call-mode dropdown, and the `join_voice_call`/`leave_voice_call`
-  Familiar tools (3c) are the following slices — ward-verified live (no
-  gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
+  Off-switch `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`. **Pass 3b (WARD ONLY):**
+  the ward's voice runs a real ward-private chat turn via `voice-chat-turn.js` —
+  the shared `/api/chat` spoken turn (RULE-A guarantees) that the web call also
+  uses — wrapped by the same `createVoiceTurnRunner` (ward-only threat scoring,
+  speakable, synthesize), with per-call history + end-of-call memorization
+  mirroring the web server. Non-ward speakers are transcribed for the log but NOT
+  answered and NOT stored (fail-closed); extending to villagers (their voice gated
+  to their clearance via `audience.js`) is the deliberate next step and a
+  **ward-sign-off privacy path (spec §5)**. **Pass 3c (partial):** the ward-only
+  `join_voice_call`/`leave_voice_call` Familiar tools (`cerebellum.js`
+  `VOICE_CALL_TOOLS`, appended for the ward in `composeDiscordTools`, off under the
+  hard switch) let her join/leave on natural language — the gateway injects
+  `voiceJoin`/`voiceLeave` into the ward turn's tool ctx (no import cycle; it owns
+  the controller + who's-in-which-VC), resolving the channel from the ward's
+  current VC or a `<#id>` they mentioned so the Familiar names no argument. The
+  per-location call-mode dropdown (off/auto/summon + auto-join) is the remaining
+  3c piece. Ward-verified live (no gateway/UDP/Opus in CI). Deps: `@discordjs/voice` **≥0.19.2** (0.18 uses an
   older voice gateway with no DAVE and can no longer complete Discord's current
   voice handshake — it stalls `connecting → signalling`; 0.19 is gateway v8 +
   DAVE + the multi-transition fix), `opusscript` (pure-JS Opus, only needed once

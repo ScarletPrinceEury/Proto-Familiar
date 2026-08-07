@@ -121,7 +121,7 @@ test('a speaker: speaking-start subscribes + decodes to 16k mono pushAudio; the 
   assert.equal(calls.pushAudio[0].pcm.length, 320 * 2);          // decoded → 16k mono
 });
 
-test('speaking-end finalises the utterance and tears the subscription down', async () => {
+test('speaking-end finalises the utterance but keeps the subscription open (no onset loss next time)', async () => {
   const deps = makeFakeDeps();
   const { hooks, calls } = makeHooks();
   const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, slugId: (s) => s.toLowerCase().replace(/\s+/g, '-') });
@@ -133,6 +133,40 @@ test('speaking-end finalises the utterance and tears the subscription down', asy
 
   assert.equal(calls.endUtterance.length, 1);
   assert.equal(calls.endUtterance[0].speakerRef, 'person-u2');   // display-name slug
+  assert.equal(stream.destroyed, undefined, 'subscription stays open across utterances');
+
+  // A second utterance reuses the SAME subscription — no re-subscribe, no gap.
+  deps._receiver.speaking.emit('start', 'u2');
+  assert.equal(deps._receiver.subscribed.length, 1, 'no second subscription for the same speaker');
+});
+
+test('onset pre-roll: audio arriving just before speaking-start is not lost', async () => {
+  const deps = makeFakeDeps();
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+
+  // First speaking-start opens the subscription. End it, then feed a packet
+  // during the inactive gap (the onset that used to be dropped), then start again.
+  deps._receiver.speaking.emit('start', 'wardU');
+  deps._receiver.speaking.emit('end', 'wardU');
+  const before = calls.pushAudio.length;
+  const stream = deps._receiver.subscribed[0].stream;
+  stream.emit('data', Buffer.from([7]));           // arrives while inactive → buffered, not dropped
+  assert.equal(calls.pushAudio.length, before, 'inactive audio is held in the pre-roll, not pushed yet');
+  deps._receiver.speaking.emit('start', 'wardU');  // onset: the buffered frame is flushed
+  assert.equal(calls.pushAudio.length, before + 1, 'the pre-roll frame is prepended on the next utterance');
+});
+
+test('destroySpeaker on channel-leave tears the subscription down', async () => {
+  const deps = makeFakeDeps();
+  const { hooks } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+  deps._receiver.speaking.emit('start', 'u2');
+  const stream = deps._receiver.subscribed[0].stream;
+  adapter.onVoiceStateChange({ userId: 'u2', channelId: 'c1' });   // present
+  adapter.onVoiceStateChange({ userId: 'u2', channelId: null });   // left → destroy
   assert.equal(stream.destroyed, true);
 });
 

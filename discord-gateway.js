@@ -2007,6 +2007,26 @@ async function handleTurn(gw, msg, decision) {
       viaVillager: isVillager
         ? { id: decision.villager?.id ?? null, name: decision.speakerName ?? decision.villager?.name ?? null }
         : null,
+      // Pass 3c: the ward can tell the Familiar to join/leave a voice channel in
+      // natural language. Injected here (not in cerebellum) so the executor never
+      // has to import the gateway — the gateway owns the controller + who's in
+      // which VC. Ward-only; the tools are only composed for the ward anyway.
+      ...(decision.isWard && gw.voiceController ? {
+        voiceJoin: async () => {
+          if (!msg.guild_id) return { ok: false, reason: 'not-in-guild' };
+          // WHICH channel: the ward's current VC (guaranteed a voice channel), else
+          // a <#id> they mentioned in the message. The Familiar names no argument.
+          const mentionedId = (String(msg.content ?? '').match(/<#(\d+)>/) || [])[1] || null;
+          const channelId = voiceChannelOf(msg.guild_id, msg.author?.id) || mentionedId;
+          if (!channelId) return { ok: false, reason: 'no-channel' };
+          return gw.voiceController.joinVoiceCall({
+            guildId: msg.guild_id, channelId,
+            wardUserId: (settings.discordWardUserId ?? '').trim(),
+            nameForUser: (id) => nameForVoiceUser(gw, msg.guild_id, id),
+          });
+        },
+        voiceLeave: async () => gw.voiceController.leaveVoiceCall(),
+      } : {}),
     };
     // On a villager turn, audit every state-mutating tool with the causing
     // villager before it runs — a villager-driven write is never silent. Reads
