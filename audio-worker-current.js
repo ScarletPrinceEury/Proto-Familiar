@@ -88,7 +88,11 @@ export async function currentAudioWorker({ rootDir, readSettings } = {}) {
     resolved = await sherpaFallback(rootDir, pocketBroken.reason);
   }
 
-  if (worker && backend?.backend === resolved.backend && backend?.workerScript === resolved.workerScript) {
+  // A change to the spawn env (e.g. PF_TTS_TEMPERATURE, which pocket bakes in at
+  // load) must respawn the worker, not reuse the old one — otherwise a tuning
+  // change would silently do nothing until the next restart.
+  const sameEnv = JSON.stringify(backend?.env ?? {}) === JSON.stringify(resolved.env ?? {});
+  if (worker && backend?.backend === resolved.backend && backend?.workerScript === resolved.workerScript && sameEnv) {
     // The WORKER can be reused (same engine + script), but the RESOLUTION
     // METADATA must not be stale: choosing the sidecar when it isn't installed
     // still resolves to sherpa, yet now carries fellBackFrom:'pocket'. Returning

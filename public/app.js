@@ -4191,7 +4191,8 @@ async function browseModels() {
 const SIDEBAR_NAV = [
   { group: 'Start here', items: [
     { id: 'section-connection', icon: 'cable',        title: 'Connection',       desc: 'Provider, API key, model' },
-    { id: 'section-chat',       icon: 'chat',         title: 'Chat',             desc: 'History, sounds, sessions' },
+    { id: 'section-chat',       icon: 'chat',         title: 'Chat',             desc: 'History, sounds, voice, sessions',
+      keywords: 'voice read aloud speak engine kyutai sherpa fix voice call microphone speed temperature expressiveness reference voice' },
   ]},
   { group: 'Your Familiar', items: [
     { id: 'section-knowledge',  icon: 'psychology',   title: 'Knowledge',        desc: 'Memories, identity, graph' },
@@ -5614,6 +5615,7 @@ function init() {
   $('voice-sidecar-install')?.addEventListener('click', installVoiceSidecar);
   $('voice-sidecar-cancel')?.addEventListener('click', cancelVoiceSidecar);
   $('voice-fix-kyutai')?.addEventListener('click', fixKyutai);
+  initVoiceTuning();
   refreshVoiceBackendPane();
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
@@ -8084,21 +8086,69 @@ async function refreshVoiceBackendPane() {
   }
 }
 
+/**
+ * Merge a patch into the nested `voiceTts` setting and persist it.
+ *
+ * ⚠️ The server's settings merge is TOP-LEVEL only, so PUTting `voiceTts:{speed}`
+ * would replace the WHOLE object and silently discard the chosen engine, voice,
+ * and other tuning. Read the current one, merge, send it back whole. This is the
+ * one writer for every voiceTts field (engine, speed, temperature) so they can't
+ * clobber each other.
+ */
+async function updateVoiceTts(patch) {
+  const current = await (await fetch('/api/settings')).json();
+  const voiceTts = { ...(current?.settings?.voiceTts ?? {}), ...patch };
+  const res = await fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings: { voiceTts } }),
+  });
+  if (!res.ok) throw new Error(`settings PUT HTTP ${res.status}`);
+  return voiceTts;
+}
+
+/**
+ * Wire the speed / expressiveness sliders: seed them from the stored voiceTts,
+ * update the readout live while dragging, and persist on release (a PUT per
+ * pixel while dragging would hammer the server for nothing).
+ */
+async function initVoiceTuning() {
+  const speed = $('voice-speed'), temp = $('voice-temp');
+  const speedVal = $('voice-speed-val'), tempVal = $('voice-temp-val');
+  if (!speed || !temp) return;
+
+  const trim = (v) => Number(v).toFixed(2).replace(/\.?0+$/, '');
+  const showSpeed = () => { if (speedVal) speedVal.textContent = `${trim(speed.value)}×`; };
+  const showTemp = () => { if (tempVal) tempVal.textContent = Number(temp.value).toFixed(2); };
+
+  // Seed from stored settings; keep the HTML defaults if the read fails.
+  try {
+    const s = (await (await fetch('/api/settings')).json())?.settings?.voiceTts ?? {};
+    if (Number.isFinite(Number(s.speed))) speed.value = String(s.speed);
+    if (Number.isFinite(Number(s.temperature))) temp.value = String(s.temperature);
+  } catch { /* keep defaults */ }
+  showSpeed(); showTemp();
+
+  speed.addEventListener('input', showSpeed);
+  temp.addEventListener('input', showTemp);
+  const save = (patch, isTemp) => async () => {
+    const st = $('voice-tuning-state');
+    try { await updateVoiceTts(patch()); }
+    catch (err) { if (st) st.textContent = `Could not save: ${String(err?.message ?? err)}`; return; }
+    // Temperature is baked into Kyutai when its model loads, so a change reloads
+    // that worker — reflect the "takes effect on the next thing I speak" reality.
+    if (isTemp) { try { await refreshVoiceBackendPane(); } catch { /* cosmetic */ } }
+  };
+  speed.addEventListener('change', save(() => ({ speed: Number(speed.value) }), false));
+  temp.addEventListener('change', save(() => ({ temperature: Number(temp.value) }), true));
+}
+
 async function onVoiceBackendChange(ev) {
   const backend = ev.target.value;
   const state = $('voice-backend-state');
   if (state) state.textContent = 'Saving…';
   try {
-    // ⚠️ The server's merge is TOP-LEVEL only, so sending `voiceTts: {backend}`
-    // would replace the whole object and silently discard the chosen voice and
-    // any tuning. Read the current one and send it back whole.
-    const current = await (await fetch('/api/settings')).json();
-    const voiceTts = { ...(current?.settings?.voiceTts ?? {}), backend };
-    await fetch('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: { voiceTts } }),
-    });
+    await updateVoiceTts({ backend });
   } catch (err) {
     if (state) state.textContent = `Could not save: ${String(err?.message ?? err)}`;
     return;

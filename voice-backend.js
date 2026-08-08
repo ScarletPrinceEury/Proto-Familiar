@@ -159,13 +159,21 @@ export async function resolveBackend({ rootDir = process.cwd(), settings = {} } 
     return { ...sherpa, fellBackFrom: BACKENDS.POCKET, reason: pocket.why };
   }
 
+  // The package lives under src/, and the worker is run as a file rather than a
+  // module, so the interpreter needs telling where to import from.
+  const env = { PYTHONPATH: path.join(root, VOICEBOX_SUBDIR, 'src') };
+  // pocket-tts bakes temperature into the model at LOAD time (worker.py reads
+  // PF_TTS_TEMPERATURE), unlike sherpa which takes it per request. So a ward's
+  // chosen expressiveness rides in as env; currentAudioWorker reloads the worker
+  // when this changes, which is why changing it takes effect on the next speak.
+  const temp = Number(settings?.voiceTts?.temperature);
+  if (Number.isFinite(temp) && temp > 0) env.PF_TTS_TEMPERATURE = String(temp);
+
   return {
     backend: BACKENDS.POCKET,
     command: pocket.python,
     workerScript: path.join(root, VOICEBOX_SUBDIR, 'src', 'voicebox', 'worker.py'),
-    // The package lives under src/, and the worker is run as a file rather than
-    // a module, so the interpreter needs telling where to import from.
-    env: { PYTHONPATH: path.join(root, VOICEBOX_SUBDIR, 'src') },
+    env,
     fellBackFrom: null,
     reason: null,
   };
