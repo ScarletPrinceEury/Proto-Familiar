@@ -2,6 +2,8 @@
 
 *An early prototype of Familiar — a bonded AI companion for neurodivergent people.*
 
+[![Donate with PayPal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/donate/?hosted_button_id=3DNZBT8WBXSYU)
+
 ---
 
 ## What is Familiar?
