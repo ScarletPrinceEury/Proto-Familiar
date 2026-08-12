@@ -361,6 +361,11 @@ const state = {
   discordToolsEnabled: true,   // clearance-gated tools on Discord turns; default ON
   discordBotToken:   '',
   discordWardUserId: '',
+  // Auto-register a new guild channel as a Location the moment it's seen,
+  // instead of leaving it in the knock list to register by hand. Default OFF:
+  // an auto-registered location is born at the strangers floor (grants nothing),
+  // but creating them silently is still the ward's call to opt into.
+  villageAutoRegisterLocations: false,
 
   // Per-feature connection routing: { <feature>: <connectionId> }. Absent/empty
   // for a feature → it uses the primary connection. Backend reads via
@@ -460,6 +465,7 @@ const SERVER_SYNCED_KEYS = [
   'gcalCalendarAttribution', 'gcalIcalUrls', 'gcalCliCalendars',
   'trustedContacts', 'userDiscordWebhook',
   'discordEnabled', 'discordToolsEnabled', 'discordBotToken', 'discordWardUserId',
+  'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
@@ -4002,6 +4008,8 @@ function readSettingsFromUI() {
   if (dbtEl) state.discordBotToken = dbtEl.value.trim();
   const dwuEl = $('discord-ward-user-id');
   if (dwuEl) state.discordWardUserId = dwuEl.value.trim();
+  const arEl = $('vl-auto-register');
+  if (arEl) state.villageAutoRegisterLocations = arEl.checked;
   // Keep the primary connection in sync with the live Connection-section fields.
   syncFieldsToPrimaryConnection();
   saveSettings();
@@ -4096,6 +4104,7 @@ function writeSettingsToUI() {
   setIfNotFocused($('user-discord-webhook'), 'value', state.userDiscordWebhook ?? '');
   setIfNotFocused($('discord-enabled'),      'checked', state.discordEnabled === true);
   setIfNotFocused($('discord-tools-enabled'), 'checked', state.discordToolsEnabled !== false);
+  setIfNotFocused($('vl-auto-register'),     'checked', state.villageAutoRegisterLocations === true);
   setIfNotFocused($('discord-bot-token'),    'value', state.discordBotToken ?? '');
   setIfNotFocused($('discord-ward-user-id'), 'value', state.discordWardUserId ?? '');
   setIfNotFocused($('tome-scan-depth'),       'value',   state.tomeScanDepth ?? 4);
@@ -5333,6 +5342,7 @@ function init() {
     'web-search-api-key', 'web-search-google-cse-id',
     'user-discord-webhook',
     'discord-enabled', 'discord-tools-enabled', 'discord-bot-token', 'discord-ward-user-id',
+    'vl-auto-register',
     'tome-scan-depth', 'tome-recursive', 'tome-max-recursion',
     'tome-case-sensitive', 'tome-match-whole-words',
     'max-empty-retries',
@@ -12860,7 +12870,72 @@ async function vlDeleteCategory(id) {
   } catch (err) { status.textContent = `Error: ${err.message}`; }
 }
 
-// ── Location knock list (V4.x) ──
+// ── Saved server list (derived from knocks + GUILD_CREATE) ──
+
+// The servers the Familiar is in, kept so the knock list can name the server a
+// channel belongs to instead of showing a raw guild ID. Loaded before knocks.
+let _vlServers = [];
+
+/** A readable server name for a guild id, from the saved list; falls back plainly. */
+function vlServerName(guildId) {
+  if (!guildId) return 'Direct messages';
+  const s = _vlServers.find(x => x.guildId === guildId);
+  return s?.name || `Server ${guildId}`;
+}
+
+async function vlLoadServers() {
+  try {
+    const r = await fetch('/api/village/servers');
+    _vlServers = r.ok ? await r.json() : [];
+  } catch { _vlServers = []; }
+  vlRenderServers();
+}
+
+function vlRenderServers() {
+  const box = $('vl-servers');
+  if (!box) return;
+  if (!Array.isArray(_vlServers) || !_vlServers.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="vl-knocks-head">🖥 Servers <span class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</span></div>`
+    + _vlServers.map((s, i) => {
+      const sub = [
+        `id ${esc(s.guildId)}`,
+        s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
+      ].filter(Boolean).join(' · ');
+      return `<div class="vl-knock" data-si="${i}">
+        <div class="vl-knock-info">
+          <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
+          <div class="vl-knock-sub">${sub}</div>
+        </div>
+        <div class="vl-knock-actions">
+          <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
+        </div>
+      </div>`;
+    }).join('');
+  box.querySelectorAll('.vl-knock').forEach(row => {
+    const s = _vlServers[Number(row.dataset.si)];
+    row.querySelector('.vl-server-x').addEventListener('click', () => vlDismissServer(s));
+  });
+}
+
+async function vlDismissServer(s) {
+  if (!s?.guildId) return;
+  if (!confirm(`Forget "${s.name || s.guildId}"? It reappears if my Familiar is active there again.`)) return;
+  try {
+    await fetch('/api/village/servers', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guildId: s.guildId, platform: s.platform }),
+    });
+  } catch { /* best-effort */ }
+  vlLoadServers();
+}
+
+// ── Location knock list (V4.x) — grouped by server ──
 
 async function vlLoadLocationKnocks() {
   const box = $('vl-location-knocks');
@@ -12869,6 +12944,11 @@ async function vlLoadLocationKnocks() {
     const r = await fetch('/api/village/location-knocks');
     vlRenderLocationKnocks(r.ok ? await r.json() : []);
   } catch { box.classList.add('hidden'); }
+}
+
+/** Pull the guild id off a knock (explicit field, else parsed from the key). */
+function vlKnockGuildId(k) {
+  return k.guildId || (k.key.match(/guild:([^:]+)/)?.[1] ?? '');
 }
 
 function vlRenderLocationKnocks(knocks) {
@@ -12880,29 +12960,45 @@ function vlRenderLocationKnocks(knocks) {
     return;
   }
   box.classList.remove('hidden');
-  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— Discord channels your Familiar has spoken in that aren't registered yet. Register them to set an access ceiling.</span></div>`
-    + knocks.map((k, i) => {
-      const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
-      const guildId   = k.guildId   || (k.key.match(/guild:([^:]+)/)?.[1] ?? '');
-      const displayKey = channelId ? `#${channelId}` : k.key;
-      const sub = [
-        guildId ? `guild ${guildId}` : '',
-        esc(k.platform ?? ''),
-        `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
-      ].filter(Boolean).join(' · ');
-      return `<div class="vl-knock" data-lki="${i}">
-        <div class="vl-knock-info">
-          <div class="vl-knock-name">${esc(displayKey)} <span class="vl-knock-id">${esc(k.key)}</span></div>
-          <div class="vl-knock-sub">${sub}</div>
-        </div>
-        <div class="vl-knock-actions">
-          <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
-          <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">${msIcon('close')}</button>
-        </div>
-      </div>`;
+
+  // Group by server so a big server's channels sit together under its name
+  // instead of a flat channel soup. Groups ordered by their most-recent knock.
+  const groups = new Map();
+  knocks.forEach((k, i) => {
+    const gid = vlKnockGuildId(k);
+    if (!groups.has(gid)) groups.set(gid, []);
+    groups.get(gid).push({ k, i });
+  });
+  const orderedGids = [...groups.keys()].sort((a, b) => {
+    const la = Math.max(...groups.get(a).map(({ k }) => new Date(k.lastSeenAt || 0).getTime()));
+    const lb = Math.max(...groups.get(b).map(({ k }) => new Date(k.lastSeenAt || 0).getTime()));
+    return lb - la;
+  });
+
+  box.innerHTML = `<div class="vl-knocks-head">🚪 Knocked on the door <span class="field-hint">— Discord channels my Familiar has spoken in that aren't registered yet. Register them to set an access ceiling.</span></div>`
+    + orderedGids.map(gid => {
+      const rows = groups.get(gid).map(({ k, i }) => {
+        const channelId = k.channelId || (k.key.split(':channel:')[1] ?? '');
+        const displayKey = channelId ? `#${channelId}` : k.key;
+        const sub = [
+          esc(k.platform ?? ''),
+          `${k.count ?? 1}×, last ${k.lastSeenAt ? new Date(k.lastSeenAt).toLocaleString() : '?'}`,
+        ].filter(Boolean).join(' · ');
+        return `<div class="vl-knock" data-lki="${i}">
+          <div class="vl-knock-info">
+            <div class="vl-knock-name">${esc(displayKey)} <span class="vl-knock-id">${esc(k.key)}</span></div>
+            <div class="vl-knock-sub">${sub}</div>
+          </div>
+          <div class="vl-knock-actions">
+            <button class="btn-secondary vl-loc-knock-register" type="button">Register</button>
+            <button class="btn-ghost vl-loc-knock-x" type="button" title="Dismiss (the channel can knock again — nothing is blocked)" aria-label="Dismiss channel knock">${msIcon('close')}</button>
+          </div>
+        </div>`;
+      }).join('');
+      return `<div class="vl-knock-group"><div class="vl-knock-group-head">${esc(vlServerName(gid))}</div>${rows}</div>`;
     }).join('');
 
-  box.querySelectorAll('.vl-knock').forEach(row => {
+  box.querySelectorAll('.vl-knock[data-lki]').forEach(row => {
     const k = knocks[Number(row.dataset.lki)];
     row.querySelector('.vl-loc-knock-register').addEventListener('click', () => vlRegisterFromLocationKnock(k));
     row.querySelector('.vl-loc-knock-x').addEventListener('click', () => vlDismissLocationKnock(k));
@@ -12941,6 +13037,8 @@ async function vlLoadLocations() {
   try {
     vlRenderLocList(await vlFetch(true));
   } catch (err) { list.innerHTML = vlErr(err); }
+  // Servers first so the knock groups can show real server names, not IDs.
+  await vlLoadServers();
   vlLoadLocationKnocks();
 }
 

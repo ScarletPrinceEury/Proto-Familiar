@@ -37,7 +37,7 @@ import { sessionSlugId } from './slug-ids.js';
 
 import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from './thalamus.js';
 import { buildAvailabilityBlock } from './schedule-availability.js';
-import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE } from './village.js';
+import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
@@ -56,7 +56,7 @@ import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
-import { recordKnock, recordLocationKnock } from './knocks.js';
+import { recordKnock, recordLocationKnock, recordServer } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox } from './outbox.js';
 import { substituteMacros } from './macros.js';
@@ -1707,16 +1707,37 @@ async function ingestDiscordImages(msg, decision, { audienceTag, sessionId }) {
   return { attachments: out, failed };
 }
 
+/**
+ * A guild channel with no Location entry just had activity. Two jobs, both
+ * fire-and-forget so a turn is never blocked:
+ *   1. Remember the SERVER it belongs to — names the Locations server list
+ *      and groups this channel's knock under it (best-effort, in case the
+ *      GUILD_CREATE that would have named it was missed).
+ *   2. Either auto-create a Location for the channel (ward opted in) or drop
+ *      it in the knock list for one-click registration. An auto-created
+ *      location is born at the strangers floor (`upsertLocation` default), so
+ *      it grants NOTHING until the ward assigns it a circle — the same "a
+ *      knock grants nothing" guarantee, just pre-listed.
+ */
+function noteUnregisteredGuild(gw, { locationKey, guildId, channelId }) {
+  const name = guildId ? gw.guildNames.get(guildId) : undefined;
+  if (guildId) recordServer({ guildId, name, platform: 'discord' }).catch(() => { /* best-effort */ });
+  if (!locationKey) return;
+  if (readSettingsSync()?.villageAutoRegisterLocations === true) {
+    const label = `${name ? `${name} — ` : ''}channel ${channelId ?? ''}`.trim();
+    upsertLocation({ key: locationKey, label }).catch(() => { /* best-effort */ });
+  } else {
+    recordLocationKnock({ key: locationKey, platform: 'discord', guildId, channelId }).catch(() => { /* best-effort */ });
+  }
+}
+
 async function observeMessage(gw, msg, decision) {
   const registry = await getRegistry();
   const regLoc = (registry.locations ?? []).find(l => l.key === decision.locationKey);
   const label  = regLoc?.label ?? `Discord channel ${msg.channel_id}`;
 
   if (decision.kind === 'guild' && !regLoc) {
-    recordLocationKnock({
-      key: decision.locationKey, platform: 'discord',
-      guildId: msg.guild_id, channelId: msg.channel_id,
-    }).catch(() => { /* best-effort */ });
+    noteUnregisteredGuild(gw, { locationKey: decision.locationKey, guildId: msg.guild_id, channelId: msg.channel_id });
   }
 
   const session = await sessionForLocation(decision.locationKey, label, 'group');
@@ -1846,16 +1867,11 @@ async function handleTurn(gw, msg, decision) {
   const label  = regLoc?.label
     ?? (decision.kind === 'guild' ? `Discord channel ${msg.channel_id}` : `Discord DM`);
 
-  // Location knock — capture unregistered guild channels for one-click
-  // registration in the Locations tab. Fire-and-forget; registration
-  // grants nothing.
+  // Unregistered guild channel: remember its server (names the list, groups
+  // the knock) and either auto-register it or drop a knock — see the helper.
+  // Fire-and-forget; registration/auto-registration grants nothing.
   if (decision.kind === 'guild' && !regLoc) {
-    recordLocationKnock({
-      key: decision.locationKey,
-      platform: 'discord',
-      guildId: msg.guild_id,
-      channelId: msg.channel_id,
-    }).catch(() => { /* best-effort */ });
+    noteUnregisteredGuild(gw, { locationKey: decision.locationKey, guildId: msg.guild_id, channelId: msg.channel_id });
   }
   const session = await sessionForLocation(decision.locationKey, label, decision.kind === 'guild' ? 'group' : 'private');
   // A real incoming message supersedes any pending revisit for this location.
@@ -2187,6 +2203,7 @@ const gw = {
   voiceRosterListener: null,
   voiceStates: new Map(),      // guildId → Map<userId, channelId> — who is in which VC
   voiceController: null,        // { joinVoiceCall, leaveVoiceCall } from voice-discord-server (Pass 3)
+  guildNames: new Map(),        // guildId → server name, from GUILD_CREATE — names the server list + knock groups
 };
 
 function clearTimers() {
@@ -2375,6 +2392,15 @@ function onDispatch(t, d) {
         for (const vs of d.voice_states) { if (vs?.user_id && vs?.channel_id) g.set(vs.user_id, vs.channel_id); }
       }
     } catch (err) { console.error('[discord] GUILD_CREATE voice-state seed failed:', err?.message ?? err); }
+    // Name the server so the Locations tab and grouped knocks read as the
+    // server's actual name, not a raw ID. GUILD_CREATE is the authoritative
+    // source of d.name; persist it and cache it for knock-time labelling.
+    try {
+      if (d?.id && typeof d.name === 'string' && d.name) {
+        gw.guildNames.set(d.id, d.name);
+        recordServer({ guildId: d.id, name: d.name, platform: 'discord' }).catch(() => { /* best-effort */ });
+      }
+    } catch (err) { console.error('[discord] GUILD_CREATE server-record failed:', err?.message ?? err); }
     return;
   }
   if (t === 'VOICE_STATE_UPDATE') {
