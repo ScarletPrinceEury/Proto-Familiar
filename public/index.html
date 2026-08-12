@@ -1979,9 +1979,15 @@
             <button id="vl-loc-refresh" class="btn-ghost">Refresh</button>
             <button id="vl-loc-add" class="btn-secondary" style="margin-left:auto">+ Add location</button>
           </div>
+          <label class="switch-row" style="margin:6px 0; display:flex; align-items:flex-start; gap:8px; font-size:0.85rem">
+            <input type="checkbox" id="vl-auto-register" style="margin-top:3px">
+            <span>Auto-register new channels as locations — the moment my Familiar is active in an unregistered channel, save it as a location automatically. It's born at the <strong>Strangers</strong> floor (granting nothing until you assign it a circle), so this is safe; off by default. When off, new channels wait in the knock list below for one-click registration.</span>
+          </label>
+          <!-- Saved server list — the Discord servers the Familiar is in, named
+               from GUILD_CREATE and derived from knocks. Hidden when empty. -->
+          <div id="vl-servers" class="vl-servers hidden"></div>
           <!-- Location knock list (V4.x) — unregistered Discord channels the
-               Familiar has spoken in, captured so the ward can register them
-               without hunting guild/channel IDs. Hidden when empty. -->
+               Familiar has spoken in, grouped by server. Hidden when empty. -->
           <div id="vl-location-knocks" class="vl-knocks hidden"></div>
           <div class="vl-split">
             <div class="vl-loc-list" id="vl-loc-list">

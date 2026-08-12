@@ -162,7 +162,7 @@ import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDisco
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
-import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock } from './knocks.js';
+import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -4690,6 +4690,20 @@ app.delete('/api/village/location-knocks', async (req, res) => {
   const { key } = req.body ?? {};
   const result = await dismissLocationKnock({ key });
   if (!result.ok) return res.status(result.error === 'knock not found' ? 404 : 400).json({ error: result.error });
+  res.json({ ok: true });
+});
+
+// The saved server list — the Discord guilds the Familiar is in, named from
+// GUILD_CREATE and derived from knocks. Read-only + forget; it's not a grant
+// surface (a server here confers nothing; Locations + circles do that).
+app.get('/api/village/servers', async (_req, res) => {
+  res.json(await listServers());
+});
+
+app.delete('/api/village/servers', async (req, res) => {
+  const { guildId, platform } = req.body ?? {};
+  const result = await dismissServer({ guildId, platform });
+  if (!result.ok) return res.status(result.error === 'server not found' ? 404 : 400).json({ error: result.error });
   res.json({ ok: true });
 });
 
