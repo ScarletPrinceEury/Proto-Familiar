@@ -217,12 +217,21 @@ in the same commit (parent §13 discipline). PATCH bump each.
    of the reply instead of finishing something nobody is hearing. Covered by a
    watched-fail adapter test (a reply held mid-stream, barged, asserts no
    post-barge chunk + a clean `speak-end`).
-   **Remaining:** `spokenUpTo` — recording in the call history HOW MUCH of the
-   reply was actually heard before the interrupt (the exact played-sample → text
-   mapping). The barge stops the audio correctly; what it does not yet do is tell
-   the next turn "you were cut off after word N", so the Familiar can't yet know
-   precisely where it was interrupted. That mapping (sample count is code's,
-   never the model's — the exact-values rule) is the piece still to build.
+   **`spokenUpTo` ✅ (shipped).** A barge now records HOW MUCH of the reply was
+   heard. The mapping is TIME-based, not sample-based: playback runs at wall-clock
+   speed regardless of how far TTS buffered ahead, so the engine times `playAudio`
+   and, when the adapter reports `{barged:true}`, maps elapsed ms → spoken text via
+   a chars-per-second constant (`spokenTextForMs` in `call-engine.js` — code's
+   arithmetic, snapped to a word boundary, the exact-values rule). The synthesized
+   reply carries its `text`; both adapters (`voice-web-adapter`, `voice-discord-
+   adapter`) return `{barged}`; the engine calls the injected `onReplyInterrupted`,
+   which rewrites the last assistant turn in the call history to what was actually
+   heard + a "cut me off here" marker (web: ctx history + memorization; Discord:
+   the ward's cross-turn history). So the next turn knows it was interrupted and
+   roughly where. Word-level precision would need TTS word-timestamps we don't
+   have; the time estimate is the honest best and is deliberately conservative.
+   Tested in `call-engine.test.mjs` (the pure mapping + the barge/no-barge wiring,
+   watched-fail).
 4. **2d — the compute governor.** ✅ **Call-state deferral landed.** The eight
    deferrable loops from the §2.1 table — pondering, memorization drain, memory
    sweep, tome graduation, gcal sync, needs-tracking, content-regate, warm
@@ -250,12 +259,20 @@ in the same commit (parent §13 discipline). PATCH bump each.
    delivered; the human's own state/response (via voice threat scoring) still
    drives escalation.** No auto-acknowledge of a triage item on being heard (that
    would be "heard = handled", the option the ward rejected).
-   **Remaining (web de-dup + tuning):** the web client still injects a
-   voice-delivered item as a muted chat message (banners themselves were retired
-   in 0.3.9, so this is a record, not a banner over the call) — a small follow-up
-   can suppress the redundant ping for items already spoken, and should review the
-   web auto-ack of a triage item during a call against the escalation decision
-   (pre-existing behaviour, not a regression from this change). Also still open:
+   **Web de-dup ✅ (ping suppressed).** An item whose `delivery['voice-call']`
+   is `delivered` was spoken into the call, so the web client still injects it as
+   a chat RECORD (with a quiet "· spoken on the call" tag) but no longer PINGS —
+   my human already heard it. Only the notification is suppressed; the ack path is
+   untouched.
+   **Triage-ack-during-call review — FINDING, awaiting ward decision.** The review
+   surfaced a real, pre-existing issue: the web client auto-acknowledges every
+   outbox item on DISPLAY, and `checkAndFirePendingContacts` only escalates
+   UNacknowledged triage items — so a browser tab merely rendering a check-in
+   cancels its trusted-contact escalation, contradicting the Pass 2d "received ≠
+   handled" decision (the voice-call path deliberately records delivery WITHOUT
+   acking; the web path acks on display). Because this is the escalation path
+   (ward-sign-off-class), it was left UNCHANGED pending the ward's call on whether
+   display should stop counting as acknowledgement for triage items. Still open:
    the two-tier `enrich()` latency budget + earcon (low value now that synthesis
    streams) and Phylactery `maintenance_defer`.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
@@ -277,14 +294,17 @@ in the same commit (parent §13 discipline). PATCH bump each.
    1.2 s trailing silence, already configured in `buildOnlineRecognizer`) segments
    what my human says into turns; the client never sends `{t:'release'}`. The talk
    button becomes a **mute toggle** rather than a hold target. **Barge in open
-   mode** is onset-detected: a frame louder than `BARGE_PEAK` while a reply plays
-   is my human talking over it → the client sends `{t:'barge'}`, stops local
+   mode** is onset-detected: the client sends `{t:'barge'}`, stops local
    playback, and the reply's synthesis is cut (2c). Server needs no change — the
    continuous stream + endpointing is exactly the "continuous/VAD adapter" the
-   engine reserved (`finalizeUtterance`/release is push-only). **Refinement left:**
-   the endpoint rules against the §6.1 latency budget (the deferred 2a tuning) and
-   a smarter onset VAD than a peak threshold; the peak gate is a conservative
-   first cut (a false barge only cuts a reply my human can ask to repeat).
+   engine reserved (`finalizeUtterance`/release is push-only). **Smarter onset VAD
+   ✅ (shipped):** the old single-sample `BARGE_PEAK` barged on any transient (a
+   click, a cough). It's now SUSTAINED RMS energy — average energy (a lone spike
+   can't carry it) that must hold above `BARGE_RMS` for `BARGE_SUSTAIN_MS` (~60ms,
+   block-size-independent) before it counts as speech-over-reply. Still a
+   conservative gate (a false barge only cuts a reply my human can ask to repeat).
+   **Refinement left:** the endpoint rules against the §6.1 latency budget (the
+   deferred 2a tuning).
 
 ## 4. Safety-critical seams (ward sign-off required)
 

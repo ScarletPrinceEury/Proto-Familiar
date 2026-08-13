@@ -118,6 +118,24 @@ export function attachVoiceCall(deps) {
     return reply;
   }
 
+  // ── engine dep: a barge cut a reply short (2c `spokenUpTo`) ─────────────
+  // Rewrite the last assistant turn to what my human ACTUALLY heard before they
+  // talked over it, plus a marker. Both the LLM-context history and the
+  // memorization transcript get it, so the next turn knows it was cut off and
+  // the stored record reflects the real exchange, not a reply nobody finished.
+  function onReplyInterrupted(ctx, { spokenUpTo }) {
+    const heard = String(spokenUpTo ?? '').trim();
+    const cut = heard ? `${heard} —[my human cut me off here]` : '[my human cut me off before I got a word out]';
+    const markLastAssistant = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i]?.role === 'assistant') { arr[i].content = cut; break; }
+      }
+    };
+    markLastAssistant(histories.get(ctx.callId));
+    markLastAssistant(callSessions.get(ctx.callId)?.messages);
+  }
+
   // ── onTurn dep: reply text → TTS PCM, streamed as it is generated (2c) ───
   // The shared synthesizer (voice-synthesize.js) — the Discord transport uses
   // the exact same one, so it lives in one place, not copy-pasted per adapter.
@@ -151,6 +169,7 @@ export function attachVoiceCall(deps) {
       },
     },
     onTurn,
+    onReplyInterrupted,
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
     offlineModelDir: ASR_MODEL_DIR,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),

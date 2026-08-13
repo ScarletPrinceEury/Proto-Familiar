@@ -196,6 +196,20 @@ export function attachDiscordVoice(deps) {
     }
   }
 
+  // A barge cut a reply short (2c). Annotate the ward's cross-turn history with
+  // what was actually heard, so the ward's next spoken turn knows it was cut off
+  // (villager turns carry no cross-turn history, so there's nothing there to fix).
+  function onReplyInterrupted(ctx, { spokenUpTo }) {
+    if (ctx?.speakerRef !== 'ward') return;
+    const hist = wardHistory.get(ctx.callId);
+    if (!Array.isArray(hist)) return;
+    const heard = String(spokenUpTo ?? '').trim();
+    const cut = heard ? `${heard} —[my human cut me off here]` : '[my human cut me off before I got a word out]';
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (hist[i]?.role === 'assistant') { hist[i].content = cut; break; }
+    }
+  }
+
   const engine = createCallEngine({
     worker: {
       request: (...a) => getWorkerThen((w) => w.request(...a)),
@@ -207,6 +221,7 @@ export function attachDiscordVoice(deps) {
       },
     },
     onTurn,
+    onReplyInterrupted,
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
     offlineModelDir: ASR_MODEL_DIR,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),

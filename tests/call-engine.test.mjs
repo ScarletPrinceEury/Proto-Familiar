@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createCallEngine, clearStaleCallState, isCallActiveFromFile } from '../call-engine.js';
+import { createCallEngine, clearStaleCallState, isCallActiveFromFile, spokenTextForMs } from '../call-engine.js';
 import { floatToPcm16, parseWav } from '../voice-audio-features.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -355,4 +355,80 @@ test('real worker: a wav pushed through the adapter drives a transcript turn', {
     worker.stop();
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+// ── 2c: spokenUpTo — how much of a reply was heard before a barge ──────────
+
+test('spokenTextForMs maps play time to spoken text, snapped to a word boundary', () => {
+  const text = 'one two three four five six seven eight';
+  assert.equal(spokenTextForMs(text, 0), '', 'nothing heard yet → empty');
+  const at1s = spokenTextForMs(text, 1000);           // ~14 chars at 14 chars/sec
+  assert.ok(at1s.length > 0 && at1s.length < text.length, 'a prefix, not the whole thing');
+  assert.ok(text.startsWith(at1s), 'it IS a prefix of the reply');
+  assert.equal(at1s, at1s.trim(), 'trimmed, no trailing space');
+  // Never a half-word: the char right after the slice is a boundary (a space).
+  assert.ok(at1s.length === text.length || text[at1s.length] === ' ', 'cut lands on a word boundary');
+  assert.equal(spokenTextForMs(text, 60_000), text, 'ample play time → the whole reply');
+  assert.equal(spokenTextForMs('', 5000), '', 'empty reply stays empty');
+});
+
+test('a barge records how far the reply got (onReplyInterrupted)', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const interrupts = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async () => ({ text: 'this is the spoken reply' }),
+      onReplyInterrupted: (ctx, info) => interrupts.push({ ctx, info }),
+      streamingModelDir: '', tomesDir: dir,
+    });
+    engine.registerCallAdapter((hooks) => { rec.hooks = hooks; return {
+      id: 'fake', capabilities: { perSpeakerStreams: true },
+      joinCall: async () => ({ callId: 'c1' }),
+      leaveCall: async () => {},
+      playAudio: async () => ({ barged: true }),   // my human talked over it
+      stopPlayback: async () => {},
+    }; });
+    await engine.startCall('fake');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'hi' });
+    await tick();
+    assert.equal(interrupts.length, 1, 'the barge was recorded exactly once');
+    assert.equal(interrupts[0].info.fullText, 'this is the spoken reply');
+    assert.equal(typeof interrupts[0].info.spokenUpTo, 'string');
+    assert.equal(interrupts[0].ctx.speakerRef, 'ward');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('a reply that plays to the end does NOT fire onReplyInterrupted', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    let interrupted = 0;
+    const engine = createCallEngine({
+      worker,
+      onTurn: async () => ({ text: 'the whole reply' }),
+      onReplyInterrupted: () => { interrupted++; },
+      streamingModelDir: '', tomesDir: dir,
+    });
+    engine.registerCallAdapter((hooks) => { rec.hooks = hooks; return {
+      id: 'fake', capabilities: {},
+      joinCall: async () => ({ callId: 'c1' }),
+      leaveCall: async () => {},
+      playAudio: async () => ({ barged: false }),   // played to completion
+      stopPlayback: async () => {},
+    }; });
+    await engine.startCall('fake');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'hi' });
+    await tick();
+    assert.equal(interrupted, 0, 'no barge → no interruption record');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

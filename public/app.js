@@ -11943,9 +11943,22 @@ async function injectOutboxAsChatMessage(item) {
   const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
+  // If this item was already SPOKEN into a live voice call (delivery recorded by
+  // the voice-call push adapter, Pass 2d), my human just heard it — the chat
+  // copy is a record for the session log, not something to ping about again.
+  const spokenOnCall = item.delivery?.['voice-call']?.status === 'delivered';
+
   const timestamp = item.ts || new Date().toISOString();
   const { el, bubble, copyBtn, speakBtn } = appendAssistantShell(timestamp);
   bubble.innerHTML = renderMarkdown(content);
+  if (spokenOnCall) {
+    // A quiet marker so a message that appeared without a ping reads as "you
+    // already heard this on the call", not a glitch.
+    const tag = document.createElement('div');
+    tag.style.cssText = 'font-size:0.72rem;color:var(--text-muted);margin-top:2px';
+    tag.textContent = '· spoken on the call';
+    bubble.appendChild(tag);
+  }
   scrollToBottom();
 
   // Persist alongside normal messages so reloading the session shows
@@ -11967,7 +11980,9 @@ async function injectOutboxAsChatMessage(item) {
   refreshTopicGutter?.();
   wireCopyButton(copyBtn, () => content);
   wireSpeakButton(speakBtn, () => content);
-  notifyNewMessage({ proactive: true });   // reminders / reach-outs / triage always ping
+  // Reminders / reach-outs / triage ping — UNLESS my human already heard this
+  // one spoken into a live call, where a second ping for the same thing is noise.
+  if (!spokenOnCall) notifyNewMessage({ proactive: true });
 
   await acknowledgeOutboxItem(item.id);
 }
