@@ -11,7 +11,19 @@ This repo runs [CodeAlmanac](https://github.com/AlmanacCode/codealmanac) (`codea
 3. **Prefer Haiku for routine gardening** (`--using claude` with `harness.model` set to a Haiku model) and reserve Sonnet for substantive ingestion of new architecture or design rationale — set per-invocation via `codealmanac config set harness.model <model>` if the default needs overriding for a specific call.
 4. **No OS-level automation here.** This environment doesn't support `launchd`/cron-based scheduling (ephemeral containers, no persistent scheduler) — `codealmanac setup` was run with `--sync-off --garden-off --no-auto-update`, so wiki maintenance is manual/session-driven, not a background job. That means it's on **every session**, not a scheduler, to keep it current.
 5. **Check `codealmanac health`** if wiki pages seem stale or contradictory — it flags orphans, dead refs, and broken links.
-6. **Only where the tool actually runs.** `codealmanac` isn't installed in every environment — ephemeral CI/cloud sessions (Claude Code on the web, GitHub Actions) may lack the binary and its dedicated-agent harness. When `codealmanac` isn't on `PATH`, this whole section is a no-op for that session: don't fabricate almanac work, and note in the commit/PR body that almanac gardening was skipped (tool unavailable) so a later local session can fold the change in. The rule binds every session where the tool *exists*.
+6. **Only where the tool actually runs — but a cloud session can usually bootstrap it.** Ephemeral CI/cloud sessions (Claude Code on the web, GitHub Actions) start WITHOUT `codealmanac` on `PATH` and without the `~/.codealmanac` config (the container is fresh each time). That does **not** automatically mean "skip" — in most cloud sessions here `uv` and the `claude` CLI are both reachable, and the wiki itself is in-repo under `almanac/` (already registered), so you can stand the tool up in ~a minute:
+
+   ```sh
+   uv tool install codealmanac@latest
+   # A FRESH install defaults harness.default=codex / a gpt model. This repo's
+   # rule is claude, never codex — and codex usually isn't even present here.
+   codealmanac config set harness.default claude
+   codealmanac config set harness.model  claude-sonnet-5   # or claude-haiku-4-5 for routine gardening
+   # valid claude models: claude-haiku-4-5, claude-sonnet-5, claude-opus-4-7
+   codealmanac doctor        # confirms the repo is registered + the wiki index
+   ```
+
+   After that, `ingest`/`garden --using claude` work exactly as on a local machine (the harness shells out to the `claude` CLI). The bootstrap is per-session — nothing under `~/.codealmanac` survives into the next cloud session, so repeat these steps when you mean to document. Only when `uv` OR the `claude` CLI is genuinely unreachable is this section a true no-op: then don't fabricate almanac work, and note in the commit/PR body that almanac gardening was skipped (tool unavailable) so a later session can fold the change in. The rule binds every session where the tool can be made to run.
 
 Don't skip this because "the change was small" — the whole value of the wiki is that it compounds across sessions instead of each one re-discovering the same context.
 
