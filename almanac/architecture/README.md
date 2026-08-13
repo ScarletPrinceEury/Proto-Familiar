@@ -8,6 +8,12 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: knocks-js
+    type: file
+    path: knocks.js
+  - id: discord-gateway-js
+    type: file
+    path: discord-gateway.js
 ---
 
 # Architecture
@@ -101,6 +107,25 @@ web-read and Village inbound boundaries — see
 [Injection guard: documented but never wired](injection-guard-gap) for the wiring history and
 what is still deliberately excluded (Phylactery/Unruh recall, the ward's own words, and gcal
 event titles) [@architecture-doc].
+
+`knocks.js` tracks contact attempts from people who are not yet registered villagers — a DM or
+an @-mention in a guild the Familiar has not been told to treat as a known Location. A knock
+records identity metadata only (platform, stable id, handle, when, where, how often), never
+message content, and grants nothing by itself: binding a knock to a villager or a channel to a
+Location is always the ward's explicit act in the Village editor [@knocks-js]. Two of the three
+lists `knocks.js` keeps are capped and spam-resistant (`KNOCKS_CAP` / `LOCATION_KNOCKS_CAP`,
+both 50, oldest-seen evicted); the third, `recordServer`/`listServers`/`dismissServer`
+(`SERVERS_CAP` 200), persists every Discord guild the Familiar is a member of, named from the
+gateway's `GUILD_CREATE` events and cached in `gw.guildNames`, so the Locations tab can show
+real server names instead of raw ids [@knocks-js] [@discord-gateway-js]. Unlike the two knock
+lists, the server list is not cleared when a knock settles into a registered Location — leaving
+a server, not registering a channel in it, is what removes an entry — because it names a
+membership fact, not a pending decision, and confers no access of its own [@knocks-js]. An
+optional `villageAutoRegisterLocations` toggle (default off) changes what happens to an
+unregistered guild channel's activity: off, it goes into the capped knock list for one-click
+registration; on, `noteUnregisteredGuild` auto-creates a Location for it via `upsertLocation`,
+born at the Strangers floor so it grants nothing until the ward assigns it a circle — the same
+"a knock grants nothing" guarantee, just pre-listed instead of queued [@discord-gateway-js].
 
 ## Storage shape
 
