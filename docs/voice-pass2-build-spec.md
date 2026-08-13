@@ -278,10 +278,10 @@ in the same commit (parent §13 discipline). PATCH bump each.
    reply (web chat OR a ward voice call, both post here) stands the escalation
    down, but a passively-open tab never does. Reminders/alerts still ack on
    display (they carry no escalation). Erring toward escalation is the intended
-   safe direction. *(A ward reply on Discord TEXT does not yet post through
-   `/api/chat`, so that surface's reply-ack is a small follow-up; it never
-   under-escalates — at worst a check-in escalates that a Discord-text reply
-   would have vetoed, the safe side.)* Still open:
+   safe direction. *(Discord text has its own turn path, so its ward reply-ack is
+   wired separately: `handleTurn` acks pending triage on any WARD message — the
+   same veto, covering the surface `/api/chat` can't. So a ward reply on web chat,
+   a ward voice call, OR Discord text all stand the escalation down.)* Still open:
    the two-tier `enrich()` latency budget + earcon (low value now that synthesis
    streams) and Phylactery `maintenance_defer`.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
