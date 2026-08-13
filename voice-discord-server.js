@@ -27,7 +27,8 @@ import path from 'node:path';
 
 import { createCallEngine, isCallActiveFromFile } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers } from './discord-gateway.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId } from './discord-gateway.js';
+import { resolveCallAudience } from './voice-call-audience.js';
 import { findVillagerByAlias, getRegistry } from './village.js';
 import { audienceTagFor } from './audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
@@ -38,6 +39,7 @@ import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { enqueueSessionByDay } from './memorization.js';
+import { writeSessionLog, stampMessages, turnMessages } from './session-log.js';
 import { slugifyLabel, sessionSlugId } from './slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
@@ -75,41 +77,48 @@ export function attachDiscordVoice(deps) {
   const synthesize = createSynthesizer({ readSettings, getTtsWorker, resolveVoiceForSettings, ensureTtsLoaded, log });
   const runVoiceChatTurn = createVoiceChatTurn({ port, readSettings, connectionForFeature, log });
 
-  // Per-call state. `wardHistory` is the ward's own capped context (ward-private);
-  // it is NEVER handed to a villager turn — that would leak my human's private
-  // exchanges into a room-gated reply. `refToUser` maps a speaker slug back to the
-  // Discord user id so a villager can be resolved. `callMeta` holds the room. All
-  // keyed by callId; one call at a time.
+  // Per-call state. A voice call is a SHARED audio space — every reply is spoken
+  // aloud to everyone present — so the WHOLE call is gated to the room's audience
+  // (the lowest clearance present), not per-speaker. `callHistory` is that one
+  // shared conversation at the current clearance; `callTag` records the clearance
+  // it was built at, so a roster change (someone joining and dropping the
+  // clearance) resets it and a more-private stretch never re-surfaces to a
+  // newcomer. `refToUser` maps a speaker slug to a Discord user id; `callMeta`
+  // holds the room. All keyed by callId; one call at a time.
   const HISTORY_MAX = 20;
-  const wardHistory = new Map();        // callId → [{role,content}] (ward-private)
+  const callHistory = new Map();        // callId → [{role,content}] at the current clearance
+  const callTag = new Map();            // callId → audienceTag the history was built at
   const refToUser = new Map();          // speakerRef → discord user id
   const callMeta = new Map();           // callId → { guildId, channelId, locationKey, wardUserId }
-  // Memorization sessions, one PER AUDIENCE TAG (ward-private for the ward's turns,
-  // the room's tag for a villager's), so nothing is stored above its clearance.
+  // Memorization sessions, one per AUDIENCE TAG the call passed through (a solo
+  // stretch → ward-private, a stretch with villagers present → the room's tag), so
+  // nothing is stored above the clearance it was actually said at.
   const memSessions = new Map();        // callId → Map<audienceTag, { sessionId, messages }>
 
-  function accumulate(callId, audienceTag, userMsg, assistantMsg) {
+  // `speaker` attributes the user turn — a group call's room session mixes
+  // several villagers, so a bare "user" would lose who said what. The ward
+  // speaks unattributed (null), exactly like Discord text.
+  function accumulate(callId, audienceTag, userMsg, assistantMsg, speaker = null) {
     let byTag = memSessions.get(callId);
     if (!byTag) { byTag = new Map(); memSessions.set(callId, byTag); }
     let sess = byTag.get(audienceTag);
-    if (!sess) { sess = { sessionId: sessionSlugId(), messages: [] }; byTag.set(audienceTag, sess); }
-    sess.messages.push({ role: 'user', content: userMsg }, { role: 'assistant', content: assistantMsg });
+    if (!sess) { sess = { sessionId: sessionSlugId(), messages: [], startedAt: Date.now() }; byTag.set(audienceTag, sess); }
+    sess.messages.push(...turnMessages(userMsg, assistantMsg, { speaker }));
   }
 
-  // Build the audience input for a room turn: WHO is present in the voice channel
-  // (everyone but the ward and me), resolved to villagers/strangers. A complete
-  // roster matters — an undercount reads the room as more private than it is.
-  async function roomAudienceInput(meta) {
-    const members = discordVoiceChannelMembers(meta.guildId, meta.channelId);
-    const participants = [];
-    for (const uid of members) {
-      if (uid === meta.wardUserId) continue;                 // the ward isn't a gating participant
-      let villager = null;
-      try { villager = await findVillagerByAlias({ platform: 'discord', id: uid }); } catch { /* treat as stranger */ }
-      // A stranger (unregistered) tightens the gate to the strangers ceiling.
-      participants.push({ id: villager?.id ?? null, name: villager?.name ?? 'someone' });
-    }
-    return { location: meta.locationKey, participants };
+  // Resolve the audience a turn is gated to — the lowest clearance of everyone
+  // who can HEAR (the live VC roster). Pure decision in voice-call-audience.js;
+  // here we inject the real roster, the villager lookup, and the tag resolver.
+  async function callAudience(meta) {
+    const registry = await getRegistry().catch(() => null);
+    return resolveCallAudience({
+      members:        meta ? discordVoiceChannelMembers(meta.guildId, meta.channelId) : [],
+      wardUserId:     meta?.wardUserId,
+      botId:          discordBotUserId(),
+      resolveVillager: (uid) => findVillagerByAlias({ platform: 'discord', id: uid }),
+      resolveTag:     (input) => (registry ? audienceTagFor(input, registry) : null),
+      location:       meta?.locationKey ?? null,
+    });
   }
 
   // ── The turn (Pass 3b, ward-signed §5) ──────────────────────────────────
@@ -123,35 +132,47 @@ export function attachDiscordVoice(deps) {
     const heard = String(transcript ?? '').trim();
     if (!heard) return null;
     const meta = callMeta.get(ctx.callId);
+    const isWard = ctx?.speakerRef === 'ward';
 
-    if (ctx?.speakerRef === 'ward') {
-      const hist = wardHistory.get(ctx.callId) ?? [];
-      const reply = await runVoiceChatTurn({ transcript: heard, history: hist, sessionAudience: 'ward-private' });
-      if (reply) {
-        wardHistory.set(ctx.callId, [...hist, { role: 'user', content: heard }, { role: 'assistant', content: reply }].slice(-HISTORY_MAX));
-        accumulate(ctx.callId, 'ward-private', heard, reply);
+    // Resolve a non-ward speaker — for attribution and the stranger fail-close.
+    // The ward is always answered; an unregistered non-ward speaker never is. This
+    // is the ONLY thing keyed on WHO spoke; the audience below is keyed on who can
+    // HEAR, which in a shared voice channel is everyone present.
+    let speakerName = null;
+    if (!isWard) {
+      const userId = refToUser.get(ctx.speakerRef);
+      let villager = null;
+      try { villager = userId ? await findVillagerByAlias({ platform: 'discord', id: userId }) : null; } catch { /* treat as stranger */ }
+      if (!villager || !meta) {
+        log(`heard from ${ctx?.speakerRef ?? '?'} (unregistered) — not answered (stranger, fail-closed)`);
+        return null;
       }
-      return reply;
+      speakerName = villager.name;
     }
 
-    // Non-ward: resolve the speaker to a registered villager.
-    const userId = refToUser.get(ctx.speakerRef);
-    let villager = null;
-    try { villager = userId ? await findVillagerByAlias({ platform: 'discord', id: userId }) : null; } catch { /* */ }
-    if (!villager || !meta) {
-      log(`heard from ${ctx?.speakerRef ?? '?'} (unregistered) — not answered (stranger, fail-closed)`);
-      return null;
-    }
+    // AUDIENCE = who can HEAR the reply. A voice call is a shared audio space — the
+    // reply is spoken ALOUD to everyone in the channel — so every turn, ward or
+    // villager, is gated to the room's audience: the lowest clearance present. Ward
+    // alone in the channel → ward-private (like a ward DM); ANY villager present →
+    // the room's tag (like a guild text channel). This matches the text model,
+    // where a shared channel is room-gated regardless of speaker. Gating the ward's
+    // own turn to ward-private — the old behaviour — spoke my human's private
+    // recall aloud to the villagers who can hear; this closes that leak.
+    const { audienceTag, sessionAudience } = await callAudience(meta);
 
-    // A registered villager: gate the turn to the ROOM. sessionAudience is the
-    // room input (object), so /api/chat scopes recall, withholds ward-private, and
-    // runs the outgoing filter. NO cross-turn history — a villager's turn must
-    // never carry the ward's private context.
-    const audienceInput = await roomAudienceInput(meta);
-    let audienceTag = 'shared-room';
-    try { audienceTag = audienceTagFor(audienceInput, await getRegistry()) || 'shared-room'; } catch { /* */ }
-    const reply = await runVoiceChatTurn({ transcript: heard, history: [], sessionAudience: audienceInput });
-    if (reply) accumulate(ctx.callId, audienceTag, heard, reply);
+    // One shared call history at the CURRENT clearance. If the clearance changed
+    // (a roster change — someone joined or left), reset it so a more-private
+    // stretch is never re-spoken to a newcomer.
+    if (callTag.get(ctx.callId) !== audienceTag) { callHistory.set(ctx.callId, []); callTag.set(ctx.callId, audienceTag); }
+    const hist = callHistory.get(ctx.callId) ?? [];
+
+    const reply = await runVoiceChatTurn({ transcript: heard, history: hist, sessionAudience });
+    if (reply) {
+      callHistory.set(ctx.callId, [...hist, { role: 'user', content: heard }, { role: 'assistant', content: reply }].slice(-HISTORY_MAX));
+      // Store the turn at the SAME tag the reply was gated to; attribute a
+      // villager's turn to them, the ward's unattributed.
+      accumulate(ctx.callId, audienceTag, heard, reply, speakerName);
+    }
     return reply;
   }
 
@@ -185,6 +206,23 @@ export function attachDiscordVoice(deps) {
     if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with'); return; }
     for (const [audienceTag, sess] of byTag) {
       if (!sess || sess.messages.length < 2) continue;
+      // Land each audience segment as its OWN reviewable session log, STAMPED
+      // with that segment's tag — a villager's segment lands at the room's tag,
+      // never ward-private, so a log carries no more clearance than the turns in
+      // it (the same per-tag split memorization uses). Then memorize.
+      if (process.env.PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED !== '1') {
+        const endedIso = new Date().toISOString();
+        const r = await writeSessionLog({
+          sessionId:  sess.sessionId,
+          startedAt:  new Date(sess.startedAt ?? Date.now()).toISOString(),
+          endedAt:    endedIso,
+          origin:     'voice-call-discord',
+          audienceTag,
+          provider:   conn.provider, model: conn.model,
+          messages:   stampMessages(sess.messages, endedIso),
+        }, { logsDir: path.join(rootDir, 'logs') });
+        if (!r.ok) log(`session log (${audienceTag}) not written: ${r.reason}`);
+      }
       try {
         const r = await enqueueSessionByDay({
           sessionId: sess.sessionId, messages: sess.messages,
@@ -193,6 +231,20 @@ export function attachDiscordVoice(deps) {
         });
         log(`voice call ${callId} ended — queued ${sess.messages.length} lines for memory at ${audienceTag} (${r.enqueued} enqueued, ${r.skipped} skipped)`);
       } catch (err) { log(`memorizeCall (${audienceTag}) failed: ${err?.message ?? err}`); }
+    }
+  }
+
+  // A barge cut a reply short (2c). Annotate the call's last assistant turn with
+  // what was actually heard, so the next spoken turn knows it was interrupted. The
+  // interrupter could be anyone in the channel, so the marker is neutral (not
+  // "my human"), and it rides the one shared call history.
+  function onReplyInterrupted(ctx, { spokenUpTo }) {
+    const hist = callHistory.get(ctx.callId);
+    if (!Array.isArray(hist)) return;
+    const heard = String(spokenUpTo ?? '').trim();
+    const cut = heard ? `${heard} —[interrupted here]` : '[interrupted before I got a word out]';
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (hist[i]?.role === 'assistant') { hist[i].content = cut; break; }
     }
   }
 
@@ -207,6 +259,7 @@ export function attachDiscordVoice(deps) {
       },
     },
     onTurn,
+    onReplyInterrupted,
     streamingModelDir: path.join(rootDir, MODELS_SUBDIR, `asr-streaming-${asrLang(readSettings())}`),
     offlineModelDir: ASR_MODEL_DIR,
     offlineFinal: () => voiceOfflineAsrEnabled(readSettings()),
@@ -297,7 +350,7 @@ export function attachDiscordVoice(deps) {
     // so a slow extraction never holds up teardown.
     if (callId) {
       memorizeCall(callId).catch(() => {});
-      wardHistory.delete(callId); callMeta.delete(callId);
+      callHistory.delete(callId); callTag.delete(callId); callMeta.delete(callId);
     }
     refToUser.clear();
     return r;

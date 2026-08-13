@@ -49,9 +49,32 @@ export function callsDisabled() {
     || process.env.PROTO_FAMILIAR_VOICE_DISABLED === '1';
 }
 
+// Speech runs at roughly this many characters per second — the same order the
+// voicebox worker's runaway cap uses (`_CHARS_PER_SECOND`). Used ONLY to
+// estimate, in code, how much of a reply was heard before a barge.
+const SPEECH_CHARS_PER_SEC = 14;
+
+/**
+ * How much of `text` was likely HEARD in `ms` of real-time playback, snapped
+ * back to a word boundary so we never report a half-word. Playback runs at
+ * wall-clock speed regardless of how far TTS buffered ahead, so elapsed ms maps
+ * to spoken characters via the speech rate — code's arithmetic, never the
+ * model's (the exact-values rule). An estimate by nature (rate varies), but a
+ * conservative, honest one: "roughly this far before you cut me off".
+ */
+export function spokenTextForMs(text, ms) {
+  const full = String(text ?? '');
+  const chars = Math.max(0, Math.round(((Number(ms) || 0) / 1000) * SPEECH_CHARS_PER_SEC));
+  if (chars >= full.length) return full;
+  const cut = full.slice(0, chars);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim();
+}
+
 export function createCallEngine({
   worker,                 // listeningWorker(): { request, sendPcm, on }
   onTurn,                 // async (transcript, ctx) => reply | null   (injected)
+  onReplyInterrupted = null, // (ctx, { fullText, spokenUpTo, playedMs }) => void — a barge cut a reply short (2c)
   streamingModelDir = '', // asr-streaming model dir; loaded once on call start
   offlineModelDir = '',   // asr-offline (SenseVoice) dir; loaded when offlineFinal is on
   offlineFinal = () => false, // hybrid ASR: re-transcribe each utterance with the offline model
@@ -295,9 +318,19 @@ export function createCallEngine({
     // to say. playAudio(null) signals the browser to leave "Thinking…" and wait
     // for the next press — otherwise a silent turn (no connection, empty reply,
     // timeout) hangs the UI forever, which is the "thinks and never answers" bug.
-    try { speaking = true; await c.adapter.playAudio(c.callId, reply); }
+    let res = null;
+    const t0 = now();
+    try { speaking = true; res = await c.adapter.playAudio(c.callId, reply); }
     catch (err) { log(`playAudio failed: ${err?.message ?? err}`); }
     finally { speaking = false; }
+    // A barge cut the reply short: record how far it got (2c). Real-time
+    // playback means elapsed ms ≈ what my human actually heard, so the next
+    // turn can know it was interrupted and roughly where.
+    if (res?.barged && reply?.text && onReplyInterrupted) {
+      const spokenUpTo = spokenTextForMs(reply.text, now() - t0);
+      try { onReplyInterrupted({ callId: c.callId, speakerRef }, { fullText: reply.text, spokenUpTo, playedMs: now() - t0 }); }
+      catch (err) { log(`onReplyInterrupted failed: ${err?.message ?? err}`); }
+    }
     drainProactive();   // a turn just ended — a good moment to speak anything queued
   }
 

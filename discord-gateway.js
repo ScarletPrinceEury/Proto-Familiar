@@ -58,7 +58,8 @@ import { recordUserActivity } from './last-activity.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.js';
 import { recordKnock, recordLocationKnock, recordServer } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
-import { enqueueOutbox } from './outbox.js';
+import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
+import { writeSessionLog as writeSessionLogShared } from './session-log.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { sanitizeExternal } from './injection-guard.js';
@@ -966,11 +967,10 @@ async function readSessionLog(sessionId) {
 }
 
 async function writeSessionLog(data) {
-  await fsp.mkdir(LOGS_DIR, { recursive: true });
-  const file = path.join(LOGS_DIR, `${data.sessionId}.json`);
-  const tmp  = `${file}.tmp`;
-  await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
-  await fsp.rename(tmp, file);
+  // One shared writer (session-log.js) — voice calls land as reviewable logs the
+  // same way, so the atomic tmp+rename lives in exactly one place.
+  const r = await writeSessionLogShared(data, { logsDir: LOGS_DIR });
+  if (!r.ok) console.warn(`[discord] session log write failed: ${r.reason}`);
 }
 
 /** Get (or rotate) the session for a location. One location = one live
@@ -1781,6 +1781,17 @@ async function handleTurn(gw, msg, decision) {
   const settings = readSettingsSync();
   const registry = await getRegistry();
   await loadRateLimits();
+
+  // My human addressing me here is genuine engagement — the escalation VETO for
+  // pending check-ins, the same as a web/voice reply (ward decision: display
+  // never acks a triage item; only actually replying does). This is the Discord
+  // reply-ack the /api/chat seam couldn't cover (Discord text has its own turn
+  // path). WARD messages only — a villager's message must never settle my
+  // human's check-ins. Fire-and-forget; never blocks or throws into the turn.
+  if (decision.isWard) {
+    acknowledgePendingByKind('triage').catch(err =>
+      console.error('[discord] triage stand-down on ward reply failed:', err?.message ?? err));
+  }
 
   // V5: per-location connection routing. Use the location's designated
   // connection if one is configured and valid; fall back to primary.

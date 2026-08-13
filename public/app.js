@@ -2072,13 +2072,19 @@ function attachmentRow(attachments) {
   return row;
 }
 
-function createMessageEl(role, htmlContent, timestamp, attachments = null) {
+function createMessageEl(role, htmlContent, timestamp, attachments = null, speaker = null) {
   const el = document.createElement('div');
   el.className = `message ${role}`;
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  avatar.textContent = role === 'user' ? 'U' : role === 'assistant' ? 'A' : '!';
+  // A named speaker (a villager in a group Discord/voice session) shows their
+  // initial + full name, so reviewing a group conversation reads as who-said-what
+  // instead of a wall of "U". Absent on live web chat and the ward's own turns.
+  const who = typeof speaker === 'string' ? speaker.trim() : '';
+  avatar.textContent = who ? who.charAt(0).toUpperCase()
+    : role === 'user' ? 'U' : role === 'assistant' ? 'A' : '!';
+  if (who) avatar.title = who;
 
   const body = document.createElement('div');
   body.className = 'msg-body';
@@ -2142,6 +2148,13 @@ function createMessageEl(role, htmlContent, timestamp, attachments = null) {
 
   const attRow = attachmentRow(attachments);
   if (attRow) body.appendChild(attRow);   // thumbnails above the bubble text
+  if (who) {
+    const nameEl = document.createElement('div');
+    nameEl.className = 'msg-speaker';
+    nameEl.style.cssText = 'font-size:0.72rem;color:var(--text-muted);margin:0 0 2px 2px';
+    nameEl.textContent = who;
+    body.appendChild(nameEl);
+  }
   body.appendChild(bubble);
   body.appendChild(actions);
   body.appendChild(timeEl);
@@ -2528,7 +2541,7 @@ function renderAllMessages() {
     const html = msg.role === 'user'
       ? esc(displayContent).replace(/\n/g, '<br>')
       : renderMarkdown(displayContent);
-    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments);
+    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);
@@ -11943,9 +11956,22 @@ async function injectOutboxAsChatMessage(item) {
   const content = stripDisplayTimestamps(formatOutboxAsMessageContent(item));
   if (!content) return;
 
+  // If this item was already SPOKEN into a live voice call (delivery recorded by
+  // the voice-call push adapter, Pass 2d), my human just heard it — the chat
+  // copy is a record for the session log, not something to ping about again.
+  const spokenOnCall = item.delivery?.['voice-call']?.status === 'delivered';
+
   const timestamp = item.ts || new Date().toISOString();
   const { el, bubble, copyBtn, speakBtn } = appendAssistantShell(timestamp);
   bubble.innerHTML = renderMarkdown(content);
+  if (spokenOnCall) {
+    // A quiet marker so a message that appeared without a ping reads as "you
+    // already heard this on the call", not a glitch.
+    const tag = document.createElement('div');
+    tag.style.cssText = 'font-size:0.72rem;color:var(--text-muted);margin-top:2px';
+    tag.textContent = '· spoken on the call';
+    bubble.appendChild(tag);
+  }
   scrollToBottom();
 
   // Persist alongside normal messages so reloading the session shows
@@ -11967,9 +11993,18 @@ async function injectOutboxAsChatMessage(item) {
   refreshTopicGutter?.();
   wireCopyButton(copyBtn, () => content);
   wireSpeakButton(speakBtn, () => content);
-  notifyNewMessage({ proactive: true });   // reminders / reach-outs / triage always ping
+  // Reminders / reach-outs / triage ping — UNLESS my human already heard this
+  // one spoken into a live call, where a second ping for the same thing is noise.
+  if (!spokenOnCall) notifyNewMessage({ proactive: true });
 
-  await acknowledgeOutboxItem(item.id);
+  // Acknowledge on display — EXCEPT triage check-ins. Merely SHOWING a check-in
+  // must not count as my human handling it: acking gates the trusted-contact
+  // escalation (checkAndFirePendingContacts skips acknowledged items), and a tab
+  // just rendering it is not the same as my human engaging (ward decision:
+  // "received ≠ handled"). A triage item stays unacknowledged — the per-tab
+  // _injectedOutboxIds set already stops it re-rendering here — and is settled
+  // only when my human actually replies (server-side, on their next ward turn).
+  if (item.kind !== 'triage') await acknowledgeOutboxItem(item.id);
 }
 
 async function fetchOutbox() {

@@ -340,8 +340,8 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
      * the player. Resolves when playback goes idle (or is barged/stopped).
      */
     async playAudio(_id, reply) {
-      if (reply == null) return;             // nothing to say — Discord just stays quiet
-      if (!player) { log('playAudio with no player — reply dropped'); return; }
+      if (reply == null) return { barged: false };   // nothing to say — Discord just stays quiet
+      if (!player) { log('playAudio with no player — reply dropped'); return { barged: false }; }
       const inRate = reply?.sampleRate || 24000;
       const pass = new PassThrough();
       const resource = deps.createAudioResource(pass, { inputType: deps.StreamType.Raw });
@@ -367,6 +367,9 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       })();
 
       try { await idle; } finally { speaking = false; }
+      // Whether my human talked over it — the engine turns elapsed play time into
+      // the spoken-so-far text (2c `spokenUpTo`).
+      return { barged };
     },
 
     async stopPlayback() {

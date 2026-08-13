@@ -189,17 +189,29 @@ integration seam that needs the most care and its own tests.
   - **Next:** ward tests 3a live, then 3b (the real Discord turn path through the
     audience gate — a ward-sign-off privacy path) and 3c (call-mode dropdown, the
     `join_voice_call`/`leave_voice_call` Familiar tools + natural-language join).
-- **3b — multi-speaker + the Discord turn path.** Per-speaker audience
-  resolution, reply spoken with the speaker's clearance, roster → audience set,
-  threat scoring ward-only.
-  - **Landed (WARD ONLY):** the ward's voice runs a real ward-private chat turn —
-    `voice-chat-turn.js` (the shared `/api/chat` spoken turn with the RULE-A
-    guarantees, extracted so the web call uses it too) wrapped by the existing
-    `createVoiceTurnRunner` (ward-only threat scoring — spec §5 — speakable,
-    synthesize), with per-call history + end-of-call memorization mirroring the
-    web server. **Non-ward speakers are transcribed for the log but NOT answered
-    and NOT stored (fail-closed).** Tested: `voice-chat-turn.test.mjs` (RULE-A
-    body, extractContent, audience passthrough).
+- **3b — multi-speaker + the Discord turn path.** Reply spoken with the
+  clearance of everyone who can HEAR it, roster → audience set, threat scoring
+  ward-only.
+  - **⚠️ Correction (ward-signed): the WHOLE call gates to the room, NOT
+    per-speaker.** The original 3b gated the ward's own voice turn to
+    `ward-private` — but a voice call is a SHARED audio space, so that reply is
+    spoken ALOUD to every villager in the channel: it leaked my human's private
+    recall to whoever could hear. Fixed to match the TEXT model, where a shared
+    guild channel is room-gated regardless of speaker (`audienceInputFor` returns
+    ward-private only for the ward's own DM). Now every turn — ward or villager —
+    resolves its audience from the live VC roster (`roomAudienceInput`, now also
+    excluding the bot's own id): **ward alone in the channel → ward-private (like a
+    ward DM); any villager present → the room's tag (the lowest clearance
+    present).** ONE shared call history at the current clearance, RESET when the
+    clearance changes (a roster change), so a more-private stretch never
+    re-surfaces to a newcomer. WHO spoke still drives only attribution + the
+    stranger fail-close + ward-only threat scoring — never what the reply may say.
+    A non-ward speaker is transcribed but answered only if a registered villager;
+    a stranger is fail-closed. The per-turn decision is a pure, injected function
+    (`voice-call-audience.js` `resolveCallAudience`) so the safety cases are
+    unit-tested (`voice-call-audience.test.mjs`, watched-fail): ward alone →
+    ward-private, bot-not-a-listener, villager present → room tag, stranger →
+    strangers ceiling, mid-call join → tag change (the history-reset signal).
   - **Landed (ward signed off, §5):** a REGISTERED VILLAGER's voice runs a turn
     gated to the ROOM's audience. `voice-discord-server` resolves the speaker slug
     → user id (`refToUser`, from the wrapped `nameForUser`) → villager
