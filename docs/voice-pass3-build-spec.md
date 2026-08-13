@@ -207,7 +207,11 @@ integration seam that needs the most care and its own tests.
     re-surfaces to a newcomer. WHO spoke still drives only attribution + the
     stranger fail-close + ward-only threat scoring — never what the reply may say.
     A non-ward speaker is transcribed but answered only if a registered villager;
-    a stranger is fail-closed.
+    a stranger is fail-closed. The per-turn decision is a pure, injected function
+    (`voice-call-audience.js` `resolveCallAudience`) so the safety cases are
+    unit-tested (`voice-call-audience.test.mjs`, watched-fail): ward alone →
+    ward-private, bot-not-a-listener, villager present → room tag, stranger →
+    strangers ceiling, mid-call join → tag change (the history-reset signal).
   - **Landed (ward signed off, §5):** a REGISTERED VILLAGER's voice runs a turn
     gated to the ROOM's audience. `voice-discord-server` resolves the speaker slug
     → user id (`refToUser`, from the wrapped `nameForUser`) → villager

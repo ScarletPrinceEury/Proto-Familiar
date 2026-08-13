@@ -28,6 +28,7 @@ import path from 'node:path';
 import { createCallEngine, isCallActiveFromFile } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
 import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId } from './discord-gateway.js';
+import { resolveCallAudience } from './voice-call-audience.js';
 import { findVillagerByAlias, getRegistry } from './village.js';
 import { audienceTagFor } from './audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
@@ -105,22 +106,19 @@ export function attachDiscordVoice(deps) {
     sess.messages.push(...turnMessages(userMsg, assistantMsg, { speaker }));
   }
 
-  // Build the audience input for a room turn: WHO is present in the voice channel
-  // (everyone but the ward and me), resolved to villagers/strangers. A complete
-  // roster matters — an undercount reads the room as more private than it is.
-  async function roomAudienceInput(meta) {
-    const members = discordVoiceChannelMembers(meta.guildId, meta.channelId);
-    const botId = discordBotUserId();
-    const participants = [];
-    for (const uid of members) {
-      if (uid === meta.wardUserId) continue;                 // the ward isn't a gating participant
-      if (botId && uid === botId) continue;                  // nor is the Familiar's own bot — it's in the channel to speak, not a listener that tightens the gate
-      let villager = null;
-      try { villager = await findVillagerByAlias({ platform: 'discord', id: uid }); } catch { /* treat as stranger */ }
-      // A stranger (unregistered) tightens the gate to the strangers ceiling.
-      participants.push({ id: villager?.id ?? null, name: villager?.name ?? 'someone' });
-    }
-    return { location: meta.locationKey, participants };
+  // Resolve the audience a turn is gated to — the lowest clearance of everyone
+  // who can HEAR (the live VC roster). Pure decision in voice-call-audience.js;
+  // here we inject the real roster, the villager lookup, and the tag resolver.
+  async function callAudience(meta) {
+    const registry = await getRegistry().catch(() => null);
+    return resolveCallAudience({
+      members:        meta ? discordVoiceChannelMembers(meta.guildId, meta.channelId) : [],
+      wardUserId:     meta?.wardUserId,
+      botId:          discordBotUserId(),
+      resolveVillager: (uid) => findVillagerByAlias({ platform: 'discord', id: uid }),
+      resolveTag:     (input) => (registry ? audienceTagFor(input, registry) : null),
+      location:       meta?.locationKey ?? null,
+    });
   }
 
   // ── The turn (Pass 3b, ward-signed §5) ──────────────────────────────────
@@ -160,14 +158,7 @@ export function attachDiscordVoice(deps) {
     // where a shared channel is room-gated regardless of speaker. Gating the ward's
     // own turn to ward-private — the old behaviour — spoke my human's private
     // recall aloud to the villagers who can hear; this closes that leak.
-    const audienceInput = meta ? await roomAudienceInput(meta) : { location: null, participants: [] };
-    const othersPresent = audienceInput.participants.length > 0;
-    let audienceTag = 'ward-private';
-    let sessionAudience = 'ward-private';
-    if (othersPresent) {
-      try { audienceTag = audienceTagFor(audienceInput, await getRegistry()) || 'shared-room'; } catch { audienceTag = 'shared-room'; }
-      sessionAudience = audienceInput;
-    }
+    const { audienceTag, sessionAudience } = await callAudience(meta);
 
     // One shared call history at the CURRENT clearance. If the clearance changed
     // (a roster change — someone joined or left), reset it so a more-private
