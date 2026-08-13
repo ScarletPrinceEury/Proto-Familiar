@@ -39,17 +39,30 @@ export async function writeSessionLog(data, { logsDir } = {}) {
 }
 
 /**
- * Give plain `{role, content}` turns the `id` + `timestamp` a reviewable log
- * renders from, leaving any that already have them untouched. A single stamp
- * time is fine — voice turns are accumulated in order and the array order is
- * what the viewer reads; the timestamp is for display, not ordering.
+ * Ensure every turn has the `id` + `timestamp` a reviewable log renders from,
+ * leaving all other fields (speaker, targets, attachments, …) intact. A safety
+ * net: turns are now stamped at accumulation time (`turnMessages`), so this is
+ * usually a no-op — but a turn that reached a log without them still renders.
  */
 export function stampMessages(messages, stampIso = new Date().toISOString()) {
   return (Array.isArray(messages) ? messages : []).map((m) => ({
+    ...m,
     id:        m?.id || randomUUID(),
-    role:      m?.role,
-    content:   m?.content,
     timestamp: m?.timestamp || stampIso,
-    ...(m?.attachments ? { attachments: m.attachments } : {}),
   }));
+}
+
+/**
+ * Build a stamped user+assistant turn pair for a call's session transcript. One
+ * place so every transport records the same shape — `id` + real accumulation
+ * `timestamp`, and a `speaker` on the user turn when known (the group-call case:
+ * a room session mixes several villagers, so a bare "user" would lose who said
+ * what — matching how Discord text attributes each turn). The ward speaks
+ * unattributed (`speaker` omitted), exactly like Discord text's ward turns.
+ */
+export function turnMessages(userMsg, assistantMsg, { speaker = null, at = new Date().toISOString() } = {}) {
+  return [
+    { id: randomUUID(), role: 'user', content: userMsg, timestamp: at, ...(speaker ? { speaker } : {}) },
+    { id: randomUUID(), role: 'assistant', content: assistantMsg, timestamp: at },
+  ];
 }

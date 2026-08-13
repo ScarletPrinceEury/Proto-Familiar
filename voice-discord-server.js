@@ -38,7 +38,7 @@ import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { enqueueSessionByDay } from './memorization.js';
-import { writeSessionLog, stampMessages } from './session-log.js';
+import { writeSessionLog, stampMessages, turnMessages } from './session-log.js';
 import { slugifyLabel, sessionSlugId } from './slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
@@ -89,12 +89,15 @@ export function attachDiscordVoice(deps) {
   // the room's tag for a villager's), so nothing is stored above its clearance.
   const memSessions = new Map();        // callId → Map<audienceTag, { sessionId, messages }>
 
-  function accumulate(callId, audienceTag, userMsg, assistantMsg) {
+  // `speaker` attributes the user turn — a group call's room session mixes
+  // several villagers, so a bare "user" would lose who said what. The ward
+  // speaks unattributed (null), exactly like Discord text.
+  function accumulate(callId, audienceTag, userMsg, assistantMsg, speaker = null) {
     let byTag = memSessions.get(callId);
     if (!byTag) { byTag = new Map(); memSessions.set(callId, byTag); }
     let sess = byTag.get(audienceTag);
     if (!sess) { sess = { sessionId: sessionSlugId(), messages: [], startedAt: Date.now() }; byTag.set(audienceTag, sess); }
-    sess.messages.push({ role: 'user', content: userMsg }, { role: 'assistant', content: assistantMsg });
+    sess.messages.push(...turnMessages(userMsg, assistantMsg, { speaker }));
   }
 
   // Build the audience input for a room turn: WHO is present in the voice channel
@@ -152,7 +155,9 @@ export function attachDiscordVoice(deps) {
     let audienceTag = 'shared-room';
     try { audienceTag = audienceTagFor(audienceInput, await getRegistry()) || 'shared-room'; } catch { /* */ }
     const reply = await runVoiceChatTurn({ transcript: heard, history: [], sessionAudience: audienceInput });
-    if (reply) accumulate(ctx.callId, audienceTag, heard, reply);
+    // Attribute this turn to the villager who spoke — the group-call case, where
+    // the room session carries turns from several people.
+    if (reply) accumulate(ctx.callId, audienceTag, heard, reply, villager.name);
     return reply;
   }
 

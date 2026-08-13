@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { writeSessionLog, stampMessages } from '../session-log.js';
+import { writeSessionLog, stampMessages, turnMessages } from '../session-log.js';
 
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'slog-'));
 
@@ -59,4 +59,20 @@ test('stampMessages fills id + timestamp on plain turns, preserves existing ones
   assert.deepEqual(stamped[2].attachments, [{ id: 'img1' }], 'attachments carried through');
   assert.equal(stamped[0].role, 'user');
   assert.equal(stampMessages(null).length, 0, 'non-array → empty, no throw');
+});
+
+test('turnMessages stamps a user+assistant pair and attributes the speaker (group calls)', () => {
+  const [u, a] = turnMessages('hello', 'hi there', { speaker: 'Mira', at: '2026-01-01T00:00:00Z' });
+  assert.equal(u.role, 'user');
+  assert.equal(u.content, 'hello');
+  assert.equal(u.speaker, 'Mira', 'the user turn carries who spoke');
+  assert.equal(u.timestamp, '2026-01-01T00:00:00Z');
+  assert.ok(u.id && a.id && u.id !== a.id, 'both turns get distinct ids');
+  assert.equal(a.role, 'assistant');
+  assert.equal(a.speaker, undefined, 'the assistant turn is the Familiar, never a speaker name');
+
+  // No speaker (the ward alone, or a web call) → the field is omitted, matching
+  // Discord text's unattributed ward turns.
+  const [wu] = turnMessages('solo', 'ok');
+  assert.equal('speaker' in wu, false, 'unattributed when no speaker given');
 });

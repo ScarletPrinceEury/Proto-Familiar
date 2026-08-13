@@ -2072,13 +2072,19 @@ function attachmentRow(attachments) {
   return row;
 }
 
-function createMessageEl(role, htmlContent, timestamp, attachments = null) {
+function createMessageEl(role, htmlContent, timestamp, attachments = null, speaker = null) {
   const el = document.createElement('div');
   el.className = `message ${role}`;
 
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
-  avatar.textContent = role === 'user' ? 'U' : role === 'assistant' ? 'A' : '!';
+  // A named speaker (a villager in a group Discord/voice session) shows their
+  // initial + full name, so reviewing a group conversation reads as who-said-what
+  // instead of a wall of "U". Absent on live web chat and the ward's own turns.
+  const who = typeof speaker === 'string' ? speaker.trim() : '';
+  avatar.textContent = who ? who.charAt(0).toUpperCase()
+    : role === 'user' ? 'U' : role === 'assistant' ? 'A' : '!';
+  if (who) avatar.title = who;
 
   const body = document.createElement('div');
   body.className = 'msg-body';
@@ -2142,6 +2148,13 @@ function createMessageEl(role, htmlContent, timestamp, attachments = null) {
 
   const attRow = attachmentRow(attachments);
   if (attRow) body.appendChild(attRow);   // thumbnails above the bubble text
+  if (who) {
+    const nameEl = document.createElement('div');
+    nameEl.className = 'msg-speaker';
+    nameEl.style.cssText = 'font-size:0.72rem;color:var(--text-muted);margin:0 0 2px 2px';
+    nameEl.textContent = who;
+    body.appendChild(nameEl);
+  }
   body.appendChild(bubble);
   body.appendChild(actions);
   body.appendChild(timeEl);
@@ -2528,7 +2541,7 @@ function renderAllMessages() {
     const html = msg.role === 'user'
       ? esc(displayContent).replace(/\n/g, '<br>')
       : renderMarkdown(displayContent);
-    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments);
+    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
     el.dataset.msgIndex = String(i);
     const capturedContent = msg.content;
     wireCopyButton(copyBtn, () => capturedContent);

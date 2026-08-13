@@ -33,7 +33,7 @@ import { recordThreat } from './threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 import { enqueueSessionByDay } from './memorization.js';
-import { writeSessionLog, stampMessages } from './session-log.js';
+import { writeSessionLog, stampMessages, turnMessages } from './session-log.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
@@ -135,7 +135,9 @@ export function attachVoiceCall(deps) {
       histories.set(ctx.callId, next.slice(-HISTORY_MAX));
       // Accumulate the FULL exchange for the end-of-call memorization (uncapped).
       const sess = callSessions.get(ctx.callId);
-      if (sess) sess.messages.push({ role: 'user', content: transcript }, { role: 'assistant', content: reply });
+      // Stamp at accumulation time — a web call is my human alone, so the user
+      // turn is unattributed (speaker omitted), like Discord text's ward turns.
+      if (sess) sess.messages.push(...turnMessages(transcript, reply));
     }
     return reply;
   }
