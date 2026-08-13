@@ -93,7 +93,7 @@ import {
   resolveAttribution, isIgnored, wardCalendarId,
   writeCalendarCache, readCalendarCache, normalizeAttributionEntry,
 } from './gcal-attribution.js';
-import { listOutbox, acknowledgeOutbox, clearAcknowledged } from './outbox.js';
+import { listOutbox, acknowledgeOutbox, clearAcknowledged, acknowledgePendingByKind } from './outbox.js';
 import { startSilenceTriageLoop, stopSilenceTriageLoop, DEFAULT_RECHECK_MS } from './silence-triage-loop.js';
 import { startReachoutLoop, stopReachoutLoop, reachoutBucketOriginId } from './reachout-loop.js';
 import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.js';
@@ -429,6 +429,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     } catch (err) {
       console.error('[server] audience resolution failed (defaulting to ward-private):', err?.message ?? err);
     }
+  }
+
+  // My human actively replying is the escalation VETO for pending check-ins — it
+  // stands down a triage item's trusted-contact escalation. Ward decision:
+  // passively DISPLAYING a check-in no longer acknowledges it ("received ≠
+  // handled"); only genuinely engaging does, and this is where "you actually
+  // replied" lands. Ward-private turns only — a villager's message must never
+  // settle my human's check-ins. Fire-and-forget; never blocks or throws into
+  // the reply. (Covers web chat AND ward voice calls, both of which post here.)
+  if (enrichMode === 'full' && userText && userText.trim() && audienceTag === 'ward-private') {
+    acknowledgePendingByKind('triage').catch(err =>
+      console.error('[server] triage stand-down on ward reply failed:', err?.message ?? err));
   }
 
   // liveTurn: only the full chat path may reconcile state (consume the

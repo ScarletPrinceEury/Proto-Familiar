@@ -11984,7 +11984,14 @@ async function injectOutboxAsChatMessage(item) {
   // one spoken into a live call, where a second ping for the same thing is noise.
   if (!spokenOnCall) notifyNewMessage({ proactive: true });
 
-  await acknowledgeOutboxItem(item.id);
+  // Acknowledge on display — EXCEPT triage check-ins. Merely SHOWING a check-in
+  // must not count as my human handling it: acking gates the trusted-contact
+  // escalation (checkAndFirePendingContacts skips acknowledged items), and a tab
+  // just rendering it is not the same as my human engaging (ward decision:
+  // "received ≠ handled"). A triage item stays unacknowledged — the per-tab
+  // _injectedOutboxIds set already stops it re-rendering here — and is settled
+  // only when my human actually replies (server-side, on their next ward turn).
+  if (item.kind !== 'triage') await acknowledgeOutboxItem(item.id);
 }
 
 async function fetchOutbox() {

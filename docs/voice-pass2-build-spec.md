@@ -264,15 +264,24 @@ in the same commit (parent §13 discipline). PATCH bump each.
    a chat RECORD (with a quiet "· spoken on the call" tag) but no longer PINGS —
    my human already heard it. Only the notification is suppressed; the ack path is
    untouched.
-   **Triage-ack-during-call review — FINDING, awaiting ward decision.** The review
-   surfaced a real, pre-existing issue: the web client auto-acknowledges every
-   outbox item on DISPLAY, and `checkAndFirePendingContacts` only escalates
-   UNacknowledged triage items — so a browser tab merely rendering a check-in
-   cancels its trusted-contact escalation, contradicting the Pass 2d "received ≠
-   handled" decision (the voice-call path deliberately records delivery WITHOUT
-   acking; the web path acks on display). Because this is the escalation path
-   (ward-sign-off-class), it was left UNCHANGED pending the ward's call on whether
-   display should stop counting as acknowledgement for triage items. Still open:
+   **Triage display-ack — FIXED (ward-signed, "broader").** The review surfaced a
+   real pre-existing issue: the web client auto-acknowledged every outbox item on
+   DISPLAY, and `checkAndFirePendingContacts` only escalates UNacknowledged triage
+   items — so a tab merely rendering a check-in cancelled its trusted-contact
+   escalation, contradicting the Pass 2d "received ≠ handled" decision. Ward
+   decision: **display never counts as acknowledgement for a triage check-in.**
+   Now (a) `injectOutboxAsChatMessage` skips the auto-ack for `kind==='triage'`
+   (the per-tab `_injectedOutboxIds` set still stops it re-rendering), so a
+   check-in stays escalation-armed; and (b) the escalation VETO moves to my
+   human genuinely engaging — `/api/chat` acks pending triage
+   (`acknowledgePendingByKind('triage')`) on a ward-private live turn, so a real
+   reply (web chat OR a ward voice call, both post here) stands the escalation
+   down, but a passively-open tab never does. Reminders/alerts still ack on
+   display (they carry no escalation). Erring toward escalation is the intended
+   safe direction. *(A ward reply on Discord TEXT does not yet post through
+   `/api/chat`, so that surface's reply-ack is a small follow-up; it never
+   under-escalates — at worst a check-in escalates that a Discord-text reply
+   would have vetoed, the safe side.)* Still open:
    the two-tier `enrich()` latency budget + earcon (low value now that synthesis
    streams) and Phylactery `maintenance_defer`.
 5. **2e — the voice-mode prompt block + intentions integration (2.2) + the §7
