@@ -50,6 +50,12 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: audio-worker-current
+    type: file
+    path: audio-worker-current.js
+  - id: app-js
+    type: file
+    path: public/app.js
 ---
 
 # Voice
@@ -320,6 +326,27 @@ hook the way [Phylactery](phylactery) is — unlike Phylactery, `pocket` is opti
 downloading 600 MB because someone ran `npm start` would be hostile on a nearly-full laptop
 [@architecture-doc].
 
+### Reliability: pocket falling back to sherpa instead of going silent
+
+A pocket install can have every file in place and still fail to speak, because `inspectBackends` only checks that the venv's interpreter and worker files exist — it reports pocket "available" even when torch cannot actually be imported, so the ordinary reinstall path never fires for a present-but-broken install [@voice-backend]. The most common cause on Windows is an environment gap, not a code bug: torch's Windows wheels are built against the Microsoft Visual C++ runtime, and `uv`'s standalone Python does not ship it the way conda does (astral-sh/uv#18413) [@voice-backend]. A developer's machine usually already has the redistributable from other software; a ward's clean machine does not, so torch's `c10.dll` cannot load its dependency and torch import fails with `OSError: [WinError 126]` — "same hardware, mine works, theirs doesn't" [@voice-backend].
+
+Three layers close this gap, from prevention to graceful degradation:
+
+- **`ensureWindowsMsvcRuntime` (`voice-backend.js`) installs the runtime automatically** instead of sending the ward to Microsoft: it installs cgohlke's `msvc-runtime` wheel into the voicebox venv, which drops the runtime DLLs next to the venv's `python.exe` where the loader finds them — no admin rights and no system-wide redistributable needed [@voice-backend]. It runs from every install/repair path (`ensure-voicebox.mjs`, the first-use auto-install it shells out to, and `rebuildVoicebox`) [@voice-backend]. It is best-effort: `msvc-runtime` only ships wheels for Python 3.11+, so on an older interpreter it logs and moves on rather than failing the install, and it is a no-op off Windows [@voice-backend]. The official `vc_redist` download is now only the last-resort hint shown after this automatic fix has already been tried.
+- **"Fix Kyutai" (`rebuildVoicebox` in `voice-backend.js`, `POST /api/voice/fix-kyutai`) repairs a present-but-broken install.** It stops the audio worker first (so Windows can delete the venv's `python.exe`, which a running worker holds open), deletes the venv, runs `uv sync --reinstall`, calls `ensureWindowsMsvcRuntime`, and then proves `import torch` actually works before declaring success — never trusting file presence the way `inspectBackends` does [@voice-backend]. It runs as a background job (started + polled), mirroring the shape of the sidecar-install flow.
+- **`currentAudioWorker` (`audio-worker-current.js`) falls back to sherpa at runtime instead of answering `no-engine` and going silent.** The first time a pocket worker is built, `currentAudioWorker` verifies it actually loads with one `ping` — which runs the torch import and model load, so the check doubles as a warm-up — and if that fails, it rebuilds transparently on the built-in sherpa engine (which needs no torch and always ships) and tags the result `fellBackFrom: 'pocket'` [@audio-worker-current]. Every speaking surface (web read-aloud, Discord, voice call) calls through this one seam, so all of them get a working voice without individually knowing pocket failed. The verdict is cached in a module-level `pocketBroken` flag so a known-bad pocket install is not re-verified and respawned on every turn, and `stopAudioWorker` clears that cache so a Fix Kyutai repair gets a fresh verification instead of a permanent demotion [@audio-worker-current]. A test hook, `__setVoiceTestHooks`, injects a fake resolver and worker builder so the fallback path can be exercised without spawning real processes [@audio-worker-current]. Net effect: a missing Visual C++ runtime now costs a *lesser voice*, not silence.
+
+The Fix Kyutai button itself surfaced a general [Update](update) gap: a ward who updated the files but had not restarted the server saw the new button 404, because Express routes are registered at boot while static assets refresh live. `public/app.js` now recognizes that 404 shape and tells the ward to restart rather than showing a cryptic error [@app-js] — see [Update](update)'s two-speed-updates section for the mechanism, which applies to any future endpoint, not just this one.
+
+### Voice settings: speed and expressiveness differ by engine
+
+`voiceTts.speed` and `voiceTts.temperature` are ward-tunable under Settings → Chat → Voice, consolidated there along with the rest of voice settings (only the Voice benchmark stays in Diagnostics). The two engines honour them differently, and the UI says so rather than shipping a control that silently no-ops for one engine [@voice-backend]:
+
+- **sherpa** takes both `speed` and `temperature` per request.
+- **pocket** has no speed control at all — `generate_audio_stream` accepts none, and the setting is reported `unsupported` for that engine — and bakes `temperature` in at model-load time rather than per request [@voice-backend]. `resolveBackend` threads the chosen temperature into the pocket worker's spawn environment as `PF_TTS_TEMPERATURE` [@voice-backend]. Because that value is fixed at load time, `currentAudioWorker` compares the spawn environment of the resolved backend against the running worker's and respawns the worker whenever it differs, rather than reusing a stale process — which is why changing expressiveness takes effect on the *next* spoken message, not mid-utterance [@audio-worker-current].
+
+The installers provision voice on a fresh install (Kyutai, the Windows runtime fix, and the listening models), skippable with `PF_SKIP_VOICE_INSTALL=1`, with every step non-fatal so a failed step degrades rather than aborting the install.
+
 ### Text preparation and media storage
 
 `voice-speech.js` turns markdown written to be read into text meant to be heard — spoken
@@ -370,3 +397,5 @@ questions for the passes that follow [@pr-voice-pass-0]:
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general rule that
   voice's machine-written pins, stripped LLM timestamps, and manifest-sourced download-size
   copy are all specific applications of.
+- [Update](update) — the self-update mechanism whose static-assets-vs-registered-routes gap
+  produced the "Fix Kyutai" 404 incident above, and applies to any future endpoint the same way.
