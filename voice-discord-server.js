@@ -38,6 +38,7 @@ import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { enqueueSessionByDay } from './memorization.js';
+import { writeSessionLog, stampMessages } from './session-log.js';
 import { slugifyLabel, sessionSlugId } from './slug-ids.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
@@ -92,7 +93,7 @@ export function attachDiscordVoice(deps) {
     let byTag = memSessions.get(callId);
     if (!byTag) { byTag = new Map(); memSessions.set(callId, byTag); }
     let sess = byTag.get(audienceTag);
-    if (!sess) { sess = { sessionId: sessionSlugId(), messages: [] }; byTag.set(audienceTag, sess); }
+    if (!sess) { sess = { sessionId: sessionSlugId(), messages: [], startedAt: Date.now() }; byTag.set(audienceTag, sess); }
     sess.messages.push({ role: 'user', content: userMsg }, { role: 'assistant', content: assistantMsg });
   }
 
@@ -185,6 +186,23 @@ export function attachDiscordVoice(deps) {
     if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with'); return; }
     for (const [audienceTag, sess] of byTag) {
       if (!sess || sess.messages.length < 2) continue;
+      // Land each audience segment as its OWN reviewable session log, STAMPED
+      // with that segment's tag — a villager's segment lands at the room's tag,
+      // never ward-private, so a log carries no more clearance than the turns in
+      // it (the same per-tag split memorization uses). Then memorize.
+      if (process.env.PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED !== '1') {
+        const endedIso = new Date().toISOString();
+        const r = await writeSessionLog({
+          sessionId:  sess.sessionId,
+          startedAt:  new Date(sess.startedAt ?? Date.now()).toISOString(),
+          endedAt:    endedIso,
+          origin:     'voice-call-discord',
+          audienceTag,
+          provider:   conn.provider, model: conn.model,
+          messages:   stampMessages(sess.messages, endedIso),
+        }, { logsDir: path.join(rootDir, 'logs') });
+        if (!r.ok) log(`session log (${audienceTag}) not written: ${r.reason}`);
+      }
       try {
         const r = await enqueueSessionByDay({
           sessionId: sess.sessionId, messages: sess.messages,

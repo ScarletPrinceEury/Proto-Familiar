@@ -33,6 +33,7 @@ import { recordThreat } from './threat-tracker.js';
 import { MODELS_SUBDIR } from './voice-fetch.js';
 import { ASR_MODEL_DIR, voiceOfflineAsrEnabled, ensureOfflineAsrModel, voiceCallSettleMs } from './voice-transcribe.js';
 import { enqueueSessionByDay } from './memorization.js';
+import { writeSessionLog, stampMessages } from './session-log.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
@@ -68,32 +69,53 @@ export function attachVoiceCall(deps) {
     log = (m) => console.log(`[voice-call] ${m}`),
   } = deps;
 
+  const logsDir = path.join(rootDir, 'logs');
+
   // Per-call chat history, keyed by callId (one call at a time, so at most one
   // live entry; a new call gets a new id and a fresh history).
   const histories = new Map();
   const HISTORY_MAX = 20;
 
   // The FULL call transcript, kept separate from `histories` (which is capped for
-  // the LLM context). On hang-up it is memorized like any ward-private session —
-  // otherwise a whole spoken conversation vanishes, unremembered and un-reviewable.
+  // the LLM context). On hang-up it lands as a reviewable session log AND is
+  // memorized like any ward-private session — otherwise a whole spoken
+  // conversation vanishes, un-reviewable and only extracted-as-facts.
   // callId → { sessionId, messages: [{role, content}], startedAt }.
   const callSessions = new Map();
 
-  // Enqueue a finished call's transcript for memorization, the same path web chat
-  // and Discord use (`enqueueSessionByDay` → consent-gated fact extraction). Called
-  // once, on hang-up. Never throws into the teardown.
+  // On hang-up: land the call as a reviewable session (logs/) so my human can
+  // read it back in the Sessions tab, THEN enqueue it for memorization (the same
+  // consent-gated fact extraction web chat + Discord use). Never throws into the
+  // teardown; each half is independent (a memorization skip still leaves a log).
   async function memorizeCall(callId) {
     const sess = callSessions.get(callId);
     callSessions.delete(callId);
     if (!sess || sess.messages.length < 2) return;
+    const s = readSettings();
+    const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
+
+    // A web call is my human on their own private surface → ward-private.
+    if (process.env.PROTO_FAMILIAR_VOICE_SESSION_LOG_DISABLED !== '1') {
+      const endedIso = new Date().toISOString();
+      const r = await writeSessionLog({
+        sessionId:  sess.sessionId,
+        startedAt:  new Date(sess.startedAt ?? Date.now()).toISOString(),
+        endedAt:    endedIso,
+        origin:     'voice-call',
+        audienceTag: 'ward-private',
+        provider:   conn?.provider ?? null,
+        model:      conn?.model ?? null,
+        messages:   stampMessages(sess.messages, endedIso),
+      }, { logsDir });
+      if (!r.ok) log(`session log not written: ${r.reason}`);
+    }
+
+    if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with — transcript not stored'); return; }
     try {
-      const s = readSettings();
-      const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
-      if (!(conn?.apiKey && conn?.provider && conn?.model)) { log('call ended but no connection to memorize it with — transcript not stored'); return; }
       const r = await enqueueSessionByDay({
         sessionId: sess.sessionId, messages: sess.messages,
         provider: conn.provider, apiKey: conn.apiKey, model: conn.model,
-        audienceTag: 'ward-private',   // a web call is my human on their own private surface
+        audienceTag: 'ward-private',
       });
       log(`call ${callId} ended — queued ${sess.messages.length} lines for memory (${r.enqueued} enqueued, ${r.skipped} skipped)`);
     } catch (err) { log(`memorizeCall failed: ${err?.message ?? err}`); }

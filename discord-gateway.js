@@ -59,6 +59,7 @@ import { buildWaitStreakLine, recordWait, recordProactive } from './wait-streak.
 import { recordKnock, recordLocationKnock, recordServer } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
+import { writeSessionLog as writeSessionLogShared } from './session-log.js';
 import { substituteMacros } from './macros.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { sanitizeExternal } from './injection-guard.js';
@@ -966,11 +967,10 @@ async function readSessionLog(sessionId) {
 }
 
 async function writeSessionLog(data) {
-  await fsp.mkdir(LOGS_DIR, { recursive: true });
-  const file = path.join(LOGS_DIR, `${data.sessionId}.json`);
-  const tmp  = `${file}.tmp`;
-  await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
-  await fsp.rename(tmp, file);
+  // One shared writer (session-log.js) — voice calls land as reviewable logs the
+  // same way, so the atomic tmp+rename lives in exactly one place.
+  const r = await writeSessionLogShared(data, { logsDir: LOGS_DIR });
+  if (!r.ok) console.warn(`[discord] session log write failed: ${r.reason}`);
 }
 
 /** Get (or rotate) the session for a location. One location = one live
