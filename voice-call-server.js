@@ -234,7 +234,12 @@ export function attachVoiceCall(deps) {
           const text = speakableText(formatItemForPush(item))?.text?.trim();
           if (!text) return { ok: false, error: 'nothing speakable in this item' };
           const heard = await engine.speakProactive(() => synthesize(text));
-          return heard ? { ok: true } : { ok: false, error: 'call ended before it could be spoken' };
+          // A web call is my human alone on their own surface — if it was spoken
+          // and heard, they were present at delivery by definition. That machine
+          // fact rides onto the delivery record so the §10 escalation factor
+          // (contactDeadlineFor) can shorten the ack window for a check-in they
+          // demonstrably heard. (A Discord VC would set this from the roster.)
+          return heard ? { ok: true, meta: { wardPresent: true } } : { ok: false, error: 'call ended before it could be spoken' };
         } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
       },
     };
