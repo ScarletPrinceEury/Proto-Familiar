@@ -36,10 +36,15 @@
 import { promises as fsp, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pcm16ToFloat } from './voice-audio-features.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
 const CALL_STATE_FILE = '.call-state.json';
+
+// A speaker embedding needs only a few seconds; cap the per-utterance capture so
+// a long press can't grow the buffer without bound. 16 kHz mono PCM16 ⇒ ~15 s.
+const MAX_EMBED_BYTES = 16000 * 2 * 15;
 
 const callStatePath = (tomesDir) => path.join(tomesDir, CALL_STATE_FILE);
 
@@ -81,6 +86,7 @@ export function createCallEngine({
   ensureOffline = null,   // async () => fetch the offline model if missing (no-op if present)
   turnSettleMs = () => 0, // coalesce utterances within this gap into one turn (0 = reply per utterance)
   transcriptFilter = () => true, // (text) => keep? — drop ambient-noise transcripts (false = drop)
+  embedSegment = null,    // async (float32Samples, sampleRate) => number[]|null — the guest watchdog's voiceprint of a finalized utterance (spec §8.2). Null = off (no speaker ID this call).
   tomesDir = DEFAULT_TOMES_DIR,
   maxCalls = 1,
   now = () => Date.now(),
@@ -227,6 +233,13 @@ export function createCallEngine({
     }
     s.frames += 1;
     s.bytes += pcm?.length ?? 0;
+    // Keep a bounded copy of this utterance's audio for the guest-watchdog
+    // embedding (spec §8.2) — only when speaker ID is on. Sending PCM to ASR is
+    // unaffected; this is a parallel tap, capped so a long press can't grow it.
+    if (embedSegment && pcm?.length) {
+      s.embChunks ||= []; s.embBytes ||= 0;
+      if (s.embBytes < MAX_EMBED_BYTES) { s.embChunks.push(pcm); s.embBytes += pcm.length; }
+    }
     await worker.sendPcm(s.streamId, pcm);
   }
 
@@ -248,6 +261,16 @@ export function createCallEngine({
       return;
     }
     log(`${speakerRef} released after ${s.frames} audio frame(s) (${s.bytes} bytes) — finalising`);
+    // Speaker embedding BEFORE we stop the stream, so `s.lastEmbedding` is ready
+    // by the time the asr-final drives the turn (which reads it). Best-effort:
+    // a failed/short embed leaves it null and the guard treats that as no signal.
+    if (embedSegment && s.embChunks?.length) {
+      try {
+        const samples = pcm16ToFloat(Buffer.concat(s.embChunks));
+        s.lastEmbedding = await embedSegment(samples, 16000);
+      } catch (err) { log(`embed of ${speakerRef}'s utterance failed: ${err?.message ?? err}`); s.lastEmbedding = null; }
+    }
+    s.embChunks = []; s.embBytes = 0;
     await worker.request({ op: 'asrStreamStop', streamId: s.streamId });   // emits asr-final → handleTurn
     if (call && call.streams.get(speakerRef) === s) {
       s.frames = 0; s.bytes = 0;
@@ -311,7 +334,11 @@ export function createCallEngine({
     const c = call;
     if (!c) return;
     let reply = null;
-    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef }); }
+    // The speaker's voiceprint for THIS utterance (spec §8.2), when speaker ID is
+    // on — the voice server feeds it to the guest watchdog. Null when off, too
+    // short to embed, or a mixed-stream speaker with no per-utterance capture.
+    const embedding = c.streams.get(speakerRef)?.lastEmbedding ?? null;
+    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, embedding }); }
     catch (err) { log(`onTurn threw: ${err?.message ?? err}`); }
     if (call !== c) return;   // the call ended mid-turn — nothing to deliver to
     // Always hand the turn's outcome to the adapter, even when there is nothing

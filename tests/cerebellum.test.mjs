@@ -480,6 +480,23 @@ test('dispatchOutboxPush records per-adapter outcomes; a failing adapter never b
   assert.deepEqual(Object.keys(metas[0][1].delivery).sort(), ['broken', 'discord-dm']);
 });
 
+test('dispatchOutboxPush merges an adapter meta (wardPresent) onto the delivery record', async () => {
+  // The voice-call adapter reports whether my human was present when it spoke;
+  // that machine fact must survive onto delivery so contactDeadlineFor can read
+  // it. It rides as data alongside status/at — never overriding them.
+  const { delivery } = await dispatchOutboxPush(
+    { id: 'i1', kind: 'triage', title: 't', body: 'b' },
+    {
+      adapters: [{ name: 'voice-call', deliver: async () => ({ ok: true, meta: { wardPresent: true } }) }],
+      updateMetaFn: async () => {},
+      now: () => 5_000,
+    },
+  );
+  assert.equal(delivery['voice-call'].status, 'delivered');
+  assert.equal(delivery['voice-call'].wardPresent, true);
+  assert.equal(delivery['voice-call'].at, new Date(5_000).toISOString(), 'status/at are not clobbered by meta');
+});
+
 test('dispatchOutboxPush with no adapters is a quiet no-op', async () => {
   const { delivery } = await dispatchOutboxPush(
     { id: 'i1', kind: 'reminder', title: 't' },

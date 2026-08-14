@@ -409,6 +409,11 @@ export async function dispatchOutboxPush(item, {
       delivery[adapter.name] = {
         status: r?.ok ? 'delivered' : 'failed',
         at:     new Date(now()).toISOString(),
+        // Machine facts an adapter records ABOUT this delivery (e.g. the
+        // voice-call adapter's `wardPresent` — was my human in the call when it
+        // was spoken — which contactDeadlineFor's §10 escalation factor reads).
+        // Merged as data, never trusted as control flow.
+        ...(r?.meta && typeof r.meta === 'object' ? r.meta : {}),
         ...(r?.error ? { error: String(r.error).slice(0, 300) } : {}),
       };
     } catch (err) {
