@@ -37,6 +37,7 @@ import { promises as fsp, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pcm16ToFloat } from './voice-audio-features.js';
+import { normalizeTranscriptCase } from './voice-speech.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOMES_DIR = path.join(__dirname, 'tomes');
@@ -190,7 +191,10 @@ export function createCallEngine({
     const msg = frame?.message;
     if (!msg || !call) return;
     if (msg.op === 'asr-final') {
-      const text = String(msg.text ?? '').trim();
+      // Un-shout the streaming zipformer's ALL-CAPS output before it drives a
+      // turn — a wall of capitals confuses the LLM (reads as shouting/acronyms).
+      // A no-op on already-cased text (SenseVoice ITN, the hybrid final).
+      const text = normalizeTranscriptCase(String(msg.text ?? '').trim());
       // The peak + duration make an empty result diagnosable: a low peak means
       // silence (a dead/muted mic or the wrong input device); a healthy peak with
       // no words means real sound the model did not recognise (format, accent,
