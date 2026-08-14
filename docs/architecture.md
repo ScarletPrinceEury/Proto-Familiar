@@ -1858,7 +1858,7 @@ Separate from Phylactery identity (the `static` block above), the ward authors
 Prompt, Character Profile, User (Human) Profile, and Post-History Prompt. On the
 **web** these are assembled by the browser (`_buildApiMessagesInner` in
 `public/app.js`) and POSTed inside the messages array. A **server-initiated
-turn** — Discord text, a voice call — has no browser, and until 0.11 it shipped
+turn** — Discord text, a voice call — has no browser, and until this fix it shipped
 **without any of them**: the Familiar answered Discord and voice with none of its
 configured identity (the reported "my Familiar doesn't see the user prompt at
 all on Discord").
