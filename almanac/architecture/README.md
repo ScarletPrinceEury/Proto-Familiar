@@ -150,6 +150,7 @@ If you're asking yourself... go to:
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
 - **How does image input work?** → [Vision and media](vision-and-media)
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
+- **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
 
 ## Where to go next
 
@@ -168,6 +169,9 @@ If you're asking yourself... go to:
   and modality fallback at the materialization seam.
 - [Voice](voice) — the multi-pass voice milestone: the model supply chain, the disk-footprint
   budget, the ward-facing benchmark tool, and read-aloud text-to-speech.
+- [Core prompts and multi-surface assembly](core-prompts) — the ward's four core prompt fields
+  (System Prompt, Character Profile, User Profile, Post-History Prompt), why they must be
+  assembled server-side, and the lesson about cross-surface consistency.
 - [Autonomous loops](autonomous-loops) — the background workers, what each one does, and how
   to turn one off.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
