@@ -268,6 +268,9 @@ import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
 import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
+import { enrollWard, enrollVillager, speakerModelPresent } from './voice-enroll.js';
+import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './voiceprints.js';
+import { assetBytesPath } from './media.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
 import { resolveVoice, installVoice, saveWardVoice, listLocalVoices } from './voices.js';
 import { mergeSettings } from './settings-merge.js';
@@ -2195,6 +2198,60 @@ app.post('/api/voice/ward-voice', express.raw({ type: 'audio/*', limit: '25mb' }
 app.get('/api/voice/local', async (_req, res) => {
   try { res.json({ ok: true, ...(await listLocalVoices(__dirname)) }); }
   catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
+});
+
+// ── Voiceprint enrolment (voice Pass 4, §8) ────────────────────────────────
+// Biometric data — the store is local-only, never synced (voiceprints.js). The
+// client records clips, uploads each via POST /api/media (kind audio,
+// ward-private), collects the ids, and posts them here to enrol. Only wav is
+// embeddable (the browser records wav); a non-wav id is refused, not guessed.
+
+/** GET the enrolment state (never the vectors) so the UI can show what's set. */
+app.get('/api/voice/voiceprints', async (_req, res) => {
+  try {
+    const { ward } = await readVoiceprints();
+    res.json({ ok: true, model: speakerModelPresent(), ward: !!ward, villagers: await listVillagerPrints() });
+  } catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
+});
+
+/**
+ * POST { who: 'ward' | '<villagerId>', name?, ids: [assetId,...] } → enrol.
+ * Resolves each media id to its wav path; the enrol module embeds + averages +
+ * stores. Continuous listening being off does NOT block enrolment (it's a
+ * deliberate ward action, like recording a note), but the hard switch does.
+ */
+app.post('/api/voice/enroll', async (req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  const { who, name, ids } = req.body ?? {};
+  if (!who || typeof who !== 'string') return res.status(400).json({ ok: false, reason: 'who-required' });
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ ok: false, reason: 'no-clips' });
+  if (!speakerModelPresent()) return res.json({ ok: false, reason: 'no-speaker-model', hint: 'the speaker-embedding model is not installed yet' });
+
+  // Resolve each id to a wav path (ward-private audio only). A missing/non-wav
+  // asset is skipped with a note rather than failing the whole enrolment.
+  const wavPaths = [];
+  const skipped = [];
+  for (const id of ids) {
+    const meta = await getAssetMeta(id).catch(() => null);
+    if (!meta || meta.kind !== 'audio') { skipped.push({ id, why: 'not-audio' }); continue; }
+    if (meta.ext !== 'wav') { skipped.push({ id, why: 'not-wav' }); continue; }
+    wavPaths.push(assetBytesPath(meta));
+  }
+  if (!wavPaths.length) return res.json({ ok: false, reason: 'no-usable-clips', skipped });
+
+  const deps = { getWorker: () => listeningWorker({ rootDir: __dirname }) };
+  const r = who === 'ward'
+    ? await enrollWard(wavPaths, deps)
+    : await enrollVillager(who, wavPaths, { name: typeof name === 'string' ? name : null, ...deps });
+  res.json({ ...r, skipped });
+});
+
+/** DELETE ?who=ward|<villagerId> — forget a print. */
+app.delete('/api/voice/voiceprint', async (req, res) => {
+  const who = String(req.query?.who ?? '').trim();
+  if (!who) return res.status(400).json({ ok: false, reason: 'who-required' });
+  const r = who === 'ward' ? await deleteWardPrint() : await deleteVillagerPrint(who);
+  res.json(r);
 });
 
 app.get('/api/voice/clips/summary', async (_req, res) => {
