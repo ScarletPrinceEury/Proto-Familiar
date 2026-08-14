@@ -317,7 +317,7 @@ export async function materializeAttachments(apiMessages, {
   if (blindImageStandins > 0) {
     out.push({
       role: 'system',
-      content: '[Some image(s) here are ones I have NOT seen — I have no description of what they show. I do not describe them, guess their contents, name who or what is in them, or react as if I saw them. I say plainly that I can\'t see it (yet), and if it matters I ask what\'s in it. Inventing what an unseen image shows would be a serious breach — I never do it.]',
+      content: '[This is only about images marked "I haven\'t looked at this one yet" or "I have no way to look at images right now" — those specifically I genuinely cannot see and have no description of, so for THOSE I don\'t describe them, guess their contents, or name who or what is in them; I say plainly I can\'t see it (yet) and ask what\'s in it if it matters. It does NOT apply to an image marked "what I saw when I looked: …" — that description IS my sight of it, and I talk about it normally, in full, as something I saw. A text description still counts as having seen the image. Inventing what an unseen image shows would be a serious breach — I never do that.]',
     });
   }
   return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, stoodInUndescribed, blindImageStandins };

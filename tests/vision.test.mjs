@@ -130,9 +130,14 @@ test('BLIND guard: an undescribed stand-in triggers the hard no-confabulation sy
   const msgs = [{ role: 'user', content: 'what do you think?', attachments: [{ id: m.id }] }];
   const res = await materializeAttachments(msgs, { connection: { visionCapable: 'no' } });
   assert.equal(res.blindImageStandins, 1);
-  const guard = res.messages.find(x => x.role === 'system' && /serious breach|never do it|NOT seen/.test(x.content));
+  const guard = res.messages.find(x => x.role === 'system' && /serious breach/.test(x.content));
   assert.ok(guard, 'a blind stand-in must carry the hard no-confabulation instruction');
-  assert.match(guard.content, /do not describe them, guess their contents, name who or what is in them/);
+  assert.match(guard.content, /don't describe them, guess their contents, or name who or what is in them/);
+  // Must NOT bleed into the described case: it explicitly excludes a "what I saw
+  // when I looked" description, so a model doesn't clam up about images it DOES
+  // have words for (or read "text description" as "didn't really see it").
+  assert.match(guard.content, /what I saw when I looked/);
+  assert.match(guard.content, /text description still counts as having seen/);
 });
 
 test('BLIND guard: a DESCRIBED image does NOT trigger the hard rule (it can be talked about)', async () => {
