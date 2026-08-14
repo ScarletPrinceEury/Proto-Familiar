@@ -37,6 +37,9 @@ import { writeSessionLog, stampMessages, turnMessages } from './session-log.js';
 import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
+import { createCallGuard } from './voice-call-guard.js';
+import { getWardPrint } from './voiceprints.js';
+import { SPEAKER_MODEL_DIR, speakerModelPresent } from './voice-enroll.js';
 
 const WS_PATH = '/api/voice/call';
 
@@ -88,6 +91,7 @@ export function attachVoiceCall(deps) {
   // consent-gated fact extraction web chat + Discord use). Never throws into the
   // teardown; each half is independent (a memorization skip still leaves a log).
   async function memorizeCall(callId) {
+    guards.delete(callId);   // the per-call guest guard is done when the call is
     const sess = callSessions.get(callId);
     callSessions.delete(callId);
     if (!sess || sess.messages.length < 2) return;
@@ -121,14 +125,77 @@ export function attachVoiceCall(deps) {
     } catch (err) { log(`memorizeCall failed: ${err?.message ?? err}`); }
   }
 
+  // ── Guest watchdog (§8.2) — the per-call privacy guard ───────────────────
+  // SAFETY-CRITICAL (privacy), ward-signed. A guard exists for a call only when
+  // the ward has enrolled a voiceprint, the speaker model is present, and the
+  // policy isn't `ignore`. Otherwise there's nothing to compare a voice against,
+  // and it stays inert — never guessing.
+  const guards = new Map();   // callId → guard | null
+  async function guardFor(callId) {
+    if (guards.has(callId)) return guards.get(callId);
+    let guard = null;
+    try {
+      const s = readSettings() || {};
+      const policy = s.voiceGuestPolicy ?? 'note';
+      if (policy !== 'ignore' && speakerModelPresent(SPEAKER_MODEL_DIR)) {
+        const wardPrint = await getWardPrint();
+        if (wardPrint) {
+          guard = createCallGuard({
+            wardPrint, policy,
+            thresholds: {
+              threshold: s.voiceGuestThreshold, enterSegments: s.voiceGuestEnterSegments,
+              exitSegments: s.voiceGuestExitSegments, exitQuietSec: s.voiceGuestExitQuietSec,
+            },
+          });
+        }
+      }
+    } catch (err) { log(`guest-guard init failed (continuing without): ${err?.message ?? err}`); }
+    guards.set(callId, guard);
+    return guard;
+  }
+
+  // The speaker-embedding tap the call engine calls on each finalized utterance
+  // (§8.2). Returns null (speaker ID off, no model, no worker) rather than an
+  // error shape, so a non-array never reaches the guard's cosine. Never throws.
+  async function embedSegment(samples, sampleRate) {
+    if (!speakerModelPresent(SPEAKER_MODEL_DIR)) return null;
+    const out = await getWorkerThen(async (w) => {
+      try {
+        const loaded = await w.request({ op: 'load', role: 'speaker', modelDir: SPEAKER_MODEL_DIR }, { timeoutMs: 180_000 });
+        if (!loaded?.ok) return null;
+        const r = await w.request({ op: 'embed', samples: Array.from(samples), sampleRate }, { timeoutMs: 30_000 });
+        return r?.ok && Array.isArray(r.embedding) ? r.embedding : null;
+      } catch { return null; }
+    });
+    return Array.isArray(out) ? out : null;
+  }
+
   // ── onTurn dep: a full chat turn via /api/chat ──────────────────────────
   const runVoiceChatTurn = createVoiceChatTurn({ port, readSettings, connectionForFeature, log });
   async function runTurn(transcript, ctx) {
     const hist = histories.get(ctx.callId) ?? [];
     // The shared /api/chat voice turn (voice-chat-turn.js) — the Discord ward
     // turn runs the exact same request. A web call is my human on their own
-    // private surface, so ward-private.
-    const reply = await runVoiceChatTurn({ transcript, history: hist, sessionAudience: 'ward-private' });
+    // private surface, so ward-private BY DEFAULT — unless the guest watchdog
+    // says otherwise.
+    let sessionAudience = 'ward-private';
+    let turnHistory = hist;
+    try {
+      const guard = await guardFor(ctx.callId);
+      if (guard && ctx.speakerRef === 'ward' && Array.isArray(ctx.embedding)) {
+        const r = guard.observeWardSegment(ctx.embedding, { text: transcript });
+        if (r.transition) log(`guest watchdog ${r.transition} (${r.reason ?? ''}) — policy ${guard.policy}`);
+      }
+      if (guard?.withholdWardPrivate()) {
+        // gate + a guest present → this turn is NOT ward-private. A stranger-
+        // present audience makes /api/chat withhold ward-private context.
+        sessionAudience = { location: 'voice-call', participants: [{ id: null, name: 'someone' }] };
+      }
+      const note = guard?.noteLine();
+      if (note) turnHistory = [...hist, { role: 'system', content: note }];   // one-off, not stored
+    } catch (err) { log(`guest-guard apply failed (continuing ward-private): ${err?.message ?? err}`); }
+
+    const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience });
     if (reply) {
       const messages = [...hist, { role: 'user', content: transcript }];
       const next = [...messages, { role: 'assistant', content: reply }];
@@ -202,6 +269,7 @@ export function attachVoiceCall(deps) {
     // so it replies immediately. Noise filter applies in both modes.
     turnSettleMs: () => (readSettings()?.voiceCallMode === 'open' ? voiceCallSettleMs(readSettings()) : 0),
     transcriptFilter: (t) => !isLikelyNoiseTranscript(t, { language: asrLang(readSettings()) }),
+    embedSegment,   // §8.2 speaker ID — inert until the ward enrols + the model is present
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });
