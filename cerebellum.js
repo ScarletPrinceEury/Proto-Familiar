@@ -486,16 +486,35 @@ export const CONTACT_ESCALATION_DELAY_MS = Object.freeze({
 // hung), fall back to the enqueue clock rather than waiting forever.
 export const DISPATCH_GRACE_MS = 10 * 60_000;
 
+/** Clamp a number to [lo, hi]; a non-finite value falls back to hi (no change). */
+function clampNum(v, lo, hi) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return hi;
+  return Math.min(hi, Math.max(lo, n));
+}
+
 /**
  * When does this triage item's escalation deadline expire?
  * Returns a ms timestamp, or null when the clock hasn't started yet
  * (push configured, delivery still pending, inside the grace window).
  */
-export function contactDeadlineFor(item, { pushConfigured, now = Date.now } = {}) {
+export function contactDeadlineFor(item, { pushConfigured, now = Date.now, voiceEscalationFactor = 1 } = {}) {
   // Pre-0.4.0 items: precomputed deadline, enqueue clock.
   if (typeof item.contactDeadlineTs === 'number') return item.contactDeadlineTs;
-  const delay = item.contactDelayMs;
-  if (typeof delay !== 'number') return null;
+  const baseDelay = item.contactDelayMs;
+  if (typeof baseDelay !== 'number') return null;
+
+  // §10 ward-signed (Pass 4): a check-in CONFIRMED SPOKEN into a live call with
+  // the ward present at delivery earns a SHORTER acknowledgement window — they
+  // demonstrably heard me, so silence after a spoken check-in means more than
+  // silence after a banner they may never have seen. Both conditions are machine
+  // facts recorded on the voice-call delivery. This tightens toward action only
+  // (factor clamped [0.25, 1]); no other delivery path is affected. The reverse —
+  // a LONGER window — is not permitted here without its own sign-off.
+  const voiceRec = item.delivery?.['voice-call'];
+  const spokenToWard = voiceRec?.status === 'delivered' && voiceRec?.wardPresent === true;
+  const factor = spokenToWard ? clampNum(voiceEscalationFactor, 0.25, 1) : 1;
+  const delay = baseDelay * factor;
 
   // ANY channel's confirmed delivery starts the veto clock (earliest one —
   // my human could have seen the check-in from that moment). Identical to
@@ -579,6 +598,7 @@ export async function checkAndFirePendingContacts({
   updateOutboxMetaFn = updateOutboxMeta,
   deliverFn          = deliverToTrustedContact,
   hasPushChannel     = () => activePushAdapters().length > 0,
+  voiceEscalationFactor = (() => { try { return readSettingsSync()?.voiceEscalationFactor ?? 0.5; } catch { return 0.5; } })(),
 } = {}) {
   const nowMs = now();
   try {
@@ -586,7 +606,7 @@ export async function checkAndFirePendingContacts({
     const pushConfigured = !!hasPushChannel();
     const expired = items.filter(i => {
       if (i.kind !== 'triage' || !i.pendingContact || i.pendingContact.delivered) return false;
-      const deadline = contactDeadlineFor(i, { pushConfigured, now });
+      const deadline = contactDeadlineFor(i, { pushConfigured, now, voiceEscalationFactor });
       return typeof deadline === 'number' && nowMs >= deadline;
     });
     for (const item of expired) {

@@ -590,6 +590,35 @@ test('contactDeadlineFor: bot-DM delivery starts the clock; earliest delivery wi
   assert.equal(contactDeadlineFor(item, { pushConfigured: true }), botAt + 30 * 60_000);
 });
 
+test('contactDeadlineFor: a spoken voice-call delivery with the ward present SHORTENS the window (§10)', () => {
+  const spokenAt = T0 + 3 * 60_000;
+  const item = newStyleItem({
+    delivery: { 'voice-call': { status: 'delivered', at: new Date(spokenAt).toISOString(), wardPresent: true } },
+  });
+  // 0.5× the 30-min window because they demonstrably heard it in a live call.
+  assert.equal(
+    contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 0.5 }),
+    spokenAt + 15 * 60_000,
+  );
+});
+
+test('contactDeadlineFor: the escalation factor is clamped to [0.25, 1] — never longer than normal', () => {
+  const item = newStyleItem({ delivery: { 'voice-call': { status: 'delivered', at: new Date(T0).toISOString(), wardPresent: true } } });
+  // A misconfigured 3× would LENGTHEN the window (away from action) — refused.
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 3 }), T0 + 30 * 60_000);
+  // A 0.05× would be absurdly tight — floored at 0.25×.
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 0.05 }), T0 + 7.5 * 60_000);
+});
+
+test('contactDeadlineFor: a spoken delivery with the ward NOT present keeps the normal window', () => {
+  const spokenAt = T0 + 3 * 60_000;
+  const item = newStyleItem({
+    delivery: { 'voice-call': { status: 'delivered', at: new Date(spokenAt).toISOString(), wardPresent: false } },
+  });
+  // Spoken into a room the ward wasn't in → no proof they heard → no tightening.
+  assert.equal(contactDeadlineFor(item, { pushConfigured: true, voiceEscalationFactor: 0.5 }), spokenAt + 30 * 60_000);
+});
+
 test('contactDeadlineFor: one channel failing while another is pending holds the clock inside grace', () => {
   const item = newStyleItem({ delivery: { 'discord-dm': { status: 'failed', at: 'x', error: 'e' } } });
   // Only one recorded channel and it failed → enqueue clock (as before).
