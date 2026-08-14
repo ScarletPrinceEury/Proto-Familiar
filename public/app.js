@@ -415,6 +415,18 @@ const state = {
   // screen: pressing 🔊 on every single message is not an accessible
   // alternative to text, it is a tax on needing one.
   readAloudByDefault: false,
+  // Voice Pass 4 — who's speaking, proactive voice, curation.
+  mediaRetentionEnabled: true,     // §9: curate aged voice-clip SOUNDS (words always kept). Default ON.
+  voiceNoteRetentionDays: 14,      // keep audio bytes this long before the retention pass judges them
+  voiceEscalationFactor: 0.5,      // §10: a check-in the ward HEARD in a live call gets a 0.5× ack window
+  voiceGuestPolicy: 'note',        // §8.2: ignore | note | gate — what a detected second voice does
+  voiceGuestThreshold: 0.5,        // cosine below which a segment isn't the ward
+  voiceGuestEnterSegments: 3,      // consecutive non-ward segments to raise a guest
+  voiceGuestExitSegments: 6,       // consecutive ward segments (with the quiet window) to release
+  voiceGuestExitQuietSec: 90,      // AND this long since the last non-ward segment
+  voiceAudioTaggingEnabled: false, // §8.4: annotation-only room-sound tags. Default OFF.
+  voiceProactiveJoin: false,       // §7: join the ward's VC to speak a tier-gated check-in. Default OFF.
+  voiceKeepAudio: false,           // §9: record a call to an audio asset (deliberate; default OFF)
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -469,6 +481,9 @@ const SERVER_SYNCED_KEYS = [
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
+  'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
+  'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
+  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceKeepAudio',
 ];
 function extractServerSettings(s) {
   const out = {};

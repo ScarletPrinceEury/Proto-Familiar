@@ -2305,6 +2305,7 @@ that is the contract talking — update all seams together or stop.
 | Needs tracking | 30min tick (opt-in, default OFF) | Settings "Track unmet needs" + `PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1` | Marks a recurring need-window's occurrence `missed` once its window elapses unresolved (the needs-fulfilment ledger). Stands down at moderate+ threat; only the lapse is made factual — never auto-confirms a projected consequence |
 | Memory coverage sweep | 10min tick (default ON) | Settings "Memory coverage sweep" + `PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1` | Memorizes PAST days that never ingested (day-anchoring Phase 2); skips today + completed days; only enqueues into the memorization worker — no LLM call of its own |
 | Noticing | 20min base pulse + self-set cadence (default ON) | Settings "Let my Familiar notice on its own" + `PROTO_FAMILIAR_NOTICING_DISABLED=1` | The Familiar's own turn: code-gated wake conditions (due intentions, rhythm deviation, readiness gaps, aging intents/tasks, overdue events) → bounded tool-using deliberation. Runs at ALL threat tiers (ward-signed no-stand-down); every decision-reaching tick logs to `logs/noticing-events.jsonl` |
+| Media retention | 6h tick (default ON) | Settings toggle + `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1` | Voice Pass 4 §9, the 13th worker. Curates aged voice-clip SOUNDS: code gates pick candidates (audio past `voiceNoteRetentionDays`, not stripped, not `keep`, has a transcript) → ONE batched LLM judgment names which sounds to keep → the rest `media.stripAudio` (bytes gone, transcript+meta+slugs survive). The transcript ALWAYS survives. Fail-soft: an LLM error or unparseable response keeps everything that pass (never strips on doubt). Defers during a live call + at moderate+ threat |
 | Google Calendar sync | 60s wake + ward interval (hourly default; opt-in, default OFF) | Settings "Google Calendar sync" + `PROTO_FAMILIAR_GCAL_DISABLED=1` | Fetch the ward's iCal feed → Unruh `gcal_ingest` (parse + reconcile + change-classify) → route ONLY `new` ids to the projection cue. Failure degrades silently and never reconciles deletions |
 | Discord gateway | 30s supervisor | Settings toggle + `PROTO_FAMILIAR_DISCORD_DISABLED=1` | Bidirectional Discord presence; follows Settings (token/enable) without restart |
 | Threat detection | per chat msg (in-band) | `PROTO_FAMILIAR_THREAT_DISABLED=1` | Patterns score my human's text; tracker accumulates with decay |
@@ -2742,6 +2743,47 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   front, logs the active one, and fails the join FAST with a clear message if none
   load (a broken libsodium ESM build — seen on Windows AND Linux — otherwise
   stalls for 30s instead of naming the cause).
+
+## Voice — Pass 4 (who is speaking, proactive voice, curation) — IN PROGRESS
+
+The "who is speaking" spine is built as pure, testable modules ahead of the live
+wiring (so the safety-critical logic is verifiable without audio):
+
+- **`voice-embedding.js`** — pure vector math (cosine similarity, L2 normalise,
+  averaged enrolment). Fail-soft: garbage → 0, never NaN/throw (it runs on the
+  live-call path).
+- **`voiceprints.js`** — the LOCAL biometric store, `tomes/.voiceprints.json`
+  (git-ignored, never synced, never leaves the embodiment). Ward print + opt-in
+  per-villager prints. `enrolledPrints()` feeds the diarizer. Never throws on a
+  missing/corrupt file.
+- **`voice-guest-watchdog.js`** (SAFETY-CRITICAL, ward-signed §8.2) — the privacy
+  state machine. ENTER on N=3 consecutive non-ward segments; RELEASE only on BOTH
+  M=6 ward segments AND ≥90 s quiet; instant spoken-release ONLY in a
+  ward-matched segment (un-fakeable), plus manual/UI release. Emits transitions
+  for logging; the `voiceGuestPolicy` (ignore/note/gate) is the caller's, never
+  decided here. Any behavioural change needs the ward, like the audience gate.
+- **`voice-diarize.js`** (§8.3) — mixed-stream matcher: enrolled prints first,
+  then short-lived online clusters (guest-1/guest-2); unmatched → stranger-tier
+  (fail-closed).
+- **Worker op** (`audio-worker.mjs`): `role:'speaker'` loads the
+  `SpeakerEmbeddingExtractor` (sherpa `BASE_MODELS` id `speaker-embed`, unpinned
+  until `pin-audio-models.mjs speaker-embed <url>` records its sha); the `embed`
+  op turns a wav OR raw VAD samples into a number[] voiceprint. Too-short clip →
+  honest `not-ready`, never a fabricated vector.
+
+Shipped alongside:
+
+- **Voice-escalation factor** (§10, ward-signed §16.4) — `contactDeadlineFor`
+  shortens the trusted-contact clock (×`voiceEscalationFactor`, default 0.5,
+  clamped [0.25, 1]) ONLY when a triage check-in was confirmed spoken into a live
+  call with the ward present (`delivery['voice-call'].{status:'delivered',
+  wardPresent:true}`). Tightens toward action only.
+- **Media-retention loop** — see the Autonomous-loops table (13th worker).
+
+**Remaining wiring (follow-up in this PR):** enrolment endpoints + UI, the
+call-engine watchdog/diarize integration, the `voice-call` push adapter
+(proactive voice, §7), ward-voice threat scoring (§10, ward-signed §16.1),
+audio-tagging annotation (§8.4), and pinning the speaker model.
 
 ## Security design
 
