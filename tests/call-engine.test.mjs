@@ -93,6 +93,58 @@ test('audio → transcript → turn → playback, then a clean end', async () =>
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('speaker embedding: a finalized utterance is embedded and the vector rides to onTurn (§8.2)', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    const embedCalls = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (_t, ctx) => { turns.push(ctx); return null; },
+      embedSegment: async (samples, rate) => { embedCalls.push({ len: samples.length, rate }); return [0.5, 0.5]; },
+      tomesDir: dir,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake', 'room');
+
+    // Ward speaks (640 bytes PCM16 = 320 samples), then releases → finalize embeds.
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    await rec.hooks.endUtterance({ callId: 'c1', speakerRef: 'ward' });
+    await tick();
+    assert.equal(embedCalls.length, 1, 'the utterance was embedded once on release');
+    assert.equal(embedCalls[0].len, 320, 'PCM16 → float samples');
+    assert.equal(embedCalls[0].rate, 16000);
+
+    // The asr-final drives the turn, which carries the freshly-computed embedding.
+    const opens = worker.calls.requests.filter((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: opens[0].streamId, text: 'hey' });
+    await tick();
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0].embedding, [0.5, 0.5], 'the voiceprint rode to onTurn for the guard');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('no embedSegment → no embedding work, ctx.embedding is null (off by default)', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    const engine = createCallEngine({ worker, onTurn: async (_t, ctx) => { turns.push(ctx); return null; }, tomesDir: dir });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake', 'room');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    await rec.hooks.endUtterance({ callId: 'c1', speakerRef: 'ward' });
+    await tick();
+    const opens = worker.calls.requests.filter((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: opens[0].streamId, text: 'hey' });
+    await tick();
+    assert.equal(turns[0].embedding, null, 'speaker ID off → no vector, no behavior change');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('hybrid ASR: offlineFinal loads the offline model and flags the stream; off does neither', async () => {
   // ON: offlineFinal() true + a model dir → startCall loads asr-offline, and every
   // asrStream the engine opens carries offlineFinal:true so the worker re-transcribes.
