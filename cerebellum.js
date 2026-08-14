@@ -1888,7 +1888,7 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'request_tools',
-      description: 'My full toolbox is bigger than what I\'m currently holding — most modules only surface when the moment calls for them. If I need a tool that isn\'t in my hands right now, I name its module here and I\'ll have those tools THIS turn, on my very next step. Modules: ' + MODULE_INDEX + '. Passing "all" hands me everything at once. This is also how I answer "what can you do?" honestly: the list above is complete, and I can pull any module to check its details. If I reach for a tool and it isn\'t there, this is ALWAYS the recovery — never "I can\'t do that."',
+      description: 'I\'ve got way more tools than the handful I\'m carrying this turn — most only show up when the moment calls for them. If I need one that isn\'t handy right now, I name its module here and I\'ve got those tools THIS turn, on my very next step. Modules: ' + MODULE_INDEX + '. Passing "all" hands me everything at once. This is also how I answer "what can you do?" honestly: the list above is complete, and I can pull any module to check its details. If I reach for a tool and it isn\'t there, this is ALWAYS the recovery — never "I can\'t do that."',
       parameters: {
         type: 'object',
         properties: {
@@ -2793,7 +2793,7 @@ export const TOOL_EXECUTORS = {
         const refTag = Array.isArray(r.schedule_refs) && r.schedule_refs.length ? ` (re: ${r.schedule_refs.join(', ')})` : '';
         return `${i + 1}. (${addr || 'memory'}${idTag}, ${score}% match)${srcTag} ${(r.excerpt ?? r.content ?? '').trim()}${refTag}`;
       });
-      return `What I already hold close to "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
+      return `What I remember about "${q}":\n${lines.join('\n')}\n\n(If one of these already covers it, I update or supersede that entry rather than saving a duplicate.)`;
     } catch (err) {
       return `I couldn't reach my memory to recall just now (${err.message}).`;
     }
@@ -3373,7 +3373,7 @@ export const TOOL_EXECUTORS = {
     for (const m of known) ctx._requestedModules.add(m);
     // Every pull is a surfacing miss — the tuning signal for triggers.
     console.log(`[tools] surfacing miss — requested: ${known.join(', ')}${unknown.length ? ` (unknown: ${unknown.join(', ')})` : ''}`);
-    return `ok — ${known.join(', ')} tools are in my hands from my next step onward${unknown.length ? ` (no such module: ${unknown.join(', ')})` : ''}.`;
+    return `ok — I've got the ${known.join(', ')} tools handy now, from my next step on${unknown.length ? ` (no such module: ${unknown.join(', ')})` : ''}.`;
   },
 
   schedule_find: async ({ query, include_resolved, limit } = {}, ctx = {}) => {
