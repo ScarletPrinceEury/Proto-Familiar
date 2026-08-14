@@ -4631,12 +4631,101 @@ function piSegmentEl(source, text) {
   return seg;
 }
 
-function openPromptInspector() {
-  const body = $('prompt-inspector-body');
+// ── Verbatim server-capture view ────────────────────────────────────────
+// The annotated view below reconstructs the web prompt from this browser's own
+// state. It can only ever show the WEB path, and it shows what SHOULD be
+// assembled. The captures fetched here are the real thing — the exact array
+// each surface sent to the model, recorded server-side at the send boundary —
+// so the Familiar's prompts can be verified on voice and Discord too, surfaces
+// with no browser of their own. This is the fix for "the inspector shows the
+// prompts but my Familiar on Discord doesn't see them."
+const PI_SURFACE_LABELS = {
+  web: 'Web', voice: 'Voice', discord: 'Discord',
+  'discord-revisit': 'Discord (revisit)',
+};
+
+function renderVerbatimCapture(container, cap) {
+  container.innerHTML = '';
+  if (!cap || !Array.isArray(cap.messages) || cap.messages.length === 0) {
+    container.innerHTML = '<p class="logs-empty">No prompt has been sent on this surface yet. Send a message there, then re-open.</p>';
+    return;
+  }
+  const meta = document.createElement('p');
+  meta.className = 'field-hint';
+  const when = cap.at ? new Date(cap.at).toLocaleString() : 'unknown time';
+  meta.textContent = `Exactly what was sent to ${cap.provider ?? 'the model'}${cap.model ? ` (${cap.model})` : ''} at ${when}. This is captured as it leaves the server — ground truth, not a reconstruction.`;
+  container.appendChild(meta);
+
+  cap.messages.forEach((msg) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'pi-msg';
+    const header = document.createElement('div');
+    header.className = 'pi-msg-header';
+    const extra = msg.attachmentCount ? ` · ${msg.attachmentCount} attachment(s)` : '';
+    header.innerHTML = `<span class="pi-role pi-role-${esc(msg.role ?? 'user')}">${esc(msg.role ?? 'user')}${esc(extra)}</span>`;
+    const text = typeof msg.content === 'string' ? msg.content
+      : JSON.stringify(msg.content ?? msg.tool_calls ?? '', null, 2);
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-ghost pi-copy';
+    copyBtn.textContent = 'Copy';
+    wireCopyButton(copyBtn, () => text);
+    header.appendChild(copyBtn);
+    wrap.appendChild(header);
+    const pre = document.createElement('pre');
+    pre.className = 'pi-pre';
+    pre.textContent = text;
+    wrap.appendChild(pre);
+    container.appendChild(wrap);
+  });
+}
+
+async function openPromptInspector() {
+  const modalBody = $('prompt-inspector-body');
+  modalBody.innerHTML = '';
+  $('prompt-inspector-modal').classList.remove('hidden');
+
+  // Tab bar: the annotated web reconstruction, plus one tab per server surface
+  // that has actually sent a prompt. Fetched fresh each open.
+  const tabs = document.createElement('div');
+  tabs.className = 'ke-tabs pi-surface-tabs';
+  const content = document.createElement('div');
+  content.className = 'pi-tab-content';
+  modalBody.appendChild(tabs);
+  modalBody.appendChild(content);
+
+  let captures = [];
+  try {
+    const r = await fetch('/api/last-prompt');
+    if (r.ok) captures = (await r.json())?.surfaces ?? [];
+  } catch { /* server captures are best-effort — the annotated view still works */ }
+
+  const mkTab = (label, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'ke-tab';
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      [...tabs.children].forEach(c => c.classList.remove('active'));
+      b.classList.add('active');
+      onClick(content);
+    });
+    tabs.appendChild(b);
+    return b;
+  };
+
+  const annotatedTab = mkTab('This browser (annotated)', (c) => renderAnnotatedInspector(c));
+  for (const cap of captures) {
+    const label = PI_SURFACE_LABELS[cap.surface] ?? cap.surface;
+    mkTab(`${label} — actually sent`, (c) => renderVerbatimCapture(c, cap));
+  }
+
+  annotatedTab.classList.add('active');
+  renderAnnotatedInspector(content);
+}
+
+function renderAnnotatedInspector(body) {
   body.innerHTML = '';
   if (!lastSentMessages) {
-    body.innerHTML = '<p class="logs-empty">Send a message first.</p>';
-    $('prompt-inspector-modal').classList.remove('hidden');
+    body.innerHTML = '<p class="logs-empty">Send a message here first, or pick a surface tab above to see what it actually sent.</p>';
     return;
   }
 
@@ -4762,8 +4851,6 @@ function openPromptInspector() {
   if (lastThalamus?.timeAnchor) {
     renderMessage({ role: 'system', content: lastThalamus.timeAnchor, __source: 'thalamus-time-anchor' }, lastSentMessages.length);
   }
-
-  $('prompt-inspector-modal').classList.remove('hidden');
 }
 
 function closePromptInspector() {

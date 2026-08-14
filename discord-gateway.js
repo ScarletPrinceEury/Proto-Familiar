@@ -61,6 +61,8 @@ import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
 import { writeSessionLog as writeSessionLogShared } from './session-log.js';
 import { substituteMacros } from './macros.js';
+import { coreSystemSegment, postHistoryMessage } from './core-prompts.js';
+import { recordOutgoingPrompt } from './prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { sanitizeExternal } from './injection-guard.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from './updater.js';
@@ -300,7 +302,10 @@ async function fireRevisit(item) {
     waitStreakLine: buildWaitStreakLine({ settings }),
   });
 
-  const systemContent = [enriched.static, preamble].filter(Boolean).join('\n\n---\n\n');
+  // Same four core prompts the live path folds in — a revisit is still the
+  // Familiar being itself in this room, so it carries its identity too.
+  const coreSeg = coreSystemSegment(settings);
+  const systemContent = [enriched.static, coreSeg, preamble].filter(Boolean).join('\n\n---\n\n');
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
@@ -315,12 +320,15 @@ async function fireRevisit(item) {
       };
     });
 
+  const phMsg = postHistoryMessage(settings);
   const apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     { role: 'user', content: '[— quiet moment, checking back —]' },
+    ...(phMsg ? [phMsg] : []),
   ];
+  recordOutgoingPrompt('discord-revisit', { messages: apiMessages, model: conn?.model, provider: conn?.provider });
 
   const rawReply = await callChat({ conn, messages: apiMessages, settings });
 
@@ -1942,7 +1950,13 @@ async function handleTurn(gw, msg, decision) {
   });
 
   const availability = await availabilityBlockFor(decision, audienceGrants);
-  const systemContent = [enriched.static, preamble, availability].filter(Boolean).join('\n\n---\n\n');
+  // The ward's four core prompts (System/Character/User/Post-History) make the
+  // Familiar itself — assembled by the browser on the web, but Discord has no
+  // browser, so they were absent entirely (the "doesn't see the user prompt on
+  // Discord" bug). Fold them in here from settings: the core segment sits with
+  // the identity (static → persona), the post-history prompt trails the turn.
+  const coreSeg = coreSystemSegment(settings);
+  const systemContent = [enriched.static, coreSeg, preamble, availability].filter(Boolean).join('\n\n---\n\n');
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
@@ -1967,11 +1981,13 @@ async function handleTurn(gw, msg, decision) {
   const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + turnFailNote;
   const turnAttField = turnAttachments.length ? { attachments: turnAttachments } : {};
 
+  const phMsg = postHistoryMessage(settings);
   let apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     { role: 'user', content: userContent, ...turnAttField },
+    ...(phMsg ? [phMsg] : []),
   ];
 
   // Vision materialization (§3) — the same seam as the web path, applied once
@@ -2008,6 +2024,11 @@ async function handleTurn(gw, msg, decision) {
       console.error('[discord] vision materialize failed (passing through):', err?.message ?? err);
     }
   }
+
+  // Ground truth for the prompt inspector: what this Discord turn actually sends
+  // to the model, captured after assembly + materialization. This is the surface
+  // that had no browser to verify itself — now it can be inspected like the web.
+  recordOutgoingPrompt('discord', { messages: apiMessages, model: conn?.model, provider: conn?.provider });
 
   // Discord clearance-gated tools (discord-tools-build-spec). The Familiar's
   // tools this turn follow the SPEAKER: ward alone → full web-chat parity; a

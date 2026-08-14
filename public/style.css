@@ -3039,6 +3039,11 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
   border-bottom: 1px dashed var(--border-light);
   margin-bottom: 8px;
 }
+
+/* Prompt-inspector surface tabs: the annotated web view vs. the verbatim
+   payload each server surface actually sent. */
+.pi-surface-tabs { margin-bottom: 12px; }
+.pi-tab-content { display: block; }
 .pi-chip {
   font-size: 0.68rem;
   font-weight: 600;
