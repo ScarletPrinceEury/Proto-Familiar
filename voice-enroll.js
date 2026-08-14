@@ -21,8 +21,17 @@ import { averageEmbeddings } from './voice-embedding.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Where the speaker-embedding model is unpacked (BASE_MODELS id `speaker-embed`). */
-export const SPEAKER_MODEL_DIR = path.join(__dirname, 'models', 'audio', 'speaker');
+// Models unpack to models/audio/<model.id>/ (same as asr-offline). The default
+// speaker model is CAM++ (BASE_MODELS id `speaker-embed`); the optional "swanky"
+// upgrade is NeMo TitaNet-Large (`speaker-embed-large`). Whichever the ward has
+// active is loaded — the extractor just finds the sole .onnx in the dir.
+export const SPEAKER_MODEL_DIR       = path.join(__dirname, 'models', 'audio', 'speaker-embed');
+export const SPEAKER_MODEL_DIR_LARGE = path.join(__dirname, 'models', 'audio', 'speaker-embed-large');
+
+/** The active speaker-model directory for these settings (default = CAM++). */
+export function speakerModelDir(settings = {}) {
+  return settings?.voiceSpeakerModel === 'titanet-large' ? SPEAKER_MODEL_DIR_LARGE : SPEAKER_MODEL_DIR;
+}
 
 const LOAD_TIMEOUT_MS  = 180_000;   // a cold onnx load off laptop disk
 const EMBED_TIMEOUT_MS = 30_000;    // one short clip

@@ -212,13 +212,36 @@ const BASE_MODELS = Object.freeze([
     files: [],
   },
   {
+    // DEFAULT speaker model: 3D-Speaker CAM++ (English VoxCeleb). Small + fast
+    // (tens of ms/utterance — matters for the live guest watchdog) and plenty
+    // accurate to tell a household's voices apart. Speaker embeddings are
+    // language-independent (timbre, not words), so it serves a bilingual home.
+    // NOTE: the asset filename below is the standard sherpa name; the fetch is
+    // self-verifying (a wrong name 404s) and `pin-audio-models.mjs` records the
+    // real sha256 + size — those are never hand-written (see the file header).
     id: 'speaker-embed',
     role: 'speaker',
     engine: null,
     lang: null,
-    label: '3D-Speaker / WeSpeaker embedding',
-    why: 'Voiceprint enrollment, the guest watchdog, diarization.',
-    estBytes: 40 * MB,
+    label: '3D-Speaker CAM++ (English VoxCeleb)',
+    why: 'Voiceprint enrollment, the guest watchdog, diarization. The default.',
+    upstream: { tag: 'speaker-recongition-models', asset: '3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx' },
+    estBytes: 28 * MB,
+    files: [],
+  },
+  {
+    // OPTIONAL "swanky" upgrade: NeMo TitaNet-Large. ~3.5× the disk and a touch
+    // slower, for a bit more speaker-verification accuracy. Opt-in — the ward
+    // downloads it and sets voiceSpeakerModel:'titanet-large' to activate; it
+    // unpacks to models/audio/speaker-embed-large/ and the loader finds it there.
+    id: 'speaker-embed-large',
+    role: 'speaker',
+    engine: null,
+    lang: null,
+    label: 'NeMo TitaNet-Large (English, higher accuracy)',
+    why: 'Optional upgrade for the speaker model — more accurate, larger.',
+    upstream: { tag: 'speaker-recongition-models', asset: 'nemo_en_titanet_large.onnx' },
+    estBytes: 97 * MB,
     files: [],
   },
   {
