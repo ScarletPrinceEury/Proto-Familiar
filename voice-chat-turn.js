@@ -58,6 +58,7 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
           max_tokens: 4000,
           userMessage: text,
           voiceMode: true,          // reply comes out speech-shaped, not screen-shaped
+          injectCorePrompts: true,  // no browser here — the server folds in the ward's four core prompts
           sessionAudience,          // the caller's gate decides this — passed through, never invented here
         }),
       });

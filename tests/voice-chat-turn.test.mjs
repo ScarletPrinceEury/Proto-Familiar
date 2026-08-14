@@ -30,6 +30,7 @@ test('posts with the RULE-A guarantees + passes sessionAudience through', async 
   assert.equal(body.runToolLoop, false);
   assert.equal(body.enrich, true);
   assert.equal(body.voiceMode, true);
+  assert.equal(body.injectCorePrompts, true, 'no browser here — the server must fold in the four core prompts');
   assert.equal(body.sessionAudience, 'ward-private', 'audience passed through, not invented');
   // history + the new user turn are both sent, in order
   assert.deepEqual(body.messages.map(m => m.content), ['earlier', 'hi']);

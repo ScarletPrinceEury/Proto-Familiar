@@ -257,6 +257,10 @@ lifecycle of the autonomous loops:
   through `/api/chat` with `enrich:false` so external clients get
   plain OpenAI-shape traffic without Proto-Familiar `_thalamus` extras.
 - `POST /api/debug-prompt` — offline preview (no upstream call).
+- `GET /api/last-prompt` — the verbatim message array last sent to the model,
+  per surface (web / voice / discord), captured at the send boundary
+  (`prompt-capture.js`). Ground truth for the prompt inspector; localhost-only,
+  same as `/api/debug-prompt`.
 - **Media (vision build spec §2):** `POST /api/media` (its OWN
   `express.raw({type:'image/*'})` body parser, so image bytes never
   touch the global JSON limit), `GET /api/media/:id` (streams bytes for
@@ -1846,6 +1850,50 @@ doesn't sit in front of it.
 | `dynamic` | RAG memory matches → knowledge-graph excerpt → recent ponderings → deferred intents → recent-memory cross-check (today+yesterday, `getRecentMemoryLines`, ward-private live turns — so proactive questions don't re-ask something already answered) → Google-Calendar projection cue (0.8) → `[CARE CHECK]` (if threat ≠ calm) → `[My stewardship]` (0.8.18, if anything qualifies) → `[Temporal Context]` | Re-derived every turn | Inserted as a separate `role: 'system'` message at `max(1, messages.length - depth)` |
 
 The depth defaults to 4 (`thalamusDynamicDepth`, 1–50, server-synced).
+
+### The four core prompts — every surface, not just the web (`core-prompts.js`)
+
+Separate from Phylactery identity (the `static` block above), the ward authors
+**four prompt fields** in Settings that make the Familiar *itself*: System
+Prompt, Character Profile, User (Human) Profile, and Post-History Prompt. On the
+**web** these are assembled by the browser (`_buildApiMessagesInner` in
+`public/app.js`) and POSTed inside the messages array. A **server-initiated
+turn** — Discord text, a voice call — has no browser, and until 0.11 it shipped
+**without any of them**: the Familiar answered Discord and voice with none of its
+configured identity (the reported "my Familiar doesn't see the user prompt at
+all on Discord").
+
+`core-prompts.js` is the server-side mirror of that client assembly — the ONE
+place, kept in step with `public/app.js` (order system → `[Character Profile]` →
+`[Human Profile]`, the same headers, `{{user}}`/`{{char}}` resolved via
+`substituteMacros`). It is NOT the lorebook/tome interleaving (that stays
+browser-only); it is exactly the four identity fields.
+
+- `coreSystemSegment(settings)` → the system-message segment (empty when unset).
+- `postHistoryMessage(settings)` → the trailing message, ward-configurable role.
+- `withCorePrompts(messages, settings)` → folds both into a bare array: core
+  segment LEADS (so the `static` block prepends in front of it, preserving the
+  web order static → persona), post-history TRAILS the conversation.
+
+Wiring: **`/api/chat`** injects them when the caller passes `injectCorePrompts`
+(the voice path, `voice-chat-turn.js`); the web client builds them itself and
+never sets the flag. **`discord-gateway.js`** folds `coreSystemSegment` into
+`systemContent` and appends `postHistoryMessage` in both the live (`handleTurn`)
+and revisit paths. Voice (web + Discord) routes through `voice-chat-turn.js`, so
+one flag covers both.
+
+### Prompt capture — the inspector shows what was actually sent (`prompt-capture.js`)
+
+The web prompt inspector used to be a client-side *reconstruction* — it could
+only ever describe the web assembly, and it showed what *should* be built, not
+what left the building. So it cheerfully showed core prompts present while
+Discord received none. `prompt-capture.js` records the real outgoing message
+array at each send boundary (`recordOutgoingPrompt(surface, …)` — web / voice /
+discord / discord-revisit; last-one-per-surface, best-effort, never throws into
+a turn). `GET /api/last-prompt` reads it, and the inspector gained a surface-tab
+view that renders each surface's **verbatim** captured payload beside the
+annotated web reconstruction — ground truth for the surfaces with no browser of
+their own.
 
 Within `dynamic`, the order is deliberate:
 1. **`[Now]`** — wall-clock + weekday + date + relative phrasing of "my human last sent a message" (see "Time perception" below). Always first so every other block reads against a consistent present.

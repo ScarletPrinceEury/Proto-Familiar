@@ -161,6 +161,8 @@ import { filterOutgoingReply } from './outgoing-filter.js';
 import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
+import { withCorePrompts } from './core-prompts.js';
+import { recordOutgoingPrompt, lastOutgoingPrompts } from './prompt-capture.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './knocks.js';
 
@@ -322,7 +324,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -487,18 +489,30 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
 
   const depth = getThalamusDynamicDepth();
 
-  let enrichedMessages = messages;
+  // Server-initiated callers (a voice call) have no browser to assemble the
+  // ward's four core prompts — System/Character/User/Post-History — the way the
+  // web client does. When they ask (`injectCorePrompts`), fold those in here
+  // from settings so the Familiar arrives with its identity on every surface,
+  // not just the web. The web client builds them itself and never sets the flag
+  // (setting it would double them). Core segment leads (it becomes the system
+  // message the static block then prepends to, matching the web order); the
+  // post-history prompt trails the conversation, exactly as the client appends it.
+  let baseMessages = injectCorePrompts
+    ? withCorePrompts(messages, readSettingsSync() || {})
+    : (Array.isArray(messages) ? messages : []);
+
+  let enrichedMessages = baseMessages;
 
   // 1) Prepend static block to the system message. Lives at the very
   //    top of the prompt so the provider's prefix cache covers it.
   if (enrichedResult.static) {
-    const sysIdx = messages.findIndex(m => m.role === 'system');
+    const sysIdx = baseMessages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
-      enrichedMessages = messages.map((m, i) =>
+      enrichedMessages = baseMessages.map((m, i) =>
         i === sysIdx ? { ...m, content: enrichedResult.static + '\n\n' + m.content } : m,
       );
     } else {
-      enrichedMessages = [{ role: 'system', content: enrichedResult.static }, ...messages];
+      enrichedMessages = [{ role: 'system', content: enrichedResult.static }, ...baseMessages];
     }
   }
 
@@ -541,6 +555,18 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       enrichedMessages = [...enrichedMessages, { role: 'system', content: timeAnchor }];
     }
   }
+
+  // Capture what we're actually about to send, so the prompt inspector shows
+  // ground truth rather than a client-side reconstruction. A voice turn is its
+  // own surface; everything else on this endpoint is the web chat. In loop mode
+  // the time anchor rides per-round, so include it here for a faithful view.
+  // Best-effort — never blocks or throws into the turn.
+  recordOutgoingPrompt(voiceMode ? 'voice' : 'web', {
+    messages: (loopMode && timeAnchor)
+      ? [...enrichedMessages, { role: 'system', content: timeAnchor }]
+      : enrichedMessages,
+    model, provider,
+  });
 
   // ── Vision materialization (vision build spec §3) ─────────────────
   // The ONE seam where media references become provider content-parts. Applied
@@ -1213,6 +1239,23 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   } catch (err) {
     if (!res.writableEnded) res.end();
   }
+});
+
+/**
+ * GET /api/last-prompt
+ * The LAST message array actually sent to the model, per surface (web / voice /
+ * discord / …), captured at the real send boundary. This is ground truth for the
+ * prompt inspector — what left the building — not a reconstruction of what should
+ * have been assembled. It is how the Familiar's core prompts can be verified on
+ * Discord and voice, surfaces with no browser to introspect themselves.
+ *
+ * WARNING: like /api/debug-prompt this exposes enriched context (identity /
+ * memory) with no auth — keep it localhost-only, same as the rest of this server.
+ */
+app.get('/api/last-prompt', (req, res) => {
+  const surfaces = lastOutgoingPrompts();
+  const only = typeof req.query.surface === 'string' ? req.query.surface : null;
+  res.json({ surfaces: only ? surfaces.filter(s => s.surface === only) : surfaces });
 });
 
 /**
