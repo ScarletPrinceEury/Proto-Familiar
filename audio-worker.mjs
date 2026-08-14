@@ -28,6 +28,7 @@
  */
 
 import path from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
 import { encodeJson, encodePcm, createFrameReader, KIND_JSON, KIND_PCM } from './audio-frame.js';
 import { floatToPcm16, pcm16ToFloat, createSilenceTracker } from './voice-audio-features.js';
 import {
@@ -210,6 +211,23 @@ function buildVad(modelDir, bufferSizeInSeconds = 30) {
   }, bufferSizeInSeconds);
 }
 
+/**
+ * Build the speaker-embedding extractor (voice spec §8) — a 3D-Speaker /
+ * WeSpeaker onnx that turns a clip into a fixed-length voiceprint vector. Unlike
+ * the recognisers this is a SINGLE onnx, so the model dir holds one `.onnx`; we
+ * accept an explicit `model.onnx` or the sole onnx in the directory.
+ */
+function buildSpeakerExtractor(modelDir) {
+  let model = path.join(modelDir, 'model.onnx');
+  if (!existsSync(model)) {
+    const onnx = readdirSync(modelDir).filter(f => f.endsWith('.onnx'));
+    if (onnx.length) model = path.join(modelDir, onnx[0]);
+  }
+  return new engine.SpeakerEmbeddingExtractor({
+    model, numThreads: threads.speaker, provider: 'cpu', debug: false,
+  });
+}
+
 /** Loaded models, by role. Lazy: nothing loads until something needs it. */
 const loaded = new Map();
 /**
@@ -378,6 +396,7 @@ const OPS = {
       else if (role === 'asr-offline') loaded.set(role, { session: buildRecognizer(modelDir), modelDir, at: Date.now() });
       else if (role === 'asr-streaming') loaded.set(role, { session: buildOnlineRecognizer(modelDir), modelDir, at: Date.now() });
       else if (role === 'vad') loaded.set(role, { session: buildVad(modelDir), modelDir, at: Date.now() });
+      else if (role === 'speaker') loaded.set(role, { session: buildSpeakerExtractor(modelDir), modelDir, at: Date.now() });
       else loaded.set(role, { modelDir, at: Date.now() });   // roles beyond these arrive later
       reportState();
       // The sample rate rides back on the load, because a streaming caller has
@@ -443,6 +462,42 @@ const OPS = {
       });
     } catch (err) {
       send({ reqId, ok: false, reason: 'transcribe-failed', detail: String(err?.message ?? err) });
+    }
+  },
+
+  /**
+   * Compute a speaker-embedding voiceprint (voice spec §8) from either a wav
+   * file (`wavPath` — the enrolment path) or raw float samples + rate
+   * (`samples`/`sampleRate` — a live VAD segment for the watchdog/diarizer).
+   * Returns a plain number[] embedding; the caller compares it (cosine) — the
+   * math lives in voice-embedding.js, not here. The extractor resamples to its
+   * own rate internally, so we pass the audio's native rate. A clip too short to
+   * be ready is an honest `not-ready`, never a fabricated vector.
+   */
+  async embed({ reqId, wavPath, samples, sampleRate }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    const held = loaded.get('speaker');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the speaker model is not loaded' });
+    try {
+      let s = samples, rate = sampleRate;
+      if (!(Array.isArray(s) || s instanceof Float32Array)) {
+        if (!wavPath || typeof wavPath !== 'string') {
+          return send({ reqId, ok: false, reason: 'bad-request', detail: 'wavPath or samples+sampleRate is required' });
+        }
+        const wave = engine.readWave(wavPath);
+        s = wave.samples; rate = wave.sampleRate;
+      }
+      const stream = held.session.createStream();
+      stream.acceptWaveform({ samples: s, sampleRate: Number(rate) || 16000 });
+      stream.inputFinished();
+      if (!held.session.isReady(stream)) {
+        return send({ reqId, ok: false, reason: 'not-ready', detail: 'clip too short to embed' });
+      }
+      const emb = held.session.compute(stream);
+      send({ reqId, ok: true, embedding: Array.from(emb), dim: emb.length });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'embed-failed', detail: String(err?.message ?? err) });
     }
   },
 

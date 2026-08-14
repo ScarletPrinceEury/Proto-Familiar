@@ -100,6 +100,7 @@ import { startMemorySweepLoop, stopMemorySweepLoop } from './memory-sweep-loop.j
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './needs-tracking-loop.js';
+import { startMediaRetentionLoop, stopMediaRetentionLoop } from './media-retention-loop.js';
 import { isNeedWindow } from './needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './reachout.js';
 import { recordReachOut } from './reach-out-log.js';
@@ -6106,6 +6107,13 @@ function startReachout() {
   // building the needs-fulfilment ledger. Stands down at moderate+ threat;
   // hard off-switch: PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1.
   startNeedsTrackingLoop();
+
+  // Media-retention (voice Pass 4, §9) — the 13th background worker. DEFAULT ON:
+  // aged voice-clip SOUNDS are curated (kept when the sound is the point, else
+  // let go to transcript-only — the words always survive). Defers during a live
+  // call and at moderate+ threat; hard off-switch:
+  // PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1.
+  startMediaRetentionLoop();
 }
 
 // ── Noticing loop (Initiative Pass 4) — the Familiar's own turn ──────
@@ -6391,6 +6399,7 @@ async function handleSignal(signal) {
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopContentRegateLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
+  try { await stopMediaRetentionLoop(); } catch { /* already stopped */ }
   try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
   try { await stopNoticingLoop(); } catch { /* already stopped */ }
   try { stopDiscordGateway(); } catch { /* already stopped */ }
