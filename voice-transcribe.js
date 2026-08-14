@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { getAssetMeta, setAssetDescription, assetBytesPath } from './media.js';
 import { composePlan } from './voice-models.js';
 import { fetchPlan, MODELS_SUBDIR } from './voice-fetch.js';
+import { normalizeTranscriptCase } from './voice-speech.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -213,7 +214,8 @@ export async function transcribeAsset(idOrSlug, { getWorker } = {}) {
       return { ok: false, reason: said?.reason ?? 'transcribe-failed', detail: said?.detail ?? null };
     }
 
-    const text = typeof said.text === 'string' ? said.text.trim() : '';
+    // Un-shout an all-caps result (a no-op on SenseVoice's already-cased output).
+    const text = normalizeTranscriptCase(typeof said.text === 'string' ? said.text.trim() : '');
     // A recording with no speech in it is a real outcome, not an error — my
     // human's pocket, a false start, a room with nobody talking. It is cached
     // so the same silence is not decoded twice, and it is said plainly.

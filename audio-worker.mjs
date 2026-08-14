@@ -389,7 +389,14 @@ const OPS = {
     const e = await ensureEngine();
     if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
     if (!role || !modelDir) return send({ reqId, ok: false, reason: 'bad-request', detail: 'role and modelDir are required' });
-    if (loaded.has(role)) return send({ reqId, ok: true, alreadyLoaded: true, role });
+    // Idempotent for the SAME model, but reload when the dir changed — otherwise
+    // switching the speaker model (CAM++ ↔ TitaNet-Large) would keep serving the
+    // old one until a restart, since roles are keyed by name not path.
+    const held = loaded.get(role);
+    if (held) {
+      if (held.modelDir === modelDir) return send({ reqId, ok: true, alreadyLoaded: true, role });
+      loaded.delete(role);
+    }
 
     try {
       if (role === 'tts') loaded.set(role, { session: buildPocketTts(modelDir), modelDir, at: Date.now() });

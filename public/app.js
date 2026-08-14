@@ -427,6 +427,7 @@ const state = {
   voiceAudioTaggingEnabled: false, // §8.4: annotation-only room-sound tags. Default OFF.
   voiceProactiveJoin: false,       // §7: join the ward's VC to speak a tier-gated check-in. Default OFF.
   voiceKeepAudio: false,           // §9: record a call to an audio asset (deliberate; default OFF)
+  voiceSpeakerModel: 'campplus',   // §8: which speaker-embedding model — 'campplus' (default) | 'titanet-large' (opt-in upgrade)
   // Transient (never synced/saved): images picked in the composer, awaiting send.
   pendingAttachments: [],
 
@@ -483,7 +484,7 @@ const SERVER_SYNCED_KEYS = [
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
-  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceKeepAudio',
+  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceKeepAudio', 'voiceSpeakerModel',
 ];
 function extractServerSettings(s) {
   const out = {};

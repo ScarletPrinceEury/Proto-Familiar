@@ -268,7 +268,7 @@ import { measureFootprint } from './voice-footprint.js';
 import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voice-clips.js';
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
 import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
-import { enrollWard, enrollVillager, speakerModelPresent } from './voice-enroll.js';
+import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './voice-enroll.js';
 import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './voiceprints.js';
 import { assetBytesPath } from './media.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
@@ -2210,7 +2210,8 @@ app.get('/api/voice/local', async (_req, res) => {
 app.get('/api/voice/voiceprints', async (_req, res) => {
   try {
     const { ward } = await readVoiceprints();
-    res.json({ ok: true, model: speakerModelPresent(), ward: !!ward, villagers: await listVillagerPrints() });
+    const s = readSettingsSync() || {};
+    res.json({ ok: true, model: speakerModelPresent(speakerModelDir(s)), speakerModel: s.voiceSpeakerModel === 'titanet-large' ? 'titanet-large' : 'campplus', ward: !!ward, villagers: await listVillagerPrints() });
   } catch (err) { res.json({ ok: false, error: String(err?.message ?? err) }); }
 });
 
@@ -2225,7 +2226,8 @@ app.post('/api/voice/enroll', async (req, res) => {
   const { who, name, ids } = req.body ?? {};
   if (!who || typeof who !== 'string') return res.status(400).json({ ok: false, reason: 'who-required' });
   if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ ok: false, reason: 'no-clips' });
-  if (!speakerModelPresent()) return res.json({ ok: false, reason: 'no-speaker-model', hint: 'the speaker-embedding model is not installed yet' });
+  const modelDir = speakerModelDir(readSettingsSync() || {});
+  if (!speakerModelPresent(modelDir)) return res.json({ ok: false, reason: 'no-speaker-model', hint: 'the speaker-embedding model is not installed yet' });
 
   // Resolve each id to a wav path (ward-private audio only). A missing/non-wav
   // asset is skipped with a note rather than failing the whole enrolment.
@@ -2239,7 +2241,7 @@ app.post('/api/voice/enroll', async (req, res) => {
   }
   if (!wavPaths.length) return res.json({ ok: false, reason: 'no-usable-clips', skipped });
 
-  const deps = { getWorker: () => listeningWorker({ rootDir: __dirname }) };
+  const deps = { getWorker: () => listeningWorker({ rootDir: __dirname }), modelDir };
   const r = who === 'ward'
     ? await enrollWard(wavPaths, deps)
     : await enrollVillager(who, wavPaths, { name: typeof name === 'string' ? name : null, ...deps });

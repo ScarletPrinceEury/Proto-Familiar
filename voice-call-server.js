@@ -39,7 +39,7 @@ import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createCallGuard } from './voice-call-guard.js';
 import { getWardPrint } from './voiceprints.js';
-import { SPEAKER_MODEL_DIR, speakerModelPresent } from './voice-enroll.js';
+import { speakerModelDir, speakerModelPresent } from './voice-enroll.js';
 
 const WS_PATH = '/api/voice/call';
 
@@ -137,7 +137,7 @@ export function attachVoiceCall(deps) {
     try {
       const s = readSettings() || {};
       const policy = s.voiceGuestPolicy ?? 'note';
-      if (policy !== 'ignore' && speakerModelPresent(SPEAKER_MODEL_DIR)) {
+      if (policy !== 'ignore' && speakerModelPresent(speakerModelDir(s))) {
         const wardPrint = await getWardPrint();
         if (wardPrint) {
           guard = createCallGuard({
@@ -158,10 +158,11 @@ export function attachVoiceCall(deps) {
   // (§8.2). Returns null (speaker ID off, no model, no worker) rather than an
   // error shape, so a non-array never reaches the guard's cosine. Never throws.
   async function embedSegment(samples, sampleRate) {
-    if (!speakerModelPresent(SPEAKER_MODEL_DIR)) return null;
+    const modelDir = speakerModelDir(readSettings() || {});
+    if (!speakerModelPresent(modelDir)) return null;
     const out = await getWorkerThen(async (w) => {
       try {
-        const loaded = await w.request({ op: 'load', role: 'speaker', modelDir: SPEAKER_MODEL_DIR }, { timeoutMs: 180_000 });
+        const loaded = await w.request({ op: 'load', role: 'speaker', modelDir }, { timeoutMs: 180_000 });
         if (!loaded?.ok) return null;
         const r = await w.request({ op: 'embed', samples: Array.from(samples), sampleRate }, { timeoutMs: 30_000 });
         return r?.ok && Array.isArray(r.embedding) ? r.embedding : null;
