@@ -2443,9 +2443,16 @@ against the MSVC runtime, and `uv`'s standalone Python doesn't ship it the way
 conda does (astral-sh/uv#18413) — a dev machine usually already has the redist
 from something else, a fresh one doesn't, so "same hardware, mine works, theirs
 doesn't." `ensureWindowsMsvcRuntime` (voice-backend.js) closes that gap: on
-Windows it installs cgohlke's `msvc-runtime` wheel into the venv, dropping the
-runtime DLLs next to the venv python where the loader finds them — no admin, no
-system-wide redist. It runs from **every** install/repair path (the
+Windows it installs cgohlke's `msvc-runtime` wheel into the venv to ACQUIRE the
+runtime DLLs, then **copies them into `torch/lib`** — because the wheel drops
+them beside python.exe (sys.prefix / Scripts), which is *not* where torch looks.
+torch loads c10.dll from `torch/lib` and Python 3.8+ resolves that DLL's own
+dependencies from `torch/lib` + `add_dll_directory` dirs + system dirs only —
+never sys.prefix or PATH — so the runtime is discoverable only if it sits in
+`torch/lib` itself (the first version of this fix installed the wheel and stopped
+there, and Kyutai still failed with WinError 126). The copy is a pure, testable
+helper (`placeMsvcRuntimeBesideTorch`), idempotent, re-run after every venv sync.
+No admin, no system-wide redist. It runs from **every** install/repair path (the
 `ensure-voicebox.mjs` CLI, the Settings/first-use auto-install it shells, and
 `rebuildVoicebox`), best-effort (older Python has no wheel → the built-in engine
 still covers it). `POST /api/voice/fix-kyutai` rebuilds the venv, adds the

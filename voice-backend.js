@@ -206,6 +206,91 @@ async function haveUv() {
 }
 
 /**
+ * The MSVC runtime DLLs torch's native libraries (c10.dll and friends) depend
+ * on. We copy whichever of these we find; torch only strictly needs the first
+ * three, but placing the whole set is harmless and covers future wheels.
+ */
+const TORCH_MSVC_DLLS = Object.freeze([
+  'vcruntime140.dll', 'vcruntime140_1.dll',
+  'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+  'concrt140.dll', 'vccorlib140.dll',
+]);
+
+/**
+ * Find the MSVC runtime DLLs somewhere inside the venv.
+ *
+ * `msvc-runtime` doesn't put them in a stable place across versions — usually
+ * next to python.exe (sys.prefix) or in Scripts/, sometimes as package data —
+ * so this checks the known spots first, then falls back to a bounded walk of
+ * site-packages (skipping torch itself, which is huge and whose own DLLs are
+ * not the runtime we're placing).
+ * @returns {Promise<Map<string,string>>} lowercase dll name → absolute path
+ */
+async function findMsvcDlls(venvDir) {
+  const wanted = new Set(TORCH_MSVC_DLLS);
+  const found = new Map();
+  const collect = async (dir) => {
+    let entries = [];
+    try { entries = await fs.readdir(dir); } catch { return; }
+    for (const name of entries) {
+      const lower = name.toLowerCase();
+      if (wanted.has(lower) && !found.has(lower)) found.set(lower, path.join(dir, name));
+    }
+  };
+  for (const dir of [venvDir, path.join(venvDir, 'Scripts'), path.join(venvDir, 'Lib', 'site-packages')]) {
+    await collect(dir);
+  }
+  if (found.size >= wanted.size) return found;
+
+  const walk = async (dir, depth) => {
+    if (depth < 0 || found.size >= wanted.size) return;
+    let entries = [];
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (ent.isDirectory()) {
+        if (ent.name.toLowerCase() === 'torch') continue;   // huge, and not the source
+        await walk(path.join(dir, ent.name), depth - 1);
+      } else {
+        const lower = ent.name.toLowerCase();
+        if (wanted.has(lower) && !found.has(lower)) found.set(lower, path.join(dir, ent.name));
+      }
+    }
+  };
+  await walk(path.join(venvDir, 'Lib', 'site-packages'), 3);
+  return found;
+}
+
+/**
+ * Put the MSVC runtime DLLs where torch actually loads them from.
+ *
+ * The subtle bug this closes: `msvc-runtime` drops the DLLs beside python.exe
+ * (sys.prefix / Scripts), but that is NOT where torch's native loader looks.
+ * On Python 3.8+ Windows resolves a DLL's dependencies from the DLL's OWN
+ * directory + any os.add_dll_directory() dirs + the system dirs — never
+ * sys.prefix, never PATH. torch's c10.dll lives in torch/lib and torch
+ * add_dll_directory's exactly that folder, so the runtime is only discoverable
+ * if it sits THERE. Copying it in is the step that actually cures WinError 126.
+ *
+ * Pure file-ops and platform-independent (the Windows-only decision lives in the
+ * caller) so the copy is unit-testable off Windows.
+ * @returns {Promise<{libDir:string|null, found:string[], copied:string[]}>}
+ */
+export async function placeMsvcRuntimeBesideTorch({ venvDir, onLog = () => {} } = {}) {
+  const libDir = path.join(venvDir, 'Lib', 'site-packages', 'torch', 'lib');
+  if (!(await exists(libDir))) return { libDir: null, found: [], copied: [] };
+
+  const dlls = await findMsvcDlls(venvDir);
+  const copied = [];
+  for (const [name, src] of dlls) {
+    const dst = path.join(libDir, name);
+    if (await exists(dst)) continue;   // torch shipped its own — leave it be
+    try { await fs.copyFile(src, dst); copied.push(name); }
+    catch (err) { onLog(`could not place ${name} beside torch: ${err?.message ?? err}`); }
+  }
+  return { libDir, found: [...dlls.keys()], copied };
+}
+
+/**
  * Give torch its Windows runtime, so a clean machine doesn't hit WinError 126.
  *
  * This is the real reason "same hardware, mine works, theirs doesn't": torch's
@@ -215,19 +300,23 @@ async function haveUv() {
  * usually already has the redist from something else; a fresh one doesn't, and
  * torch's c10.dll then can't find its dependency and refuses to load.
  *
- * cgohlke's `msvc-runtime` wheel carries exactly those DLLs and drops them next
- * to the venv's python.exe (sys.prefix / Scripts), where the loader finds them —
- * no admin, no system-wide redist install, no separate step for my human. Runs
- * as part of every install/repair so the environment is self-contained.
+ * cgohlke's `msvc-runtime` wheel carries exactly those DLLs — but it drops them
+ * beside python.exe (sys.prefix / Scripts), which the FIRST version of this fix
+ * assumed torch would search. It doesn't: torch loads c10.dll from torch/lib and
+ * Python 3.8+ resolves that DLL's own dependencies only from torch/lib +
+ * add_dll_directory dirs + system dirs. So we install the wheel to ACQUIRE the
+ * DLLs, then copy them into torch/lib where the loader will actually find them.
+ * No admin, no system-wide redist, no separate step for my human, self-contained.
  *
- * Best-effort by design: it only has wheels for Python 3.11+, so on an older
- * interpreter (or any resolve failure) it logs and returns — the built-in engine
- * still speaks, and a hard failure here must never sink the whole install.
- * No-op off Windows, where torch needs nothing of the sort.
+ * Best-effort by design: `msvc-runtime` only has wheels for Python 3.11+, so on
+ * an older interpreter (or any resolve failure) it logs and returns — the
+ * built-in engine still speaks, and a hard failure here must never sink the whole
+ * install. No-op off Windows, where torch needs nothing of the sort.
  */
 export async function ensureWindowsMsvcRuntime({ rootDir = process.cwd(), onLog = () => {} } = {}) {
   if (process.platform !== 'win32') return { ok: true, skipped: 'not-windows' };
-  const py = await voiceboxPython(asRoot(rootDir));
+  const root = asRoot(rootDir);
+  const py = await voiceboxPython(root);
   if (!py) return { ok: false, reason: 'no-python', detail: 'no venv interpreter to install the runtime into' };
 
   onLog('ensuring the Visual C++ runtime torch needs (msvc-runtime)…');
@@ -237,7 +326,23 @@ export async function ensureWindowsMsvcRuntime({ rootDir = process.cwd(), onLog 
     onLog('could not add the runtime automatically — the built-in voice still works; the Visual C++ redistributable would enable Kyutai.');
     return { ok: false, reason: 'runtime-install-failed', detail: r.detail };
   }
-  return { ok: true, installed: true };
+
+  // Installing the wheel is only half of it — the DLLs land where torch never
+  // looks. Copy them into torch/lib, the one directory its native loader searches.
+  const venvDir = path.join(root, VOICEBOX_SUBDIR, '.venv');
+  const placed = await placeMsvcRuntimeBesideTorch({ venvDir, onLog });
+  if (!placed.libDir) {
+    onLog('torch/lib not found in the venv — cannot place the runtime where torch looks.');
+    return { ok: false, reason: 'no-torch-lib', detail: 'torch is not installed in the voicebox venv' };
+  }
+  if (placed.found.length === 0) {
+    onLog('installed msvc-runtime but found none of its DLLs to copy — the system Visual C++ redistributable is the fallback.');
+    return { ok: false, reason: 'no-runtime-dlls', detail: 'msvc-runtime installed but its DLLs were not found in the venv' };
+  }
+  onLog(placed.copied.length
+    ? `placed ${placed.copied.length} runtime DLL(s) where torch loads them (${placed.copied.join(', ')}).`
+    : 'the runtime was already in place beside torch.');
+  return { ok: true, installed: true, copied: placed.copied };
 }
 
 /**
@@ -281,7 +386,7 @@ export async function rebuildVoicebox({ rootDir = process.cwd(), onLog = () => {
     return {
       ok: false, reason: 'torch-broken', detail: probe.detail,
       hint: winDll
-        ? "I rebuilt the environment and tried to add the Visual C++ runtime torch needs, but it still can't load its native library. As a last resort install the official Microsoft Visual C++ Redistributable (vc_redist.x64 — aka.ms/vs/17/release/vc_redist.x64.exe) and restart. Meanwhile the built-in voice still speaks."
+        ? "I rebuilt the environment and copied the Visual C++ runtime into torch's own folder, but it still can't load its native library. As a last resort install the official Microsoft Visual C++ Redistributable (vc_redist.x64 — aka.ms/vs/17/release/vc_redist.x64.exe) and restart. Meanwhile the built-in voice still speaks."
         : 'torch rebuilt but still fails to import; see the detail for the underlying error.',
     };
   }
