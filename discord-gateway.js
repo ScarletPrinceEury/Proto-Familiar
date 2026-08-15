@@ -2291,6 +2291,21 @@ function recordVoiceState(d) {
 /** The voice channel a user is currently in, or null. */
 function voiceChannelOf(guildId, userId) { return gw.voiceStates.get(guildId)?.get(userId) ?? null; }
 
+/** Where the ward is sitting in voice right now, across every tracked guild, or
+ *  null. Used by the proactive-voice push adapter (§7): when there is no live
+ *  call and `voiceProactiveJoin` is on, this is how I find the channel to join to
+ *  speak a check-in. First match wins (a user is in at most one VC per guild, and
+ *  effectively one across Discord). */
+export function findWardVoiceChannel(wardUserId) {
+  const ward = String(wardUserId ?? '').trim();
+  if (!ward) return null;
+  for (const [guildId, g] of gw.voiceStates) {
+    const channelId = g.get(ward);
+    if (channelId) return { guildId, channelId };
+  }
+  return null;
+}
+
 /** Everyone currently in a given voice channel (user ids). The voice audience
  *  gate needs the COMPLETE set present — an undercount loosens the gate. */
 export function discordVoiceChannelMembers(guildId, channelId) {

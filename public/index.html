@@ -248,6 +248,10 @@
             <input type="number" id="voice-call-settle" min="0" max="4000" step="250" style="width:6em" aria-label="Milliseconds of pause before the Familiar answers on a call">
             <span class="field-hint">ms — higher = I let you finish a longer thought before I answer (0 = reply the moment you stop). Applies to Discord calls and web open-mic.</span>
           </div>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-proactive-join-toggle">
+            <span>Let me speak check-ins in Discord voice — when I have something to say and you're sitting alone in a voice channel, I'll join and say it aloud, then leave. Only ever when you're alone there; if anyone else is present it stays a private message instead. Off by default.</span>
+          </label>
 
           <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Who's speaking (voiceprint)</h4>
           <p class="field-hint">If I learn your voice, I can tell on a call when someone else is in the room and keep our private things private until we're alone again. Your voiceprint stays on this machine and is never synced.</p>

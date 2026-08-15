@@ -33,7 +33,7 @@
  * a test injects a fake. Same discipline as the push-adapter registry.
  */
 
-import { promises as fsp, mkdirSync } from 'node:fs';
+import { promises as fsp, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pcm16ToFloat } from './voice-audio-features.js';
@@ -520,5 +520,19 @@ export async function isCallActiveFromFile(tomesDir = DEFAULT_TOMES_DIR) {
   try {
     const raw = await fsp.readFile(callStatePath(tomesDir), 'utf8');
     return Boolean(JSON.parse(raw)?.active);
+  } catch { return false; }
+}
+
+/**
+ * Sync sibling of `isCallActiveFromFile`, for the ONE place that needs the answer
+ * without awaiting: a push-adapter factory (evaluated synchronously per dispatch)
+ * deciding whether a call is already live on the OTHER transport, so the Discord
+ * proactive-join path never fires while a web call is speaking (they share the
+ * one voice connection, and two 'voice-call' deliveries would collide). Same
+ * fail-safe: an absent/broken file reads as NOT active.
+ */
+export function isCallActiveFromFileSync(tomesDir = DEFAULT_TOMES_DIR) {
+  try {
+    return Boolean(JSON.parse(readFileSync(callStatePath(tomesDir), 'utf8'))?.active);
   } catch { return false; }
 }

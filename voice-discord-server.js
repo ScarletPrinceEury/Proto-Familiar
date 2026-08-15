@@ -25,10 +25,11 @@
 
 import path from 'node:path';
 
-import { createCallEngine, isCallActiveFromFile } from './call-engine.js';
+import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId } from './discord-gateway.js';
-import { resolveCallAudience } from './voice-call-audience.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel } from './discord-gateway.js';
+import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
+import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { findVillagerByAlias, getRegistry } from './village.js';
 import { audienceTagFor } from './audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
@@ -355,6 +356,93 @@ export function attachDiscordVoice(deps) {
     refToUser.clear();
     return r;
   }
+
+  // ── Proactive voice into Discord (spec §7) ───────────────────────────────
+  // The Discord half of the web `voice-call` push adapter. Two ways a proactive
+  // outbox item (a triage check-in, a reminder, a warm reach-out) reaches my
+  // human by voice on Discord:
+  //   1. A call is already live → speak it into the call.
+  //   2. No call, but `voiceProactiveJoin` is on and my human is sitting in a VC →
+  //      join that channel, speak the check-in, and leave. (Discord can't ring a
+  //      human; sitting in a channel is the closest thing to being reachable.)
+  // BOTH are gated on my human being the ONLY human present (`wardAlone`): a
+  // private check-in must never be spoken aloud where a villager or a stranger can
+  // hear it. When it can't be spoken privately, this adapter declines and the item
+  // still lands through the private channels (the webhook / the gateway bot-DM).
+  //
+  // The name is 'voice-call' — the SAME channel the web adapter records under — so
+  // a check-in spoken to my human here earns the §10 escalation factor exactly
+  // like a web call (`contactDeadlineFor` reads `delivery['voice-call']`). The two
+  // factories never both deliver: at most one voice connection is live across the
+  // transports (the shared call-state lock), and the proactive-join branch stands
+  // down whenever ANY call is active (the sync file read below), so the single
+  // 'voice-call' delivery record is never overwritten by a colliding second one.
+  const tomesDir = path.join(rootDir, 'tomes');
+  const speakItem = async (item) => {
+    const text = speakableText(formatItemForPush(item))?.text?.trim();
+    if (!text) return { ok: false, error: 'nothing speakable in this item' };
+    const heard = await engine.speakProactive(() => synthesize(text));
+    return heard;
+  };
+
+  registerPushAdapterFactory((s) => {
+    const wardUserId = String(s?.discordWardUserId ?? '').trim();
+    const botId = discordBotUserId();
+
+    // 1) A live Discord call → speak into it, but only if my human is alone.
+    if (engine.isCallActive()) {
+      return {
+        name: 'voice-call',
+        deliver: async (item) => {
+          try {
+            const meta = callMeta.get(engine.currentCallId());
+            const members = meta ? discordVoiceChannelMembers(meta.guildId, meta.channelId) : [];
+            const { wardPresent, wardAlone } = wardVoiceState(members, { wardUserId, botId });
+            if (!wardAlone) {
+              return { ok: false, error: wardPresent ? 'others present — kept private, not spoken aloud' : 'my human is not in the call' };
+            }
+            const heard = await speakItem(item);
+            return heard ? { ok: true, meta: { wardPresent: true } } : { ok: false, error: 'call ended before it could be spoken' };
+          } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+        },
+      };
+    }
+
+    // 2) No live call → proactive join, only if enabled and viable RIGHT NOW.
+    // Decide viability synchronously in the factory so a non-viable dispatch adds
+    // no 'voice-call' record at all (and never collides with the web adapter).
+    if (!Boolean(s?.voiceProactiveJoin) || discordVoiceDisabled() || !wardUserId) return null;
+    if (isCallActiveFromFileSync(tomesDir)) return null;   // a call is live on the other transport — that path speaks
+    const where = findWardVoiceChannel(wardUserId);
+    if (!where) return null;                                // my human isn't sitting in any VC
+    const { wardAlone } = wardVoiceState(discordVoiceChannelMembers(where.guildId, where.channelId), { wardUserId, botId });
+    if (!wardAlone) return null;                            // someone else is there — don't join to speak something private
+
+    return {
+      name: 'voice-call',
+      deliver: async (item) => {
+        // Re-check at delivery time — the roster or call state may have shifted
+        // between the factory's synchronous decision and now (fail-closed).
+        if (engine.isCallActive() || await isCallActiveFromFile(tomesDir)) return { ok: false, error: 'a call became active — not joining' };
+        const now = findWardVoiceChannel(wardUserId);
+        if (!now) return { ok: false, error: 'my human left voice before I could join' };
+        const still = wardVoiceState(discordVoiceChannelMembers(now.guildId, now.channelId), { wardUserId, botId });
+        if (!still.wardAlone) return { ok: false, error: 'someone else joined — kept private, not spoken aloud' };
+
+        const j = await joinVoiceCall({
+          guildId: now.guildId, channelId: now.channelId, wardUserId,
+          nameForUser: (id) => `guest-${String(id).slice(0, 6)}`,
+        });
+        if (!j?.ok) return { ok: false, error: `proactive join failed: ${j.reason ?? 'unknown'}` };
+        log(`proactive join → speaking a check-in to my human in ${now.guildId}/${now.channelId}`);
+        try {
+          const heard = await speakItem(item);
+          return heard ? { ok: true, meta: { wardPresent: true, proactiveJoin: true } } : { ok: false, error: 'my human left before it could be spoken' };
+        } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+        finally { await leaveVoiceCall().catch(() => {}); }
+      },
+    };
+  });
 
   return { joinVoiceCall, leaveVoiceCall, isCallActive: engine.isCallActive };
 }

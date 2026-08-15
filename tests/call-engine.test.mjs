@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createCallEngine, clearStaleCallState, isCallActiveFromFile, spokenTextForMs } from '../call-engine.js';
+import { createCallEngine, clearStaleCallState, isCallActiveFromFile, isCallActiveFromFileSync, spokenTextForMs } from '../call-engine.js';
 import { floatToPcm16, parseWav } from '../voice-audio-features.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -458,6 +458,20 @@ test('a stale active call-state file is cleared at boot, and reads fail-safe', a
     assert.equal(await isCallActiveFromFile(path.join(dir, 'nowhere')), false);
     await fs.writeFile(path.join(dir, '.call-state.json'), 'not json');
     assert.equal(await isCallActiveFromFile(dir), false);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('isCallActiveFromFileSync mirrors the async read (used by the proactive-voice factory)', async () => {
+  const dir = await tmp();
+  try {
+    // No file yet → not active (fail-safe), same as the async read.
+    assert.equal(isCallActiveFromFileSync(dir), false);
+    assert.equal(isCallActiveFromFileSync(path.join(dir, 'nowhere')), false);
+    await fs.writeFile(path.join(dir, '.call-state.json'), JSON.stringify({ active: true, callId: 'c' }));
+    assert.equal(isCallActiveFromFileSync(dir), true, 'a live call reads active');
+    assert.equal(isCallActiveFromFileSync(dir), await isCallActiveFromFile(dir), 'sync and async agree');
+    await fs.writeFile(path.join(dir, '.call-state.json'), 'not json');
+    assert.equal(isCallActiveFromFileSync(dir), false, 'a broken file fails safe to inactive');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 

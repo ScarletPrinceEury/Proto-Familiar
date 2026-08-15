@@ -3922,6 +3922,7 @@ function readSettingsFromUI() {
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
+  if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
   if ($('voice-call-settle') && $('voice-call-settle').value !== '') {
     const n = parseInt($('voice-call-settle').value, 10);
     if (Number.isFinite(n) && n >= 0) state.voiceCallSettleMs = Math.min(4000, n);
@@ -4093,6 +4094,7 @@ function writeSettingsToUI() {
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
+  if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
   if ($('voice-call-settle')) setIfNotFocused($('voice-call-settle'), 'value', String(state.voiceCallSettleMs ?? 1500));
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
@@ -5449,6 +5451,7 @@ function init() {
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode',
+    'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',

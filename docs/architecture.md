@@ -2790,13 +2790,27 @@ Shipped alongside:
   call with the ward present (`delivery['voice-call'].{status:'delivered',
   wardPresent:true}`). Tightens toward action only.
 - **Media-retention loop** — see the Autonomous-loops table (13th worker).
+- **Proactive voice → Discord (§7, `voice-discord-server.js`)** — the Discord half
+  of the web `voice-call` push adapter, registered under the SAME `voice-call`
+  name so a check-in spoken here earns the §10 escalation factor identically.
+  Two paths: (1) a live Discord call → speak the item into it; (2) no call +
+  `voiceProactiveJoin` (default OFF, ward toggle) + my human sitting in a VC →
+  transient join → speak → leave. BOTH gated on `wardVoiceState().wardAlone` —
+  a private check-in is never spoken where a villager/stranger (or any
+  unidentified member — fail-closed) can hear; when it can't be spoken privately
+  the adapter declines and the item still lands via the private channels
+  (webhook / bot-DM). The two `voice-call` factories never both deliver: at most
+  one voice connection is live (the shared call-state lock), and the proactive-join
+  branch stands down whenever any call is active (`isCallActiveFromFileSync` +
+  a delivery-time re-check), so the single delivery record is never overwritten.
+  `findWardVoiceChannel` (discord-gateway) locates my human's VC across guilds.
+  Off-switch: the whole feature rides `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`.
 
-**Remaining wiring (follow-up):** the Discord VC `voice-call` push adapter
-(proactive voice with roster-based `wardPresent`, §7) and audio-tagging annotation
-(§8.4). Done: enrolment endpoints + UI, the guest watchdog + diarizer integration
-into the call engine (§8.2/§8.3), the web `voice-call` push adapter (proactive
-voice), ward-voice threat scoring (§10, ward-signed §16.1), and the speaker-model
-pin/download (`voice-pin.js` + the in-UI downloader).
+**Remaining wiring (follow-up):** audio-tagging annotation (§8.4). Done:
+enrolment endpoints + UI, the guest watchdog + diarizer integration into the call
+engine (§8.2/§8.3), the web AND Discord `voice-call` push adapters (proactive
+voice + §7 Discord proactive-join), ward-voice threat scoring (§10, ward-signed
+§16.1), and the speaker-model pin/download (`voice-pin.js` + the in-UI downloader).
 
 ## Security design
 
