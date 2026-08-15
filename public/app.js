@@ -3922,6 +3922,7 @@ function readSettingsFromUI() {
   if ($('voice-call-lang') && $('voice-call-lang').value) state.voiceAsrLanguage = $('voice-call-lang').value;
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
+  if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
   if ($('voice-call-settle') && $('voice-call-settle').value !== '') {
     const n = parseInt($('voice-call-settle').value, 10);
     if (Number.isFinite(n) && n >= 0) state.voiceCallSettleMs = Math.min(4000, n);
@@ -4093,6 +4094,7 @@ function writeSettingsToUI() {
   if ($('voice-call-lang')) setIfNotFocused($('voice-call-lang'), 'value', state.voiceAsrLanguage ?? 'en');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
+  if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
   if ($('voice-call-settle')) setIfNotFocused($('voice-call-settle'), 'value', String(state.voiceCallSettleMs ?? 1500));
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
   setRadio('weather-unit', state.weatherUnit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
@@ -5449,6 +5451,7 @@ function init() {
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode',
+    'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
@@ -5742,6 +5745,7 @@ function init() {
   $('voice-sidecar-cancel')?.addEventListener('click', cancelVoiceSidecar);
   $('voice-fix-kyutai')?.addEventListener('click', fixKyutai);
   initVoiceTuning();
+  initVoiceprints();
   refreshVoiceBackendPane();
   $('voice-picker-close')?.addEventListener('click', closeVoicePicker);
   $('voice-picker-done')?.addEventListener('click', closeVoicePicker);
@@ -8267,6 +8271,111 @@ async function initVoiceTuning() {
   };
   speed.addEventListener('change', save(() => ({ speed: Number(speed.value) }), false));
   temp.addEventListener('change', save(() => ({ temperature: Number(temp.value) }), true));
+}
+
+// ── Voiceprint enrolment + speaker-model download (voice Pass 4, §8) ─────────
+// Records a clip, uploads it as a ward-private audio asset, and enrols it as a
+// voiceprint. The biometric data lives only on the machine (server-side store);
+// this UI is the reachable surface for it. Blind-built — verified live by my human.
+let _vpRecording = null;
+
+async function refreshVoiceprintUi() {
+  const sel = $('speaker-model-select'), modelState = $('speaker-model-state');
+  const vpState = $('voiceprint-state'), forgetBtn = $('voiceprint-forget');
+  try {
+    const r = await (await fetch('/api/voice/voiceprints')).json();
+    if (sel && r?.speakerModel) sel.value = r.speakerModel;
+    const modelName = r?.speakerModel === 'titanet-large' ? 'TitaNet-Large' : 'CAM++';
+    if (modelState) modelState.textContent = r?.model
+      ? `${modelName} is installed and active.`
+      : `${modelName} isn't downloaded yet — click "Download model" (needed before I can learn a voice).`;
+    if (vpState && forgetBtn) {
+      if (r?.ward) { vpState.textContent = 'Your voiceprint is set. Re-record any time to refresh it.'; forgetBtn.classList.remove('hidden'); }
+      else { vpState.textContent = 'When you record, read a few sentences aloud for ~15 seconds so I get a good sense of your voice.'; forgetBtn.classList.add('hidden'); }
+    }
+  } catch { /* leave the static hints in place */ }
+}
+
+// Toggle-record: first click starts, second click stops → upload → enrol.
+async function recordVoiceprint({ who, name, btn, stateEl }) {
+  if (_vpRecording) {
+    const handle = _vpRecording; _vpRecording = null;
+    btn.classList.remove('is-recording');
+    if (btn.dataset.idle) btn.textContent = btn.dataset.idle;
+    if (stateEl) stateEl.textContent = 'Saving your voiceprint…';
+    let blob;
+    try { blob = await handle.stop(); }
+    catch (err) { if (stateEl) stateEl.textContent = `Recording failed: ${err?.message ?? err}`; return; }
+    try {
+      const { toWav } = await import('./voice-recorder.js');
+      const wav = await toWav(blob);
+      const up = await fetch('/api/media', { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+      if (!up.ok) throw new Error((await up.json().catch(() => ({})))?.error || `upload ${up.status}`);
+      const meta = await up.json();
+      const id = meta.slugs?.[0] || meta.id;
+      const body = { who, ids: [id], ...(name ? { name } : {}) };
+      const enr = await (await fetch('/api/voice/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+      if (stateEl) {
+        if (enr?.ok) stateEl.textContent = 'Got it — voiceprint saved.';
+        else if (enr?.reason === 'no-speaker-model') stateEl.textContent = "I don't have the recognition model yet — download it above first.";
+        else if (enr?.reason === 'no-usable-clips') stateEl.textContent = 'That clip was too short or unclear — try again, speaking for a bit longer.';
+        else stateEl.textContent = `Couldn't save the voiceprint (${enr?.reason ?? 'error'}).`;
+      }
+      await refreshVoiceprintUi();
+    } catch (err) { if (stateEl) stateEl.textContent = `Couldn't save the voiceprint: ${err?.message ?? err}`; }
+    return;
+  }
+  try {
+    const { startRecording } = await import('./voice-recorder.js');
+    _vpRecording = await startRecording({ onTick: (_s, label) => { if (stateEl) stateEl.textContent = `Recording ${label} — read aloud, then click Stop.`; } });
+    btn.dataset.idle = btn.textContent;
+    btn.textContent = '⏹ Stop';
+    btn.classList.add('is-recording');
+  } catch (err) {
+    _vpRecording = null;
+    const denied = /NotAllowed|Permission/i.test(String(err?.name ?? err));
+    if (stateEl) stateEl.textContent = denied ? 'I need microphone permission to learn your voice.' : `Couldn't start recording: ${err?.message ?? err}`;
+  }
+}
+
+async function initVoiceprints() {
+  const sel = $('speaker-model-select'), dl = $('speaker-model-download');
+  const recBtn = $('voiceprint-record'), forgetBtn = $('voiceprint-forget');
+  const vRecBtn = $('villager-print-record');
+  if (!recBtn) return;
+
+  if (sel) {
+    if (state.voiceSpeakerModel) sel.value = state.voiceSpeakerModel;
+    sel.addEventListener('change', () => {
+      state.voiceSpeakerModel = sel.value === 'titanet-large' ? 'titanet-large' : 'campplus';
+      saveSettings();
+      refreshVoiceprintUi();
+    });
+  }
+  dl?.addEventListener('click', async () => {
+    const st = $('speaker-model-state'), model = sel?.value || 'campplus';
+    dl.disabled = true;
+    if (st) st.textContent = `Downloading ${model === 'titanet-large' ? 'TitaNet-Large' : 'CAM++'}… (this can take a minute; progress prints in the server log)`;
+    try {
+      const r = await (await fetch('/api/voice/install-speaker-model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) })).json();
+      if (st) st.textContent = r?.ok ? 'Model installed and ready.' : `Download failed (${r?.reason ?? 'error'}${r?.detail ? ': ' + r.detail : ''}).`;
+    } catch (err) { if (st) st.textContent = `Download failed: ${err?.message ?? err}`; }
+    finally { dl.disabled = false; await refreshVoiceprintUi(); }
+  });
+  recBtn.addEventListener('click', () => recordVoiceprint({ who: 'ward', btn: recBtn, stateEl: $('voiceprint-state') }));
+  forgetBtn?.addEventListener('click', async () => {
+    try { await fetch('/api/voice/voiceprint?who=ward', { method: 'DELETE' }); } catch { /* */ }
+    await refreshVoiceprintUi();
+  });
+  vRecBtn?.addEventListener('click', () => {
+    const id = ($('villager-print-id')?.value || '').trim();
+    const name = ($('villager-print-name')?.value || '').trim();
+    const st = $('villager-print-state');
+    if (!id) { if (st) st.textContent = 'Enter their Village id first.'; return; }
+    recordVoiceprint({ who: id, name, btn: vRecBtn, stateEl: st });
+  });
+
+  refreshVoiceprintUi();
 }
 
 async function onVoiceBackendChange(ev) {

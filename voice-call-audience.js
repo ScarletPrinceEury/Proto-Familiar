@@ -58,3 +58,28 @@ export async function resolveCallAudience({
   try { audienceTag = resolveTag(audienceInput) || 'shared-room'; } catch { audienceTag = 'shared-room'; }
   return { audienceInput, othersPresent: true, audienceTag, sessionAudience: audienceInput };
 }
+
+/**
+ * Where my human stands in a voice-channel roster — the read the PROACTIVE-VOICE
+ * push adapter (spec §7) needs before speaking a check-in aloud. A private
+ * check-in must never be spoken into a channel where anyone but my human can hear
+ * it, so this is deliberately strict and fail-closed:
+ *
+ *   - `wardPresent` — my human is in the roster.
+ *   - `wardAlone`   — my human is the ONLY human present. The Familiar's own bot
+ *     doesn't count; ANY other member (a villager, a stranger, even another bot
+ *     we can't identify) makes it false, so an unknown voice can never be treated
+ *     as "alone with my human."
+ *
+ * Pure, so the privacy gate is unit-testable without a gateway.
+ * @param {string[]} members  uids currently in the voice channel
+ * @param {object} o  { wardUserId, botId }
+ * @returns {{ wardPresent:boolean, wardAlone:boolean, others:string[] }}
+ */
+export function wardVoiceState(members = [], { wardUserId, botId } = {}) {
+  const ward = String(wardUserId ?? '').trim();
+  const roster = (Array.isArray(members) ? members : []).map((m) => String(m));
+  const wardPresent = Boolean(ward) && roster.includes(ward);
+  const others = roster.filter((uid) => uid !== ward && !(botId && uid === botId));
+  return { wardPresent, wardAlone: wardPresent && others.length === 0, others };
+}

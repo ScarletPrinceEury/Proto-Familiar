@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveCallAudience } from '../voice-call-audience.js';
+import { resolveCallAudience, wardVoiceState } from '../voice-call-audience.js';
 
 // Fakes: a villager registry by uid, and a tag resolver that models the real
 // audience gate — a stranger present tightens to 'strangers', otherwise the
@@ -67,4 +67,45 @@ test('never throws — a bad resolveTag degrades to shared-room, not a crash', a
   });
   assert.equal(r.audienceTag, 'shared-room', 'a tag resolver failure fails to the safe shared-room, not ward-private');
   assert.equal(r.othersPresent, true);
+});
+
+// ── wardVoiceState — the proactive-voice privacy gate (§7) ─────────────────
+// A private check-in is only ever spoken aloud when my human is the ONLY human
+// present. These lock that gate down.
+
+test('wardVoiceState: my human alone → present AND alone', () => {
+  const r = wardVoiceState([WARD], { wardUserId: WARD, botId: BOT });
+  assert.equal(r.wardPresent, true);
+  assert.equal(r.wardAlone, true);
+  assert.deepEqual(r.others, []);
+});
+
+test('wardVoiceState: the bot alongside my human still counts as alone', () => {
+  const r = wardVoiceState([WARD, BOT], { wardUserId: WARD, botId: BOT });
+  assert.equal(r.wardAlone, true, 'my own bot is not a listener');
+});
+
+test('wardVoiceState: a villager present → present but NOT alone', () => {
+  const r = wardVoiceState([WARD, 'v-mira'], { wardUserId: WARD, botId: BOT });
+  assert.equal(r.wardPresent, true);
+  assert.equal(r.wardAlone, false, 'someone else can hear — never spoken aloud');
+  assert.deepEqual(r.others, ['v-mira']);
+});
+
+test('wardVoiceState: any unidentified member (even another bot) → NOT alone (fail-closed)', () => {
+  const r = wardVoiceState([WARD, 'other-bot'], { wardUserId: WARD, botId: BOT });
+  assert.equal(r.wardAlone, false, 'an unknown voice is never treated as alone-with-my-human');
+});
+
+test('wardVoiceState: my human not in the channel → not present, not alone', () => {
+  const r = wardVoiceState(['v-mira', 'v-tom'], { wardUserId: WARD, botId: BOT });
+  assert.equal(r.wardPresent, false);
+  assert.equal(r.wardAlone, false);
+});
+
+test('wardVoiceState: an empty roster, or no ward id, is a clean not-present (never throws)', () => {
+  assert.deepEqual(wardVoiceState([], { wardUserId: WARD, botId: BOT }), { wardPresent: false, wardAlone: false, others: [] });
+  const noId = wardVoiceState([WARD], { wardUserId: '', botId: BOT });
+  assert.equal(noId.wardPresent, false, 'no configured ward id → nobody is the ward');
+  assert.equal(noId.wardAlone, false);
 });
