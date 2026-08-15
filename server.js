@@ -269,6 +269,7 @@ import { listClips, measureClip, cachedFeatures, catalogueSummary } from './voic
 import { currentAudioWorker as currentAudioWorkerShared, listeningWorker, stopAudioWorker, VOICE_HARD_DISABLED } from './audio-worker-current.js';
 import { hearVoiceNotes, transcribeAsset, transcriptionAllowed, correctTranscript } from './voice-transcribe.js';
 import { enrollWard, enrollVillager, speakerModelPresent, speakerModelDir } from './voice-enroll.js';
+import { pinAndInstallModel } from './voice-pin.js';
 import { readVoiceprints, listVillagerPrints, deleteWardPrint, deleteVillagerPrint } from './voiceprints.js';
 import { assetBytesPath } from './media.js';
 import { DEFAULT_VOICE } from './voice-catalogue.js';
@@ -2253,6 +2254,35 @@ app.delete('/api/voice/voiceprint', async (req, res) => {
   const who = String(req.query?.who ?? '').trim();
   if (!who) return res.status(400).json({ ok: false, reason: 'who-required' });
   const r = who === 'ward' ? await deleteWardPrint() : await deleteVillagerPrint(who);
+  res.json(r);
+});
+
+/**
+ * POST /api/voice/install-speaker-model { model: 'campplus' | 'titanet-large' }
+ * Download + pin + install the chosen speaker-embedding model. The default
+ * (CAM++) and the opt-in upgrade (TitaNet-Large) map to their BASE_MODELS ids;
+ * the ward's explicit request is the trust decision (pin-on-demand). Progress
+ * lands in the terminal; the response reports the final outcome.
+ */
+const SPEAKER_MODEL_IDS = { campplus: 'speaker-embed', 'titanet-large': 'speaker-embed-large' };
+app.post('/api/voice/install-speaker-model', async (req, res) => {
+  if (VOICE_HARD_DISABLED) return res.json({ ok: false, reason: 'voice-disabled' });
+  const modelId = SPEAKER_MODEL_IDS[String(req.body?.model ?? '')];
+  if (!modelId) return res.status(400).json({ ok: false, reason: 'unknown-model', hint: "model must be 'campplus' or 'titanet-large'" });
+  console.log(`[voice] installing speaker model ${modelId}…`);
+  let lastPct = -1;
+  const r = await pinAndInstallModel(modelId, {
+    rootDir: __dirname,
+    onProgress: (e) => {
+      if ((e?.phase === 'measuring' || e?.phase === 'download') && e.totalBytes > 0) {
+        const pct = Math.floor((e.receivedBytes / e.totalBytes) * 10) * 10;
+        if (pct > lastPct) { lastPct = pct; console.log(`[voice]   speaker model ${pct}%`); }
+      } else if (e?.phase && e.phase !== 'measuring' && e.phase !== 'download') {
+        console.log(`[voice]   ${e.phase}${e.file ? ` ${e.file}` : ''}`);
+      }
+    },
+  });
+  console.log(r.ok ? `[voice] speaker model ${modelId} ready` : `[voice] speaker model ${modelId} failed: ${r.reason} ${r.detail ?? ''}`);
   res.json(r);
 });
 

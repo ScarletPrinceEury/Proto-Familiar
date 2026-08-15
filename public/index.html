@@ -248,6 +248,33 @@
             <input type="number" id="voice-call-settle" min="0" max="4000" step="250" style="width:6em" aria-label="Milliseconds of pause before the Familiar answers on a call">
             <span class="field-hint">ms — higher = I let you finish a longer thought before I answer (0 = reply the moment you stop). Applies to Discord calls and web open-mic.</span>
           </div>
+
+          <h4 class="section-label" style="margin-top:16px; font-size:0.9em; opacity:0.85">Who's speaking (voiceprint)</h4>
+          <p class="field-hint">If I learn your voice, I can tell on a call when someone else is in the room and keep our private things private until we're alone again. Your voiceprint stays on this machine and is never synced.</p>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px; flex-wrap:wrap">
+            <label for="speaker-model-select" style="font-size:0.85em">Recognition model</label>
+            <select id="speaker-model-select" aria-label="Speaker recognition model">
+              <option value="campplus">CAM++ — small &amp; fast (default)</option>
+              <option value="titanet-large">TitaNet-Large — more accurate, bigger (~97 MB)</option>
+            </select>
+            <button id="speaker-model-download" class="btn-secondary" type="button">⬇ Download model</button>
+          </div>
+          <p class="field-hint" id="speaker-model-state" style="margin-top:6px" aria-live="polite"></p>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
+            <button id="voiceprint-record" class="btn-secondary" type="button">🎙 Record my voiceprint</button>
+            <button id="voiceprint-forget" class="btn-secondary hidden" type="button">Forget my voiceprint</button>
+          </div>
+          <p class="field-hint" id="voiceprint-state" style="margin-top:6px" aria-live="polite">When you record, read a few sentences aloud for ~15 seconds so I get a good sense of your voice.</p>
+          <details style="margin-top:10px">
+            <summary style="cursor:pointer; font-size:0.85em">Add someone else's voice (optional)</summary>
+            <p class="field-hint" style="margin-top:6px">With their okay, record a short clip of a specific person from your Village so I can recognise them by name on a shared call. Their voiceprint also stays on this machine.</p>
+            <div class="action-row" style="margin-top:6px; align-items:center; gap:6px; flex-wrap:wrap">
+              <input id="villager-print-id" type="text" placeholder="their Village id" style="width:11em" aria-label="Villager id">
+              <input id="villager-print-name" type="text" placeholder="their name" style="width:8em" aria-label="Villager name">
+              <button id="villager-print-record" class="btn-secondary" type="button">🎙 Record</button>
+            </div>
+            <p class="field-hint" id="villager-print-state" style="margin-top:6px" aria-live="polite"></p>
+          </details>
         </div>
 
         <!-- Tomes -->
