@@ -29,7 +29,7 @@ import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
 import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel } from './discord-gateway.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
-import { createTagSegment, createRoomListener } from './voice-tagging.js';
+import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { findVillagerByAlias, getRegistry } from './village.js';
 import { audienceTagFor } from './audience.js';
@@ -172,7 +172,7 @@ export function attachDiscordVoice(deps) {
     // call. Annotation only: never stored, never moves the threat tier.
     let turnHistory = hist;
     if (Array.isArray(ctx.roomSounds) && ctx.roomSounds.length) {
-      try { const line = roomListenerFor(ctx.callId).note(ctx.roomSounds); if (line) turnHistory = [...hist, { role: 'system', content: line }]; }
+      try { const line = roomListeners.for(ctx.callId).note(ctx.roomSounds); if (line) turnHistory = [...hist, { role: 'system', content: line }]; }
       catch (err) { log(`room-sound note failed: ${err?.message ?? err}`); }
     }
 
@@ -261,12 +261,7 @@ export function attachDiscordVoice(deps) {
   // Room-sound tagging (§8.4) — inert until the ward opts in AND the model is
   // installed. A per-call listener dedups so a persistent sound is named once.
   const tagSegment = createTagSegment({ getWorkerThen: (fn) => getWorkerThen(fn), readSettings, log });
-  const roomListeners = new Map();   // callId → room listener
-  function roomListenerFor(callId) {
-    let l = roomListeners.get(callId);
-    if (!l) { l = createRoomListener(); roomListeners.set(callId, l); }
-    return l;
-  }
+  const roomListeners = createRoomListenerMap();
 
   const engine = createCallEngine({
     worker: {
@@ -372,7 +367,7 @@ export function attachDiscordVoice(deps) {
     if (callId) {
       memorizeCall(callId).catch(() => {});
       callHistory.delete(callId); callTag.delete(callId); callMeta.delete(callId);
-      roomListeners.delete(callId);   // §8.4 per-call "already mentioned" set
+      roomListeners.forget(callId);   // §8.4 per-call "already mentioned" set
     }
     refToUser.clear();
     return r;

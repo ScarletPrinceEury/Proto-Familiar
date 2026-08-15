@@ -3,7 +3,9 @@
  *
  * Two capabilities, kept off the orchestration files (cerebellum only
  * registers the tool defs and delegates here):
- *   - searchWeb(query, settings)  → a local, self-hosted SearXNG JSON API
+ *   - searchWeb(query, settings)  → the keyless DuckDuckGo floor, or a chosen
+ *                                   search API (Marginalia/Tavily/Brave/Google)
+ *                                   when webSearchBackend='api' (websearch-providers.js)
  *   - readWebpage(url, settings)  → guardedFetch → linkedom → Readability
  *                                   → turndown → clean markdown
  *
@@ -11,9 +13,12 @@
  * SSRF + timeout boundary. Web content is UNTRUSTED external data flowing
  * toward a Familiar that holds high-stakes tools (contact_trusted_person,
  * delete_memory, relay_message, identity edits), so the guard is not
- * optional: read_webpage always routes through it. searchWeb talks only
- * to the one sanctioned loopback — the configured SearXNG base URL — and
- * so does not use the public-only guard.
+ * optional: read_webpage always routes through it. searchWeb talks only to
+ * FIXED, known search endpoints (DuckDuckGo's host, or the selected provider's
+ * API host) — never an arbitrary URL — so it doesn't need the public-URL guard.
+ * (Historical: 0.7.x shipped a self-hosted SearXNG backend; it was removed in
+ * 0.7.38. If a self-hosted backend is ever reconsidered, prefer a thin
+ * "point at a URL you run" client — see docs/websearch-build-spec.md.)
  *
  * Failure cases return calm first-person strings the Familiar reads back;
  * the cerebellum executors are a thin pass-through with their own catch as

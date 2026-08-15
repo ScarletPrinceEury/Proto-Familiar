@@ -95,3 +95,21 @@ export function createRoomListener() {
     reset() { seen.clear(); },
   };
 }
+
+/**
+ * A per-call map of room listeners, so both call servers (web + Discord) share ONE
+ * lazy get-or-create instead of each keeping its own identical Map + helper.
+ * `.for(callId)` returns (creating on first use) that call's listener; `.forget`
+ * drops it on hang-up.
+ */
+export function createRoomListenerMap() {
+  const byCall = new Map();
+  return {
+    for(callId) {
+      let l = byCall.get(callId);
+      if (!l) { l = createRoomListener(); byCall.set(callId, l); }
+      return l;
+    },
+    forget(callId) { byCall.delete(callId); },
+  };
+}
