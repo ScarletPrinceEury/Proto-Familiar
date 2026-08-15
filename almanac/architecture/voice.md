@@ -56,6 +56,12 @@ sources:
   - id: app-js
     type: file
     path: public/app.js
+  - id: voice-audio-tags
+    type: file
+    path: voice-audio-tags.js
+  - id: voice-tagging
+    type: file
+    path: voice-tagging.js
 ---
 
 # Voice
@@ -67,9 +73,13 @@ measuring pass, and it built the supply chain, the disk-footprint budget, and a 
 a ward can run themselves to replace the spec's `~` estimates with numbers from their own
 machine [@pr-voice-pass-0] [@architecture-doc]. **Pass 1**, built on Pass 0's supply chain,
 shipped the first thing that actually speaks: per-message read-aloud text-to-speech
-[@architecture-doc]. Live conversation (streaming ASR, barge-in, the compute governor) and
-Discord voice are later passes, not yet built [@voice-build-spec]. This page covers both
-shipped passes; see [Vision and media](vision-and-media) for the sibling multimodal-input
+[@architecture-doc]. Later passes have since shipped live conversation and voiceprint enrolment
+(Pass 4, through 0.10.102-alpha) [@voice-tagging]; this page documents Pass 0 and Pass 1 in
+depth and does not yet cover Pass 2–4 in full. One Pass 4 piece is covered elsewhere: room-sound
+tagging (`voice-tagging.js`, `voice-audio-tags.js`) ships **annotation-only** by deliberate
+design — see [Safety spine](safety-spine)'s deferred-work section for why it stops short of using
+room sounds for care detection, and what a future ward-signed spec would need to decide
+[@voice-audio-tags]. See [Vision and media](vision-and-media) for the sibling multimodal-input
 milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
@@ -401,3 +411,5 @@ questions for the passes that follow [@pr-voice-pass-0]:
   copy are all specific applications of.
 - [Update](update) — the self-update mechanism whose static-assets-vs-registered-routes gap
   produced the "Fix Kyutai" 404 incident above, and applies to any future endpoint the same way.
+- [Safety spine](safety-spine) — why Pass 4's room-sound tagging is annotation-only, and the
+  ward decisions a future care-detection spec would need to answer.
