@@ -177,16 +177,23 @@ import {
   toolRoundsPerTurn,
   RELAY_TO_WARD_TOOL_NAME,
   RELAY_TO_WARD_TOOL,
+  VOICE_CALL_TOOLS,
 } from '../cerebellum.js';
 
 // Executors that are deliberately NOT in the always-advertised BUILTIN_TOOLS
-// because they are composed per-turn on a specific surface. `relay_to_ward`
-// is the villager→ward hand-off tool: it only ever appears on a Discord
-// villager turn (via RELAY_TO_WARD_TOOL in composeDiscordTools), never on a
-// ward chat turn — advertising it to the ward would be nonsense (they don't
-// relay to themselves). The reverse-parity check below exempts exactly this
-// set, derived from source so a rename keeps the exemption honest.
-const SEPARATELY_COMPOSED_EXECUTORS = new Set([RELAY_TO_WARD_TOOL_NAME]);
+// because they are composed per-turn on a specific surface:
+//   - `relay_to_ward` — the villager→ward hand-off, only on a Discord villager
+//     turn (via RELAY_TO_WARD_TOOL in composeDiscordTools).
+//   - join/leave_voice_call — ward-only, only on a Discord turn (VOICE_CALL_TOOLS
+//     appended in composeDiscordTools).
+// Advertising any of these to a ward web chat would be nonsense. The
+// reverse-parity check below exempts exactly this set, DERIVED FROM SOURCE
+// (not a hand-typed name list) so adding/renaming a per-surface tool keeps the
+// exemption honest instead of silently going stale.
+const SEPARATELY_COMPOSED_EXECUTORS = new Set([
+  RELAY_TO_WARD_TOOL_NAME,
+  ...VOICE_CALL_TOOLS.map((t) => t.function.name),
+]);
 
 test('BUILTIN_TOOLS carries the full registry in OpenAI function format', () => {
   assert.ok(BUILTIN_TOOLS.length >= 20);

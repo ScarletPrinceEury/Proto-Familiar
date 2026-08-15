@@ -23,6 +23,7 @@ import { fileURLToPath } from 'url';
 import { recentReachOuts, formatReachOutBlock } from './reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
+import { phylacteryToolError } from './phylactery-result.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2933,8 +2934,9 @@ export async function appendIdentity({ category, filename, content }) {
 }
 
 /**
- * Append content to a specific markdown section of a Phylactery identity file.
- * Auto-creates the section if the heading doesn't exist.
+ * Rewrite one markdown section of a Phylactery identity file (the `heading`
+ * names the section). Phylactery's identity_update_section is an alias for
+ * identity_rewrite_section — it REPLACES the section's body, it does not append.
  * @param {{ category: string, filename: string, heading: string, content: string }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
@@ -2942,10 +2944,23 @@ export async function updateIdentitySection({ category, filename, heading, conte
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   try {
-    await mcpClient.callTool({
+    // The tool's parameter is `section`, NOT `heading`. Sending `heading` left the
+    // required `section` missing, so the call failed validation and NOTHING was
+    // written — while the code below still returned ok. The sibling
+    // rewriteIdentitySection() has always sent `section`; this now matches it.
+    const result = await mcpClient.callTool({
       name: 'identity_update_section',
-      arguments: { category, filename, heading, content },
+      arguments: { category, filename, section: heading, content },
     });
+    // Phylactery reports failure as an isError result OR a plain "Failed: …"
+    // string (its tools return text, not JSON) — neither throws, so we MUST
+    // inspect the result or a failed write reads as success (the silent-failure
+    // this fixes). callTool only rejects on a transport/protocol error.
+    const err = phylacteryToolError(result);
+    if (err) {
+      console.error(`[thalamus] updateIdentitySection rejected for ${category}/${filename} § ${heading}: ${err}`);
+      return { ok: false, error: err };
+    }
     console.log(`[thalamus] updateIdentitySection() updated ${category}/${filename} § ${heading}`);
     return { ok: true };
   } catch (err) {

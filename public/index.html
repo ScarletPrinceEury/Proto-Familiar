@@ -184,7 +184,7 @@
             <input type="checkbox" id="read-aloud-default-toggle">
           </div>
           <p class="field-hint">Off by default. With it on, each reply is spoken as it arrives — no need to press 🔊 on every message. Press the button again, or just start typing, to cut it off. There is a 🔊 button under each of your Familiar's messages either way, and neither needs the voice-note microphone.</p>
-          <p class="field-hint" style="margin-top:10px"><strong>Voice notes:</strong> the microphone button sits next to the message box — press it, say what you meant, press it again. The words appear under the recording before you send, so you can check they were heard right. It all happens on this machine.</p>
+          <p class="field-hint" style="margin-top:10px"><strong>Voice notes:</strong> the microphone button sits next to the message box — press it, say what you meant, press it again. The words appear under the recording before you send, so you can check they were heard right. It all happens on this machine. The first recording downloads the listening model — 158 MB to fetch, 233 MB once unpacked (and briefly both at once while it unpacks).</p>
 
           <p class="field-hint" style="margin-top:14px">Listen to the reference voices my Familiar could speak with, and pick one.</p>
           <div class="action-row" style="margin-top:4px">
@@ -931,7 +931,9 @@
             </label>
             <span id="ke-mem-count" class="vl-count" aria-live="polite"></span>
             <button id="ke-mem-refresh" class="btn-ghost">Refresh</button>
+            <button id="ke-mem-audit" class="btn-ghost" type="button" title="Check which memories can't be rolled up into weekly/monthly summaries">Check consolidation</button>
           </div>
+          <div id="ke-mem-audit-panel" hidden aria-live="polite" style="margin:8px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px"></div>
           <div class="ke-split">
             <div class="ke-list" id="ke-mem-list"></div>
             <div class="ke-detail" id="ke-mem-detail">

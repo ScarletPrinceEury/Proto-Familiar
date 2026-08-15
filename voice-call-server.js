@@ -39,7 +39,7 @@ import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createCallGuard } from './voice-call-guard.js';
 import { createDiarizer } from './voice-diarize.js';
-import { createTagSegment, createRoomListener } from './voice-tagging.js';
+import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { getWardPrint, enrolledPrints } from './voiceprints.js';
 import { speakerModelDir, speakerModelPresent } from './voice-enroll.js';
 
@@ -95,7 +95,7 @@ export function attachVoiceCall(deps) {
   async function memorizeCall(callId) {
     guards.delete(callId);   // the per-call guest guard is done when the call is
     diarizers.delete(callId);   // and its call-scoped speaker clusters (§8.3)
-    roomListeners.delete(callId);   // and its room-sound "already mentioned" set (§8.4)
+    roomListeners.forget(callId);   // and its room-sound "already mentioned" set (§8.4)
     const sess = callSessions.get(callId);
     callSessions.delete(callId);
     if (!sess || sess.messages.length < 2) return;
@@ -228,12 +228,7 @@ export function attachVoiceCall(deps) {
   // dedups (a TV on the whole call is mentioned once) and turns the raw events into
   // a one-off "what I can hear" system note — never stored, never threat.
   const tagSegment = createTagSegment({ getWorkerThen: (fn) => getWorkerThen(fn), readSettings, log });
-  const roomListeners = new Map();   // callId → room listener
-  function roomListenerFor(callId) {
-    let l = roomListeners.get(callId);
-    if (!l) { l = createRoomListener(); roomListeners.set(callId, l); }
-    return l;
-  }
+  const roomListeners = createRoomListenerMap();
 
   // ── onTurn dep: a full chat turn via /api/chat ──────────────────────────
   const runVoiceChatTurn = createVoiceChatTurn({ port, readSettings, connectionForFeature, log });
@@ -284,7 +279,7 @@ export function attachVoiceCall(deps) {
     // §8.4 room-sound annotation — a one-off "what I can hear" line, deduped per
     // call. Annotation only: it never moves the threat tier and is never stored.
     if (Array.isArray(ctx.roomSounds) && ctx.roomSounds.length) {
-      try { const line = roomListenerFor(ctx.callId).note(ctx.roomSounds); if (line) notes.push(line); }
+      try { const line = roomListeners.for(ctx.callId).note(ctx.roomSounds); if (line) notes.push(line); }
       catch (err) { log(`room-sound note failed: ${err?.message ?? err}`); }
     }
     if (notes.length) turnHistory = [...hist, ...notes.map((content) => ({ role: 'system', content }))];
