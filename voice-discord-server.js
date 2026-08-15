@@ -29,6 +29,7 @@ import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
 import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel } from './discord-gateway.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
+import { createTagSegment, createRoomListener } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { findVillagerByAlias, getRegistry } from './village.js';
 import { audienceTagFor } from './audience.js';
@@ -167,7 +168,15 @@ export function attachDiscordVoice(deps) {
     if (callTag.get(ctx.callId) !== audienceTag) { callHistory.set(ctx.callId, []); callTag.set(ctx.callId, audienceTag); }
     const hist = callHistory.get(ctx.callId) ?? [];
 
-    const reply = await runVoiceChatTurn({ transcript: heard, history: hist, sessionAudience });
+    // §8.4 room-sound annotation — a one-off "what I can hear" line, deduped per
+    // call. Annotation only: never stored, never moves the threat tier.
+    let turnHistory = hist;
+    if (Array.isArray(ctx.roomSounds) && ctx.roomSounds.length) {
+      try { const line = roomListenerFor(ctx.callId).note(ctx.roomSounds); if (line) turnHistory = [...hist, { role: 'system', content: line }]; }
+      catch (err) { log(`room-sound note failed: ${err?.message ?? err}`); }
+    }
+
+    const reply = await runVoiceChatTurn({ transcript: heard, history: turnHistory, sessionAudience });
     if (reply) {
       callHistory.set(ctx.callId, [...hist, { role: 'user', content: heard }, { role: 'assistant', content: reply }].slice(-HISTORY_MAX));
       // Store the turn at the SAME tag the reply was gated to; attribute a
@@ -249,6 +258,16 @@ export function attachDiscordVoice(deps) {
     }
   }
 
+  // Room-sound tagging (§8.4) — inert until the ward opts in AND the model is
+  // installed. A per-call listener dedups so a persistent sound is named once.
+  const tagSegment = createTagSegment({ getWorkerThen: (fn) => getWorkerThen(fn), readSettings, log });
+  const roomListeners = new Map();   // callId → room listener
+  function roomListenerFor(callId) {
+    let l = roomListeners.get(callId);
+    if (!l) { l = createRoomListener(); roomListeners.set(callId, l); }
+    return l;
+  }
+
   const engine = createCallEngine({
     worker: {
       request: (...a) => getWorkerThen((w) => w.request(...a)),
@@ -269,6 +288,7 @@ export function attachDiscordVoice(deps) {
     // drop ambient-noise transcripts (traffic the recogniser heard as Chinese).
     turnSettleMs: () => voiceCallSettleMs(readSettings()),
     transcriptFilter: (t) => !isLikelyNoiseTranscript(t, { language: asrLang(readSettings()) }),
+    tagSegment,   // §8.4 room-sound tagging (annotation only)
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });
@@ -352,6 +372,7 @@ export function attachDiscordVoice(deps) {
     if (callId) {
       memorizeCall(callId).catch(() => {});
       callHistory.delete(callId); callTag.delete(callId); callMeta.delete(callId);
+      roomListeners.delete(callId);   // §8.4 per-call "already mentioned" set
     }
     refToUser.clear();
     return r;

@@ -46,6 +46,7 @@ const threads = {
   asr: Number(process.env.PF_AUDIO_THREADS_ASR) || 2,
   tts: Number(process.env.PF_AUDIO_THREADS_TTS) || 2,
   speaker: Number(process.env.PF_AUDIO_THREADS_SPEAKER) || 1,
+  tagging: Number(process.env.PF_AUDIO_THREADS_TAGGING) || 1,
 };
 
 /**
@@ -228,6 +229,32 @@ function buildSpeakerExtractor(modelDir) {
   });
 }
 
+/**
+ * Build the audio-tagging model (voice spec §8.4) — a zipformer AudioSet tagger
+ * that turns a clip into event probabilities ("Dog", "Television", …). The model
+ * dir holds ONE `.onnx` plus a class-labels file; we accept an explicit
+ * `model.onnx` or the sole onnx in the directory, and the labels CSV by its
+ * conventional name or the sole `.csv` present. A missing labels file is a clear
+ * throw (the tagger can't name events without it), not a silent mislabel.
+ */
+function buildAudioTagger(modelDir) {
+  let model = path.join(modelDir, 'model.onnx');
+  if (!existsSync(model)) {
+    const onnx = readdirSync(modelDir).filter((f) => f.endsWith('.onnx'));
+    if (onnx.length) model = path.join(modelDir, onnx[0]);
+  }
+  let labels = path.join(modelDir, 'class_labels_indices.csv');
+  if (!existsSync(labels)) {
+    const csv = readdirSync(modelDir).filter((f) => f.endsWith('.csv'));
+    if (csv.length) labels = path.join(modelDir, csv[0]);
+  }
+  if (!existsSync(labels)) throw new Error('audio-tagging labels file (class_labels_indices.csv) not found in the model dir');
+  return new engine.AudioTagging({
+    model: { zipformer: { model }, numThreads: threads.tagging, provider: 'cpu', debug: false },
+    labels,
+  });
+}
+
 /** Loaded models, by role. Lazy: nothing loads until something needs it. */
 const loaded = new Map();
 /**
@@ -404,6 +431,7 @@ const OPS = {
       else if (role === 'asr-streaming') loaded.set(role, { session: buildOnlineRecognizer(modelDir), modelDir, at: Date.now() });
       else if (role === 'vad') loaded.set(role, { session: buildVad(modelDir), modelDir, at: Date.now() });
       else if (role === 'speaker') loaded.set(role, { session: buildSpeakerExtractor(modelDir), modelDir, at: Date.now() });
+      else if (role === 'tagging') loaded.set(role, { session: buildAudioTagger(modelDir), modelDir, at: Date.now() });
       else loaded.set(role, { modelDir, at: Date.now() });   // roles beyond these arrive later
       reportState();
       // The sample rate rides back on the load, because a streaming caller has
@@ -505,6 +533,37 @@ const OPS = {
       send({ reqId, ok: true, embedding: Array.from(emb), dim: emb.length });
     } catch (err) {
       send({ reqId, ok: false, reason: 'embed-failed', detail: String(err?.message ?? err) });
+    }
+  },
+
+  /**
+   * Audio tagging (voice spec §8.4) — name the salient sounds in a clip, from a
+   * wav (`wavPath`) or raw float samples + rate (`samples`/`sampleRate`, a live
+   * VAD segment). Returns raw AudioSet events (`[{name, prob, index}]`); the
+   * CALLER classifies + phrases them (voice-audio-tags.js) — no judgment lives
+   * here, and nothing about tone/threat is read from them. `topK` bounds the
+   * result; the caller filters by confidence.
+   */
+  async tag({ reqId, wavPath, samples, sampleRate, topK = 8 }) {
+    const e = await ensureEngine();
+    if (!e.ok) return send({ reqId, ok: false, reason: e.reason, detail: e.detail });
+    const held = loaded.get('tagging');
+    if (!held?.session) return send({ reqId, ok: false, reason: 'not-loaded', detail: 'the audio-tagging model is not loaded' });
+    try {
+      let s = samples, rate = sampleRate;
+      if (!(Array.isArray(s) || s instanceof Float32Array)) {
+        if (!wavPath || typeof wavPath !== 'string') {
+          return send({ reqId, ok: false, reason: 'bad-request', detail: 'wavPath or samples+sampleRate is required' });
+        }
+        const wave = engine.readWave(wavPath);
+        s = wave.samples; rate = wave.sampleRate;
+      }
+      const stream = held.session.createStream();
+      stream.acceptWaveform({ samples: s, sampleRate: Number(rate) || 16000 });
+      const events = held.session.compute(stream, Number(topK) || 8);
+      send({ reqId, ok: true, events: Array.isArray(events) ? events.map((ev) => ({ name: ev?.name ?? '', prob: Number(ev?.prob) || 0, index: ev?.index ?? -1 })) : [] });
+    } catch (err) {
+      send({ reqId, ok: false, reason: 'tag-failed', detail: String(err?.message ?? err) });
     }
   },
 

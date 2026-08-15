@@ -237,6 +237,89 @@ test('a null diarization keeps the adapter ref (no ward print baseline → stays
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('room-sound tagging (§8.4): a finalized utterance is tagged and the events ride to onTurn', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    const tagCalls = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (_t, ctx) => { turns.push(ctx); return null; },
+      // No speaker ID this call — tagging must run independently of it.
+      tagSegment: async (samples, rate) => { tagCalls.push({ len: samples.length, rate }); return [{ name: 'Dog', prob: 0.9 }]; },
+      tomesDir: dir,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake', 'room');
+
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    await rec.hooks.endUtterance({ callId: 'c1', speakerRef: 'ward' });   // PTT release → analyse + tag
+    await tick();
+    assert.equal(tagCalls.length, 1, 'the utterance was tagged once, with no speaker model loaded');
+    assert.equal(tagCalls[0].len, 320, 'PCM16 → float samples');
+    assert.equal(tagCalls[0].rate, 16000);
+
+    const opens = worker.calls.requests.filter((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: opens[0].streamId, text: 'hey' });
+    await tick();
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0].roomSounds, [{ name: 'Dog', prob: 0.9 }], 'the raw events rode to onTurn for the caller to classify');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('embedding and tagging share ONE materialised copy of the utterance (both ride to onTurn)', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    let embeds = 0, tags = 0;
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (_t, ctx) => { turns.push(ctx); return null; },
+      embedSegment: async () => { embeds++; return [0.1, 0.2]; },
+      tagSegment: async () => { tags++; return [{ name: 'Television', prob: 0.8 }]; },
+      tomesDir: dir,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    await rec.hooks.endUtterance({ callId: 'c1', speakerRef: 'ward' });
+    await tick();
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'hi' });
+    await tick();
+    assert.equal(embeds, 1, 'embedded once');
+    assert.equal(tags, 1, 'tagged once');
+    assert.deepEqual(turns[0].embedding, [0.1, 0.2]);
+    assert.deepEqual(turns[0].roomSounds, [{ name: 'Television', prob: 0.8 }]);
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('no tagSegment → ctx.roomSounds is null (off by default)', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    const engine = createCallEngine({ worker, onTurn: async (_t, ctx) => { turns.push(ctx); return null; }, tomesDir: dir });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    await rec.hooks.endUtterance({ callId: 'c1', speakerRef: 'ward' });
+    await tick();
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'hi' });
+    await tick();
+    assert.equal(turns[0].roomSounds, null, 'tagging off → no events, no behaviour change');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('hybrid ASR: offlineFinal loads the offline model and flags the stream; off does neither', async () => {
   // ON: offlineFinal() true + a model dir → startCall loads asr-offline, and every
   // asrStream the engine opens carries offlineFinal:true so the worker re-transcribes.

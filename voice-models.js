@@ -320,7 +320,13 @@ const BASE_MODELS = Object.freeze([
     lang: null,
     label: 'Audio tagging (AudioSet)',
     why: 'Opt-in, default OFF, annotation-only in this milestone (§8.4).',
+    // The sherpa-onnx zipformer AudioSet tagger — a `.onnx` plus a
+    // class-labels CSV, unpacked into models/audio/tagging-audioset/. The asset
+    // name is upstream's published archive; like the speaker models it carries NO
+    // pinned sha until `pin-audio-models.mjs tagging-audioset --upstream` records
+    // one against a live download (sha/bytes are never hand-written).
     estBytes: 50 * MB,
+    upstream: { tag: 'audio-tagging-models', asset: 'sherpa-onnx-zipformer-audio-tagging-2024-04-09.tar.bz2' },
     files: [],
   },
 ]);

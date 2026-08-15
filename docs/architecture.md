@@ -2776,11 +2776,28 @@ wiring (so the safety-critical logic is verifiable without audio):
   id+name (their real circle resolves via `/api/chat`); a guest is `someone`. The
   stored transcript labels the diarized speaker. Push-to-talk is untouched (§8.2
   watchdog owns it). Off-switch `PROTO_FAMILIAR_VOICE_DIARIZE_DISABLED=1`.
+- **`voice-audio-tags.js` + `voice-tagging.js`** (§8.4) — room-sound tagging,
+  **annotation-only** this milestone. `voice-audio-tags.js` is the pure classifier:
+  it DROPS human-vocalisation labels (speech, shouting, crying, laughter — the
+  care-detection territory §8.4 defers to its own ward-signed spec) and bare
+  acoustic-environment labels, keeps salient non-human sounds above a confidence
+  floor, and phrases them into one "[I can hear … in the room]" line.
+  `voice-tagging.js` is the plumbing: `createTagSegment` (the engine seam — loads
+  the tagging model on the worker, runs the `tag` op, returns RAW AudioSet events)
+  and `createRoomListener` (per-call dedup → one-off note). The engine's
+  `tagSegment` seam runs on each finalized utterance (independent of speaker ID —
+  different model); both call servers inject the classified line as a **one-off
+  system note, never stored, never touching the threat tier**. Inert until the
+  ward's `voiceAudioTaggingEnabled` (default OFF) AND the model is installed.
+  Off-switch `PROTO_FAMILIAR_AUDIO_TAGGING_DISABLED=1`.
 - **Worker op** (`audio-worker.mjs`): `role:'speaker'` loads the
   `SpeakerEmbeddingExtractor` (sherpa `BASE_MODELS` id `speaker-embed`, unpinned
   until `pin-audio-models.mjs speaker-embed <url>` records its sha); the `embed`
-  op turns a wav OR raw VAD samples into a number[] voiceprint. Too-short clip →
-  honest `not-ready`, never a fabricated vector.
+  op turns a wav OR raw VAD samples into a number[] voiceprint. `role:'tagging'`
+  loads the zipformer AudioSet `AudioTagging` model (id `tagging-audioset`, pinned
+  via `pin-audio-models.mjs tagging-audioset --upstream`); the `tag` op turns a wav
+  OR raw samples into AudioSet events. Both: too-short/absent → honest
+  `not-ready`/`not-loaded`, never a fabricated result.
 
 Shipped alongside:
 
@@ -2806,11 +2823,15 @@ Shipped alongside:
   `findWardVoiceChannel` (discord-gateway) locates my human's VC across guilds.
   Off-switch: the whole feature rides `PROTO_FAMILIAR_DISCORD_VOICE_DISABLED=1`.
 
-**Remaining wiring (follow-up):** audio-tagging annotation (§8.4). Done:
-enrolment endpoints + UI, the guest watchdog + diarizer integration into the call
-engine (§8.2/§8.3), the web AND Discord `voice-call` push adapters (proactive
-voice + §7 Discord proactive-join), ward-voice threat scoring (§10, ward-signed
-§16.1), and the speaker-model pin/download (`voice-pin.js` + the in-UI downloader).
+**Pass 4 complete.** Shipped: enrolment endpoints + UI; the guest watchdog +
+diarizer integration into the call engine (§8.2/§8.3); the web AND Discord
+`voice-call` push adapters (proactive voice + §7 Discord proactive-join);
+ward-voice threat scoring (§10, ward-signed §16.1); the speaker-model pin/download
+(`voice-pin.js` + the in-UI downloader); and room-sound tagging (§8.4,
+annotation-only). The audio-tagging model still needs its live pin
+(`pin-audio-models.mjs tagging-audioset --upstream`), the same last step as the
+speaker models. The long-term care-detection ambition on top of §8.4 is a
+separate, ward-signed spec and deliberately NOT built here.
 
 ## Security design
 
