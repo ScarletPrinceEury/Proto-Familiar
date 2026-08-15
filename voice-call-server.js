@@ -39,6 +39,7 @@ import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createCallGuard } from './voice-call-guard.js';
 import { createDiarizer } from './voice-diarize.js';
+import { createTagSegment, createRoomListener } from './voice-tagging.js';
 import { getWardPrint, enrolledPrints } from './voiceprints.js';
 import { speakerModelDir, speakerModelPresent } from './voice-enroll.js';
 
@@ -94,6 +95,7 @@ export function attachVoiceCall(deps) {
   async function memorizeCall(callId) {
     guards.delete(callId);   // the per-call guest guard is done when the call is
     diarizers.delete(callId);   // and its call-scoped speaker clusters (§8.3)
+    roomListeners.delete(callId);   // and its room-sound "already mentioned" set (§8.4)
     const sess = callSessions.get(callId);
     callSessions.delete(callId);
     if (!sess || sess.messages.length < 2) return;
@@ -220,6 +222,19 @@ export function attachVoiceCall(deps) {
     return s.voiceCallMode === 'open' && speakerModelPresent(speakerModelDir(s));
   }
 
+  // ── Room-sound tagging (§8.4) — annotation only ──────────────────────────
+  // The engine calls tagSegment on each finalized utterance; it stays inert until
+  // the ward turns tagging on AND the model is installed. A per-call room listener
+  // dedups (a TV on the whole call is mentioned once) and turns the raw events into
+  // a one-off "what I can hear" system note — never stored, never threat.
+  const tagSegment = createTagSegment({ getWorkerThen: (fn) => getWorkerThen(fn), readSettings, log });
+  const roomListeners = new Map();   // callId → room listener
+  function roomListenerFor(callId) {
+    let l = roomListeners.get(callId);
+    if (!l) { l = createRoomListener(); roomListeners.set(callId, l); }
+    return l;
+  }
+
   // ── onTurn dep: a full chat turn via /api/chat ──────────────────────────
   const runVoiceChatTurn = createVoiceChatTurn({ port, readSettings, connectionForFeature, log });
   async function runTurn(transcript, ctx) {
@@ -243,6 +258,7 @@ export function attachVoiceCall(deps) {
       sessionAudience = { location: 'voice-call', participants: [{ id: guest ? null : String(speaker), name }] };
     }
     let turnHistory = hist;
+    const notes = [];   // one-off system context for THIS turn — never stored, never threat
     try {
       if (isWard) {
         // Ward stream — §8.2 guest watchdog guards a second voice in the room on a
@@ -259,11 +275,19 @@ export function attachVoiceCall(deps) {
           sessionAudience = { location: 'voice-call', participants: [{ id: null, name: 'someone' }] };
         }
         const note = guard?.noteLine();
-        if (note) turnHistory = [...hist, { role: 'system', content: note }];   // one-off, not stored
+        if (note) notes.push(note);
       } else {
         log(`diarized speaker ${speaker}${ctx.speakerName ? ` (${ctx.speakerName})` : ''} — this turn is not ward-private`);
       }
     } catch (err) { log(`speaker-guard apply failed: ${err?.message ?? err}`); }
+
+    // §8.4 room-sound annotation — a one-off "what I can hear" line, deduped per
+    // call. Annotation only: it never moves the threat tier and is never stored.
+    if (Array.isArray(ctx.roomSounds) && ctx.roomSounds.length) {
+      try { const line = roomListenerFor(ctx.callId).note(ctx.roomSounds); if (line) notes.push(line); }
+      catch (err) { log(`room-sound note failed: ${err?.message ?? err}`); }
+    }
+    if (notes.length) turnHistory = [...hist, ...notes.map((content) => ({ role: 'system', content }))];
 
     const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience });
     if (reply) {
@@ -345,6 +369,7 @@ export function attachVoiceCall(deps) {
     embedSegment,   // §8.2 speaker ID — inert until the ward enrols + the model is present
     diarize,        // §8.3 who-is-speaking on a mixed stream (web open-mic)
     diarizeSegments, // run diarization only in open-mic mode with the model present
+    tagSegment,     // §8.4 room-sound tagging — inert until the ward opts in + the model is present
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });

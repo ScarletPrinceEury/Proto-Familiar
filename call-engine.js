@@ -90,6 +90,7 @@ export function createCallEngine({
   embedSegment = null,    // async (float32Samples, sampleRate) => number[]|null — the guest watchdog's voiceprint of a finalized utterance (spec §8.2). Null = off (no speaker ID this call).
   diarize = null,         // async (embedding, {ts, callId}) => {ref, name}|null — resolve WHO said a mixed-stream utterance (spec §8.3). Null-resolution keeps the adapter's own ref (no attribution change).
   diarizeSegments = () => false, // predicate: run the diarization stage on this adapter's finalized utterances (mixed stream — web open-mic). False for per-speaker adapters (Discord SSRC, push-to-talk).
+  tagSegment = null,      // async (float32Samples, sampleRate) => AudioSet events []|null — the room-sound tagger (spec §8.4). Raw events; the caller classifies + phrases. Null = off.
   tomesDir = DEFAULT_TOMES_DIR,
   maxCalls = 1,
   now = () => Date.now(),
@@ -204,17 +205,31 @@ export function createCallEngine({
     // asr-partial is reserved for live captions + barge-in (Pass 2c / web adapter).
   }
 
-  /** Concatenate + embed a stream's buffered utterance PCM, then clear the buffer. */
-  async function embedStreamBuffer(s) {
-    if (!s) return null;
-    if (!embedSegment || !s.embChunks?.length) { s.embChunks = []; s.embBytes = 0; return null; }
-    let emb = null;
-    try {
-      const samples = pcm16ToFloat(Buffer.concat(s.embChunks));
-      emb = await embedSegment(samples, 16000);
-    } catch (err) { log(`embed of utterance failed: ${err?.message ?? err}`); emb = null; }
+  /**
+   * Analyse a stream's buffered utterance PCM with whatever per-utterance stages
+   * are wired — the speaker embedding (§8.2/§8.3) and the room-sound tagger (§8.4)
+   * — from the ONE materialised copy of the samples, then clear the buffer. Both
+   * are best-effort: a failure in either leaves its result null and never blocks
+   * the turn. Returns `{ embedding, roomSounds }` (roomSounds = raw AudioSet events
+   * for the caller to classify).
+   */
+  async function analyzeStreamBuffer(s) {
+    if (!s || !s.embChunks?.length) { if (s) { s.embChunks = []; s.embBytes = 0; } return { embedding: null, roomSounds: null }; }
+    let samples = null;
+    try { samples = pcm16ToFloat(Buffer.concat(s.embChunks)); }
+    catch (err) { log(`utterance samples unavailable: ${err?.message ?? err}`); }
     s.embChunks = []; s.embBytes = 0;
-    return Array.isArray(emb) ? emb : null;
+    if (!samples) return { embedding: null, roomSounds: null };
+    let embedding = null, roomSounds = null;
+    if (embedSegment) {
+      try { const e = await embedSegment(samples, 16000); embedding = Array.isArray(e) ? e : null; }
+      catch (err) { log(`embed of utterance failed: ${err?.message ?? err}`); }
+    }
+    if (tagSegment) {
+      try { const t = await tagSegment(samples, 16000); roomSounds = Array.isArray(t) ? t : null; }
+      catch (err) { log(`room-sound tagging failed: ${err?.message ?? err}`); }
+    }
+    return { embedding, roomSounds };
   }
 
   async function handleAsrFinal(msg) {
@@ -252,21 +267,26 @@ export function createCallEngine({
     }
 
     let ref = adapterRef;
-    const speakerInfo = { embedding: s?.lastEmbedding ?? null, name: null };
-    // ── Diarization stage (spec §8.3) ────────────────────────────────────
-    // A mixed-stream adapter (web open-mic) hands every voice in on ONE ref, so
-    // it can't tell us who is speaking — we do: embed this utterance and match it
-    // to an enrolled print or an online guest cluster, then attribute the turn to
-    // the resolved speaker. A null resolution (diarization off, no ward print to
-    // contrast against, or a too-short clip) keeps the adapter's own ref, so the
-    // call stays ward-private by default — the same "absence disables §8.3, never
-    // blocks a call" rule as enrollment.
-    if (diarize && diarizeSegments() && s) {
-      const emb = await embedStreamBuffer(s);
-      if (emb) {
-        speakerInfo.embedding = emb;
+    const speakerInfo = { embedding: s?.lastEmbedding ?? null, name: null, roomSounds: s?.lastRoomSounds ?? null };
+    // ── Per-utterance analysis on a mixed stream (§8.3 diarization + §8.4 tags) ─
+    // A mixed-stream adapter (web open-mic) endpoints its own utterances, so the
+    // buffer is still full here (push-to-talk analysed + cleared it in
+    // finalizeUtterance — that's why we only analyse when chunks remain). One
+    // materialise feeds both stages:
+    //   • Diarization: match this voice to an enrolled print / guest cluster and
+    //     attribute the turn. A null resolution (no ward print, too-short clip)
+    //     keeps the adapter's own ref — the call stays ward-private by default.
+    //   • Room-sound tagging: name the salient sounds in the clip (annotation only).
+    // The two are independent: tagging runs even when speaker ID is off (they use
+    // different models), so a ward with only the tagging model still gets tags.
+    const wantDiarize = Boolean(diarize && diarizeSegments());
+    if (s && s.embChunks?.length && (wantDiarize || tagSegment)) {
+      const a = await analyzeStreamBuffer(s);
+      speakerInfo.embedding = a.embedding;
+      speakerInfo.roomSounds = a.roomSounds;
+      if (wantDiarize && a.embedding) {
         try {
-          const d = await diarize(emb, { ts: now(), callId: call.callId });
+          const d = await diarize(a.embedding, { ts: now(), callId: call.callId });
           if (d?.ref) { ref = d.ref; speakerInfo.name = d.name ?? null; }
         } catch (err) { log(`diarize failed (attributing to ${ref}): ${err?.message ?? err}`); }
       }
@@ -292,10 +312,11 @@ export function createCallEngine({
     }
     s.frames += 1;
     s.bytes += pcm?.length ?? 0;
-    // Keep a bounded copy of this utterance's audio for the guest-watchdog
-    // embedding (spec §8.2) — only when speaker ID is on. Sending PCM to ASR is
-    // unaffected; this is a parallel tap, capped so a long press can't grow it.
-    if (embedSegment && pcm?.length) {
+    // Keep a bounded copy of this utterance's audio for the per-utterance analysis
+    // stages — the guest-watchdog / diarizer embedding (§8.2/§8.3) and the
+    // room-sound tagger (§8.4) — only when at least one is on. Sending PCM to ASR
+    // is unaffected; this is a parallel tap, capped so a long press can't grow it.
+    if ((embedSegment || tagSegment) && pcm?.length) {
       s.embChunks ||= []; s.embBytes ||= 0;
       if (s.embBytes < MAX_EMBED_BYTES) { s.embChunks.push(pcm); s.embBytes += pcm.length; }
     }
@@ -320,13 +341,15 @@ export function createCallEngine({
       return;
     }
     log(`${speakerRef} released after ${s.frames} audio frame(s) (${s.bytes} bytes) — finalising`);
-    // Speaker embedding BEFORE we stop the stream, so `s.lastEmbedding` is ready
-    // by the time the asr-final drives the turn (which reads it). Best-effort:
-    // a failed/short embed leaves it null and the guard treats that as no signal.
-    // (Push-to-talk path — one speaker per press; the mixed-stream diarization in
-    // handleAsrFinal embeds there instead, keyed off `diarizeSegments`.)
-    if (embedSegment && s.embChunks?.length) s.lastEmbedding = await embedStreamBuffer(s);
-    else { s.embChunks = []; s.embBytes = 0; }
+    // Analyse the utterance BEFORE we stop the stream, so `s.lastEmbedding` and
+    // `s.lastRoomSounds` are ready by the time the asr-final drives the turn (which
+    // reads them). Best-effort: a failed/short embed or tag leaves its result null.
+    // (Push-to-talk path — one speaker per press; the mixed-stream case analyses in
+    // handleAsrFinal instead, where the recogniser endpoints the utterance.)
+    if ((embedSegment || tagSegment) && s.embChunks?.length) {
+      const a = await analyzeStreamBuffer(s);
+      s.lastEmbedding = a.embedding; s.lastRoomSounds = a.roomSounds;
+    } else { s.embChunks = []; s.embBytes = 0; }
     await worker.request({ op: 'asrStreamStop', streamId: s.streamId });   // emits asr-final → handleTurn
     if (call && call.streams.get(speakerRef) === s) {
       s.frames = 0; s.bytes = 0;
@@ -399,7 +422,11 @@ export function createCallEngine({
     // the clip was too short, or nothing placed the voice.
     const embedding = meta?.embedding ?? c.streams.get(speakerRef)?.lastEmbedding ?? null;
     const speakerName = meta?.name ?? null;
-    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, speakerName, embedding }); }
+    // Raw room-sound events for this utterance (§8.4), when the tagger is on. The
+    // turn runner classifies + phrases them into a one-off "what I can hear" note;
+    // they never persist and never touch the threat tier.
+    const roomSounds = meta?.roomSounds ?? c.streams.get(speakerRef)?.lastRoomSounds ?? null;
+    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, speakerName, embedding, roomSounds }); }
     catch (err) { log(`onTurn threw: ${err?.message ?? err}`); }
     if (call !== c) return;   // the call ended mid-turn — nothing to deliver to
     // Always hand the turn's outcome to the adapter, even when there is nothing
