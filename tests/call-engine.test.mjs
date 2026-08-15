@@ -145,6 +145,98 @@ test('no embedSegment → no embedding work, ctx.embedding is null (off by defau
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('diarization (§8.3): a mixed-stream utterance is attributed to the diarized speaker', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    const diarizeCalls = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (_t, ctx) => { turns.push(ctx); return null; },
+      embedSegment: async () => [0.1, 0.2, 0.3],
+      // A mixed stream can't tell us who spoke — this resolves it to a villager.
+      diarize: async (emb, o) => { diarizeCalls.push({ emb, o }); return { ref: 'villager-jules', name: 'Jules' }; },
+      diarizeSegments: () => true,
+      tomesDir: dir,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake', 'room');
+
+    // Audio arrives on the adapter's single mixed-stream ref ('ward'); the
+    // recogniser endpoints the utterance itself (open-mic — no PTT release).
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'who is this' });
+    await tick(20);
+
+    assert.equal(diarizeCalls.length, 1, 'the utterance was diarized once');
+    assert.deepEqual(diarizeCalls[0].emb, [0.1, 0.2, 0.3], 'the embedding was handed to the matcher');
+    assert.equal(typeof diarizeCalls[0].o.callId, 'string', 'the call id scopes the diarizer');
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].speakerRef, 'villager-jules', 'the turn is attributed to the diarized speaker, not the adapter ref');
+    assert.equal(turns[0].speakerName, 'Jules', 'the resolved name rides to onTurn');
+    assert.deepEqual(turns[0].embedding, [0.1, 0.2, 0.3], 'the embedding rides too');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('diarizeSegments()=false keeps the adapter ref — push-to-talk / per-speaker unaffected', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    let diarizeCalled = false;
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (_t, ctx) => { turns.push(ctx); return null; },
+      embedSegment: async () => [0.9],
+      diarize: async () => { diarizeCalled = true; return { ref: 'guest-1' }; },
+      diarizeSegments: () => false,   // per-speaker adapter → diarization off
+      tomesDir: dir,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    await rec.hooks.endUtterance({ callId: 'c1', speakerRef: 'ward' });   // PTT release embeds
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'hey' });
+    await tick(20);
+    assert.equal(diarizeCalled, false, 'diarization never ran on a per-speaker stream');
+    assert.equal(turns[0].speakerRef, 'ward', 'the adapter ref is preserved');
+    assert.equal(turns[0].speakerName, null, 'no diarized name on the PTT path');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('a null diarization keeps the adapter ref (no ward print baseline → stays ward)', async () => {
+  const dir = await tmp();
+  try {
+    const worker = fakeWorker();
+    const rec = { played: [] };
+    const turns = [];
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (_t, ctx) => { turns.push(ctx); return null; },
+      embedSegment: async () => [0.4, 0.4],
+      diarize: async () => null,   // e.g. no ward print to contrast against
+      diarizeSegments: () => true,
+      tomesDir: dir,
+    });
+    engine.registerCallAdapter(fakeAdapterFactory(rec));
+    await engine.startCall('fake');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(640) });
+    const open = worker.calls.requests.find((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: open.streamId, text: 'hi' });
+    await tick(20);
+    assert.equal(turns[0].speakerRef, 'ward', 'a null resolution leaves the call ward-private by default');
+    assert.deepEqual(turns[0].embedding, [0.4, 0.4], 'the embedding was still computed and rode along');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('hybrid ASR: offlineFinal loads the offline model and flags the stream; off does neither', async () => {
   // ON: offlineFinal() true + a model dir → startCall loads asr-offline, and every
   // asrStream the engine opens carries offlineFinal:true so the worker re-transcribes.

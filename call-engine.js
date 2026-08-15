@@ -88,6 +88,8 @@ export function createCallEngine({
   turnSettleMs = () => 0, // coalesce utterances within this gap into one turn (0 = reply per utterance)
   transcriptFilter = () => true, // (text) => keep? — drop ambient-noise transcripts (false = drop)
   embedSegment = null,    // async (float32Samples, sampleRate) => number[]|null — the guest watchdog's voiceprint of a finalized utterance (spec §8.2). Null = off (no speaker ID this call).
+  diarize = null,         // async (embedding, {ts, callId}) => {ref, name}|null — resolve WHO said a mixed-stream utterance (spec §8.3). Null-resolution keeps the adapter's own ref (no attribution change).
+  diarizeSegments = () => false, // predicate: run the diarization stage on this adapter's finalized utterances (mixed stream — web open-mic). False for per-speaker adapters (Discord SSRC, push-to-talk).
   tomesDir = DEFAULT_TOMES_DIR,
   maxCalls = 1,
   now = () => Date.now(),
@@ -187,36 +189,89 @@ export function createCallEngine({
     return null;
   }
 
+  // asr-finals are handled through a promise chain so the async diarization step
+  // (embed → match) on a mixed stream can't let a later utterance's attribution
+  // race ahead of an earlier one. On a per-speaker stream the chain is a
+  // near-no-op (no embed/diarize await), so it costs nothing there.
+  let asrChain = Promise.resolve();
+
   function onWorkerFrame(frame) {
     const msg = frame?.message;
     if (!msg || !call) return;
     if (msg.op === 'asr-final') {
-      // Un-shout the streaming zipformer's ALL-CAPS output before it drives a
-      // turn — a wall of capitals confuses the LLM (reads as shouting/acronyms).
-      // A no-op on already-cased text (SenseVoice ITN, the hybrid final).
-      const text = normalizeTranscriptCase(String(msg.text ?? '').trim());
-      // The peak + duration make an empty result diagnosable: a low peak means
-      // silence (a dead/muted mic or the wrong input device); a healthy peak with
-      // no words means real sound the model did not recognise (format, accent,
-      // too quiet, too short). Speech is roughly peak > 0.05.
-      // asrEngine + any offline note make "is the accurate model actually being
-      // used?" answerable from one line, instead of guessing from text quality.
-      const eng = msg.asrEngine ? ` ${msg.asrEngine}${msg.asrOfflineNote ? ` (${msg.asrOfflineNote})` : ''}` : '';
-      // A transcript the noise filter rejects (ambient noise the recogniser
-      // guessed as words — traffic heard as Chinese) is treated like silence: no
-      // turn, no memory. Named in the log so a real drop is diagnosable.
-      const noise = Boolean(text) && !transcriptFilter(text);
-      const meta = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s${eng}${noise ? ' DROPPED-noise' : ''}`;
-      log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'} [${meta}]`);
-      if (text && !noise) {
-        queueUtterance(speakerForStream(msg.streamId), text);   // settle → serialised dispatcher
-      } else if (call?.adapter && !settlePending()) {
-        // Nothing to act on (silence or dropped noise) AND nothing is settling —
-        // release my human from "Thinking…" so the call is usable again.
-        try { call.adapter.playAudio(call.callId, null); } catch (e) { log(`reset after empty asr failed: ${e?.message ?? e}`); }
-      }
+      asrChain = asrChain.then(() => handleAsrFinal(msg)).catch((e) => log(`asr-final handling failed: ${e?.message ?? e}`));
     }
     // asr-partial is reserved for live captions + barge-in (Pass 2c / web adapter).
+  }
+
+  /** Concatenate + embed a stream's buffered utterance PCM, then clear the buffer. */
+  async function embedStreamBuffer(s) {
+    if (!s) return null;
+    if (!embedSegment || !s.embChunks?.length) { s.embChunks = []; s.embBytes = 0; return null; }
+    let emb = null;
+    try {
+      const samples = pcm16ToFloat(Buffer.concat(s.embChunks));
+      emb = await embedSegment(samples, 16000);
+    } catch (err) { log(`embed of utterance failed: ${err?.message ?? err}`); emb = null; }
+    s.embChunks = []; s.embBytes = 0;
+    return Array.isArray(emb) ? emb : null;
+  }
+
+  async function handleAsrFinal(msg) {
+    if (!call) return;
+    // Un-shout the streaming zipformer's ALL-CAPS output before it drives a
+    // turn — a wall of capitals confuses the LLM (reads as shouting/acronyms).
+    // A no-op on already-cased text (SenseVoice ITN, the hybrid final).
+    const text = normalizeTranscriptCase(String(msg.text ?? '').trim());
+    // The peak + duration make an empty result diagnosable: a low peak means
+    // silence (a dead/muted mic or the wrong input device); a healthy peak with
+    // no words means real sound the model did not recognise (format, accent,
+    // too quiet, too short). Speech is roughly peak > 0.05.
+    // asrEngine + any offline note make "is the accurate model actually being
+    // used?" answerable from one line, instead of guessing from text quality.
+    const eng = msg.asrEngine ? ` ${msg.asrEngine}${msg.asrOfflineNote ? ` (${msg.asrOfflineNote})` : ''}` : '';
+    // A transcript the noise filter rejects (ambient noise the recogniser
+    // guessed as words — traffic heard as Chinese) is treated like silence: no
+    // turn, no memory. Named in the log so a real drop is diagnosable.
+    const noise = Boolean(text) && !transcriptFilter(text);
+    const metaStr = `peak=${msg.peak ?? '?'} ${msg.seconds ?? '?'}s${eng}${noise ? ' DROPPED-noise' : ''}`;
+    log(`asr-final on stream ${msg.streamId}: ${text ? `"${text}"` : '(empty — no words recognised)'} [${metaStr}]`);
+
+    const adapterRef = speakerForStream(msg.streamId);
+    const s = adapterRef ? call.streams.get(adapterRef) : null;
+
+    if (!text || noise) {
+      // Silence or dropped noise. Clear any embedding buffer so it never spans
+      // into the next utterance on a mixed stream, and — when nothing is settling
+      // — release my human from "Thinking…" so the call is usable again.
+      if (s) { s.embChunks = []; s.embBytes = 0; }
+      if (call?.adapter && !settlePending()) {
+        try { call.adapter.playAudio(call.callId, null); } catch (e) { log(`reset after empty asr failed: ${e?.message ?? e}`); }
+      }
+      return;
+    }
+
+    let ref = adapterRef;
+    const speakerInfo = { embedding: s?.lastEmbedding ?? null, name: null };
+    // ── Diarization stage (spec §8.3) ────────────────────────────────────
+    // A mixed-stream adapter (web open-mic) hands every voice in on ONE ref, so
+    // it can't tell us who is speaking — we do: embed this utterance and match it
+    // to an enrolled print or an online guest cluster, then attribute the turn to
+    // the resolved speaker. A null resolution (diarization off, no ward print to
+    // contrast against, or a too-short clip) keeps the adapter's own ref, so the
+    // call stays ward-private by default — the same "absence disables §8.3, never
+    // blocks a call" rule as enrollment.
+    if (diarize && diarizeSegments() && s) {
+      const emb = await embedStreamBuffer(s);
+      if (emb) {
+        speakerInfo.embedding = emb;
+        try {
+          const d = await diarize(emb, { ts: now(), callId: call.callId });
+          if (d?.ref) { ref = d.ref; speakerInfo.name = d.name ?? null; }
+        } catch (err) { log(`diarize failed (attributing to ${ref}): ${err?.message ?? err}`); }
+      }
+    }
+    if (call) queueUtterance(ref, text, speakerInfo);   // settle → serialised dispatcher
   }
 
   async function handleAudio({ callId, speakerRef, pcm } = {}) {
@@ -268,13 +323,10 @@ export function createCallEngine({
     // Speaker embedding BEFORE we stop the stream, so `s.lastEmbedding` is ready
     // by the time the asr-final drives the turn (which reads it). Best-effort:
     // a failed/short embed leaves it null and the guard treats that as no signal.
-    if (embedSegment && s.embChunks?.length) {
-      try {
-        const samples = pcm16ToFloat(Buffer.concat(s.embChunks));
-        s.lastEmbedding = await embedSegment(samples, 16000);
-      } catch (err) { log(`embed of ${speakerRef}'s utterance failed: ${err?.message ?? err}`); s.lastEmbedding = null; }
-    }
-    s.embChunks = []; s.embBytes = 0;
+    // (Push-to-talk path — one speaker per press; the mixed-stream diarization in
+    // handleAsrFinal embeds there instead, keyed off `diarizeSegments`.)
+    if (embedSegment && s.embChunks?.length) s.lastEmbedding = await embedStreamBuffer(s);
+    else { s.embChunks = []; s.embBytes = 0; }
     await worker.request({ op: 'asrStreamStop', streamId: s.streamId });   // emits asr-final → handleTurn
     if (call && call.streams.get(speakerRef) === s) {
       s.frames = 0; s.bytes = 0;
@@ -292,6 +344,7 @@ export function createCallEngine({
   const SETTLE_MIN_QUIET_MS = 350;   // don't fire until the mic has actually gone quiet this long
   let settleBuf = [];
   let settleRef = null;
+  let settleMeta = null;   // freshest speaker signal (embedding + resolved name) for this settled group
   let settleTimer = null;
   function settlePending() { return settleBuf.length > 0; }
   function armSettle(ms) { if (settleTimer) clearTimeout(settleTimer); settleTimer = setTimeout(flushSettle, ms); settleTimer.unref?.(); }
@@ -303,15 +356,17 @@ export function createCallEngine({
     if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
     const transcript = settleBuf.join(' ').replace(/\s+/g, ' ').trim();
     const ref = settleRef;
-    settleBuf = []; settleRef = null;
-    if (transcript) handleTurn(ref, transcript);
+    const meta = settleMeta;
+    settleBuf = []; settleRef = null; settleMeta = null;
+    if (transcript) handleTurn(ref, transcript, meta);
   }
-  function queueUtterance(speakerRef, text) {
+  function queueUtterance(speakerRef, text, meta = null) {
     const ms = Math.max(0, Number(turnSettleMs()) || 0);
-    if (ms <= 0) { handleTurn(speakerRef, text); return; }
+    if (ms <= 0) { handleTurn(speakerRef, text, meta); return; }
     if (settleRef && settleRef !== speakerRef) flushSettle();   // a different speaker → don't merge voices
     settleRef = speakerRef;
     settleBuf.push(text);
+    settleMeta = meta;   // the latest utterance's speaker signal wins for the merged group
     armSettle(ms);
   }
 
@@ -323,26 +378,28 @@ export function createCallEngine({
   let turnBusy = false;
   let pendingTurn = null;
 
-  function handleTurn(speakerRef, transcript) {
-    if (turnBusy) { pendingTurn = { speakerRef, transcript }; return; }
+  function handleTurn(speakerRef, transcript, meta = null) {
+    if (turnBusy) { pendingTurn = { speakerRef, transcript, meta }; return; }
     turnBusy = true;
-    runOneTurn(speakerRef, transcript).finally(() => {
+    runOneTurn(speakerRef, transcript, meta).finally(() => {
       turnBusy = false;
       const next = pendingTurn;
       pendingTurn = null;
-      if (next && call) handleTurn(next.speakerRef, next.transcript);
+      if (next && call) handleTurn(next.speakerRef, next.transcript, next.meta);
     });
   }
 
-  async function runOneTurn(speakerRef, transcript) {
+  async function runOneTurn(speakerRef, transcript, meta = null) {
     const c = call;
     if (!c) return;
     let reply = null;
-    // The speaker's voiceprint for THIS utterance (spec §8.2), when speaker ID is
-    // on — the voice server feeds it to the guest watchdog. Null when off, too
-    // short to embed, or a mixed-stream speaker with no per-utterance capture.
-    const embedding = c.streams.get(speakerRef)?.lastEmbedding ?? null;
-    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, embedding }); }
+    // The speaker's voiceprint + resolved name for THIS utterance. From the
+    // diarization/embedding meta when present (mixed streams, spec §8.3), else the
+    // per-stream capture (push-to-talk, spec §8.2). Null when speaker ID is off,
+    // the clip was too short, or nothing placed the voice.
+    const embedding = meta?.embedding ?? c.streams.get(speakerRef)?.lastEmbedding ?? null;
+    const speakerName = meta?.name ?? null;
+    try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, speakerName, embedding }); }
     catch (err) { log(`onTurn threw: ${err?.message ?? err}`); }
     if (call !== c) return;   // the call ended mid-turn — nothing to deliver to
     // Always hand the turn's outcome to the adapter, even when there is nothing
@@ -417,7 +474,7 @@ export function createCallEngine({
     // so the caller doesn't record a "heard" the escalation clock would trust.
     if (proactiveTimer) { clearTimeout(proactiveTimer); proactiveTimer = null; }
     if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
-    settleBuf = []; settleRef = null;
+    settleBuf = []; settleRef = null; settleMeta = null;
     while (proactiveQueue.length) { try { proactiveQueue.shift().resolve(false); } catch { /* */ } }
     try { if (unsub) unsub(); } catch { /* already gone */ }
     unsub = null;

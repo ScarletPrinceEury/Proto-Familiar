@@ -2764,7 +2764,18 @@ wiring (so the safety-critical logic is verifiable without audio):
   decided here. Any behavioural change needs the ward, like the audience gate.
 - **`voice-diarize.js`** (§8.3) — mixed-stream matcher: enrolled prints first,
   then short-lived online clusters (guest-1/guest-2); unmatched → stranger-tier
-  (fail-closed).
+  (fail-closed). **Wired into the call engine (open-mic path):** the engine's
+  `diarize` + `diarizeSegments` seams run the stage only in open-mic mode with the
+  model present — on each finalized utterance the buffered PCM is embedded and
+  `diarize()` resolves `{ref,name}`; the turn is attributed to that speaker.
+  `voice-call-server.js` builds a per-call diarizer **only when a ward print
+  exists** (no baseline → no diarization, call stays ward-private), and `runTurn`
+  gates the audience **fail-closed**: any non-ward voice sets a
+  stranger/villager-present audience BEFORE anything that could throw, so a guest's
+  turn can never read ward-private context. A matched villager carries their
+  id+name (their real circle resolves via `/api/chat`); a guest is `someone`. The
+  stored transcript labels the diarized speaker. Push-to-talk is untouched (§8.2
+  watchdog owns it). Off-switch `PROTO_FAMILIAR_VOICE_DIARIZE_DISABLED=1`.
 - **Worker op** (`audio-worker.mjs`): `role:'speaker'` loads the
   `SpeakerEmbeddingExtractor` (sherpa `BASE_MODELS` id `speaker-embed`, unpinned
   until `pin-audio-models.mjs speaker-embed <url>` records its sha); the `embed`
@@ -2780,10 +2791,12 @@ Shipped alongside:
   wardPresent:true}`). Tightens toward action only.
 - **Media-retention loop** — see the Autonomous-loops table (13th worker).
 
-**Remaining wiring (follow-up in this PR):** enrolment endpoints + UI, the
-call-engine watchdog/diarize integration, the `voice-call` push adapter
-(proactive voice, §7), ward-voice threat scoring (§10, ward-signed §16.1),
-audio-tagging annotation (§8.4), and pinning the speaker model.
+**Remaining wiring (follow-up):** the Discord VC `voice-call` push adapter
+(proactive voice with roster-based `wardPresent`, §7) and audio-tagging annotation
+(§8.4). Done: enrolment endpoints + UI, the guest watchdog + diarizer integration
+into the call engine (§8.2/§8.3), the web `voice-call` push adapter (proactive
+voice), ward-voice threat scoring (§10, ward-signed §16.1), and the speaker-model
+pin/download (`voice-pin.js` + the in-UI downloader).
 
 ## Security design
 

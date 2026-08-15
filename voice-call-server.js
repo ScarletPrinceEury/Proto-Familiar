@@ -38,7 +38,8 @@ import { sessionSlugId } from './slug-ids.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
 import { createCallGuard } from './voice-call-guard.js';
-import { getWardPrint } from './voiceprints.js';
+import { createDiarizer } from './voice-diarize.js';
+import { getWardPrint, enrolledPrints } from './voiceprints.js';
 import { speakerModelDir, speakerModelPresent } from './voice-enroll.js';
 
 const WS_PATH = '/api/voice/call';
@@ -92,6 +93,7 @@ export function attachVoiceCall(deps) {
   // teardown; each half is independent (a memorization skip still leaves a log).
   async function memorizeCall(callId) {
     guards.delete(callId);   // the per-call guest guard is done when the call is
+    diarizers.delete(callId);   // and its call-scoped speaker clusters (§8.3)
     const sess = callSessions.get(callId);
     callSessions.delete(callId);
     if (!sess || sess.messages.length < 2) return;
@@ -171,6 +173,53 @@ export function attachVoiceCall(deps) {
     return Array.isArray(out) ? out : null;
   }
 
+  // ── Diarization stage (§8.3) — WHO is speaking on a MIXED stream ──────────
+  // The web open-mic hands every voice in on one stream, so the engine can't tell
+  // speakers apart. This per-call diarizer does: it matches each utterance's
+  // embedding to an enrolled print (the ward, plus any villager who consented to
+  // one) or an online guest cluster. It only exists when there IS a ward print to
+  // contrast against — without one there's no baseline, so a mixed stream stays
+  // ward-private by default (the "absence disables §8.3, never blocks" rule).
+  // Hard off-switch: PROTO_FAMILIAR_VOICE_DIARIZE_DISABLED=1.
+  const DIARIZE_DISABLED = process.env.PROTO_FAMILIAR_VOICE_DIARIZE_DISABLED === '1';
+  const diarizers = new Map();   // callId → diarizer | null
+  async function diarizerFor(callId) {
+    if (diarizers.has(callId)) return diarizers.get(callId);
+    let d = null;
+    try {
+      const prints = await enrolledPrints();
+      // A ward print is the required baseline: without it we can't tell the ward
+      // from a guest, so we must not downgrade their own call. (Villager prints
+      // ride along when present but never substitute for the ward baseline.)
+      if (prints.some((p) => p.ref === 'ward')) {
+        const s = readSettings() || {};
+        d = createDiarizer({ prints, matchThreshold: s.voiceGuestThreshold });
+      }
+    } catch (err) { log(`diarizer init failed (continuing without): ${err?.message ?? err}`); }
+    diarizers.set(callId, d);
+    return d;
+  }
+
+  // The engine calls this on each finalized utterance of a mixed stream. Returns
+  // the resolved speaker ({ref, name}) or null to keep the adapter's own ref.
+  // Never throws — a failure keeps the call ward-private rather than breaking it.
+  async function diarize(embedding, { ts, callId } = {}) {
+    try {
+      if (DIARIZE_DISABLED) return null;
+      const d = await diarizerFor(callId);
+      if (!d) return null;
+      return d.assign(embedding, { ts });
+    } catch (err) { log(`diarize failed: ${err?.message ?? err}`); return null; }
+  }
+
+  // Run the diarization stage only in open-mic mode (a true mixed stream) with the
+  // speaker model present; push-to-talk is one speaker per press (§8.2 owns it).
+  function diarizeSegments() {
+    if (DIARIZE_DISABLED) return false;
+    const s = readSettings() || {};
+    return s.voiceCallMode === 'open' && speakerModelPresent(speakerModelDir(s));
+  }
+
   // ── onTurn dep: a full chat turn via /api/chat ──────────────────────────
   const runVoiceChatTurn = createVoiceChatTurn({ port, readSettings, connectionForFeature, log });
   async function runTurn(transcript, ctx) {
@@ -179,22 +228,42 @@ export function attachVoiceCall(deps) {
     // turn runs the exact same request. A web call is my human on their own
     // private surface, so ward-private BY DEFAULT — unless the guest watchdog
     // says otherwise.
+    const speaker = ctx.speakerRef;
+    const isWard = !speaker || speaker === 'ward';
     let sessionAudience = 'ward-private';
+    // §8.3 fail-closed: if diarization placed this utterance with a voice that
+    // ISN'T the ward, the turn is NOT ward-private — set the gated audience FIRST,
+    // before anything that could throw, so an error can never leave a guest's turn
+    // reading ward-private context. A matched villager carries their id+name so
+    // /api/chat resolves their real circle; an unplaced guest is stranger-tier
+    // ('someone'), the same disposition as an unknown Discord user.
+    if (!isWard) {
+      const guest = String(speaker).startsWith('guest');
+      const name = ctx.speakerName || (guest ? 'someone' : String(speaker));
+      sessionAudience = { location: 'voice-call', participants: [{ id: guest ? null : String(speaker), name }] };
+    }
     let turnHistory = hist;
     try {
-      const guard = await guardFor(ctx.callId);
-      if (guard && ctx.speakerRef === 'ward' && Array.isArray(ctx.embedding)) {
-        const r = guard.observeWardSegment(ctx.embedding, { text: transcript });
-        if (r.transition) log(`guest watchdog ${r.transition} (${r.reason ?? ''}) — policy ${guard.policy}`);
+      if (isWard) {
+        // Ward stream — §8.2 guest watchdog guards a second voice in the room on a
+        // dedicated ward stream (push-to-talk). On open-mic, diarization diverts
+        // non-ward voices to the branch above, so the watchdog never sees one.
+        const guard = await guardFor(ctx.callId);
+        if (guard && Array.isArray(ctx.embedding)) {
+          const r = guard.observeWardSegment(ctx.embedding, { text: transcript });
+          if (r.transition) log(`guest watchdog ${r.transition} (${r.reason ?? ''}) — policy ${guard.policy}`);
+        }
+        if (guard?.withholdWardPrivate()) {
+          // gate + a guest present → this turn is NOT ward-private. A stranger-
+          // present audience makes /api/chat withhold ward-private context.
+          sessionAudience = { location: 'voice-call', participants: [{ id: null, name: 'someone' }] };
+        }
+        const note = guard?.noteLine();
+        if (note) turnHistory = [...hist, { role: 'system', content: note }];   // one-off, not stored
+      } else {
+        log(`diarized speaker ${speaker}${ctx.speakerName ? ` (${ctx.speakerName})` : ''} — this turn is not ward-private`);
       }
-      if (guard?.withholdWardPrivate()) {
-        // gate + a guest present → this turn is NOT ward-private. A stranger-
-        // present audience makes /api/chat withhold ward-private context.
-        sessionAudience = { location: 'voice-call', participants: [{ id: null, name: 'someone' }] };
-      }
-      const note = guard?.noteLine();
-      if (note) turnHistory = [...hist, { role: 'system', content: note }];   // one-off, not stored
-    } catch (err) { log(`guest-guard apply failed (continuing ward-private): ${err?.message ?? err}`); }
+    } catch (err) { log(`speaker-guard apply failed: ${err?.message ?? err}`); }
 
     const reply = await runVoiceChatTurn({ transcript, history: turnHistory, sessionAudience });
     if (reply) {
@@ -203,9 +272,12 @@ export function attachVoiceCall(deps) {
       histories.set(ctx.callId, next.slice(-HISTORY_MAX));
       // Accumulate the FULL exchange for the end-of-call memorization (uncapped).
       const sess = callSessions.get(ctx.callId);
-      // Stamp at accumulation time — a web call is my human alone, so the user
-      // turn is unattributed (speaker omitted), like Discord text's ward turns.
-      if (sess) sess.messages.push(...turnMessages(transcript, reply));
+      // Stamp at accumulation time. A ward turn is unattributed (speaker omitted),
+      // like Discord text's ward turns; a diarized non-ward voice (open-mic §8.3)
+      // is labelled so the stored transcript reads "someone / <villager> said …"
+      // instead of implying my human said it.
+      const speakerLabel = isWard ? null : (ctx.speakerName || (String(speaker).startsWith('guest') ? 'someone' : String(speaker)));
+      if (sess) sess.messages.push(...turnMessages(transcript, reply, { speaker: speakerLabel }));
     }
     return reply;
   }
@@ -271,6 +343,8 @@ export function attachVoiceCall(deps) {
     turnSettleMs: () => (readSettings()?.voiceCallMode === 'open' ? voiceCallSettleMs(readSettings()) : 0),
     transcriptFilter: (t) => !isLikelyNoiseTranscript(t, { language: asrLang(readSettings()) }),
     embedSegment,   // §8.2 speaker ID — inert until the ward enrols + the model is present
+    diarize,        // §8.3 who-is-speaking on a mixed stream (web open-mic)
+    diarizeSegments, // run diarization only in open-mic mode with the model present
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });
