@@ -5871,6 +5871,7 @@ function init() {
   }
   $('ke-mem-refresh').addEventListener('click', keLoadMemories);
   $('ke-mem-granularity').addEventListener('change', keLoadMemories);
+  $('ke-mem-audit')?.addEventListener('click', keLoadGranularityAudit);
   $('ke-mem-search')?.addEventListener('input', keRenderMemories);
   $('ke-cov-refresh')?.addEventListener('click', keLoadCoverage);
   $('ke-cov-prev')?.addEventListener('click', () => { if (_keCovMonth) { _keCovMonth = keCovShiftMonth(_keCovMonth, -1); keRenderCalendar(); } });
@@ -8939,6 +8940,44 @@ async function keLoadMemories() {
     _keMemCache = data.memories ?? [];
     keRenderMemories();
   } catch (err) { list.innerHTML = keError(err, 'Failed to load memories.'); }
+}
+
+// Consolidation legibility audit (GET /api/memory-granularity) — a read-only
+// look at which dated memories the weekly/monthly roll-up can't see, because
+// their date_key isn't ISO (usually old entity-core imports). It changes
+// nothing; it just lets my human SEE the stuck rows. Toggles a panel below the
+// toolbar so it's out of the way until asked for.
+async function keLoadGranularityAudit() {
+  const panel = $('ke-mem-audit-panel');
+  if (!panel) return;
+  if (!panel.hidden && panel.dataset.loaded === '1') { panel.hidden = true; panel.dataset.loaded = ''; return; }
+  panel.hidden = false;
+  panel.innerHTML = '<p class="logs-loading">Checking…</p>';
+  try {
+    const res = await fetch('/api/memory-granularity');
+    const d = await res.json().catch(() => ({}));
+    if (!d?.ok) { panel.innerHTML = keError(d?.error || 'unknown', 'Consolidation check unavailable.'); return; }
+    const total = d.narrative_rows ?? 0;
+    const stuck = d.unparseable_date_key?.total ?? 0;
+    const byGran = (m) => Object.entries(m || {}).map(([g, n]) => `${esc(g)}: ${n}`).join(', ') || '—';
+    const samples = (d.samples || []).map((s) =>
+      `<li><code>${esc(s.id)}</code> · ${esc(s.granularity)} · <code>${esc(s.date_key ?? '—')}</code>${s.migrated ? ' · migrated' : ''}`
+      + `<br><span class="field-hint">${esc(s.excerpt ?? '')}</span></li>`).join('');
+    panel.innerHTML = `
+      <p style="margin:0 0 6px">${stuck === 0
+        ? `All ${total} dated memories can be rolled up into weekly/monthly summaries — nothing is stuck.`
+        : `<strong>${stuck}</strong> of ${total} memories can't be rolled up: their date isn't in <code>YYYY-MM-DD</code> form, so weekly/monthly consolidation never sees them. Usually old imports the entity-core migration mislabeled.`}</p>
+      ${stuck === 0 ? '' : `
+        <details>
+          <summary>Details</summary>
+          <p class="field-hint">Stuck by granularity — ${byGran(d.unparseable_date_key?.by_granularity)}</p>
+          <p class="field-hint">From the entity-core migration — ${byGran(d.migrated_from_entity_core)}</p>
+          ${samples ? `<ul style="margin:6px 0; padding-left:18px">${samples}</ul>` : ''}
+          <p class="field-hint">${esc(d.note ?? '')}</p>
+        </details>`}
+      <p class="field-hint" style="margin:6px 0 0">Read-only — this checks, it never changes anything.</p>`;
+    panel.dataset.loaded = '1';
+  } catch (err) { panel.innerHTML = keError(err, 'Consolidation check failed.'); }
 }
 
 // Render the cached memories through the live search filter — a memory

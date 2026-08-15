@@ -931,7 +931,9 @@
             </label>
             <span id="ke-mem-count" class="vl-count" aria-live="polite"></span>
             <button id="ke-mem-refresh" class="btn-ghost">Refresh</button>
+            <button id="ke-mem-audit" class="btn-ghost" type="button" title="Check which memories can't be rolled up into weekly/monthly summaries">Check consolidation</button>
           </div>
+          <div id="ke-mem-audit-panel" hidden aria-live="polite" style="margin:8px 0; padding:10px 12px; border:1px solid var(--border); border-radius:8px"></div>
           <div class="ke-split">
             <div class="ke-list" id="ke-mem-list"></div>
             <div class="ke-detail" id="ke-mem-detail">
