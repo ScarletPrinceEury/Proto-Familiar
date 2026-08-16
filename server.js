@@ -3892,8 +3892,9 @@ app.patch('/api/entity/graph/nodes/:id', async (req, res) => {
 app.delete('/api/entity/graph/nodes/:id', async (req, res) => {
   const { id } = req.params;
   if (!VALID_GRAPH_ID_RE.test(id)) return badRequest(res, 'invalid id');
-  const permanent = req.query.permanent === '1' || req.query.permanent === 'true';
-  const result = await deleteGraphNode({ id, permanent });
+  // Phylactery graph deletion is always a hard delete (node + edges, snapshot
+  // first) — there is no soft-delete, so no `permanent` flag to honour.
+  const result = await deleteGraphNode({ id });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
 });

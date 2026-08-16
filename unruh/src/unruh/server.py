@@ -866,6 +866,32 @@ def interest_list_bookmarks(limit: int = 100) -> dict[str, Any]:
         return {"ok": True, "bookmarks": bms}
 
 
+@mcp.tool()
+def interest_report_surfacing_outcome(
+    bookmark_id: str,
+    outcome: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """I use this to remember whether my human engaged with an interest I surfaced,
+    so I resurface it at a smarter pace — later when it lands, sooner when it's
+    ignored (M8 adaptive rules). Repeated ignores also let the topic fade on its own.
+
+    Args:
+        bookmark_id: the bookmark node I surfaced.
+        outcome: 'engaged' or 'ignored'.
+        now: ward-local timestamp of the outcome (defaults to now).
+
+    Returns: {ok, resurface_after_hours, consecutive_ignores, topic_deprioritised}.
+    """
+    try:
+        with get_conn() as conn:
+            return interests.report_surfacing_outcome(
+                conn, bookmark_id=bookmark_id, outcome=outcome, now=now,
+            )
+    except ValueError as e:
+        return _err(str(e))
+
+
 # ── Session handoff (M6) ──────────────────────────────────────────────
 
 

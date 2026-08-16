@@ -3308,13 +3308,16 @@ export async function updateGraphNode({ id, label, description, type, audience, 
   }
 }
 
-export async function deleteGraphNode({ id, permanent = false }) {
+export async function deleteGraphNode({ id }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
   await autoSnapshot(`graph_node_delete ${id}`);
   try {
-    const result = await callTool('graph_node_delete', { id, permanent });
-    console.log(`[thalamus] deleteGraphNode ${id}${permanent ? ' (permanent)' : ''}`);
+    // graph_node_delete takes only { id } (+ optional instanceId). It always
+    // hard-deletes (node + edges); there is no `permanent` param — sending one
+    // was a dead arg pydantic silently dropped.
+    const result = await callTool('graph_node_delete', { id });
+    console.log(`[thalamus] deleteGraphNode ${id}`);
     return { ok: true, result };
   } catch (err) {
     console.error('[thalamus] deleteGraphNode failed:', err.message);
