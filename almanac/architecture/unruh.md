@@ -53,6 +53,24 @@ sources:
   - id: causal-chain-spec
     type: file
     path: docs/causal-chain-fix-build-spec.md
+  - id: bookmark-migration
+    type: file
+    path: unruh/src/unruh/migrations/0003_bookmark_surfacing.sql
+  - id: interest-py
+    type: file
+    path: unruh/src/unruh/interest.py
+  - id: interest-test
+    type: file
+    path: unruh/tests/test_interest.py
+  - id: thalamus
+    type: file
+    path: thalamus.js
+  - id: audit-mcp-script
+    type: file
+    path: scripts/audit-mcp-contracts.mjs
+  - id: app-js
+    type: file
+    path: public/app.js
 ---
 
 # Unruh
@@ -99,6 +117,46 @@ Unruh's design separates two layers that update at different rhythms [@unruh-des
   exception: they do not decay, are anchored in Phylactery as identity-level facts, and are
   expressed in Unruh as always-active orientations, so the Familiar's priorities cannot
   drift just because a value has been quiet for a while [@unruh-design].
+
+## Bookmark resurfacing and the M8 feedback loop
+
+Migration 0003 added four columns to the interest graph's bookmark nodes —
+`last_surfaced_at`, `last_surfacing_outcome`, `resurface_after_hours`,
+`consecutive_ignores` — plus a comment spelling out an adaptive resurfacing rule: an
+engaged bookmark's interval should grow, an ignored one should shrink, and repeated
+ignoring should nudge the parent topic's weight down [@bookmark-migration]. `thalamus.js`'s
+`reportSurfacingOutcomes()` runs after every chat turn that surfaced a bookmark: it scans the
+response text for the bookmark's or its topic's label, calls that an `engaged`/`ignored`
+outcome, and calls `interest_report_surfacing_outcome` on Unruh with the result
+[@thalamus]. `server.js` fires it from every streaming and non-streaming reply path
+[@server], and the Tomes/bookmarks UI renders the stored outcome as a badge on each
+bookmark [@app-js].
+
+For about three weeks after the 2026-07-25 commit that added the migration, the JS caller,
+and the UI badge, the Unruh side of this loop did not exist: no `@mcp.tool` named
+`interest_report_surfacing_outcome` was ever implemented [@audit-mcp-script]. Every call from
+`reportSurfacingOutcomes()` threw, and `thalamus.js` swallowed the error into a `console.error`
+line rather than surfacing it [@thalamus] — a correct application of graceful degradation (see
+[Engineering conventions](../reference/engineering-conventions)) for a peer being down, but it
+also meant a fully scaffolded feature ran on every turn, always failed, and never told anyone.
+No test crossed the JS→Python boundary to catch the missing tool, and the migration's own
+comment read like a finished plan, so later sessions that saw the columns, the caller, and the
+badge reasonably read the feature as wired. There is no data-loss or safety caveat attached to
+this gap — it is a feature that was scaffolded and then never finished, not a regression — but
+it is the concrete case behind
+[Cross-language MCP contracts: a silent-failure bug class and its gate](../reference/engineering-conventions),
+which records the bug class and the permanent gate that now catches a missing tool like this
+one before it ships.
+
+The recorder is now implemented as `report_surfacing_outcome()` in `unruh/src/unruh/interest.py`,
+following the migration's own rules: an engaged outcome multiplies `resurface_after_hours` by
+1.5, capped at 168 hours (one week); an ignored outcome multiplies it by 0.75, floored at 4
+hours; and three consecutive ignores nudge the bookmark's parent topic's interest weight down
+[@interest-py]. It is covered by `unruh/tests/test_interest.py` [@interest-test]. What is still
+open, deliberately not built in this pass, is the other half of the M8 loop: idle-mode surfacing
+does not yet read `resurface_after_hours` / `last_surfaced_at` to decide *when* to resurface a
+bookmark — the cadence is now recorded but not yet consumed, a pacing decision left for the
+ward [@audit-mcp-script].
 
 ## Origin: a schedule, not a cronjob checklist
 
@@ -342,3 +400,6 @@ All of these are transformation-only; no events are deleted or modified in the u
   Thalamus.
 - [Autonomous loops](autonomous-loops) — the pondering loop's tiered cadence, the shipped
   alternative to a fixed-interval checklist.
+- [Engineering conventions](../reference/engineering-conventions) — the cross-language MCP
+  contract bug class the bookmark-resurfacing gap above is the worked example of, and the
+  permanent gate that now catches a missing or misnamed tool call before it ships.

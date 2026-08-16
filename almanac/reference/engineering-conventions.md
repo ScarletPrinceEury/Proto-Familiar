@@ -8,6 +8,15 @@ sources:
   - id: app-js
     type: file
     path: public/app.js
+  - id: audit-mcp-script
+    type: file
+    path: scripts/audit-mcp-contracts.mjs
+  - id: mcp-contracts-test
+    type: file
+    path: tests/mcp-contracts.test.mjs
+  - id: thalamus
+    type: file
+    path: thalamus.js
 ---
 
 # Engineering Conventions
@@ -236,3 +245,54 @@ for keyboard users), and text-muted foreground at ~2:1 contrast (text readabilit
 ratios are documented inline in `style.css` with precise values so future changes can be
 verified without manual testing. The conventions are recorded in `CLAUDE.md` with "hold the
 WCAG line" as the operating principle.
+
+## Cross-language MCP contracts: a silent-failure bug class and its gate
+
+Thalamus (JS) calls [Phylactery](../architecture/phylactery) and [Unruh](../architecture/unruh)
+(Python) MCP tools with `callTool({ name, arguments })`, and `arguments` is an opaque object —
+nothing in the JS toolchain checks its keys against the Python tool's `@mcp.tool` parameter
+names [@audit-mcp-script]. That gap produces three distinct failure shapes, and all three fail
+**silently**: invisible to `node --check` and to every JS-only wiring audit (imports, exports,
+endpoints, loops), because the mismatch only exists at the JS↔Python argument boundary
+[@audit-mcp-script].
+
+- **Wrong/misnamed arg.** Pydantic drops the unknown key and the tool's actually-required
+  parameter is now missing, so FastMCP returns an `isError` result the JS wrapper often never
+  inspects — the HTTP layer answers `{ok:true}` while nothing was written.
+- **Extra arg the tool doesn't accept.** Pydantic silently drops it, so a filter or flag the
+  caller believes it is passing does nothing.
+- **A tool name that doesn't exist.** The call throws; if the caller wraps it in a
+  swallow-and-log `try`/`catch`, the feature goes inert with only a log line as evidence.
+
+Four instances shipped before the gate below existed [@audit-mcp-script]: `identity_update_section`
+sent `heading` where the tool wanted `section` (silent no-op write, HTTP still reported
+`{ok:true}`); `graph_node_search` sent `type`, which the tool did not accept, so a
+type-filtered graph search silently returned every type (`graph_node_list` did support the
+filter — only `search` was missing it, fixed by adding the filter to Phylactery);
+`interest_report_surfacing_outcome` — the Unruh tool did not exist at all, see below; and
+`graph_node_delete` sent a dead `permanent` flag that Phylactery's delete tool does not
+accept — it only hard-deletes a node and its edges — removed end-to-end from thalamus's call
+site [@thalamus].
+
+**The gate.** `scripts/audit-mcp-contracts.mjs` (`npm run audit:mcp`) parses every thalamus MCP
+call site and every Phylactery/Unruh `@mcp.tool` signature, then flags UNKNOWN tool names,
+BAD-ARG keys that are not a parameter of the tool, and MISSING-REQ parameters a call never
+sends [@audit-mcp-script]. `tests/mcp-contracts.test.mjs` asserts the check returns no findings,
+so a future mismatch fails CI instead of reaching a ward's data [@mcp-contracts-test]. It
+catches all four instances above.
+
+**Its limit, stated so nobody over-trusts it:** the gate checks argument names, tool existence,
+and required-parameter presence only — **not** types and **not** semantics
+[@audit-mcp-script]. A call that sends a correctly-named argument with the wrong type (a string
+where the tool wants a list), or the right name and type with the wrong meaning (a
+local-naive timestamp where the tool expects UTC — the class behind the 0.7.84 reminder bug,
+see [Unruh](../architecture/unruh)), still passes. Static name-checking cannot decide either
+case: the call sites are untyped JS, and meaning is not decidable from syntax alone. Catching
+those classes needs a cross-process integration test that actually spawns the peer and asserts
+behavior, not a static contract check — that deeper coverage was not added in this pass.
+
+**The meta-lesson.** A JS-internal wiring audit has a structural blind spot at every
+language/process boundary. "Thorough audit" must explicitly include cross-boundary contract
+checks — and, for the type/semantic classes above, boundary-crossing tests — not just
+intra-language imports/exports/endpoints. See [Unruh](../architecture/unruh) for the concrete
+feature this blind spot hid for about three weeks.
