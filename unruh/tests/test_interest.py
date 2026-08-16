@@ -396,3 +396,73 @@ class TestListBookmarks:
             )
         result = interests.list_bookmarks(conn)
         assert [b["label"] for b in result] == ["newer", "older"]
+
+
+class TestReportSurfacingOutcome:
+    """M8: recording whether a surfaced bookmark landed, and adapting its
+    resurface interval. The tool thalamus called never existed — bookmark
+    engagement feedback was silently inert until this landed."""
+
+    def _bookmark(self, conn):
+        r = interests.bookmark(conn, topic="Rust", resource="https://example/rust")
+        return r["bookmark_id"], r["topic_id"]
+
+    def _row(self, conn, bid):
+        return conn.execute(
+            "SELECT last_surfacing_outcome, last_surfaced_at, resurface_after_hours, "
+            "consecutive_ignores FROM nodes WHERE id = ?", (bid,)
+        ).fetchone()
+
+    def test_engaged_grows_interval_and_resets_ignores(self, conn):
+        bid, _ = self._bookmark(conn)
+        r = interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="engaged")
+        assert r["ok"] and r["resurface_after_hours"] == 36.0  # 24 * 1.5
+        assert r["consecutive_ignores"] == 0
+        row = self._row(conn, bid)
+        assert row["last_surfacing_outcome"] == "engaged"
+        assert row["last_surfaced_at"]  # stamped
+
+    def test_ignored_shrinks_interval_and_counts(self, conn):
+        bid, _ = self._bookmark(conn)
+        r = interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="ignored")
+        assert r["resurface_after_hours"] == 18.0  # 24 * 0.75
+        assert r["consecutive_ignores"] == 1
+
+    def test_interval_floors_at_4h(self, conn):
+        bid, _ = self._bookmark(conn)
+        r = None
+        for _ in range(20):
+            r = interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="ignored")
+        assert r["resurface_after_hours"] == 4.0
+
+    def test_interval_caps_at_168h(self, conn):
+        bid, _ = self._bookmark(conn)
+        r = None
+        for _ in range(20):
+            r = interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="engaged")
+        assert r["resurface_after_hours"] == 168.0
+
+    def test_engaged_after_ignores_resets_the_streak(self, conn):
+        bid, _ = self._bookmark(conn)
+        interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="ignored")
+        interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="ignored")
+        r = interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="engaged")
+        assert r["consecutive_ignores"] == 0
+
+    def test_three_ignores_deprioritise_the_parent_topic(self, conn):
+        bid, tid = self._bookmark(conn)
+        before = conn.execute("SELECT weight FROM nodes WHERE id = ?", (tid,)).fetchone()["weight"]
+        assert interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="ignored")["topic_deprioritised"] is False
+        assert interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="ignored")["topic_deprioritised"] is False
+        assert interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="ignored")["topic_deprioritised"] is True
+        after = conn.execute("SELECT weight FROM nodes WHERE id = ?", (tid,)).fetchone()["weight"]
+        assert after < before
+
+    def test_unknown_bookmark_is_a_clean_miss(self, conn):
+        r = interests.report_surfacing_outcome(conn, bookmark_id="does-not-exist-x", outcome="engaged")
+        assert r["ok"] is False
+
+    def test_invalid_outcome_raises(self, conn):
+        bid, _ = self._bookmark(conn)
+        with pytest.raises(ValueError):
+            interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="maybe")

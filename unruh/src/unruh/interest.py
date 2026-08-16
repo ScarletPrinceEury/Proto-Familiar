@@ -49,7 +49,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import insert_with_slug_retry, new_id, now_iso
+from .db import insert_with_slug_retry, new_id, now_iso, to_local_naive
 
 # ── Allowed values. Surfaced as constants so tests + the MCP layer
 # can validate against them without re-typing strings. ──────────────
@@ -502,3 +502,85 @@ def list_bookmarks(
         if payload: item["payload"] = payload
         out.append(item)
     return out
+
+
+# ── M8 bookmark-surfacing adaptation (migration 0003 rules) ──────────
+# When a bookmark I surfaced gets engaged with, I show it again less often;
+# when it's ignored, sooner. Three ignores in a row also nudge the parent
+# topic's weight down so the interest layer deprioritises it on its own.
+RESURFACE_MAX_HOURS = 168.0          # engaged → interval grows, capped at 1 week
+RESURFACE_MIN_HOURS = 4.0            # ignored → interval shrinks, floored at 4h
+RESURFACE_ENGAGED_FACTOR = 1.5
+RESURFACE_IGNORED_FACTOR = 0.75
+IGNORE_STREAK_FOR_DECAY = 3          # 3+ consecutive ignores → deprioritise the topic
+TOPIC_IGNORE_DECAY_FACTOR = 0.85     # small weight nudge, not a wipe
+
+
+def report_surfacing_outcome(
+    conn: sqlite3.Connection,
+    *,
+    bookmark_id: str,
+    outcome: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Record whether my human engaged with a bookmark I surfaced, and adapt when
+    it resurfaces (migration 0003 M8 rules): engaged → interval ×1.5 (cap 168h),
+    ignored → interval ×0.75 (floor 4h). Three consecutive ignores also nudge the
+    parent topic's weight down so the interest layer deprioritises it naturally.
+
+    Returns {ok, resurface_after_hours, consecutive_ignores, topic_deprioritised}
+    or {ok: False, error} when the bookmark isn't found."""
+    if outcome not in ("engaged", "ignored"):
+        raise ValueError("outcome must be 'engaged' or 'ignored'")
+    ts = to_local_naive(now) or now_iso()
+
+    row = conn.execute(
+        "SELECT id, resurface_after_hours, consecutive_ignores FROM nodes "
+        "WHERE id = ? AND layer = 'interest' AND type = 'bookmark'",
+        (bookmark_id,),
+    ).fetchone()
+    if row is None:
+        return {"ok": False, "error": f"no bookmark {bookmark_id!r}"}
+
+    cur_hours = row["resurface_after_hours"] if row["resurface_after_hours"] is not None else 24.0
+    cur_ignores = row["consecutive_ignores"] or 0
+    if outcome == "engaged":
+        new_hours = min(RESURFACE_MAX_HOURS, cur_hours * RESURFACE_ENGAGED_FACTOR)
+        new_ignores = 0
+    else:
+        new_hours = max(RESURFACE_MIN_HOURS, cur_hours * RESURFACE_IGNORED_FACTOR)
+        new_ignores = cur_ignores + 1
+
+    conn.execute(
+        "UPDATE nodes SET last_surfacing_outcome = ?, last_surfaced_at = ?, "
+        "resurface_after_hours = ?, consecutive_ignores = ?, updated_at = ? WHERE id = ?",
+        (outcome, ts, new_hours, new_ignores, ts, bookmark_id),
+    )
+
+    # Repeatedly-skipped bookmark → gently deprioritise its topic (decay-then-scale,
+    # the same decay model record() uses), so surfacing naturally moves on.
+    topic_deprioritised = False
+    if outcome == "ignored" and new_ignores >= IGNORE_STREAK_FOR_DECAY:
+        topic = conn.execute(
+            "SELECT t.id, t.weight, t.last_touched FROM edges e "
+            "JOIN nodes t ON t.id = e.dst_id "
+            "WHERE e.src_id = ? AND e.kind = 'bookmarked'",
+            (bookmark_id,),
+        ).fetchone()
+        if topic is not None and topic["weight"] is not None:
+            decayed = effective_weight(
+                topic["weight"], topic["last_touched"],
+                now=datetime.fromisoformat(ts),
+            )
+            conn.execute(
+                "UPDATE nodes SET weight = ?, last_touched = ?, updated_at = ? WHERE id = ?",
+                (decayed * TOPIC_IGNORE_DECAY_FACTOR, ts, ts, topic["id"]),
+            )
+            topic_deprioritised = True
+
+    return {
+        "ok": True,
+        "resurface_after_hours": new_hours,
+        "consecutive_ignores": new_ignores,
+        "topic_deprioritised": topic_deprioritised,
+    }
