@@ -17,6 +17,12 @@ sources:
   - id: thalamus
     type: file
     path: thalamus.js
+  - id: phylactery-result
+    type: file
+    path: phylactery-result.js
+  - id: mcp-smoke-test
+    type: file
+    path: tests/mcp-smoke.test.mjs
 ---
 
 # Engineering Conventions
@@ -289,10 +295,81 @@ local-naive timestamp where the tool expects UTC — the class behind the 0.7.84
 see [Unruh](../architecture/unruh)), still passes. Static name-checking cannot decide either
 case: the call sites are untyped JS, and meaning is not decidable from syntax alone. Catching
 those classes needs a cross-process integration test that actually spawns the peer and asserts
-behavior, not a static contract check — that deeper coverage was not added in this pass.
+behavior, not a static contract check — see the smoke test below for the coverage that fills
+this gap.
+
+**Checker precision fix (0.10.109-alpha).** The gate originally resolved `arguments: someVar`
+by a global first match of `const/let/var someVar = {...}`, but variable names like `args` are
+reused across many call sites, so a global first match could resolve the wrong assignment
+entirely. It now resolves to the NEAREST-PRECEDING assignment above the call site and folds in
+any incremental `someVar.key = …` assignments between that point and the call
+[@audit-mcp-script]. This mattered concretely: `temporal_context`'s `mode` argument (see
+[Unruh](../architecture/unruh)) was assembled into a separate `const unruhArgs` object, so the
+old resolver validated only that the tool existed, never that `mode` was one of its keys.
+Removing `mode` from the Python tool now correctly flags `BAD-ARG unruh.temporal_context`.
+
+## The isError-swallow class: a runtime gap the static gate can't catch
+
+The contract gate above checks argument *names* against the Python signature; it says nothing
+about whether a caller correctly reads the *result* of a call. `callTool` from
+`@modelcontextprotocol/sdk` does not throw when a Python tool raises — a pydantic validation
+error from a bad or missing argument, or any other exception, comes back as a **resolved**
+result with `isError: true` [@phylactery-result]. A wrapper that only reads
+`content[].text` and falls through to a `{ ok: true }` fallback when that text does not parse
+as the tool's normal JSON reports success on a failed write — the error text isn't the tool's
+JSON payload, so the fallback wins silently. This is the exact class behind the
+`identity_update_section` bug, which had previously been fixed at only that one call site.
+
+A 0.10.108-alpha audit found the fix had not generalized: **28 mutating Unruh wrappers** in
+`thalamus.js` returned `parseToolText(r, { ok: true })`, plus 2 more returned `true`
+unconditionally, so all 30 reported success on any Unruh raise. The root-cause fix is two
+pieces:
+
+- `phylacteryToolError` was generalized into server-agnostic `mcpToolError(result)` in
+  `phylactery-result.js`: `isError` is set by both Phylactery and Unruh on a raise, and the
+  "Failed:" prefix check is Phylactery's own deliberate-failure convention layered on top — a
+  harmless no-op check against Unruh, whose success payloads are JSON starting with `{`
+  [@phylactery-result].
+- `unruhResult(result, fallback)` in `thalamus.js` calls `mcpToolError` first: an error result
+  becomes honest `{ ok: false, error }`; a success result returns the tool's own JSON payload
+  (which already carries `ok`) [@thalamus]. All 28 write wrappers plus the original
+  `identity_update_section` site now route through it.
+
+Reads are deliberately **not** routed through `unruhResult` — they still degrade to an empty
+payload on failure (absence renders as absence), which is this page's own Graceful degradation
+rule's intended behavior for a peer being down. Only the write class, where a silent success is
+the dangerous outcome, is made honest. The general lesson: the static contract checker matches
+argument *names*, and structurally cannot see whether a caller reads a raised error as success
+— that is runtime error-handling behavior, not a naming mismatch, and it needs a different kind
+of check.
+
+## Cross-process MCP smoke test
+
+`tests/mcp-smoke.test.mjs` closes the gap the previous two sections both point at: it spawns the
+**real** Phylactery and Unruh MCP children through thalamus (not stubs) and round-trips
+representative tools, asserting actual behavior and actual return shapes — catching type or
+semantic mismatches that neither the static gate nor a pure-function unit test can
+[@mcp-smoke-test]. Its cases include `saveBookmark` → `listBookmarks` (the M8 write side,
+exercised cross-process, see [Unruh](../architecture/unruh)); a call with a missing required
+argument, asserting the resulting pydantic `isError` surfaces as an honest `{ ok: false }`
+through `unruhResult` against a real raise rather than a stub; `bumpInterest` →
+`listInterests`; and Phylactery's `getMemoryHealth`. The suite self-skips when `uv` or the
+Python venvs are absent (CI without Python), so a missing toolchain never reddens the suite
+[@mcp-smoke-test].
+
+Isolating the test from dev data required a store override: `UNRUH_DB_PATH` and
+`PHYLACTERY_DB_PATH` relocate each server's sqlite file, read in `default_db_path()` on both the
+Unruh and Phylactery sides, and forwarded into the spawned child's environment by
+`thalamus.js` only when set [@mcp-smoke-test] [@thalamus]. The forwarding is explicit because
+these variables are not in the MCP SDK's inherited-environment allowlist — the SDK's stdio
+transport merges only its own default environment plus `serverParams.env`, so an unlisted
+variable never reaches the child unless the caller adds it itself. Production spawns are
+unaffected when the variables are unset, and the same override lets an install relocate its
+data directory generally, not just under test.
 
 **The meta-lesson.** A JS-internal wiring audit has a structural blind spot at every
 language/process boundary. "Thorough audit" must explicitly include cross-boundary contract
-checks — and, for the type/semantic classes above, boundary-crossing tests — not just
-intra-language imports/exports/endpoints. See [Unruh](../architecture/unruh) for the concrete
-feature this blind spot hid for about three weeks.
+checks, boundary-crossing tests for the type/semantic classes a static check can't decide, and a
+check on runtime error-handling at the boundary — not just intra-language imports, exports,
+endpoints, and argument names. See [Unruh](../architecture/unruh) for the concrete feature
+(bookmark resurfacing) this blind spot hid pieces of across two consecutive audit passes.

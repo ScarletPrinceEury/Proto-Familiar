@@ -71,6 +71,15 @@ sources:
   - id: app-js
     type: file
     path: public/app.js
+  - id: server-py
+    type: file
+    path: unruh/src/unruh/server.py
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
+  - id: tool-surfacing-js
+    type: file
+    path: tool-surfacing.js
 ---
 
 # Unruh
@@ -152,11 +161,43 @@ The recorder is now implemented as `report_surfacing_outcome()` in `unruh/src/un
 following the migration's own rules: an engaged outcome multiplies `resurface_after_hours` by
 1.5, capped at 168 hours (one week); an ignored outcome multiplies it by 0.75, floored at 4
 hours; and three consecutive ignores nudge the bookmark's parent topic's interest weight down
-[@interest-py]. It is covered by `unruh/tests/test_interest.py` [@interest-test]. What is still
-open, deliberately not built in this pass, is the other half of the M8 loop: idle-mode surfacing
-does not yet read `resurface_after_hours` / `last_surfaced_at` to decide *when* to resurface a
-bookmark — the cadence is now recorded but not yet consumed, a pacing decision left for the
-ward [@audit-mcp-script].
+[@interest-py]. It is covered by `unruh/tests/test_interest.py` [@interest-test].
+
+### Closing the other two gaps: selection and creation
+
+Recording an outcome is only the third of three steps a bookmark needs to actually resurface —
+and a 0.10.107–0.10.109-alpha session (an intra-MCP audit of the whole loop, not just the
+recorder) found the other two were still missing, so the fully-scaffolded feature (DB columns,
+recorder, JS consumer, UI badge) had run on an empty shelf the whole time:
+
+- **Selection.** `temporal_context` — the tool that builds every turn's `[Temporal Context]`
+  block — never SELECTED due bookmarks at all. The fix adds `interests.due_bookmarks(conn)`
+  [@interest-py]: never-surfaced bookmarks first, then most-overdue by `resurface_after_hours`,
+  capped at `DUE_BOOKMARKS_LIMIT=2`, stamping `last_surfaced_at` on selection so each bookmark
+  respects its own adaptive interval. `temporal_context` gained a `mode` parameter and returns
+  `bookmarks` only when `mode == 'idle'` — a free cycle, never mid-conversation
+  [@server-py]. thalamus already sent `mode='idle'` once past `IDLE_THRESHOLD_MS`, but the tool
+  had no `mode` parameter to receive it, so pydantic silently dropped the argument and idle
+  gating never engaged — a fresh instance of the exact silent-arg-drop class
+  [Cross-language MCP contracts: a silent-failure bug class and its gate](../reference/engineering-conventions)
+  exists to catch.
+- **Creation**, the deeper gap, found only by auditing reachability rather than argument names:
+  the Unruh tool `interest_bookmark` existed but nothing called it — no JS wrapper, no
+  Familiar-facing tool, no HTTP endpoint. A bookmark could never be created in the first place,
+  so selection and recording had nothing to operate on. This is the "capability that isn't
+  reachable by the Familiar" anti-pattern (see
+  [Engineering conventions](../reference/engineering-conventions)), just applied to the write
+  side of a feature instead of a single tool. The fix adds `saveBookmark()` in `thalamus.js`
+  [@thalamus] and a first-person `bookmark_for_later` builtin in `cerebellum.js`
+  [@cerebellum-js], surfaced through the `CORE` tool-surfacing module — the same always-on
+  bucket as `interest_bump` and `interest_set_standing` — rather than a trigger-gated module,
+  because the Familiar reaches for it on its own initiative; nothing in a user message triggers
+  a save the way a search result triggers `mem_delete` [@cerebellum-js] [@tool-surfacing-js].
+
+With both halves closed, the M8 loop runs end-to-end: `bookmark_for_later` creates a bookmark,
+`due_bookmarks` selects it once due during an idle cycle, `reportSurfacingOutcomes()` records
+whether the ward engaged, and the adaptive interval it produces feeds back into the next
+selection.
 
 ## Origin: a schedule, not a cronjob checklist
 
