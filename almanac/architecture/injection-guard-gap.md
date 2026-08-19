@@ -95,3 +95,7 @@ sanitization.
   means even the read-side pattern layer it contrasts against was not actually running.
 - [Engineering conventions](../reference/engineering-conventions) — the capability-
   reachability rule this defect is the defensive-side mirror of.
+- [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
+  — the unbuilt browsing milestone that layers deterministic code guardrails (an SSRF proxy, a
+  Stranger-tier default for page content) on top of this now-wired injection guard, rather than
+  relying on prompt framing alone.

@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Seventeen decisions live here. Grouped by the question each one answers:
+Eighteen decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -48,6 +48,10 @@ reoccurring.
 - [Single-user before platform](single-user-before-platform) — the founding scoping decision that
   bounds Village and every multi-channel surface to one ward's own support network rather than a
   general multi-user platform.
+- [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code) — an unbuilt
+  milestone's settled decisions for letting the Familiar click and fill on the web: an in-process
+  SSRF proxy, treating page content as a Village Stranger, and gating credentials, dialogs, and
+  handoff in code rather than by prompt.
 
 ## The Initiative build spec: wait-streak and contact rhythm
 
