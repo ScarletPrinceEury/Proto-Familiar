@@ -56,7 +56,7 @@ import {
   addScheduleEdge, updateScheduleEdge, upsertScheduleState, exportSchedule, getScheduleNode, findScheduleNodes, setScheduleLead,
   templateUpsert, templateList, templateDelete,
   convertUnruhIds, convertGraphIds, convertMemoryIds,
-  bumpInterest, setStandingInterest,
+  bumpInterest, setStandingInterest, saveBookmark,
   setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
@@ -2071,6 +2071,22 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'bookmark_for_later',
+      description: 'I save a resource to come back to in a free cycle — an article, a video, a thread, a thing I stumbled on that I want to actually sit with when I have room, not right now. It hangs off an interest topic (created on first reference, same as interest_bump), and once it\'s due it surfaces in my [Temporal Context] during a quiet stretch so I can pick it back up. This is for a concrete thing to REVISIT — a link, a title, a specific pointer — not for tracking that I find a subject interesting (that\'s interest_bump) and not for a fact I already know (that\'s save_to_tome / save_memory). If I never come back to it and it keeps going ignored, it quietly stops nagging.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic:    { type: 'string', description: 'Short, tag-like interest label to file this under (1-5 words), e.g. "ice skating", "rust async". The topic is created if it doesn\'t exist yet, exactly like interest_bump.' },
+          resource: { type: 'string', description: 'The thing to come back to — a URL, a title, or a short specific pointer ("the Oliver Sacks essay on music and memory"). Concrete enough that future-me knows what it is.' },
+          note:     { type: 'string', description: 'Optional: why I saved it / what I want to do with it when I get to it.' },
+        },
+        required: ['topic', 'resource'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'set_day_start_anchor',
       description: 'I set the hour my human\'s day really begins — the ward-local time I use to decide when to open with what\'s coming (my stewardship opening brief). I reach for this when my stewardship block has watched enough mornings to tell me their real rhythm has drifted from the time I\'ve been opening on, or when my human tells me directly when their day starts. It writes one shared setting they can also see and change in Settings, so after I set it I tell them plainly in my own voice what I changed it to — the heads-up is mine to give.',
       parameters: {
@@ -3650,6 +3666,16 @@ export const TOOL_EXECUTORS = {
       if (data?.ok === false) return `Failed to set standing value: ${data.error ?? 'unknown error'}`;
       return quietOk(`"${topic}" set as a standing value. It will appear in the standing block of my [Temporal Context] every turn, never decaying.`);
     } catch (err) { return `Failed to set standing value: ${err.message}`; }
+  },
+
+  bookmark_for_later: async ({ topic, resource, note } = {}) => {
+    if (!topic || typeof topic !== 'string' || !topic.trim()) return 'Failed to save bookmark: topic (string) is required';
+    if (!resource || typeof resource !== 'string' || !resource.trim()) return 'Failed to save bookmark: resource (string) is required';
+    try {
+      const data = await saveBookmark({ topic, resource, note });
+      if (data?.ok === false) return `Failed to save bookmark: ${data.error ?? 'unknown error'}`;
+      return quietOk(`Bookmarked "${resource}" under "${topic}". I'll come back to it in a free cycle — it'll surface in my [Temporal Context] once it's due.`);
+    } catch (err) { return `Failed to save bookmark: ${err.message}`; }
   },
 
   set_day_start_anchor: async ({ time } = {}) => {

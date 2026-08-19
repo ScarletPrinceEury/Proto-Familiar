@@ -584,3 +584,71 @@ def report_surfacing_outcome(
         "consecutive_ignores": new_ignores,
         "topic_deprioritised": topic_deprioritised,
     }
+
+
+# Default cap on how many due bookmarks temporal_context surfaces per turn — the
+# prompt's kilobytes budget wants a couple, not the whole shelf.
+DUE_BOOKMARKS_LIMIT = 2
+
+
+def due_bookmarks(
+    conn: sqlite3.Connection,
+    *,
+    now: str | None = None,
+    limit: int = DUE_BOOKMARKS_LIMIT,
+) -> list[dict[str, Any]]:
+    """Select the bookmarks that are DUE to resurface and mark them shown.
+
+    A bookmark is due when it's never been surfaced (last_surfaced_at IS NULL) or
+    enough time has passed since it was (`resurface_after_hours`, which
+    report_surfacing_outcome adapts — engaged pushes it out, ignored pulls it in).
+    Never-surfaced first, then most-overdue. Each returned bookmark is stamped
+    last_surfaced_at = now so it respects its interval instead of re-appearing
+    every turn — closing the M8 loop: recorded cadence is finally CONSUMED here.
+
+    Returns [{id, label, topic_id, topic_label, payload?}] (empty when none due)."""
+    ts = to_local_naive(now) or now_iso()
+    now_dt = datetime.fromisoformat(ts)
+    rows = conn.execute(
+        """SELECT b.id, b.label, b.payload_json, b.last_surfaced_at,
+                  b.resurface_after_hours,
+                  e.dst_id AS topic_id, t.label AS topic_label
+             FROM nodes b
+             LEFT JOIN edges e ON e.src_id = b.id AND e.kind = 'bookmarked'
+             LEFT JOIN nodes t ON t.id = e.dst_id
+            WHERE b.layer = 'interest' AND b.type = 'bookmark'
+            ORDER BY b.last_surfaced_at IS NOT NULL, b.last_surfaced_at ASC,
+                     b.created_at ASC, b.id ASC""",
+    ).fetchall()
+
+    due: list[dict[str, Any]] = []
+    for r in rows:
+        lsa = r["last_surfaced_at"]
+        hours = r["resurface_after_hours"] if r["resurface_after_hours"] is not None else 24.0
+        if lsa is None:
+            is_due = True
+        else:
+            elapsed_h = (now_dt - datetime.fromisoformat(lsa)).total_seconds() / 3600.0
+            is_due = elapsed_h >= hours
+        if not is_due:
+            continue
+        item = {
+            "id":          r["id"],
+            "label":       r["label"],
+            "topic_id":    r["topic_id"],
+            "topic_label": r["topic_label"],
+        }
+        payload = json.loads(r["payload_json"] or "{}")
+        if payload:
+            item["payload"] = payload
+        due.append(item)
+        if len(due) >= max(1, limit):
+            break
+
+    # Mark shown so the interval gate holds until they're due again.
+    for item in due:
+        conn.execute(
+            "UPDATE nodes SET last_surfaced_at = ?, updated_at = ? WHERE id = ?",
+            (ts, ts, item["id"]),
+        )
+    return due

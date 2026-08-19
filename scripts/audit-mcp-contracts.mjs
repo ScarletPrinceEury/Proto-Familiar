@@ -81,7 +81,14 @@ function splitTopLevel(blob) {
   return out;
 }
 
-/** Top-level keys of the JS object literal whose opening `{` is at src[open]. */
+/**
+ * Statically-determinable keys of the JS object literal whose opening `{` is at
+ * src[open] — its own top-level keys PLUS keys contributed by a top-level
+ * `...spread` of an object literal (e.g. a conditional
+ * `...(isIdle ? { mode: 'idle' } : {})`, which is exactly how a `mode` arg slipped
+ * past an earlier version of this checker). A spread of a plain variable can't be
+ * resolved statically and is skipped — its keys are unknown, so it can't be checked.
+ */
 function objectKeys(src, open) {
   let depth = 0, i = open, body = '';
   for (; i < src.length; i++) {
@@ -91,7 +98,15 @@ function objectKeys(src, open) {
     if (depth >= 1) body += ch;
   }
   body = body.slice(1); // drop the leading {
-  const keys = new Set(); let d = 0, tok = '';
+  const keys = new Set();
+  collectOwnKeys(body, keys);
+  collectSpreadKeys(body, keys);
+  return keys;
+}
+
+/** Depth-0 keys of an object BODY (`key: value` and shorthand). */
+function collectOwnKeys(body, keys) {
+  let d = 0, tok = '';
   const flush = () => { const t = tok.trim(); tok = ''; if (d === 0 && /^[A-Za-z_$][\w$]*$/.test(t)) keys.add(t); };
   for (let x = 0; x < body.length; x++) {
     const ch = body[x];
@@ -107,7 +122,31 @@ function objectKeys(src, open) {
     if (d === 0) tok += ch;
   }
   if (tok.trim()) flush();
-  return keys;
+}
+
+/** For each top-level `...spread`, add the keys of any object literal inside it. */
+function collectSpreadKeys(body, keys) {
+  let d = 0;
+  for (let x = 0; x < body.length; x++) {
+    const ch = body[x];
+    if ('([{'.includes(ch)) { d++; continue; }
+    if (')]}'.includes(ch)) { d--; continue; }
+    if (d === 0 && body.startsWith('...', x)) {
+      let j = x + 3, sd = 0;                // scan the spread expression to the next depth-0 comma / end
+      for (; j < body.length; j++) { const c = body[j]; if ('([{'.includes(c)) sd++; else if (')]}'.includes(c)) { if (sd === 0) break; sd--; } else if (c === ',' && sd === 0) break; }
+      const expr = body.slice(x + 3, j);
+      for (let k = 0; k < expr.length; k++) {   // collect keys of every object literal within
+        if (expr[k] !== '{') continue;
+        let dd = 0, e = k;
+        for (let m = k; m < expr.length; m++) { const cm = expr[m]; if (cm === '{') dd++; else if (cm === '}') { dd--; if (dd === 0) { e = m; break; } } }
+        const inner = expr.slice(k + 1, e);
+        collectOwnKeys(inner, keys);
+        collectSpreadKeys(inner, keys);       // nested spreads
+        k = e;
+      }
+      x = j;
+    }
+  }
 }
 
 /** Cross-check thalamus.js MCP call sites against the parsed tool signatures. */
@@ -147,8 +186,24 @@ export function findContractMismatches() {
     if (argsAt < 0 || argsAt > m.index + 700) { check(nameM[1], null, tools, server, m.index); continue; }
     const braceAt = js.indexOf('{', argsAt);
     const between = js.slice(argsAt + 'arguments:'.length, braceAt);
-    // `arguments: someVar` (not an inline object) → can't read keys; check name only.
-    if (/[A-Za-z_$]/.test(between) && !between.includes('{')) { check(nameM[1], null, tools, server, m.index); continue; }
+    // `arguments: someVar` — not an inline object. Resolve the variable to the
+    // NEAREST-PRECEDING `const/let <var> = { ... }` (var names like `args` are
+    // reused across functions, so a global first-match resolves the wrong one),
+    // then fold in incremental `<var>.key = …` assignments up to the call site
+    // (objects are often built literal-then-mutated). This is how the
+    // temporal_context `mode` arg hid — assembled in a separate `const unruhArgs`.
+    if (/[A-Za-z_$]/.test(between) && !between.includes('{')) {
+      const varName = (between.match(/[A-Za-z_$][\w$]*/) || [])[0];
+      const pre = js.slice(0, m.index);
+      const defRe = new RegExp(`(?:const|let|var)\\s+${varName}\\s*=\\s*\\{`, 'g');
+      let defIdx = -1, dm; while ((dm = defRe.exec(pre)) !== null) defIdx = dm.index;
+      if (defIdx >= 0) {
+        const keys = objectKeys(js, js.indexOf('{', defIdx));
+        for (const am of js.slice(defIdx, m.index).matchAll(new RegExp(`\\b${varName}\\.([A-Za-z_$][\\w$]*)\\s*=[^=]`, 'g'))) keys.add(am[1]);
+        check(nameM[1], keys, tools, server, m.index);
+      } else check(nameM[1], null, tools, server, m.index);   // truly unresolvable → name only
+      continue;
+    }
     check(nameM[1], objectKeys(js, braceAt), tools, server, m.index);
   }
   return findings;
