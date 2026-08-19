@@ -466,3 +466,46 @@ class TestReportSurfacingOutcome:
         bid, _ = self._bookmark(conn)
         with pytest.raises(ValueError):
             interests.report_surfacing_outcome(conn, bookmark_id=bid, outcome="maybe")
+
+
+class TestDueBookmarks:
+    """M8 selection half: temporal_context must surface bookmarks that are DUE by
+    their resurface interval and mark them shown, so the recorded cadence is
+    actually consumed. Before this, temporal_context returned no bookmarks at
+    all — the whole loop was inert."""
+
+    def _bm(self, conn, topic="Rust"):
+        return interests.bookmark(conn, topic=topic, resource="https://x")["bookmark_id"]
+
+    def test_never_surfaced_is_due_then_gated_after_marking(self, conn):
+        bid = self._bm(conn)
+        due = interests.due_bookmarks(conn, now="2026-08-16T10:00:00")
+        assert [d["id"] for d in due] == [bid]
+        assert due[0]["topic_label"] == "Rust"
+        # Marked shown → not due again within its interval.
+        assert interests.due_bookmarks(conn, now="2026-08-16T10:05:00") == []
+
+    def test_recently_surfaced_within_interval_is_not_due(self, conn):
+        bid = self._bm(conn)
+        conn.execute("UPDATE nodes SET last_surfaced_at = ? WHERE id = ?", ("2026-08-16T08:00:00", bid))
+        # default interval 24h, surfaced 2h ago
+        assert interests.due_bookmarks(conn, now="2026-08-16T10:00:00") == []
+
+    def test_overdue_past_its_interval_is_due(self, conn):
+        bid = self._bm(conn)
+        conn.execute("UPDATE nodes SET last_surfaced_at = ?, resurface_after_hours = 24 WHERE id = ?",
+                     ("2026-08-15T04:00:00", bid))  # 30h earlier
+        assert [d["id"] for d in interests.due_bookmarks(conn, now="2026-08-16T10:00:00")] == [bid]
+
+    def test_adapted_interval_gates_resurfacing(self, conn):
+        bid = self._bm(conn)
+        # engaged pushed the interval to 36h; surfaced 30h ago → still not due
+        conn.execute("UPDATE nodes SET last_surfaced_at = ?, resurface_after_hours = 36 WHERE id = ?",
+                     ("2026-08-15T04:00:00", bid))
+        assert interests.due_bookmarks(conn, now="2026-08-16T10:00:00") == []
+
+    def test_limit_caps_and_prefers_never_surfaced(self, conn):
+        for i in range(4):
+            self._bm(conn, topic=f"Topic{i}")
+        due = interests.due_bookmarks(conn, now="2026-08-16T10:00:00", limit=2)
+        assert len(due) == 2

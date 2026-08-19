@@ -1215,7 +1215,7 @@ def weather_read(location_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def temporal_context(now: str | None = None) -> dict[str, Any]:
+def temporal_context(now: str | None = None, mode: str | None = None) -> dict[str, Any]:
     """I use this to assemble my full per-message temporal context — schedule, interests,
     and session handoff in one payload. Thalamus calls this every turn so I always know
     where my human is in their day, what I care about, and what I was working on last.
@@ -1275,6 +1275,13 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         intentions_due = intentions_mod.intentions_due(
             conn, now=now, current_phase_label=(phase or {}).get("label"),
         )
+        # M8: bookmarks DUE to resurface — but ONLY in idle mode (a free cycle),
+        # never mid-active-conversation. The chat path passes mode='idle' once the
+        # ward has been quiet past its idle threshold; that arg used to be silently
+        # dropped (temporal_context had no `mode` param), so surfacing never gated.
+        # Interval-gated by resurface_after_hours (which report_surfacing_outcome
+        # adapts) and marked shown here so they respect their cadence.
+        bookmarks = interests.due_bookmarks(conn, now=now) if mode == "idle" else []
     # Edges ride along so the Familiar sees the consequence graph, not just
     # a flat list (temporal-format renders a "Consequence links" block from
     # these). `linked` carries the edge endpoints that aren't window nodes —
@@ -1306,6 +1313,9 @@ def temporal_context(now: str | None = None) -> dict[str, Any]:
         # Intentions whose trigger has come due (Pass 3). The Node side
         # applies the condition gate + renders; empty list renders nothing.
         "intentions_due": intentions_due,
+        # M8 bookmarks due to resurface. The chat path reads these to weave in
+        # AND to report the engaged/ignored outcome after the reply.
+        "bookmarks": bookmarks,
     }
 
 
