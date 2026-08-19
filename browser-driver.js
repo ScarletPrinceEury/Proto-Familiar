@@ -21,12 +21,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
 
 import { createGuardedProxy } from './browser-proxy.js';
 import { buildRefTable, isProtectedField } from './browser-lens.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_DIR = path.join(__dirname, 'browser', 'profile');
+const PW_BROWSERS_DIR = path.join(__dirname, 'browser', 'pw-browsers');
 
 export const BROWSE_MAX_TABS_DEFAULT = 3;
 const NAV_TIMEOUT_MS = 15000;
@@ -34,9 +37,8 @@ const ACT_TIMEOUT_MS = 5000;
 
 // ── Chromium discovery ────────────────────────────────────────────────────
 // System channel first, then the Playwright browser cache (PLAYWRIGHT_BROWSERS_
-// PATH or the default), then a Familiar-fetched binary under browser/. The
-// ~130 MB fetch is Pass-1 future work; here we locate what already exists and
-// return a calm reason when nothing does (the toggle stays honest either way).
+// PATH or the default), then the Familiar-fetched binary under browser/. Locates
+// what already exists; when nothing does, startChromiumFetch (below) pulls one.
 export function findChromium() {
   const envExe = process.env.PROTO_FAMILIAR_CHROME || process.env.CHROME;
   if (envExe && fs.existsSync(envExe)) return envExe;
@@ -62,6 +64,46 @@ export function findChromium() {
   return null;
 }
 
+// ── Auto-fetch (spec §2, §14.4) ─────────────────────────────────────────────
+// When no browser is found, fetch a pinned Chromium into our own git-ignored
+// browser/pw-browsers — reusing playwright-core's OWN install CLI (which owns
+// the version pin + checksum; we don't reinvent either). It runs in the
+// BACKGROUND: a 130 MB download must never block a chat turn, so the first
+// browse call kicks it off and returns a calm "setting up" line; status()
+// surfaces progress; a later call finds the browser ready. The `browseEnabled`
+// toggle already gated us here, so the fetch is consented.
+let install = { status: 'idle', startedAt: null, error: null };
+export function chromiumInstallState() { return { ...install }; }
+
+export function startChromiumFetch({ spawnFn = spawn, findFn = findChromium } = {}) {
+  if (install.status === 'fetching') return install;         // already going
+  if (findFn()) { install = { status: 'ready', startedAt: null, error: null }; return install; }
+  install = { status: 'fetching', startedAt: Date.now(), error: null };
+  let cli;
+  try {
+    // playwright-core's `exports` map blocks resolving ./cli.js directly, but
+    // ./package.json resolves — cli.js is its sibling at the package root.
+    const pkg = createRequire(import.meta.url).resolve('playwright-core/package.json');
+    cli = path.join(path.dirname(pkg), 'cli.js');
+    if (!fs.existsSync(cli)) throw new Error('cli.js missing');
+  } catch (err) { install = { status: 'failed', startedAt: Date.now(), error: 'playwright-core not installed' }; return install; }
+  try {
+    fs.mkdirSync(PW_BROWSERS_DIR, { recursive: true });
+    const child = spawnFn(process.execPath, [cli, 'install', 'chromium', '--no-progress'], {
+      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: PW_BROWSERS_DIR },
+      stdio: 'ignore',
+    });
+    child.on('error', (err) => { install = { status: 'failed', startedAt: install.startedAt, error: err.message }; });
+    child.on('close', (code) => {
+      if (code === 0 && findFn()) install = { status: 'ready', startedAt: install.startedAt, error: null };
+      else install = { status: 'failed', startedAt: install.startedAt, error: `install exited ${code}` };
+    });
+  } catch (err) {
+    install = { status: 'failed', startedAt: install.startedAt, error: err.message };
+  }
+  return install;
+}
+
 // ── The single live context ───────────────────────────────────────────────
 let state = null; // { context, proxy, tabs:Map, idleTimer, launchedAt, crashes:[] }
 
@@ -78,7 +120,13 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
   if (state?.context) { armIdle(idleMs); return state; }
 
   const exe = findChromium();
-  if (!exe) throw new Error('no Chromium found (enable browsing to fetch one, or install a system browser)');
+  if (!exe) {
+    // No browser yet — kick off (or continue) the background fetch and tell the
+    // caller it's installing, rather than blocking the turn on a 130 MB download.
+    startChromiumFetch();
+    if (install.status === 'failed') throw new Error(`browser download failed: ${install.error}`);
+    throw new Error('installing chromium');
+  }
 
   let chromium;
   try { ({ chromium } = await import('playwright-core')); }
@@ -334,5 +382,6 @@ export function status() {
     executable: state?.exe ?? findChromium(),
     proxyBlocked: state?.proxy?.stats?.().blocked ?? 0,
     recentCrashes: state ? state.crashes.filter(t => Date.now() - t < 60000).length : 0,
+    install: chromiumInstallState(),
   };
 }

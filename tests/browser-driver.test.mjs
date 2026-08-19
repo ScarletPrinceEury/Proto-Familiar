@@ -67,3 +67,28 @@ live('extractPageData walks the real DOM into the lens shape; css resolves + act
     await browser.close();
   }
 });
+
+// ── Auto-fetch state machine (injected spawn — no real download) ───────────
+import { startChromiumFetch, chromiumInstallState } from '../browser-driver.js';
+import { EventEmitter } from 'node:events';
+
+test('startChromiumFetch is a no-op when a browser already exists', () => {
+  const st = startChromiumFetch({ findFn: () => '/exists/chrome', spawnFn: () => { throw new Error('should not spawn'); } });
+  assert.equal(st.status, 'ready');
+});
+
+test('startChromiumFetch spawns the install when none exists, and tracks fetching→failed', async () => {
+  // Force "no browser found" so the spawn branch runs; a fake child lets us
+  // drive the state transition without a real 130 MB download.
+  const child = new EventEmitter();
+  let spawnedArgs = null;
+  const st = startChromiumFetch({
+    findFn: () => null,
+    spawnFn: (cmd, args) => { spawnedArgs = args; return child; },
+  });
+  assert.equal(st.status, 'fetching');
+  assert.ok(spawnedArgs.includes('install') && spawnedArgs.includes('chromium'), 'invokes the playwright install CLI');
+  // Non-zero exit → failed (findFn still returns null on the recheck).
+  child.emit('close', 1);
+  assert.equal(chromiumInstallState().status, 'failed');
+});

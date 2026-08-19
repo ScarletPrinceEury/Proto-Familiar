@@ -109,6 +109,8 @@ export function browserStatus() { return driver.status(); }
 /** Turn an engine error into a calm first-person line — never a throw. */
 function degrade(err, prefix) {
   const m = String(err?.message ?? err);
+  if (/installing chromium/i.test(m)) return "I'm setting up my browser — a one-time ~130 MB download. It'll be ready in a minute; ask me again shortly.";
+  if (/browser download failed/i.test(m)) return `My browser download didn't finish: ${m.replace(/^browser download failed:\s*/i, '')}. I'll be able to browse once it succeeds.`;
   if (/not installed|no Chromium|launch failed/i.test(m)) return "My browser isn't available right now — the engine isn't set up on this machine.";
   return `${prefix}: ${m.split('\n')[0]}.`;
 }
