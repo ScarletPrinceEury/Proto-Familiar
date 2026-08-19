@@ -304,9 +304,11 @@ blow-by-blow — the tool-result trail in context stays verdict-sized.
    JS-rendered thing. For plain reading I reach for read_webpage first; it's
    far cheaper."*
 2. **`browse_see({level, scope})`** — §3.1.
-3. **`browse_act({ref, action, value})`** — `click / fill / select / press /
-   scroll / hover`; returns the delta verdict. `fill` refuses password
-   fields structurally (§5.4).
+3. **`browse_act({ref, action, value, on_dialog})`** — `click / fill /
+   select / press / scroll / hover`; returns the delta verdict. `fill` refuses
+   password / credential / file-input fields structurally (§5.4). `on_dialog`
+   (`dismiss` default | `accept`) pre-authorises how a confirm the act
+   triggers is answered — see the dialog policy in §4.1.
 4. **`read_webpage(url?)`** — not a new tool: the existing one, re-backed
    (§0.1). With a `url` it reads that page in an ephemeral tab; with no
    `url` and a browse task open, it reads the current page's live DOM.
@@ -338,6 +340,43 @@ blow-by-blow — the tool-result trail in context stays verdict-sized.
 
 Under tool-surfacing these live in one `browser` module (trigger: URLs +
 browse-ish verbs + marker blocks); always available via `request_tools`.
+
+### 4.1 Dialogs, file inputs, and popups (the mechanics §4 must pin)
+
+Real pages throw JS dialogs, ask to upload files, and spawn tabs. None may
+hang the turn or open an ungoverned surface, and — the ward's call — the
+Familiar **is allowed to answer a benign confirm**, without that becoming a
+way for a page to escalate.
+
+- **`alert()`** → acknowledged (its only option) and the text surfaced in the
+  verdict. No decision to make.
+- **`beforeunload`** ("leave? unsaved changes") → accepted: it only guards the
+  Familiar's *own* navigation intent, which it just chose.
+- **`confirm()`** → **default `dismiss` (the safe, negative answer)**, and the
+  verdict names the dialog's text. The Familiar, now *seeing* that text
+  (Stranger-tier framed, never trusted as instruction), may re-issue the act
+  with `on_dialog:'accept'` to confirm a benign one — so it answers benign
+  confirms **with the words in hand, never blind.** Crucially, **an `accept`
+  is exactly as powerful as clicking a button — it commits to whatever the
+  page does next — so it is gated identically, no more:** every §5 refusal the
+  triggering act was subject to (payment/credential fields, a
+  `browseConfirmDomains` submit, the site mode) still holds, and a dialog can
+  never launder a gated action. Every accepted confirm's text lands in the
+  audit log (§5.6).
+- **`prompt()`** (page-solicited free-text) → **default `dismiss`.** Typing a
+  value into a page-requested prompt carries the §5.4 risk (page instruction →
+  Familiar-typed input), so v1 never supplies one; a value would come only
+  later through the same grant/vault path as credential fill, never from the
+  model.
+- **File inputs (`<input type=file>`)** → refused in code exactly like a
+  credential field (§5.4). The Familiar has nothing to upload in v1, and no
+  path may attach the ward's files (the `own-files.js` denylist reason). A
+  real upload need is a deliberate future feature with its own gate.
+- **Popups / new tabs (`window.open`, `target=_blank`)** → captured into the
+  **same guarded context**, counted against `browseMaxTabs`, and
+  adopted-or-closed per the cap. A popup's navigation hits the SSRF proxy
+  (§5.1) exactly like `browse_open`; no window ever runs outside the tab
+  registry, the guards, or the reaper.
 
 ## 5. Safety — deterministic guardrails in code (the Sigil lesson)
 
@@ -385,6 +424,9 @@ browse-ish verbs + marker blocks); always available via `request_tools`.
    sees, or types a secret" stays literally true: the vault mechanism has
    *code* read the entry and type it; the model only ever names which entry,
    never the value. No grant, no vault entry → the field stays refused.
+   **File inputs (`<input type=file>`) are refused by the same code floor**
+   (§4.1): the Familiar has nothing to upload in v1 and no path may hand a
+   page the ward's files.
 5. **Injection immunization at the snapshot boundary:** every string that
    leaves the lens — element labels, page text, verdicts quoting toasts —
    passes `injection-guard.js`, and the whole snapshot block is framed in
@@ -665,8 +707,14 @@ required — the static floor works).
   clicks a different element than the ref named.
 - A page whose subresource targets `127.0.0.1`/RFC1918/metadata is blocked
   at the route layer (test fixture); non-HTTP schemes never navigate.
-- `fill` on a password/card fixture field refuses in every site mode; a
-  `browseConfirmDomains` submit without fresh confirmation refuses.
+- `fill` on a password/card/file-input fixture field refuses in every site
+  mode; a `browseConfirmDomains` submit without fresh confirmation refuses.
+- **Dialogs (§4.1):** an unhandled `confirm` fixture defaults to dismiss and
+  its text reaches the verdict; `on_dialog:'accept'` confirms a benign fixture
+  dialog; but an `accept` on an act that is itself gated (payment field /
+  `browseConfirmDomains` submit) still refuses — the dialog cannot launder it.
+  A fixture popup to a private-IP URL is blocked by the proxy exactly like
+  `browse_open`, and never escapes the tab cap.
 - A JS-rendered fixture page returns real prose through `read_webpage`
   (browser-backed); with `webReadBackend:'static'` or the browser down, the
   same call serves from the static floor and logs which backend served.
