@@ -289,6 +289,11 @@ const state = {
   // module stays (0-10).
   toolSurfacingEnabled:    false,
   toolStickyTurns:         2,
+  // Browser (browser build spec §10). Default OFF — like web search, being able
+  // to reach out of the box is opt-in. Env off-switch PROTO_FAMILIAR_BROWSE_DISABLED=1.
+  browseEnabled:           false,
+  browseIdleMin:           5,
+  browseMaxTabs:           3,
   // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
@@ -462,6 +467,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'providerApiKeys',
+  'browseEnabled', 'browseIdleMin', 'browseMaxTabs',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
@@ -3890,6 +3896,7 @@ function readSettingsFromUI() {
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
+  if ($('browse-toggle')) state.browseEnabled = $('browse-toggle').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4066,6 +4073,7 @@ function writeSettingsToUI() {
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
+  if ($('browse-toggle'))      setIfNotFocused($('browse-toggle'),      'checked', state.browseEnabled === true);
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
@@ -5441,7 +5449,7 @@ function init() {
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
-    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',

@@ -2594,6 +2594,28 @@ app.get('/api/discord-writes', async (_req, res) => {
   }
 });
 
+// ── Browser (browser build spec §2, §5.6) — status + the action audit log ──
+app.get('/api/browser/status', async (_req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') {
+    return res.json({ running: false, disabled: true, reason: 'PROTO_FAMILIAR_BROWSE_DISABLED=1' });
+  }
+  try {
+    const { browserStatus } = await import('./browser.js');
+    res.json(browserStatus());
+  } catch (err) {
+    res.json({ running: false, error: err?.message ?? String(err) });
+  }
+});
+
+app.get('/api/browser-actions', async (_req, res) => {
+  try {
+    const { readBrowserActions } = await import('./browser-audit.js');
+    res.json(await readBrowserActions({ limit: 200 }));
+  } catch {
+    res.json([]);
+  }
+});
+
 // ── Media (vision build spec §2) ──────────────────────────────────
 // Image bytes ride their OWN raw body parser (like /api/import-logs' json
 // override) so the global 4 MB JSON limit never sees base64 and image bytes
