@@ -26,7 +26,10 @@ triage in a group setting. What shipped:
 - **Web:** `websearch.js` sanitizes search titles/snippets, `look_up` reference text, and
   `read_webpage` extractions at the module's return boundaries (URLs deliberately untouched so
   the read_webpage follow-up keeps working). The guard also became escape-tolerant for bracket
-  markers, because turndown renders `[SYSTEM]` as `\[SYSTEM\]` at exactly this boundary.
+  markers, because turndown renders `[SYSTEM]` as `\[SYSTEM\]` at exactly this boundary. The
+  [browser milestone](browser)'s `browser.js`, shipped later (0.11.0), is a second wired call
+  site: every page snapshot and act verdict passes through `sanitizeExternal()` before it can
+  reach a prompt, on top of the Stranger-tier framing that page content also gets there.
 - **Village:** `discord-gateway.js`'s new `inboundContent()` helper (both ingestion sites —
   spoken turns and observed messages) sanitizes villager/stranger text only. The constraints
   are structural, not behavioral: the ward's own words never pass through the guard on any
@@ -96,6 +99,7 @@ sanitization.
 - [Engineering conventions](../reference/engineering-conventions) — the capability-
   reachability rule this defect is the defensive-side mirror of.
 - [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
-  — the unbuilt browsing milestone that layers deterministic code guardrails (an SSRF proxy, a
-  Stranger-tier default for page content) on top of this now-wired injection guard, rather than
-  relying on prompt framing alone.
+  — the design decisions behind the browsing milestone's deterministic code guardrails (an SSRF
+  proxy, a Stranger-tier default for page content), layered on top of this now-wired injection
+  guard rather than relying on prompt framing alone; see [Browser](browser) for the shipped
+  subsystem itself.

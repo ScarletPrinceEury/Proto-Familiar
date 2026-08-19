@@ -48,10 +48,11 @@ reoccurring.
 - [Single-user before platform](single-user-before-platform) — the founding scoping decision that
   bounds Village and every multi-channel surface to one ward's own support network rather than a
   general multi-user platform.
-- [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code) — an unbuilt
-  milestone's settled decisions for letting the Familiar click and fill on the web: an in-process
-  SSRF proxy, treating page content as a Village Stranger, and gating credentials, dialogs, and
-  handoff in code rather than by prompt.
+- [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code) — settled
+  decisions for letting the Familiar click and fill on the web: an in-process SSRF proxy,
+  treating page content as a Village Stranger, and gating credentials, dialogs, and handoff in
+  code rather than by prompt. Pass 1/Pass 2 shipped (0.11.0/0.11.1) — see [Browser](../architecture/browser)
+  for the built subsystem; credentials and handoff (Pass 3) have not.
 
 ## The Initiative build spec: wait-streak and contact rhythm
 

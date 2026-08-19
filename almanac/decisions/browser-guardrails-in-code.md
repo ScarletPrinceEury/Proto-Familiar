@@ -1,6 +1,6 @@
 ---
 title: "Browser Milestone: Guardrails in Code, Not Prompts"
-topics: [decisions, safety]
+topics: [decisions, safety, browser]
 sources:
   - id: browser-build-spec
     type: file
@@ -15,18 +15,23 @@ sources:
 
 # Browser Milestone: Guardrails in Code, Not Prompts
 
-**Status: decided, not yet implemented.** `docs/browser-build-spec.md` specs an unbuilt MINOR
-milestone — the Familiar using the web (click, fill, scroll, multi-step flows) instead of only
-reading it through `read_webpage` [@browser-build-spec]. It is a cognition layer over
-`playwright-core`, built on the existing web-search stack (`websearch.js`'s `look_up` /
-`web_search` / `read_webpage`) and modeled on two external references: agent-browser's dense-ref
-token model and Sigil's doctrine of deterministic, code-level guardrails instead of prompted
-ones [@browser-build-spec]. This page records the design decisions a second spec review settled
-— not the whole spec, which stays authoritative for the mechanics, but the *why* behind the
-choices that are easy to get wrong or quietly re-litigate later. Each one reuses an existing
-Proto-Familiar defense rather than inventing a parallel one, which is the throughline: SSRF
-reuses `websearch.js`'s IP guard, page trust reuses Village's floor tier, and credential handling
-reuses [Exact values are code's job](exact-values-in-code).
+**Status: Pass 1 and Pass 2 decided and shipped (0.11.0 / 0.11.1); Pass 3 and Pass 4 decided,
+not yet implemented.** `docs/browser-build-spec.md` specs a MINOR milestone — the Familiar using
+the web (click, fill, scroll, multi-step flows) instead of only reading it through
+`read_webpage` [@browser-build-spec]. It is a cognition layer over `playwright-core`, built on
+the existing web-search stack (`websearch.js`'s `look_up` / `web_search` / `read_webpage`) and
+modeled on two external references: agent-browser's dense-ref token model and Sigil's doctrine
+of deterministic, code-level guardrails instead of prompted ones [@browser-build-spec]. Pass 1
+(the driver, the lens, the guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log) and
+Pass 2 (screenshots, tabs, downloads, history) are built and described on
+[Browser: click-and-fill web access](../architecture/browser); this page records the design
+decisions a second spec review settled — not the whole spec, which stays authoritative for the
+mechanics, but the *why* behind the choices that are easy to get wrong or quietly re-litigate
+later. Each one reuses an existing Proto-Familiar defense rather than inventing a parallel one,
+which is the throughline: SSRF reuses `websearch.js`'s IP guard, page trust reuses Village's
+floor tier, and credential handling reuses [Exact values are code's job](exact-values-in-code).
+The credential-vault fill path, `browse_handoff`, and the `autonomy-grants.json` consent gate
+described below are Pass 3, and remain decided but not yet implemented.
 
 ## SSRF is enforced by a proxy the app owns, not `context.route`
 
@@ -138,20 +143,22 @@ is a structured error, never a coin-flip on the first match [@browser-build-spec
 mode this buys is always "re-observe, then retry," never "clicked something the model never
 named."
 
-## Build order defers `read_webpage`'s re-backing past the spine pass
+## Build order defers `read_webpage`'s re-backing past both shipped passes
 
-Pass 1 ships the driver, the lens, `browse_open/see/act/close`, the SSRF proxy, and the audit
-log, but deliberately leaves `read_webpage` on its existing static extractor rather than routing
-it through the new browser driver immediately [@browser-build-spec]. The reasoning: the driver
-(crash supervision, idle reaper, the CONNECT proxy) is unproven in Pass 1, and `read_webpage` is
+Pass 1 shipped the driver, the lens, `browse_open/see/act/close`, the SSRF proxy, and the audit
+log, but deliberately left `read_webpage` on its existing static extractor rather than routing it
+through the new browser driver immediately [@browser-build-spec]. The reasoning: the driver
+(crash supervision, idle reaper, the CONNECT proxy) was unproven in Pass 1, and `read_webpage` is
 an always-on, widely-used tool — routing it through a brand-new subsystem in the same pass that
 subsystem first ships would put unproven code straight into the hot path of existing behavior.
-`browse_*` proves the driver first; `read_webpage`'s replacement (with the static extractor
-retained as the degradation floor, selectable via `webReadBackend:'static'`) moves to Pass 2 once
-the driver has shaken out [@browser-build-spec]. Pass 3 adds the sovereignty surfaces (handoff,
-autonomy grants, the credentials vault); Pass 4 adds read-only unattended research on pondering
-ticks, the one deliberate exception to the project's usual "ride existing requests, never poll"
-rule for background work.
+`browse_*` proved the driver first; the spec placed `read_webpage`'s replacement (the static
+extractor retained as the degradation floor, selectable via `webReadBackend:'static'`) in Pass 2
+[@browser-build-spec], but as shipped in 0.11.1, that re-backing is still deferred — see
+[Browser: click-and-fill web access](../architecture/browser) for the current state of the tool
+surface. Pass 3 adds the sovereignty surfaces (handoff, autonomy grants, the credentials vault)
+and has not shipped; Pass 4 adds read-only unattended research on pondering ticks, the one
+deliberate exception to the project's usual "ride existing requests, never poll" rule for
+background work, and has not shipped either.
 
 ## Consequences
 
@@ -161,6 +168,8 @@ page — matching the "gate in code" doctrine already established for [Injection
 and [Content-based memory gating](../architecture/content-gating). A future implementer must not
 loosen the Stranger default, the credential-refusal boundary, or the handoff headless fallback as
 local conveniences; each one is a ward-signed floor, and the spec names loosening any of them as
-its own decision to reopen, not a bug to quietly fix. The build-order deferral means `read_webpage`
-keeps its current static-extractor behavior through Pass 1 even after `browse_*` ships — a reader
-should not expect the browser-backed reading path until Pass 2 lands.
+its own decision to reopen, not a bug to quietly fix. The build-order deferral means
+`read_webpage` keeps its static-extractor behavior even after both `browse_*` (Pass 1) and
+screenshots/tabs/downloads/history (Pass 2) shipped in 0.11.0/0.11.1 — a reader should not
+expect the browser-backed reading path until a future pass flips it over, and should not expect
+`browse_handoff`, autonomy grants, or vault-fill credentials until Pass 3 ships.
