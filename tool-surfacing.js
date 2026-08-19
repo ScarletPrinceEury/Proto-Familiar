@@ -26,6 +26,8 @@ export const TOOL_MODULES = {
   recall: 'core', recall_timeframe: 'core', save_memory: 'core', save_to_tome: 'core',
   update_identity: 'core', schedule_find: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
+  bookmark_for_later: 'core',   // the Familiar's own initiative (nothing in a user msg triggers it) — always reachable, like the other interest-layer tools
+
   contact_trusted_person: 'core', show_crisis_resources: 'core',
   flag_distress: 'core',   // safety: the Familiar's own read of distress → threat (ward-signed)
   get_trusted_contacts: 'core',   // pairs with contact_trusted_person

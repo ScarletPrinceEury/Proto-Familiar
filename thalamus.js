@@ -23,7 +23,7 @@ import { fileURLToPath } from 'url';
 import { recentReachOuts, formatReachOutBlock } from './reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
-import { phylacteryToolError } from './phylactery-result.js';
+import { mcpToolError } from './phylactery-result.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -575,10 +575,12 @@ export async function recordInterest({ topic, delta, source = 'chat' }) {
   if (typeof delta !== 'number' || !Number.isFinite(delta) || delta <= 0) return false;
   try {
     console.log(`[thalamus] → unruh: interest_record (topic="${topic.trim()}", delta=${delta}, source=${source})`);
-    await unruhClient.callTool({
+    const r = await unruhClient.callTool({
       name: 'interest_record',
       arguments: { topic: topic.trim(), delta, source },
     });
+    const err = mcpToolError(r);
+    if (err) { console.error('[thalamus] interest_record rejected:', err); return false; }
     console.log('[thalamus] ← unruh: interest_record — ok');
     return true;
   } catch (err) {
@@ -629,7 +631,7 @@ export async function bumpInterest({ topic, delta, source = 'manual' }) {
       arguments: { topic, delta, source },
     });
     console.log('[thalamus] ← unruh: interest_record/bump — ok');
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) {
     console.error('[thalamus] bumpInterest failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
@@ -647,7 +649,7 @@ export async function demoteStanding({ id }) {
       arguments: { id },
     });
     console.log('[thalamus] ← unruh: interest_demote_standing — ok');
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) {
     console.error('[thalamus] demoteStanding failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
@@ -674,7 +676,7 @@ export async function setStandingInterest({ topic, weight = 1.0, value_ref }) {
       arguments: args,
     });
     console.log('[thalamus] ← unruh: interest_set_standing — ok');
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) {
     console.error('[thalamus] setStandingInterest failed:', err?.message ?? err);
     return { ok: false, error: err?.message ?? String(err) };
@@ -707,7 +709,7 @@ export async function addScheduleNode({ type, label, when, end, payload }) {
       name: 'schedule_add_node',
       arguments: { type, label, when, end, payload },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -721,7 +723,7 @@ export async function updateScheduleNode({ id, label, when, end, payload }) {
   if (payload !== undefined) args.payload = payload;
   try {
     const r = await unruhClient.callTool({ name: 'schedule_update_node', arguments: args });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -733,7 +735,7 @@ export async function resolveScheduleNode({ id, resolution, series = false }) {
       name: 'schedule_resolve',
       arguments: { id, resolution, series },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -751,7 +753,7 @@ export async function resolveScheduleOccurrence({ id, occurrence_date, resolutio
       name: 'schedule_resolve_occurrence',
       arguments: { id, occurrence_date, resolution },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -763,7 +765,7 @@ export async function deleteScheduleNode({ id }) {
       name: 'schedule_delete_node',
       arguments: { id },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -782,7 +784,7 @@ export async function addScheduleEdge({ src, dst, kind, payload }) {
       name: 'schedule_add_edge',
       arguments: { src, dst, kind, payload },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -800,7 +802,7 @@ export async function upsertScheduleState({ label }) {
       name: 'schedule_upsert_state',
       arguments: { label },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -819,7 +821,7 @@ export async function updateScheduleEdge({ id, payload }) {
       name: 'schedule_update_edge',
       arguments: { id, payload },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -837,7 +839,7 @@ export async function stampElapsedEvents({ hours = 24 } = {}) {
       name: 'schedule_stamp_elapsed',
       arguments: { hours },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -854,7 +856,7 @@ export async function deleteScheduleEdge({ id }) {
       name: 'schedule_delete_edge',
       arguments: { id },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -916,7 +918,7 @@ export async function setIntention({ what, why, refs, trigger, condition, source
   if (visibility !== undefined) args.visibility = visibility;
   try {
     const r = await unruhClient.callTool({ name: 'intention_set', arguments: args });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -936,7 +938,7 @@ export async function dropIntention({ id }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'intention_drop', arguments: { id } });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -945,7 +947,7 @@ export async function completeIntention({ id }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'intention_done', arguments: { id } });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -956,7 +958,7 @@ export async function markIntentionFired({ id, now } = {}) {
   if (now !== undefined) args.now = now;
   try {
     const r = await unruhClient.callTool({ name: 'intention_mark_fired', arguments: args });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -965,7 +967,7 @@ export async function setRoundsVisibility({ value }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'intention_set_rounds_visibility', arguments: { value } });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -993,7 +995,7 @@ export async function addLocation({ label, lat, lon, place_name, timezone } = {}
   if (timezone   !== undefined) args.timezone   = timezone;
   try {
     const r = await unruhClient.callTool({ name: 'location_add', arguments: args });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1020,7 +1022,7 @@ export async function setCurrentLocation({ ident }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'location_set_current', arguments: { ident } });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1029,7 +1031,7 @@ export async function deleteLocation({ ident }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'location_delete', arguments: { ident } });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1051,7 +1053,7 @@ export async function ingestWeather({ location_id, provider, fetched_at, current
       name: 'weather_ingest',
       arguments: { location_id, provider, fetched_at, current, hourly },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1126,7 +1128,7 @@ export async function setScheduleLead({ id, lead_minutes = null }) {
       name: 'schedule_set_lead',
       arguments: lead_minutes == null ? { id } : { id, lead_minutes },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1208,7 +1210,7 @@ export async function templateUpsert({ tag, label, prerequisites }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'template_upsert', arguments: { tag, label, prerequisites } });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1226,7 +1228,7 @@ export async function templateDelete({ tag }) {
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   try {
     const r = await unruhClient.callTool({ name: 'template_delete', arguments: { tag } });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1279,7 +1281,7 @@ export async function markHandoffConsumed({ id }) {
       name: 'session_mark_handoff_consumed',
       arguments: { id },
     });
-    return parseToolText(r, { ok: true });
+    return unruhResult(r);
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
@@ -1334,6 +1336,33 @@ export async function listBookmarks({ limit = 100 } = {}) {
 }
 
 /**
+ * Save a bookmark — a resource the Familiar wants to come back to in a free
+ * cycle — against an interest topic. This is the WRITE side of M8: the create
+ * that feeds the adaptive resurfacing loop (due_bookmarks selects it once due,
+ * temporal_context surfaces it in idle mode, report_surfacing_outcome adapts the
+ * cadence). Without this nothing ever lands on the shelf. The topic is created
+ * on first reference, exactly like an interest bump.
+ *
+ * @param {{ topic: string, resource: string, note?: string }} args
+ * @returns {Promise<{ ok: boolean, error?: string, id?: string }>}
+ */
+export async function saveBookmark({ topic, resource, note } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  if (!topic || typeof topic !== 'string' || !topic.trim()) return { ok: false, error: 'topic (string) is required' };
+  if (!resource || typeof resource !== 'string' || !resource.trim()) return { ok: false, error: 'resource (string) is required' };
+  try {
+    const r = await unruhClient.callTool({
+      name: 'interest_bookmark',
+      arguments: { topic: topic.trim(), resource: resource.trim(), ...(note ? { note: String(note) } : {}) },
+    });
+    return unruhResult(r);
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
+/**
  * Store a session-end handoff (M6) into Unruh. The chat path (frontend)
  * summarises the ending session into intent + open threads and posts
  * them here via server.js; we forward to the `session_set_handoff`
@@ -1349,7 +1378,7 @@ export async function recordHandoff({ intent, threads, sessionId } = {}) {
   await startThalamus();
   if (!unruhClient) return false;
   try {
-    await unruhClient.callTool({
+    const r = await unruhClient.callTool({
       name: 'session_set_handoff',
       arguments: {
         intent: intent ?? null,
@@ -1357,6 +1386,8 @@ export async function recordHandoff({ intent, threads, sessionId } = {}) {
         session_id: sessionId ?? null,
       },
     });
+    const err = mcpToolError(r);
+    if (err) { console.error('[thalamus] session_set_handoff rejected:', err); return false; }
     return true;
   } catch (err) {
     console.error('[thalamus] session_set_handoff failed:', err?.message ?? err);
@@ -1404,6 +1435,26 @@ function parseToolText(result, fallback) {
   const text = result?.content?.find(c => c.type === 'text')?.text;
   if (!text) return fallback;
   try { return JSON.parse(text); } catch { return fallback; }
+}
+
+/**
+ * Read a MUTATING Unruh tool result honestly. `callTool` does NOT throw when a
+ * tool raises (a pydantic error from a bad/missing arg, or any exception) — it
+ * resolves with `isError: true` — so a write wrapper that just returned
+ * `parseToolText(r, { ok: true })` reported success on failure: the error text
+ * isn't the tool's normal JSON, so it fell through to the `{ ok: true }`
+ * fallback. This surfaces the failure as `{ ok: false, error }` instead; on
+ * success it returns the tool's own JSON payload (which already carries `ok`).
+ *
+ * Reads are deliberately NOT routed through here — they degrade to an empty
+ * payload on failure (absence renders as absence), which is the intended
+ * graceful-degradation behaviour. This is only for the write class, where a
+ * silent success is the dangerous outcome.
+ */
+export function unruhResult(result, fallback = { ok: true }) {
+  const err = mcpToolError(result);
+  if (err) return { ok: false, error: err };
+  return parseToolText(result, fallback);
 }
 
 /**
@@ -2956,7 +3007,7 @@ export async function updateIdentitySection({ category, filename, heading, conte
     // string (its tools return text, not JSON) — neither throws, so we MUST
     // inspect the result or a failed write reads as success (the silent-failure
     // this fixes). callTool only rejects on a transport/protocol error.
-    const err = phylacteryToolError(result);
+    const err = mcpToolError(result);
     if (err) {
       console.error(`[thalamus] updateIdentitySection rejected for ${category}/${filename} § ${heading}: ${err}`);
       return { ok: false, error: err };

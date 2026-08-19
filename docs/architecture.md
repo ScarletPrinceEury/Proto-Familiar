@@ -99,7 +99,7 @@ ponderings injection, care-check framing) and as background loops
 ```
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
-├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers
+├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers. MUTATING wrappers read results honestly via `unruhResult` / `mcpToolError` (phylactery-result.js): the SDK's callTool does NOT throw when a tool raises (it resolves isError:true), so a wrapper that just returned `{ok:true}` reported success on failure — the silent-write class behind the identity_update_section bug. Reads deliberately still degrade to empty (absence renders as absence). `saveBookmark` is the M8 write side (→ interest_bookmark), feeding the resurfacing loop
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector — 5 tiers, ~13 signal categories, damping
 ├── threat-tracker.js        Decaying scalar with audit history, off-switches, file persistence
