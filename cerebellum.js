@@ -2451,6 +2451,42 @@ export const BUILTIN_TOOLS = [
       parameters: { type: 'object', properties: {} },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'browse_screenshot',
+      description: "I take a picture of the page I'm on and actually look at it — for a page the outline reads badly (a canvas app, a chart, an image-heavy layout), or when I just want to see it with my own eyes. I can pass `scope` a ref (like r7) to shoot one element instead of the whole viewport. The picture is kept as mine (ward-private) and I can tie it to someone/something later.",
+      parameters: {
+        type: 'object',
+        properties: { scope: { type: 'string', description: 'Optional ref (e.g. r7) to screenshot one element instead of the viewport.' } },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browse_tabs',
+      description: 'I manage my open browser tabs: list them, switch which one I\'m looking at, or close one. I keep only a few open at a time.',
+      parameters: {
+        type: 'object',
+        properties: {
+          op: { type: 'string', enum: ['list', 'switch', 'close'], description: 'list (default), switch, or close.' },
+          id: { type: 'string', description: 'The tab id (e.g. t2) for switch/close.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browse_history',
+      description: "I look back at what I've actually done on the web — every page I opened and action I took is logged, so I can answer \"what did I do on that site?\" without carrying a blow-by-blow in my head. I can pass a `query` to filter (a site, a word).",
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: 'Optional filter — a domain, a word, a tool name.' } },
+      },
+    },
+  },
 ];
 
 // Resolve a circle name the Familiar typed (a Village category's name or id) to
@@ -4165,6 +4201,29 @@ export const TOOL_EXECUTORS = {
     const b = await import('./browser.js');
     return b.browseClose({}, { sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
+  browse_screenshot: async ({ scope } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
+    const b = await import('./browser.js');
+    const res = await b.browseScreenshot({ scope }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
+    // Ride the shot into the SAME turn on a vision-capable connection (the
+    // view_image mechanism). browse_screenshot is only offered on capable turns
+    // (composeActiveTools), so a pending push is always valid here.
+    if (res?.id) {
+      ctx._pendingImages = Array.isArray(ctx._pendingImages) ? ctx._pendingImages : [];
+      ctx._pendingImages.push({ id: res.id });
+    }
+    return res?.text ?? 'I took a screenshot.';
+  },
+  browse_tabs: async ({ op, id } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
+    const b = await import('./browser.js');
+    return b.browseTabs({ op, id }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
+  },
+  browse_history: async ({ query } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
+    const b = await import('./browser.js');
+    return b.browseHistory({ query }, { settings: readSettingsSync() });
+  },
 };
 
 /**
@@ -4310,6 +4369,10 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
     (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)) &&
     (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL) &&
     (visionCapableTurn || t.function?.name !== 'view_image') &&
+    // browse_screenshot only makes sense when I can actually see: on a text-only
+    // connection the shot would stand in blind, so it's hidden there (I use
+    // browse_see level=text instead). Its _pendingImages ride is thus always valid.
+    (visionCapableTurn || t.function?.name !== 'browse_screenshot') &&
     (visionOn || !VISION_LINK_TOOL_NAMES.has(t.function?.name)));
   if (Array.isArray(customTools)) {
     for (const t of customTools) {

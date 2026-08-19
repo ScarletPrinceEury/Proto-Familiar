@@ -679,11 +679,17 @@ required — the static floor works).
   pass would put a brand-new subsystem straight into the hot path of existing
   behaviour (ordering decision, spec review 2). `browse_*` proves the driver
   first; the milestone still shows value here. *Milestone `0.X.0`.*
-- **Pass 2 — eyes and hands.** Delta verdicts (act returns), `text/full`
-  levels, `browse_screenshot` + vision-seam ride, downloads→media,
-  `browse_tabs`, `browse_history`, stale-ref generations, **and the
-  `read_webpage` re-backing** (browser route + static floor + `webReadBackend`,
-  flipped to browser-backed only once the Pass-1 driver has shaken out).
+- **Pass 2 — eyes and hands.** DONE (0.11.1): delta verdicts (act returns) +
+  `text/full` levels already shipped in Pass 1; `browse_screenshot` +
+  vision-seam ride (capable-turn-gated like `view_image`; its `_pendingImages`
+  push is thus always valid), downloads→media (size-cap + mime allow-list,
+  never an executable), `browse_tabs`, `browse_history` (over the audit log),
+  and the stale-ref generation guard (a ref used after a nav / DOM rebuild
+  errors to a re-observe). **STILL PENDING — the `read_webpage` re-backing**
+  (browser route + static floor + `webReadBackend`): deferred on purpose, per
+  this pass's own hedge — an always-on tool flips to the new driver only once
+  it's genuinely shaken out with real use, not the moment it lands. Tracked as
+  the one remaining Pass-2 item.
 - **Pass 3 — sovereignty surfaces.** `browse_handoff` (headed window +
   hand-back affordance + outbox/push), `[CONFIRM]` domains, site modes UI,
   credential/payment fill refusals hardened against fixture forms,
