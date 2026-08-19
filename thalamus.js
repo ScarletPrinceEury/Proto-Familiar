@@ -358,7 +358,12 @@ async function connectPhylactery() {
     command: uvBin,
     args: ['run', '--no-sync', 'python', '-m', 'phylactery'],
     cwd: PHYLACTERY_ROOT,
-    env: phEnv,
+    // PHYLACTERY_DB_PATH relocates the store (the cross-process smoke test sets
+    // it to a temp file for isolation). It's not in the SDK's inherited env
+    // allowlist, so forward it explicitly when present; unset → default path.
+    env: process.env.PHYLACTERY_DB_PATH
+      ? { ...phEnv, PHYLACTERY_DB_PATH: process.env.PHYLACTERY_DB_PATH }
+      : phEnv,
   });
 
   const client = new Client(
@@ -475,11 +480,19 @@ async function connectUnruh() {
   // the platforms where the bug occurs (Linux/WSL/Docker); native Windows is
   // already in the ward's zone, so a no-op there is harmless.
   const wardTz = wardTimeZoneSetting();
+  // UNRUH_DB_PATH relocates the store (the cross-process smoke test sets it to a
+  // temp file for isolation). Not in the SDK's inherited env allowlist, so
+  // forward it explicitly when present. Unset + no wardTz → no env override
+  // (the SDK's default inherited env), unchanged from before.
+  const unruhEnv = {
+    ...(wardTz ? { ...process.env, TZ: wardTz } : {}),
+    ...(process.env.UNRUH_DB_PATH ? { UNRUH_DB_PATH: process.env.UNRUH_DB_PATH } : {}),
+  };
   const transport = new StdioClientTransport({
     command: uvBin,
     args: ['run', '--no-sync', 'python', '-m', 'unruh'],
     cwd: UNRUH_ROOT,
-    ...(wardTz ? { env: { ...process.env, TZ: wardTz } } : {}),
+    ...(Object.keys(unruhEnv).length ? { env: unruhEnv } : {}),
   });
 
   const client = new Client(
