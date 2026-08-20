@@ -1191,11 +1191,18 @@ async function handleVoiceCommand(gw, msg, action) {
   else await send(`I couldn't join (${r?.reason ?? 'unknown'}).`);
 }
 
-/** Best-effort display name for a speaker slug — the registry name if known,
- *  else the raw id. Kept simple for Pass 3a; 3b enriches this via the gate. */
+/** Best-effort display name for a voice speaker's slug. The ward is the
+ *  configured user name; anyone else is their cached Discord display name (a
+ *  real name the Familiar can tell apart from the next speaker), falling back
+ *  to a short opaque tag only when Discord hasn't named them yet. The
+ *  authoritative villager name (which outranks the display name) is applied
+ *  where the registry is loaded — the roster builder and the turn runner —
+ *  since that read is async and this must stay sync (the adapter mints slugs
+ *  synchronously). */
 function nameForVoiceUser(gw, guildId, userId) {
-  if (userId && userId === (readSettingsSync().discordWardUserId ?? '').trim()) return 'Ward';
-  return `user-${userId}`;
+  const s = readSettingsSync();
+  if (userId && userId === (s.discordWardUserId ?? '').trim()) return (s.userName || '').trim() || 'my human';
+  return discordVoiceDisplayName(userId) || `guest-${String(userId ?? '').slice(0, 6)}`;
 }
 
 async function handleUpdateCommand(gw, msg, content) {
@@ -2236,7 +2243,31 @@ const gw = {
   voiceStates: new Map(),      // guildId → Map<userId, channelId> — who is in which VC
   voiceController: null,        // { joinVoiceCall, leaveVoiceCall } from voice-discord-server (Pass 3)
   guildNames: new Map(),        // guildId → server name, from GUILD_CREATE — names the server list + knock groups
+  userInfo: new Map(),          // userId → { id, username, global_name } — so a voice speaker reads as a NAME, not a raw snowflake the LLM can't tell apart
 };
+
+/** Cache what Discord tells us about a user (from GUILD_CREATE members, seeded
+ *  voice states, and VOICE_STATE_UPDATE.member) so a voice speaker can be named
+ *  even when they're not a registered villager. A snowflake means nothing to the
+ *  Familiar (an LLM); a display name is something it can hold onto and tell apart
+ *  from the next speaker. Best-effort: a partial object still upgrades the cache. */
+function rememberUser(user) {
+  const id = user?.id;
+  if (!id) return;
+  const prev = gw.userInfo.get(id) ?? {};
+  gw.userInfo.set(id, {
+    id,
+    username:    user.username    ?? prev.username    ?? null,
+    global_name: user.global_name ?? prev.global_name ?? null,
+  });
+}
+
+/** The best display name Discord has given us for a user id, or null. Villager
+ *  names (which outrank this) are resolved separately against the registry. */
+export function discordVoiceDisplayName(userId) {
+  const u = gw.userInfo.get(String(userId ?? ''));
+  return u ? (u.global_name || u.username || null) : null;
+}
 
 function clearTimers() {
   if (gw.heartbeatTimer) { clearInterval(gw.heartbeatTimer); gw.heartbeatTimer = null; }
@@ -2436,8 +2467,13 @@ function onDispatch(t, d) {
       if (d?.id && Array.isArray(d.voice_states)) {
         let g = gw.voiceStates.get(d.id);
         if (!g) { g = new Map(); gw.voiceStates.set(d.id, g); }
-        for (const vs of d.voice_states) { if (vs?.user_id && vs?.channel_id) g.set(vs.user_id, vs.channel_id); }
+        for (const vs of d.voice_states) {
+          if (vs?.user_id && vs?.channel_id) g.set(vs.user_id, vs.channel_id);
+          if (vs?.member?.user) rememberUser(vs.member.user);   // name the people already sitting in voice
+        }
       }
+      // Cache every member's user object so a voice speaker reads as a name.
+      if (Array.isArray(d?.members)) for (const m of d.members) if (m?.user) rememberUser(m.user);
     } catch (err) { console.error('[discord] GUILD_CREATE voice-state seed failed:', err?.message ?? err); }
     // Name the server so the Locations tab and grouped knocks read as the
     // server's actual name, not a raw ID. GUILD_CREATE is the authoritative
@@ -2452,6 +2488,7 @@ function onDispatch(t, d) {
   }
   if (t === 'VOICE_STATE_UPDATE') {
     try {
+      if (d?.member?.user) rememberUser(d.member.user);   // keep the speaker's name fresh as they move between channels
       const prevChannel = recordVoiceState(d);
       const methods = gw.voiceAdapters.get(d?.guild_id);
       if (methods && d?.user_id === gw.botUserId) methods.onVoiceStateUpdate(d);

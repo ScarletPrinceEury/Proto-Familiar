@@ -245,6 +245,43 @@ integration seam that needs the most care and its own tests.
     `locationCallModeFor`); `auto` adds hands-free join when the ward ENTERS a VC
     (gateway `maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`, ward-only, only on a
     real entry, never mid-call).
+- **3d — group-call presence & speaker attribution (Pass 3 tail, ward-requested).**
+  Before this, a group Discord call reached the Familiar (an LLM) as a flat wall of
+  unattributed "user" turns tagged with raw snowflakes it can't tell apart, and
+  nothing told it more than one person was present, who they were, or who
+  joined/left. Three coordinated pieces close it:
+  - **Real names.** `discord-gateway.js` now caches every user object it sees
+    (GUILD_CREATE members + seeded `voice_states[].member`, and every
+    `VOICE_STATE_UPDATE.member`) in `gw.userInfo`, and `nameForVoiceUser` resolves
+    ward → configured name, else the cached Discord display name, else a short
+    `guest-xxxxxx` — never the bare `user-<snowflake>` again. `discordVoiceDisplayName`
+    exports the cached name; `villagerByAlias` (a pure split of `findVillagerByAlias`)
+    lets the roster builder name many ids in ONE registry read (villager name wins).
+  - **Attributed transcript.** In a **group** call (2+ humans), every turn — my
+    human's included (ward decision: the LLM needs them distinguishable from a
+    villager) — is prefixed with the speaker's name in both the live transcript and
+    the stored call history. A **solo** call is byte-identical to before (no prefix).
+    The MEMORY write is unchanged: it still takes the raw text with the speaker as
+    its own field, not a prefix.
+  - **Presence + greeting** (`voice-presence.js`, pure). A first-person "who's here /
+    who came or went" note is surfaced once after each roster change (and at call
+    start), then goes quiet — annotation only, exactly like the §8.4 room-sound note
+    (never stored, never moves the threat tier, never touches the audience gate).
+    And, opt-in-ON (`voiceProactiveGreetings`), a short **spoken hello** when a
+    non-ward arrival joins: composed by a lean, **leak-free** LLM call (names only
+    the arrival — no recall, safe to speak aloud at any clearance), spoken via the
+    engine's existing `speakProactive`, which **rides the next silence gap** so it
+    never talks over someone mid-sentence as the join lands (the ward's explicit
+    ask). Deduped per stay, **stood down at moderate+ threat** (triage owns those
+    moments), recorded into call history once spoken so it isn't repeated.
+  - **Off-switches (same commit):** `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1`
+    reverts the whole layer to the old unlabelled transcript;
+    `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` + the `voiceProactiveGreetings`
+    toggle silence only the spoken hello (presence/labels stay). Tests:
+    `voice-presence.test.mjs`, `villagerByAlias` in `village.test.mjs`.
+  - **Not a ward-sign-off safety path:** the audience gate, threat scoring, and what
+    is stored-per-clearance are all untouched — this only changes what the Familiar
+    *reads* about who's in the room, plus one leak-free spoken greeting.
 - **Noise/silence polish (Pass 3, live-testing feedback).** Two engine options:
   `transcriptFilter` drops ambient-noise transcripts (traffic/fan the multilingual
   recogniser guessed as CJK — `isLikelyNoiseTranscript` in `voice-speech.js`, a
