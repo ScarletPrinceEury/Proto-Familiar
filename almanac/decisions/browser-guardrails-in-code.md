@@ -23,12 +23,15 @@ sources:
   - id: browser-js
     type: file
     path: browser.js
+  - id: ponder-research-js
+    type: file
+    path: ponder-research.js
 ---
 
 # Browser Milestone: Guardrails in Code, Not Prompts
 
-**Status: Pass 1 through Pass 3b decided and shipped (0.11.0 / 0.11.1 / 0.11.3 / 0.11.4), plus
-both named Pass 3b refinements (0.11.5 / 0.11.6); Pass 4 decided, not yet implemented.** `docs/browser-build-spec.md` specs a MINOR milestone — the
+**Status: Pass 1 through Pass 4 decided and shipped (0.11.0 / 0.11.1 / 0.11.3 / 0.11.4 / 0.11.5 /
+0.11.6 / 0.11.7).** `docs/browser-build-spec.md` specs a MINOR milestone — the
 Familiar using the web (click, fill, scroll, multi-step flows) instead of only reading it
 through `read_webpage` [@browser-build-spec]. It is a cognition layer over `playwright-core`,
 built on the existing web-search stack (`websearch.js`'s `look_up` / `web_search` /
@@ -208,15 +211,45 @@ an always-on, widely-used tool — routing it through a brand-new subsystem in t
 subsystem first ships would put unproven code straight into the hot path of existing behavior.
 `browse_*` proved the driver first; the spec placed `read_webpage`'s replacement (the static
 extractor retained as the degradation floor, selectable via `webReadBackend:'static'`) in Pass 2
-[@browser-build-spec], but as shipped through 0.11.6, that re-backing is still deferred — see
+[@browser-build-spec], but as shipped through 0.11.7, that re-backing is still deferred — see
 [Browser: click-and-fill web access](../architecture/browser) for the current state of the tool
 surface. Pass 3 added the sovereignty surfaces (site modes, the consent ceremony, the
 credentials vault, the fill-source gate, the confirm-domain refusal, and `browse_handoff`) across
 0.11.3 and 0.11.4, and its two named refinements (`browseConfirmMode: 'ask'` approve-resume and
 headed handoff hand-back-and-resume) shipped in 0.11.5 and 0.11.6, so Pass 3 is now fully
-shipped. Pass 4 adds read-only unattended research on pondering ticks, the one deliberate
-exception to the project's usual "ride existing requests, never poll" rule for background work,
-and has not shipped.
+shipped. Pass 4 (0.11.7) shipped read-only unattended research on pondering ticks — the one
+deliberate exception to the project's usual "ride existing requests, never poll" rule for
+background work — described in the section below.
+
+## Pass 4 (0.11.7) inverts agency instead of adding a tool loop
+
+The spec described Pass 4 as a read-only *tool-calling* loop layered on `browse_*`. The shipped
+design, `ponder-research.js`, deliberately diverges: it is a **plan-and-read loop**, not a
+tool-calling loop, and the divergence is itself the decision worth recording
+[@ponder-research-js]. The reasoning is about *where* the loop runs: [pondering](../architecture/pondering)
+fires unattended, with no ward nearby to notice odd behavior mid-tick. In that context the
+Familiar should get **less** agency than it has on a live chat turn, not more — the opposite of
+what handing it a `browse_*` tool surface would do [@ponder-research-js].
+
+Concretely, the model in `researchForPonder()` only ever returns JSON naming what it wants —
+`{searches, reads, done}` — and code alone performs the bounded reads (`websearch.js`'s
+`searchWeb`/`readWebpage`, or a browser-backed `browseRead` when available) [@ponder-research-js].
+There is no tool surface at all for a hostile page to misuse, even via malformed model output,
+because reads are idempotent and there is no act path to reach — a stronger safety property than
+a read-only tool loop would have offered, since a tool loop still hands the model a callable
+surface a crafted page could try to talk it into misusing. This is the same "gate in code, not in
+the prompt" doctrine as the rest of the milestone, applied to the shape of the loop itself rather
+than to a single gate inside it.
+
+Two bounds keep the added request volume small: `ponderWebRoundsPerTick` clamps the loop to
+1–10 rounds, and a shared per-day read budget (`ponder-web-budget.js`, day-keyed and fail-closed)
+caps total reads regardless of how many ponder ticks fire [@ponder-research-js]. An exhausted
+budget is never a failed call — the ponder prompt says plainly that it is thinking from what it
+already holds — because the deliberate exception to "ride existing requests, never poll" is
+scoped narrowly: the research itself is the feature, and the round cap plus budget are what keep
+that exception bounded rather than open-ended. See [Pondering](../architecture/pondering) for how
+the research gate sits inside `ponderOnce()`, and [Browser: click-and-fill web access](../architecture/browser)
+for the module's place alongside the rest of the browser subsystem.
 
 ## Consequences
 
@@ -227,9 +260,11 @@ and [Content-based memory gating](../architecture/content-gating). A future impl
 loosen the Stranger default, the credential-refusal boundary, or the handoff headless fallback as
 local conveniences; each one is a ward-signed floor, and the spec names loosening any of them as
 its own decision to reopen, not a bug to quietly fix. The build-order deferral means
-`read_webpage` keeps its static-extractor behavior even after Pass 1 through Pass 3b and both
-refinements shipped in 0.11.0/0.11.1/0.11.3/0.11.4/0.11.5/0.11.6 — a reader should not expect the
-browser-backed reading path until a future pass flips it over. `browse_handoff`, the autonomy
-grants, vault-fill credentials, `browseConfirmMode: 'ask'` approve-resume, and the headed
-handoff hand-back-and-resume are all now shipped and can be relied on; only Pass 4's unattended
-research on pondering ticks has not started.
+`read_webpage` keeps its static-extractor behavior even after Pass 1 through Pass 4 shipped in
+0.11.0/0.11.1/0.11.3/0.11.4/0.11.5/0.11.6/0.11.7 — a reader should not expect the browser-backed
+reading path until a future pass flips it over. `browse_handoff`, the autonomy grants, vault-fill
+credentials, `browseConfirmMode: 'ask'` approve-resume, the headed handoff hand-back-and-resume,
+and Pass 4's plan-and-read pondering research are all now shipped and can be relied on. Because
+Pass 4's design diverged from the spec's read-only tool-loop description, a future implementer
+should not "fix" `ponder-research.js` back toward a tool-calling shape without re-reading the
+agency-inversion reasoning above — the divergence is the safer design, not an unfinished one.

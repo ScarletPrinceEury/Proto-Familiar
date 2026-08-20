@@ -32,23 +32,32 @@ sources:
   - id: browser-tools-test
     type: file
     path: tests/browser-tools.test.mjs
+  - id: ponder-research-js
+    type: file
+    path: ponder-research.js
+  - id: ponder-web-budget-js
+    type: file
+    path: ponder-web-budget.js
 ---
 
 # Browser: Click-and-Fill Web Access
 
 The browser subsystem lets the Familiar navigate, read, and act on live web pages —
 click, fill, scroll, and multi-step flows — instead of only reading a page through the
-existing static `read_webpage` extractor. It shipped in four passes: Pass 1 (0.11.0, the
+existing static `read_webpage` extractor. It shipped in five passes: Pass 1 (0.11.0, the
 spine: driver, lens, guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log), Pass 2
 (0.11.1, screenshots, tabs, downloads, history), Pass 3a (0.11.3, synchronous safety gates),
-and Pass 3b (0.11.4, the ward-in-the-loop and consent-gated surfaces), followed by two async
+Pass 3b (0.11.4, the ward-in-the-loop and consent-gated surfaces), and Pass 4 (0.11.7,
+unattended web research on [pondering](pondering) ticks), followed by two async
 refinements to Pass 3b's synchronous hard-stops: `browseConfirmMode: 'ask'` approve-resume
 (0.11.5) and headed handoff hand-back-and-resume (0.11.6)
-[@package-json] [@browser-driver-js] [@browser-js] [@browser-grants-js]. `docs/browser-build-spec.md`
-is the design document the Pass 1 through 3b work implements; the [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
-decision page records why its guardrails are shaped the way they are. This page describes
-the six modules that exist in the repo today and how they fit together, using the built
-code — not the spec — as the source of truth for what actually runs.
+[@package-json] [@browser-driver-js] [@browser-js] [@browser-grants-js] [@ponder-research-js].
+`docs/browser-build-spec.md` is the design document the Pass 1 through 3b work implements; Pass
+4 shipped as a deliberate divergence from that spec — see the "Pass 4" section below and the
+[Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
+decision page, which records why its guardrails, including Pass 4's, are shaped the way they
+are. This page describes the modules that exist in the repo today and how they fit together,
+using the built code — not the spec — as the source of truth for what actually runs.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
 `PROTO_FAMILIAR_BROWSE_DISABLED` env kill switch) and ward-only: the `browse_*` tools are
@@ -332,20 +341,57 @@ wait, the handback swap, failure-to-park), not the Playwright relaunch itself; t
 relaunch dance needs a live desktop shakeout before it can be trusted beyond that
 [@browser-tools-test].
 
+## Pass 4 (0.11.7): unattended web research on pondering ticks
+
+Pass 4 lets the Familiar seek out sources mid-[ponder](pondering) instead of only recombining
+what it already holds, and it completes the browser milestone's build passes
+[@ponder-research-js]. The load-bearing design decision is that this shipped as a
+**plan-and-read loop, not a tool-calling loop**, deliberately diverging from the build spec's
+§8.5, which described a read-only tool loop; the
+[Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
+decision page's Pass 4 section records the full reasoning. In short: an unattended context
+(pondering, no ward nearby to notice odd behavior) is where the Familiar should get **less**
+agency, not more, so `ponder-research.js`'s model call only ever names what to search or read —
+it returns JSON `{searches, reads, done}` — and code alone performs the bounded reads
+[@ponder-research-js]. There is no tool surface for a hostile page to misuse even through
+malformed model output, because reads are idempotent and there is no act path to reach.
+
+`researchForPonder()` runs up to `ponderWebRoundsPerTick` rounds (clamped 1–10, default 4),
+asking the model each round what it wants to look up next given what it has already pulled, and
+can follow a trail across rounds (read a page, then ask for a link from it)
+[@ponder-research-js]. Each read goes through the browser's live-DOM read
+(`shouldBrowserRead`/`browseRead`, stamped `sessionId:'pondering'` in the browser action audit
+log) when the driver is up, else falls back to the static `readWebpage` floor — the same
+degradation relationship `read_webpage` itself has to the driver elsewhere on this page
+[@ponder-research-js]. `ponder-web-budget.js` enforces a shared per-day read budget
+(`tomes/.ponder-web-budget.json`, keyed to the ward's local calendar day, fail-closed on a
+read/write failure) across all unattended research, independent of the round cap
+[@ponder-web-budget-js]. An exhausted budget is never a failed call: the returned `sources` array
+comes back empty with `budgetSpent:true`, and [pondering](pondering)'s prompt then says plainly
+that it is thinking from what it already holds rather than erroring [@ponder-research-js]. Every
+source gathered is provenance-stamped and folded into the ponder prompt via `sourcesBlock()` so
+the resulting thought cites what it actually read [@ponder-research-js].
+
+Settings: `ponderWebEnabled` (default on), `ponderWebRoundsPerTick` (default 4),
+`ponderWebReadsPerDay` (default 12), plus the hard env off-switch
+`PROTO_FAMILIAR_PONDER_WEB_DISABLED=1` [@ponder-research-js]. See
+[Pondering](pondering) for where this research gate sits inside `ponderOnce()` and why it is
+skipped for reflection-mode ponders.
+
 ## What is deliberately still deferred
 
 `read_webpage` is not re-backed by this driver. It stays on its existing static extractor even
-after Pass 1 through 3b have shipped, on purpose: `read_webpage` is an always-on, widely used
+after Pass 1 through 4 have shipped, on purpose: `read_webpage` is an always-on, widely used
 tool, and the spec's ordering is to prove the driver on the opt-in `browse_*` surface first,
 then flip the always-on tool to it only once the driver has shaken out under real use
 [@browser-build-spec]. This is the one item the spec originally placed inside Pass 2 that
-remains undone as of 0.11.6.
+remains undone as of 0.11.7.
 
-The whole browser milestone specced in `docs/browser-build-spec.md`'s Passes 1 through 3 is now
-built, including both Pass 3b refinements named above: `browseConfirmMode: 'ask'`
-approve-resume (0.11.5) and the headed handoff hand-back-and-resume (0.11.6). What remains is
-Pass 4 — unattended web research on pondering ticks — and `read_webpage`'s re-backing onto this
-driver.
+The whole browser milestone specced in `docs/browser-build-spec.md`'s Passes 1 through 4 is now
+built, including both Pass 3b refinements named above (`browseConfirmMode: 'ask'`
+approve-resume, 0.11.5, and the headed handoff hand-back-and-resume, 0.11.6) and Pass 4's
+unattended pondering research (0.11.7, shipped as a plan-and-read loop rather than the spec's
+tool-calling design). What remains is `read_webpage`'s re-backing onto this driver.
 
 ## Related
 
@@ -361,3 +407,5 @@ driver.
   into.
 - [Safety spine](safety-spine) — the broader crisis-detection and threat-tracking system the
   Stranger-tier framing is designed never to be able to move.
+- [Pondering](pondering) — the autonomous thought loop Pass 4's research gate runs inside, and
+  where `sourcesBlock()`'s output lands in the ponder prompt.

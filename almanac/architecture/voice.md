@@ -62,6 +62,24 @@ sources:
   - id: voice-tagging
     type: file
     path: voice-tagging.js
+  - id: voice-presence-js
+    type: file
+    path: voice-presence.js
+  - id: voice-discord-server-js
+    type: file
+    path: voice-discord-server.js
+  - id: voice-discord-adapter-js
+    type: file
+    path: voice-discord-adapter.js
+  - id: call-engine-js
+    type: file
+    path: call-engine.js
+  - id: discord-gateway-js
+    type: file
+    path: discord-gateway.js
+  - id: village-js
+    type: file
+    path: village.js
 ---
 
 # Voice
@@ -75,8 +93,10 @@ machine [@pr-voice-pass-0] [@architecture-doc]. **Pass 1**, built on Pass 0's su
 shipped the first thing that actually speaks: per-message read-aloud text-to-speech
 [@architecture-doc]. Later passes have since shipped live conversation and voiceprint enrolment
 (Pass 4, through 0.10.102-alpha) [@voice-tagging]; this page documents Pass 0 and Pass 1 in
-depth and does not yet cover Pass 2–4 in full. One Pass 4 piece is covered elsewhere: room-sound
-tagging (`voice-tagging.js`, `voice-audio-tags.js`) ships **annotation-only** by deliberate
+depth and does not yet cover Pass 2–4 in full. Two later pieces are covered on this page in their
+own sections below: group-call presence, speaker naming, and join/leave awareness on the Discord
+call path (0.11.8-alpha) [@voice-presence-js], and room-sound tagging
+(`voice-tagging.js`, `voice-audio-tags.js`), which ships **annotation-only** by deliberate
 design — see [Safety spine](safety-spine)'s deferred-work section for why it stops short of using
 room sounds for care detection, and what a future ward-signed spec would need to decide
 [@voice-audio-tags]. See [Vision and media](vision-and-media) for the sibling multimodal-input
@@ -378,6 +398,71 @@ file extension from one shared lookup table, so a voice note can no longer be st
 image carrying an audio file extension, and the audience tag, dedup, and slug-id machinery
 built for images cover voice notes for free [@media] [@architecture-doc].
 
+## Group-call presence, speaker names, and join/leave (0.11.8-alpha)
+
+A live Discord voice call can hold more than the ward, and the call path did not originally
+account for that: transcripts arrived as a flat wall of unattributed `user` turns tagged with raw
+Discord snowflakes the model cannot tell apart, and nothing told the Familiar who was present or
+who had joined or left [@voice-presence-js]. Three fixes, layered on top of the live-conversation
+call path, close this gap without touching audience gating, threat scoring, or what gets stored
+at each clearance [@voice-presence-js].
+
+**Names now resolve.** `nameForVoiceUser()` in `discord-gateway.js` previously special-cased only
+the ward and returned a literal `user-<snowflake>` for anyone else, even though Discord's own
+`member.user` payload arrives on every `VOICE_STATE_UPDATE` and `GUILD_CREATE` event
+[@discord-gateway-js]. A module-level `gw.userInfo` cache, seeded from `GUILD_CREATE` members and
+each voice state's `member`, and kept current on `VOICE_STATE_UPDATE`, now backs name resolution:
+the ward's configured name, then a cached Discord display name, then a short `guest-xxxxxx` tag
+only when Discord has not named the user yet [@discord-gateway-js]. `village.js`'s existing
+`findVillagerByAlias()` was split so a pure `villagerByAlias(reg, {platform, id})` can run against
+an already-loaded registry [@village-js]. This lets the roster builder resolve many ids from one
+registry read, where a registered villager's own name always outranks the raw Discord display
+name.
+
+**Speaker labels reach the turn, not just the memory write.** `voice-presence.js` is a new pure
+module: `isGroupCall(roster)` is true once 2 or more humans share the call, and only then does
+`attributeSpeaker()` return a label; `prefixTurn(label, text)` prepends `"Name: "` to a turn only
+when a label exists, so a solo call's transcript stays byte-identical to before
+[@voice-presence-js]. In a group call every turn is labelled, the ward's own turns included — a
+ward decision, made so the model can tell the ward's turns apart from a villager's rather than
+inferring it from context [@voice-presence-js]. `voice-discord-server.js` wires this into
+`runTurn()`: it resolves the speaker's name, computes `isGroupCall(roster)`, and prefixes the
+transcript before it reaches the model, while the memory write for the turn still carries the
+speaker as its own structured field rather than folding it into the text [@voice-discord-server-js].
+
+**A presence signal now exists.** `call-engine.js`'s `rosterChanged` hook used to be a dead
+no-op stub with a comment that Pass 3 would consume it [@call-engine-js]. `voice-discord-adapter.js`
+now calls it from `onVoiceStateChange()` whenever a user's presence in the call's channel flips
+[@voice-discord-adapter-js]. `voice-presence.js`'s `diffRoster()` compares the previous and next
+id lists to find who joined and left, and `formatPresenceNote()` renders a first-person "who's
+here / who just joined or left" line — returning `null` for a solo call with no change, so a quiet
+moment stays quiet [@voice-presence-js]. Like the room-sound tagging note covered in
+[Safety spine](safety-spine)'s deferred-work section, this presence note is **annotation only**:
+it is never stored, never moves the threat tier, and never touches the audience gate described in
+[Content-Based Memory Gating](content-gating) — it only changes what the Familiar reads about who
+is in the room [@voice-presence-js].
+
+**A proactive spoken greeting rides the existing quiet-gap mechanism.** `greetArrival()` in
+`voice-discord-server.js` builds a short greeting via `voice-presence.js`'s
+`buildGreetingPrompt()`/`parseGreeting()` and speaks it through the call engine's existing
+`speakProactive()`, which only fires at the next `PROACTIVE_QUIET_MS` gap with nobody already
+speaking [@voice-discord-server-js] [@call-engine-js]. Riding that existing mechanism gets "never
+talk over a mid-sentence join" for free, without a bespoke wait-for-quiet implementation. The
+greeting prompt is deliberately leak-free — it names only the arriving person and the join/leave
+event, no memory recall — because the line is spoken aloud to the whole channel at any clearance
+[@voice-presence-js]. It is deduped per stay (a rejoin clears the dedup so a second arrival gets
+greeted again), stands down entirely at moderate-or-higher threat because triage owns distress
+moments, is never offered to the ward's own presence (the call itself is not a guest to greet),
+and is recorded into call history once actually spoken so the Familiar does not repeat it
+[@voice-discord-server-js].
+
+This work is scoped to the Discord voice call path, where raw snowflakes and multi-human calls
+occur; the web call path already diarizes named guests and did not need the fix
+[@voice-presence-js]. Settings: `voiceProactiveGreetings` (default on). Off-switches:
+`PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1` reverts the whole layer to the old unlabelled
+transcript, and `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` silences only the spoken hello
+[@voice-presence-js].
+
 ## What Pass 0 flagged for later passes
 
 Three findings from Pass 0's measurement are not solved by Pass 0 and are named as open
@@ -412,4 +497,7 @@ questions for the passes that follow [@pr-voice-pass-0]:
 - [Update](update) — the self-update mechanism whose static-assets-vs-registered-routes gap
   produced the "Fix Kyutai" 404 incident above, and applies to any future endpoint the same way.
 - [Safety spine](safety-spine) — why Pass 4's room-sound tagging is annotation-only, and the
-  ward decisions a future care-detection spec would need to answer.
+  ward decisions a future care-detection spec would need to answer; the same annotation-only
+  discipline shapes the group-call presence note above.
+- [Content-Based Memory Gating](content-gating) — the audience-gate and content-tag machinery
+  group-call presence deliberately leaves untouched.
