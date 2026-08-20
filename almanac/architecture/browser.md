@@ -14,6 +14,9 @@ sources:
   - id: browser-js
     type: file
     path: browser.js
+  - id: browser-grants-js
+    type: file
+    path: browser-grants.js
   - id: browser-audit-js
     type: file
     path: browser-audit.js
@@ -32,13 +35,14 @@ sources:
 
 The browser subsystem lets the Familiar navigate, read, and act on live web pages —
 click, fill, scroll, and multi-step flows — instead of only reading a page through the
-existing static `read_webpage` extractor. It shipped in two passes, Pass 1 (0.11.0, the
-spine: driver, lens, guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log) and
-Pass 2 (0.11.1, screenshots, tabs, downloads, history) [@package-json] [@browser-driver-js]
-[@browser-js]. `docs/browser-build-spec.md` is the design document Pass 1 and Pass 2
-implement; the [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
+existing static `read_webpage` extractor. It shipped in four passes: Pass 1 (0.11.0, the
+spine: driver, lens, guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log), Pass 2
+(0.11.1, screenshots, tabs, downloads, history), Pass 3a (0.11.3, synchronous safety gates),
+and Pass 3b (0.11.4, the ward-in-the-loop and consent-gated surfaces)
+[@package-json] [@browser-driver-js] [@browser-js] [@browser-grants-js]. `docs/browser-build-spec.md`
+is the design document all four passes implement; the [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
 decision page records why its guardrails are shaped the way they are. This page describes
-the five modules that exist in the repo today and how they fit together, using the built
+the six modules that exist in the repo today and how they fit together, using the built
 code — not the spec — as the source of truth for what actually runs.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
@@ -47,7 +51,7 @@ gated at the executor so a villager turn never reaches them [@browser-js] [@cere
 `playwright-core` is an `optionalDependency`, so the server still boots when it is absent
 [@package-json].
 
-## Five modules, one job each
+## Six modules, one job each
 
 The subsystem is deliberately split so that each layer can be reasoned about — and tested —
 in isolation.
@@ -57,9 +61,13 @@ leveled, ref'd, token-capped snapshot (`outline` / `actions` / `text` / `full`),
 code-computed delta verdict describing what an action changed [@browser-lens-js]. It has no
 dependency on `playwright-core` and is fixture-tested without a browser, which keeps the
 ref/token logic — the part most likely to have subtle bugs — directly testable rather than
-hidden behind a stub of the thing that actually renders the page. `isProtectedField()` flags
-password, file, and other credential-shaped fields so the layers above can refuse to fill
-them [@browser-lens-js].
+hidden behind a stub of the thing that actually renders the page. `protectedKind(node)`
+classifies a field as `'payment'` (card/CVV/IBAN autocomplete or name heuristics) or
+`'credential'` (password/file inputs, OTP, other credential-shaped autocomplete) or `null`
+for a plain field, reading the site's own `autocomplete` declaration as the strongest signal
+before falling back to name/inputmode heuristics; `isProtectedField()` is `protectedKind(node)
+!== null` [@browser-lens-js]. `evaluateFill(node, {value, secret, grants})` is the pure
+fill-source decision described in the Pass 3b section below [@browser-lens-js].
 
 **`browser-proxy.js`** is the SSRF enforcement floor. See the SSRF section below — it is
 worth calling out separately because it is the one place in this subsystem where a naive
@@ -84,7 +92,15 @@ crash, a stale ref — into a calm first-person string rather than an exception 
 the chat path [@browser-js].
 
 **`browser-audit.js`** appends every action to `logs/browser-actions.jsonl`, mirroring the
-shape of `discord-write-log.js`'s append-only log [@browser-audit-js].
+shape of `discord-write-log.js`'s append-only log; a `browse_act` entry stamps `grant` with
+whichever autonomy grant a fill actually used, or `null` for an ungated action
+[@browser-audit-js] [@browser-js].
+
+**`browser-grants.js`**, added in Pass 3b (0.11.4), is the consent gate for the surfaces the
+other five modules refuse by default: filling a credential or payment field, submitting on a
+ward-listed confirm domain, and completing a CAPTCHA. It reads two hand-edited, git-ignored
+JSON files under `browser/` and exposes no UI path to change either — see the
+"Pass 3b" section below for what it enforces and why [@browser-grants-js].
 
 ## Refs never hold a live element; they resolve fresh at act time
 
@@ -148,8 +164,7 @@ it reaches a prompt [@browser-js]:
 
 Credential and file-input fields are refused before any of this: `isProtectedField()` flags
 them in the lens, and `browser.js`/`browser-driver.js` never accept a model-supplied value
-into one — the decision page covers the (still unbuilt, Pass 3) vault-fill path that will be
-the one exception.
+into one — the Pass 3b section below covers the vault-fill path that is the one exception.
 
 ## What Pass 2 (0.11.1) added
 
@@ -167,27 +182,110 @@ text-only reads [@browser-js]:
 - **`browse_tabs`** (list/switch/close) and **`browse_history`** (query
   `logs/browser-actions.jsonl`) round out the tool surface [@browser-js] [@browser-audit-js].
 
+## What Pass 3a (0.11.3) added: synchronous safety gates
+
+Pass 3a is scoped to gates that decide in-line, without waiting on the ward — the design
+principle for the whole of Pass 3 is that everything dangerous is off by default, and a grant
+only *lifts* a gate; it never invents a new capability outright.
+
+- **Site modes.** `siteModeAllows(url, settings)` in `browser.js` reads
+  `settings.browseSiteMode` (`'open'` / `'blocklist'` / `'allowlist'`), matches subdomains via
+  `hostMatches()`, and fails closed on an unparseable URL [@browser-js]. It gates both
+  `browse_open` and page-triggered top-level navigation: `opts(settings)` wires it in as
+  `siteGuard`, which `browser-driver.js` enforces via a `context.route` interceptor that aborts
+  a disallowed main-frame navigation a page triggers itself (a link, a JS redirect) — not just
+  navigations the Familiar requests directly [@browser-js] [@browser-driver-js]. Subresources
+  are untouched by the site guard; the CONNECT proxy described below still owns the network
+  floor for those. A site-blocked `read_webpage` call returns a distinct `{ok: false, blocked:
+  true}` signal rather than falling through to the static-extractor floor, which closes a real
+  bypass: without that distinct signal, a blocked browser read could silently re-fetch the page
+  through the unguarded static path [@browser-js].
+- **Credential/payment fill hardening.** `protectedKind()` (described above) reads the site's
+  own `autocomplete` declaration first — the strongest signal — before falling back to
+  name/inputmode heuristics, and the field-kind classification only ever gates *whether* a fill
+  is refused; it never accepts model-supplied bytes into a protected field regardless of kind
+  [@browser-lens-js].
+
+## What Pass 3b (0.11.4) added: the ward-in-the-loop and dangerous surfaces
+
+Pass 3b is the "sovereignty surfaces" the decision page named as unbuilt through 0.11.1: the
+consent ceremony, the credentials vault, the fill-source gate, the confirm-domain refusal, and
+`browse_handoff`. All of it is now built [@browser-grants-js] [@browser-lens-js]
+[@browser-driver-js] [@browser-js].
+
+- **`browser-grants.js` is the consent ceremony, and it has no UI, ever.** `readGrants()`
+  re-reads `browser/autonomy-grants.json` on every call — a stale cache must never keep a
+  revoked grant alive — and requires the file's `acknowledgment` string to match `ACK_SENTENCE`
+  exactly after trimming surrounding whitespace (an editor's trailing newline should not revoke
+  real consent, but a changed word does); an absent file, malformed JSON, or a mismatched
+  sentence makes every grant read `false`, which is the shipped default [@browser-grants-js].
+  Typing the sentence by hand into the file is the consent; there is no checkbox that can carry
+  it. Grants are `credentials`, `payments`, `captchas`, and `autoSubmit`.
+- **The credentials vault.** `readVaultEntry(name)` reads `browser/credentials-vault.json`
+  only when the `credentials` or `payments` grant is active, and returns `{user, secret}` for
+  code — never the model — to type [@browser-grants-js]. The secret never enters a prompt, tool
+  result, session log, or audit entry; the Familiar only ever names the vault entry. Both
+  `autonomy-grants.json` and `credentials-vault.json` are git-ignored and are also on
+  `own-files.js`'s denylist, so no Familiar tool can read either file directly
+  [@browser-grants-js]. This is [Exact values are code's job](../decisions/exact-values-in-code)
+  applied to secrets: the model points at a named thing, code alone touches the value.
+- **The fill-source gate is pure and unit-tested.** `evaluateFill(node, {value, secret,
+  grants})` in `browser-lens.js` is the single decision point: a protected field admits only a
+  code-typed vault `secret` under the grant matching its `protectedKind` (`payment` requires
+  `grants.payments`, `credential` requires `grants.credentials`); it refuses model-supplied
+  `value` bytes into any protected field, and separately refuses a `secret` aimed at a plain
+  field [@browser-lens-js]. `browser-driver.js`'s `act()` calls it for every `fill` action and
+  stamps the result's `grantUsed` onto the return value that `browser.js` forwards to the audit
+  log [@browser-driver-js]. Because the decision lives in the lens rather than the driver, it is
+  fixture-tested without a live browser — the safety-critical judgment call does not depend on
+  Playwright behaving a particular way.
+- **The `[CONFIRM]`-domain gate.** `isSubmitShaped(action, node, value)` in `browser-driver.js`
+  treats a `press` of Enter, a `click` on a `type=submit` element, or a click on an element
+  whose name matches a submit/pay/order/checkout-shaped regex as submit-shaped
+  [@browser-driver-js]. `act()` refuses any submit-shaped act whose host is on the ward's
+  `browseConfirmDomains` list — matched exactly or as a subdomain — unless the `autoSubmit`
+  grant lifts it, and hands the refusal back naming `browse_handoff` as the ward's path to
+  complete it [@browser-driver-js]. The hard refusal is the shipped default; an
+  approve-then-resume flow that lets the ward pre-authorize a specific submit without granting
+  blanket `autoSubmit` is a named refinement that has not shipped.
+- **`browse_handoff`.** `browserStatus()` exposes `hasDisplay` from the driver alongside
+  `currentUrl` and the active grant list [@browser-js] [@browser-driver-js]. When a display
+  exists, `browse_handoff` hands the ward a headed window on the current page; when it does not
+  (a headless server, no ward at this machine), it parks the action and logs `parked for ward:
+  <reason>` to the audit trail rather than pretending a window popped somewhere the ward can see
+  it [@browser-js]. This headless-fallback honesty is the review-2 behavior the decision page
+  called for; a headed-window hand-back-and-resume flow that returns control to the Familiar
+  automatically once the ward finishes is the other named refinement still pending.
+- **Loud visibility.** Every browser launch that finds an active grant logs `⚠ AUTONOMY GRANTS
+  ACTIVE: <names> (browser/autonomy-grants.json)` to the console, `browserStatus()` surfaces the
+  same `grants` list to any caller, and every `browse_act` audit entry stamps the `grant` a fill
+  actually used [@browser-driver-js] [@browser-js] [@browser-audit-js]. Silent autonomy is the
+  failure mode this visibility exists to prevent — a grant can lift a gate, but it cannot make
+  its own use invisible.
+
 ## What is deliberately still deferred
 
-`read_webpage` is not re-backed by this driver. It stays on its existing static extractor
-even after Pass 1 and Pass 2 both shipped, on purpose: `read_webpage` is an always-on, widely
-used tool, and the spec's ordering is to prove the driver on the opt-in `browse_*` surface
-first, then flip the always-on tool to it only once the driver has shaken out under real use
-[@browser-build-spec]. This is the one item the spec originally placed inside Pass 2 that the
-shipped Pass 2 still left undone.
+`read_webpage` is not re-backed by this driver. It stays on its existing static extractor even
+after Pass 1 through 3b have shipped, on purpose: `read_webpage` is an always-on, widely used
+tool, and the spec's ordering is to prove the driver on the opt-in `browse_*` surface first,
+then flip the always-on tool to it only once the driver has shaken out under real use
+[@browser-build-spec]. This is the one item the spec originally placed inside Pass 2 that
+remains undone as of 0.11.4.
 
-Everything the decision page calls the "sovereignty surfaces" — `browse_handoff` for
-ward-performed logins and payments, the hand-edited `browser/autonomy-grants.json` consent
-file, and the code-only `browser/credentials-vault.json` fill path — belongs to a Pass 3 that
-has not shipped as of 0.11.1. A future implementer should not assume vault-fill or handoff
-exist just because the rest of the browser surface does; check `browser.js` and
-`browser-driver.js` for what is actually wired before relying on either.
+The whole browser milestone specced in `docs/browser-build-spec.md`'s Passes 1 through 3 is now
+built. What remains is Pass 4 — unattended web research on pondering ticks — plus the two named
+Pass 3b refinements called out above: the `[CONFIRM]` approve-then-resume flow and the headed
+handoff auto-resume. A future implementer should not assume either refinement exists just
+because the rest of Pass 3b does; check `browser-driver.js` and `browser.js` for what is
+actually wired before relying on it.
 
 ## Related
 
 - [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
-  — the design decisions behind the SSRF proxy, the Stranger-tier default, and the still-unbuilt
-  credential and handoff surfaces.
+  — the design decisions behind the SSRF proxy, the Stranger-tier default, and the consent,
+  vault, and handoff surfaces Pass 3 built.
+- [Exact values are code's job](../decisions/exact-values-in-code) — the general rule
+  `readVaultEntry()` applies to secrets: the model names a thing, only code touches the value.
 - [Injection guard: documented but never wired](injection-guard-gap) — the pattern-scanner
   `browser.js` now also calls, and the other boundaries it does and does not cover.
 - [Vision and media](vision-and-media) — the `view_image`/`_pendingImages` mechanism
