@@ -2259,7 +2259,6 @@ function rememberUser(user) {
     id,
     username:    user.username    ?? prev.username    ?? null,
     global_name: user.global_name ?? prev.global_name ?? null,
-    bot:         user.bot ?? prev.bot ?? false,
   });
 }
 
@@ -2268,15 +2267,6 @@ function rememberUser(user) {
 export function discordVoiceDisplayName(userId) {
   const u = gw.userInfo.get(String(userId ?? ''));
   return u ? (u.global_name || u.username || null) : null;
-}
-
-/** Is this user a bot (another Familiar or app)? Drives the voice loop guard —
- *  a Familiar doesn't listen to another bot's audio unless the room opts in
- *  (readBots), mirroring the text path. Unknown (uncached) → false, so a real
- *  human is never muted by a missing flag; a bot is cached the moment it appears
- *  in a voice state, well before it can speak. */
-export function discordVoiceUserIsBot(userId) {
-  return gw.userInfo.get(String(userId ?? ''))?.bot === true;
 }
 
 function clearTimers() {
