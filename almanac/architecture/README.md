@@ -149,6 +149,7 @@ If you're asking yourself... go to:
 - **How do sessions turn into lasting memories?** → [Session memorization](session-memorization)
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
 - **How does image input work?** → [Vision and media](vision-and-media)
+- **How does the Familiar click and fill on the web?** → [Browser](browser)
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
 
@@ -167,6 +168,8 @@ If you're asking yourself... go to:
   [location-privacy](../decisions/location-privacy) invariant.
 - [Vision and media](vision-and-media) — multimodal image input, content-addressed storage,
   and modality fallback at the materialization seam.
+- [Browser](browser) — the opt-in, ward-only click-and-fill web subsystem: the SSRF-guarding
+  proxy, the ref/generation model, and how far the shipped Pass 1/Pass 2 build has gotten.
 - [Voice](voice) — the multi-pass voice milestone: the model supply chain, the disk-footprint
   budget, the ward-facing benchmark tool, and read-aloud text-to-speech.
 - [Core prompts and multi-surface assembly](core-prompts) — the ward's four core prompt fields

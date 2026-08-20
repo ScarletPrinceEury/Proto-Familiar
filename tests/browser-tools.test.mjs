@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { browseOpen, browseAct, _setDriverForTest } from '../browser.js';
+import { browseOpen, browseAct, browseScreenshot, browseTabs, _setDriverForTest } from '../browser.js';
 import { TOOL_EXECUTORS, BUILTIN_TOOLS } from '../cerebellum.js';
 
 const ward = { settings: { browseEnabled: true }, sessionId: 's-test' };
@@ -71,5 +71,46 @@ test('every browse_* tool has a def and an executor (wiring parity)', () => {
   for (const name of ['browse_open', 'browse_see', 'browse_act', 'browse_close']) {
     assert.ok(BUILTIN_TOOLS.some(t => t.function?.name === name), `${name} def missing`);
     assert.equal(typeof TOOL_EXECUTORS[name], 'function', `${name} executor missing`);
+  }
+});
+
+// ── Pass 2: screenshot ride, tabs, history, new-tool gating ────────────────
+// 1×1 transparent PNG (valid image bytes for saveAsset).
+const PNG_1x1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+
+test('browseScreenshot saves the shot and returns an id for the turn to ride', async () => {
+  _setDriverForTest({ screenshot: async () => ({ buffer: PNG_1x1, url: 'https://shop.example', title: 'Shop' }) });
+  const res = await browseScreenshot({}, ward);
+  assert.match(res.text, /screenshot of https:\/\/shop\.example/);
+  assert.ok(res.id, 'carries a real asset id the executor pushes to _pendingImages');
+  _setDriverForTest(null);
+});
+
+test('browseScreenshot surfaces a driver error without saving or riding', async () => {
+  _setDriverForTest({ screenshot: async () => ({ error: 'unknown ref r9 — browse_see to re-observe' }) });
+  const res = await browseScreenshot({ scope: 'r9' }, ward);
+  assert.match(res.text, /unknown ref r9/);
+  assert.equal(res.id, undefined);
+  _setDriverForTest(null);
+});
+
+test('browseTabs lists tabs through the real orchestration', async () => {
+  _setDriverForTest({ tabsDetailed: async () => [
+    { id: 't1', current: true, url: 'https://a', title: 'A' },
+    { id: 't2', current: false, url: 'https://b', title: 'B' },
+  ] });
+  const out = await browseTabs({ op: 'list' }, ward);
+  assert.match(out, /t1 \(current\) — A/);
+  assert.match(out, /t2 — B/);
+  _setDriverForTest(null);
+});
+
+test('the Pass-2 browse tools are gated ward-only and fully wired', async () => {
+  const gatedCtx = { discord: true, wardPrivate: false, audiences: ['villagers'], sessionInfo: {} };
+  for (const name of ['browse_screenshot', 'browse_tabs', 'browse_history']) {
+    assert.ok(BUILTIN_TOOLS.some(t => t.function?.name === name), `${name} def missing`);
+    assert.equal(typeof TOOL_EXECUTORS[name], 'function', `${name} executor missing`);
+    const out = await TOOL_EXECUTORS[name]({}, gatedCtx);
+    assert.match(out, /only browse the web on my human's own turns/i, `${name} not gated`);
   }
 });

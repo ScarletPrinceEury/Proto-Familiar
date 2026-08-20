@@ -21,7 +21,8 @@
 import { renderSnapshot, computeDelta } from './browser-lens.js';
 import * as realDriver from './browser-driver.js';
 import { sanitizeExternal } from './injection-guard.js';
-import { logBrowserAction } from './browser-audit.js';
+import { logBrowserAction, readBrowserActions } from './browser-audit.js';
+import { saveAsset } from './media.js';
 
 // The engine, swappable for tests (a stubbed browser drives the same
 // orchestration — framing, sanitisation, audit, degrade — with no Chromium).
@@ -86,7 +87,23 @@ export async function browseAct({ ref, action, value, on_dialog } = {}, { settin
       logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict: res.error, sessionId });
       return sanitizeExternal(res.error, { source: 'web', context: 'browser' });
     }
-    const verdict = computeDelta(res.before, res.after, res);
+    let verdict = computeDelta(res.before, res.after, res);
+    // A download the act triggered (§6) → save it as a media asset (size-capped,
+    // mime allow-list — never an executable). Best-effort; a failure just notes.
+    const dl = typeof driver.takeLastDownload === 'function'
+      ? await driver.takeLastDownload().catch(() => null)
+      : null;
+    if (dl?.buffer) {
+      const mime = mimeForFilename(dl.name);
+      if (mime) {
+        const saved = await saveAsset({ buffer: dl.buffer, mime, origin: { surface: 'browser', name: dl.name }, audienceTag: 'ward-private', label: dl.name }).catch(() => null);
+        verdict += saved?.ok !== false && saved?.id
+          ? `\n  downloaded "${dl.name}" — kept as ${saved.slugs?.[0] ?? saved.id}`
+          : `\n  downloaded "${dl.name}" — too large or not a type I keep`;
+      } else {
+        verdict += `\n  downloaded "${dl.name}" — not a type I keep (only documents/images/audio)`;
+      }
+    }
     logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict, sessionId });
     return sanitizeExternal(verdict, { source: 'web', context: 'browser' });
   } catch (err) {
@@ -101,6 +118,69 @@ export async function browseClose(_args, { sessionId } = {}) {
     return 'I closed the browser. My profile (cookies, logins) is kept for next time.';
   } catch (err) {
     return degrade(err, "I couldn't close the browser cleanly");
+  }
+}
+
+// Download mime allow-list (documents / images / audio — never executables).
+const DL_MIME = {
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  gif: 'image/gif', webp: 'image/webp', txt: 'text/plain', csv: 'text/csv',
+  md: 'text/markdown', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+};
+function mimeForFilename(name) {
+  const ext = String(name || '').toLowerCase().split('.').pop();
+  return DL_MIME[ext] || null;
+}
+
+/**
+ * Screenshot the current page (or one element via `scope`). Saves a PNG media
+ * asset and returns { text, id } — the executor pushes the id onto
+ * _pendingImages so the shot rides the SAME turn on a vision-capable connection
+ * (the view_image mechanism). ward-private, origin browser.
+ */
+export async function browseScreenshot({ scope } = {}, { settings, sessionId } = {}) {
+  if (!browseEnabled(settings)) return { text: 'My browsing is turned off right now.' };
+  try {
+    const shot = await driver.screenshot({ scope });
+    if (shot.error) return { text: sanitizeExternal(shot.error, { source: 'web', context: 'browser' }) };
+    const label = (shot.title || 'web page').slice(0, 60);
+    const saved = await saveAsset({ buffer: shot.buffer, mime: 'image/png', origin: { surface: 'browser', url: shot.url }, audienceTag: 'ward-private', label });
+    if (saved?.ok === false) return { text: `I took the screenshot but couldn't keep it: ${saved.error}.` };
+    logBrowserAction({ tool: 'browse_screenshot', target: shot.url, verdict: `saved ${saved.id}`, sessionId });
+    return { text: `I took a screenshot of ${shot.url} (${saved.slugs?.[0] ?? saved.id}). I'm looking at it now.`, id: saved.id };
+  } catch (err) {
+    return { text: degrade(err, "I couldn't take a screenshot") };
+  }
+}
+
+export async function browseTabs({ op = 'list', id } = {}, { settings, sessionId } = {}) {
+  if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
+  try {
+    if (op === 'list') {
+      const tabs = await driver.tabsDetailed();
+      if (!tabs.length) return 'No tabs are open.';
+      return 'My open tabs:\n' + tabs.map(t => `  ${t.id}${t.current ? ' (current)' : ''} — ${t.title || '(untitled)'} · ${t.url}`).join('\n');
+    }
+    if (op === 'switch') { const r = await driver.switchTab(id); return r.error ? r.error : `Switched to tab ${id}.`; }
+    if (op === 'close')  { const r = await driver.closeTab(id);  return r.error ? r.error : `Closed tab ${id}.`; }
+    return `Unknown tab op "${op}" (list / switch / close).`;
+  } catch (err) {
+    return degrade(err, "I couldn't manage tabs");
+  }
+}
+
+/** Query the action audit log — the offloaded history (§3.4). */
+export async function browseHistory({ query } = {}, { settings } = {}) {
+  if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
+  try {
+    const rows = await readBrowserActions({ limit: 200 });
+    const q = String(query || '').trim().toLowerCase();
+    const hits = (q ? rows.filter(r => JSON.stringify(r).toLowerCase().includes(q)) : rows).slice(0, 25);
+    if (!hits.length) return q ? `Nothing in my browsing history matches "${query}".` : 'My browsing history is empty.';
+    return `What I've done on the web${q ? ` matching "${query}"` : ''} (most recent first):\n` +
+      hits.map(r => `  ${r.at?.slice(0, 16).replace('T', ' ')} · ${r.tool} · ${r.target ?? ''} → ${String(r.verdict ?? '').split('\n')[0].slice(0, 80)}`).join('\n');
+  } catch (err) {
+    return degrade(err, "I couldn't read my browsing history");
   }
 }
 

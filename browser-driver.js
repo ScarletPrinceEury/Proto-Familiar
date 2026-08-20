@@ -143,6 +143,7 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
       executablePath: exe,
       viewport: { width: 1280, height: 800 },
       reducedMotion: 'reduce',
+      acceptDownloads: true,   // §6: a download becomes a media asset
       // Every request the browser makes tunnels through our IP-checking proxy.
       proxy: { server: `http://127.0.0.1:${proxyPort}` },
     });
@@ -174,8 +175,15 @@ function registerTab(pg) {
   if (state.tabs.size >= state.maxTabs) { pg.close().catch(() => {}); return; }
   const id = `t${++tabSeq}`;
   state.tabs.set(pg, { id, current: state.tabs.size === 0 });
+  pg.__pfGeneration = pg.__pfGeneration || 0;
   pg.on('crash', () => { state?.crashes.push(Date.now()); });
   pg.on('close', () => { state?.tabs.delete(pg); });
+  // A page-driven navigation (a link, a JS redirect) bumps the generation too,
+  // so refs minted before it go stale and force a re-observe (§3.2).
+  pg.on('framenavigated', (frame) => { if (frame === pg.mainFrame()) pg.__pfGeneration = (pg.__pfGeneration || 0) + 1; });
+  // A download the Familiar's act triggered (§6): hold the most-recent one for
+  // browse.js to save as a media asset (size-capped, mime allow-list there).
+  pg.on('download', (dl) => { if (state) state.lastDownload = dl; });
 }
 
 async function newTab() {
@@ -285,7 +293,7 @@ export async function extractPageData(page) {
   // EXTRACT_FN is a string arrow function; a string passed to evaluate is an
   // EXPRESSION, so invoke it as an IIFE rather than returning the function.
   const data = await page.evaluate(`(${EXTRACT_FN})()`);
-  data.generation = (page.__pfGeneration = (page.__pfGeneration || 0)); // generation tracked below
+  data.generation = page.__pfGeneration || 0;
   return data;
 }
 
@@ -295,7 +303,9 @@ export async function snapshot() {
   if (!pg) throw new Error('no open tab');
   const pageData = await extractPageData(pg);
   const refTable = buildRefTable(pageData);
-  state.current = { page: pg, pageData, refTable };
+  // Stamp the generation the refs were minted in; act() rejects a ref used
+  // after the page has moved on (§3.2 generation guard).
+  state.current = { page: pg, pageData, refTable, generation: pageData.generation };
   return state.current;
 }
 
@@ -321,6 +331,11 @@ export async function act({ ref, action, value, onDialog = 'dismiss' }) {
   if (!entry) return { error: `unknown ref ${ref} — browse_see to re-observe` };
   if ((action === 'fill') && (entry.protected || isProtectedField(entry.node))) {
     return { error: `${ref} is a protected field — I can't type into it` };
+  }
+  // Generation guard: the page moved under this ref (a nav / DOM rebuild since
+  // the snapshot) → don't act on a possibly-different element, force a re-look.
+  if ((pg.__pfGeneration || 0) !== state.current.generation) {
+    return { error: `ref ${ref} is stale (the page changed) — browse_see to re-observe` };
   }
   const before = state.current.pageData;
   const locator = pg.locator(entry.node.css);
@@ -362,6 +377,66 @@ export async function act({ ref, action, value, onDialog = 'dismiss' }) {
   pg.off('dialog', onDlg);
   const after = await snapshot();
   return { before, after: after.pageData, event, actedRef: ref, actionLabel: action };
+}
+
+/**
+ * Screenshot the current tab (or one element when `scope` is a ref). Returns
+ * { buffer, url, title } — a PNG the caller saves as a media asset (§6).
+ */
+export async function screenshot({ scope = null } = {}) {
+  if (!state?.current) await snapshot();
+  const { page: pg, refTable } = state.current;
+  let buffer;
+  if (scope) {
+    const entry = refTable.byRef.get(scope);
+    if (!entry) return { error: `unknown ref ${scope} — browse_see to re-observe` };
+    const loc = pg.locator(entry.node.css);
+    if ((await loc.count().catch(() => 0)) !== 1) return { error: `ref ${scope} no longer resolves uniquely — browse_see to re-observe` };
+    buffer = await loc.first().screenshot({ timeout: ACT_TIMEOUT_MS });
+  } else {
+    buffer = await pg.screenshot({ fullPage: false });
+  }
+  return { buffer, url: pg.url(), title: await pg.title().catch(() => '') };
+}
+
+// ── Tabs (§4, browse_tabs) ──────────────────────────────────────────────────
+export function listTabs() {
+  if (!state) return [];
+  return [...state.tabs.entries()].map(([pg, meta]) => ({
+    id: meta.id, current: meta.current, url: pg.url(), title: pg.__pfTitle || '',
+  }));
+}
+export async function tabsDetailed() {
+  if (!state) return [];
+  const out = [];
+  for (const [pg, meta] of state.tabs) out.push({ id: meta.id, current: meta.current, url: pg.url(), title: await pg.title().catch(() => '') });
+  return out;
+}
+export async function switchTab(id) {
+  if (!state) return { error: 'no browser open' };
+  let found = null;
+  for (const [pg, meta] of state.tabs) { meta.current = (meta.id === id); if (meta.current) found = pg; }
+  if (!found) return { error: `no tab ${id}` };
+  await found.bringToFront().catch(() => {});
+  state.current = null; // force a fresh snapshot of the newly-current tab
+  return { ok: true, id };
+}
+export async function closeTab(id) {
+  if (!state) return { error: 'no browser open' };
+  for (const [pg, meta] of state.tabs) if (meta.id === id) { await pg.close().catch(() => {}); return { ok: true, id }; }
+  return { error: `no tab ${id}` };
+}
+
+/** Take the most-recent completed download (bytes + name), or null. */
+export async function takeLastDownload() {
+  if (!state?.lastDownload) return null;
+  const dl = state.lastDownload; state.lastDownload = null;
+  try {
+    const p = await dl.path();
+    if (!p) return null;
+    const buffer = fs.readFileSync(p);
+    return { buffer, name: dl.suggestedFilename() };
+  } catch { return null; }
 }
 
 export async function closeBrowser(reason = 'close') {
