@@ -93,14 +93,16 @@ machine [@pr-voice-pass-0] [@architecture-doc]. **Pass 1**, built on Pass 0's su
 shipped the first thing that actually speaks: per-message read-aloud text-to-speech
 [@architecture-doc]. Later passes have since shipped live conversation and voiceprint enrolment
 (Pass 4, through 0.10.102-alpha) [@voice-tagging]; this page documents Pass 0 and Pass 1 in
-depth and does not yet cover Pass 2–4 in full. Two later pieces are covered on this page in their
-own sections below: group-call presence, speaker naming, and join/leave awareness on the Discord
-call path (0.11.8-alpha) [@voice-presence-js], and room-sound tagging
+depth and does not yet cover Pass 2–4 in full. Three later pieces are covered on this page in
+their own sections below: group-call presence, speaker naming, and join/leave awareness on the
+Discord call path (0.11.8-alpha) [@voice-presence-js]; room-sound tagging
 (`voice-tagging.js`, `voice-audio-tags.js`), which ships **annotation-only** by deliberate
 design — see [Safety spine](safety-spine)'s deferred-work section for why it stops short of using
 room sounds for care detection, and what a future ward-signed spec would need to decide
-[@voice-audio-tags]. See [Vision and media](vision-and-media) for the sibling multimodal-input
-milestone that voice's media storage reuses.
+[@voice-audio-tags]; and a shared-heap decode bug in the `opusscript` Opus decoder that silenced
+one Familiar whenever a second one joined the same Discord call, fixed in 0.11.10-alpha
+[@voice-discord-adapter-js]. See [Vision and media](vision-and-media) for the sibling
+multimodal-input milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
 
@@ -462,6 +464,45 @@ occur; the web call path already diarizes named guests and did not need the fix
 `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1` reverts the whole layer to the old unlabelled
 transcript, and `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` silences only the spoken hello
 [@voice-presence-js].
+
+## Two Familiars in one call: the opusscript shared-heap decode bug (0.11.9–0.11.10)
+
+A live test with two Familiars in the same Discord voice call left one of them silent, with
+the terminal flooded by `opus decode failed for <speaker>: memory access out of bounds`
+[@voice-discord-adapter-js]. The root cause is a property of the `opusscript` WASM binding,
+not of this repo's code: `opusscript` keeps **one** emscripten heap shared across every
+`OpusScript` decoder instance and caches its heap views (`inOpus`/`outPCM`) at construction
+time. `voice-discord-adapter.js` allocates one decoder per speaker (`ensureSpeaker()`), so a
+second speaker joining the call allocates a second decoder — and if that allocation grows the
+shared heap, every already-existing decoder's cached views detach, so the first speaker's
+decoder throws "memory access out of bounds" on its very next packet [@voice-discord-adapter-js].
+This is why the ward's own Familiar went quiet the instant a second one joined the call: the
+newcomer's decoder allocation, not anything about the newcomer's audio, broke the existing one.
+
+The first attempt at a fix (0.11.9-alpha) treated the symptom instead of the cause: it added a
+`shouldHear(userId)` loop guard mirroring the text path's `author.bot` + `readBots` check, so a
+second bot's audio was never subscribed or decoded at all, plus a five-consecutive-failure
+teardown as a blunt self-heal. That shipped, then was reverted one commit later
+[@voice-discord-adapter-js] — the goal is two Familiars *hearing* each other, so skipping a
+second bot's audio sidesteps the bug rather than fixing it, and the underlying decoder still
+wedges for any two-decoder roster, bot or human.
+
+0.11.10-alpha replaces both with a fix at the actual fault line. `decodeOpus(entry, speakerRef,
+opusPacket)` in `voice-discord-adapter.js` tries the existing decoder first; on a throw, it
+deletes that decoder, calls `deps.makeOpusDecoder()` again to get a fresh instance with views
+bound to the *current* heap, and retries the same packet once — no audio is lost, and the
+subscription stays open throughout [@voice-discord-adapter-js]. Once the roster stops changing,
+the heap stops growing and no more rebuilds happen; a packet that fails even the rebuilt decoder
+is a genuinely bad packet, not a heap issue, and is skipped with a per-speaker rate-limited log
+line rather than flooding the terminal on every subsequent packet [@voice-discord-adapter-js]. A
+separate, unrelated guard — `MAX_OPUS_PACKET = 3828` bytes, opusscript's WASM input buffer size
+— drops any packet too large to decode before it can overflow `inOpus.set(buffer)`; normal voice
+frames are well under 1 KB, so this is a defensive floor, not the fix for the silence bug
+[@voice-discord-adapter-js]. The `shouldHear` loop guard and the gateway's per-user bot-flag
+cache from 0.11.9 were both reverted along with the old fail-counting teardown: with the real bug
+fixed, filtering out other bots is no longer needed, and **all speakers, including other bots,
+are decoded** — two Familiars conversing by voice over Discord is supported
+[@voice-discord-adapter-js].
 
 ## What Pass 0 flagged for later passes
 
