@@ -353,8 +353,9 @@ export async function browseHandback({ settings, sessionId } = {}) {
 function degrade(err, prefix) {
   const m = String(err?.message ?? err);
   if (/awaiting handback/i.test(m)) return handbackPending() || "I'm waiting for you to finish in the window I opened.";
-  if (/installing chromium/i.test(m)) return "I'm setting up my browser — a one-time ~130 MB download. It'll be ready in a minute; ask me again shortly.";
-  if (/browser download failed/i.test(m)) return `My browser download didn't finish: ${m.replace(/^browser download failed:\s*/i, '')}. I'll be able to browse once it succeeds.`;
+  if (/still installing chromium/i.test(m)) return `My browser is still downloading — it's taking longer than usual (${(m.match(/\((\d+) min\)/) || [])[1] ?? 'a few'} min in). If it keeps stalling, the install log is at browser/chromium-install.log, and you can point me at an existing browser with the PROTO_FAMILIAR_CHROME env var. Ask me again shortly.`;
+  if (/installing chromium/i.test(m)) return "I'm setting up my browser — a one-time download (chromium plus its helpers). It'll be ready shortly; ask me again in a minute.";
+  if (/browser download failed/i.test(m)) return `My browser download didn't finish: ${m.replace(/^browser download failed:\s*/i, '')}. You can retry by asking me again, pre-install a browser and point me at it with PROTO_FAMILIAR_CHROME, or install system chromium — I'll use whichever appears.`;
   if (/not installed|no Chromium|launch failed/i.test(m)) return "My browser isn't available right now — the engine isn't set up on this machine.";
   return `${prefix}: ${m.split('\n')[0]}.`;
 }

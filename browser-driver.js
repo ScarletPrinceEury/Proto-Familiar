@@ -73,13 +73,32 @@ export function findChromium() {
 // browse call kicks it off and returns a calm "setting up" line; status()
 // surfaces progress; a later call finds the browser ready. The `browseEnabled`
 // toggle already gated us here, so the fetch is consented.
-let install = { status: 'idle', startedAt: null, error: null };
-export function chromiumInstallState() { return { ...install }; }
+const INSTALL_LOG = path.join(__dirname, 'browser', 'chromium-install.log');
+// A real chromium fetch (chromium + its helpers, a few hundred MB) is a few
+// minutes; past this it has STALLED (dead mirror, hung socket) and must be
+// killed and reported, not left saying "setting up" forever. Env-overridable for
+// a genuinely slow link.
+const INSTALL_TIMEOUT_MS = Number(process.env.PROTO_FAMILIAR_BROWSER_INSTALL_TIMEOUT_MS) || 15 * 60 * 1000;
+// After a failure, don't respawn the installer on every single browse call — but
+// DO let the ward recover from a transient failure by asking again after this.
+const INSTALL_RETRY_COOLDOWN_MS = 30 * 1000;
 
-export function startChromiumFetch({ spawnFn = spawn, findFn = findChromium } = {}) {
+let install = { status: 'idle', startedAt: null, error: null, logPath: INSTALL_LOG };
+let installTimer = null;
+export function chromiumInstallState() {
+  const st = { ...install };
+  if (st.status === 'fetching' && st.startedAt) st.elapsedMs = Date.now() - st.startedAt;
+  return st;
+}
+
+export function startChromiumFetch({ spawnFn = spawn, findFn = findChromium, now = Date.now, timeoutMs = INSTALL_TIMEOUT_MS } = {}) {
   if (install.status === 'fetching') return install;         // already going
-  if (findFn()) { install = { status: 'ready', startedAt: null, error: null }; return install; }
-  install = { status: 'fetching', startedAt: Date.now(), error: null };
+  if (findFn()) { install = { status: 'ready', startedAt: null, error: null, logPath: INSTALL_LOG }; return install; }
+  // A recent failure is left to settle (cooldown) so a permanently-broken
+  // environment isn't hammered once per browse call; after it, a fresh ask retries.
+  if (install.status === 'failed' && install.startedAt && (now() - install.startedAt) < INSTALL_RETRY_COOLDOWN_MS) return install;
+
+  install = { status: 'fetching', startedAt: now(), error: null, logPath: INSTALL_LOG };
   let cli;
   try {
     // playwright-core's `exports` map blocks resolving ./cli.js directly, but
@@ -87,20 +106,45 @@ export function startChromiumFetch({ spawnFn = spawn, findFn = findChromium } = 
     const pkg = createRequire(import.meta.url).resolve('playwright-core/package.json');
     cli = path.join(path.dirname(pkg), 'cli.js');
     if (!fs.existsSync(cli)) throw new Error('cli.js missing');
-  } catch (err) { install = { status: 'failed', startedAt: Date.now(), error: 'playwright-core not installed' }; return install; }
+  } catch (err) { install = { status: 'failed', startedAt: now(), error: 'playwright-core not installed', logPath: INSTALL_LOG }; return install; }
   try {
     fs.mkdirSync(PW_BROWSERS_DIR, { recursive: true });
+    // Capture the installer's own output so a stall/failure is DIAGNOSABLE
+    // (failures-that-matter-are-observable) instead of a silent forever-fetch.
+    let logFd = null;
+    try { logFd = fs.openSync(INSTALL_LOG, 'w'); fs.writeSync(logFd, `[${new Date().toISOString()}] fetching chromium into ${PW_BROWSERS_DIR}\n`); } catch { /* log is best-effort */ }
+    // This is a deliberate, ward-consented install — a PLAYWRIGHT_SKIP_BROWSER_
+    // DOWNLOAD=1 inherited from the environment would silently turn it into a
+    // no-op (exit 0, no binary), so strip it for the child.
+    const childEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: PW_BROWSERS_DIR };
+    delete childEnv.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD;
     const child = spawnFn(process.execPath, [cli, 'install', 'chromium', '--no-progress'], {
-      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: PW_BROWSERS_DIR },
-      stdio: 'ignore',
+      env: childEnv,
+      stdio: logFd != null ? ['ignore', logFd, logFd] : 'ignore',
     });
-    child.on('error', (err) => { install = { status: 'failed', startedAt: install.startedAt, error: err.message }; });
+    const finalize = () => {
+      if (installTimer) { clearTimeout(installTimer); installTimer = null; }
+      if (logFd != null) { try { fs.closeSync(logFd); } catch { /* */ } logFd = null; }
+    };
+    // Watchdog: bound the fetch so a stalled download becomes an honest failure
+    // the ward can see and retry, never an endless "setting up".
+    installTimer = setTimeout(() => {
+      installTimer = null;
+      try { child.kill?.('SIGKILL'); } catch { /* */ }
+      if (logFd != null) { try { fs.closeSync(logFd); } catch { /* */ } logFd = null; }
+      install = { status: 'failed', startedAt: install.startedAt, error: `download stalled — no completion after ${Math.round(INSTALL_TIMEOUT_MS / 60000)} min (see ${INSTALL_LOG})`, logPath: INSTALL_LOG };
+    }, timeoutMs);
+    installTimer.unref?.();
+    child.on('error', (err) => { finalize(); install = { status: 'failed', startedAt: install.startedAt, error: err.message, logPath: INSTALL_LOG }; });
     child.on('close', (code) => {
-      if (code === 0 && findFn()) install = { status: 'ready', startedAt: install.startedAt, error: null };
-      else install = { status: 'failed', startedAt: install.startedAt, error: `install exited ${code}` };
+      finalize();
+      if (code === 0 && findFn()) install = { status: 'ready', startedAt: install.startedAt, error: null, logPath: INSTALL_LOG };
+      else if (code === 0)        install = { status: 'failed', startedAt: install.startedAt, error: `install reported success but no chromium binary appeared under ${PW_BROWSERS_DIR} (see ${INSTALL_LOG})`, logPath: INSTALL_LOG };
+      else                        install = { status: 'failed', startedAt: install.startedAt, error: `install exited ${code} (see ${INSTALL_LOG})`, logPath: INSTALL_LOG };
     });
   } catch (err) {
-    install = { status: 'failed', startedAt: install.startedAt, error: err.message };
+    if (installTimer) { clearTimeout(installTimer); installTimer = null; }
+    install = { status: 'failed', startedAt: install.startedAt, error: err.message, logPath: INSTALL_LOG };
   }
   return install;
 }
@@ -128,10 +172,14 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
   const exe = findChromium();
   if (!exe) {
     // No browser yet — kick off (or continue) the background fetch and tell the
-    // caller it's installing, rather than blocking the turn on a 130 MB download.
+    // caller it's installing, rather than blocking the turn on a large download.
     startChromiumFetch();
-    if (install.status === 'failed') throw new Error(`browser download failed: ${install.error}`);
-    throw new Error('installing chromium');
+    const st = chromiumInstallState();
+    if (st.status === 'failed') throw new Error(`browser download failed: ${st.error}`);
+    // Distinguish a normal fresh install from one that's dragging, so the Familiar
+    // can tell the ward it's taking unusually long (and where the log is).
+    const mins = st.elapsedMs ? Math.floor(st.elapsedMs / 60000) : 0;
+    throw new Error(mins >= 2 ? `still installing chromium (${mins} min)` : 'installing chromium');
   }
 
   let chromium;

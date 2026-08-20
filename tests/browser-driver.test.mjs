@@ -91,4 +91,65 @@ test('startChromiumFetch spawns the install when none exists, and tracks fetchin
   // Non-zero exit → failed (findFn still returns null on the recheck).
   child.emit('close', 1);
   assert.equal(chromiumInstallState().status, 'failed');
+  assert.match(chromiumInstallState().error, /exited 1/);
+  assert.ok(chromiumInstallState().logPath, 'the install log path is surfaced for diagnosis');
+});
+
+// A time base far beyond real Date.now(), so injected `now()` values stay
+// monotonic and larger than any prior test's real timestamp (the module-level
+// install state persists across tests; each test settles its child so the next
+// doesn't start blocked on a lingering 'fetching').
+const T = 2_000_000_000_000;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+test('a stalled install is killed by the watchdog and reported failed, not fetching forever', async () => {
+  const child = new EventEmitter();
+  let killed = false;
+  child.kill = () => { killed = true; };
+  const st = startChromiumFetch({ findFn: () => null, spawnFn: () => child, now: () => T, timeoutMs: 20 });
+  assert.equal(st.status, 'fetching');
+  await sleep(60);                              // let the watchdog fire (the child never closes)
+  assert.equal(killed, true, 'the hung installer is killed');
+  assert.equal(chromiumInstallState().status, 'failed');
+  assert.match(chromiumInstallState().error, /stalled/);
+});
+
+test('exit 0 but no binary is a failure, not a false "ready"', () => {
+  const child = new EventEmitter();
+  startChromiumFetch({ findFn: () => null, spawnFn: () => child, now: () => T + 100_000 });
+  child.emit('close', 0);                       // installer "succeeded" but findFn still finds nothing
+  assert.equal(chromiumInstallState().status, 'failed');
+  assert.match(chromiumInstallState().error, /no chromium binary/i);
+});
+
+test('a recent failure is left to settle, then a later ask retries', () => {
+  let spawns = 0;
+  const children = [];
+  const spawnFn = () => { spawns++; const c = new EventEmitter(); children.push(c); return c; };
+  startChromiumFetch({ findFn: () => null, spawnFn, now: () => T + 500_000 });
+  children.at(-1).emit('close', 1);             // first attempt fails
+  assert.equal(chromiumInstallState().status, 'failed');
+  startChromiumFetch({ findFn: () => null, spawnFn, now: () => T + 500_000 + 1_000 });   // within cooldown
+  assert.equal(spawns, 1, 'no respawn during the cooldown');
+  startChromiumFetch({ findFn: () => null, spawnFn, now: () => T + 500_000 + 60_000 });  // after cooldown
+  assert.equal(spawns, 2, 'a fresh ask after the cooldown retries the fetch');
+  assert.equal(chromiumInstallState().status, 'fetching');
+  children.at(-1).emit('close', 1);             // settle so the next test isn't blocked on 'fetching'
+});
+
+test('the install child never inherits a download-skip flag', () => {
+  const prev = process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD;
+  process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1';   // as a container/CI env commonly sets
+  try {
+    let seenEnv = null;
+    const child = new EventEmitter();
+    startChromiumFetch({ findFn: () => null, spawnFn: (_c, _a, opts) => { seenEnv = opts?.env; return child; }, now: () => T + 2_000_000 });
+    assert.ok(seenEnv, 'spawn received options with an env');
+    assert.equal(seenEnv.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, undefined, 'the skip flag is stripped for our deliberate install');
+    assert.ok(seenEnv.PLAYWRIGHT_BROWSERS_PATH, 'the install target path is set');
+    child.emit('close', 1);
+  } finally {
+    if (prev === undefined) delete process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD;
+    else process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = prev;
+  }
 });

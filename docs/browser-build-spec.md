@@ -209,6 +209,27 @@ playwright-core  ──►  system Chrome/Chromium (channel detect) or
   `GET /api/browser/status`; the size is named in the toggle's hint for
   honesty, but enabling is one action. `browser/` holds profile + any fetched
   binary; all git-ignored.
+  - **The fetch is observable, bounded, and retryable (0.11.11, live-testing —
+    "downloading Chromium forever").** The install child (`node
+    playwright-core/cli.js install chromium`) previously ran with `stdio:'ignore'`
+    and no timeout, so a stalled download stayed `status:'fetching'` forever and
+    the Familiar re-said "setting up" on every call, with nothing to diagnose.
+    Now: (1) the installer's output is captured to `browser/chromium-install.log`;
+    (2) a **watchdog** (`INSTALL_TIMEOUT_MS`, 15 min, env-overridable via
+    `PROTO_FAMILIAR_BROWSER_INSTALL_TIMEOUT_MS`) kills a hung install and marks it
+    `failed` with the reason + log path, so it can never fetch forever; (3) a
+    failure is **retryable** — after a short cooldown a fresh browse call re-spawns
+    the fetch (a transient network blip recovers by the ward asking again), while
+    the cooldown stops a permanently-broken environment being hammered every call;
+    (4) the child env has `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` **stripped**, since a
+    container/CI environment commonly sets it and it would silently turn our
+    deliberate install into a no-op (exit 0, no binary — now itself reported as a
+    failure, not a false "ready"); (5) `chromiumInstallState()` surfaces
+    `elapsedMs` + `logPath`, and the degrade lines tell the ward where the log is
+    and that they can point me at an existing browser via `PROTO_FAMILIAR_CHROME`.
+    `findChromium` already checks `PROTO_FAMILIAR_CHROME`/`CHROME`, the Playwright
+    cache, and system installs, so a manual/system browser sidesteps the fetch
+    entirely. Tests in `browser-driver.test.mjs`.
 - **Lazy launch** on the first `browse_*` call of a session; **idle reaper**
   closes the whole process after `browseIdleMin` (default 5) with no open
   task. Launch state and RSS visible at `GET /api/browser/status`.
