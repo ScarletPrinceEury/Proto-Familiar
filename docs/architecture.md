@@ -2747,7 +2747,13 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   default ON) welcomes a non-ward arrival via the engine's `speakProactive` so it
   rides the next silence gap, deduped per stay and stood down at moderate+ threat.
   Off-switches `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1` (whole layer) /
-  `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` (spoken hello only). **Noise/silence
+  `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` (spoken hello only). A **voice loop
+  guard** (0.11.9) mirrors the text path: `joinVoiceCall` builds a `shouldHear`
+  predicate (my human + non-bots always; other bots only when the location's
+  `readBots` is on, via the cached `discordVoiceUserIsBot` flag) threaded into
+  `joinSpec`, so a second Familiar in the channel is never subscribed/opus-decoded
+  — and a wedged opusscript decoder is torn down after `DECODE_FAIL_LIMIT` failures
+  and rebuilt on the next utterance, so a bad stream can't flood the log. **Noise/silence
   polish** lives in `call-engine.js` as two options both call servers pass:
   `transcriptFilter` (drops ambient noise the recogniser guessed as CJK, via
   `isLikelyNoiseTranscript`) and `turnSettleMs` (coalesces sentences within a pause

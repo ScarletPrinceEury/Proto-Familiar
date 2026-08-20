@@ -225,6 +225,40 @@ test('stopPlayback (barge) stops the player, which resolves an in-flight playAud
   assert.equal(adapter.isSpeaking(), false);
 });
 
+test('shouldHear: a speaker I am not meant to hear (another bot) never opens a subscription', async () => {
+  const deps = makeFakeDeps();
+  const { hooks, calls } = makeHooks();
+  // Hear the ward, ignore botU (another Familiar) — the voice loop guard.
+  const spec = { ...joinSpec(), shouldHear: (id) => id !== 'botU' };
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: spec, deps });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'botU');       // the other bot speaks
+  assert.equal(deps._receiver.subscribed.length, 0, 'no subscription opened for a bot I ignore');
+
+  deps._receiver.speaking.emit('start', 'wardU');      // my human speaks
+  assert.equal(deps._receiver.subscribed.length, 1, 'a heard speaker still subscribes');
+  deps._receiver.subscribed[0].stream.emit('data', Buffer.from([1]));
+  assert.equal(calls.pushAudio.length, 1);
+});
+
+test('a wedged opus decoder is torn down after a streak of failures instead of flooding forever', async () => {
+  const deps = makeFakeDeps();
+  deps.makeOpusDecoder = () => ({ decode: () => { throw new Error('memory access out of bounds'); }, delete() {} });
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  for (let i = 0; i < 5; i++) stream.emit('data', Buffer.from([i]));   // DECODE_FAIL_LIMIT = 5
+
+  assert.equal(stream.destroyed, true, 'the wedged stream is destroyed, not left crashing per packet');
+  assert.equal(calls.pushAudio.length, 0, 'nothing decoded → nothing pushed');
+  // A late packet on the dead entry is a no-op, never a throw.
+  assert.doesNotThrow(() => stream.emit('data', Buffer.from([9])));
+});
+
 test('leaveCall destroys the connection and clears open speakers', async () => {
   const deps = makeFakeDeps();
   const { hooks } = makeHooks();

@@ -282,6 +282,21 @@ integration seam that needs the most care and its own tests.
   - **Not a ward-sign-off safety path:** the audience gate, threat scoring, and what
     is stored-per-clearance are all untouched — this only changes what the Familiar
     *reads* about who's in the room, plus one leak-free spoken greeting.
+  - **Voice loop guard (0.11.9, live-testing fix — two Familiars in one call).** The
+    voice RECEIVE path had no bot filter (the text path's `author.bot` + `readBots`
+    guard was never mirrored), so a second Familiar in the channel got subscribed
+    and opus-decoded like a person — flooding the log with `opus decode failed …
+    memory access out of bounds` (opusscript's WASM wedging on a stream not meant
+    for me) and starving my own turns. Fixed two ways: (1) `joinVoiceCall` builds a
+    `shouldHear(userId)` predicate — my human always, plus non-bots, plus bots only
+    when the location has `readBots` — threaded into the adapter's `joinSpec`; a
+    speaker I don't hear never opens a subscription (`startUtterance` returns
+    early). The gateway caches each user's `bot` flag (`discordVoiceUserIsBot`).
+    (2) The decoder self-heals: after `DECODE_FAIL_LIMIT` (5) consecutive decode
+    failures a speaker's wedged decoder + stream are torn down (logged once), and
+    the next speaking-start rebuilds a fresh one — so a bad stream costs one line,
+    not thousands. `readBots` now governs voice too (existing per-location toggle,
+    Locations editor); tests in `voice-discord-adapter.test.mjs`.
 - **Noise/silence polish (Pass 3, live-testing feedback).** Two engine options:
   `transcriptFilter` drops ambient-noise transcripts (traffic/fan the multilingual
   recogniser guessed as CJK — `isLikelyNoiseTranscript` in `voice-speech.js`, a

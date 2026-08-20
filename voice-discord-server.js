@@ -27,7 +27,7 @@ import path from 'node:path';
 
 import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName } from './discord-gateway.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName, discordVoiceUserIsBot } from './discord-gateway.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
@@ -466,11 +466,25 @@ export function attachDiscordVoice(deps) {
       return name;
     };
 
+    // Voice loop guard — a Familiar does NOT decode another bot's audio (another
+    // Familiar, a music bot) unless this room opted in via readBots, mirroring the
+    // text path's `author.bot` guard. Without this, two Familiars in one call
+    // subscribe to each other and flood the log with opus-decode crashes on a
+    // stream that isn't meant for me — and I'd try to answer the other Familiar.
+    // My human is always heard (never a bot); the flag is read once at join.
+    let hearBots = false;
+    try {
+      const reg = await getRegistry();
+      const loc = (reg?.locations ?? []).find(l => l.key === `discord:guild:${guildId}:channel:${channelId}`);
+      hearBots = loc?.readBots === true;
+    } catch { /* default: don't hear bots */ }
+    const shouldHear = (id) => id === wardUserId || hearBots || !discordVoiceUserIsBot(id);
+
     const adapterCreator = discordVoiceAdapterCreator(guildId);
     engine.registerCallAdapter((hooks) => {
       const { adapter } = createDiscordCallAdapter({
         hooks,
-        joinSpec: { guildId, channelId, adapterCreator, wardUserId, nameForUser: trackedNameForUser },
+        joinSpec: { guildId, channelId, adapterCreator, wardUserId, nameForUser: trackedNameForUser, shouldHear },
         deps: voiceDeps,
         slugId,
         log,

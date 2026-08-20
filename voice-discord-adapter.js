@@ -196,6 +196,7 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
   // first phoneme survives. Discord's speaking start/end still bound the
   // utterance — they gate whether decoded audio feeds the engine or the pre-roll.
   const PRE_ROLL_FRAMES = 8;   // ~160 ms of 20 ms Opus frames — enough to cover onset, small enough not to drag noise in
+  const DECODE_FAIL_LIMIT = 5; // consecutive opus-decode failures before a speaker's wedged decoder is torn down (rebuilt on the next utterance)
 
   function ensureSpeaker(userId) {
     const speakerRef = speakerRefFor(userId);
@@ -204,15 +205,34 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
     try {
       const decoder = deps.makeOpusDecoder();
       const sub = connection.receiver.subscribe(userId, { end: { behavior: deps.EndBehaviorType.Manual } });
-      entry = { decoder, sub, active: false, pre: [] };
+      entry = { decoder, sub, active: false, pre: [], fails: 0 };
       decoders.set(speakerRef, entry);
       sub.on('data', (opusPacket) => {
+        if (entry.dead) return;
         let pcm;
         try {
           const pcm48 = decoder.decode(opusPacket);            // 48 kHz stereo s16le
           if (!pcm48?.length) return;
           pcm = stereo48ToMono16(pcm48);
-        } catch (err) { log(`opus decode failed for ${speakerRef}: ${err?.message ?? err}`); return; }
+          entry.fails = 0;                                     // a clean decode clears the streak
+        } catch (err) {
+          // A single bad packet (jitter/loss) is tolerable, but opusscript's WASM
+          // can WEDGE — an "out of bounds" trap corrupts the instance and then
+          // EVERY later packet throws, flooding the log. So after a short streak,
+          // tear this speaker down (log once): the next speaking-start rebuilds a
+          // fresh decoder + subscription. Bounds the noise to one line, self-heals.
+          entry.fails = (entry.fails || 0) + 1;
+          if (entry.fails <= DECODE_FAIL_LIMIT) log(`opus decode failed for ${speakerRef}: ${err?.message ?? err}`);
+          if (entry.fails >= DECODE_FAIL_LIMIT) {
+            entry.dead = true;
+            log(`opus decoder wedged for ${speakerRef} after ${entry.fails} failures — resetting the stream`);
+            if (entry.active) { try { hooks.endUtterance({ callId, speakerRef }); } catch { /* */ } }
+            decoders.delete(speakerRef);
+            try { entry.sub.destroy(); } catch { /* already gone */ }
+            try { entry.decoder.delete?.(); } catch { /* opusscript frees its wasm */ }
+          }
+          return;
+        }
         if (entry.active) {
           hooks.pushAudio({ callId, speakerRef, pcm });
         } else {
@@ -228,6 +248,10 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
   }
 
   function startUtterance(userId) {
+    // Loop guard: don't open a subscription for a speaker I'm not meant to hear
+    // (another bot, unless the room opted in). Gating here means the decoder +
+    // stream never open for them — no audio, no decode, no flood.
+    if (joinSpec.shouldHear && !joinSpec.shouldHear(userId)) return;
     const r = ensureSpeaker(userId);
     if (!r) return;
     const { speakerRef, entry } = r;
