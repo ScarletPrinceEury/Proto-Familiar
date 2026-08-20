@@ -2302,7 +2302,7 @@ that is the contract talking — update all seams together or stop.
 | Loop | Cadence | Off-switch | What it does |
 |---|---|---|---|
 | Memorization | 5s tick | `PROTO_FAMILIAR_MEMORIZE_DISABLED=1` | Drains queue of session-memorization jobs |
-| Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry |
+| Pondering | 1min tick + tier-based interval | Settings toggle + `PROTO_FAMILIAR_PONDERING_DISABLED=1` | Picks an interest, ponders it, writes a real tome entry. When web search is on, a tick may first do bounded unattended research (`ponder-research.js` + `ponder-web-budget.js`, §8.5): the model names searches/URLs, code executes the reads under a shared daily budget, sources are cited in the ponder and audited under surface `pondering`. Settings toggle + `PROTO_FAMILIAR_PONDER_WEB_DISABLED=1` |
 | Reminders | 30s tick | `PROTO_FAMILIAR_REMINDERS_DISABLED=1` | Polls `reminders_due`, enqueues into outbox, marks fired; same tick runs event lead-time alerts (`PROTO_FAMILIAR_EVENT_ALERTS_DISABLED=1` to silence those alone), the weather refresh (self-gated to a 6h cadence; `PROTO_FAMILIAR_WEATHER_DISABLED=1`), and elapsed-stamping of long-past unresolved events (self-gated hourly; `PROTO_FAMILIAR_ELAPSED_STAMP_DISABLED=1`) — both ride this tick rather than spinning their own loops |
 | Silence triage | 5min tick + LLM-set cool-down | `PROTO_FAMILIAR_TRIAGE_DISABLED=1` | LLM decides "should I reach out?" given threat + silence |
 | Warm reach-out | 10min tick + LLM-set cool-down | Settings toggle + `PROTO_FAMILIAR_WARMTH_DISABLED=1` | Warm non-crisis outreach (ward banner or warm-villager DM); stands down at moderate+ threat |

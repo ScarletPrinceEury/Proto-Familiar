@@ -242,6 +242,14 @@ const state = {
   // PROTO_FAMILIAR_PONDERING_DISABLED=1 env var on the server.
   ponderingEnabled:        true,
   ponderingIntervalScale:  1,
+  // Unattended web research on a ponder tick (§8.5). When on, the Familiar can
+  // look a few things up mid-ponder instead of only recombining what it holds —
+  // model NAMES what to look up, code does the bounded reads. Default ON; the
+  // shared daily read budget keeps it cheap. Only active when web search is on;
+  // hard-disable with PROTO_FAMILIAR_PONDER_WEB_DISABLED=1 on the server.
+  ponderWebEnabled:        true,
+  ponderWebRoundsPerTick:  4,
+  ponderWebReadsPerDay:    12,
   // Deferred follow-ups (the "I'll do that later" catch). Default-ON: when I
   // tell my human I'll do something and don't actually use the tool to make
   // it real, memorization catches the open promise and re-surfaces it to me
@@ -486,6 +494,7 @@ const SERVER_SYNCED_KEYS = [
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
+  'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
@@ -3907,6 +3916,11 @@ function readSettingsFromUI() {
     const n = parseFloat($('pondering-scale').value);
     state.ponderingIntervalScale = Number.isFinite(n) && n >= 1 && n <= 10 ? n : 1;
   }
+  if ($('ponder-web-toggle')) state.ponderWebEnabled = $('ponder-web-toggle').checked;
+  if ($('ponder-web-reads')) {
+    const n = parseInt($('ponder-web-reads').value, 10);
+    state.ponderWebReadsPerDay = Number.isFinite(n) && n >= 0 && n <= 200 ? n : 12;
+  }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
@@ -4088,6 +4102,8 @@ function writeSettingsToUI() {
   if ($('handoff-toggle')) setIfNotFocused($('handoff-toggle'), 'checked', state.handoffEnabled !== false);
   if ($('pondering-toggle')) setIfNotFocused($('pondering-toggle'), 'checked', state.ponderingEnabled !== false);
   if ($('pondering-scale'))  setIfNotFocused($('pondering-scale'),  'value',   state.ponderingIntervalScale ?? 1);
+  if ($('ponder-web-toggle')) setIfNotFocused($('ponder-web-toggle'), 'checked', state.ponderWebEnabled !== false);
+  if ($('ponder-web-reads'))  setIfNotFocused($('ponder-web-reads'),  'value',   state.ponderWebReadsPerDay ?? 12);
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
@@ -5473,7 +5489,7 @@ function init() {
   const settingsIds = [
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
-    'pondering-toggle', 'pondering-scale',
+    'pondering-toggle', 'pondering-scale', 'ponder-web-toggle', 'ponder-web-reads',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',

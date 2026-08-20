@@ -1144,6 +1144,16 @@
             <input type="number" id="pondering-scale" value="1" min="1" max="10" step="0.5">
             <div class="field-hint">Multiplies the base ponder interval. 1× = default cadence (30 min – 6 hr). 2× doubles every interval (1 hr – 12 hr). Use this to dial token cost down without disabling entirely. Only stretches, never speeds up.</div>
           </div>
+          <div class="field-row" style="margin-top:12px">
+            <label for="ponder-web-toggle">Look things up while pondering</label>
+            <input type="checkbox" id="ponder-web-toggle" checked>
+          </div>
+          <div class="field-hint">On by default (only active while web search is enabled). When on, your Familiar can read a few sources mid-ponder instead of only recombining what it already holds — it decides what to look up, and a shared daily read budget keeps it cheap. The reads are audited (surface "pondering") so you can see what it read while you were away. Off keeps ponders to its own memory. Budget below caps reads per day across all its idle research.</div>
+          <div class="field">
+            <label for="ponder-web-reads">Daily research reads</label>
+            <input type="number" id="ponder-web-reads" value="12" min="0" max="200" step="1">
+            <div class="field-hint">The most searches + page-reads your Familiar may spend on unattended research in one day, shared across every idle surface. 0 turns idle research off as surely as the toggle. Spent budget is never a failed call — the ponder just says it's thinking from what it already holds.</div>
+          </div>
 
           <div class="field-row" style="margin-top:12px">
             <label for="memory-sweep-toggle">Memory coverage sweep</label>
