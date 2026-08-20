@@ -305,6 +305,9 @@ const state = {
   // Domains where any submit-shaped act needs my fresh yes (§5 item 3). A hard
   // gate; only the hand-edited autonomy-grants file's autoSubmit lifts it.
   browseConfirmDomains:    '',
+  // How the confirm-list behaves: 'refuse' (default — hand it straight back) or
+  // 'ask' (hold it as a pending confirmation the ward approves out-of-band).
+  browseConfirmMode:       'refuse',
   // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
@@ -479,7 +482,7 @@ const SERVER_SYNCED_KEYS = [
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'providerApiKeys',
   'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend',
-  'browseSiteMode', 'browseSiteList', 'browseConfirmDomains',
+  'browseSiteMode', 'browseSiteList', 'browseConfirmDomains', 'browseConfirmMode',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
@@ -3912,6 +3915,7 @@ function readSettingsFromUI() {
   if ($('browse-site-mode')) state.browseSiteMode = $('browse-site-mode').value;
   if ($('browse-site-list')) state.browseSiteList = $('browse-site-list').value;
   if ($('browse-confirm-domains')) state.browseConfirmDomains = $('browse-confirm-domains').value;
+  if ($('browse-confirm-mode')) state.browseConfirmMode = $('browse-confirm-mode').value;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4092,6 +4096,7 @@ function writeSettingsToUI() {
   if ($('browse-site-mode'))   setIfNotFocused($('browse-site-mode'),   'value',   state.browseSiteMode || 'open');
   if ($('browse-site-list'))   setIfNotFocused($('browse-site-list'),   'value',   state.browseSiteList || '');
   if ($('browse-confirm-domains')) setIfNotFocused($('browse-confirm-domains'), 'value', state.browseConfirmDomains || '');
+  if ($('browse-confirm-mode')) setIfNotFocused($('browse-confirm-mode'), 'value', state.browseConfirmMode || 'refuse');
   { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
@@ -5471,7 +5476,7 @@ function init() {
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle',
-    'browse-site-mode', 'browse-site-list', 'browse-confirm-domains',
+    'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
@@ -5522,21 +5527,63 @@ function init() {
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none';
   });
-  $('browse-activity-btn')?.addEventListener('click', async () => {
-    const pre = $('browse-activity'); if (!pre) return;
+  async function renderBrowserActivity() {
+    const pre = $('browse-activity'), pend = $('browse-pending'); if (!pre) return;
     pre.style.display = ''; pre.textContent = 'Loading…';
     try {
       const [st, acts] = await Promise.all([
         fetch('/api/browser/status').then(r => r.json()).catch(() => ({})),
         fetch('/api/browser-actions').then(r => r.json()).catch(() => []),
       ]);
+      // Pending confirmations (the 'ask' flow) — approve/decline out-of-band.
+      const pcs = Array.isArray(st?.pendingConfirms) ? st.pendingConfirms : [];
+      if (pend) {
+        pend.innerHTML = '';
+        // A headed handoff window is open → offer "hand it back".
+        if (st?.awaitingHandback) {
+          pend.style.display = '';
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:13px';
+          row.appendChild(Object.assign(document.createElement('span'), { textContent: `A window is open for you${st.handoffUrl ? ` (${st.handoffUrl})` : ''}. Finish your part, then:`, style: 'flex:1' }));
+          const hb = document.createElement('button');
+          hb.type = 'button'; hb.className = 'secondary-btn'; hb.textContent = 'Hand it back';
+          hb.addEventListener('click', async () => {
+            hb.disabled = true; hb.textContent = 'Resuming…';
+            await fetch('/api/browser/handback', { method: 'POST' }).catch(() => {});
+            renderBrowserActivity();
+          });
+          row.appendChild(hb);
+          pend.appendChild(row);
+        }
+        if (pcs.length) {
+          pend.style.display = '';
+          pend.appendChild(Object.assign(document.createElement('div'), { textContent: 'Waiting for your yes:', style: 'font-weight:600; margin-bottom:4px' }));
+          for (const p of pcs) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px';
+            row.appendChild(Object.assign(document.createElement('span'), { textContent: `${p.action} on ${p.host}`, style: 'flex:1' }));
+            for (const [label, approve] of [['Approve', true], ['Decline', false]]) {
+              const b = document.createElement('button');
+              b.type = 'button'; b.className = 'secondary-btn'; b.textContent = label;
+              b.addEventListener('click', async () => {
+                b.disabled = true;
+                await fetch('/api/browser/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id, approve }) }).catch(() => {});
+                renderBrowserActivity();
+              });
+              row.appendChild(b);
+            }
+            pend.appendChild(row);
+          }
+        } else if (!st?.awaitingHandback) { pend.style.display = 'none'; }
+      }
       const head = st?.disabled ? 'Browser: hard-disabled'
-        : `Browser: ${st?.running ? 'running' : 'idle'}${st?.install?.status && st.install.status !== 'idle' ? ` · install ${st.install.status}` : ''}${st?.proxyBlocked ? ` · ${st.proxyBlocked} blocked request(s)` : ''}`;
+        : `Browser: ${st?.running ? 'running' : 'idle'}${st?.install?.status && st.install.status !== 'idle' ? ` · install ${st.install.status}` : ''}${st?.proxyBlocked ? ` · ${st.proxyBlocked} blocked request(s)` : ''}${st?.grants?.length ? ` · GRANTS: ${st.grants.join(', ')}` : ''}`;
       const lines = (Array.isArray(acts) ? acts : []).slice(0, 40).map(a =>
         `${(a.at || '').slice(0, 16).replace('T', ' ')}  ${a.tool}  ${a.target || ''}  → ${String(a.verdict || '').split('\n')[0].slice(0, 80)}`);
       pre.textContent = head + '\n\n' + (lines.length ? lines.join('\n') : 'No browser activity yet.');
     } catch { pre.textContent = "Couldn't load browser activity."; }
-  });
+  }
+  $('browse-activity-btn')?.addEventListener('click', renderBrowserActivity);
 
   // Provider change → refresh model suggestions and set sane default. Also
   // auto-fill the API key field from any saved connection using the same

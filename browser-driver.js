@@ -107,6 +107,10 @@ export function startChromiumFetch({ spawnFn = spawn, findFn = findChromium } = 
 
 // ── The single live context ───────────────────────────────────────────────
 let state = null; // { context, proxy, tabs:Map, idleTimer, launchedAt, crashes:[] }
+// While a HEADED handoff window is open (§4.8), the headless context is closed
+// and this holds the ward's window + the URL to resume at. Only ONE Chromium may
+// hold the profile at a time, so headless and headed can never coexist.
+let handoff = null; // { url, context, proxy }
 
 function clearIdle() { if (state?.idleTimer) { clearTimeout(state.idleTimer); state.idleTimer = null; } }
 function armIdle(idleMs) {
@@ -118,6 +122,7 @@ function armIdle(idleMs) {
 
 /** Lazy-launch (or reuse) the persistent context, wired through the guarded proxy. */
 export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_MAX_TABS_DEFAULT, lookupFn, siteGuard } = {}) {
+  if (handoff) throw new Error('awaiting handback');   // the ward's headed window holds the profile
   if (state?.context) { if (siteGuard) state.siteGuard = siteGuard; armIdle(idleMs); return state; }
 
   const exe = findChromium();
@@ -155,7 +160,7 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
   context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
   context.setDefaultTimeout(ACT_TIMEOUT_MS);
 
-  state = { context, proxy, exe, tabs: new Map(), idleTimer: null, launchedAt: Date.now(), crashes: [], maxTabs, siteGuard };
+  state = { context, proxy, exe, tabs: new Map(), idleTimer: null, launchedAt: Date.now(), crashes: [], maxTabs, siteGuard, idleMs, pendingConfirms: new Map() };
 
   // Site-mode enforcement on TOP-LEVEL navigations, including page-triggered
   // ones (§5.2): abort a main-frame document navigation whose host the ward's
@@ -385,19 +390,30 @@ export function isSubmitShaped(action, node, value) {
 }
 function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } }
 
-export async function act({ ref, action, value, onDialog = 'dismiss', secret = null, grants = null, confirmDomains = [], autoSubmit = false }) {
+export async function act({ ref, action, value, onDialog = 'dismiss', secret = null, grants = null, confirmDomains = [], autoSubmit = false, confirmMode = 'refuse' }) {
   if (!state?.current) await snapshot();
   const { page: pg, refTable } = state.current;
   const entry = refTable.byRef.get(ref);
   if (!entry) return { error: `unknown ref ${ref} — browse_see to re-observe` };
 
   // [CONFIRM]-domain gate (§5 item 3): a submit-shaped act on a ward-listed
-  // domain needs the ward's fresh yes — refused here unless the autonomy-grants
-  // file's `autoSubmit` lifts it. The safe default is to hand back to the ward.
+  // domain needs the ward's fresh yes, unless the autonomy `autoSubmit` grant
+  // lifts it. Two shapes, ward-chosen via browseConfirmMode:
+  //   'refuse' (default) → hand it straight back to the ward (safe + simple).
+  //   'ask'              → HOLD the act as a pending confirmation the ward
+  //                        approves out-of-band (a button, not a tool arg the
+  //                        model controls); on approval it resumes, generation-
+  //                        guarded like any other act.
   if (!autoSubmit && Array.isArray(confirmDomains) && confirmDomains.length) {
     const host = hostOf(pg.url());
     const listed = confirmDomains.some(d => host === d || host.endsWith('.' + d));
     if (listed && isSubmitShaped(action, entry.node, value)) {
+      if (confirmMode === 'ask') {
+        const id = `cf-${Math.random().toString(36).slice(2, 8)}`;
+        state.pendingConfirms.set(id, { ref, action, value, host, createdAt: Date.now() });
+        clearIdle();                       // keep the browser alive while awaiting the ward's yes
+        return { held: true, confirmId: id, host, action };
+      }
       return { error: `${host} is on my human's confirm-list — a submit like this needs their fresh yes, so I'm not doing it myself. This is theirs to complete (browse_handoff), unless they've granted auto-submit.` };
     }
   }
@@ -530,6 +546,28 @@ export async function closeBrowser(reason = 'close') {
   return { ok: true, reason };
 }
 
+// ── Pending confirmations (the [CONFIRM] approve-resume flow, 'ask' mode) ────
+export function listPendingConfirms() {
+  if (!state?.pendingConfirms) return [];
+  return [...state.pendingConfirms.entries()].map(([id, p]) => ({ id, host: p.host, action: p.action, ageMs: Date.now() - p.createdAt }));
+}
+/**
+ * Resolve a held confirmation out-of-band (a ward button, never a tool arg).
+ * Approve → the stored act RESUMES via the normal act() path with the gate
+ * lifted for this one act; the generation guard still fires, so a page that
+ * moved since the ward approved fails honestly instead of clicking the wrong
+ * thing. Decline (or unknown id) → dropped.
+ */
+export async function resolvePendingConfirm(id, approve) {
+  const p = state?.pendingConfirms?.get(id);
+  if (!p) return { error: 'no such pending confirmation (it may have expired or the browser closed)' };
+  state.pendingConfirms.delete(id);
+  if (state.pendingConfirms.size === 0) armIdle(state.idleMs || 5 * 60 * 1000); // reaper back on
+  if (!approve) return { declined: true, host: p.host, action: p.action };
+  const res = await act({ ref: p.ref, action: p.action, value: p.value, autoSubmit: true });
+  return { ...res, resumed: true, host: p.host };
+}
+
 /** The current tab's URL (cheap — no re-extract), or '' when nothing is open. */
 export function currentUrl() {
   try { return currentPage()?.url() || ''; } catch { return ''; }
@@ -546,6 +584,58 @@ export function hasDisplay() {
   return !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
+// ── Headed handoff (§4.8 hand-back-and-resume) ──────────────────────────────
+export function isAwaitingHandback() { return !!handoff; }
+
+/**
+ * Open the current page HEADED on the Familiar's own profile so the ward can do
+ * a login / payment / CAPTCHA by hand. Only ONE Chromium may hold the profile,
+ * so the headless context is CLOSED first and this takes over. Cookies the ward
+ * creates persist (shared profile), which is what lets the Familiar resume
+ * already-authenticated. Returns { ok, url } or { error } (→ caller parks).
+ */
+export async function openHeaded(url, { lookupFn } = {}) {
+  if (handoff) return { ok: true, url: handoff.url };        // already open
+  const exe = findChromium();
+  if (!exe) return { error: 'no browser available' };
+  let chromium;
+  try { ({ chromium } = await import('playwright-core')); } catch { return { error: 'playwright-core not installed' }; }
+  const target = url || currentUrl();
+  await closeBrowser('handoff');                             // release the profile lock
+  const proxy = createGuardedProxy({ lookupFn });
+  const proxyPort = await proxy.listen();
+  let context;
+  try {
+    context = await chromium.launchPersistentContext(PROFILE_DIR, {
+      headless: false, executablePath: exe, viewport: null,
+      proxy: { server: `http://127.0.0.1:${proxyPort}` },
+    });
+  } catch (err) { await proxy.close(); return { error: `headed window failed: ${err.message.split('\n')[0]}` }; }
+  const pg = context.pages()[0] || await context.newPage();
+  if (target) await pg.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  handoff = { url: target || pg.url(), context, proxy };
+  return { ok: true, url: handoff.url };
+}
+
+/**
+ * The ward clicked "hand it back": close the headed window, relaunch headless at
+ * the same URL — now authenticated, because the session cookies persisted in the
+ * shared profile. Returns { ok, url } or { error }.
+ */
+export async function completeHandback(opts) {
+  if (!handoff) return { error: 'no handoff window is open' };
+  const url = handoff.url;
+  try { await handoff.context.close(); } catch {}
+  try { await handoff.proxy.close(); } catch {}
+  handoff = null;
+  try {
+    if (url) await navigate(url, opts); else await ensureContext(opts);
+    return { ok: true, url };
+  } catch (err) {
+    return { error: `couldn't resume after handback: ${err.message.split('\n')[0]}` };
+  }
+}
+
 /** Lifecycle status for GET /api/browser/status. */
 export function status() {
   return {
@@ -556,5 +646,7 @@ export function status() {
     proxyBlocked: state?.proxy?.stats?.().blocked ?? 0,
     recentCrashes: state ? state.crashes.filter(t => Date.now() - t < 60000).length : 0,
     install: chromiumInstallState(),
+    awaitingHandback: !!handoff,
+    handoffUrl: handoff?.url ?? null,
   };
 }

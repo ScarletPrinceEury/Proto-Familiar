@@ -27,8 +27,8 @@ sources:
 
 # Browser Milestone: Guardrails in Code, Not Prompts
 
-**Status: Pass 1 through Pass 3b decided and shipped (0.11.0 / 0.11.1 / 0.11.3 / 0.11.4); Pass 4
-decided, not yet implemented.** `docs/browser-build-spec.md` specs a MINOR milestone — the
+**Status: Pass 1 through Pass 3b decided and shipped (0.11.0 / 0.11.1 / 0.11.3 / 0.11.4), plus
+both named Pass 3b refinements (0.11.5 / 0.11.6); Pass 4 decided, not yet implemented.** `docs/browser-build-spec.md` specs a MINOR milestone — the
 Familiar using the web (click, fill, scroll, multi-step flows) instead of only reading it
 through `read_webpage` [@browser-build-spec]. It is a cognition layer over `playwright-core`,
 built on the existing web-search stack (`websearch.js`'s `look_up` / `web_search` /
@@ -153,12 +153,36 @@ server, no `DISPLAY`, or a remote ward — the browser stays headless: the shipp
 action and logs `parked for ward: <reason>` to the audit trail instead of trying to pop a window
 nobody is at [@browser-js]. The browser and its profile stay alive so the Familiar resumes the
 instant the ward's part is done through whatever surface they used [@browser-build-spec]. A
-headed window is the nicer path when it exists, not a requirement the tool can fail on; an
-automatic hand-back-and-resume flow that returns control to the Familiar the instant the ward
-finishes, rather than requiring a fresh request, is a named refinement that has not shipped.
-Driving the ward's own already-logged-in Chrome remotely — the highest-stakes variant, and the
-one capability explicitly *not* copied from Sigil — stays a pinned horizon item, not part of this
-milestone [@browser-build-spec].
+headed window is the nicer path when it exists, not a requirement the tool can fail on.
+
+The automatic hand-back-and-resume flow named as pending in the original review shipped in
+0.11.6. Because only one Chromium instance may hold the persistent profile at a time, and
+Playwright cannot toggle a live context between headless and headed, resume is a relaunch dance
+rather than a flag: `driver.openHeaded()` closes the headless context and reopens the same
+profile headed; `POST /api/browser/handback` closes the headed context and reopens headless at
+the same URL, now carrying whatever cookies the ward's session left behind
+[@browser-driver-js]. While a handback is pending, `ensureContext` throws so the profile can
+never be double-opened, and every `browse_*` op degrades to a calm wait instead of an error
+[@browser-driver-js] [@browser-js]. See [Browser: click-and-fill web access](../architecture/browser)
+for the mechanics; only a co-located desktop install benefits, since the server process needs
+display access, and a failed headed launch still falls back to the honest park rather than a
+broken promise. Driving the ward's own already-logged-in Chrome remotely — the highest-stakes
+variant, and the one capability explicitly *not* copied from Sigil — stays a pinned horizon
+item, not part of this milestone [@browser-build-spec].
+
+## `[CONFIRM]` gained an opt-in approve-resume path (0.11.5)
+
+The hard refusal described above is the shipped default and remains unchanged. `browseConfirmMode:
+'ask'` is the approve-then-resume alternative named as pending in the original review: instead of
+refusing a submit-shaped act on a `browseConfirmDomains` host outright, `act()` holds it in
+`state.pendingConfirms` and returns `{held: true}` [@browser-driver-js]. The property that keeps
+this from becoming a self-approval side door is where the approval comes from: a Settings button
+posts to `POST /api/browser/confirm`, never a model tool argument, so no page content can talk the
+model into supplying its own approval [@browser-driver-js]. On approval, `resolvePendingConfirm()`
+resumes the stored act through the normal `act()` path with `autoSubmit` lifted for that one call,
+so the same generation guard described below still applies — a page that changed since the ward
+approved fails rather than clicking whatever now occupies that ref [@browser-driver-js]. See
+[Browser: click-and-fill web access](../architecture/browser) for the full mechanics.
 
 ## Ref-to-locator resolution fails loud instead of clicking the wrong element
 
@@ -184,14 +208,15 @@ an always-on, widely-used tool — routing it through a brand-new subsystem in t
 subsystem first ships would put unproven code straight into the hot path of existing behavior.
 `browse_*` proved the driver first; the spec placed `read_webpage`'s replacement (the static
 extractor retained as the degradation floor, selectable via `webReadBackend:'static'`) in Pass 2
-[@browser-build-spec], but as shipped through 0.11.4, that re-backing is still deferred — see
+[@browser-build-spec], but as shipped through 0.11.6, that re-backing is still deferred — see
 [Browser: click-and-fill web access](../architecture/browser) for the current state of the tool
 surface. Pass 3 added the sovereignty surfaces (site modes, the consent ceremony, the
 credentials vault, the fill-source gate, the confirm-domain refusal, and `browse_handoff`) across
-0.11.3 and 0.11.4, and is now fully shipped except for the two named refinements above. Pass 4
-adds read-only unattended research on pondering ticks, the one deliberate exception to the
-project's usual "ride existing requests, never poll" rule for background work, and has not
-shipped.
+0.11.3 and 0.11.4, and its two named refinements (`browseConfirmMode: 'ask'` approve-resume and
+headed handoff hand-back-and-resume) shipped in 0.11.5 and 0.11.6, so Pass 3 is now fully
+shipped. Pass 4 adds read-only unattended research on pondering ticks, the one deliberate
+exception to the project's usual "ride existing requests, never poll" rule for background work,
+and has not shipped.
 
 ## Consequences
 
@@ -202,9 +227,9 @@ and [Content-based memory gating](../architecture/content-gating). A future impl
 loosen the Stranger default, the credential-refusal boundary, or the handoff headless fallback as
 local conveniences; each one is a ward-signed floor, and the spec names loosening any of them as
 its own decision to reopen, not a bug to quietly fix. The build-order deferral means
-`read_webpage` keeps its static-extractor behavior even after Pass 1 through Pass 3b shipped in
-0.11.0/0.11.1/0.11.3/0.11.4 — a reader should not expect the browser-backed reading path until a
-future pass flips it over. `browse_handoff`, the autonomy grants, and vault-fill credentials are
-now shipped and can be relied on; the `[CONFIRM]` approve-then-resume flow and the headed
-handoff auto-resume are the two Pass 3b refinements still pending, and Pass 4's unattended
+`read_webpage` keeps its static-extractor behavior even after Pass 1 through Pass 3b and both
+refinements shipped in 0.11.0/0.11.1/0.11.3/0.11.4/0.11.5/0.11.6 — a reader should not expect the
+browser-backed reading path until a future pass flips it over. `browse_handoff`, the autonomy
+grants, vault-fill credentials, `browseConfirmMode: 'ask'` approve-resume, and the headed
+handoff hand-back-and-resume are all now shipped and can be relied on; only Pass 4's unattended
 research on pondering ticks has not started.

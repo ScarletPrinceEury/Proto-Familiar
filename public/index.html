@@ -1661,8 +1661,17 @@
             </div>
             <div class="field-hint">On these sites your Familiar won't press buy / pay / submit itself — it hands the moment back to you. A hard gate (only the hand-edited autonomy-grants file can lift it).</div>
             <div class="field-row" style="margin-top:8px">
+              <label for="browse-confirm-mode">When it hits one of those</label>
+              <select id="browse-confirm-mode">
+                <option value="refuse">Hand it straight back to me</option>
+                <option value="ask">Hold it for my one-tap approval</option>
+              </select>
+            </div>
+            <div class="field-hint">"Hold" queues the submit and waits — you approve or decline it below, and only then does it act. It never assumes it went through.</div>
+            <div class="field-row" style="margin-top:8px">
               <button type="button" id="browse-activity-btn" class="secondary-btn">View browser activity</button>
             </div>
+            <div id="browse-pending" style="display:none; margin-top:6px"></div>
             <pre id="browse-activity" style="display:none; max-height:220px; overflow:auto; font-size:12px; white-space:pre-wrap; background:var(--surface-2, #1a1a1a); padding:8px; border-radius:6px; margin-top:6px"></pre>
           </div>
           <div class="routine-rounds" id="te-rounds" style="padding:10px 12px; border-bottom:1px solid var(--border-subtle, #2a2a2a)">
