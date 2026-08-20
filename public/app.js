@@ -302,6 +302,9 @@ const state = {
   // 'blocklist' (open minus the list) / 'allowlist' (the list only).
   browseSiteMode:          'open',
   browseSiteList:          '',   // newline/comma-separated domains
+  // Domains where any submit-shaped act needs my fresh yes (§5 item 3). A hard
+  // gate; only the hand-edited autonomy-grants file's autoSubmit lifts it.
+  browseConfirmDomains:    '',
   // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
@@ -476,7 +479,7 @@ const SERVER_SYNCED_KEYS = [
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'providerApiKeys',
   'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend',
-  'browseSiteMode', 'browseSiteList',
+  'browseSiteMode', 'browseSiteList', 'browseConfirmDomains',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
@@ -3908,6 +3911,7 @@ function readSettingsFromUI() {
   if ($('browse-toggle')) state.browseEnabled = $('browse-toggle').checked;
   if ($('browse-site-mode')) state.browseSiteMode = $('browse-site-mode').value;
   if ($('browse-site-list')) state.browseSiteList = $('browse-site-list').value;
+  if ($('browse-confirm-domains')) state.browseConfirmDomains = $('browse-confirm-domains').value;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4087,6 +4091,7 @@ function writeSettingsToUI() {
   if ($('browse-toggle'))      setIfNotFocused($('browse-toggle'),      'checked', state.browseEnabled === true);
   if ($('browse-site-mode'))   setIfNotFocused($('browse-site-mode'),   'value',   state.browseSiteMode || 'open');
   if ($('browse-site-list'))   setIfNotFocused($('browse-site-list'),   'value',   state.browseSiteList || '');
+  if ($('browse-confirm-domains')) setIfNotFocused($('browse-confirm-domains'), 'value', state.browseConfirmDomains || '');
   { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
@@ -5466,7 +5471,7 @@ function init() {
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle',
-    'browse-site-mode', 'browse-site-list',
+    'browse-site-mode', 'browse-site-list', 'browse-confirm-domains',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',

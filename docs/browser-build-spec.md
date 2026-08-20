@@ -700,12 +700,19 @@ required — the static floor works).
     + credential/payment fill refusals hardened against real form shapes
     (autocomplete/name/inputmode) + the `/api/browser-actions` viewer in
     Settings. No new capability, only tighter gates — shippable on its own.
-  - **3b — the ward-in-the-loop + dangerous surfaces (PENDING):**
-    `browse_handoff` (headed window / headless-park fallback + hand-back
-    affordance + outbox/push), `[CONFIRM]` domains (the outbox approve-then-act
-    flow), and **the autonomy-grants file + credentials vault** (§5.9 — reader,
-    exact-string check, vault-typed fill, loud grant visibility, own-files
-    denylist entry for the vault). Highest-stakes; its own review checkpoint.
+  - **3b — the ward-in-the-loop + dangerous surfaces DONE (0.11.4):**
+    `browse_handoff` (headed window when a display exists, else parks + is
+    honest — the review-2 fallback); `[CONFIRM]` domains as a hard **refuse**
+    gate (a submit-shaped act on a `browseConfirmDomains` host is handed back
+    unless the autonomy `autoSubmit` grant lifts it — the outbox
+    approve-then-*resume* flow, and the headed-window hand-back-and-resume, are
+    the named refinements still open); and **the autonomy-grants file +
+    credentials vault** (§5.9): `browser-grants.js` reads
+    `browser/autonomy-grants.json` (byte-exact acknowledgment or all-false) +
+    `browser/credentials-vault.json`, both on the own-files denylist; the pure
+    fill-source gate (`evaluateFill`) admits only a code-typed vault secret
+    under the matching grant, the model never sees the value; grants log loudly
+    at launch, show in status, and stamp the audit. Pass 3 complete.
 - **Pass 4 — unattended research (§8.5).** The read-only tool loop in
   `ponderOnce` + the reflection tick, the per-tick/per-day budget store,
   audit stamping (`surface:'pondering'`), the budget-spent prompt line,

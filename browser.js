@@ -23,6 +23,7 @@ import * as realDriver from './browser-driver.js';
 import { sanitizeExternal } from './injection-guard.js';
 import { logBrowserAction, readBrowserActions } from './browser-audit.js';
 import { saveAsset } from './media.js';
+import { readGrants, readVaultEntry, hasAnyGrant } from './browser-grants.js';
 
 // The engine, swappable for tests (a stubbed browser drives the same
 // orchestration — framing, sanitisation, audit, degrade — with no Chromium).
@@ -112,11 +113,26 @@ export async function browseSee({ level = 'outline', scope = null } = {}, { sett
   }
 }
 
-export async function browseAct({ ref, action, value, on_dialog } = {}, { settings, sessionId } = {}) {
+export async function browseAct({ ref, action, value, on_dialog, vault } = {}, { settings, sessionId } = {}) {
   if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
   if (!ref || !action) return 'I need a ref and an action (click / fill / select / press / hover / scroll).';
   try {
-    const res = await driver.act({ ref, action, value, onDialog: on_dialog === 'accept' ? 'accept' : 'dismiss' });
+    const grants = readGrants();
+    // Vault fill (§5.9): the Familiar names an entry; CODE reads the secret and
+    // hands it to the driver, which types it. The value never enters this
+    // function's return, a log, or a prompt — only which entry + which grant.
+    let secret = null;
+    if (vault) {
+      const entry = readVaultEntry(vault);
+      if (!entry) return `I don't have a saved login called "${vault}" I'm allowed to use — that needs my human's autonomy-grants file and a matching vault entry.`;
+      secret = entry.secret;
+    }
+    const res = await driver.act({
+      ref, action, value, onDialog: on_dialog === 'accept' ? 'accept' : 'dismiss',
+      secret, grants,
+      confirmDomains: siteList({ browseSiteList: settings?.browseConfirmDomains }),
+      autoSubmit: grants.autoSubmit === true,
+    });
     if (res.error) {
       logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict: res.error, sessionId });
       return sanitizeExternal(res.error, { source: 'web', context: 'browser' });
@@ -138,7 +154,7 @@ export async function browseAct({ ref, action, value, on_dialog } = {}, { settin
         verdict += `\n  downloaded "${dl.name}" — not a type I keep (only documents/images/audio)`;
       }
     }
-    logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict, sessionId });
+    logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict, sessionId, grant: res.grantUsed || null });
     return sanitizeExternal(verdict, { source: 'web', context: 'browser' });
   } catch (err) {
     return degrade(err, `I couldn't ${action} ${ref}`);
@@ -253,7 +269,31 @@ export function shouldBrowserRead(settings) {
   try { return !!driver.findChromium(); } catch { return false; }
 }
 
-export function browserStatus() { return driver.status(); }
+export function browserStatus() {
+  const g = readGrants();
+  return { ...driver.status(), url: driver.currentUrl?.() || '', grants: g.active, hasDisplay: driver.hasDisplay?.() };
+}
+
+/**
+ * The ward-sovereignty tool (§4.8). Some moments belong to my human — a login,
+ * a payment, a CAPTCHA. With a local display I open the page headed for them;
+ * with none (headless server / they're remote) I stay headless and PARK it,
+ * flagging it so they finish it later — never a window nobody is at. On the
+ * ward's live turn this reply IS the flag; the browser + profile stay alive.
+ */
+export async function browseHandoff({ reason } = {}, { settings, sessionId } = {}) {
+  if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
+  const url = driver.currentUrl?.() || '';
+  const why = String(reason || 'this part').trim();
+  logBrowserAction({ tool: 'browse_handoff', target: url, verdict: `parked for ward: ${why}`, sessionId });
+  const where = url ? ` The page is ${url}.` : '';
+  if (driver.hasDisplay?.()) {
+    // A desktop is present; opening the headed window on our own profile so the
+    // cookie carries back is a §3-tail refinement — for now I flag it plainly.
+    return `${why} is yours, not mine — I've stopped here so you can take it.${where} Tell me when you've done your part and I'll pick back up (my browser stays open, so your session carries over).`;
+  }
+  return `${why} is yours, not mine — but you're not at the machine I'm running on, so I can't hand you a window. I've parked it for whenever you can get to it.${where} I'll continue once you've done your part.`;
+}
 
 /** Turn an engine error into a calm first-person line — never a throw. */
 function degrade(err, prefix) {

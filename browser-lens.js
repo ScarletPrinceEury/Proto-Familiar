@@ -52,22 +52,54 @@ const PROTECTED_AUTOCOMPLETE = new Set([
 ]);
 const CREDENTIAL_NAME_RE = /\b(password|passcode|cvv|cvc|cvn|csc|card\s*(number|no)|cardnum|iban|sort\s*code|routing|account\s*number|security\s*code|social\s*security|\bssn\b)\b/i;
 
-/** A field the Familiar must never be able to fill with model-supplied bytes (§5.4). */
-export function isProtectedField(node) {
-  if (!node) return false;
-  if (node.tag === 'input' && node.type) {
-    const t = String(node.type).toLowerCase();
-    if (t === 'password' || t === 'file') return true;
-  }
-  // The site's own autofill declaration (autocomplete) is the strongest signal.
-  const ac = String(node.autocomplete || '').toLowerCase().trim();
-  if (ac) for (const tok of ac.split(/\s+/)) if (PROTECTED_AUTOCOMPLETE.has(tok)) return true;
-  // A numeric-keypad field named like a card/CVV is payment-shaped too.
+const PAYMENT_AUTOCOMPLETE = new Set(['cc-number', 'cc-exp', 'cc-exp-month', 'cc-exp-year', 'cc-csc', 'cc-name', 'cc-type']);
+const PAYMENT_NAME_RE = /\b(cvv|cvc|cvn|csc|card\s*(number|no)|cardnum|iban|sort\s*code|routing|account\s*number|security\s*code)\b/i;
+
+/**
+ * Classify a protected field so grants can gate it correctly (§5.9): 'payment'
+ * (card/CVV/IBAN — lifted by the `payments` grant) vs 'credential' (passwords,
+ * OTP, file inputs — lifted by `credentials`), or null when it's a plain field.
+ * Pure — the strongest signal is the site's own autocomplete declaration.
+ */
+export function protectedKind(node) {
+  if (!node) return null;
+  const ac = String(node.autocomplete || '').toLowerCase().trim().split(/\s+/);
   const name = String(node.name || '').toLowerCase();
-  if (CREDENTIAL_NAME_RE.test(name)) return true;
+  const type = String(node.type || '').toLowerCase();
   const im = String(node.inputmode || '').toLowerCase();
-  if ((im === 'numeric' || node.type === 'tel') && /\b(card|cvv|cvc|csc|cvn|security|iban)\b/.test(name)) return true;
-  return false;
+  // Payment first (more specific).
+  if (ac.some(t => PAYMENT_AUTOCOMPLETE.has(t))) return 'payment';
+  if (PAYMENT_NAME_RE.test(name)) return 'payment';
+  if ((im === 'numeric' || type === 'tel') && /\b(card|cvv|cvc|csc|cvn|security|iban)\b/.test(name)) return 'payment';
+  // Credential.
+  if (node.tag === 'input' && (type === 'password' || type === 'file')) return 'credential';
+  if (ac.some(t => PROTECTED_AUTOCOMPLETE.has(t))) return 'credential';
+  if (CREDENTIAL_NAME_RE.test(name)) return 'credential';
+  return null;
+}
+
+/** A field the Familiar must never fill with MODEL-supplied bytes (§5.4). */
+export function isProtectedField(node) {
+  return protectedKind(node) !== null;
+}
+
+/**
+ * The fill-source decision (§5.4 / §5.9), pure so it's tested without a browser.
+ * A protected field takes ONLY a code-typed vault `secret` under the grant that
+ * matches its kind (payment→payments, credential→credentials); a plain field
+ * takes the model `value` and refuses a stray secret. Returns
+ * { ok, value, grantUsed, error } — `value` is what the driver actually types.
+ */
+export function evaluateFill(node, { value, secret = null, grants = null } = {}) {
+  const kind = protectedKind(node);
+  if (kind) {
+    if (!secret) return { ok: false, error: `this is a protected ${kind} field — I can't type into it` };
+    const granted = kind === 'payment' ? grants?.payments === true : grants?.credentials === true;
+    if (!granted) return { ok: false, error: `this is a protected ${kind} field — I have no grant to fill it` };
+    return { ok: true, value: secret, grantUsed: kind === 'payment' ? 'payments' : 'credentials' };
+  }
+  if (secret) return { ok: false, error: `this isn't a login/payment field — I won't put a saved secret there` };
+  return { ok: true, value, grantUsed: null };
 }
 
 /**
