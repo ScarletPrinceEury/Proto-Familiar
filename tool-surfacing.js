@@ -105,7 +105,7 @@ export const TOOL_MODULES = {
   // Surfaced by URLs + browse-ish verbs; ward-only executors, so a villager
   // turn never reaches them even if the module is advertised.
   browse_open: 'browser', browse_see: 'browser', browse_act: 'browser', browse_close: 'browser',
-  browse_screenshot: 'browser', browse_tabs: 'browser', browse_history: 'browser',
+  browse_screenshot: 'browser', browse_tabs: 'browser', browse_history: 'browser', browse_handoff: 'browser',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 

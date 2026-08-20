@@ -151,3 +151,73 @@ test('browseRead degrades to ok:false when the live read throws (→ static floo
   assert.equal(res.ok, false);
   _setDriverForTest(null);
 });
+
+// ── Pass 3a: site modes ────────────────────────────────────────────────────
+import { siteModeAllows } from '../browser.js';
+
+test('siteModeAllows: open allows all; blocklist/allowlist gate by domain (+subdomains)', () => {
+  assert.equal(siteModeAllows('https://anything.example/x', { browseSiteMode: 'open' }), true);
+  const bl = { browseSiteMode: 'blocklist', browseSiteList: 'reddit.com\nnews.example' };
+  assert.equal(siteModeAllows('https://reddit.com/r/x', bl), false);
+  assert.equal(siteModeAllows('https://old.reddit.com/r/x', bl), false); // subdomain
+  assert.equal(siteModeAllows('https://example.org/ok', bl), true);
+  const al = { browseSiteMode: 'allowlist', browseSiteList: 'wikipedia.org' };
+  assert.equal(siteModeAllows('https://en.wikipedia.org/wiki/X', al), true);
+  assert.equal(siteModeAllows('https://evil.example', al), false);
+});
+
+test('siteModeAllows fails closed on an unparseable URL (non-open modes)', () => {
+  assert.equal(siteModeAllows('not a url', { browseSiteMode: 'allowlist', browseSiteList: 'x.com' }), false);
+});
+
+test('browseOpen refuses a site the ward blocked, without touching the engine', async () => {
+  let navigated = false;
+  _setDriverForTest({ navigate: async () => { navigated = true; return { pageData: { url: 'x', title: '', nodes: [] } }; } });
+  const out = await browseOpen({ url: 'https://reddit.com' }, { settings: { browseEnabled: true, browseSiteMode: 'blocklist', browseSiteList: 'reddit.com' } });
+  assert.match(out, /blocked that site/i);
+  assert.equal(navigated, false, 'a blocked site never reaches the driver');
+  _setDriverForTest(null);
+});
+
+test('browseRead returns a distinct blocked signal for a site-blocked URL (no static bypass)', async () => {
+  const res = await browseRead({ url: 'https://reddit.com' }, { settings: { browseEnabled: true, browseSiteMode: 'blocklist', browseSiteList: 'reddit.com' } });
+  assert.equal(res.ok, false);
+  assert.equal(res.blocked, true);
+  assert.match(res.text, /site settings block/i);
+});
+
+// ── Pass 3b: submit-shape detection, handoff ───────────────────────────────
+import { isSubmitShaped } from '../browser-driver.js';
+import { browseHandoff } from '../browser.js';
+
+test('isSubmitShaped flags buy/pay/submit clicks and Enter, not plain clicks', () => {
+  assert.equal(isSubmitShaped('click', { type: 'submit', name: 'Go' }), true);
+  assert.equal(isSubmitShaped('click', { name: 'Place order' }), true);
+  assert.equal(isSubmitShaped('click', { name: 'Pay now' }), true);
+  assert.equal(isSubmitShaped('press', { name: 'Search box' }, 'Enter'), true);
+  assert.equal(isSubmitShaped('click', { name: 'Read more' }), false);
+  assert.equal(isSubmitShaped('fill', { name: 'Buy' }), false); // filling isn't submitting
+});
+
+test('browseHandoff hands the window over when a display exists', async () => {
+  _setDriverForTest({ currentUrl: () => 'https://bank.example/login', hasDisplay: () => true });
+  const out = await browseHandoff({ reason: 'the login' }, ward);
+  assert.match(out, /the login is yours/i);
+  assert.match(out, /take it/i);
+  assert.match(out, /bank\.example\/login/);
+  _setDriverForTest(null);
+});
+
+test('browseHandoff parks + is honest when there is no local display', async () => {
+  _setDriverForTest({ currentUrl: () => 'https://bank.example/login', hasDisplay: () => false });
+  const out = await browseHandoff({ reason: 'the payment' }, ward);
+  assert.match(out, /not at the machine/i);
+  assert.match(out, /parked/i);
+  _setDriverForTest(null);
+});
+
+test('browseAct refuses a vault fill when no grant/vault entry exists', async () => {
+  // No autonomy-grants file in the default repo state → readVaultEntry is null.
+  const out = await browseAct({ ref: 'r1', action: 'fill', vault: 'mastodon' }, ward);
+  assert.match(out, /don't have a saved login called "mastodon"/i);
+});

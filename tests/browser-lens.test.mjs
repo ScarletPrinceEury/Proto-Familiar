@@ -94,3 +94,44 @@ test('computeDelta on a no-op act says no navigation', () => {
   assert.match(v, /ok — filled r1/);
   assert.match(v, /no navigation/);
 });
+
+// ── Pass 3a: hardened credential/payment field detection ───────────────────
+test('isProtectedField catches autocomplete + name/inputmode payment heuristics', () => {
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'cc-number' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'cc-csc' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'current-password' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', name: 'IBAN' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', name: 'Routing number' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'tel', name: 'Card CVV' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', inputmode: 'numeric', name: 'security code' }), true);
+  // A normal search/name field with a numeric mode is NOT protected.
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', inputmode: 'numeric', name: 'Quantity' }), false);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'email', name: 'Email' }), false);
+});
+
+// ── Pass 3b: the fill-source gate (vault vs model bytes) ───────────────────
+import { evaluateFill, protectedKind } from '../browser-lens.js';
+
+test('protectedKind classifies payment vs credential vs plain', () => {
+  assert.equal(protectedKind({ tag: 'input', type: 'text', autocomplete: 'cc-number' }), 'payment');
+  assert.equal(protectedKind({ tag: 'input', type: 'password' }), 'credential');
+  assert.equal(protectedKind({ tag: 'input', type: 'text', name: 'Search' }), null);
+});
+
+test('evaluateFill: a plain field takes model value; a stray secret is refused', () => {
+  const plain = { tag: 'input', type: 'text', name: 'Search' };
+  assert.deepEqual(evaluateFill(plain, { value: 'kittens' }), { ok: true, value: 'kittens', grantUsed: null });
+  assert.equal(evaluateFill(plain, { secret: 'oops' }).ok, false); // no secrets into arbitrary boxes
+});
+
+test('evaluateFill: a protected field refuses model bytes and needs the matching grant', () => {
+  const pw = { tag: 'input', type: 'password', name: 'Password' };
+  assert.equal(evaluateFill(pw, { value: 'typed' }).ok, false);            // model bytes refused
+  assert.equal(evaluateFill(pw, { secret: 's', grants: {} }).ok, false);   // vault but no grant
+  const okd = evaluateFill(pw, { secret: 's', grants: { credentials: true } });
+  assert.deepEqual(okd, { ok: true, value: 's', grantUsed: 'credentials' });
+  // a payment field needs the payments grant, not credentials
+  const card = { tag: 'input', type: 'text', autocomplete: 'cc-number' };
+  assert.equal(evaluateFill(card, { secret: 's', grants: { credentials: true } }).ok, false);
+  assert.equal(evaluateFill(card, { secret: 's', grants: { payments: true } }).grantUsed, 'payments');
+});

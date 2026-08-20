@@ -25,7 +25,8 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 
 import { createGuardedProxy } from './browser-proxy.js';
-import { buildRefTable, isProtectedField } from './browser-lens.js';
+import { buildRefTable, evaluateFill } from './browser-lens.js';
+import { readGrants } from './browser-grants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_DIR = path.join(__dirname, 'browser', 'profile');
@@ -116,8 +117,8 @@ function armIdle(idleMs) {
 }
 
 /** Lazy-launch (or reuse) the persistent context, wired through the guarded proxy. */
-export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_MAX_TABS_DEFAULT, lookupFn } = {}) {
-  if (state?.context) { armIdle(idleMs); return state; }
+export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_MAX_TABS_DEFAULT, lookupFn, siteGuard } = {}) {
+  if (state?.context) { if (siteGuard) state.siteGuard = siteGuard; armIdle(idleMs); return state; }
 
   const exe = findChromium();
   if (!exe) {
@@ -154,7 +155,22 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
   context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
   context.setDefaultTimeout(ACT_TIMEOUT_MS);
 
-  state = { context, proxy, exe, tabs: new Map(), idleTimer: null, launchedAt: Date.now(), crashes: [], maxTabs };
+  state = { context, proxy, exe, tabs: new Map(), idleTimer: null, launchedAt: Date.now(), crashes: [], maxTabs, siteGuard };
+
+  // Site-mode enforcement on TOP-LEVEL navigations, including page-triggered
+  // ones (§5.2): abort a main-frame document navigation whose host the ward's
+  // site mode disallows. Subresources are untouched (the CONNECT proxy owns the
+  // network floor); only the frame's own destination is gated here.
+  await context.route('**/*', (route) => {
+    try {
+      const req = route.request();
+      if (state?.siteGuard && req.isNavigationRequest() && !req.frame().parentFrame() && !state.siteGuard(req.url())) {
+        state.blockedNav = (state.blockedNav || 0) + 1;
+        return route.abort('blockedbyclient');
+      }
+    } catch {}
+    return route.continue();
+  });
 
   // Popup / new-tab capture (§4.1): every new page joins the SAME guarded
   // context (so it inherits the proxy) and counts against the cap; over-cap
@@ -165,6 +181,12 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
   for (const pg of context.pages()) registerTab(pg);
   if (state.tabs.size === 0) await newTab();
   armIdle(idleMs);
+
+  // Loud grant visibility (§5.9): active autonomy grants are announced at every
+  // launch, so a Familiar acting with the ward's authority is never silent.
+  const active = readGrants().active;
+  if (active.length) console.warn(`[browser] ⚠ AUTONOMY GRANTS ACTIVE: ${active.join(', ')} (browser/autonomy-grants.json)`);
+
   return state;
 }
 
@@ -282,6 +304,8 @@ const EXTRACT_FN = `() => {
     nodes.push({
       role, name, tag: el.tagName.toLowerCase(),
       type: el.getAttribute && el.getAttribute('type') ? el.getAttribute('type').toLowerCase() : null,
+      autocomplete: el.getAttribute && el.getAttribute('autocomplete') || '',
+      inputmode: el.getAttribute && el.getAttribute('inputmode') || '',
       interactable: true, inViewport: inVp(el), section: sectionOf(el), nth, css: uniqueCss(el),
     });
   }
@@ -350,13 +374,45 @@ export async function readPage(url, opts) {
  * a benign, non-protected target — the caller (browser-tools) enforces the §5
  * gates before we get here. Returns { before, after, event, actedRef }.
  */
-export async function act({ ref, action, value, onDialog = 'dismiss' }) {
+const SUBMIT_NAME_RE = /\b(buy|pay|order|place\s*order|checkout|check\s*out|submit|confirm|purchase|subscribe|send|complete)\b/i;
+/** Is this act likely to SUBMIT a form / spend/send (§5 item 3, the [CONFIRM] gate)? */
+export function isSubmitShaped(action, node, value) {
+  if (action === 'press' && /enter/i.test(String(value || ''))) return true;
+  if (action !== 'click') return false;
+  const type = String(node?.type || '').toLowerCase();
+  if (type === 'submit') return true;
+  return SUBMIT_NAME_RE.test(String(node?.name || ''));
+}
+function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } }
+
+export async function act({ ref, action, value, onDialog = 'dismiss', secret = null, grants = null, confirmDomains = [], autoSubmit = false }) {
   if (!state?.current) await snapshot();
   const { page: pg, refTable } = state.current;
   const entry = refTable.byRef.get(ref);
   if (!entry) return { error: `unknown ref ${ref} — browse_see to re-observe` };
-  if ((action === 'fill') && (entry.protected || isProtectedField(entry.node))) {
-    return { error: `${ref} is a protected field — I can't type into it` };
+
+  // [CONFIRM]-domain gate (§5 item 3): a submit-shaped act on a ward-listed
+  // domain needs the ward's fresh yes — refused here unless the autonomy-grants
+  // file's `autoSubmit` lifts it. The safe default is to hand back to the ward.
+  if (!autoSubmit && Array.isArray(confirmDomains) && confirmDomains.length) {
+    const host = hostOf(pg.url());
+    const listed = confirmDomains.some(d => host === d || host.endsWith('.' + d));
+    if (listed && isSubmitShaped(action, entry.node, value)) {
+      return { error: `${host} is on my human's confirm-list — a submit like this needs their fresh yes, so I'm not doing it myself. This is theirs to complete (browse_handoff), unless they've granted auto-submit.` };
+    }
+  }
+
+  // Fill-source gate (§5.4 / §5.9) — the pure decision lives in the lens. A
+  // protected field NEVER takes model bytes; the only write path is a code-typed
+  // vault `secret` under the matching grant. `grantUsed` is stamped for the
+  // audit; the secret itself never leaves this function.
+  let fillValue = value;
+  let grantUsed = null;
+  if (action === 'fill') {
+    const d = evaluateFill(entry.node, { value, secret, grants });
+    if (!d.ok) return { error: `${ref}: ${d.error}` };
+    fillValue = d.value;
+    grantUsed = d.grantUsed;
   }
   // Generation guard: the page moved under this ref (a nav / DOM rebuild since
   // the snapshot) → don't act on a possibly-different element, force a re-look.
@@ -388,7 +444,7 @@ export async function act({ ref, action, value, onDialog = 'dismiss' }) {
     const el = locator.first();
     switch (action) {
       case 'click':  await el.click({ timeout: ACT_TIMEOUT_MS }); break;
-      case 'fill':   await el.fill(String(value ?? ''), { timeout: ACT_TIMEOUT_MS }); break;
+      case 'fill':   await el.fill(String(fillValue ?? ''), { timeout: ACT_TIMEOUT_MS }); break;
       case 'select': await el.selectOption(String(value ?? ''), { timeout: ACT_TIMEOUT_MS }); break;
       case 'press':  await el.press(String(value ?? 'Enter'), { timeout: ACT_TIMEOUT_MS }); break;
       case 'hover':  await el.hover({ timeout: ACT_TIMEOUT_MS }); break;
@@ -402,7 +458,7 @@ export async function act({ ref, action, value, onDialog = 'dismiss' }) {
   await pg.waitForTimeout(150); // let a nav/DOM settle enough to diff
   pg.off('dialog', onDlg);
   const after = await snapshot();
-  return { before, after: after.pageData, event, actedRef: ref, actionLabel: action };
+  return { before, after: after.pageData, event, actedRef: ref, actionLabel: action, grantUsed };
 }
 
 /**
@@ -472,6 +528,22 @@ export async function closeBrowser(reason = 'close') {
   try { await s.context.close(); } catch {}
   try { await s.proxy.close(); } catch {}
   return { ok: true, reason };
+}
+
+/** The current tab's URL (cheap — no re-extract), or '' when nothing is open. */
+export function currentUrl() {
+  try { return currentPage()?.url() || ''; } catch { return ''; }
+}
+
+/**
+ * Is a local display available for a HEADED handoff window (§4.8)? On Linux a
+ * headless server has no DISPLAY/WAYLAND_DISPLAY; macOS/Windows are assumed to
+ * have a desktop. When false, handoff parks + notifies instead of opening a
+ * window nobody is at (the ward's review-2 decision).
+ */
+export function hasDisplay() {
+  if (process.platform === 'darwin' || process.platform === 'win32') return true;
+  return !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
 /** Lifecycle status for GET /api/browser/status. */

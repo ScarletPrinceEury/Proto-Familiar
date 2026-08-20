@@ -11,27 +11,44 @@ sources:
   - id: village-js
     type: file
     path: village.js
+  - id: browser-grants-js
+    type: file
+    path: browser-grants.js
+  - id: browser-lens-js
+    type: file
+    path: browser-lens.js
+  - id: browser-driver-js
+    type: file
+    path: browser-driver.js
+  - id: browser-js
+    type: file
+    path: browser.js
 ---
 
 # Browser Milestone: Guardrails in Code, Not Prompts
 
-**Status: Pass 1 and Pass 2 decided and shipped (0.11.0 / 0.11.1); Pass 3 and Pass 4 decided,
-not yet implemented.** `docs/browser-build-spec.md` specs a MINOR milestone — the Familiar using
-the web (click, fill, scroll, multi-step flows) instead of only reading it through
-`read_webpage` [@browser-build-spec]. It is a cognition layer over `playwright-core`, built on
-the existing web-search stack (`websearch.js`'s `look_up` / `web_search` / `read_webpage`) and
-modeled on two external references: agent-browser's dense-ref token model and Sigil's doctrine
-of deterministic, code-level guardrails instead of prompted ones [@browser-build-spec]. Pass 1
-(the driver, the lens, the guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log) and
-Pass 2 (screenshots, tabs, downloads, history) are built and described on
+**Status: Pass 1 through Pass 3b decided and shipped (0.11.0 / 0.11.1 / 0.11.3 / 0.11.4); Pass 4
+decided, not yet implemented.** `docs/browser-build-spec.md` specs a MINOR milestone — the
+Familiar using the web (click, fill, scroll, multi-step flows) instead of only reading it
+through `read_webpage` [@browser-build-spec]. It is a cognition layer over `playwright-core`,
+built on the existing web-search stack (`websearch.js`'s `look_up` / `web_search` /
+`read_webpage`) and modeled on two external references: agent-browser's dense-ref token model
+and Sigil's doctrine of deterministic, code-level guardrails instead of prompted ones
+[@browser-build-spec]. Pass 1 (the driver, the lens, the guarded proxy,
+`browse_open`/`see`/`act`/`close`, the audit log), Pass 2 (screenshots, tabs, downloads,
+history), Pass 3a (site modes and credential/payment fill hardening, 0.11.3), and Pass 3b (the
+consent ceremony, credentials vault, fill-source gate, confirm-domain refusal, and
+`browse_handoff`, 0.11.4) are all built and described on
 [Browser: click-and-fill web access](../architecture/browser); this page records the design
 decisions a second spec review settled — not the whole spec, which stays authoritative for the
 mechanics, but the *why* behind the choices that are easy to get wrong or quietly re-litigate
 later. Each one reuses an existing Proto-Familiar defense rather than inventing a parallel one,
 which is the throughline: SSRF reuses `websearch.js`'s IP guard, page trust reuses Village's
 floor tier, and credential handling reuses [Exact values are code's job](exact-values-in-code).
-The credential-vault fill path, `browse_handoff`, and the `autonomy-grants.json` consent gate
-described below are Pass 3, and remain decided but not yet implemented.
+Pass 3 split by risk: 3a covers gates that decide synchronously with no ward involvement, and 3b
+covers the surfaces that either need the ward in the loop (`browse_handoff`) or are dangerous
+enough to require an explicit, hand-edited consent file (the credentials vault, payment fill,
+confirm-domain auto-submit).
 
 ## SSRF is enforced by a proxy the app owns, not `context.route`
 
@@ -87,25 +104,34 @@ The only path that can still fill such a field is code-typed vault fill, gated b
 hand-edited `browser/autonomy-grants.json` (no UI, an exact-string acknowledgment sentence
 required byte-for-byte, absent-or-malformed file means every grant reads false) plus a
 `browser/credentials-vault.json` the app never reads through any Familiar tool
-[@browser-build-spec]. With a `credentials` grant, the Familiar names a vault entry
-(`browse_act({ref, action:'fill', vault:'mastodon'})`) and code reads and types the secret — the
-password never enters a prompt, a tool result, a session log, or the audit trail
-[@browser-build-spec]. This is [Exact values are code's job](exact-values-in-code) applied to
-secrets instead of timestamps or ids: the model points at a named thing, code alone touches the
-value. File inputs (`<input type=file>`) are refused by the same code floor, for the same reason
-`own-files.js` denies the vault to every Familiar tool — there is no path in this milestone by
-which a page may be handed the ward's files [@browser-build-spec].
+[@browser-build-spec]. This shipped as specced in Pass 3b (0.11.4): `browser-grants.js`'s
+`readGrants()` re-reads the grants file on every call rather than caching it, so a revoked grant
+can never stay alive on stale state, and `readVaultEntry(name)` is inert unless the matching
+`credentials`/`payments` grant is active [@browser-grants-js]. With a `credentials` grant, the
+Familiar names a vault entry and code reads and types the secret — the password never enters a
+prompt, a tool result, a session log, or the audit trail [@browser-grants-js]. The pure decision
+of *which* bytes a given field may accept lives in `browser-lens.js`'s `evaluateFill()`, kept
+separate from the grants file so the safety-critical judgment is unit-tested without a browser
+[@browser-lens-js]; see [Browser: click-and-fill web access](../architecture/browser) for the
+mechanics. This is
+[Exact values are code's job](exact-values-in-code) applied to secrets instead of timestamps or
+ids: the model points at a named thing, code alone touches the value. File inputs (`<input
+type=file>`) are refused by the same code floor, for the same reason `own-files.js` denies the
+vault to every Familiar tool — there is no path in this milestone by which a page may be handed
+the ward's files [@browser-build-spec].
 
 ## A dialog can be answered, but never used to escalate
 
 The Familiar may answer a benign `confirm()` rather than always dismissing blind, but the spec
 pins the boundary carefully so a dialog can never become a side door around the other guardrails.
-`confirm()` defaults to `dismiss` — the safe, negative answer — and the verdict surfaces the
-dialog's text, itself framed as Stranger-tier content, never as an instruction. The Familiar may
-then re-issue the act with `on_dialog:'accept'` having seen that text, so an accept is always
-made with the words in hand, never blind [@browser-build-spec]. The load-bearing rule is that
-**an accept is exactly as powerful as clicking the button that raised the dialog**, so it is
-gated identically: every refusal the triggering act was already subject to — payment or
+This shipped in `browser-driver.js`'s `act()`, which takes an `onDialog` parameter
+(`browse_act`'s `on_dialog`, wired through `browser.js`) that defaults to `'dismiss'` — the safe,
+negative answer [@browser-driver-js] [@browser-js]. The verdict surfaces the dialog's text,
+itself framed as Stranger-tier content, never as an instruction, and the Familiar may then
+re-issue the act with `on_dialog:'accept'` having seen that text, so an accept is always made
+with the words in hand, never blind [@browser-build-spec] [@browser-driver-js]. The load-bearing
+rule is that **an accept is exactly as powerful as clicking the button that raised the dialog**,
+so it is gated identically: every refusal the triggering act was already subject to — payment or
 credential fields, a `browseConfirmDomains` submit, the active site mode — still holds, and a
 dialog can never launder a gated action [@browser-build-spec]. `alert()` is acknowledged (its
 only option), `beforeunload` is accepted (it only guards the Familiar's own chosen navigation),
@@ -117,17 +143,22 @@ runs outside the guards [@browser-build-spec].
 
 ## Handoff falls back to headless, never pops a window nobody is at
 
-`browse_handoff` is the tool for moments that belong to the ward — logins, payments, CAPTCHAs.
-When a local display exists, it opens the current page headed on that display, explains why, and
-pauses until the ward hands it back, never having seen the password or card number
-[@browser-build-spec]. When no display exists — a headless server, no `DISPLAY`, or a remote ward
-— the browser stays headless: the spec is explicit that the app must not try to pop a window
-nobody is at. The action is parked instead, the same outbox/push mechanism notifies the ward, and
-the browser and its profile stay alive so the Familiar resumes the instant the ward's part is done
-through whatever surface they used [@browser-build-spec]. A headed window is the nicer path when
-it exists, not a requirement the tool can fail on. Driving the ward's own already-logged-in
-Chrome remotely — the highest-stakes variant, and the one capability explicitly *not* copied from
-Sigil — stays a pinned horizon item, not part of this milestone [@browser-build-spec].
+`browse_handoff` is the tool for moments that belong to the ward — logins, payments, CAPTCHAs. It
+shipped in Pass 3b (0.11.4): `browserStatus()` exposes the driver's `hasDisplay()` result
+alongside the current URL and active grants, and `browse_handoff` reads it to decide which path
+to take [@browser-js] [@browser-driver-js]. When a local display exists, it opens the current
+page headed on that display, explains why, and pauses until the ward hands it back, never having
+seen the password or card number [@browser-build-spec]. When no display exists — a headless
+server, no `DISPLAY`, or a remote ward — the browser stays headless: the shipped code parks the
+action and logs `parked for ward: <reason>` to the audit trail instead of trying to pop a window
+nobody is at [@browser-js]. The browser and its profile stay alive so the Familiar resumes the
+instant the ward's part is done through whatever surface they used [@browser-build-spec]. A
+headed window is the nicer path when it exists, not a requirement the tool can fail on; an
+automatic hand-back-and-resume flow that returns control to the Familiar the instant the ward
+finishes, rather than requiring a fresh request, is a named refinement that has not shipped.
+Driving the ward's own already-logged-in Chrome remotely — the highest-stakes variant, and the
+one capability explicitly *not* copied from Sigil — stays a pinned horizon item, not part of this
+milestone [@browser-build-spec].
 
 ## Ref-to-locator resolution fails loud instead of clicking the wrong element
 
@@ -153,12 +184,14 @@ an always-on, widely-used tool — routing it through a brand-new subsystem in t
 subsystem first ships would put unproven code straight into the hot path of existing behavior.
 `browse_*` proved the driver first; the spec placed `read_webpage`'s replacement (the static
 extractor retained as the degradation floor, selectable via `webReadBackend:'static'`) in Pass 2
-[@browser-build-spec], but as shipped in 0.11.1, that re-backing is still deferred — see
+[@browser-build-spec], but as shipped through 0.11.4, that re-backing is still deferred — see
 [Browser: click-and-fill web access](../architecture/browser) for the current state of the tool
-surface. Pass 3 adds the sovereignty surfaces (handoff, autonomy grants, the credentials vault)
-and has not shipped; Pass 4 adds read-only unattended research on pondering ticks, the one
-deliberate exception to the project's usual "ride existing requests, never poll" rule for
-background work, and has not shipped either.
+surface. Pass 3 added the sovereignty surfaces (site modes, the consent ceremony, the
+credentials vault, the fill-source gate, the confirm-domain refusal, and `browse_handoff`) across
+0.11.3 and 0.11.4, and is now fully shipped except for the two named refinements above. Pass 4
+adds read-only unattended research on pondering ticks, the one deliberate exception to the
+project's usual "ride existing requests, never poll" rule for background work, and has not
+shipped.
 
 ## Consequences
 
@@ -169,7 +202,9 @@ and [Content-based memory gating](../architecture/content-gating). A future impl
 loosen the Stranger default, the credential-refusal boundary, or the handoff headless fallback as
 local conveniences; each one is a ward-signed floor, and the spec names loosening any of them as
 its own decision to reopen, not a bug to quietly fix. The build-order deferral means
-`read_webpage` keeps its static-extractor behavior even after both `browse_*` (Pass 1) and
-screenshots/tabs/downloads/history (Pass 2) shipped in 0.11.0/0.11.1 — a reader should not
-expect the browser-backed reading path until a future pass flips it over, and should not expect
-`browse_handoff`, autonomy grants, or vault-fill credentials until Pass 3 ships.
+`read_webpage` keeps its static-extractor behavior even after Pass 1 through Pass 3b shipped in
+0.11.0/0.11.1/0.11.3/0.11.4 — a reader should not expect the browser-backed reading path until a
+future pass flips it over. `browse_handoff`, the autonomy grants, and vault-fill credentials are
+now shipped and can be relied on; the `[CONFIRM]` approve-then-resume flow and the headed
+handoff auto-resume are the two Pass 3b refinements still pending, and Pass 4's unattended
+research on pondering ticks has not started.

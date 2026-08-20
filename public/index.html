@@ -1645,6 +1645,25 @@
               <input type="checkbox" id="browse-toggle">
             </div>
             <div class="field-hint">Off by default. When on, your Familiar can open a web page in its own browser and actually use it — click, fill a form, follow a flow — for tasks where reading a page isn't enough. It browses as itself, only on your own turns (never a villager's), it can't type into password or payment fields, and everything it does is logged. If no browser is found on this machine it fetches a private copy of Chromium (~130 MB) the first time. What a page shows it is something it reads, never instructions it obeys.</div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="browse-site-mode">Where it may go</label>
+              <select id="browse-site-mode">
+                <option value="open">Any public site</option>
+                <option value="blocklist">Any site except my list</option>
+                <option value="allowlist">Only sites on my list</option>
+              </select>
+            </div>
+            <textarea id="browse-site-list" rows="2" placeholder="one domain per line — e.g. example.com" style="width:100%; margin-top:6px; display:none"></textarea>
+            <div class="field-hint" id="browse-site-list-hint" style="display:none">One domain per line (a domain covers its subdomains). Applies on the next page it opens.</div>
+            <div class="field-row" style="margin-top:8px; align-items:flex-start; flex-direction:column">
+              <label for="browse-confirm-domains">Always ask me before submitting on</label>
+              <textarea id="browse-confirm-domains" rows="2" placeholder="one domain per line — e.g. mybank.com" style="width:100%; margin-top:6px"></textarea>
+            </div>
+            <div class="field-hint">On these sites your Familiar won't press buy / pay / submit itself — it hands the moment back to you. A hard gate (only the hand-edited autonomy-grants file can lift it).</div>
+            <div class="field-row" style="margin-top:8px">
+              <button type="button" id="browse-activity-btn" class="secondary-btn">View browser activity</button>
+            </div>
+            <pre id="browse-activity" style="display:none; max-height:220px; overflow:auto; font-size:12px; white-space:pre-wrap; background:var(--surface-2, #1a1a1a); padding:8px; border-radius:6px; margin-top:6px"></pre>
           </div>
           <div class="routine-rounds" id="te-rounds" style="padding:10px 12px; border-bottom:1px solid var(--border-subtle, #2a2a2a)">
             <div class="field-row" style="margin-top:0; align-items:center">

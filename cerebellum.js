@@ -2438,6 +2438,7 @@ export const BUILTIN_TOOLS = [
           action: { type: 'string', enum: ['click', 'fill', 'select', 'press', 'hover', 'scroll'], description: 'What to do.' },
           value: { type: 'string', description: 'For fill (text), select (option), or press (key name).' },
           on_dialog: { type: 'string', enum: ['dismiss', 'accept'], description: "How to answer a confirm this act raises. Default dismiss. accept only for a benign confirm I've already seen the text of." },
+          vault: { type: 'string', description: "The NAME of a saved login to fill a password/payment field with (I never see the secret — code types it). Only works if my human has set up their autonomy-grants file and a matching vault entry; otherwise the field stays refused." },
         },
         required: ['ref', 'action'],
       },
@@ -2484,6 +2485,17 @@ export const BUILTIN_TOOLS = [
       parameters: {
         type: 'object',
         properties: { query: { type: 'string', description: 'Optional filter — a domain, a word, a tool name.' } },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browse_handoff',
+      description: "I hand the page back to my human when a moment is theirs, not mine — a login, a payment, a CAPTCHA. I stop, tell them why, and let them finish their part; I never push through those myself. If they're at this machine I mean for them to take the visible window; if they're elsewhere I park it for whenever they can. Even when I could technically do a thing myself, some moments are better shared — this is how I share them.",
+      parameters: {
+        type: 'object',
+        properties: { reason: { type: 'string', description: 'What this is — e.g. "the login", "the card details", "the CAPTCHA".' } },
       },
     },
   },
@@ -4139,6 +4151,8 @@ export const TOOL_EXECUTORS = {
       if (b.shouldBrowserRead(s)) {
         const res = await b.browseRead({ url }, { settings: s, sessionId: ctx?.sessionInfo?.sessionId ?? null });
         if (res?.ok) return res.text;
+        // Site mode blocked it → honour the block; don't reach it via the floor.
+        if (res?.blocked) return res.text;
       }
     } catch { /* fall through to static */ }
     return readWebpage(url, s);
@@ -4205,10 +4219,10 @@ export const TOOL_EXECUTORS = {
     const b = await import('./browser.js');
     return b.browseSee({ level, scope }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
-  browse_act: async ({ ref, action, value, on_dialog } = {}, ctx = {}) => {
+  browse_act: async ({ ref, action, value, on_dialog, vault } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
     const b = await import('./browser.js');
-    return b.browseAct({ ref, action, value, on_dialog }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
+    return b.browseAct({ ref, action, value, on_dialog, vault }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   browse_close: async (_args = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
@@ -4237,6 +4251,11 @@ export const TOOL_EXECUTORS = {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
     const b = await import('./browser.js');
     return b.browseHistory({ query }, { settings: readSettingsSync() });
+  },
+  browse_handoff: async ({ reason } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
+    const b = await import('./browser.js');
+    return b.browseHandoff({ reason }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
 };
 
