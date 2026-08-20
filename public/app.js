@@ -298,6 +298,10 @@ const state = {
   // browser when it's available (falls back to static), 'static' pins the old
   // fetch+readability extractor. Inert until browsing is enabled.
   webReadBackend:          'auto',
+  // Where my Familiar's browser may go (§5.2): 'open' (any public site) /
+  // 'blocklist' (open minus the list) / 'allowlist' (the list only).
+  browseSiteMode:          'open',
+  browseSiteList:          '',   // newline/comma-separated domains
   // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
@@ -472,6 +476,7 @@ const SERVER_SYNCED_KEYS = [
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'providerApiKeys',
   'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend',
+  'browseSiteMode', 'browseSiteList',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',
@@ -3901,6 +3906,8 @@ function readSettingsFromUI() {
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
   if ($('browse-toggle')) state.browseEnabled = $('browse-toggle').checked;
+  if ($('browse-site-mode')) state.browseSiteMode = $('browse-site-mode').value;
+  if ($('browse-site-list')) state.browseSiteList = $('browse-site-list').value;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4078,6 +4085,11 @@ function writeSettingsToUI() {
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
   if ($('browse-toggle'))      setIfNotFocused($('browse-toggle'),      'checked', state.browseEnabled === true);
+  if ($('browse-site-mode'))   setIfNotFocused($('browse-site-mode'),   'value',   state.browseSiteMode || 'open');
+  if ($('browse-site-list'))   setIfNotFocused($('browse-site-list'),   'value',   state.browseSiteList || '');
+  { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
+    if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
+    if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
@@ -5454,6 +5466,7 @@ function init() {
     'pondering-toggle', 'pondering-scale',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle',
+    'browse-site-mode', 'browse-site-list',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
@@ -5495,6 +5508,29 @@ function init() {
   });
   document.querySelectorAll('input[name="weather-unit"]').forEach(el => {
     el.addEventListener('change', readSettingsFromUI);
+  });
+
+  // Browser: show the domain list only for blocklist/allowlist modes, and load
+  // the activity viewer (the action audit log + live status) on demand.
+  $('browse-site-mode')?.addEventListener('change', e => {
+    const show = e.target.value !== 'open';
+    if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
+    if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none';
+  });
+  $('browse-activity-btn')?.addEventListener('click', async () => {
+    const pre = $('browse-activity'); if (!pre) return;
+    pre.style.display = ''; pre.textContent = 'Loading…';
+    try {
+      const [st, acts] = await Promise.all([
+        fetch('/api/browser/status').then(r => r.json()).catch(() => ({})),
+        fetch('/api/browser-actions').then(r => r.json()).catch(() => []),
+      ]);
+      const head = st?.disabled ? 'Browser: hard-disabled'
+        : `Browser: ${st?.running ? 'running' : 'idle'}${st?.install?.status && st.install.status !== 'idle' ? ` · install ${st.install.status}` : ''}${st?.proxyBlocked ? ` · ${st.proxyBlocked} blocked request(s)` : ''}`;
+      const lines = (Array.isArray(acts) ? acts : []).slice(0, 40).map(a =>
+        `${(a.at || '').slice(0, 16).replace('T', ' ')}  ${a.tool}  ${a.target || ''}  → ${String(a.verdict || '').split('\n')[0].slice(0, 80)}`);
+      pre.textContent = head + '\n\n' + (lines.length ? lines.join('\n') : 'No browser activity yet.');
+    } catch { pre.textContent = "Couldn't load browser activity."; }
   });
 
   // Provider change → refresh model suggestions and set sane default. Also

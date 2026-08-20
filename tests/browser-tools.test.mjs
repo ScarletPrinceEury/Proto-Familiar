@@ -151,3 +151,37 @@ test('browseRead degrades to ok:false when the live read throws (→ static floo
   assert.equal(res.ok, false);
   _setDriverForTest(null);
 });
+
+// ── Pass 3a: site modes ────────────────────────────────────────────────────
+import { siteModeAllows } from '../browser.js';
+
+test('siteModeAllows: open allows all; blocklist/allowlist gate by domain (+subdomains)', () => {
+  assert.equal(siteModeAllows('https://anything.example/x', { browseSiteMode: 'open' }), true);
+  const bl = { browseSiteMode: 'blocklist', browseSiteList: 'reddit.com\nnews.example' };
+  assert.equal(siteModeAllows('https://reddit.com/r/x', bl), false);
+  assert.equal(siteModeAllows('https://old.reddit.com/r/x', bl), false); // subdomain
+  assert.equal(siteModeAllows('https://example.org/ok', bl), true);
+  const al = { browseSiteMode: 'allowlist', browseSiteList: 'wikipedia.org' };
+  assert.equal(siteModeAllows('https://en.wikipedia.org/wiki/X', al), true);
+  assert.equal(siteModeAllows('https://evil.example', al), false);
+});
+
+test('siteModeAllows fails closed on an unparseable URL (non-open modes)', () => {
+  assert.equal(siteModeAllows('not a url', { browseSiteMode: 'allowlist', browseSiteList: 'x.com' }), false);
+});
+
+test('browseOpen refuses a site the ward blocked, without touching the engine', async () => {
+  let navigated = false;
+  _setDriverForTest({ navigate: async () => { navigated = true; return { pageData: { url: 'x', title: '', nodes: [] } }; } });
+  const out = await browseOpen({ url: 'https://reddit.com' }, { settings: { browseEnabled: true, browseSiteMode: 'blocklist', browseSiteList: 'reddit.com' } });
+  assert.match(out, /blocked that site/i);
+  assert.equal(navigated, false, 'a blocked site never reaches the driver');
+  _setDriverForTest(null);
+});
+
+test('browseRead returns a distinct blocked signal for a site-blocked URL (no static bypass)', async () => {
+  const res = await browseRead({ url: 'https://reddit.com' }, { settings: { browseEnabled: true, browseSiteMode: 'blocklist', browseSiteList: 'reddit.com' } });
+  assert.equal(res.ok, false);
+  assert.equal(res.blocked, true);
+  assert.match(res.text, /site settings block/i);
+});

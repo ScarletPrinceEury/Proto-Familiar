@@ -116,8 +116,8 @@ function armIdle(idleMs) {
 }
 
 /** Lazy-launch (or reuse) the persistent context, wired through the guarded proxy. */
-export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_MAX_TABS_DEFAULT, lookupFn } = {}) {
-  if (state?.context) { armIdle(idleMs); return state; }
+export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_MAX_TABS_DEFAULT, lookupFn, siteGuard } = {}) {
+  if (state?.context) { if (siteGuard) state.siteGuard = siteGuard; armIdle(idleMs); return state; }
 
   const exe = findChromium();
   if (!exe) {
@@ -154,7 +154,22 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
   context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
   context.setDefaultTimeout(ACT_TIMEOUT_MS);
 
-  state = { context, proxy, exe, tabs: new Map(), idleTimer: null, launchedAt: Date.now(), crashes: [], maxTabs };
+  state = { context, proxy, exe, tabs: new Map(), idleTimer: null, launchedAt: Date.now(), crashes: [], maxTabs, siteGuard };
+
+  // Site-mode enforcement on TOP-LEVEL navigations, including page-triggered
+  // ones (§5.2): abort a main-frame document navigation whose host the ward's
+  // site mode disallows. Subresources are untouched (the CONNECT proxy owns the
+  // network floor); only the frame's own destination is gated here.
+  await context.route('**/*', (route) => {
+    try {
+      const req = route.request();
+      if (state?.siteGuard && req.isNavigationRequest() && !req.frame().parentFrame() && !state.siteGuard(req.url())) {
+        state.blockedNav = (state.blockedNav || 0) + 1;
+        return route.abort('blockedbyclient');
+      }
+    } catch {}
+    return route.continue();
+  });
 
   // Popup / new-tab capture (§4.1): every new page joins the SAME guarded
   // context (so it inherits the proxy) and counts against the cap; over-cap
@@ -282,6 +297,8 @@ const EXTRACT_FN = `() => {
     nodes.push({
       role, name, tag: el.tagName.toLowerCase(),
       type: el.getAttribute && el.getAttribute('type') ? el.getAttribute('type').toLowerCase() : null,
+      autocomplete: el.getAttribute && el.getAttribute('autocomplete') || '',
+      inputmode: el.getAttribute && el.getAttribute('inputmode') || '',
       interactable: true, inViewport: inVp(el), section: sectionOf(el), nth, css: uniqueCss(el),
     });
   }

@@ -94,3 +94,17 @@ test('computeDelta on a no-op act says no navigation', () => {
   assert.match(v, /ok — filled r1/);
   assert.match(v, /no navigation/);
 });
+
+// ── Pass 3a: hardened credential/payment field detection ───────────────────
+test('isProtectedField catches autocomplete + name/inputmode payment heuristics', () => {
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'cc-number' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'cc-csc' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'current-password' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', name: 'IBAN' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', name: 'Routing number' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'tel', name: 'Card CVV' }), true);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', inputmode: 'numeric', name: 'security code' }), true);
+  // A normal search/name field with a numeric mode is NOT protected.
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', inputmode: 'numeric', name: 'Quantity' }), false);
+  assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'email', name: 'Email' }), false);
+});

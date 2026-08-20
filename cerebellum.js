@@ -4139,6 +4139,8 @@ export const TOOL_EXECUTORS = {
       if (b.shouldBrowserRead(s)) {
         const res = await b.browseRead({ url }, { settings: s, sessionId: ctx?.sessionInfo?.sessionId ?? null });
         if (res?.ok) return res.text;
+        // Site mode blocked it → honour the block; don't reach it via the floor.
+        if (res?.blocked) return res.text;
       }
     } catch { /* fall through to static */ }
     return readWebpage(url, s);

@@ -693,12 +693,19 @@ required — the static floor works).
   (browseEnabled + a browser exists + `webReadBackend` != 'static') and falls
   back to the static floor on any failure — reading never depends on the
   browser being up. Pass 2 complete.
-- **Pass 3 — sovereignty surfaces.** `browse_handoff` (headed window +
-  hand-back affordance + outbox/push), `[CONFIRM]` domains, site modes UI,
-  credential/payment fill refusals hardened against fixture forms,
-  `/api/browser-actions` viewer in Settings, **the autonomy-grants file +
-  credentials vault** (§5.9 — reader, exact-string check, vault-typed fill,
-  loud grant visibility, own-files denylist entry for the vault).
+- **Pass 3 — sovereignty surfaces.** Split into two by risk.
+  - **3a — synchronous safety gates DONE (0.11.3):** site modes
+    (`browseSiteMode` open/blocklist/allowlist + `browseSiteList`, enforced on
+    the Familiar's navs AND page-triggered top-level navs, with a site-modes UI)
+    + credential/payment fill refusals hardened against real form shapes
+    (autocomplete/name/inputmode) + the `/api/browser-actions` viewer in
+    Settings. No new capability, only tighter gates — shippable on its own.
+  - **3b — the ward-in-the-loop + dangerous surfaces (PENDING):**
+    `browse_handoff` (headed window / headless-park fallback + hand-back
+    affordance + outbox/push), `[CONFIRM]` domains (the outbox approve-then-act
+    flow), and **the autonomy-grants file + credentials vault** (§5.9 — reader,
+    exact-string check, vault-typed fill, loud grant visibility, own-files
+    denylist entry for the vault). Highest-stakes; its own review checkpoint.
 - **Pass 4 — unattended research (§8.5).** The read-only tool loop in
   `ponderOnce` + the reflection tick, the per-tick/per-day budget store,
   audit stamping (`surface:'pondering'`), the budget-spent prompt line,

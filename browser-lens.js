@@ -43,6 +43,15 @@ const CHARS_PER_TOKEN = 4;
 
 const estTokens = (s) => Math.ceil(s.length / CHARS_PER_TOKEN);
 
+// Autocomplete tokens the HTML spec reserves for credentials + payment (§5.4,
+// §5 item 3). A field asking the browser to autofill any of these is card/CVV/
+// account-shaped by the site's OWN declaration — the strongest signal we get.
+const PROTECTED_AUTOCOMPLETE = new Set([
+  'current-password', 'new-password', 'one-time-code',
+  'cc-number', 'cc-exp', 'cc-exp-month', 'cc-exp-year', 'cc-csc', 'cc-name', 'cc-type',
+]);
+const CREDENTIAL_NAME_RE = /\b(password|passcode|cvv|cvc|cvn|csc|card\s*(number|no)|cardnum|iban|sort\s*code|routing|account\s*number|security\s*code|social\s*security|\bssn\b)\b/i;
+
 /** A field the Familiar must never be able to fill with model-supplied bytes (§5.4). */
 export function isProtectedField(node) {
   if (!node) return false;
@@ -50,9 +59,15 @@ export function isProtectedField(node) {
     const t = String(node.type).toLowerCase();
     if (t === 'password' || t === 'file') return true;
   }
-  // Heuristically credential/payment-shaped by accessible name.
+  // The site's own autofill declaration (autocomplete) is the strongest signal.
+  const ac = String(node.autocomplete || '').toLowerCase().trim();
+  if (ac) for (const tok of ac.split(/\s+/)) if (PROTECTED_AUTOCOMPLETE.has(tok)) return true;
+  // A numeric-keypad field named like a card/CVV is payment-shaped too.
   const name = String(node.name || '').toLowerCase();
-  return /\b(password|passcode|cvv|cvc|card\s*number|iban|security\s*code)\b/.test(name);
+  if (CREDENTIAL_NAME_RE.test(name)) return true;
+  const im = String(node.inputmode || '').toLowerCase();
+  if ((im === 'numeric' || node.type === 'tel') && /\b(card|cvv|cvc|csc|cvn|security|iban)\b/.test(name)) return true;
+  return false;
 }
 
 /**
