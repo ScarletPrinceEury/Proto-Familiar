@@ -570,18 +570,31 @@ not just recombining what I already hold. (Projection cues ride chat turns,
 which already carry tools; this section covers the turns nobody is watching.)
 
 **What unattended turns get: the read stack, which is now the browser.**
-`ponderOnce` (and the reflection tick that rides it) gains a bounded tool
-loop (`runToolCallLoop`, reused) whose toolset is **composed in code and
-read-only**: `look_up`, `web_search`, `read_webpage` — nothing else. Because
-`read_webpage` is browser-backed (§0.1), this is real access to the modern
-web, JS-rendered pages included. And because turndown keeps hyperlinks in
-the extracted markdown, I can *follow* a trail — read a page, pick a link
-from its text, read that — purely through reads.
+Before `ponderOnce` (and the reflection tick that rides it) writes, it runs a
+bounded *plan-and-read* loop (`ponder-research.js`): each round I answer with
+JSON naming a few web searches / URLs to read, and **code executes the
+reads** — `searchWeb`, then `readOne` (browser-backed via `shouldBrowserRead`
++ `browseRead` when it's up, else the static `readWebpage` floor). Because the
+read is browser-backed (§0.1), this is real access to the modern web,
+JS-rendered pages included; and because the extracted markdown keeps
+hyperlinks, I can *follow* a trail across rounds — read a page, then name a
+link from it to read next — purely through reads.
+
+**Why plan-and-read, not a tool-calling loop (an as-built refinement of the
+original spec).** The first design gave the unattended turn the read tools
+directly (`runToolCallLoop` with a read-only toolset). It shipped instead as
+a loop where the model only ever *names* what to look up and code does the
+fetching — strictly *less* model agency in the context that most warrants it.
+The safety property is stronger: the model literally cannot emit a tool call
+of any other shape, because there is no tool surface at all — only a query
+list that code validates (`parsePlan`: strings, `https?:` URLs, ≤2 each) and a
+budget that code enforces. Reads stay idempotent; there is no act path to
+reach even by malformed output.
 
 **What unattended turns never get: my hands.** `browse_act`, `browse_open`,
-tabs, screenshots-on-demand, handoff — none of it, structurally (the
-composer simply never includes them; same fail-closed pattern as the
-villager tool ladders). Three reasons, all load-bearing:
+tabs, screenshots-on-demand, handoff — none of it, structurally (the loop
+only ever calls `searchWeb`/`readOne`; there is no tool composer to slip an
+act into). Three reasons, all load-bearing:
 
 1. **Injection blast radius.** An unattended turn has no ward nearby to
    notice me acting oddly. A hostile page that catches me alone must find
@@ -596,9 +609,9 @@ villager tool ladders). Three reasons, all load-bearing:
 
 **The budget (gate in code, the ward's "sensible budget"):**
 
-- `ponderWebRoundsPerTick` (default 4) — tool-loop rounds one ponder may
+- `ponderWebRoundsPerTick` (default 4) — plan-and-read rounds one ponder may
   spend; the prompt names the budget so I spend it deliberately, but the
-  loop enforces it regardless of what I do.
+  loop enforces it regardless of what I do (clamped [1,10] in code).
 - `ponderWebReadsPerDay` (default 12) — a day-keyed counter across ALL
   unattended surfaces (`tomes/.ponder-web-budget.json`); exhausted means
   the tools simply aren't offered on the next tick, and the pondering
@@ -725,10 +738,19 @@ required — the static floor works).
     fill-source gate (`evaluateFill`) admits only a code-typed vault secret
     under the matching grant, the model never sees the value; grants log loudly
     at launch, show in status, and stamp the audit. Pass 3 complete.
-- **Pass 4 — unattended research (§8.5).** The read-only tool loop in
-  `ponderOnce` + the reflection tick, the per-tick/per-day budget store,
-  audit stamping (`surface:'pondering'`), the budget-spent prompt line,
-  provenance-cited tome entries.
+- **Pass 4 — unattended research (§8.5). DONE (0.11.7).** Shipped as a
+  plan-and-read loop (`ponder-research.js`) rather than a read-only
+  tool loop — the model NAMES searches/URLs, code executes the reads
+  (browser-backed when up, static floor else), so an unattended turn has no
+  tool surface to misuse at all (an as-built safety refinement, §8.5). The
+  per-day budget store (`ponder-web-budget.js`, `tomes/.ponder-web-budget.json`,
+  local-day-keyed, fail-closed), audit stamping (`ponder_search`/`ponder_read`,
+  `sessionId:'pondering'`), the budget-spent prompt line, and
+  provenance-cited sources folded into the ponder prompt (`sourcesBlock`).
+  Gated on `ponderWebEnabled` (default ON) + `webSearchEnabled`, off-switch
+  `PROTO_FAMILIAR_PONDER_WEB_DISABLED=1`; reflection ticks excluded. Settings
+  wired into `SERVER_SYNCED_KEYS` + a Behaviour-pane toggle & daily-reads
+  field. Tests: `ponder-web-budget.test.mjs`, `ponder-research.test.mjs`.
 - Each pass: `docs/architecture.md` same commit; tool-surfacing `browser`
   module lands with Pass 1.
 
