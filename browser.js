@@ -184,6 +184,36 @@ export async function browseHistory({ query } = {}, { settings } = {}) {
   }
 }
 
+/**
+ * Read a page over the LIVE (JS-rendered) DOM — the browser-backed read_webpage
+ * path (§0.1). Reuses websearch.js's shared extractReadable so the output is
+ * byte-identical to the static path (same framing/provenance/sanitise). Returns
+ * { ok, text }: ok:false (browser off / unavailable / a bad read) lets the
+ * executor fall back to the static floor. Never throws into the turn.
+ */
+export async function browseRead({ url } = {}, { settings, sessionId } = {}) {
+  if (!browseEnabled(settings)) return { ok: false };
+  try {
+    const { readPage } = driver;
+    if (typeof readPage !== 'function') return { ok: false };
+    const { html, url: finalUrl } = await readPage(url, opts(settings));
+    const { extractReadable } = await import('./websearch.js');
+    const maxChars = Math.min(Math.max(Number(settings?.webSearchMaxChars) || 8000, 500), 100000);
+    const res = await extractReadable(html, { url: finalUrl, maxChars });
+    if (res.ok) logBrowserAction({ tool: 'read_webpage', target: finalUrl, verdict: 'read (browser)', sessionId });
+    return res;
+  } catch {
+    return { ok: false };   // → static floor
+  }
+}
+
+/** Should read_webpage use the browser this turn? (auto + enabled + a browser exists.) */
+export function shouldBrowserRead(settings) {
+  if (!browseEnabled(settings)) return false;
+  if ((settings?.webReadBackend ?? 'auto') === 'static') return false;
+  try { return !!driver.findChromium(); } catch { return false; }
+}
+
 export function browserStatus() { return driver.status(); }
 
 /** Turn an engine error into a calm first-person line — never a throw. */

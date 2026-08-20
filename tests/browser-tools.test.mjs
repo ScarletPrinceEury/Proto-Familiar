@@ -114,3 +114,40 @@ test('the Pass-2 browse tools are gated ward-only and fully wired', async () => 
     assert.match(out, /only browse the web on my human's own turns/i, `${name} not gated`);
   }
 });
+
+// ── read_webpage re-backing (browser route + static fallback) ──────────────
+import { browseRead, shouldBrowserRead } from '../browser.js';
+import { findChromium } from '../browser-driver.js';
+
+test('shouldBrowserRead: off when disabled or pinned static, on when auto+enabled+browser', () => {
+  assert.equal(shouldBrowserRead({ browseEnabled: false }), false);
+  assert.equal(shouldBrowserRead({ browseEnabled: true, webReadBackend: 'static' }), false);
+  // auto + enabled → depends on a browser being present (it is, in this env)
+  assert.equal(shouldBrowserRead({ browseEnabled: true, webReadBackend: 'auto' }), !!findChromium());
+});
+
+test('browseRead reads the live DOM through the shared extractor', async () => {
+  _setDriverForTest({
+    readPage: async () => ({
+      html: '<html><head><title>Live</title></head><body><article><h1>Live page</h1><p>This text came from the JS-rendered DOM, not a static fetch.</p></article></body></html>',
+      url: 'https://spa.example/app',
+    }),
+  });
+  const res = await browseRead({ url: 'https://spa.example/app' }, ward);
+  assert.equal(res.ok, true);
+  assert.match(res.text, /JS-rendered DOM/);
+  assert.match(res.text, /Source: https:\/\/spa\.example\/app/);
+  _setDriverForTest(null);
+});
+
+test('browseRead returns ok:false when browsing is off (executor uses the static floor)', async () => {
+  const res = await browseRead({ url: 'https://x' }, { settings: { browseEnabled: false } });
+  assert.equal(res.ok, false);
+});
+
+test('browseRead degrades to ok:false when the live read throws (→ static floor)', async () => {
+  _setDriverForTest({ readPage: async () => { throw new Error('nav timeout'); } });
+  const res = await browseRead({ url: 'https://x' }, ward);
+  assert.equal(res.ok, false);
+  _setDriverForTest(null);
+});

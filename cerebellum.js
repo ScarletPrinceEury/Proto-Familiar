@@ -4128,7 +4128,21 @@ export const TOOL_EXECUTORS = {
   // reference APIs (Wikipedia + DDG Instant Answer), so it ignores the
   // search-backend settings entirely.
   look_up: async ({ query } = {}) => lookUp(query, readSettingsSync()),
-  read_webpage: async ({ url } = {}) => readWebpage(url, readSettingsSync()),
+  read_webpage: async ({ url } = {}, ctx = {}) => {
+    const s = readSettingsSync();
+    // Browser-backed read (§0.1): when browsing is on + a browser exists + the
+    // ward hasn't pinned 'static', read the LIVE JS-rendered DOM. Any failure
+    // (browser off/unavailable, a bad read) falls through to the static floor —
+    // reading never depends on the browser being up.
+    try {
+      const b = await import('./browser.js');
+      if (b.shouldBrowserRead(s)) {
+        const res = await b.browseRead({ url }, { settings: s, sessionId: ctx?.sessionInfo?.sessionId ?? null });
+        if (res?.ok) return res.text;
+      }
+    } catch { /* fall through to static */ }
+    return readWebpage(url, s);
+  },
 
   // Weather (W-B). The forecast arc for a place's day. Coordinates never enter
   // here — resolveLocation/getForecast keep them Node-side; I read words back.
