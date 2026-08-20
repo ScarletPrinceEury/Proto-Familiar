@@ -27,11 +27,17 @@ import path from 'node:path';
 
 import { createCallEngine, isCallActiveFromFile, isCallActiveFromFileSync } from './call-engine.js';
 import { createDiscordCallAdapter, loadDiscordVoiceDeps } from './voice-discord-adapter.js';
-import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel } from './discord-gateway.js';
+import { discordVoiceAdapterCreator, setVoiceRosterListener, discordVoiceChannelMembers, discordBotUserId, findWardVoiceChannel, discordVoiceDisplayName } from './discord-gateway.js';
 import { resolveCallAudience, wardVoiceState } from './voice-call-audience.js';
 import { createTagSegment, createRoomListenerMap } from './voice-tagging.js';
 import { registerPushAdapterFactory, formatItemForPush } from './cerebellum.js';
-import { findVillagerByAlias, getRegistry } from './village.js';
+import { findVillagerByAlias, getRegistry, villagerByAlias } from './village.js';
+import {
+  isGroupCall, attributeSpeaker, prefixTurn, diffRoster,
+  formatPresenceNote, buildGreetingPrompt, parseGreeting,
+} from './voice-presence.js';
+import { callProviderChat } from './llm-call.js';
+import { substituteMacros } from './macros.js';
 import { audienceTagFor } from './audience.js';
 import { createSynthesizer } from './voice-synthesize.js';
 import { createVoiceChatTurn } from './voice-chat-turn.js';
@@ -39,7 +45,7 @@ import { createVoiceTurnRunner } from './voice-call-turn.js';
 import { voiceThreatEnabled } from './voice-call-server.js';
 import { speakableText, isLikelyNoiseTranscript } from './voice-speech.js';
 import { scoreMessage } from './crisis-signals.js';
-import { recordThreat } from './threat-tracker.js';
+import { recordThreat, getThreat, THREAT_TIERS } from './threat-tracker.js';
 import { enqueueSessionByDay } from './memorization.js';
 import { writeSessionLog, stampMessages, turnMessages } from './session-log.js';
 import { slugifyLabel, sessionSlugId } from './slug-ids.js';
@@ -96,6 +102,14 @@ export function attachDiscordVoice(deps) {
   // stretch → ward-private, a stretch with villagers present → the room's tag), so
   // nothing is stored above the clearance it was actually said at.
   const memSessions = new Map();        // callId → Map<audienceTag, { sessionId, messages }>
+  // Group-call presence (voice Pass 3 tail). `prevRosterIds` is the last-seen set
+  // of present ids, for diffing joins/leaves; `presence` stages what changed +
+  // whether the next turn should carry a "who's here" note; `greeted` dedups the
+  // proactive hello so an arrival is greeted once per stay, not on every roster
+  // wobble. All keyed by callId.
+  const prevRosterIds = new Map();      // callId → Set<userId> present as of the last roster read
+  const presence = new Map();           // callId → { dirty, joined:[names], left:[names] }
+  const greeted  = new Map();           // callId → Set<userId> already greeted this stay
 
   // `speaker` attributes the user turn — a group call's room session mixes
   // several villagers, so a bare "user" would lose who said what. The ward
@@ -121,6 +135,105 @@ export function attachDiscordVoice(deps) {
       resolveTag:     (input) => (registry ? audienceTagFor(input, registry) : null),
       location:       meta?.locationKey ?? null,
     });
+  }
+
+  // ── Group-call presence (voice Pass 3 tail) ─────────────────────────────
+  // Off-switches: the whole presence/attribution layer (a correctness fix,
+  // on by default) drops back to the old unlabelled behaviour under the env
+  // flag; the proactive spoken hello is separately gated (ward toggle + env)
+  // because it's the one piece that makes me SPEAK unprompted.
+  const presenceEnabled  = () => process.env.PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED !== '1';
+  const greetingsEnabled = () =>
+    process.env.PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED !== '1'
+    && readSettings()?.voiceProactiveGreetings !== false;
+
+  const botId = () => discordBotUserId();
+  const wardName = () => (readSettings()?.userName || '').trim() || 'my human';
+
+  // Resolve a set of Discord ids to names in ONE registry read (villager name
+  // wins, else the cached Discord display name, else a short opaque tag). Used
+  // for the roster and for naming who joined/left.
+  async function nameMap(ids, meta) {
+    const reg = await getRegistry().catch(() => null);
+    const wn = wardName();
+    const out = new Map();
+    for (const id of ids) {
+      if (meta?.wardUserId && id === meta.wardUserId) { out.set(id, { name: wn, isWard: true }); continue; }
+      const v = reg ? villagerByAlias(reg, { platform: 'discord', id }) : null;
+      out.set(id, { name: v?.name || discordVoiceDisplayName(id) || `guest-${String(id).slice(0, 6)}`, isWard: false });
+    }
+    return out;
+  }
+
+  // The humans in the call right now (bot excluded), named. One reg read.
+  async function namedRoster(meta) {
+    const ids = (meta ? discordVoiceChannelMembers(meta.guildId, meta.channelId) : []).filter(id => id !== botId());
+    const names = await nameMap(ids, meta);
+    return ids.map(id => ({ id, ...names.get(id) }));
+  }
+
+  // A VOICE_STATE_UPDATE landed. Diff the roster, stage the join/left names for
+  // the next turn's presence note, and (if enabled) fire a proactive hello that
+  // rides the engine's next-silence gap — so it never talks over someone who is
+  // mid-sentence as the join happens. Fully guarded; never throws into the loop.
+  async function onRosterChange() {
+    if (!presenceEnabled()) return;
+    const callId = engine.currentCallId();
+    const meta = callId ? callMeta.get(callId) : null;
+    if (!callId || !meta) return;
+
+    const presentIds = (discordVoiceChannelMembers(meta.guildId, meta.channelId) || []).filter(id => id !== botId());
+    const prev = prevRosterIds.get(callId) ?? new Set();
+    const { joined, left } = diffRoster([...prev], presentIds);
+    prevRosterIds.set(callId, new Set(presentIds));
+    if (!joined.length && !left.length) return;
+
+    const names = await nameMap([...new Set([...presentIds, ...joined, ...left])], meta);
+    const nameOf = (id) => names.get(id)?.name || 'someone';
+
+    const pend = presence.get(callId) ?? { dirty: false, joined: [], left: [] };
+    for (const id of joined) pend.joined.push(nameOf(id));
+    for (const id of left)   pend.left.push(nameOf(id));
+    pend.dirty = true;
+    presence.set(callId, pend);
+
+    // A rejoin should greet again — forget anyone who left.
+    const seen = greeted.get(callId) ?? new Set();
+    for (const id of left) seen.delete(id);
+    greeted.set(callId, seen);
+
+    // Proactive hello — non-ward arrivals only (my human's own presence is the
+    // call itself, not a guest to greet), deduped per stay, stood down under
+    // distress (triage owns those moments, not small talk).
+    if (greetingsEnabled()) {
+      for (const id of joined) {
+        if (meta.wardUserId && id === meta.wardUserId) continue;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        greetArrival(callId, nameOf(id)).catch(err => log(`greet failed: ${err?.message ?? err}`));
+      }
+    }
+  }
+
+  // Compose a short, in-voice hello and speak it at the next quiet gap. Leak-free
+  // (the prompt names only who arrived — no recall), so it's safe to say aloud to
+  // the whole channel regardless of clearance. Recorded into the shared call
+  // history once actually spoken, so I know I already greeted them.
+  async function greetArrival(callId, name) {
+    const s = readSettings();
+    const threat = await getThreat({ tomesDir: path.join(rootDir, 'tomes') }).catch(() => ({ weight: 0 }));
+    if ((threat?.weight ?? 0) >= THREAT_TIERS.moderate) return;   // stand down under distress
+    const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
+    if (!(conn?.apiKey && conn?.provider && conn?.model)) return;
+    const prompt = substituteMacros(buildGreetingPrompt({ name, event: 'joined' }), s);
+    const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt, temperature: 0.8, maxTokens: 2000 });
+    const line = parseGreeting(raw);
+    if (!line || !engine.isCallActive() || engine.currentCallId() !== callId) return;
+    const spoken = await engine.speakProactive(() => synthesize(line));
+    if (spoken) {
+      const hist = callHistory.get(callId);
+      if (Array.isArray(hist)) { hist.push({ role: 'assistant', content: line }); callHistory.set(callId, hist.slice(-HISTORY_MAX)); }
+    }
   }
 
   // ── The turn (Pass 3b, ward-signed §5) ──────────────────────────────────
@@ -168,19 +281,49 @@ export function attachDiscordVoice(deps) {
     if (callTag.get(ctx.callId) !== audienceTag) { callHistory.set(ctx.callId, []); callTag.set(ctx.callId, audienceTag); }
     const hist = callHistory.get(ctx.callId) ?? [];
 
+    // Group-call attribution: when 2+ humans share the call, prefix every turn
+    // with WHO said it — my human included, so I can tell their turns from a
+    // villager's (before this the transcript was a flat wall of "user" turns
+    // tagged with raw snowflakes I can't distinguish). Solo → no prefix, so a
+    // one-on-one call reads exactly as it did. The label rides both the live
+    // transcript AND the stored call history, but NOT the memory write (that
+    // carries the speaker as its own field).
+    let attributedHeard = heard;
+    const systemNotes = [];
+    if (presenceEnabled()) {
+      const roster = await namedRoster(meta);
+      const group  = isGroupCall(roster);
+      const label  = attributeSpeaker({ name: isWard ? wardName() : speakerName, isGroup: group });
+      attributedHeard = prefixTurn(label, heard);
+
+      // Presence note — surfaced once after a roster change (or at call start),
+      // then it goes quiet until the next change. Annotation only: never stored,
+      // never moves the threat tier — like the room-sound note below.
+      const pend = presence.get(ctx.callId);
+      if (pend?.dirty) {
+        try {
+          const note = formatPresenceNote({ roster, joined: pend.joined, left: pend.left });
+          if (note) systemNotes.push(note);
+        } catch (err) { log(`presence note failed: ${err?.message ?? err}`); }
+        presence.set(ctx.callId, { dirty: false, joined: [], left: [] });
+      }
+    }
+
     // §8.4 room-sound annotation — a one-off "what I can hear" line, deduped per
     // call. Annotation only: never stored, never moves the threat tier.
-    let turnHistory = hist;
     if (Array.isArray(ctx.roomSounds) && ctx.roomSounds.length) {
-      try { const line = roomListeners.for(ctx.callId).note(ctx.roomSounds); if (line) turnHistory = [...hist, { role: 'system', content: line }]; }
+      try { const line = roomListeners.for(ctx.callId).note(ctx.roomSounds); if (line) systemNotes.push(line); }
       catch (err) { log(`room-sound note failed: ${err?.message ?? err}`); }
     }
 
-    const reply = await runVoiceChatTurn({ transcript: heard, history: turnHistory, sessionAudience });
+    const turnHistory = systemNotes.length ? [...hist, ...systemNotes.map(content => ({ role: 'system', content }))] : hist;
+
+    const reply = await runVoiceChatTurn({ transcript: attributedHeard, history: turnHistory, sessionAudience });
     if (reply) {
-      callHistory.set(ctx.callId, [...hist, { role: 'user', content: heard }, { role: 'assistant', content: reply }].slice(-HISTORY_MAX));
+      callHistory.set(ctx.callId, [...hist, { role: 'user', content: attributedHeard }, { role: 'assistant', content: reply }].slice(-HISTORY_MAX));
       // Store the turn at the SAME tag the reply was gated to; attribute a
-      // villager's turn to them, the ward's unattributed.
+      // villager's turn to them, the ward's unattributed. The memory write takes
+      // the RAW heard text — the speaker rides as its own field, not a prefix.
       accumulate(ctx.callId, audienceTag, heard, reply, speakerName);
     }
     return reply;
@@ -337,10 +480,12 @@ export function attachDiscordVoice(deps) {
     });
 
     // The gateway forwards every VOICE_STATE_UPDATE here so the adapter learns
-    // who is in the channel (feeds the Pass 3b audience set).
+    // who is in the channel (feeds the Pass 3b audience set) AND so I track
+    // group-call presence — who's here, who came, who went — for the note + hello.
     setVoiceRosterListener((d) => {
       try { activeAdapter?.onVoiceStateChange({ userId: d?.user_id, channelId: d?.channel_id }); }
       catch (err) { log(`roster forward failed: ${err?.message ?? err}`); }
+      onRosterChange().catch(err => log(`presence update failed: ${err?.message ?? err}`));
     });
 
     const r = await engine.startCall('discord', { guildId, channelId });
@@ -353,6 +498,13 @@ export function attachDiscordVoice(deps) {
       log(`voice call live in guild ${guildId} channel ${channelId} (${r.callId})`);
       // Remember the room, so a villager turn can build the audience gate + tag.
       callMeta.set(r.callId, { guildId, channelId, locationKey: `discord:guild:${guildId}:channel:${channelId}`, wardUserId });
+      // Seed presence: whoever is ALREADY here counts as present, not as "joined"
+      // (so the first turn doesn't announce my human arriving at their own call);
+      // mark dirty so the first turn still names the room if it opened as a group.
+      const seedIds = (discordVoiceChannelMembers(guildId, channelId) || []).filter(id => id !== botId());
+      prevRosterIds.set(r.callId, new Set(seedIds));
+      presence.set(r.callId, { dirty: true, joined: [], left: [] });
+      greeted.set(r.callId, new Set());
     }
     return r;
   }
@@ -368,6 +520,7 @@ export function attachDiscordVoice(deps) {
       memorizeCall(callId).catch(() => {});
       callHistory.delete(callId); callTag.delete(callId); callMeta.delete(callId);
       roomListeners.forget(callId);   // §8.4 per-call "already mentioned" set
+      prevRosterIds.delete(callId); presence.delete(callId); greeted.delete(callId);
     }
     refToUser.clear();
     return r;

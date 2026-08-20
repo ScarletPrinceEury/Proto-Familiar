@@ -2733,7 +2733,21 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   per-location **call-mode dropdown** (`village.js` `callMode` off/summon/auto;
   default summon so `!call` always works, auto-join opt-in) governs joining: `off`
   refuses even `!call` (`locationCallModeFor`), `auto` joins hands-free when the
-  ward enters a VC (`maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`). **Noise/silence
+  ward enters a VC (`maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`). **Pass 3d —
+  group-call presence & attribution** (`voice-presence.js`, pure): in a group call
+  (2+ humans) each turn is prefixed with the speaker's real name — my human's
+  included — in the live transcript and stored call history (solo calls unchanged;
+  the memory write still carries the speaker as its own field). Names come from a
+  gateway user-object cache (`gw.userInfo`, seeded from `GUILD_CREATE` members +
+  `VOICE_STATE_UPDATE.member`) via `nameForVoiceUser`/`discordVoiceDisplayName`,
+  with the villager name winning through a one-read `villagerByAlias`. A
+  first-person "who's here / who joined or left" note is surfaced once per roster
+  change (annotation only — like the room-sound note, never stored, never moves
+  threat, gate untouched), and a leak-free spoken **greeting** (`voiceProactiveGreetings`,
+  default ON) welcomes a non-ward arrival via the engine's `speakProactive` so it
+  rides the next silence gap, deduped per stay and stood down at moderate+ threat.
+  Off-switches `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1` (whole layer) /
+  `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` (spoken hello only). **Noise/silence
   polish** lives in `call-engine.js` as two options both call servers pass:
   `transcriptFilter` (drops ambient noise the recogniser guessed as CJK, via
   `isLikelyNoiseTranscript`) and `turnSettleMs` (coalesces sentences within a pause

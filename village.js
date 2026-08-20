@@ -539,15 +539,28 @@ export async function getRegistry({ filePath = DEFAULT_VILLAGE_PATH } = {}) {
 }
 
 /**
+ * Pure alias→villager match against an already-loaded registry. Match is
+ * by platform + exact id (the stable platform identifier, e.g. the Discord
+ * snowflake — NOT the display handle, which can be spoofed). Split out so a
+ * caller resolving MANY ids (a voice-call roster) reads the registry once and
+ * maps in memory, rather than one async read per id.
+ */
+export function villagerByAlias(reg, { platform, id } = {}) {
+  if (typeof platform !== 'string' || typeof id !== 'string') return null;
+  const p = platform.trim().toLowerCase();
+  const villagers = Array.isArray(reg?.villagers) ? reg.villagers : [];
+  return villagers.find(v => (v.aliases ?? []).some(a => a.platform === p && a.id === id)) ?? null;
+}
+
+/**
  * Resolve a platform alias to a villager, or null. Alias matching is
  * by platform + exact id (the stable platform identifier, e.g. the
  * Discord snowflake — NOT the display handle, which can be spoofed).
  */
 export async function findVillagerByAlias({ platform, id }, { filePath = DEFAULT_VILLAGE_PATH } = {}) {
   if (typeof platform !== 'string' || typeof id !== 'string') return null;
-  const p = platform.trim().toLowerCase();
   const reg = await readRegistryFile(filePath);
-  return reg.villagers.find(v => v.aliases.some(a => a.platform === p && a.id === id)) ?? null;
+  return villagerByAlias(reg, { platform, id });
 }
 
 // ── Category CRUD ─────────────────────────────────────────────────

@@ -453,6 +453,7 @@ const state = {
   voiceGuestExitQuietSec: 90,      // AND this long since the last non-ward segment
   voiceAudioTaggingEnabled: false, // §8.4: annotation-only room-sound tags. Default OFF.
   voiceProactiveJoin: false,       // §7: join the ward's VC to speak a tier-gated check-in. Default OFF.
+  voiceProactiveGreetings: true,   // group calls: say a short hello aloud when someone joins (rides the next silence, stands down under distress). Default ON.
   voiceKeepAudio: false,           // §9: record a call to an audio asset (deliberate; default OFF)
   voiceSpeakerModel: 'campplus',   // §8: which speaker-embedding model — 'campplus' (default) | 'titanet-large' (opt-in upgrade)
   // Transient (never synced/saved): images picked in the composer, awaiting send.
@@ -514,7 +515,7 @@ const SERVER_SYNCED_KEYS = [
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
-  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceKeepAudio', 'voiceSpeakerModel',
+  'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel',
 ];
 function extractServerSettings(s) {
   const out = {};
@@ -3963,6 +3964,7 @@ function readSettingsFromUI() {
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
   if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
+  if ($('voice-greetings-toggle')) state.voiceProactiveGreetings = $('voice-greetings-toggle').checked;
   if ($('audio-tagging-toggle')) state.voiceAudioTaggingEnabled = $('audio-tagging-toggle').checked;
   if ($('voice-call-settle') && $('voice-call-settle').value !== '') {
     const n = parseInt($('voice-call-settle').value, 10);
@@ -4146,6 +4148,7 @@ function writeSettingsToUI() {
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
   if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
+  if ($('voice-greetings-toggle')) setIfNotFocused($('voice-greetings-toggle'), 'checked', state.voiceProactiveGreetings !== false);
   if ($('audio-tagging-toggle')) setIfNotFocused($('audio-tagging-toggle'), 'checked', state.voiceAudioTaggingEnabled === true);
   if ($('voice-call-settle')) setIfNotFocused($('voice-call-settle'), 'value', String(state.voiceCallSettleMs ?? 1500));
   if ($('weather-toggle')) setIfNotFocused($('weather-toggle'), 'checked', state.weatherEnabled !== false);
@@ -5504,7 +5507,7 @@ function init() {
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode',
-    'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'audio-tagging-toggle',
+    'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',
