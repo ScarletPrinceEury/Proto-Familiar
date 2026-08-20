@@ -69,8 +69,30 @@ live('extractPageData walks the real DOM into the lens shape; css resolves + act
 });
 
 // ── Auto-fetch state machine (injected spawn — no real download) ───────────
-import { startChromiumFetch, chromiumInstallState } from '../browser-driver.js';
+import { startChromiumFetch, chromiumInstallState, systemBrowserCandidates } from '../browser-driver.js';
 import { EventEmitter } from 'node:events';
+
+test('systemBrowserCandidates finds Windows Chrome AND Edge (why the download was forced on Windows)', () => {
+  const realPlat = Object.getOwnPropertyDescriptor(process, 'platform');
+  const prevPF = process.env.ProgramFiles;
+  try {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.ProgramFiles = 'C:\\Program Files';
+    const cands = systemBrowserCandidates();
+    assert.ok(cands.some(p => /chrome\.exe$/i.test(p)), 'includes an installed Chrome');
+    assert.ok(cands.some(p => /msedge\.exe$/i.test(p)), 'includes Edge — always present on Windows, so no download is ever needed');
+  } finally {
+    Object.defineProperty(process, 'platform', realPlat);
+    if (prevPF === undefined) delete process.env.ProgramFiles; else process.env.ProgramFiles = prevPF;
+  }
+});
+
+test('systemBrowserCandidates covers Chrome, Edge and Chromium on this (linux) host', () => {
+  const cands = systemBrowserCandidates();
+  assert.ok(cands.some(p => /google-chrome/.test(p)));
+  assert.ok(cands.some(p => /chromium/.test(p)));
+  assert.ok(cands.some(p => /microsoft-edge/.test(p)));
+});
 
 test('startChromiumFetch is a no-op when a browser already exists', () => {
   const st = startChromiumFetch({ findFn: () => '/exists/chrome', spawnFn: () => { throw new Error('should not spawn'); } });

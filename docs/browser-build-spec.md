@@ -230,6 +230,18 @@ playwright-core  ──►  system Chrome/Chromium (channel detect) or
     `findChromium` already checks `PROTO_FAMILIAR_CHROME`/`CHROME`, the Playwright
     cache, and system installs, so a manual/system browser sidesteps the fetch
     entirely. Tests in `browser-driver.test.mjs`.
+  - **Cross-platform system-browser detection (0.11.12, the Windows half of the
+    same report).** `findChromium`'s system-install list was Linux/Mac-only — it
+    had NO Windows paths — so a Windows ward (whose machine always ships Edge, and
+    usually Chrome) was pushed onto the download path anyway, where it hung. Now
+    `systemBrowserCandidates()` returns platform-appropriate locations: on Windows,
+    Chrome/Edge/Chromium under `%ProgramFiles%`, `%ProgramFiles(x86)%` and
+    `%LOCALAPPDATA%` (built from the real env vars, not a guessed drive); on macOS,
+    Chrome/Edge/Chromium under `/Applications`; on Linux, the google-chrome /
+    chromium / microsoft-edge binaries incl. the snap path. Since playwright-core
+    drives any of these via `executablePath`, an existing browser skips the
+    download entirely — which is the spec's intended primary path (the fetch is the
+    fallback). Edge-always-present means a Windows ward now never needs the fetch.
 - **Lazy launch** on the first `browse_*` call of a session; **idle reaper**
   closes the whole process after `browseIdleMin` (default 5) with no open
   task. Launch state and RSS visible at `GET /api/browser/status`.
