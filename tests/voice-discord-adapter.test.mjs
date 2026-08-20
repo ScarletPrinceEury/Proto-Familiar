@@ -225,6 +225,68 @@ test('stopPlayback (barge) stops the player, which resolves an in-flight playAud
   assert.equal(adapter.isSpeaking(), false);
 });
 
+test('a decoder detached by a heap move is rebuilt on the current heap and the packet retried', async () => {
+  // Model opusscript's shared-heap hazard: the FIRST decoder instance throws
+  // "memory access out of bounds" (its cached views were detached when a second
+  // speaker's decoder grew the shared heap); a REBUILT instance decodes fine.
+  const deps = makeFakeDeps();
+  let made = 0;
+  deps.makeOpusDecoder = () => {
+    const id = ++made;
+    return {
+      decode: (pkt) => {
+        if (id === 1) throw new Error('memory access out of bounds');   // detached views
+        const b = Buffer.alloc(960 * 4); b.writeInt16LE(pkt?.[0] ?? 0, 0); return b;
+      },
+      delete() {},
+    };
+  };
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  stream.emit('data', Buffer.from([7]));               // first decode throws → rebuild → retry succeeds
+
+  assert.ok(made >= 2, 'the decoder was rebuilt on the current heap');
+  assert.equal(calls.pushAudio.length, 1, 'the same packet decoded on retry, so no audio is lost');
+  assert.equal(stream.destroyed, undefined, 'the stream stays open — no teardown, the speaker stays audible');
+});
+
+test('a persistently undecodable stream is skipped quietly (no throw, no flood, no audio)', async () => {
+  const deps = makeFakeDeps();
+  const logs = [];
+  deps.makeOpusDecoder = () => ({ decode: () => { throw new Error('memory access out of bounds'); }, delete() {} });
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps, log: (m) => logs.push(m) });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  assert.doesNotThrow(() => { for (let i = 0; i < 50; i++) stream.emit('data', Buffer.from([i])); });
+  assert.equal(calls.pushAudio.length, 0, 'nothing decodes → nothing pushed');
+  const skipWarnings = logs.filter(m => /skipping bad packets/.test(m));
+  assert.equal(skipWarnings.length, 1, 'the skip warning is rate-limited to one line, not one per packet');
+});
+
+test('an oversized packet is skipped before it can overflow the decoder input buffer', async () => {
+  const deps = makeFakeDeps();
+  let decoded = 0;
+  deps.makeOpusDecoder = () => ({ decode: (pkt) => { decoded++; const b = Buffer.alloc(960 * 4); b.writeInt16LE(pkt?.[0] ?? 0, 0); return b; }, delete() {} });
+  const { hooks, calls } = makeHooks();
+  const { adapter } = createDiscordCallAdapter({ hooks, joinSpec: joinSpec(), deps });
+  await adapter.joinCall();
+
+  deps._receiver.speaking.emit('start', 'wardU');
+  const { stream } = deps._receiver.subscribed[0];
+  stream.emit('data', Buffer.alloc(4000));             // > MAX_OPUS_PACKET (3828) → skipped, never decoded
+  assert.equal(decoded, 0);
+  assert.equal(calls.pushAudio.length, 0);
+  stream.emit('data', Buffer.from([1]));               // a normal packet still decodes
+  assert.equal(decoded, 1);
+});
+
 test('leaveCall destroys the connection and clears open speakers', async () => {
   const deps = makeFakeDeps();
   const { hooks } = makeHooks();

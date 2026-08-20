@@ -282,6 +282,24 @@ integration seam that needs the most care and its own tests.
   - **Not a ward-sign-off safety path:** the audience gate, threat scoring, and what
     is stored-per-clearance are all untouched — this only changes what the Familiar
     *reads* about who's in the room, plus one leak-free spoken greeting.
+  - **opusscript shared-heap decode fix (0.11.10, live-testing — two Familiars in
+    one call).** With a second speaker in the channel, the terminal flooded with
+    `opus decode failed … memory access out of bounds` and one Familiar went
+    silent. Root cause: `opusscript` keeps ONE emscripten WASM heap across every
+    `OpusScript` instance and caches heap VIEWS (`inOpus`/`outPCM`) at construction.
+    Allocating a new per-speaker decoder (a second speaker joining) can GROW that
+    shared heap, which **detaches** the cached views of the decoders that already
+    exist — so an existing speaker's decoder throws OOB on its very next packet
+    (why the ward's own audio died the moment another speaker arrived). Fix in
+    `voice-discord-adapter.js`: `decodeOpus` rebuilds the speaker's decoder on the
+    CURRENT heap and retries the same packet once, so no audio is lost and the
+    stream stays open; once the roster stops changing the heap stabilises and no
+    more rebuilds happen. A genuinely undecodable packet fails the retry and is
+    skipped (skip-warning rate-limited to one line per speaker), and packets larger
+    than opusscript's `MAX_PACKET_SIZE` (3828 B) are dropped before they can
+    overflow its input buffer. Other bots are heard normally — nothing is filtered
+    out (two Familiars conversing by voice is a supported scenario). Tests in
+    `voice-discord-adapter.test.mjs`.
 - **Noise/silence polish (Pass 3, live-testing feedback).** Two engine options:
   `transcriptFilter` drops ambient-noise transcripts (traffic/fan the multilingual
   recogniser guessed as CJK — `isLikelyNoiseTranscript` in `voice-speech.js`, a

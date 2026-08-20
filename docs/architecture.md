@@ -2747,7 +2747,18 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   default ON) welcomes a non-ward arrival via the engine's `speakProactive` so it
   rides the next silence gap, deduped per stay and stood down at moderate+ threat.
   Off-switches `PROTO_FAMILIAR_VOICE_PRESENCE_DISABLED=1` (whole layer) /
-  `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` (spoken hello only). **Noise/silence
+  `PROTO_FAMILIAR_VOICE_GREETINGS_DISABLED=1` (spoken hello only). **opusscript
+  shared-heap decode fix** (0.11.10): opusscript keeps one emscripten heap across
+  all `OpusScript` instances and caches heap views at construction, so allocating a
+  new per-speaker decoder (a second speaker joining) can grow the heap and detach
+  the existing decoders' views → "memory access out of bounds" on their next packet
+  (an existing speaker went silent when another joined). `decodeOpus` in
+  `voice-discord-adapter.js` rebuilds the decoder on the current heap and retries
+  the packet once (no audio lost, stream stays open; converges once the roster
+  stabilises); a truly bad packet is skipped with a rate-limited warning, and an
+  oversized packet (> `MAX_OPUS_PACKET`) is dropped before it can overflow the
+  input buffer. All speakers including other bots are decoded (two Familiars by
+  voice is supported). **Noise/silence
   polish** lives in `call-engine.js` as two options both call servers pass:
   `transcriptFilter` (drops ambient noise the recogniser guessed as CJK, via
   `isLikelyNoiseTranscript`) and `turnSettleMs` (coalesces sentences within a pause

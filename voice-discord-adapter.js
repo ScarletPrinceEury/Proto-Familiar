@@ -196,6 +196,40 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
   // first phoneme survives. Discord's speaking start/end still bound the
   // utterance — they gate whether decoded audio feeds the engine or the pre-roll.
   const PRE_ROLL_FRAMES = 8;   // ~160 ms of 20 ms Opus frames — enough to cover onset, small enough not to drag noise in
+  // opusscript's WASM input buffer is MAX_PACKET_SIZE (1276·3 = 3828 bytes); a
+  // packet larger than that overflows `inOpus.set(buffer)`. A normal voice frame
+  // is well under 1 KB, so anything bigger isn't decodable audio — skip it rather
+  // than trap. (Belt-and-suspenders; the real culprit is the heap detachment below.)
+  const MAX_OPUS_PACKET = 3828;
+
+  // Decode one Opus packet to 48 kHz stereo PCM, healing the opusscript
+  // shared-heap hazard. opusscript keeps ONE emscripten heap across every decoder
+  // instance and caches heap VIEWS at construction; allocating a new decoder (a
+  // second speaker joining the call — e.g. another Familiar) can GROW that heap,
+  // which detaches the cached views of decoders that already exist. The existing
+  // decoder then throws "memory access out of bounds" on its next packet — which
+  // is why one Familiar went silent the moment a second joined. The cure: rebuild
+  // the decoder on the CURRENT heap and retry the same packet once. After the
+  // roster stops changing the heap stabilises and no more rebuilds happen. A
+  // genuinely bad packet fails the retry too and is skipped — bounded, no flood.
+  function decodeOpus(entry, speakerRef, opusPacket) {
+    try {
+      return entry.decoder.decode(opusPacket);
+    } catch (first) {
+      try {
+        try { entry.decoder.delete?.(); } catch { /* opusscript frees its wasm */ }
+        entry.decoder = deps.makeOpusDecoder();              // fresh views on the current heap
+        const pcm = entry.decoder.decode(opusPacket);
+        if (!entry.rebuilt) { entry.rebuilt = true; log(`opus decoder for ${speakerRef} rebuilt after a heap move — recovered`); }
+        return pcm;
+      } catch (second) {
+        // The retry failed too: a genuinely undecodable packet. Log sparingly
+        // (once per speaker) so a persistently bad stream can't flood the terminal.
+        if (!entry.warned) { entry.warned = true; log(`opus decode failed for ${speakerRef} (skipping bad packets): ${second?.message ?? second}`); }
+        return null;
+      }
+    }
+  }
 
   function ensureSpeaker(userId) {
     const speakerRef = speakerRefFor(userId);
@@ -207,12 +241,11 @@ export function createDiscordCallAdapter({ hooks, joinSpec, deps, slugId = (s) =
       entry = { decoder, sub, active: false, pre: [] };
       decoders.set(speakerRef, entry);
       sub.on('data', (opusPacket) => {
-        let pcm;
-        try {
-          const pcm48 = decoder.decode(opusPacket);            // 48 kHz stereo s16le
-          if (!pcm48?.length) return;
-          pcm = stereo48ToMono16(pcm48);
-        } catch (err) { log(`opus decode failed for ${speakerRef}: ${err?.message ?? err}`); return; }
+        if (!opusPacket?.length || opusPacket.length > MAX_OPUS_PACKET) return;
+        const pcm48 = decodeOpus(entry, speakerRef, opusPacket);   // 48 kHz stereo s16le, or null on a bad packet
+        if (!pcm48?.length) return;
+        const pcm = stereo48ToMono16(pcm48);
+        if (entry.warned) entry.warned = false;                    // a clean decode re-arms the (rate-limited) warning
         if (entry.active) {
           hooks.pushAudio({ callId, speakerRef, pcm });
         } else {
