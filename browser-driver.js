@@ -171,6 +171,7 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
 let tabSeq = 0;
 function registerTab(pg) {
   if (!state) return;
+  if (state._ephemeralPending) { state._ephemeralPending = false; return; } // read_webpage's throwaway tab
   if (state.tabs.has(pg)) return;
   if (state.tabs.size >= state.maxTabs) { pg.close().catch(() => {}); return; }
   const id = `t${++tabSeq}`;
@@ -316,6 +317,31 @@ export async function navigate(url, opts) {
   pg.__pfGeneration = (pg.__pfGeneration || 0) + 1;
   await pg.goto(url, { waitUntil: 'domcontentloaded' });
   return snapshot();
+}
+
+/**
+ * Read one page's LIVE (JS-rendered) DOM as an HTML string, then throw the tab
+ * away — the browser-backed read_webpage path (§0.1). Ephemeral: the tab is
+ * exempt from the registry/cap and never becomes `current`, so it can't disturb
+ * an in-flight browse task. With no `url`, reads the current tab instead.
+ * Returns { html, url } or throws (the caller falls back to the static floor).
+ */
+export async function readPage(url, opts) {
+  await ensureContext(opts);
+  if (!url) {
+    const pg = currentPage();
+    if (!pg) throw new Error('no open tab to read');
+    return { html: await pg.content(), url: pg.url() };
+  }
+  state._ephemeralPending = true;             // registerTab skips this one (no cap, no current)
+  const pg = await state.context.newPage();
+  state.tabs.delete(pg);                       // belt-and-suspenders if the event still registered it
+  try {
+    await pg.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+    return { html: await pg.content(), url: pg.url() };
+  } finally {
+    await pg.close().catch(() => {});
+  }
 }
 
 /**

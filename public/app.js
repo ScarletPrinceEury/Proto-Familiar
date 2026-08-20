@@ -294,6 +294,10 @@ const state = {
   browseEnabled:           false,
   browseIdleMin:           5,
   browseMaxTabs:           3,
+  // read_webpage backend: 'auto' reads the live JS-rendered DOM through the
+  // browser when it's available (falls back to static), 'static' pins the old
+  // fetch+readability extractor. Inert until browsing is enabled.
+  webReadBackend:          'auto',
   // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
@@ -467,7 +471,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'providerApiKeys',
-  'browseEnabled', 'browseIdleMin', 'browseMaxTabs',
+  'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'followupsEnabled',

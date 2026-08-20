@@ -685,11 +685,14 @@ required — the static floor works).
   push is thus always valid), downloads→media (size-cap + mime allow-list,
   never an executable), `browse_tabs`, `browse_history` (over the audit log),
   and the stale-ref generation guard (a ref used after a nav / DOM rebuild
-  errors to a re-observe). **STILL PENDING — the `read_webpage` re-backing**
-  (browser route + static floor + `webReadBackend`): deferred on purpose, per
-  this pass's own hedge — an always-on tool flips to the new driver only once
-  it's genuinely shaken out with real use, not the moment it lands. Tracked as
-  the one remaining Pass-2 item.
+  errors to a re-observe). **`read_webpage` re-backing DONE (0.11.2):** the
+  shared extractor (`extractReadable` in websearch.js) is now used by BOTH the
+  static path (over a guardedFetch body) and the browser path (over the live
+  `page.content()` DOM in an ephemeral, cap-exempt tab), so their output can't
+  drift; the executor routes to the browser when `shouldBrowserRead`
+  (browseEnabled + a browser exists + `webReadBackend` != 'static') and falls
+  back to the static floor on any failure — reading never depends on the
+  browser being up. Pass 2 complete.
 - **Pass 3 — sovereignty surfaces.** `browse_handoff` (headed window +
   hand-back affordance + outbox/push), `[CONFIRM]` domains, site modes UI,
   credential/payment fill refusals hardened against fixture forms,
