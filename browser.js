@@ -132,7 +132,13 @@ export async function browseAct({ ref, action, value, on_dialog, vault } = {}, {
       secret, grants,
       confirmDomains: siteList({ browseSiteList: settings?.browseConfirmDomains }),
       autoSubmit: grants.autoSubmit === true,
+      confirmMode: settings?.browseConfirmMode === 'ask' ? 'ask' : 'refuse',
     });
+    if (res.held) {
+      // 'ask' mode: the submit is queued for the ward's out-of-band yes.
+      logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict: `held for confirmation ${res.confirmId} on ${res.host}`, sessionId });
+      return `${res.host} is on my human's confirm-list, so I have NOT done this. I've queued it (${res.confirmId}) for them to approve in Settings → browser activity; I'll only ${action} it once they say yes.`;
+    }
     if (res.error) {
       logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict: res.error, sessionId });
       return sanitizeExternal(res.error, { source: 'web', context: 'browser' });
@@ -271,7 +277,29 @@ export function shouldBrowserRead(settings) {
 
 export function browserStatus() {
   const g = readGrants();
-  return { ...driver.status(), url: driver.currentUrl?.() || '', grants: g.active, hasDisplay: driver.hasDisplay?.() };
+  return { ...driver.status(), url: driver.currentUrl?.() || '', grants: g.active, hasDisplay: driver.hasDisplay?.(),
+    pendingConfirms: driver.listPendingConfirms?.() || [] };
+}
+
+/** The ward's out-of-band confirmations awaiting a yes/no (the 'ask' flow). */
+export function listPendingConfirms() { return driver.listPendingConfirms?.() || []; }
+
+/**
+ * Resolve a held submit from the ward (a UI button — NOT a model tool arg, so
+ * the model can't self-approve). Approve → the act resumes, generation-guarded;
+ * decline → dropped. The verdict is audited so the Familiar can find the outcome
+ * (browse_history) — it never assumed the submit happened.
+ */
+export async function resolveConfirm(id, approve, { sessionId } = {}) {
+  const res = await driver.resolvePendingConfirm?.(String(id || ''), approve === true);
+  if (!res || res.error) return { ok: false, error: res?.error || 'browser not available' };
+  if (res.declined) {
+    logBrowserAction({ tool: 'browse_confirm', target: res.host, verdict: `ward DECLINED the ${res.action}`, sessionId });
+    return { ok: true, declined: true };
+  }
+  const verdict = res.error ? res.error : computeDelta(res.before, res.after, res);
+  logBrowserAction({ tool: 'browse_confirm', target: res.host, verdict: `ward APPROVED → ${String(verdict).split('\n')[0]}`, sessionId });
+  return { ok: true, verdict: sanitizeExternal(String(verdict), { source: 'web', context: 'browser' }) };
 }
 
 /**

@@ -221,3 +221,42 @@ test('browseAct refuses a vault fill when no grant/vault entry exists', async ()
   const out = await browseAct({ ref: 'r1', action: 'fill', vault: 'mastodon' }, ward);
   assert.match(out, /don't have a saved login called "mastodon"/i);
 });
+
+// ── [CONFIRM] approve-resume ('ask' mode) ──────────────────────────────────
+import { resolveConfirm } from '../browser.js';
+import { resolvePendingConfirm } from '../browser-driver.js';
+
+test("browseAct 'ask' mode surfaces a held submit, never claims it acted", async () => {
+  _setDriverForTest({ act: async () => ({ held: true, confirmId: 'cf-abc123', host: 'mybank.example', action: 'click' }) });
+  const out = await browseAct({ ref: 'r5', action: 'click' }, { settings: { browseEnabled: true, browseConfirmMode: 'ask' } });
+  assert.match(out, /have NOT done this/);
+  assert.match(out, /cf-abc123/);
+  assert.match(out, /once they say yes/i);
+  _setDriverForTest(null);
+});
+
+test("browseAct default 'refuse' mode still hands back a submit", async () => {
+  _setDriverForTest({ act: async () => ({ error: 'mybank.example is on my human\'s confirm-list — a submit like this needs their fresh yes' }) });
+  const out = await browseAct({ ref: 'r5', action: 'click' }, { settings: { browseEnabled: true } });
+  assert.match(out, /needs their fresh yes/);
+  _setDriverForTest(null);
+});
+
+test('resolveConfirm approve → resumed verdict; decline → dropped', async () => {
+  const before = { url: 'https://a', title: 'A', nodes: [{}, {}] };
+  const after = { url: 'https://a/ordered', title: 'Ordered', nodes: [{}] };
+  _setDriverForTest({ resolvePendingConfirm: async (_id, ok) => ok
+    ? { resumed: true, host: 'mybank.example', before, after, actedRef: 'r5', actionLabel: 'click' }
+    : { declined: true, host: 'mybank.example', action: 'click' } });
+  const yes = await resolveConfirm('cf-abc123', true);
+  assert.equal(yes.ok, true);
+  assert.match(yes.verdict, /ok — click r5/);
+  const no = await resolveConfirm('cf-abc123', false);
+  assert.equal(no.declined, true);
+  _setDriverForTest(null);
+});
+
+test('resolvePendingConfirm on an unknown id fails safely (no browser open)', async () => {
+  const res = await resolvePendingConfirm('cf-nope', true);
+  assert.ok(res.error, 'unknown/expired id → error, never a phantom submit');
+});

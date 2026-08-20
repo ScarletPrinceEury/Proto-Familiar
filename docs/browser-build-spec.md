@@ -702,11 +702,16 @@ required — the static floor works).
     Settings. No new capability, only tighter gates — shippable on its own.
   - **3b — the ward-in-the-loop + dangerous surfaces DONE (0.11.4):**
     `browse_handoff` (headed window when a display exists, else parks + is
-    honest — the review-2 fallback); `[CONFIRM]` domains as a hard **refuse**
-    gate (a submit-shaped act on a `browseConfirmDomains` host is handed back
-    unless the autonomy `autoSubmit` grant lifts it — the outbox
-    approve-then-*resume* flow, and the headed-window hand-back-and-resume, are
-    the named refinements still open); and **the autonomy-grants file +
+    honest — the review-2 fallback); `[CONFIRM]` domains, ward-toggled via
+    `browseConfirmMode`: **'refuse' (default)** hands a submit-shaped act on a
+    `browseConfirmDomains` host straight back, **'ask' (0.11.5)** HOLDS it as a
+    pending confirmation the ward approves/declines **out-of-band** (a Settings
+    button + `POST /api/browser/confirm`, never a model tool arg); on approval
+    it resumes generation-guarded, and the Familiar's held result never claims
+    it acted (RULE B). The autonomy `autoSubmit` grant still lifts the gate
+    entirely. (The headed-window hand-back-and-resume for handoff on a
+    co-located display is the one named refinement still open.) And **the
+    autonomy-grants file +
     credentials vault** (§5.9): `browser-grants.js` reads
     `browser/autonomy-grants.json` (byte-exact acknowledgment or all-false) +
     `browser/credentials-vault.json`, both on the own-files denylist; the pure
