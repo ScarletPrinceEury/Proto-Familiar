@@ -542,6 +542,8 @@ is not an off-switch.
 |---|---|
 | `PROTO_FAMILIAR_UPDATE_BRANCH` | which branch the updater checks |
 | `PROTO_FAMILIAR_ZAI_MCP_COMMAND` | overrides the command used to launch z.ai's vision MCP server |
+| `PROTO_FAMILIAR_CHROME` (or `CHROME`) | points the browser tools at an existing Chrome/Chromium binary, skipping the auto-download |
+| `PROTO_FAMILIAR_BROWSER_INSTALL_TIMEOUT_MS` | how long to wait for the one-time Chromium download before treating it as stalled (default 15 min); raise it for a genuinely slow link. If the download never finishes, its log is at `browser/chromium-install.log` |
 
 ### Settings only reachable by editing the file
 
