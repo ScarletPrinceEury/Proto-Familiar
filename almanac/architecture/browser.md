@@ -29,6 +29,9 @@ sources:
   - id: browser-build-spec
     type: file
     path: docs/browser-build-spec.md
+  - id: browser-tools-test
+    type: file
+    path: tests/browser-tools.test.mjs
 ---
 
 # Browser: Click-and-Fill Web Access
@@ -38,9 +41,11 @@ click, fill, scroll, and multi-step flows — instead of only reading a page thr
 existing static `read_webpage` extractor. It shipped in four passes: Pass 1 (0.11.0, the
 spine: driver, lens, guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log), Pass 2
 (0.11.1, screenshots, tabs, downloads, history), Pass 3a (0.11.3, synchronous safety gates),
-and Pass 3b (0.11.4, the ward-in-the-loop and consent-gated surfaces)
+and Pass 3b (0.11.4, the ward-in-the-loop and consent-gated surfaces), followed by two async
+refinements to Pass 3b's synchronous hard-stops: `browseConfirmMode: 'ask'` approve-resume
+(0.11.5) and headed handoff hand-back-and-resume (0.11.6)
 [@package-json] [@browser-driver-js] [@browser-js] [@browser-grants-js]. `docs/browser-build-spec.md`
-is the design document all four passes implement; the [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
+is the design document the Pass 1 through 3b work implements; the [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
 decision page records why its guardrails are shaped the way they are. This page describes
 the six modules that exist in the repo today and how they fit together, using the built
 code — not the spec — as the source of truth for what actually runs.
@@ -245,23 +250,87 @@ consent ceremony, the credentials vault, the fill-source gate, the confirm-domai
   [@browser-driver-js]. `act()` refuses any submit-shaped act whose host is on the ward's
   `browseConfirmDomains` list — matched exactly or as a subdomain — unless the `autoSubmit`
   grant lifts it, and hands the refusal back naming `browse_handoff` as the ward's path to
-  complete it [@browser-driver-js]. The hard refusal is the shipped default; an
-  approve-then-resume flow that lets the ward pre-authorize a specific submit without granting
-  blanket `autoSubmit` is a named refinement that has not shipped.
+  complete it [@browser-driver-js]. The hard refusal is the shipped default; the
+  approve-then-resume alternative is `browseConfirmMode`, covered below.
 - **`browse_handoff`.** `browserStatus()` exposes `hasDisplay` from the driver alongside
   `currentUrl` and the active grant list [@browser-js] [@browser-driver-js]. When a display
   exists, `browse_handoff` hands the ward a headed window on the current page; when it does not
   (a headless server, no ward at this machine), it parks the action and logs `parked for ward:
   <reason>` to the audit trail rather than pretending a window popped somewhere the ward can see
   it [@browser-js]. This headless-fallback honesty is the review-2 behavior the decision page
-  called for; a headed-window hand-back-and-resume flow that returns control to the Familiar
-  automatically once the ward finishes is the other named refinement still pending.
+  called for; on a co-located desktop where a display does exist, `browse_handoff` now also
+  closes the loop automatically — see the hand-back-and-resume refinement below.
 - **Loud visibility.** Every browser launch that finds an active grant logs `⚠ AUTONOMY GRANTS
   ACTIVE: <names> (browser/autonomy-grants.json)` to the console, `browserStatus()` surfaces the
   same `grants` list to any caller, and every `browse_act` audit entry stamps the `grant` a fill
   actually used [@browser-driver-js] [@browser-js] [@browser-audit-js]. Silent autonomy is the
   failure mode this visibility exists to prevent — a grant can lift a gate, but it cannot make
   its own use invisible.
+
+## Two Pass 3 refinements (0.11.5 / 0.11.6): async, opt-in, toggle-gated
+
+Both `[CONFIRM]`'s hard refusal and `browse_handoff`'s headless park are safe *synchronous*
+hard-stops: they refuse in-line and hand the moment to the ward without waiting on them. Two
+later refinements make each one an async, human-in-the-loop flow that resumes across the gap
+where the ward is away — both are toggle- or capability-gated so the shipped safe defaults are
+unchanged; the refinement is opt-in, never a silent behavior change [@browser-driver-js].
+
+### `browseConfirmMode: 'ask'` — approve-resume without a blanket grant (0.11.5)
+
+A ward toggle on `settings.browseConfirmMode`, default `'refuse'` (the Pass 3b hard-stop
+described above); `'ask'` HOLDS a submit-shaped act on a `browseConfirmDomains` host as a
+pending confirmation instead of refusing it outright [@browser-js] [@browser-driver-js]. This
+exists for the ward who wants to pre-authorize one specific submit without granting blanket
+`autoSubmit` forever.
+
+The load-bearing safety property is where the approval comes from: a Settings button posts to
+`POST /api/browser/confirm`, never a model tool argument, so a page can never talk the model
+into self-approving its own submit — that is the entire point of requiring a fresh ward
+confirmation [@browser-driver-js]. In `'ask'` mode, `act()` registers the held act in
+`state.pendingConfirms` and returns `{held: true, confirmId, host, action}` instead of acting,
+and clears the idle reaper so the browser stays alive while the ward's yes is pending
+[@browser-driver-js]. The held tool result explicitly reports that nothing happened yet: the
+Familiar never assumes the submit succeeded, and can check the real outcome via
+`browse_history` once the confirmation resolves.
+
+`resolvePendingConfirm(id, approve)` looks the pending act up by id: on approval, the stored act
+resumes through the normal `act()` path with `autoSubmit` lifted for that one call, so the same
+generation guard described above still fires — a page that moved since the ward approved fails
+honestly instead of clicking whatever now sits at that ref [@browser-driver-js]. A decline, or
+an unknown id, is dropped safely with no side effect [@browser-driver-js] [@browser-js].
+
+### Headed handoff hand-back-and-resume (0.11.6)
+
+Makes `browse_handoff` a closed loop on a co-located desktop, rather than a one-shot hand to the
+ward. The constraint that shapes the design: only one Chromium instance may hold the persistent
+browser profile at a time, and Playwright cannot toggle a live context between headless and
+headed — so resuming is a relaunch dance, not a flag flip [@browser-driver-js].
+
+`driver.openHeaded(url)` closes the headless context, relaunches the *same* profile with
+`headless: false` through a fresh guarded proxy (the SSRF floor still applies to the headed
+window), navigates to the page, and holds a module-level `handoff` state
+[@browser-driver-js]. While that state is set, `ensureContext` throws `'awaiting handback'`, so
+the profile can never be double-opened from underneath the ward [@browser-driver-js]. The ward
+completes their login, payment, or CAPTCHA in the real window; because it is the same browser
+profile, cookies persist automatically — there is no other state transfer. Clicking "Hand it
+back" posts to `POST /api/browser/handback`, which closes the headed context, relaunches
+headless, and navigates back to the same URL, now authenticated by the cookies the ward's
+session left behind [@browser-driver-js].
+
+While a handback is pending, every `browse_*` op returns a calm "I'm waiting for you to finish…
+click hand it back" instead of an error, via a `handbackPending()` guard in `browser.js`, so the
+Familiar never fights the ward for the profile [@browser-js]. A failed headed launch (for
+example, no display after all) falls back to the honest park described above rather than a
+broken promise [@browser-js]. The refinement's value is narrow by design: only a co-located
+desktop install benefits, since the server process needs display access; the review-2 headless
+park remains the fallback for the far more common remote-ward shape.
+
+**Testing boundary.** The headed launch and the real window it opens cannot be exercised in a
+headless CI container — there is no display to open one on. `tests/browser-tools.test.mjs`
+stubs the driver to unit-test the lifecycle *decisions* (headed-vs-park, the awaiting-handback
+wait, the handback swap, failure-to-park), not the Playwright relaunch itself; the profile
+relaunch dance needs a live desktop shakeout before it can be trusted beyond that
+[@browser-tools-test].
 
 ## What is deliberately still deferred
 
@@ -270,14 +339,13 @@ after Pass 1 through 3b have shipped, on purpose: `read_webpage` is an always-on
 tool, and the spec's ordering is to prove the driver on the opt-in `browse_*` surface first,
 then flip the always-on tool to it only once the driver has shaken out under real use
 [@browser-build-spec]. This is the one item the spec originally placed inside Pass 2 that
-remains undone as of 0.11.4.
+remains undone as of 0.11.6.
 
 The whole browser milestone specced in `docs/browser-build-spec.md`'s Passes 1 through 3 is now
-built. What remains is Pass 4 — unattended web research on pondering ticks — plus the two named
-Pass 3b refinements called out above: the `[CONFIRM]` approve-then-resume flow and the headed
-handoff auto-resume. A future implementer should not assume either refinement exists just
-because the rest of Pass 3b does; check `browser-driver.js` and `browser.js` for what is
-actually wired before relying on it.
+built, including both Pass 3b refinements named above: `browseConfirmMode: 'ask'`
+approve-resume (0.11.5) and the headed handoff hand-back-and-resume (0.11.6). What remains is
+Pass 4 — unattended web research on pondering ticks — and `read_webpage`'s re-backing onto this
+driver.
 
 ## Related
 
