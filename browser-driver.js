@@ -57,12 +57,43 @@ export function findChromium() {
       }
     }
   }
-  // Common system installs.
-  for (const p of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']) {
-    if (fs.existsSync(p)) return p;
+  // A Chromium-family browser already on the machine — playwright-core drives
+  // Chrome/Edge/Chromium fine via executablePath, so an existing one skips the
+  // whole download (the intended primary path per the spec; the fetch is the
+  // fallback). Windows ALWAYS ships Edge, so this alone means a Windows ward
+  // never needs the download — the missing Windows/Edge paths here were why the
+  // fetch was being forced (and then hanging) on Windows.
+  for (const p of systemBrowserCandidates()) {
+    if (p && fs.existsSync(p)) return p;
   }
   return null;
+}
+
+/** Platform-specific locations of an installed Chrome / Edge / Chromium, most
+ *  preferred first. Built from env vars on Windows so it follows the real
+ *  Program Files / LocalAppData layout rather than guessing a drive letter. */
+export function systemBrowserCandidates() {
+  const plat = process.platform;
+  if (plat === 'win32') {
+    const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean);
+    const out = [];
+    for (const r of roots) out.push(path.join(r, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    for (const r of roots) out.push(path.join(r, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+    for (const r of roots) out.push(path.join(r, 'Chromium', 'Application', 'chrome.exe'));
+    return out;
+  }
+  if (plat === 'darwin') {
+    return [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ];
+  }
+  return [
+    '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium',
+    '/usr/bin/microsoft-edge', '/usr/bin/microsoft-edge-stable',
+  ];
 }
 
 // ── Auto-fetch (spec §2, §14.4) ─────────────────────────────────────────────
