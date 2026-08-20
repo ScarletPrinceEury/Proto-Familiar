@@ -107,6 +107,10 @@ export function startChromiumFetch({ spawnFn = spawn, findFn = findChromium } = 
 
 // ── The single live context ───────────────────────────────────────────────
 let state = null; // { context, proxy, tabs:Map, idleTimer, launchedAt, crashes:[] }
+// While a HEADED handoff window is open (§4.8), the headless context is closed
+// and this holds the ward's window + the URL to resume at. Only ONE Chromium may
+// hold the profile at a time, so headless and headed can never coexist.
+let handoff = null; // { url, context, proxy }
 
 function clearIdle() { if (state?.idleTimer) { clearTimeout(state.idleTimer); state.idleTimer = null; } }
 function armIdle(idleMs) {
@@ -118,6 +122,7 @@ function armIdle(idleMs) {
 
 /** Lazy-launch (or reuse) the persistent context, wired through the guarded proxy. */
 export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_MAX_TABS_DEFAULT, lookupFn, siteGuard } = {}) {
+  if (handoff) throw new Error('awaiting handback');   // the ward's headed window holds the profile
   if (state?.context) { if (siteGuard) state.siteGuard = siteGuard; armIdle(idleMs); return state; }
 
   const exe = findChromium();
@@ -579,6 +584,58 @@ export function hasDisplay() {
   return !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 }
 
+// ── Headed handoff (§4.8 hand-back-and-resume) ──────────────────────────────
+export function isAwaitingHandback() { return !!handoff; }
+
+/**
+ * Open the current page HEADED on the Familiar's own profile so the ward can do
+ * a login / payment / CAPTCHA by hand. Only ONE Chromium may hold the profile,
+ * so the headless context is CLOSED first and this takes over. Cookies the ward
+ * creates persist (shared profile), which is what lets the Familiar resume
+ * already-authenticated. Returns { ok, url } or { error } (→ caller parks).
+ */
+export async function openHeaded(url, { lookupFn } = {}) {
+  if (handoff) return { ok: true, url: handoff.url };        // already open
+  const exe = findChromium();
+  if (!exe) return { error: 'no browser available' };
+  let chromium;
+  try { ({ chromium } = await import('playwright-core')); } catch { return { error: 'playwright-core not installed' }; }
+  const target = url || currentUrl();
+  await closeBrowser('handoff');                             // release the profile lock
+  const proxy = createGuardedProxy({ lookupFn });
+  const proxyPort = await proxy.listen();
+  let context;
+  try {
+    context = await chromium.launchPersistentContext(PROFILE_DIR, {
+      headless: false, executablePath: exe, viewport: null,
+      proxy: { server: `http://127.0.0.1:${proxyPort}` },
+    });
+  } catch (err) { await proxy.close(); return { error: `headed window failed: ${err.message.split('\n')[0]}` }; }
+  const pg = context.pages()[0] || await context.newPage();
+  if (target) await pg.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  handoff = { url: target || pg.url(), context, proxy };
+  return { ok: true, url: handoff.url };
+}
+
+/**
+ * The ward clicked "hand it back": close the headed window, relaunch headless at
+ * the same URL — now authenticated, because the session cookies persisted in the
+ * shared profile. Returns { ok, url } or { error }.
+ */
+export async function completeHandback(opts) {
+  if (!handoff) return { error: 'no handoff window is open' };
+  const url = handoff.url;
+  try { await handoff.context.close(); } catch {}
+  try { await handoff.proxy.close(); } catch {}
+  handoff = null;
+  try {
+    if (url) await navigate(url, opts); else await ensureContext(opts);
+    return { ok: true, url };
+  } catch (err) {
+    return { error: `couldn't resume after handback: ${err.message.split('\n')[0]}` };
+  }
+}
+
 /** Lifecycle status for GET /api/browser/status. */
 export function status() {
   return {
@@ -589,5 +646,7 @@ export function status() {
     proxyBlocked: state?.proxy?.stats?.().blocked ?? 0,
     recentCrashes: state ? state.crashes.filter(t => Date.now() - t < 60000).length : 0,
     install: chromiumInstallState(),
+    awaitingHandback: !!handoff,
+    handoffUrl: handoff?.url ?? null,
   };
 }

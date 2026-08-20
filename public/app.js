@@ -5539,6 +5539,22 @@ function init() {
       const pcs = Array.isArray(st?.pendingConfirms) ? st.pendingConfirms : [];
       if (pend) {
         pend.innerHTML = '';
+        // A headed handoff window is open → offer "hand it back".
+        if (st?.awaitingHandback) {
+          pend.style.display = '';
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:13px';
+          row.appendChild(Object.assign(document.createElement('span'), { textContent: `A window is open for you${st.handoffUrl ? ` (${st.handoffUrl})` : ''}. Finish your part, then:`, style: 'flex:1' }));
+          const hb = document.createElement('button');
+          hb.type = 'button'; hb.className = 'secondary-btn'; hb.textContent = 'Hand it back';
+          hb.addEventListener('click', async () => {
+            hb.disabled = true; hb.textContent = 'Resuming…';
+            await fetch('/api/browser/handback', { method: 'POST' }).catch(() => {});
+            renderBrowserActivity();
+          });
+          row.appendChild(hb);
+          pend.appendChild(row);
+        }
         if (pcs.length) {
           pend.style.display = '';
           pend.appendChild(Object.assign(document.createElement('div'), { textContent: 'Waiting for your yes:', style: 'font-weight:600; margin-bottom:4px' }));
@@ -5558,7 +5574,7 @@ function init() {
             }
             pend.appendChild(row);
           }
-        } else { pend.style.display = 'none'; }
+        } else if (!st?.awaitingHandback) { pend.style.display = 'none'; }
       }
       const head = st?.disabled ? 'Browser: hard-disabled'
         : `Browser: ${st?.running ? 'running' : 'idle'}${st?.install?.status && st.install.status !== 'idle' ? ` · install ${st.install.status}` : ''}${st?.proxyBlocked ? ` · ${st.proxyBlocked} blocked request(s)` : ''}${st?.grants?.length ? ` · GRANTS: ${st.grants.join(', ')}` : ''}`;

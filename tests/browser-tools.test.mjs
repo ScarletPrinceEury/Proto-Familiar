@@ -260,3 +260,54 @@ test('resolvePendingConfirm on an unknown id fails safely (no browser open)', as
   const res = await resolvePendingConfirm('cf-nope', true);
   assert.ok(res.error, 'unknown/expired id → error, never a phantom submit');
 });
+
+// ── Headed handoff hand-back-and-resume ────────────────────────────────────
+import { browseHandback } from '../browser.js';
+
+test('browseHandoff opens a headed window when a display exists', async () => {
+  let opened = null;
+  _setDriverForTest({
+    currentUrl: () => 'https://bank.example/login', hasDisplay: () => true,
+    openHeaded: async (url) => { opened = url; return { ok: true, url }; },
+  });
+  const out = await browseHandoff({ reason: 'the login' }, ward);
+  assert.match(out, /opened it in a window/i);
+  assert.match(out, /hand it back/i);
+  assert.equal(opened, 'https://bank.example/login');
+  _setDriverForTest(null);
+});
+
+test('browseHandoff falls back to park when the headed launch fails', async () => {
+  _setDriverForTest({
+    currentUrl: () => 'https://bank.example/login', hasDisplay: () => true,
+    openHeaded: async () => ({ error: 'headed window failed' }),
+  });
+  const out = await browseHandoff({ reason: 'the login' }, ward);
+  assert.match(out, /stopped here so you can take it/i); // parked, not a broken promise
+  _setDriverForTest(null);
+});
+
+test('while awaiting handback, browse ops wait instead of failing', async () => {
+  _setDriverForTest({ isAwaitingHandback: () => true, navigate: async () => { throw new Error('should not navigate'); } });
+  const out = await browseOpen({ url: 'https://x' }, ward);
+  assert.match(out, /waiting for you to finish/i);
+  const shot = await browseScreenshot({}, ward);
+  assert.match(shot.text, /waiting for you to finish/i);
+  _setDriverForTest(null);
+});
+
+test('browseHandback resumes on the ward click', async () => {
+  _setDriverForTest({ completeHandback: async () => ({ ok: true, url: 'https://bank.example/account' }) });
+  const res = await browseHandback({ settings: { browseEnabled: true } });
+  assert.equal(res.ok, true);
+  assert.equal(res.url, 'https://bank.example/account');
+  _setDriverForTest(null);
+});
+
+test('browseHandback reports honestly when no window is open', async () => {
+  _setDriverForTest({ completeHandback: async () => ({ error: 'no handoff window is open' }) });
+  const res = await browseHandback({ settings: {} });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /no handoff window/i);
+  _setDriverForTest(null);
+});

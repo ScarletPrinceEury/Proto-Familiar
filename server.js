@@ -2630,6 +2630,19 @@ app.post('/api/browser/confirm', async (req, res) => {
   }
 });
 
+// The ward's "hand it back" after a headed handoff (§4.8) — close the window,
+// relaunch headless at the same URL, now signed in.
+app.post('/api/browser/handback', async (_req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSE_DISABLED === '1') return res.status(403).json({ ok: false, error: 'browsing disabled' });
+  try {
+    const { browseHandback } = await import('./browser.js');
+    const s = (() => { try { return readSettingsSync(); } catch { return {}; } })();
+    res.json(await browseHandback({ settings: s }));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
 // ── Media (vision build spec §2) ──────────────────────────────────
 // Image bytes ride their OWN raw body parser (like /api/import-logs' json
 // override) so the global 4 MB JSON limit never sees base64 and image bytes

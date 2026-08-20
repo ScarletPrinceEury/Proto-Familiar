@@ -709,8 +709,15 @@ required — the static floor works).
     button + `POST /api/browser/confirm`, never a model tool arg); on approval
     it resumes generation-guarded, and the Familiar's held result never claims
     it acted (RULE B). The autonomy `autoSubmit` grant still lifts the gate
-    entirely. (The headed-window hand-back-and-resume for handoff on a
-    co-located display is the one named refinement still open.) And **the
+    entirely. **Headed handoff hand-back-and-resume DONE (0.11.6):** with a
+    display, `browse_handoff` closes the headless context, relaunches the SAME
+    profile HEADED (only one Chromium may hold the profile), and navigates the
+    ward's window to the page; the ward does their part and clicks "hand it
+    back" (`POST /api/browser/handback`), which closes headed and relaunches
+    headless at the same URL — now signed in, because the session cookies
+    persisted in the shared profile. While the window is open the Familiar's
+    browse ops wait (isAwaitingHandback); a failed headed launch falls back to
+    the honest park. Pass 3 refinements complete. And **the
     autonomy-grants file +
     credentials vault** (§5.9): `browser-grants.js` reads
     `browser/autonomy-grants.json` (byte-exact acknowledgment or all-false) +
