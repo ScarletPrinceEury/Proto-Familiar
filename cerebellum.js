@@ -1673,7 +1673,7 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'intention_set_rounds_visibility',
+      name: 'intention_visibility',
       description: 'I decide whether my human sees the rounds I keep, or whether they stay mine. "shared" (my default) means my standing rounds show in my human\'s view of my routine; "private" keeps their contents to myself. Even private, my human still knows I keep some rounds — the existence isn\'t hidden, only what they are. This is genuinely mine to choose.',
       parameters: {
         type: 'object',
@@ -2446,8 +2446,8 @@ export const BUILTIN_TOOLS = [
           ref: { type: 'string', description: 'The element handle from a snapshot (e.g. add-to-basket). Give this OR target.' },
           target: { type: 'string', description: "The visible label of the element to act on (e.g. \"Add to basket\") — I use this when it's clearer than a ref; code resolves it to the one matching element." },
           role: { type: 'string', description: 'Optional — narrow a target by kind (button, link, textbox…) when a label alone is ambiguous.' },
-          action: { type: 'string', enum: ['click', 'fill', 'select', 'press', 'hover', 'scroll'], description: 'What to do.' },
-          value: { type: 'string', description: 'For fill (text), select (option), or press (key name).' },
+          action: { type: 'string', enum: ['click', 'fill', 'select', 'press', 'hover', 'scroll'], description: 'What to do. `scroll` with a ref brings that element into view; `scroll` with NO ref moves the whole page (see value) to reveal more.' },
+          value: { type: 'string', description: 'For fill (text), select (option), press (key name), or a page scroll (up / down / top / bottom — down loads more of a long/infinite page).' },
           on_dialog: { type: 'string', enum: ['dismiss', 'accept'], description: "How to answer a confirm this act raises. Default dismiss. accept only for a benign confirm I've already seen the text of." },
           vault: { type: 'string', description: "The NAME of a saved login to fill a password/payment field with (I never see the secret — code types it). Only works if my human has set up their autonomy-grants file and a matching vault entry; otherwise the field stays refused." },
         },
@@ -3364,7 +3364,7 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to mark intention fired: ${err.message}`; }
   },
 
-  intention_set_rounds_visibility: async ({ value } = {}) => {
+  intention_visibility: async ({ value } = {}) => {
     if (value !== 'shared' && value !== 'private') return 'Failed to set rounds visibility: value must be "shared" or "private".';
     try {
       const data = await setRoundsVisibility({ value });

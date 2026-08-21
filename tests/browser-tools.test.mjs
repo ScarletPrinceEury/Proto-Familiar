@@ -77,6 +77,20 @@ test('browse_act with neither a ref nor a target asks for one — the driver is 
   _setDriverForTest(null);
 });
 
+test('a page scroll (scroll + no ref) is allowed and reaches the driver', async () => {
+  let seen = null;
+  _setDriverForTest({
+    act: async (args) => { seen = args; return { before: { url: 'https://a', nodes: [{}] }, after: { url: 'https://a', nodes: [{}, {}, {}] }, event: { scrolled: 'down' }, actionLabel: 'scrolled down' }; },
+  });
+  const out = await browseAct({ action: 'scroll', value: 'down' }, ward);
+  assert.equal(seen.action, 'scroll');
+  assert.equal(seen.value, 'down');
+  assert.equal(seen.ref, undefined);
+  assert.match(out, /ok — scrolled down/);
+  assert.match(out, /\+2 elements/);   // lazy-loaded content is visible in the delta
+  _setDriverForTest(null);
+});
+
 // ── Ward-only gate (§5.7): a gated villager turn is refused ─────────────────
 test('browse_* executors refuse on a gated (villager) turn', async () => {
   // discordReadAudiences(ctx) !== undefined marks a gated turn. A ctx carrying

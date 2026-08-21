@@ -268,10 +268,25 @@ code** (truncation is explicit: `…+41 more [see level=full or scope=ref]`):
 | `full` | outline + actions + text, page-wide | ~4,000 tok |
 | `shot` | screenshot → media asset (§6), stand-in or live image part | n/a |
 
-A ref line is dense and code-built:
-`r14 button "Add to basket" (in: product card 'Oat milk 1L')`.
-Scoping: `browse_see({scope: 'r7'})` re-observes one region — the cheap way
-to watch a widget instead of the world.
+A ref line is dense and code-built (refs are meaning-bearing slugs, §3.2):
+`add-to-basket button "Add to basket" (in: product card 'Oat milk 1L')`.
+Scoping: `browse_see({scope: 'add-to-basket'})` re-observes one region — the
+cheap way to watch a widget instead of the world.
+
+**Images the model can perceive (0.11.15).** The Familiar reads *text*, not
+pixels, so without a signal it can't even know a page HAS a picture — and thus
+can't decide when a screenshot is worth it. The DOM walk now emits image nodes
+(`img`, `[role=img]`, named `svg`, `figure`, `canvas` — meaningful ones only:
+named, or ≥100×100, capped), and outline/actions/full render an `[images]`
+section naming each with its ref. So the model *sees that images exist* and,
+when one matters, `browse_screenshot({scope: '<image-ref>'})` to actually look
+at it (each image node carries a css so the scope resolves to that one element).
+
+**Getting past the fold — page scroll (0.11.15).** `browse_act({action:'scroll'})`
+with a `ref` scrolls that element into view; with **no** ref it scrolls the
+whole viewport (`value`: `up`/`down`/`top`/`bottom`) to reveal below-the-fold or
+**lazy-loaded / infinite-scroll** content, then re-snapshots — the one thing
+`browse_see level=full` can't do (it only re-reads the DOM that's already there).
 
 ### 3.2 Refs
 

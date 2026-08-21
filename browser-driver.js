@@ -393,6 +393,23 @@ const EXTRACT_FN = `() => {
       interactable: true, inViewport: inVp(el), section: sectionOf(el), nth, css: uniqueCss(el),
     });
   }
+  // Images — so the model can PERCEIVE that pictures are on the page and decide
+  // whether to screenshot (it reads text, not pixels). Meaningful ones only:
+  // named (alt/aria-label/figcaption) OR large enough not to be an icon/tracking
+  // pixel; capped to bound tokens. Each carries a css so a screenshot can scope
+  // to one image.
+  let imgCount = 0;
+  for (const el of document.querySelectorAll('img,[role=img],svg[aria-label],svg[role=img],figure,canvas')) {
+    if (imgCount >= 40) break;
+    if (!visible(el)) continue;
+    const box = el.getBoundingClientRect();
+    let nm = nameOf(el);
+    if (el.tagName.toLowerCase() === 'figure') { const cap = el.querySelector('figcaption'); if (cap) nm = cap.textContent.replace(/\\s+/g, ' ').trim().slice(0, 120); }
+    const alt = (el.getAttribute && el.getAttribute('alt') || '').replace(/\\s+/g, ' ').trim().slice(0, 200);
+    if (!nm && !alt && !(box.width >= 100 && box.height >= 100)) continue;   // skip tiny + nameless (decorative/icons)
+    imgCount++;
+    nodes.push({ role: 'image', name: nm, alt, tag: el.tagName.toLowerCase(), isImage: true, interactable: false, inViewport: inVp(el), section: sectionOf(el), css: uniqueCss(el) });
+  }
   const main = document.querySelector('main') || document.body;
   const text = (main?.innerText || '').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 12000);
   return { url: location.href, title: document.title, nodes, text };
@@ -472,6 +489,28 @@ function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch
 export async function act({ ref, target, role = null, action, value, onDialog = 'dismiss', secret = null, grants = null, confirmDomains = [], autoSubmit = false, confirmMode = 'refuse' }) {
   if (!state?.current) await snapshot();
   const { page: pg, refTable } = state.current;
+
+  // Page-level scroll (no ref): move the viewport to reveal below-the-fold or
+  // lazy-loaded / infinite-scroll content, or reposition for a screenshot — the
+  // thing `browse_see level=full` can't do (it only re-reads the current DOM).
+  // `scroll` WITH a ref still scrolls that element into view (below).
+  if (action === 'scroll' && !ref && !target) {
+    const dir = String(value || 'down').toLowerCase();
+    const before = state.current.pageData;
+    try {
+      await pg.evaluate((d) => {
+        const step = Math.round(window.innerHeight * 0.85);
+        if (d === 'top') window.scrollTo(0, 0);
+        else if (d === 'bottom') window.scrollTo(0, document.body.scrollHeight);
+        else if (d === 'up') window.scrollBy(0, -step);
+        else window.scrollBy(0, step);
+      }, dir);
+    } catch (err) { return { error: `couldn't scroll the page: ${err.message.split('\n')[0]}` }; }
+    await pg.waitForTimeout(350);                 // let lazy content load in
+    const after = await snapshot();
+    return { before, after: after.pageData, event: { scrolled: dir }, actionLabel: `scrolled ${dir}`, grantUsed: null };
+  }
+
   // Select-by-text: when no ref is given, resolve what the Familiar named ("the
   // 'Add to basket' button") to a single ref in code. Ambiguity is handed back
   // with the candidate refs so the model picks the exact one — code owns the

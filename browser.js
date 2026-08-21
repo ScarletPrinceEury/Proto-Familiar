@@ -125,8 +125,11 @@ export async function browseSee({ level = 'outline', scope = null } = {}, { sett
 export async function browseAct({ ref, target, role, action, value, on_dialog, vault } = {}, { settings, sessionId } = {}) {
   if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
   { const hb = handbackPending(); if (hb) return hb; }
-  if ((!ref && !target && !role) || !action) return 'I need something to act on — a ref (like add-to-basket) or a visible label — and an action (click / fill / select / press / hover / scroll).';
-  const actLabel = ref || (target ? `"${target}"` : role);
+  if (!action) return 'I need an action (click / fill / select / press / hover / scroll).';
+  // A page scroll (action:'scroll' with no ref/target, value: up/down/top/bottom)
+  // is the one act that needs no element — everything else needs something to act on.
+  if (action !== 'scroll' && !ref && !target && !role) return 'I need something to act on — a ref (like add-to-basket) or a visible label. (For a page scroll, use action:scroll with value up/down/top/bottom and no ref.)';
+  const actLabel = ref || (target ? `"${target}"` : role) || `page ${value || 'down'}`;
   try {
     const grants = readGrants();
     // Vault fill (§5.9): the Familiar names an entry; CODE reads the secret and

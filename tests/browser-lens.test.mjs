@@ -127,6 +127,47 @@ test('computeDelta on a no-op act says no navigation', () => {
   assert.match(v, /no navigation/);
 });
 
+test('computeDelta reports a page scroll (+ any newly-loaded elements)', () => {
+  const before = { url: 'https://x', title: 'X', nodes: [{}, {}] };
+  const after = { url: 'https://x', title: 'X', nodes: [{}, {}, {}, {}] };   // 2 lazy-loaded
+  const v = computeDelta(before, after, { actionLabel: 'scrolled down', event: { scrolled: 'down' } });
+  assert.match(v, /ok — scrolled down/);
+  assert.match(v, /\+2 elements/);
+  assert.match(v, /scrolled down/);
+});
+
+// ── Images the model can perceive + screenshot ─────────────────────────────
+const imaged = {
+  url: 'https://shop.example/oat-milk', title: 'Oat Milk', generation: 1,
+  nodes: [
+    { role: 'button', name: 'Buy', tag: 'button', interactable: true, inViewport: true },
+    { role: 'image', name: 'Oat milk carton', alt: 'A 1L carton of barista oat milk', tag: 'img', isImage: true, interactable: false, inViewport: true, section: "product card", css: 'img.hero' },
+    { role: 'image', name: '', alt: '', tag: 'canvas', isImage: true, interactable: false, inViewport: true, css: 'canvas.chart' },
+  ],
+  text: '',
+};
+
+test('images get refs (so a screenshot can scope to one) without being interactables', () => {
+  const { order, byRef } = buildRefTable(imaged);
+  assert.deepEqual(order, ['buy', 'oat-milk-carton', 'image']);   // named image → slug; unnamed → role slug
+  assert.equal(byRef.get('oat-milk-carton').node.isImage, true);
+  assert.equal(byRef.get('oat-milk-carton').node.css, 'img.hero'); // driver screenshots this via scope
+  assert.equal(byRef.get('image').node.isImage, true);            // the canvas, unnamed
+});
+
+test('the snapshot names images (incl. alt text) so the model KNOWS pictures are on the page', () => {
+  const { text } = renderSnapshot(imaged, { level: 'outline' });
+  assert.match(text, /\[images\] 2 — browse_screenshot to look/);
+  assert.match(text, /oat-milk-carton "Oat milk carton" \(alt: "A 1L carton of barista oat milk"\)/);
+  assert.match(text, /image \(no caption\)/);   // the unnamed, alt-less canvas is still surfaced
+});
+
+test('an image whose only description is alt shows that alt', () => {
+  const t = { nodes: [{ role: 'image', name: '', alt: 'Bar chart of monthly sales', tag: 'img', isImage: true, inViewport: true }] };
+  const { text } = renderSnapshot(t, { level: 'outline' });
+  assert.match(text, /\(alt: "Bar chart of monthly sales"\)/);
+});
+
 // ── Pass 3a: hardened credential/payment field detection ───────────────────
 test('isProtectedField catches autocomplete + name/inputmode payment heuristics', () => {
   assert.equal(isProtectedField({ tag: 'input', type: 'text', autocomplete: 'cc-number' }), true);
