@@ -11,6 +11,9 @@ sources:
   - id: audit-mcp-script
     type: file
     path: scripts/audit-mcp-contracts.mjs
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
   - id: mcp-contracts-test
     type: file
     path: tests/mcp-contracts.test.mjs
@@ -373,3 +376,15 @@ checks, boundary-crossing tests for the type/semantic classes a static check can
 check on runtime error-handling at the boundary — not just intra-language imports, exports,
 endpoints, and argument names. See [Unruh](../architecture/unruh) for the concrete feature
 (bookmark resurfacing) this blind spot hid pieces of across two consecutive audit passes.
+
+## Sibling tool names must be prefix-distinct
+
+An LLM selecting a tool by name is misled when two sibling tools share a prefix: reaching for
+the shorter name gets railroaded into the longer one. This shipped as a live bug — the Familiar
+trying to call `intention_set` was routed into `intention_set_rounds_visibility`, so it couldn't
+set intentions at all. The fix (0.11.16) was to rename the longer tool to `intention_visibility`
+so the names no longer collide on the `intention_set` prefix; only the model-facing name changed
+(the tool definition, its executor key, and the surfacing-module map), while the internal Unruh
+MCP call kept its own name [@cerebellum-js]. The convention: when two Familiar-facing tools are
+siblings, make sure neither name is a prefix of the other — the model picks by name, and a
+shared prefix is a selection hazard, not just a cosmetic overlap.
