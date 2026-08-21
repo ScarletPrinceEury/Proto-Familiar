@@ -531,6 +531,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED` | tools on Discord turns |
 | `PROTO_FAMILIAR_DISCORD_BATCH_DISABLED` | coalescing a burst into one reply |
 | `PROTO_FAMILIAR_WEBSEARCH_DISABLED` | web search |
+| `PROTO_FAMILIAR_PAGE_WATCH_DISABLED` | watching web pages for changes |
 | `PROTO_FAMILIAR_TOOL_SURFACING_DISABLED` | surfacing relevant tools per turn |
 | `PROTO_FAMILIAR_QUIET_TOOLS_DISABLED` | quiet tool calls |
 | `PROTO_FAMILIAR_GUIDE_CHAT_DISABLED` | the setup guide chat |

@@ -49,7 +49,10 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
 } from './thalamus.js';
 import { scoreMessage } from './crisis-signals.js';
-import { foldReasoningIntoContent } from './llm-call.js';
+import { foldReasoningIntoContent, callProviderChat } from './llm-call.js';
+import { fetchReadable } from './websearch.js';
+import { startPageWatchLoop, stopPageWatchLoop } from './page-watch-loop.js';
+import { buildPageWatchPrompt, parsePageWatchDecision } from './page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './threat-tracker.js';
 import { ponderOnce } from './pondering.js';
 import { startPonderingLoop, stopPonderingLoop } from './pondering-loop.js';
@@ -117,6 +120,7 @@ import {
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
   appendNoticingEventLog, readNoticingEvents, composeNoticingTools,
+  appendPageWatchEventLog, readPageWatchEvents,
   registerPushAdapterFactory, formatItemForPush,
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
@@ -2505,6 +2509,14 @@ app.get('/api/reachout-events', async (_req, res) => {
 // dead noticing loop reads as stale entries, never as calm silence.
 app.get('/api/noticing-events', async (_req, res) => {
   try { res.json(await readNoticingEvents()); }
+  catch { res.json([]); }
+});
+
+// Page-watch decision log (§9 Horizon #1): every tick that read a due page,
+// with its checked/changed/surfaced/failed counts — so "it never told me the
+// page changed" is auditable, not a black box.
+app.get('/api/page-watch-events', async (_req, res) => {
+  try { res.json(await readPageWatchEvents()); }
   catch { res.json([]); }
 });
 
@@ -5190,6 +5202,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   startAutonomousPondering();
   startRemindersScheduler();
   startGcalSync();
+  startPageWatches();
   startSilenceTriage();
   startReachout();
   startNoticing();
@@ -6052,6 +6065,55 @@ function startGcalSync() {
   console.log('[gcal] Calendar sync loop ENABLED (idles until an iCal URL + toggle are set). Hard-disable with PROTO_FAMILIAR_GCAL_DISABLED=1.');
 }
 
+// ── Page watches (browser milestone §9 Horizon #1) ───────────────
+// "Tell me when the page changes." A slow loop re-reads each watched URL over
+// the cheap static read path, diffs it in CODE, and only on a real change asks
+// the LLM whether it's worth a banner — then drops one through the outbox (and
+// the ward's push channels). Inert until a watch is registered.
+function startPageWatches() {
+  if (process.env.PROTO_FAMILIAR_PAGE_WATCH_DISABLED === '1') {
+    console.log('[page-watch] PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1 — page watches are OFF');
+    return;
+  }
+  startPageWatchLoop({
+    isEnabled: async () => readSettingsSync()?.pageWatchEnabled !== false,
+    // The cheap static read (spec §9.1: the read_webpage path, NOT the browser),
+    // through the same SSRF guard every web read uses.
+    fetchReadable: (url) => fetchReadable(url, readSettingsSync()),
+    // The LLM step — consulted ONLY on a real (code-detected) change. Leak-free:
+    // it sees only the watched page's own before/after text.
+    decideChange: async ({ url, label, note, oldSnapshot, newText }) => {
+      const s = readSettingsSync();
+      const conn = connectionForFeature(s, 'chat') || connectionForFeature(s, 'pondering');
+      if (!(conn?.apiKey && conn?.provider && conn?.model)) return { surface: true, summary: '' };   // no model → surface plainly rather than swallow the change
+      const prompt = substituteMacros(buildPageWatchPrompt({ url, label, note, oldSnapshot, newText }), s);
+      const raw = await callProviderChat({ provider: conn.provider, apiKey: conn.apiKey, model: conn.model, prompt, temperature: 0.4, maxTokens: 2000 });
+      return parsePageWatchDecision(raw);
+    },
+    // Surface as a gentle banner AND push to the ward's channels (same path the
+    // reminders/reachout use). Dedup per distinct change via originId=id:hash.
+    enqueue: async ({ id, url, label, summary, hash }) => {
+      await enqueueAndDispatch({
+        kind: 'page_watch',
+        originId: `${id}:${hash}`,
+        title: label || url,
+        body: summary ? `${summary}\n${url}` : `Something changed on this page.\n${url}`,
+        meta: { url, watchId: id },
+      });
+    },
+    onTick: (r) => {
+      // Only log ticks that actually read a due page — an idle wake (nothing due)
+      // carries no decision, exactly like the reachout/noticing cadence skips.
+      if (r?.ran && r.checked > 0) {
+        appendPageWatchEventLog({ ts: new Date().toISOString(), ...r });
+        if (r.surfaced) console.log(`[page-watch] ${r.surfaced} change(s) surfaced (${r.checked} checked, ${r.changed} changed, ${r.failed} failed)`);
+      }
+    },
+    onError: (err) => console.error('[page-watch]', err?.message ?? err),
+  });
+  console.log('[page-watch] Page-watch loop ENABLED (idle until a watch is set). Hard-disable with PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1.');
+}
+
 // ── Silence-triage loop (M12b) ──────────────────────────────────
 // Every 5 min, asks: "user is quiet AND threat is elevated — should
 // I gently reach out?" The DECISION is an LLM call (per design doc:
@@ -6533,6 +6595,7 @@ async function handleSignal(signal) {
   try { await stopPonderingLoop(); } catch { /* already stopped */ }
   try { await stopRemindersLoop(); } catch { /* already stopped */ }
   try { await stopGcalSyncLoop(); } catch { /* already stopped */ }
+  try { await stopPageWatchLoop(); } catch { /* already stopped */ }
   try { await stopSilenceTriageLoop(); } catch { /* already stopped */ }
   try { await stopReachoutLoop(); } catch { /* already stopped */ }
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }

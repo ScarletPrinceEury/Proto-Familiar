@@ -678,6 +678,26 @@ required — the static floor works).
    code-computed diff, LLM consulted **only on change** (the gcal-ingest
    discipline); surfaces through the outbox. Ships with its own toggle +
    off-switch when it comes.
+   - **BUILT (0.11.13).** `page-watch.js` (pure core: the git-ignored watch
+     store `tomes/.page-watches.json`, `normalizeForHash` + sha256 diff,
+     `dueWatches`, and the fully-injectable `runOnePageWatchTick`) +
+     `page-watch-loop.js` (the singleton on the gcal-sync-loop pattern: a 5-min
+     base tick, per-watch `intervalMs` gate defaulting to ~6h with a 15-min
+     floor, call-governor defer, fail-soft). Each due page is re-read through
+     `websearch.fetchReadable` (the static SSRF-guarded path, **not** the
+     browser, per this section), diffed in code, and only on a real change does
+     the LLM judge whether it's worth surfacing (leak-free prompt over the page's
+     own before/after text) — a noise change (ads, timestamps) is dropped. A
+     surfaced change enqueues an outbox banner (`kind:'page_watch'`, 👁, deduped
+     `originId = id:hash`) through `enqueueAndDispatch`, so it also reaches the
+     ward's push channels. Repeated fetch failures back a watch off and
+     deactivate it after 5 tries (with a reason). The Familiar drives it on
+     ward-only turns via `watch_page` / `list_page_watches` / `unwatch_page`
+     (ids ride back on `list` so it can `unwatch` — every-capability-operable).
+     Ticks that read a due page land in `logs/page-watch-events.jsonl` (GET
+     `/api/page-watch-events`). Settings `pageWatchEnabled` (default ON, inert
+     until a watch exists) + hard `PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1`. Tests:
+     `page-watch.test.mjs`.
 2. **Driving the ward's own logged-in Chrome** (Sigil's mode, via
    `connectOverCDP`): the highest-stakes variant — every guardrail in §5
    must hold *plus* a per-task ward arm ("this task, this site, this
