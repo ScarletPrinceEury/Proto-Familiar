@@ -822,6 +822,16 @@ never snapshotted — dereferenced fresh when it surfaces), a `trigger`
 `unresolvedRefs` — the Node side applies the live-signal gate), and a
 `visibility` the Familiar itself controls. Unruh owns storage + trigger TIMING
 (`intentions_due`); the Node side owns the condition gate and budgets.
+**Phase-round matching is forgiving (0.11.17, bugfix):** a `phase` round's
+`trigger_phase` is matched to the ward's live routine-phase label via
+`phase_matches` — case-insensitive and substring either way — so a round the
+Familiar typed as `'evening'` still fires against a phase labelled
+`'Evening wind-down'` (the exact match `'evening' == 'Evening'` silently never
+fired, so evening check-ins never surfaced). `set_intention` also canonicalises
+the typed word to a real phase label at set time (`resolve_phase`, fed the
+ward's `list_phases` labels by the MCP wrapper) and, when nothing matches,
+returns a `warning` the Familiar surfaces — so a round that can never fire is
+visible, not silent dead care.
 Chat-path tools (`cerebellum.js`, first-person, ward-only, `intentions`
 surfacing module): `intention_set/list/drop/done/mark_fired` +
 `intention_visibility` (rounds shared/private — renamed from
