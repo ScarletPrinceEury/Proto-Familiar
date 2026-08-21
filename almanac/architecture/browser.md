@@ -41,6 +41,21 @@ sources:
   - id: browser-driver-test
     type: file
     path: tests/browser-driver.test.mjs
+  - id: page-watch-js
+    type: file
+    path: page-watch.js
+  - id: page-watch-loop-js
+    type: file
+    path: page-watch-loop.js
+  - id: browser-server-js
+    type: file
+    path: server.js
+  - id: slug-ids-js
+    type: file
+    path: slug-ids.js
+  - id: browser-cdp-spec
+    type: file
+    path: docs/browser-cdp-mode-build-spec.md
 ---
 
 # Browser: Click-and-Fill Web Access
@@ -61,6 +76,14 @@ refinements to Pass 3b's synchronous hard-stops: `browseConfirmMode: 'ask'` appr
 decision page, which records why its guardrails, including Pass 4's, are shaped the way they
 are. This page describes the modules that exist in the repo today and how they fit together,
 using the built code — not the spec — as the source of truth for what actually runs.
+
+Work continued past the spec's four passes: two Chromium-acquisition hardening fixes (0.11.11 /
+0.11.12, covered below), page watches (0.11.13, a scheduled watch-and-notify loop that reuses
+the static web-read path rather than the driver), and a run of interaction-model refinements
+(0.11.14–0.11.16) that made refs meaning-bearing, let the model act by naming what it sees, gave
+it awareness of images on a page, and added page-level scroll. A CDP-attach engine backing for
+the ward's own logged-in Chrome (spec §9 Horizon #2) is fully designed but deliberately parked,
+not built — see the CDP mode section below.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
 `PROTO_FAMILIAR_BROWSE_DISABLED` env kill switch) and ward-only: the `browse_*` tools are
@@ -421,6 +444,147 @@ cross-platform, and treat the bundled download as a fallback that must be observ
 time-bounded — never a silent forever-fetch.** `PROTO_FAMILIAR_CHROME` (or `CHROME`) remains the
 explicit override that points at any binary and sidesteps discovery.
 
+## Page watches (0.11.13): a scheduled diff loop, not a browser read
+
+Page watches answer "tell me when this page changes" — a restock, a decision posted, a date
+announced — without paying an LLM call on every re-check [@page-watch-js]. The feature lives in
+the browser milestone's roadmap as spec §9 Horizon #1, but it does not touch `browser-driver.js`
+or Chromium at all: each watched URL is re-read on a schedule through `websearch.js`'s existing
+static `fetchReadable()` — the same extractor `read_webpage` falls back to when the driver is
+unavailable — rather than through a live browser tab [@page-watch-js] [@browser-server-js]. That
+choice keeps an armed watch list cheap: most watched pages (a product listing, an announcement
+page) don't need a rendered browser to read, and routing every watch through Chromium would turn
+an idle watch list into a standing resource cost.
+
+**The core is pure and injectable.** `page-watch.js` holds the store (`tomes/.page-watches.json`,
+git-ignored, the same posture as the outbox and the ponder-web budget), the normalize-and-hash
+diff, due-selection, and the one-tick reconcile — all free of network or LLM calls, so
+`runOnePageWatchTick()` is unit-tested against fixture `fetchReadable`/`decideChange`/`enqueue`
+functions rather than a live loop [@page-watch-js]. `normalizeForHash()` collapses whitespace and
+strips `read_webpage`'s own front-matter block before hashing with sha256; it is deliberately
+conservative about what it normalizes away — no stripping of numbers or dates — because missing
+a real change is worse here than an occasional noisy one, and the LLM step is the actual noise
+filter [@page-watch-js].
+
+**Code diffs for free; the LLM judges only a real change.** `dueWatches()` selects only watches
+whose own `intervalMs` (default 6h, floor 15min so nothing gets hammered) has elapsed since
+`lastCheckedAt` [@page-watch-js]. A hash match against `lastHash` costs one fetch and zero
+tokens; only a hash mismatch calls the injected `decideChange`, which reads a leak-free
+before/after (only the watched page's own snapshot text, capped at 2000 chars) and returns JSON
+`{surface, summary}` judging whether the change is worth a nudge or just noise — an ad, a
+timestamp, a view counter [@page-watch-js]. This is the same "ride existing requests, gate in
+code" ordering [Engineering conventions](../reference/engineering-conventions) documents for LLM
+requests generally, applied here to a brand-new background loop rather than an existing call
+site. A watch's first-ever read only sets the baseline hash and is never surfaced — otherwise
+every new watch would immediately read as "changed" [@page-watch-js]. A URL that fails to fetch
+`MAX_FETCH_FAILS` (5) times in a row deactivates itself with the failure reason recorded on the
+watch, rather than retrying a dead link forever [@page-watch-js].
+
+**The loop is the same singleton pattern used elsewhere.** `page-watch-loop.js` mirrors
+`gcal-sync-loop.js`: a short base tick (5 min) wakes the loop, and the per-watch `intervalMs`
+inside `runOnePageWatchTick` — not the base tick — decides what is actually due, so the loop can
+wake often without re-reading every watch every 5 minutes [@page-watch-loop-js]. It follows
+[Autonomous loops](autonomous-loops)'s shared contract: a reentrancy guard (`_activeTick`), a
+graceful `stopPageWatchLoop()` that awaits any in-flight tick, and it never lets a failure escape
+its own boundary — a fetch failure backs off that one watch without touching the others
+[@page-watch-loop-js].
+
+**Wiring and surfacing.** `server.js`'s `startPageWatches()` supplies the three injected
+functions: `fetchReadable` (the static path, behind the same SSRF check every web read uses),
+`decideChange` (resolves a connection via `connectionForFeature(s,'chat')` or the pondering
+connection, and runs `buildPageWatchPrompt()`'s `{{user}}`/`{{char}}` tokens through
+`substituteMacros` before the call — the same boundary-1 macro discipline
+[Engineering conventions](../reference/engineering-conventions) documents for triage, warm
+reach-out, pondering, tome-graduation, and guide-chat), and `enqueue` (drops a `kind:'page_watch'`
+item through `enqueueAndDispatch`, the same outbox-plus-push path reminders and reach-outs use)
+[@browser-server-js]. The `originId` is `${watchId}:${hash}` — a distinct string per detected
+change, not per watch — so a genuinely new change on an already-notified watch still surfaces,
+while the outbox's own `(kind, originId)` dedup still stops a re-delivery of the identical
+unacknowledged change from duplicating [@browser-server-js]. Every tick that actually read a due
+page is logged to `logs/page-watch-events.jsonl` (`GET /api/page-watch-events`), so a silently
+dead loop reads as stale entries rather than calm silence — the same auditability pattern
+[Autonomous loops](autonomous-loops) records for the noticing loop [@cerebellum-js].
+
+**Tools, gating, off-switches.** `watch_page` / `list_page_watches` / `unwatch_page` are
+ward-only — refused on any turn `discordReadAudiences` resolves to a villager or stranger
+context — and only registered when `pageWatchEnabled` is not explicitly `false` in settings
+(default on, but inert until a watch actually exists) [@cerebellum-js]. The hard kill switch is
+`PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1`, checked before the loop even starts
+[@browser-server-js]. Watch ids are readable slugs minted from the label or URL via
+`slug-ids.js`'s `slugifyLabel`, following the same
+[readable-slug-id convention](../decisions/exact-values-in-code) every other model-facing id in
+the app follows [@page-watch-js] [@slug-ids-js].
+
+## Refs are meaning-bearing slugs, and the model can name what it sees (0.11.14)
+
+The ref/generation model described above — originally opaque, `r3`/`r14`-shaped — now mints refs
+from each element's own accessible name instead: `add-to-basket` rather than `r14`
+[@browser-lens-js]. `mintRef(node, taken)` slugifies the interactable's `name` (falling back to
+its `role` or `tag` when unnamed) via `slug-ids.js`'s `slugifyLabel`, suffixing only on collision
+within the same generation [@browser-lens-js] [@slug-ids-js]. This is the
+[readable-slug-id law](../decisions/exact-values-in-code) — already the convention for every
+other model-facing id in the app — applied to page elements for the first time: a model names
+`add-to-basket` far more reliably than an opaque `r14`, because the handle it emits now means
+what it is [@browser-lens-js]. Nothing about the underlying reliability model changes:
+`buildRefTable()` still pairs each ref with a code-computed locator (`{role, name, nth}`) the
+driver re-resolves fresh at act time, the ref still dies with the generation described above, and
+the model still only ever repeats a ref — it never fabricates a selector [@browser-lens-js].
+
+`resolveTarget(refTable, {target, role})` adds a second way to act: `browse_act` now also accepts
+`target` (a visible label, such as "Add to basket") plus an optional `role` to narrow it, instead
+of requiring a ref [@browser-lens-js]. Matching is most-specific first — exact accessible-name
+match, then a name substring, then the ref-slug itself — and returns a single ref on a unique
+hit, the candidate refs on an ambiguous match (so the model can then name the exact one it
+means), or `none` when nothing matches [@browser-lens-js]. `browser-driver.js`'s `act()` calls
+`resolveTarget` before acting whenever `target` is supplied instead of `ref`, and surfaces an
+ambiguous match as a structured refusal rather than a first-match guess — the same "fail loud,
+never guess" discipline the ref/generation model already applies to a stale ref
+[@browser-driver-js]. Code still owns disambiguation; the model only ever supplies what it sees.
+
+## The model can see that a page has pictures, and scroll it without a target (0.11.15)
+
+Before this, the lens had no way to tell the model a page held an image at all — it reads text,
+not pixels, so a page's pictures were structurally invisible to it, and it could never decide to
+look at one. The DOM walk `browser-driver.js` runs at extraction time now also collects `img`,
+`[role=img]`, a named `svg`, `figure` (captioned by its `figcaption`), and `canvas` elements as
+image nodes (`isImage:true`, non-interactable) [@browser-driver-js]. `buildRefTable()` mints a
+ref for an image node the same way it does an interactable, and `renderSnapshot()` adds an
+`[images]` section listing each image's ref alongside its author-supplied alt text — the
+strongest signal for whether the picture is worth a look [@browser-lens-js]. This is what lets
+the model decide, in text, to call `browse_screenshot scope=<image-ref>` for one picture instead
+of the whole page — without this section it could not know a page had a picture worth looking
+at, let alone which one [@browser-lens-js].
+
+`browse_act`'s `scroll` action gained a page-level mode: called with no `ref` and no `target`
+(direction in `value`: `up`/`down`/`top`/`bottom`), it moves the viewport itself via
+`window.scrollTo`/`scrollBy` rather than scrolling a specific element into view
+[@browser-driver-js]. This is distinct from `scroll` *with* a ref, which still calls
+`scrollIntoViewIfNeeded` on that element [@browser-driver-js]. Page-level scroll is what reveals
+below-the-fold or lazy-loaded/infinite-scroll content that `browse_see`'s viewport-only outline
+level would otherwise never mention.
+
+## CDP mode (Horizon #2): driving the ward's own Chrome — designed, not built
+
+`docs/browser-cdp-mode-build-spec.md` specs an alternate engine backing for the same `browse_*`
+tool surface: instead of the Familiar's own isolated profile, it would attach to the ward's
+**already-running, already-logged-in** Chrome via `chromium.connectOverCDP()`, so tasks that the
+owned-profile mode has to hand back to the ward — anything behind a login — could proceed without
+a handoff [@browser-cdp-spec]. The ward reviewed the design and chose to **spec-and-park** it
+rather than build it now: the owned-profile browser this page describes had only just entered
+real use, and CDP mode belongs in the same "prove the cheaper modes first" bucket as the
+still-undesigned delegated task-flow horizon [@browser-cdp-spec]. No code exists yet — the design
+is settled and answered (§7 of the spec), and this section exists so that work is not lost before
+a future ward go-ahead revives it.
+
+The design's central problem is that this page's "SSRF is enforced by a proxy the app owns"
+guarantee cannot apply under CDP: that guarantee depends on the app launching the browser through
+`launch({proxy})`, and CDP attaches to a browser it did not launch, so the network floor degrades
+from an airtight IP-resolution check to a best-effort URL allowlist [@browser-cdp-spec]. See
+[CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) for why that degraded
+floor, plus a forced single-domain allowlist and two independent human acts nothing can fake,
+were judged an acceptable design for a capability this high-stakes — read it in full before
+resuming this work.
+
 ## What is deliberately still deferred
 
 `read_webpage` is not re-backed by this driver. It stays on its existing static extractor even
@@ -441,8 +605,12 @@ tool-calling design). What remains is `read_webpage`'s re-backing onto this driv
 - [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
   — the design decisions behind the SSRF proxy, the Stranger-tier default, and the consent,
   vault, and handoff surfaces Pass 3 built.
+- [CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) — the settled,
+  parked design for the Horizon #2 alternate engine backing, and why its degraded network floor
+  was judged acceptable.
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general rule
-  `readVaultEntry()` applies to secrets: the model names a thing, only code touches the value.
+  `readVaultEntry()` applies to secrets, and the readable-slug-id law page watches and
+  meaning-bearing refs both apply to page-facing identifiers.
 - [Injection guard: documented but never wired](injection-guard-gap) — the pattern-scanner
   `browser.js` now also calls, and the other boundaries it does and does not cover.
 - [Vision and media](vision-and-media) — the `view_image`/`_pendingImages` mechanism
@@ -452,3 +620,5 @@ tool-calling design). What remains is `read_webpage`'s re-backing onto this driv
   Stranger-tier framing is designed never to be able to move.
 - [Pondering](pondering) — the autonomous thought loop Pass 4's research gate runs inside, and
   where `sourcesBlock()`'s output lands in the ponder prompt.
+- [Autonomous loops](autonomous-loops) — the shared loop contract page watches follows, and
+  where it sits alongside the app's other background workers.
