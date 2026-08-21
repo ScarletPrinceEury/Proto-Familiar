@@ -704,6 +704,15 @@ required — the static floor works).
    session"), because the blast radius is the ward's authenticated life.
    Own spec, own sign-off. Nothing in this milestone forecloses it; the
    driver seam (`browser-driver.js`) is where it would plug.
+   - **DESIGNED + PARKED (ward-decided).** Full design in
+     [`docs/browser-cdp-mode-build-spec.md`](browser-cdp-mode-build-spec.md).
+     The ward reviewed it and chose to spec-and-park until the owned-profile
+     browser is proven in real use. Settled decisions recorded there: CDP loses
+     the airtight SSRF proxy, so it is forced to `allowlist` site-mode where the
+     allowlist IS a single ward-armed domain; the arm is per-task, single-domain,
+     time-boxed (15 min default / 60 min ceiling), UI-armed and never
+     model-armed; on expiry it drops back to the owned profile with the swap
+     audit-stamped and announced (never silent). No code until a fresh go-ahead.
 3. **Task flows** (recurring multi-step jobs the ward delegates): only after
    watches + months of audit-log confidence. Named so nobody builds it as a
    weekend feature.
