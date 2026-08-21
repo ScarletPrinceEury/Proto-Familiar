@@ -35,6 +35,8 @@
  * on navigation (§3.2).
  */
 
+import { slugifyLabel } from './slug-ids.js';
+
 // Hard token caps per level (§3.1). Caps are enforced by code — truncation is
 // explicit, never a silent drop. Tokens are estimated cheaply (≈4 chars/token);
 // exactness isn't the point, bounding the block is.
@@ -103,17 +105,34 @@ export function evaluateFill(node, { value, secret = null, grants = null } = {})
 }
 
 /**
+ * Mint a MEANING-BEARING ref for an interactable (the repo's readable-slug-id
+ * law applied to page elements): a slug of the element's accessible name (or its
+ * role when unnamed), suffixed only on collision. A language model picks
+ * `add-to-basket` far more reliably than an opaque `r14` — the handle it emits
+ * now means what it is. Still code-minted, still ephemeral (dies with the
+ * generation), still resolved by the code-held locator — the exact-values rule
+ * holds: the model only ever repeats a ref, never fabricates a selector.
+ */
+function mintRef(node, taken) {
+  const label = node.name || node.role || node.tag || 'el';
+  const base = slugifyLabel(label, { maxWords: 4 }) || slugifyLabel(node.role || node.tag || 'el') || 'el';
+  const n = (taken.get(base) || 0) + 1;
+  taken.set(base, n);
+  return n === 1 ? base : `${base}-${n}`;
+}
+
+/**
  * Build the ref table: interactables only, in document order, each assigned a
- * stable-within-generation `rN` and a regenerated locator descriptor. Returns
- * { order: ['r1',…], byRef: Map<ref, {node, locator}> }.
+ * meaning-bearing slug ref (unique within the generation) and a regenerated
+ * locator descriptor. Returns { order: ['add-to-basket',…], byRef: Map<ref, {node, locator}> }.
  */
 export function buildRefTable(pageData) {
   const order = [];
   const byRef = new Map();
-  let n = 0;
+  const taken = new Map();   // slug base → count, for collision suffixes
   for (const node of pageData?.nodes ?? []) {
     if (!node?.interactable) continue;
-    const ref = `r${++n}`;
+    const ref = mintRef(node, taken);
     order.push(ref);
     byRef.set(ref, {
       node,
@@ -124,6 +143,32 @@ export function buildRefTable(pageData) {
     });
   }
   return { order, byRef };
+}
+
+/**
+ * Resolve a select-by-text target to a single ref, so the Familiar can also act
+ * by what it SEES ("the 'Add to basket' button") instead of only by ref — the
+ * forgiving path, with code owning the disambiguation. Matching, most-specific
+ * first: exact accessible-name (optionally narrowed by role), then a name
+ * substring, then the ref-slug itself. Returns { ref } on a unique hit,
+ * { ambiguous: [refs] } when several match (the model then picks the exact ref),
+ * or { none } when nothing does. Pure — tested without a browser.
+ */
+export function resolveTarget(refTable, { target, role = null } = {}) {
+  const q = String(target ?? '').trim().toLowerCase();
+  if (!q || !refTable?.order?.length) return { none: true };
+  const roleQ = role ? String(role).trim().toLowerCase() : null;
+  const cands = [];
+  for (const ref of refTable.order) {
+    const { node } = refTable.byRef.get(ref);
+    if (roleQ && String(node.role || '').toLowerCase() !== roleQ) continue;
+    cands.push({ ref, name: String(node.name || '').toLowerCase() });
+  }
+  const exact = cands.filter(c => c.name === q);
+  const pick = exact.length ? exact : cands.filter(c => (c.name && c.name.includes(q)) || c.ref === q);
+  if (pick.length === 1) return { ref: pick[0].ref };
+  if (pick.length === 0) return { none: true };
+  return { ambiguous: pick.map(c => c.ref) };
 }
 
 /** One dense ref line: `r14 button "Add to basket" (in: product card 'Oat milk')`. */

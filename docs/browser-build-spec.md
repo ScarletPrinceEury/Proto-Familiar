@@ -275,13 +275,32 @@ to watch a widget instead of the world.
 
 ### 3.2 Refs
 
-- Code-minted per snapshot (`r1…rN`, stable *within* a page generation),
-  mapped internally to Playwright locators derived from the a11y node.
-  A navigation or DOM rebuild bumps the generation; stale refs return a
-  structured error naming the fix (`stale ref (page changed) — browse_see to
-  re-observe`) rather than acting on the wrong element.
-- The model only ever repeats refs it was shown. An unknown ref is an error,
-  never a guess.
+- Code-minted per snapshot, stable *within* a page generation, mapped
+  internally to Playwright locators derived from the a11y node. A navigation or
+  DOM rebuild bumps the generation; stale refs return a structured error naming
+  the fix (`stale ref (page changed) — browse_see to re-observe`) rather than
+  acting on the wrong element.
+- **Refs are MEANING-BEARING slugs, not `rN` (0.11.14).** A ref is now a slug of
+  the element's accessible name (or its role when unnamed), unique-suffixed on
+  collision — `add-to-basket`, `quantity`, `password`, `button-2` — minted by
+  `mintRef` in `browser-lens.js` via the shared `slugifyLabel`. This is the
+  repo's readable-slug-id law (CLAUDE.md) applied to page elements: a language
+  model picks `add-to-basket` far more reliably than the opaque, meaningless
+  `r14`, because the handle it emits now *means* what it is. The exact-values
+  principle is untouched — the ref is still code-minted, still ephemeral (dies
+  with the generation), still resolved by the code-held locator; the model only
+  ever repeats a ref, never fabricates a selector.
+- **Select-by-text is a first-class alternative (0.11.14).** `browse_act` accepts
+  either a `ref` OR a `target` (a visible label, e.g. "Add to basket", optionally
+  narrowed by `role`). `resolveTarget` (pure, in the lens) matches the target
+  against the current ref table — exact accessible-name first (role-narrowed if
+  given), then substring, then the ref-slug itself — and returns the single ref,
+  or hands back the candidate refs when several match so the model picks the
+  exact one, or a re-observe hint when none do. Code owns the disambiguation; the
+  model never guesses a selector. This is the forgiving path the ward asked for:
+  the Familiar can act by what it *sees*, not only by an id it has to track.
+- The model only ever repeats refs it was shown (or names a label it can see).
+  An unknown ref is an error, never a guess.
 
 **Resolution mechanism (the reliability crux — decide before building
 `browser-lens.js`, it lands Pass 1).** Two things must both hold: a ref must
@@ -289,8 +308,8 @@ find the *same* element it named, and it must *fail loud* rather than act on
 the wrong one when the page has moved under it.
 
 - **Capture:** each snapshot walks the accessibility tree once and, per
-  interactable, mints `rN` alongside a **regenerated, reasonably-stable
-  selector** (role + accessible-name + a nth-of-role disambiguator, resolved
+  interactable, mints a **slug ref** (§ above) alongside a **regenerated,
+  reasonably-stable selector** (role + accessible-name + a nth-of-role disambiguator, resolved
   to a Playwright `getByRole`/locator at act time). We deliberately do NOT
   hold live `ElementHandle`s across turns: handles pin DOM nodes (memory) and
   die silently on any navigation. A locator regenerated from role+name is

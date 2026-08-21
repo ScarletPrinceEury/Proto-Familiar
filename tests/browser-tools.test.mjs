@@ -56,6 +56,27 @@ test('a stale/unknown ref from the engine is surfaced, not swallowed', async () 
   _setDriverForTest(null);
 });
 
+test('select-by-text: a target (no ref) is threaded to the driver to resolve', async () => {
+  let seen = null;
+  _setDriverForTest({
+    act: async (args) => { seen = args; return { before: { url: 'https://a', nodes: [] }, after: { url: 'https://a', nodes: [] }, event: {}, actedRef: 'add-to-basket', actionLabel: 'clicked' }; },
+  });
+  const out = await browseAct({ target: 'Add to basket', action: 'click' }, ward);
+  assert.equal(seen.target, 'Add to basket');
+  assert.equal(seen.ref, undefined);
+  assert.match(out, /ok — clicked add-to-basket/);
+  _setDriverForTest(null);
+});
+
+test('browse_act with neither a ref nor a target asks for one — the driver is never called', async () => {
+  let called = false;
+  _setDriverForTest({ act: async () => { called = true; return {}; } });
+  const out = await browseAct({ action: 'click' }, ward);
+  assert.match(out, /I need something to act on/);
+  assert.equal(called, false);
+  _setDriverForTest(null);
+});
+
 // ── Ward-only gate (§5.7): a gated villager turn is refused ─────────────────
 test('browse_* executors refuse on a gated (villager) turn', async () => {
   // discordReadAudiences(ctx) !== undefined marks a gated turn. A ctx carrying
