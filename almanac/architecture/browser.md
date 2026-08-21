@@ -38,6 +38,9 @@ sources:
   - id: ponder-web-budget-js
     type: file
     path: ponder-web-budget.js
+  - id: browser-driver-test
+    type: file
+    path: tests/browser-driver.test.mjs
 ---
 
 # Browser: Click-and-Fill Web Access
@@ -377,6 +380,46 @@ Settings: `ponderWebEnabled` (default on), `ponderWebRoundsPerTick` (default 4),
 `PROTO_FAMILIAR_PONDER_WEB_DISABLED=1` [@ponder-research-js]. See
 [Pondering](pondering) for where this research gate sits inside `ponderOnce()` and why it is
 skipped for reflection-mode ponders.
+
+## Getting a browser: prefer an installed one, and never fetch forever (0.11.11 / 0.11.12)
+
+The first live test of the browser tools surfaced a "downloading Chromium forever" hang, and
+fixing it hardened the whole browser-acquisition path in `browser-driver.js`. Two distinct
+faults, each with its own lesson.
+
+The **auto-fetch was neither observable nor bounded** (0.11.11). `startChromiumFetch` spawned
+`node playwright-core/cli.js install chromium` with `stdio: 'ignore'` and no timeout, so a
+stalled download stayed `status: 'fetching'` indefinitely — the Familiar re-said "setting up"
+every turn with nothing to diagnose. This is the failures-must-be-observable rule violated in
+the acquisition path. The fix makes the fetch (a) observable — the installer's output is
+captured to `browser/chromium-install.log`; (b) bounded — a watchdog (`INSTALL_TIMEOUT_MS`,
+15 min, overridable via `PROTO_FAMILIAR_BROWSER_INSTALL_TIMEOUT_MS`) kills a hung install and
+records `failed` with the reason plus the log path, so it can never fetch forever; (c)
+retryable — after a short cooldown a fresh browse call re-spawns the fetch, while the cooldown
+stops a permanently-broken environment being hammered once per call; and (d) resilient to a
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` inherited from a container/CI environment, which is stripped
+from the child env — otherwise it silently turns the deliberate install into a no-op (exit 0,
+no binary), a case now reported as a failure rather than a false "ready". `chromiumInstallState()`
+surfaces `elapsedMs` and `logPath` for the status endpoint [@browser-driver-js]
+[@browser-driver-test].
+
+The **deeper cause for a Windows ward: no Windows browser detection at all** (0.11.12).
+`findChromium`'s system-install list was Linux/macOS-only, so a Windows machine — which always
+ships Edge and usually Chrome — was pushed onto the download path (and then the hang) even
+though a perfectly good browser was already installed. `systemBrowserCandidates()` now returns
+platform-appropriate locations: Chrome / Edge / Chromium under `%ProgramFiles%`,
+`%ProgramFiles(x86)%` and `%LOCALAPPDATA%` on Windows (built from the real env vars, not a
+guessed drive letter); the same three under `/Applications` on macOS; and
+`google-chrome` / `chromium` / `microsoft-edge` (including the snap path) on Linux. Because
+`playwright-core` drives any Chromium-family browser via `executablePath`, an already-installed
+browser skips the download entirely — the spec's intended primary path, with the bundled fetch
+as the fallback. Since Windows always has Edge, a Windows ward never needs the fetch at all
+[@browser-driver-js] [@browser-driver-test].
+
+The lesson worth carrying forward: **prefer an already-installed system browser, detected
+cross-platform, and treat the bundled download as a fallback that must be observable and
+time-bounded — never a silent forever-fetch.** `PROTO_FAMILIAR_CHROME` (or `CHROME`) remains the
+explicit override that points at any binary and sidesteps discovery.
 
 ## What is deliberately still deferred
 
