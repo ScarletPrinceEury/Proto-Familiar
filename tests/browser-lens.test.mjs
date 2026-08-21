@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  buildRefTable, isProtectedField, renderSnapshot, computeDelta, LEVEL_CAPS,
+  buildRefTable, isProtectedField, renderSnapshot, computeDelta, LEVEL_CAPS, resolveTarget,
 } from '../browser-lens.js';
 
 // A small fixture page: a product card with a fillable qty, an add button, a
@@ -21,12 +21,44 @@ const page = {
   text: 'Creamy oat milk, 1 litre. Barista edition.',
 };
 
-test('buildRefTable mints r-refs for interactables only, with locators', () => {
+test('buildRefTable mints MEANING-BEARING slug refs for interactables only, with locators', () => {
   const { order, byRef } = buildRefTable(page);
-  assert.deepEqual(order, ['r1', 'r2', 'r3', 'r4']); // 4 interactables, heading excluded
-  assert.equal(byRef.get('r1').node.name, 'Quantity');
-  assert.deepEqual(byRef.get('r2').locator, { role: 'button', name: 'Add to basket', nth: 0 });
-  assert.equal(byRef.get('r3').protected, true); // password field
+  assert.deepEqual(order, ['quantity', 'add-to-basket', 'password', 'help']); // name-derived, heading excluded
+  assert.equal(byRef.get('quantity').node.name, 'Quantity');
+  assert.deepEqual(byRef.get('add-to-basket').locator, { role: 'button', name: 'Add to basket', nth: 0 });
+  assert.equal(byRef.get('password').protected, true); // password field
+});
+
+test('slug refs are unique — a collision gets a numeric suffix', () => {
+  const dup = { nodes: [
+    { role: 'button', name: 'Add', tag: 'button', interactable: true },
+    { role: 'button', name: 'Add', tag: 'button', interactable: true },
+    { role: 'button', name: 'Add', tag: 'button', interactable: true },
+  ] };
+  assert.deepEqual(buildRefTable(dup).order, ['add', 'add-2', 'add-3']);
+});
+
+test('an unnamed (icon) interactable falls back to a role-based slug', () => {
+  const t = buildRefTable({ nodes: [{ role: 'button', name: '', tag: 'button', interactable: true }] });
+  assert.deepEqual(t.order, ['button']);
+});
+
+test('resolveTarget: exact label → the one ref; substring works; role narrows; ambiguity is reported', () => {
+  const t = buildRefTable(page);
+  assert.deepEqual(resolveTarget(t, { target: 'Add to basket' }), { ref: 'add-to-basket' });
+  assert.deepEqual(resolveTarget(t, { target: 'quantity' }), { ref: 'quantity' });        // case-insensitive
+  assert.deepEqual(resolveTarget(t, { target: 'basket' }), { ref: 'add-to-basket' });      // substring
+  assert.deepEqual(resolveTarget(t, { target: 'add-to-basket' }), { ref: 'add-to-basket' }); // by slug too
+  assert.deepEqual(resolveTarget(t, { target: 'nope' }), { none: true });
+
+  // Two same-named links, one narrowed by role.
+  const two = buildRefTable({ nodes: [
+    { role: 'link', name: 'Details', tag: 'a', interactable: true },
+    { role: 'button', name: 'Details', tag: 'button', interactable: true },
+  ] });
+  const amb = resolveTarget(two, { target: 'Details' });
+  assert.ok(Array.isArray(amb.ambiguous) && amb.ambiguous.length === 2, 'ambiguous → candidate refs');
+  assert.deepEqual(resolveTarget(two, { target: 'Details', role: 'button' }), { ref: 'details-2' });
 });
 
 test('isProtectedField catches password, file, and credential-named fields', () => {
@@ -39,19 +71,19 @@ test('isProtectedField catches password, file, and credential-named fields', () 
 
 test('outline shows viewport interactables and flags the protected field', () => {
   const { text } = renderSnapshot(page, { level: 'outline' });
-  assert.match(text, /r2 button "Add to basket" \(in: product card 'Oat Milk'\)/);
-  assert.match(text, /r3 textbox "Password".*protected — I can't fill this/);
-  assert.doesNotMatch(text, /r4 link "Help"/); // not in viewport → excluded from outline
+  assert.match(text, /add-to-basket button "Add to basket" \(in: product card 'Oat Milk'\)/);
+  assert.match(text, /password textbox "Password".*protected — I can't fill this/);
+  assert.doesNotMatch(text, /help link "Help"/); // not in viewport → excluded from outline
 });
 
 test('actions level includes whole-page interactables (the footer link)', () => {
   const { text } = renderSnapshot(page, { level: 'actions' });
-  assert.match(text, /r4 link "Help"/);
+  assert.match(text, /help link "Help"/);
 });
 
 test('scope narrows to one section', () => {
-  const { text } = renderSnapshot(page, { level: 'actions', scope: 'r2' });
-  assert.match(text, /scope: r2/);
+  const { text } = renderSnapshot(page, { level: 'actions', scope: 'add-to-basket' });
+  assert.match(text, /scope: add-to-basket/);
   assert.match(text, /Add to basket/);
   assert.doesNotMatch(text, /Help/); // footer link is a different section
 });

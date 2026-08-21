@@ -25,7 +25,7 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 
 import { createGuardedProxy } from './browser-proxy.js';
-import { buildRefTable, evaluateFill } from './browser-lens.js';
+import { buildRefTable, evaluateFill, resolveTarget } from './browser-lens.js';
 import { readGrants } from './browser-grants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -469,11 +469,21 @@ export function isSubmitShaped(action, node, value) {
 }
 function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } }
 
-export async function act({ ref, action, value, onDialog = 'dismiss', secret = null, grants = null, confirmDomains = [], autoSubmit = false, confirmMode = 'refuse' }) {
+export async function act({ ref, target, role = null, action, value, onDialog = 'dismiss', secret = null, grants = null, confirmDomains = [], autoSubmit = false, confirmMode = 'refuse' }) {
   if (!state?.current) await snapshot();
   const { page: pg, refTable } = state.current;
-  const entry = refTable.byRef.get(ref);
-  if (!entry) return { error: `unknown ref ${ref} — browse_see to re-observe` };
+  // Select-by-text: when no ref is given, resolve what the Familiar named ("the
+  // 'Add to basket' button") to a single ref in code. Ambiguity is handed back
+  // with the candidate refs so the model picks the exact one — code owns the
+  // disambiguation, the model never guesses a selector.
+  if (!ref && (target || role)) {
+    const r = resolveTarget(refTable, { target, role });
+    if (r.none)      return { error: `I don't see ${target ? `"${target}"` : `a ${role}`} to ${action || 'act on'} — browse_see to re-observe.` };
+    if (r.ambiguous) return { error: `${target ? `"${target}"` : `that ${role}`} matches more than one thing (${r.ambiguous.join(', ')}) — say which by its ref.` };
+    ref = r.ref;
+  }
+  const entry = ref ? refTable.byRef.get(ref) : null;
+  if (!entry) return { error: `unknown ref ${ref ?? '(none given)'} — name a ref or a visible label, then browse_see to re-observe` };
 
   // [CONFIRM]-domain gate (§5 item 3): a submit-shaped act on a ward-listed
   // domain needs the ward's fresh yes, unless the autonomy `autoSubmit` grant
@@ -491,7 +501,7 @@ export async function act({ ref, action, value, onDialog = 'dismiss', secret = n
         const id = `cf-${Math.random().toString(36).slice(2, 8)}`;
         state.pendingConfirms.set(id, { ref, action, value, host, createdAt: Date.now() });
         clearIdle();                       // keep the browser alive while awaiting the ward's yes
-        return { held: true, confirmId: id, host, action };
+        return { held: true, confirmId: id, host, action, ref };
       }
       return { error: `${host} is on my human's confirm-list — a submit like this needs their fresh yes, so I'm not doing it myself. This is theirs to complete (browse_handoff), unless they've granted auto-submit.` };
     }

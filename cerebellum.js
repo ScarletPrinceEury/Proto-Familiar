@@ -2439,17 +2439,19 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'browse_act',
-      description: "I act on one element by its ref (from a snapshot): click, fill, select, press a key, hover, or scroll it into view. I only ever use a ref I was actually shown — an unknown or stale ref is an error I fix by looking again (browse_see), never a guess. I can't type into a password or payment field or a file upload — those aren't mine to fill. If my action raises a confirm dialog, by default I decline it and the verdict tells me what it said; if I've read that text and it's plainly benign, I can re-do the action with on_dialog:'accept' — but that's exactly as much power as clicking the button, so the same limits still hold.",
+      description: "I act on one element: click, fill, select, press a key, hover, or scroll it into view. I name the element two ways — whichever's clearer: by its `ref` from the last snapshot (the readable handle like `add-to-basket`), or by `target`, the visible label I can see (\"Add to basket\"), and I let the page-reader find it. I only act on something I was actually shown; if a target matches more than one thing it tells me the refs so I pick the exact one, and an unknown/stale handle is an error I fix by looking again (browse_see), never a guess. I can't type into a password or payment field or a file upload — those aren't mine to fill. If my action raises a confirm dialog, by default I decline it and the verdict tells me what it said; if I've read that text and it's plainly benign, I can re-do the action with on_dialog:'accept' — but that's exactly as much power as clicking the button, so the same limits still hold.",
       parameters: {
         type: 'object',
         properties: {
-          ref: { type: 'string', description: 'The element ref from a snapshot (e.g. r14).' },
+          ref: { type: 'string', description: 'The element handle from a snapshot (e.g. add-to-basket). Give this OR target.' },
+          target: { type: 'string', description: "The visible label of the element to act on (e.g. \"Add to basket\") — I use this when it's clearer than a ref; code resolves it to the one matching element." },
+          role: { type: 'string', description: 'Optional — narrow a target by kind (button, link, textbox…) when a label alone is ambiguous.' },
           action: { type: 'string', enum: ['click', 'fill', 'select', 'press', 'hover', 'scroll'], description: 'What to do.' },
           value: { type: 'string', description: 'For fill (text), select (option), or press (key name).' },
           on_dialog: { type: 'string', enum: ['dismiss', 'accept'], description: "How to answer a confirm this act raises. Default dismiss. accept only for a benign confirm I've already seen the text of." },
           vault: { type: 'string', description: "The NAME of a saved login to fill a password/payment field with (I never see the secret — code types it). Only works if my human has set up their autonomy-grants file and a matching vault entry; otherwise the field stays refused." },
         },
-        required: ['ref', 'action'],
+        required: ['action'],
       },
     },
   },
@@ -4264,10 +4266,10 @@ export const TOOL_EXECUTORS = {
     const b = await import('./browser.js');
     return b.browseSee({ level, scope }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
-  browse_act: async ({ ref, action, value, on_dialog, vault } = {}, ctx = {}) => {
+  browse_act: async ({ ref, target, role, action, value, on_dialog, vault } = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';
     const b = await import('./browser.js');
-    return b.browseAct({ ref, action, value, on_dialog, vault }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
+    return b.browseAct({ ref, target, role, action, value, on_dialog, vault }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
   browse_close: async (_args = {}, ctx = {}) => {
     if (discordReadAudiences(ctx) !== undefined) return 'I only browse the web on my human\'s own turns.';

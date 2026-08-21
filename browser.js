@@ -122,10 +122,11 @@ export async function browseSee({ level = 'outline', scope = null } = {}, { sett
   }
 }
 
-export async function browseAct({ ref, action, value, on_dialog, vault } = {}, { settings, sessionId } = {}) {
+export async function browseAct({ ref, target, role, action, value, on_dialog, vault } = {}, { settings, sessionId } = {}) {
   if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
   { const hb = handbackPending(); if (hb) return hb; }
-  if (!ref || !action) return 'I need a ref and an action (click / fill / select / press / hover / scroll).';
+  if ((!ref && !target && !role) || !action) return 'I need something to act on — a ref (like add-to-basket) or a visible label — and an action (click / fill / select / press / hover / scroll).';
+  const actLabel = ref || (target ? `"${target}"` : role);
   try {
     const grants = readGrants();
     // Vault fill (§5.9): the Familiar names an entry; CODE reads the secret and
@@ -138,7 +139,7 @@ export async function browseAct({ ref, action, value, on_dialog, vault } = {}, {
       secret = entry.secret;
     }
     const res = await driver.act({
-      ref, action, value, onDialog: on_dialog === 'accept' ? 'accept' : 'dismiss',
+      ref, target, role, action, value, onDialog: on_dialog === 'accept' ? 'accept' : 'dismiss',
       secret, grants,
       confirmDomains: siteList({ browseSiteList: settings?.browseConfirmDomains }),
       autoSubmit: grants.autoSubmit === true,
@@ -146,11 +147,11 @@ export async function browseAct({ ref, action, value, on_dialog, vault } = {}, {
     });
     if (res.held) {
       // 'ask' mode: the submit is queued for the ward's out-of-band yes.
-      logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict: `held for confirmation ${res.confirmId} on ${res.host}`, sessionId });
+      logBrowserAction({ tool: 'browse_act', target: `${action} ${res.ref || actLabel}`, verdict: `held for confirmation ${res.confirmId} on ${res.host}`, sessionId });
       return `${res.host} is on my human's confirm-list, so I have NOT done this. I've queued it (${res.confirmId}) for them to approve in Settings → browser activity; I'll only ${action} it once they say yes.`;
     }
     if (res.error) {
-      logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict: res.error, sessionId });
+      logBrowserAction({ tool: 'browse_act', target: `${action} ${actLabel}`, verdict: res.error, sessionId });
       return sanitizeExternal(res.error, { source: 'web', context: 'browser' });
     }
     let verdict = computeDelta(res.before, res.after, res);
