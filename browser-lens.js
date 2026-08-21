@@ -131,7 +131,9 @@ export function buildRefTable(pageData) {
   const byRef = new Map();
   const taken = new Map();   // slug base → count, for collision suffixes
   for (const node of pageData?.nodes ?? []) {
-    if (!node?.interactable) continue;
+    // Interactables get refs so they can be acted on; images get refs too so a
+    // screenshot can scope to one (they're never fillable/clickable-by-default).
+    if (!node?.interactable && !node?.isImage) continue;
     const ref = mintRef(node, taken);
     order.push(ref);
     byRef.set(ref, {
@@ -211,6 +213,7 @@ export function renderSnapshot(pageData, { level = 'outline', scope = null } = {
 
   const wantStructure = level === 'outline' || level === 'full';
   const wantActions   = level === 'outline' || level === 'actions' || level === 'full';
+  const wantImages    = level === 'outline' || level === 'actions' || level === 'full';
   const wantText      = level === 'text'    || level === 'full';
 
   const lines = [`[page] ${head}${scopeNote}`];
@@ -238,6 +241,22 @@ export function renderSnapshot(pageData, { level = 'outline', scope = null } = {
       shown++;
     }
     if (truncated) lines.push(`  …+${acts.length - shown} more [browse_see level=full or scope=rN]`);
+  }
+
+  // Images the model can't otherwise perceive (it reads text, not pixels): name
+  // them + their ref, so it KNOWS pictures are here and can browse_screenshot
+  // (scope=<ref> for just one) when the picture actually matters.
+  if (wantImages) {
+    const imgs = nodes.filter(nd => nd.isImage && (level === 'outline' ? nd.inViewport : true));
+    if (imgs.length) {
+      lines.push(`[images] ${imgs.length} — browse_screenshot to look (scope=<ref> for one)`);
+      for (const nd of imgs.slice(0, 20)) {
+        const ref = refFor.get(nd);
+        if (!ref) continue;
+        lines.push(`  ${ref}${nd.name ? ` "${nd.name}"` : ' (no caption)'}${nd.section ? ` (in: ${nd.section})` : ''}`);
+      }
+      if (imgs.length > 20) lines.push(`  …+${imgs.length - 20} more images`);
+    }
   }
 
   if (wantText) {
@@ -276,6 +295,7 @@ export function computeDelta(before, after, { actedRef = null, actionLabel = '',
   if (event.ariaLive) parts.push(`announced: ${JSON.stringify(event.ariaLive)}`);
   if (event.validation) parts.push(`form error: ${JSON.stringify(event.validation)}`);
   if (event.newTab) parts.push(`opened tab ${event.newTab}`);
+  if (event.scrolled) parts.push(`scrolled ${event.scrolled}`);
 
   const head = actedRef ? `ok — ${actionLabel || 'acted'} ${actedRef}` : `ok — ${actionLabel || 'acted'}`;
   return `${head}\n  ${parts.join(' · ')}`;
