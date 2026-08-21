@@ -3317,7 +3317,10 @@ export const TOOL_EXECUTORS = {
       const data = await setIntention({ what: what.trim(), why, refs, trigger: trig, condition, source: source || 'chat', visibility });
       if (data?.ok === false) return `Failed to set intention: ${data.error ?? 'unknown error'}`;
       const when = describeIntentionTrigger(trig);
-      return quietOk(`Intention kept (id: ${data.id})${when ? ` — ${when}` : ''}. It comes back to me when it's due.`, { id: data.id });
+      // A phase round whose phase matches no routine phase can never fire —
+      // Unruh returns a warning so I don't silently keep dead care.
+      const warn = data?.warning ? ` ⚠ ${data.warning}` : '';
+      return quietOk(`Intention kept (id: ${data.id})${when ? ` — ${when}` : ''}. It comes back to me when it's due.${warn}`, { id: data.id });
     } catch (err) { return `Failed to set intention: ${err.message}`; }
   },
 

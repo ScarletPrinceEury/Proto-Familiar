@@ -972,6 +972,10 @@ def intention_set(
               {"kind":"at","at":"2026-07-16T09:00:00"}  (my local time)
               {"kind":"phase","phase":"morning","recurring":true}  (a round)
               {"kind":"on_next_contact"}  | {"kind":"none"}
+            For a phase round, `phase` is matched against my human's actual
+            routine phases (case-insensitive, forgiving of a longer label) — if
+            it matches none, I still create it but the result carries a
+            `warning` telling me the round can't fire yet and which phases exist.
         condition: an optional extra gate before I act — any of
               {"minContactGapMs": <ms>, "needsStatus": "missed", "unresolvedRefs": true}.
         source: where this came from ('chat','pondering','reflection','noticing').
@@ -982,9 +986,19 @@ def intention_set(
     Returns: {ok, id} or {ok:false, error}.
     """
     with get_conn() as conn:
+        # For a phase round, hand set_intention the ward's real routine-phase
+        # labels so it can canonicalise the typed word (and warn when nothing
+        # matches). Only queried for a phase trigger — cheap, and irrelevant otherwise.
+        available_phases = None
+        if isinstance(trigger, dict) and trigger.get("kind") == "phase":
+            try:
+                available_phases = [p.get("label") for p in sched.list_phases(conn) if p.get("label")]
+            except Exception:
+                available_phases = []
         return intentions_mod.set_intention(
             conn, what=what, why=why, refs=refs, trigger=trigger,
             condition=condition, source=source, visibility=visibility,
+            available_phases=available_phases,
         )
 
 
