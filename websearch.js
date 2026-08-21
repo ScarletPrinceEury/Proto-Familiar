@@ -487,26 +487,40 @@ export async function extractReadable(html, { url = '', maxChars = DEFAULT_MAX_C
   };
 }
 
-export async function readWebpage(url, settings = {}, { fetchFn = fetch, lookupFn } = {}) {
+/**
+ * Structured readable-fetch: the guts of read_webpage, but returning a clean
+ * { ok, text, url } / { ok:false, error, status?, blocked? } instead of a
+ * human string. Callers that need to ACT on success vs failure (the page-watch
+ * loop) use this rather than sniffing readWebpage's prose. Never throws.
+ */
+export async function fetchReadable(url, settings = {}, { fetchFn = fetch, lookupFn } = {}) {
   const raw = String(url ?? '').trim();
-  if (!raw) return 'I need the link of the page I want to read.';
+  if (!raw) return { ok: false, error: 'no-url' };
   const maxChars = clampInt(settings.webSearchMaxChars, DEFAULT_MAX_CHARS, 500, 100000);
-
   let res;
   try {
     res = await guardedFetch(raw, { fetchFn, lookupFn });
   } catch (err) {
-    if (err instanceof WebAccessError) return err.message;
-    if (err?.name === 'AbortError')    return 'That page took too long to load, so I stopped waiting.';
-    return `I couldn't open that link (${err.message}).`;
+    if (err instanceof WebAccessError) return { ok: false, error: err.message, blocked: true };
+    if (err?.name === 'AbortError')    return { ok: false, error: 'timeout' };
+    return { ok: false, error: err.message };
   }
-
-  if (!res.ok) return `That page answered with an error (HTTP ${res.status}).`;
-
+  if (!res.ok) return { ok: false, error: `http ${res.status}`, status: res.status };
   let html;
   try { html = await res.text(); }
-  catch { return 'I reached that page but couldn\'t read its body.'; }
-
+  catch { return { ok: false, error: 'unreadable-body' }; }
   const { text } = await extractReadable(html, { url: res.url || raw, maxChars });
-  return text;
+  return { ok: true, text, url: res.url || raw };
+}
+
+export async function readWebpage(url, settings = {}, deps = {}) {
+  const raw = String(url ?? '').trim();
+  if (!raw) return 'I need the link of the page I want to read.';
+  const r = await fetchReadable(url, settings, deps);
+  if (r.ok) return r.text;
+  if (r.blocked) return r.error;                                   // WebAccessError message, as before
+  if (r.error === 'timeout') return 'That page took too long to load, so I stopped waiting.';
+  if (r.status) return `That page answered with an error (HTTP ${r.status}).`;
+  if (r.error === 'unreadable-body') return 'I reached that page but couldn\'t read its body.';
+  return `I couldn't open that link (${r.error}).`;
 }

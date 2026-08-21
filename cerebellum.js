@@ -212,6 +212,7 @@ mkdirSync(LOGS_DIR, { recursive: true });
 const TRIAGE_LOG_FILE   = path.join(LOGS_DIR, 'triage-events.jsonl');
 const REACHOUT_LOG_FILE = path.join(LOGS_DIR, 'reachout-events.jsonl');
 const NOTICING_LOG_FILE = path.join(LOGS_DIR, 'noticing-events.jsonl');
+const PAGE_WATCH_LOG_FILE = path.join(LOGS_DIR, 'page-watch-events.jsonl');
 
 // Shared JSONL event-log primitives — triage and warm reach-out both use
 // them, so decisions from either loop are auditable the same way.
@@ -255,6 +256,13 @@ export const readReachoutEvents     = ()      => readEventLog(REACHOUT_LOG_FILE)
 // carry no decision and stay unlogged.
 export const appendNoticingEventLog = (entry) => appendEventLog(NOTICING_LOG_FILE, entry);
 export const readNoticingEvents     = ()      => readEventLog(NOTICING_LOG_FILE);
+// Page watches (§9 Horizon #1): every tick that actually read a due page logs
+// here (checked/changed/surfaced/failed counts), so "it never told me the page
+// changed" is auditable — a quiet page reads as ticks with changed:0, a dead
+// loop as stale/absent entries. Idle wakes (nothing due) carry no decision and
+// stay unlogged.
+export const appendPageWatchEventLog = (entry) => appendEventLog(PAGE_WATCH_LOG_FILE, entry);
+export const readPageWatchEvents     = ()      => readEventLog(PAGE_WATCH_LOG_FILE);
 
 // Read the last N user/assistant messages from the most recently updated
 // session log file. Used by decideTriageViaLLM to ground the triage
@@ -350,6 +358,7 @@ export function formatItemForPush({ kind, title, body }) {
              : kind === 'triage'          ? '💭'
              : kind === 'outbound_alert'  ? '📤'
              : kind === 'crisis_resources' ? '🆘'
+             : kind === 'page_watch'      ? '👁'
              : '📨';
   const head = title ? `${lead} **${title}**` : lead;
   return body ? `${head}\n\n${body}` : head;
@@ -2499,6 +2508,42 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'watch_page',
+      description: "I keep an eye on a web page for {{user}} and let them know when it actually changes — a restock, a decision posted, a date announced. I re-read it on a slow schedule, notice a real change in code, and only then judge whether it's worth a nudge (I ignore ads and timestamps). I give it the URL, and a short note on WHY I'm watching so I know what counts as worth telling them.",
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The full URL to watch (http/https).' },
+          label: { type: 'string', description: 'A short name for it, e.g. "the ticket page".' },
+          note: { type: 'string', description: 'Why I\'m watching / what change matters — so I can tell a real change from noise.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_page_watches',
+      description: "I look at the pages I'm currently keeping an eye on for {{user}} — their ids, urls, when each last changed. I use this to tell them what I'm watching, or to find the id of one I want to stop.",
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'unwatch_page',
+      description: "I stop watching a page — when {{user}} no longer cares, or it's served its purpose. I pass the id (or the url) from list_page_watches.",
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'The watch id (or the url) to stop watching.' } },
+        required: ['id'],
+      },
+    },
+  },
 ];
 
 // Resolve a circle name the Familiar typed (a Village category's name or id) to
@@ -4257,6 +4302,32 @@ export const TOOL_EXECUTORS = {
     const b = await import('./browser.js');
     return b.browseHandoff({ reason }, { settings: readSettingsSync(), sessionId: ctx?.sessionInfo?.sessionId ?? null });
   },
+  watch_page: async ({ url, label, note } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'I only watch pages on my human\'s own turns.';
+    if (readSettingsSync()?.pageWatchEnabled === false) return "Page watches are switched off in my settings, so I can't start one right now.";
+    const pw = await import('./page-watch.js');
+    const r = pw.addWatch({ url, label, note, createdBy: 'familiar' });
+    if (!r.ok) return `I couldn't watch that: ${r.error}.`;
+    const w = r.watch;
+    return `${r.updated ? 'Updated my watch on' : 'Watching'} ${w.label} (id ${w.id}). I'll read it on a slow schedule and only speak up when it genuinely changes — my first read just sets the baseline, so I won't ping about that.`;
+  },
+  list_page_watches: async (_args = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'I only manage my page watches on my human\'s own turns.';
+    const pw = await import('./page-watch.js');
+    const list = pw.listWatches({});
+    if (!list.length) return "I'm not watching any pages right now.";
+    return 'Pages I\'m watching:\n' + list.map(w => {
+      const changed = w.lastChangedAt ? `last changed ${w.lastChangedAt}` : (w.lastHash ? 'no change seen yet' : 'not read yet');
+      const status = w.active ? changed : `stopped — ${w.deactivatedReason || 'inactive'}`;
+      return `- ${w.id}: ${w.label} <${w.url}> — ${status}`;
+    }).join('\n');
+  },
+  unwatch_page: async ({ id } = {}, ctx = {}) => {
+    if (discordReadAudiences(ctx) !== undefined) return 'I only manage my page watches on my human\'s own turns.';
+    const pw = await import('./page-watch.js');
+    const r = pw.removeWatch(String(id ?? '').trim());
+    return r.ok ? "Done — I've stopped watching that page." : `I couldn't stop that watch: ${r.error}.`;
+  },
 };
 
 /**
@@ -4282,6 +4353,7 @@ const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 // toggle + the env off-switch) — a Familiar with no places saved still sees
 // them, and weather_today tells it kindly there's nowhere to check yet.
 const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location']);
+const PAGE_WATCH_TOOL_NAMES = new Set(['watch_page', 'list_page_watches', 'unwatch_page']);
 // Vision link tools (vision build spec §6.5) — need vision enabled but not a
 // capable turn (linking is by-id metadata); view_image is gated separately on
 // capability. Villager turns never see these (not in villagerToolNames).
@@ -4396,10 +4468,12 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
   // vision is disabled.
   const visionOn = settings?.visionEnabled !== false && process.env.PROTO_FAMILIAR_VISION_DISABLED !== '1';
   const visionCapableTurn = visionOn && opts.visionCapable === true;
+  const pageWatchOn = settings?.pageWatchEnabled !== false && process.env.PROTO_FAMILIAR_PAGE_WATCH_DISABLED !== '1';
   const tools = BUILTIN_TOOLS.filter(t =>
     inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
     (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)) &&
+    (pageWatchOn || !PAGE_WATCH_TOOL_NAMES.has(t.function?.name)) &&
     (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL) &&
     (visionCapableTurn || t.function?.name !== 'view_image') &&
     // browse_screenshot only makes sense when I can actually see: on a text-only

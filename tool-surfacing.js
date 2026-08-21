@@ -106,6 +106,7 @@ export const TOOL_MODULES = {
   // turn never reaches them even if the module is advertised.
   browse_open: 'browser', browse_see: 'browser', browse_act: 'browser', browse_close: 'browser',
   browse_screenshot: 'browser', browse_tabs: 'browser', browse_history: 'browser', browse_handoff: 'browser',
+  watch_page: 'browser', list_page_watches: 'browser', unwatch_page: 'browser',
 };
 delete TOOL_MODULES['memory-edit']; // the namespace note above, not a tool
 

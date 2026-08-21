@@ -316,6 +316,12 @@ const state = {
   // How the confirm-list behaves: 'refuse' (default — hand it straight back) or
   // 'ask' (hold it as a pending confirmation the ward approves out-of-band).
   browseConfirmMode:       'refuse',
+  // Page watches (§9 Horizon #1). Default ON but inert until my Familiar (on my
+  // behalf) registers a URL to watch: it re-reads each watched page on a slow
+  // schedule, diffs it in code, and only nudges me when it genuinely changed.
+  // Uses the cheap static read, not the browser. Off via this toggle or
+  // PROTO_FAMILIAR_PAGE_WATCH_DISABLED=1 on the server.
+  pageWatchEnabled:        true,
   // Stewardship (docs/stewardship-build-spec.md, Pass 1). Default ON — the
   // executive layer that opens the day, surfaces aging floaters, and learns
   // the ward's real day-start. Anchor is 24h "HH:MM" ward-local.
@@ -490,7 +496,7 @@ const SERVER_SYNCED_KEYS = [
   'tomeCaseSensitive', 'tomeMatchWholeWords',
   'connections', 'primaryConnectionId', 'fallbackConnectionIds', 'maxEmptyRetries',
   'providerApiKeys',
-  'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend',
+  'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend', 'pageWatchEnabled',
   'browseSiteMode', 'browseSiteList', 'browseConfirmDomains', 'browseConfirmMode',
   'phylacteryConnectionId',
   'thalamusDynamicDepth', 'handoffEnabled',
@@ -3927,6 +3933,7 @@ function readSettingsFromUI() {
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
   if ($('noticing-toggle')) state.noticingEnabled = $('noticing-toggle').checked;
   if ($('browse-toggle')) state.browseEnabled = $('browse-toggle').checked;
+  if ($('page-watch-toggle')) state.pageWatchEnabled = $('page-watch-toggle').checked;
   if ($('browse-site-mode')) state.browseSiteMode = $('browse-site-mode').value;
   if ($('browse-site-list')) state.browseSiteList = $('browse-site-list').value;
   if ($('browse-confirm-domains')) state.browseConfirmDomains = $('browse-confirm-domains').value;
@@ -4111,6 +4118,7 @@ function writeSettingsToUI() {
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
   if ($('noticing-toggle'))    setIfNotFocused($('noticing-toggle'),    'checked', state.noticingEnabled !== false);
   if ($('browse-toggle'))      setIfNotFocused($('browse-toggle'),      'checked', state.browseEnabled === true);
+  if ($('page-watch-toggle'))  setIfNotFocused($('page-watch-toggle'),  'checked', state.pageWatchEnabled !== false);
   if ($('browse-site-mode'))   setIfNotFocused($('browse-site-mode'),   'value',   state.browseSiteMode || 'open');
   if ($('browse-site-list'))   setIfNotFocused($('browse-site-list'),   'value',   state.browseSiteList || '');
   if ($('browse-confirm-domains')) setIfNotFocused($('browse-confirm-domains'), 'value', state.browseConfirmDomains || '');
@@ -5494,7 +5502,7 @@ function init() {
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale', 'ponder-web-toggle', 'ponder-web-reads',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
-    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle',
+    'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle', 'page-watch-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
