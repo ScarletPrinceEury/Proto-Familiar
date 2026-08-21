@@ -823,8 +823,10 @@ never snapshotted — dereferenced fresh when it surfaces), a `trigger`
 `visibility` the Familiar itself controls. Unruh owns storage + trigger TIMING
 (`intentions_due`); the Node side owns the condition gate and budgets.
 Chat-path tools (`cerebellum.js`, first-person, ward-only, `intentions`
-surfacing module): `intention_set/list/drop/done/mark_fired/
-set_rounds_visibility`. Budget caps enforced at set time, ward-configurable:
+surfacing module): `intention_set/list/drop/done/mark_fired` +
+`intention_visibility` (rounds shared/private — renamed from
+`intention_set_rounds_visibility` in 0.11.16 so its name no longer collides on
+the `intention_set` prefix and mis-routes tool selection). Budget caps enforced at set time, ward-configurable:
 `intentionStandingPerPhase` (default 3), `intentionOpenOneShots` (default 30) —
 a cap hit tells the Familiar to prune, never a silent drop. Due intentions
 surface in `[Temporal Context]` via `temporal_context` (a payoff turn riding the

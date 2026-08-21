@@ -1673,7 +1673,7 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'intention_set_rounds_visibility',
+      name: 'intention_visibility',
       description: 'I decide whether my human sees the rounds I keep, or whether they stay mine. "shared" (my default) means my standing rounds show in my human\'s view of my routine; "private" keeps their contents to myself. Even private, my human still knows I keep some rounds — the existence isn\'t hidden, only what they are. This is genuinely mine to choose.',
       parameters: {
         type: 'object',
@@ -3364,7 +3364,7 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `Failed to mark intention fired: ${err.message}`; }
   },
 
-  intention_set_rounds_visibility: async ({ value } = {}) => {
+  intention_visibility: async ({ value } = {}) => {
     if (value !== 'shared' && value !== 'private') return 'Failed to set rounds visibility: value must be "shared" or "private".';
     try {
       const data = await setRoundsVisibility({ value });

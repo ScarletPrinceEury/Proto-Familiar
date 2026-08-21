@@ -405,9 +405,10 @@ const EXTRACT_FN = `() => {
     const box = el.getBoundingClientRect();
     let nm = nameOf(el);
     if (el.tagName.toLowerCase() === 'figure') { const cap = el.querySelector('figcaption'); if (cap) nm = cap.textContent.replace(/\\s+/g, ' ').trim().slice(0, 120); }
-    if (!nm && !(box.width >= 100 && box.height >= 100)) continue;   // skip tiny + nameless (decorative/icons)
+    const alt = (el.getAttribute && el.getAttribute('alt') || '').replace(/\\s+/g, ' ').trim().slice(0, 200);
+    if (!nm && !alt && !(box.width >= 100 && box.height >= 100)) continue;   // skip tiny + nameless (decorative/icons)
     imgCount++;
-    nodes.push({ role: 'image', name: nm, tag: el.tagName.toLowerCase(), isImage: true, interactable: false, inViewport: inVp(el), section: sectionOf(el), css: uniqueCss(el) });
+    nodes.push({ role: 'image', name: nm, alt, tag: el.tagName.toLowerCase(), isImage: true, interactable: false, inViewport: inVp(el), section: sectionOf(el), css: uniqueCss(el) });
   }
   const main = document.querySelector('main') || document.body;
   const text = (main?.innerText || '').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 12000);

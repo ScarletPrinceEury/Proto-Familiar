@@ -253,7 +253,15 @@ export function renderSnapshot(pageData, { level = 'outline', scope = null } = {
       for (const nd of imgs.slice(0, 20)) {
         const ref = refFor.get(nd);
         if (!ref) continue;
-        lines.push(`  ${ref}${nd.name ? ` "${nd.name}"` : ' (no caption)'}${nd.section ? ` (in: ${nd.section})` : ''}`);
+        // Show the author's alt text — the best signal for whether the picture is
+        // worth a look. When the name IS the alt (the common case), show it once;
+        // when they differ (name from aria-label), show both.
+        let label;
+        if (nd.name && nd.alt && nd.alt !== nd.name) label = ` "${nd.name}" (alt: "${nd.alt}")`;
+        else if (nd.alt)  label = ` (alt: "${nd.alt}")`;
+        else if (nd.name) label = ` "${nd.name}"`;
+        else              label = ' (no caption)';
+        lines.push(`  ${ref}${label}${nd.section ? ` (in: ${nd.section})` : ''}`);
       }
       if (imgs.length > 20) lines.push(`  …+${imgs.length - 20} more images`);
     }

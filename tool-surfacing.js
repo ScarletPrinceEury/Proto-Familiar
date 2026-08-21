@@ -95,7 +95,7 @@ export const TOOL_MODULES = {
   intention_set: 'intentions', intention_list: 'intentions',
   intention_drop: 'intentions', intention_done: 'intentions',
   intention_mark_fired: 'intentions',
-  intention_set_rounds_visibility: 'intentions',
+  intention_visibility: 'intentions',
 
   // vision (vision build spec §6.5/§10) — looking again at an image + tying it
   // to a graph node. Surfaced whenever an image stand-in is in context.

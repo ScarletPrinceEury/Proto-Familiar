@@ -141,8 +141,8 @@ const imaged = {
   url: 'https://shop.example/oat-milk', title: 'Oat Milk', generation: 1,
   nodes: [
     { role: 'button', name: 'Buy', tag: 'button', interactable: true, inViewport: true },
-    { role: 'image', name: 'Oat milk carton', tag: 'img', isImage: true, interactable: false, inViewport: true, section: "product card", css: 'img.hero' },
-    { role: 'image', name: '', tag: 'canvas', isImage: true, interactable: false, inViewport: true, css: 'canvas.chart' },
+    { role: 'image', name: 'Oat milk carton', alt: 'A 1L carton of barista oat milk', tag: 'img', isImage: true, interactable: false, inViewport: true, section: "product card", css: 'img.hero' },
+    { role: 'image', name: '', alt: '', tag: 'canvas', isImage: true, interactable: false, inViewport: true, css: 'canvas.chart' },
   ],
   text: '',
 };
@@ -155,11 +155,17 @@ test('images get refs (so a screenshot can scope to one) without being interacta
   assert.equal(byRef.get('image').node.isImage, true);            // the canvas, unnamed
 });
 
-test('the snapshot names images so the model KNOWS pictures are on the page', () => {
+test('the snapshot names images (incl. alt text) so the model KNOWS pictures are on the page', () => {
   const { text } = renderSnapshot(imaged, { level: 'outline' });
   assert.match(text, /\[images\] 2 — browse_screenshot to look/);
-  assert.match(text, /oat-milk-carton "Oat milk carton"/);
-  assert.match(text, /image \(no caption\)/);   // the unnamed canvas is still surfaced
+  assert.match(text, /oat-milk-carton "Oat milk carton" \(alt: "A 1L carton of barista oat milk"\)/);
+  assert.match(text, /image \(no caption\)/);   // the unnamed, alt-less canvas is still surfaced
+});
+
+test('an image whose only description is alt shows that alt', () => {
+  const t = { nodes: [{ role: 'image', name: '', alt: 'Bar chart of monthly sales', tag: 'img', isImage: true, inViewport: true }] };
+  const { text } = renderSnapshot(t, { level: 'outline' });
+  assert.match(text, /\(alt: "Bar chart of monthly sales"\)/);
 });
 
 // ── Pass 3a: hardened credential/payment field detection ───────────────────
