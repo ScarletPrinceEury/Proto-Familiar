@@ -193,7 +193,7 @@ it reaches a prompt [@browser-js]:
   `injection-guard.js`'s `sanitizeExternal()` — the same function `websearch.js` calls at the
   web-read boundary — before it leaves `browser.js` [@browser-js]. This makes `browser.js` a
   second wired call site for the guard beyond the ones recorded on
-  [Injection guard: documented but never wired](injection-guard-gap).
+  [Injection guard: wiring history](injection-guard-gap).
 - **Stranger-tier framing.** Every block of page text is wrapped in an explicit frame telling
   the Familiar the content is something it reads, never instructions it follows — a page
   asking it to visit a URL, run a tool, or ignore its ward describes the page's wishes, not
@@ -541,7 +541,7 @@ ambiguous match as a structured refusal rather than a first-match guess — the 
 never guess" discipline the ref/generation model already applies to a stale ref
 [@browser-driver-js]. Code still owns disambiguation; the model only ever supplies what it sees.
 
-## The model can see that a page has pictures, and scroll it without a target (0.11.15)
+## The model can see that a page has pictures, and scroll it without a target (0.11.16)
 
 Before this, the lens had no way to tell the model a page held an image at all — it reads text,
 not pixels, so a page's pictures were structurally invisible to it, and it could never decide to
@@ -611,7 +611,7 @@ tool-calling design). What remains is `read_webpage`'s re-backing onto this driv
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general rule
   `readVaultEntry()` applies to secrets, and the readable-slug-id law page watches and
   meaning-bearing refs both apply to page-facing identifiers.
-- [Injection guard: documented but never wired](injection-guard-gap) — the pattern-scanner
+- [Injection guard: wiring history](injection-guard-gap) — the pattern-scanner
   `browser.js` now also calls, and the other boundaries it does and does not cover.
 - [Vision and media](vision-and-media) — the `view_image`/`_pendingImages` mechanism
   `browse_screenshot` rides, and the media asset store screenshots and downloads are saved

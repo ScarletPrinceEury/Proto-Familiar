@@ -104,7 +104,7 @@ top of this coarse per-category gate for memories specifically — see
 for why the write side is a separate, behavioral defense rather than a filter in this pipeline,
 and how it differs from `injection-guard.js`, a pattern-scanner/sanitizer wired (0.8.57) at the
 web-read and Village inbound boundaries — see
-[Injection guard: documented but never wired](injection-guard-gap) for the wiring history and
+[Injection guard: wiring history](injection-guard-gap) for how it got wired and
 what is still deliberately excluded (Phylactery/Unruh recall, the ward's own words, and gcal
 event titles) [@architecture-doc].
 
@@ -169,7 +169,8 @@ If you're asking yourself... go to:
 - [Vision and media](vision-and-media) — multimodal image input, content-addressed storage,
   and modality fallback at the materialization seam.
 - [Browser](browser) — the opt-in, ward-only click-and-fill web subsystem: the SSRF-guarding
-  proxy, the ref/generation model, and how far the shipped Pass 1/Pass 2 build has gotten.
+  proxy, the ref/generation model, and the five shipped passes (through 0.11.16) plus the parked
+  CDP-mode alternate engine.
 - [Voice](voice) — the multi-pass voice milestone: the model supply chain, the disk-footprint
   budget, the ward-facing benchmark tool, and read-aloud text-to-speech.
 - [Core prompts and multi-surface assembly](core-prompts) — the ward's four core prompt fields
@@ -179,7 +180,7 @@ If you're asking yourself... go to:
   to turn one off.
 - [Safety spine](safety-spine) — crisis detection, threat tracking, and how escalation to a
   human trusted contact works.
-- [Injection guard: documented but never wired](injection-guard-gap) — the pattern-scanner's
+- [Injection guard: wiring history](injection-guard-gap) — the pattern-scanner's
   wiring history and current boundaries, and the incident that produced it.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.

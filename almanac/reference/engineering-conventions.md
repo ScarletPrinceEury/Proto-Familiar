@@ -26,6 +26,12 @@ sources:
   - id: mcp-smoke-test
     type: file
     path: tests/mcp-smoke.test.mjs
+  - id: llm-call-js
+    type: file
+    path: llm-call.js
+  - id: voice-transcribe-js
+    type: file
+    path: voice-transcribe.js
 ---
 
 # Engineering Conventions
@@ -214,6 +220,41 @@ The diagnostic move that finds this class of bug fastest: when any button in the
 open the browser console before touching the reported button, even when the console error looks
 unrelated to what the user described. A single early throw in `init()` is a more common cause of
 "several unrelated buttons stopped working" than a defect in each button individually.
+
+## Three named rules from a five-incident postmortem
+
+CLAUDE.md promotes three point-fixes to standing rules, named A/B/C, after the same shape of
+bug shipped on a new surface five times because each earlier fix was recorded as a fact about
+one call site instead of a law about every call site [@claude-md].
+
+**RULE A — every LLM call site goes through `callProviderChat`, or replicates both of its
+guarantees**: a generous `max_tokens` (≥4000, since a thinking model bills its reasoning against
+the same cap) and `extractContent` at the reply boundary, which falls back to
+`reasoning_content`/`reasoning` when `content` comes back empty [@claude-md] [@llm-call-js]. A
+new raw provider fetch is a review flag; grep for `max_tokens` when touching one. This was paid
+for twice: triage (0.8.82), then the Discord turn path (0.9.7, empty turns and tool calls cut
+mid-JSON), because the first fix lived in `llm-call.js` alone and Discord's own raw fetch never
+got the memo [@claude-md].
+
+**RULE B — budget exhaustion is never silence.** Every cap, limit, timeout, or retry ceiling
+must define, before it is built: what the ward sees, what the Familiar is told (its own tool
+result must record that an action did not run — a dropped cutoff manufactures confident
+confabulation, not an honest gap), and the log line [@claude-md]. The round-cap closing text
+round (0.9.7, tuned per-surface in 0.9.8) is the reference implementation: on tool-round budget
+exhaustion, force one closing text round with tools stripped, plus a first-person note that the
+pending calls did not run [@claude-md].
+
+**RULE C — a capability lands in the shared turn path, or the spec carries a surface matrix.**
+Turn-machinery features must live in code every surface shares; where per-surface wiring is
+unavoidable, the build spec must contain an explicit matrix (web live turn / web tool rounds /
+Discord ward / Discord villager+ambient / background loops), each cell marked wired-or-N/A, in
+the same commit as the feature [@claude-md]. The incident: Discord shipped without the
+synchronous-describe wiring [Vision and media](../architecture/vision-and-media) gave the web
+path (0.9.6) — web got `ensureDescribed`, Discord silently didn't, and the Familiar described
+images on Discord it had never actually looked at [@claude-md]. `ensureDescribed`'s sibling for
+voice notes, `ensureTranscribed` in `voice-transcribe.js`, was built with the lesson already
+applied: both surfaces gained it in the same change, and its own doc comment names
+`ensureDescribed` as the reason it exists [@voice-transcribe-js].
 
 ## Safety-critical sign-off
 
