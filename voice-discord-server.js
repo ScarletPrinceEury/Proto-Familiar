@@ -293,7 +293,7 @@ export function attachDiscordVoice(deps) {
     if (presenceEnabled()) {
       const roster = await namedRoster(meta);
       const group  = isGroupCall(roster);
-      const label  = attributeSpeaker({ name: isWard ? wardName() : speakerName, isGroup: group });
+      const label  = attributeSpeaker({ name: isWard ? wardName() : speakerName, isGroup: group, isWard });
       attributedHeard = prefixTurn(label, heard);
 
       // Presence note — surfaced once after a roster change (or at call start),

@@ -23,6 +23,14 @@ test('attributeSpeaker: labels in a group, null when solo', () => {
   assert.equal(attributeSpeaker({ name: '  ', isGroup: true }), null);              // empty name → no label
 });
 
+test('attributeSpeaker: the ward carries a (WARD) marker in a group', () => {
+  // The reported confusion: my human's turns read as mine or a villager's.
+  assert.equal(attributeSpeaker({ name: 'Zara', isGroup: true, isWard: true }), 'Zara (WARD)');
+  assert.equal(attributeSpeaker({ name: 'Sam', isGroup: true, isWard: false }), 'Sam');   // villager: plain name
+  assert.equal(attributeSpeaker({ name: 'Zara', isGroup: false, isWard: true }), null);   // solo → still unattributed
+  assert.equal(attributeSpeaker({ name: '  ', isGroup: true, isWard: true }), null);      // empty name → no label
+});
+
 test('prefixTurn: only prefixes when a label is present', () => {
   assert.equal(prefixTurn('Sam', 'hey there'), 'Sam: hey there');
   assert.equal(prefixTurn(null, 'hey there'), 'hey there');   // solo path byte-identical to before
