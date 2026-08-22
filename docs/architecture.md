@@ -980,6 +980,35 @@ the same `applyConsentAndSettle` helper as the text path (shared, not
 copy-pasted) and the same audit log. DMs are inherently private, so no
 ephemeral flag is needed.
 
+*Ward console — `!queue` + `!connection` (0.11.19, `ward-consent-queue.js`,
+`ward-connections.js`).* The ward-facing twins of the villager consent menu,
+same discipline (pure builders, gateway does the I/O, no LLM). Shared
+component primitives (`btn`/`row`/`EMBED_COLOR`/`expiredView`) now live in
+`discord-menu-kit.js`, used by all three menu modules instead of copied.
+Both commands are **ward-DM only** (personal data + settings never render in
+a room) and intercepted before any turn, beside `!update`/`!call`.
+  - **`!queue`** — the pending memory-consent queue as a component menu:
+    paginated list, a picker to open one item (Keep it / Drop it), and
+    Keep all / Drop all. Keep → `confirmConsentMemories`, drop →
+    `dropPendingMemories`, both then `pruneConsentPending` (shared
+    `settleQueueItems`). Reads the same `.consent-pending.json` the web
+    `[PENDING MEMORY CONSENT]` block shows. `pfqueue:*` custom_ids.
+  - **`!connection`** (also `!conn`/`!model`, plurals accepted) — set the
+    active connection (`primaryConnectionId`) and route each background
+    feature (`featureConnections`, the six `connectionForFeature` keys,
+    mirroring `FEATURE_CONNECTIONS` in `public/app.js` — a test guards the
+    two against drift). Writes go through `patchWardSettings`: the same
+    locked, atomic, wholesale-top-level `mergeSettings` write the HTTP
+    `PUT /api/settings` uses, so a Discord change and a web change can't
+    tear the file. `pfconn:*` custom_ids; a `__default__` sentinel clears a
+    feature override back to the primary.
+  - Both interaction handlers **re-check that the clicking user is the ward**
+    on every event (`interactionIsWard` → `discordWardUserId`) — a villager
+    clicking a forwarded control is refused. The gateway's
+    `INTERACTION_CREATE` dispatch routes by custom_id prefix
+    (`pfconsent:`/`pfqueue:`/`pfconn:`). Ward `!consent` now points at both
+    new commands (discoverability) rather than only the web app.
+
 *Clearance-gated tools (V10, `docs/discord-tools-build-spec.md`).*
 `handleTurn` runs a tool loop (reusing `cerebellum.runToolCallLoop`;
 `callChatRaw` supplies the full provider response with `tool_calls`)
