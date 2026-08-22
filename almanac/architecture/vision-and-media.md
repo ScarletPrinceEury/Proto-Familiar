@@ -29,6 +29,9 @@ sources:
   - id: providers-js
     type: file
     path: providers.js
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
 ---
 
 # Vision and Media Input
@@ -182,14 +185,21 @@ The feature is known to false-positive on fictional violence (horror film stills
 
 ## Vision milestone status
 
-The vision milestone remains feature-complete as of 0.9.5-alpha (PR #220):
-
 - **Pass 1** (0.9.0): introductory vision spine
 - **Pass 2** (0.9.1): sight-for-everything + picture→node linking
 - **Pass 2 tail** (0.9.3): composer tag UI + node graduation
 - **Image threat scoring** (0.9.2): image descriptions consumed by the safety spine
 - **Pass 3** (0.9.4): Discord image ingest
 - **z.ai Coding Plan vision allotment** (0.9.5-alpha, PR #220): describe-only vision via z.ai's Vision MCP for the Coding Plan quota
+- **Synchronous describe-before-reply** (0.9.38-alpha): `ensureDescribed()` describes a blind
+  connection's undescribed images before the prompt is assembled, so the stand-in the model reads
+  on THIS turn carries a real description instead of "not yet described" [@vision-js]. The web
+  chat path got this wiring first; Discord initially did not, a gap named
+  [RULE C](../reference/engineering-conventions) in CLAUDE.md's operating rules, fixed in 0.9.6
+  [@claude-md].
+
+Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
+milestone rather than this one; see [Voice](voice) for those.
 
 ## Deferred work
 

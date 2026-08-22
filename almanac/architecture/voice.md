@@ -80,6 +80,9 @@ sources:
   - id: village-js
     type: file
     path: village.js
+  - id: media-retention-loop
+    type: file
+    path: media-retention-loop.js
 ---
 
 # Voice
@@ -101,7 +104,9 @@ design — see [Safety spine](safety-spine)'s deferred-work section for why it s
 room sounds for care detection, and what a future ward-signed spec would need to decide
 [@voice-audio-tags]; and a shared-heap decode bug in the `opusscript` Opus decoder that silenced
 one Familiar whenever a second one joined the same Discord call, fixed in 0.11.10-alpha
-[@voice-discord-adapter-js]. See [Vision and media](vision-and-media) for the sibling
+[@voice-discord-adapter-js]; and media retention (Pass 4 §9), the default-on background worker
+that curates aged voice-clip sounds without ever touching their transcripts
+[@media-retention-loop]. See [Vision and media](vision-and-media) for the sibling
 multimodal-input milestone that voice's media storage reuses.
 
 ## The footprint budget: disk as an accessibility constraint
@@ -510,6 +515,23 @@ fixed, filtering out other bots is no longer needed, and **all speakers, includi
 are decoded** — two Familiars conversing by voice over Discord is supported
 [@voice-discord-adapter-js].
 
+## Media retention: curating aged voice clips (Pass 4 §9)
+
+§9 of the build spec is the other later piece this page covers: `media-retention-loop.js` (see
+[Autonomous loops](autonomous-loops)) is a default-on, ~6-hour-tick background worker that
+decides whether an old voice clip's SOUND is worth keeping, never whether the conversation is
+[@media-retention-loop]. Code gates pick candidates first — audio past
+`voiceNoteRetentionDays` (default 14), not already stripped, not flagged `keep`, and carrying a
+transcript — then one batched LLM judgment per tick names which sounds to keep; everything else
+goes through `media.stripAudio`, which deletes only the bytes: the transcript, metadata, and
+slugs survive, and a stand-in renders `[audio let go — transcript kept]` wherever the clip used
+to play [@media-retention-loop]. The transcript always surviving is the load-bearing property —
+it means a wrong "let go" costs disk, not memory, so the loop can run unattended. It fails soft
+in the same spirit: an LLM error or an unparseable response keeps *everything* that pass, because
+`parseKeepRefs` returns `null` on no-JSON, a state the loop deliberately treats as distinct from
+a valid "keep none" [@media-retention-loop]. Like the noticing loop, it stands down during a live
+call and at moderate-or-higher threat — curation can always wait for a calmer tick.
+
 ## What Pass 0 flagged for later passes
 
 Three findings from Pass 0's measurement are not solved by Pass 0 and are named as open
@@ -548,3 +570,5 @@ questions for the passes that follow [@pr-voice-pass-0]:
   discipline shapes the group-call presence note above.
 - [Content-Based Memory Gating](content-gating) — the audience-gate and content-tag machinery
   group-call presence deliberately leaves untouched.
+- [Autonomous loops](autonomous-loops) — where media retention sits alongside the rest of the
+  loop set, and the shared off-switch/degradation contract it follows.

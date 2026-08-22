@@ -24,6 +24,9 @@ sources:
   - id: memorization-js
     type: file
     path: memorization.js
+  - id: phylactery-server
+    type: file
+    path: phylactery/src/phylactery/server.py
 ---
 
 # Phylactery
@@ -91,7 +94,13 @@ Memories have a temporality marker that determines consolidation behavior [@clau
 
 **Standing** memories are identity-essential facts and relationship declarations that exist outside time: who you are, what you've decided about yourself, registered villagers and their roles [@memorization-js]. Standing facts skip daily granularity and write directly into the significant tier, where they remain accessible on every turn [@claude-md]. They are always injected, never consolidated away.
 
-The distinction is set by the tool that writes the memory: `memory_create` (episodic, date-timestamped) vs `memory_set_standing` (standing, timeless) [@memorization-js]. Standing facts are gated by `resolveRememberGate`, which keys on WHO the fact is about and WHETHER the ward told the Familiar directly (direct channel + about-the-ward → implied consent; third-party subjects still ask) [@memorization-js].
+The distinction is set by a single argument to a single tool, not by two separate tools:
+`memory_create`'s `register` parameter is `episodic` (a lived moment, the default) for the daily
+kind, or `me` / `ward` (a standing truth about the Familiar or about the ward) for the timeless
+kind — granularity and register are separate axes on the same write
+[@phylactery-server]. Standing facts are gated by `resolveRememberGate`, which keys on WHO the
+fact is about and WHETHER the ward told the Familiar directly (direct channel + about-the-ward →
+implied consent; third-party subjects still ask) [@memorization-js].
 
 ## What decides which memory survives consolidation: load-bearing versus decorative
 

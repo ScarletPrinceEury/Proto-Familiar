@@ -51,6 +51,15 @@ import {
   CONSENT_CID, buildConsentHomeView, buildCategoryView, buildMemoriesView, buildPendingView, buildDoneView,
 } from './villager-consent.js';
 import { findVillagerByAlias } from './village.js';
+import { mergeSettings } from './settings-merge.js';
+import {
+  isQueueCommand, QUEUE_CID,
+  buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
+} from './ward-consent-queue.js';
+import {
+  isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
+  buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
+} from './ward-connections.js';
 import { PROVIDER_URLS } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
@@ -1478,6 +1487,208 @@ async function handleConsentInteraction(gw, d) {
   }
 }
 
+// ── Ward console: `!queue` (memory-consent queue) + `!connection` ────────────
+//
+// The ward-facing twins of the villager `!consent` menu. Same discipline: pure
+// builders (ward-consent-queue.js / ward-connections.js), the gateway does the
+// I/O, and every surface is gated to my human — a villager can never open or
+// click these. No LLM call: a consent decision and a routing choice must be
+// exact, so they are code, not judgment.
+
+const WARD_SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+// Persist a ward settings change with the same locked, atomic write + wholesale
+// top-level merge the HTTP PUT uses, so a Discord change and a web change can't
+// tear the file. Only for ward-authenticated console actions.
+async function patchWardSettings(patch) {
+  await withLock(WARD_SETTINGS_FILE, async () => {
+    let prior = {};
+    try { prior = JSON.parse(await fsp.readFile(WARD_SETTINGS_FILE, 'utf8')); }
+    catch { /* first write / unreadable — the patch stands alone */ }
+    const merged = mergeSettings(prior, patch);
+    const tmp = WARD_SETTINGS_FILE + '.tmp';
+    await fsp.writeFile(tmp, JSON.stringify(merged, null, 2), 'utf8');
+    await fsp.rename(tmp, WARD_SETTINGS_FILE);
+  });
+}
+
+// The interacting user IS my human — the gate for every ward-console click. A
+// custom_id carries only the action, never identity, so this is re-checked on
+// every interaction (a forwarded or aged message can't act as the ward).
+function interactionIsWard(d) {
+  const wardId = (readSettingsSync().discordWardUserId ?? '').trim();
+  const userId = d.user?.id ?? d.member?.user?.id;
+  return !!wardId && userId === wardId;
+}
+
+// `!queue`: the pending memory-consent queue as a visual menu (keep/drop one at
+// a time, or the whole queue). Text fallback if the component send fails.
+async function handleQueueCommand(gw, { msg }) {
+  try {
+    const items = await readConsentPending().catch(() => []);
+    const list  = Array.isArray(items) ? items : [];
+    try {
+      await sendComponentMessage(gw.config.token, msg.channel_id, buildQueueHomeView({ items: list }));
+    } catch (err) {
+      console.error('[discord] queue menu failed — falling back to text:', err?.message ?? err);
+      await sendChannelMessage(gw.config.token, msg.channel_id, buildQueueText({ items: list }));
+    }
+  } catch (err) {
+    console.error('[discord] queue command failed:', err?.message ?? err);
+    await sendChannelMessage(gw.config.token, msg.channel_id,
+      'Something went wrong opening your memory queue just now — it\'s been logged.').catch(() => {});
+  }
+}
+
+// Settle one or more pending items: keep → confirm, drop → drop; either way
+// prune them out of the queue file. Returns how many were settled.
+async function settleQueueItems(ids, keep) {
+  const list = (Array.isArray(ids) ? ids : []).filter(Boolean);
+  if (!list.length) return 0;
+  if (keep) await confirmConsentMemories(list);
+  else      await dropPendingMemories(list);
+  await pruneConsentPending(list);
+  console.log(`[discord] queue: ward ${keep ? 'kept' : 'dropped'} ${list.length} pending`);
+  return list.length;
+}
+
+async function handleQueueInteraction(gw, d) {
+  const respond = (data) => respondToInteraction(gw.config.token, d, { type: 7, data });
+  try {
+    if (!interactionIsWard(d)) {
+      await respond({ embeds: [{ description: 'This menu isn\'t yours to use.' }], components: [] });
+      return;
+    }
+    const parts = String(d.data?.custom_id ?? '').split(':');   // pfqueue:<verb>[:…]
+    const verb  = parts[1];
+    const items = async () => (await readConsentPending().catch(() => [])) || [];
+
+    if (verb === 'done') { await respond(buildQueueDoneView()); return; }
+    if (verb === 'home') { await respond(buildQueueHomeView({ items: await items() })); return; }
+    if (verb === 'page') {
+      const page = parseInt(parts[2] ?? '0', 10) || 0;
+      await respond(buildQueueHomeView({ items: await items(), page }));
+      return;
+    }
+    if (verb === 'pick') {
+      const id = d.data?.values?.[0];
+      const item = (await items()).find(x => String(x.id) === String(id)) ?? null;
+      await respond(buildQueueItemView({ item }));
+      return;
+    }
+    if (verb === 'set') {
+      // pfqueue:set:<id>:keep|drop — id parsed defensively (never contains ':').
+      const action = parts[parts.length - 1];
+      const id     = parts.slice(2, -1).join(':');
+      const settled = await settleQueueItems([id], action === 'keep');
+      await respond(buildQueueHomeView({
+        items: await items(),
+        note: settled ? `✓ ${action === 'keep' ? 'Kept' : 'Dropped'} that one.` : 'That item was already settled.',
+      }));
+      return;
+    }
+    if (verb === 'all') {
+      const keep = parts[2] === 'keep';
+      const ids  = (await items()).map(x => x.id);
+      const settled = await settleQueueItems(ids, keep);
+      await respond(buildQueueHomeView({
+        items: await items(),
+        note: settled ? `✓ ${keep ? 'Kept' : 'Dropped'} ${settled} item${settled === 1 ? '' : 's'}.` : '',
+      }));
+      return;
+    }
+    await respond({ embeds: [{ description: 'That control has expired — type `!queue` for a fresh menu.' }], components: [] });
+  } catch (err) {
+    console.error('[discord] queue interaction failed:', err?.message ?? err);
+    try { await respond({ embeds: [{ description: 'Something went wrong — type `!queue` to try again.' }], components: [] }); }
+    catch { /* interaction already dead */ }
+  }
+}
+
+// `!connection` (also `!conn` / `!model`): pick the active connection and route
+// each background feature. Text fallback if the component send fails.
+async function handleConnectionCommand(gw, { msg }) {
+  try {
+    const s = readSettingsSync();
+    const view = {
+      connections: Array.isArray(s.connections) ? s.connections : [],
+      primaryId: s.primaryConnectionId ?? null,
+      featureConnections: s.featureConnections ?? {},
+    };
+    try {
+      await sendComponentMessage(gw.config.token, msg.channel_id, buildConnHomeView(view));
+    } catch (err) {
+      console.error('[discord] connection menu failed — falling back to text:', err?.message ?? err);
+      await sendChannelMessage(gw.config.token, msg.channel_id, buildConnText(view));
+    }
+  } catch (err) {
+    console.error('[discord] connection command failed:', err?.message ?? err);
+    await sendChannelMessage(gw.config.token, msg.channel_id,
+      'Something went wrong opening your connections just now — it\'s been logged.').catch(() => {});
+  }
+}
+
+async function handleConnectionInteraction(gw, d) {
+  const respond = (data) => respondToInteraction(gw.config.token, d, { type: 7, data });
+  try {
+    if (!interactionIsWard(d)) {
+      await respond({ embeds: [{ description: 'This menu isn\'t yours to use.' }], components: [] });
+      return;
+    }
+    const parts = String(d.data?.custom_id ?? '').split(':');   // pfconn:<verb>[:…]
+    const verb  = parts[1];
+    const snap  = () => {
+      const s = readSettingsSync();
+      return {
+        connections: Array.isArray(s.connections) ? s.connections : [],
+        primaryId: s.primaryConnectionId ?? null,
+        featureConnections: s.featureConnections ?? {},
+      };
+    };
+
+    if (verb === 'done')     { await respond(buildConnDoneView()); return; }
+    if (verb === 'home')     { await respond(buildConnHomeView(snap())); return; }
+    if (verb === 'features') { const s = snap(); await respond(buildFeaturesView(s)); return; }
+
+    if (verb === 'primary') {
+      const id = d.data?.values?.[0];
+      const known = snap().connections.some(c => String(c.id) === String(id));
+      if (known) {
+        await patchWardSettings({ primaryConnectionId: id });
+        console.log(`[discord] connection: ward set active -> ${id}`);
+      }
+      const s = snap();
+      const name = s.connections.find(c => String(c.id) === String(id));
+      await respond(buildConnHomeView({ ...s, note: known ? `✓ Active connection set to **${name?.name || name?.model || id}**.` : '' }));
+      return;
+    }
+    if (verb === 'feat') {
+      const feature = d.data?.values?.[0];
+      await respond(buildFeatureView({ feature, ...snap() }));
+      return;
+    }
+    if (verb === 'featset') {
+      const feature = parts[2];
+      const value   = d.data?.values?.[0];
+      if (FEATURE_CONNECTIONS.some(f => f.key === feature)) {
+        const s = snap();
+        const next = { ...(s.featureConnections || {}) };
+        if (value === DEFAULT_VALUE) delete next[feature];
+        else if (s.connections.some(c => String(c.id) === String(value))) next[feature] = value;
+        await patchWardSettings({ featureConnections: next });
+        console.log(`[discord] connection: ward routed ${feature} -> ${value === DEFAULT_VALUE ? 'primary' : value}`);
+      }
+      await respond(buildFeatureView({ feature, ...snap() }));
+      return;
+    }
+    await respond({ embeds: [{ description: 'That control has expired — type `!connection` for a fresh menu.' }], components: [] });
+  } catch (err) {
+    console.error('[discord] connection interaction failed:', err?.message ?? err);
+    try { await respond({ embeds: [{ description: 'Something went wrong — type `!connection` to try again.' }], components: [] }); }
+    catch { /* interaction already dead */ }
+  }
+}
+
 async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, settings, channelId, session, locationKey, regLoc, priorMessages = [] }) {
   // Pillar D semantic outgoing gate. Ward-private (the ward's own DM)
   // fast-paths; every other room is filtered before I say anything.
@@ -1881,7 +2092,7 @@ async function handleTurn(gw, msg, decision) {
     }
     if (decision.kind === 'ward-dm') {
       await sendChannelMessage(gw.config.token, msg.channel_id,
-        'The consent menu is for villagers about themselves — your full controls live in the Village panel of the web app (People → remember settings).').catch(() => {});
+        '`!consent` is the villagers\' menu about themselves. For your own controls here: `!queue` to review what I\'m holding for your OK, `!connection` to pick where I run. Your full settings live in the web app\'s Village and Connections panels.').catch(() => {});
       return;
     }
     // In a guild room: ignore quietly (personal data never renders in a room).
@@ -2528,11 +2739,18 @@ function onDispatch(t, d) {
     // Anything else — unknown namespace, other interaction types — is
     // ignored; there is nothing else interactive to click. Wrapped like
     // MESSAGE_CREATE: a bad interaction can never tear the gateway down.
-    if (d?.type === 3 && String(d?.data?.custom_id ?? '').startsWith(`${CONSENT_CID}:`)) {
-      (async () => {
-        try { await handleConsentInteraction(gw, d); }
-        catch (err) { console.error('[discord] interaction handler error:', err?.message ?? err); }
-      })();
+    if (d?.type === 3) {
+      const cid = String(d?.data?.custom_id ?? '');
+      const handler = cid.startsWith(`${CONSENT_CID}:`) ? handleConsentInteraction
+        : cid.startsWith(`${QUEUE_CID}:`) ? handleQueueInteraction
+        : cid.startsWith(`${CONN_CID}:`) ? handleConnectionInteraction
+        : null;
+      if (handler) {
+        (async () => {
+          try { await handler(gw, d); }
+          catch (err) { console.error('[discord] interaction handler error:', err?.message ?? err); }
+        })();
+      }
     }
     return;
   }
@@ -2584,6 +2802,16 @@ function onDispatch(t, d) {
         {
           const voiceAction = decision.isWard ? parseVoiceCommand(d.content) : null;
           if (voiceAction) { await handleVoiceCommand(gw, d, voiceAction); return; }
+        }
+
+        // Ward-only console commands, ward-DM only (personal data + settings
+        // never render in a shared room). `!queue` → the pending memory-consent
+        // menu; `!connection`/`!conn`/`!model` → active-connection + per-feature
+        // routing. Intercepted before any turn — exact code surfaces, no LLM. A
+        // villager typing these falls through to normal handling (just chat).
+        if (decision.isWard && decision.kind === 'ward-dm') {
+          if (isQueueCommand(d.content))      { await handleQueueCommand(gw, { msg: d }); return; }
+          if (isConnectionCommand(d.content)) { await handleConnectionCommand(gw, { msg: d }); return; }
         }
 
         // V8 lurk: read the room without replying.
