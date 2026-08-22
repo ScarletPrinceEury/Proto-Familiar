@@ -32,12 +32,15 @@ export function isGroupCall(roster) {
 
 /** The label to prefix a speaker's turn with, or null when none is wanted.
  *  In a group EVERYONE is labelled (my human too — the ward chose this: I need
- *  their turns distinguishable from a villager's). Solo → null (unattributed,
+ *  their turns distinguishable from a villager's). My human's label carries a
+ *  `(WARD)` marker so I never read their words as my own or a villager's — the
+ *  same disambiguation the text rooms use. Solo → null (unattributed,
  *  unchanged). */
-export function attributeSpeaker({ name, isGroup } = {}) {
+export function attributeSpeaker({ name, isGroup, isWard = false } = {}) {
   if (!isGroup) return null;
   const n = typeof name === 'string' ? name.trim() : '';
-  return n || null;
+  if (!n) return null;
+  return isWard ? `${n} (WARD)` : n;
 }
 
 /** Prefix a user turn with its speaker label. No label → the text unchanged

@@ -2749,8 +2749,13 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   ward enters a VC (`maybeAutoJoinVoice` off `VOICE_STATE_UPDATE`). **Pass 3d —
   group-call presence & attribution** (`voice-presence.js`, pure): in a group call
   (2+ humans) each turn is prefixed with the speaker's real name — my human's
-  included — in the live transcript and stored call history (solo calls unchanged;
-  the memory write still carries the speaker as its own field). Names come from a
+  included, marked `(WARD)` (0.11.18) so I never read their words as my own or a
+  villager's — in the live transcript and stored call history (solo calls unchanged;
+  the memory write still carries the speaker as its own field). The same
+  disambiguation covers multi-party **text** rooms: `attributeUserContent`
+  (`discord-gateway.js`) prefixes every guild-channel turn — a villager as
+  `[Name]:`, my human as `[Name (WARD)]:` — while a one-on-one ward DM stays raw
+  (there's only us). Baked into the stored content so it replays identically. Names come from a
   gateway user-object cache (`gw.userInfo`, seeded from `GUILD_CREATE` members +
   `VOICE_STATE_UPDATE.member`) via `nameForVoiceUser`/`discordVoiceDisplayName`,
   with the villager name winning through a one-read `villagerByAlias`. A

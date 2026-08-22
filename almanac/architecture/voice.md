@@ -427,7 +427,13 @@ module: `isGroupCall(roster)` is true once 2 or more humans share the call, and 
 when a label exists, so a solo call's transcript stays byte-identical to before
 [@voice-presence-js]. In a group call every turn is labelled, the ward's own turns included — a
 ward decision, made so the model can tell the ward's turns apart from a villager's rather than
-inferring it from context [@voice-presence-js]. `voice-discord-server.js` wires this into
+inferring it from context [@voice-presence-js]. `attributeSpeaker()` gained an `isWard` parameter
+(0.11.18) that appends a `(WARD)` marker to the ward's own group-call label (`"Zara (WARD)"`, not
+just `"Zara"`), after a live report that the Familiar kept reading the ward's words as its own or
+a villager's; the same disambiguation, `attributeUserContent()` in `discord-gateway.js`, covers
+multi-party **text** rooms — a villager's guild turn is prefixed `[Name]:`, the ward's is
+`[Name (WARD)]:`, and a one-on-one ward DM stays unprefixed, since there is only the two of them
+to tell apart [@voice-presence-js] [@discord-gateway-js]. `voice-discord-server.js` wires this into
 `runTurn()`: it resolves the speaker's name, computes `isGroupCall(roster)`, and prefixes the
 transcript before it reaches the model, while the memory write for the turn still carries the
 speaker as its own structured field rather than folding it into the text [@voice-discord-server-js].

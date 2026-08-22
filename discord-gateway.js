@@ -721,6 +721,20 @@ function nameForUser(user, villagers = []) {
   return byVillager ?? user?.global_name ?? user?.username ?? null;
 }
 
+/** How a stored/replayed turn is labelled so a multi-party transcript stays
+ *  legible to me. In a shared room (a guild channel) EVERY speaker is
+ *  name-prefixed — my human included, marked `(WARD)` — so I never read their
+ *  words as my own or a villager's (the reported confusion: I kept thinking my
+ *  human had said things they hadn't). A one-on-one ward DM stays unprefixed —
+ *  there's only us, nothing to disambiguate. A villager is always prefixed,
+ *  DM or room, as before. The label is baked into the stored content so it
+ *  replays identically across turns. */
+export function attributeUserContent({ isWard, kind, speakerName, wardName, content }) {
+  const body = String(content ?? '');
+  if (isWard) return kind === 'guild' ? `[${wardName} (WARD)]: ${body}` : body;
+  return speakerName ? `[${speakerName}]: ${body}` : body;
+}
+
 export function directedAtOthers(msg, { botUserId = null, villagers = [] } = {}) {
   const names = [];
   const add = (user) => {
@@ -1775,7 +1789,10 @@ async function observeMessage(gw, msg, decision) {
   // failed fetch degrades to a visible note, never blocks.
   const { attachments: obsAttachments, failed: obsFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
   const failNote = obsFailed > 0 ? '\n[image failed to load]' : '';
-  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + failNote;
+  const wardName = (readSettingsSync()?.userName || '').trim() || 'my human';
+  const userContent = attributeUserContent({
+    isWard: decision.isWard, kind: decision.kind, speakerName: decision.speakerName, wardName, content,
+  }) + failNote;
   // Same structured signals as a spoken turn, so a lurked-then-active room
   // can still see whose exchange a later untagged line continues.
   const turnSpeaker = nameForUser(msg.author, registry.villagers) ?? decision.speakerName ?? null;
@@ -1978,14 +1995,18 @@ async function handleTurn(gw, msg, decision) {
       };
     });
 
-  // Non-ward speakers are name-prefixed so multi-party rooms stay
-  // legible to me across turns. The ward's own words stay raw, same
-  // as the web chat.
+  // Speakers are name-prefixed so a multi-party room stays legible to me
+  // across turns — my human included, marked (WARD), so I never read their
+  // words as my own or a villager's. A one-on-one ward DM stays raw, same
+  // as the web chat (attributeUserContent gates on decision.kind).
   // Ingest this message's image attachments at arrival (§5) — stored beside
   // the content, materialized into provider image parts just before the call.
   const { attachments: turnAttachments, failed: turnFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
   const turnFailNote = turnFailed > 0 ? '\n[image failed to load]' : '';
-  const userContent = (decision.isWard ? content : `[${decision.speakerName}]: ${content}`) + turnFailNote;
+  const wardName = (settings?.userName || '').trim() || 'my human';
+  const userContent = attributeUserContent({
+    isWard: decision.isWard, kind: decision.kind, speakerName: decision.speakerName, wardName, content,
+  }) + turnFailNote;
   const turnAttField = turnAttachments.length ? { attachments: turnAttachments } : {};
 
   const phMsg = postHistoryMessage(settings);

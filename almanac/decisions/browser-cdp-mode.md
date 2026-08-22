@@ -23,7 +23,7 @@ ward's *already-running, logged-in* Chrome over the Chrome DevTools Protocol
 "own spec, own sign-off" precisely because the blast radius is the ward's authenticated life —
 every site their real browser is logged into [@browser-build-spec].
 
-**The decision: designed in full, deliberately parked — no code.** The ward reviewed the
+**Status: designed in full, deliberately parked — no code.** The ward reviewed the
 design and chose to hold it until the cheaper owned-profile modes (Passes 1–4 plus page
 watches) have been proven in real use, the same "prove it first" posture the spec applies to
 the Horizon #3 task-flows. This page records *why the design is shaped the way it is* so that
