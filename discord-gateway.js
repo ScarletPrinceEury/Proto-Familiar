@@ -43,7 +43,7 @@ import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCa
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
 import { hearVoiceNotes } from './voice-transcribe.js';
-import { extractContent } from './llm-call.js';
+import { extractTurnReply } from './llm-call.js';
 import { logDiscordWrite } from './discord-write-log.js';
 import { enqueueSessionByDay, readConsentPending, pruneConsentPending } from './memorization.js';
 import {
@@ -59,8 +59,9 @@ import {
 import {
   isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
   buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
+  buildEffortsView, buildEffortView, isSettableEffort,
 } from './ward-connections.js';
-import { PROVIDER_URLS } from './providers.js';
+import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
 import { recordThreat } from './threat-tracker.js';
 import { recordUserActivity } from './last-activity.js';
@@ -1076,11 +1077,23 @@ async function touchLocation(locationKey, sessionId) {
 // reasoning, so content came back EMPTY (silent turns) or a tool call was cut
 // off mid-JSON (garbled/wrong-looking tool reaches). A generous cap is free
 // for non-thinking models — they stop when done.
-const DISCORD_MAX_TOKENS = 4000;
+// Headroom for always-on-thinking models (GLM-5.3+): reasoning bills against
+// this cap, so a tight budget gets spent thinking and content comes back empty
+// (the "thinking dump" + lost-turn bug). reasoning_effort keeps it answer-first;
+// the raised cap is the belt to that suspenders so a legitimately long reply or
+// a heavier effort setting still lands.
+const DISCORD_MAX_TOKENS = 8000;
+
+// Honest fallback when a thinking model spends its whole budget reasoning and
+// reaches no answer (empty content). Better than dead air (RULE B) or dumping
+// raw chain-of-thought. Kept plain and short — an error-path note, not a
+// personality surface. Only used on my human's own direct turn.
+const THINKING_BUDGET_NOTE = "(I ran out of room mid-thought on that one and didn't land a reply — nudge me and I'll pick it back up.)";
 
 export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = PROVIDER_URLS[conn.provider];
   if (!url) throw new Error(`unknown provider: ${conn.provider}`);
+  const effort = resolveReasoningEffort(conn);
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -1093,6 +1106,7 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
       stream:      false,
       temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
       max_tokens:  DISCORD_MAX_TOKENS,
+      ...(effort ? { reasoning_effort: effort } : {}),
       ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
     }),
   });
@@ -1105,10 +1119,12 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
 
 async function callChat({ conn, messages, settings }) {
   const data = await callChatRaw({ conn, messages, settings });
-  // extractContent falls back to reasoning_content when a thinking model (or a
-  // proxy in front of one) leaves `content` empty — the answer is often THERE,
-  // just in the wrong field. Without this, real replies read as empty turns.
-  const content = extractContent(data.choices?.[0]?.message ?? {});
+  // extractTurnReply recovers an answer a proxy parked in reasoning_content, but
+  // will NOT surface raw chain-of-thought when a thinking model ran out of budget
+  // mid-thought (finish_reason=length, empty content) — that's the GLM-5.3
+  // "thinking dump", not an answer. An empty result here throws, and the caller
+  // decides (honest note / stay quiet); the user's message is already persisted.
+  const content = extractTurnReply(data.choices?.[0]);
   if (!content.trim()) throw new Error(`provider returned empty content (finish_reason=${data.choices?.[0]?.finish_reason ?? 'unknown'})`);
   return content;
 }
@@ -1681,6 +1697,33 @@ async function handleConnectionInteraction(gw, d) {
       await respond(buildFeatureView({ feature, ...snap() }));
       return;
     }
+    if (verb === 'efforts') { await respond(buildEffortsView(snap())); return; }
+    if (verb === 'effpick') {
+      const connId = d.data?.values?.[0];
+      await respond(buildEffortView({ connId, ...snap() }));
+      return;
+    }
+    if (verb === 'effset') {
+      // pfconn:effset:<connId> — connId parsed defensively (ids carry no ':').
+      const connId = parts.slice(2).join(':');
+      const value  = d.data?.values?.[0];
+      const s = snap();
+      if (isSettableEffort(value) && s.connections.some(c => String(c.id) === String(connId))) {
+        // Rewrite the whole connections array (mergeSettings replaces top-level
+        // keys wholesale): copy the target, set or clear its reasoningEffort.
+        const nextConns = s.connections.map(c => {
+          if (String(c.id) !== String(connId)) return c;
+          const copy = { ...c };
+          if (value === DEFAULT_VALUE) delete copy.reasoningEffort;
+          else copy.reasoningEffort = value;
+          return copy;
+        });
+        await patchWardSettings({ connections: nextConns });
+        console.log(`[discord] connection: ward set reasoning effort ${connId} -> ${value === DEFAULT_VALUE ? 'default' : value}`);
+      }
+      await respond(buildEffortView({ connId, ...snap() }));
+      return;
+    }
     await respond({ embeds: [{ description: 'That control has expired — type `!connection` for a fresh menu.' }], components: [] });
   } catch (err) {
     console.error('[discord] connection interaction failed:', err?.message ?? err);
@@ -2220,6 +2263,20 @@ async function handleTurn(gw, msg, decision) {
   }) + turnFailNote;
   const turnAttField = turnAttachments.length ? { attachments: turnAttachments } : {};
 
+  // Persist my human's message to the session NOW, before the model call — their
+  // words must never depend on the model succeeding. A thinking model that spends
+  // its whole budget reasoning (GLM-5.3's always-on thinking) can throw or return
+  // empty here, and the turn used to drop the very message it was answering, so
+  // the next turn had no idea what was asked (the reported vanishing-message
+  // loop). Written once here; the reply is appended when it lands. Every later
+  // branch reuses this object and never re-adds it.
+  const userTurn = { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField };
+  session.messages    = [...(session.messages ?? []), userTurn];
+  session.audienceTag = audienceTag;
+  session.updatedAt   = nowIso;
+  await writeSessionLog(session);
+  await touchLocation(decision.locationKey, session.sessionId);
+
   const phMsg = postHistoryMessage(settings);
   let apiMessages = [
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
@@ -2350,7 +2407,7 @@ async function handleTurn(gw, msg, decision) {
         // keep the tight background default.
         maxRounds: decision.isWard ? toolRoundsPerTurn(settings) : undefined,
       });
-      rawReply = extractContent(data?.choices?.[0]?.message ?? {});
+      rawReply = extractTurnReply(data?.choices?.[0]);
       turnRounds = Array.isArray(toolRounds) ? toolRounds : [];
     } catch (err) {
       // A whole-loop failure (e.g. provider error) must never cost the person a
@@ -2374,21 +2431,34 @@ async function handleTurn(gw, msg, decision) {
         console.warn('[discord] ward closing-text round failed:', err?.message ?? err);
       }
     }
-    // Still nothing to say — accumulate the turn and stay quiet, like an abstain.
+    // Still nothing to say. For MY HUMAN's own direct turn, silence here is the
+    // dead-air RULE B forbids — a thinking model that spent its whole budget
+    // reasoning (GLM-5.3) and never reached content. Say so honestly instead of
+    // vanishing or dumping raw chain-of-thought; their message is already saved,
+    // so fall through to deliver the note. For villager/ambient turns, no words
+    // is a fine abstain — stay quiet.
     if (!rawReply || !rawReply.trim()) {
-      session.messages = [
-        ...(session.messages ?? []),
-        { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
-      ];
-      session.audienceTag = audienceTag;
-      session.updatedAt   = new Date().toISOString();
-      await writeSessionLog(session);
-      await touchLocation(decision.locationKey, session.sessionId);
-      console.log(`[discord] tool turn produced no closing text in ${decision.locationKey} — stayed quiet`);
-      return;
+      if (decision.isWard && !decision.ambient) {
+        rawReply = THINKING_BUDGET_NOTE;
+      } else {
+        session.updatedAt = new Date().toISOString();
+        await writeSessionLog(session);
+        console.log(`[discord] tool turn produced no closing text in ${decision.locationKey} — stayed quiet`);
+        return;
+      }
     }
   } else {
-    rawReply = await callChat({ conn, messages: apiMessages, settings });
+    // A thinking model that spends its budget reasoning returns empty content →
+    // callChat throws. Never let that drop the turn: catch to empty and let the
+    // shared empty-handling below decide (honest note for my human, quiet flow
+    // otherwise). The user's message is already persisted.
+    rawReply = await callChat({ conn, messages: apiMessages, settings }).catch(err => {
+      console.warn('[discord] plain reply failed/empty:', err?.message ?? err);
+      return '';
+    });
+    if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient) {
+      rawReply = THINKING_BUDGET_NOTE;
+    }
   }
 
   // Ambient 'llm' turn where I chose to stay quiet: accumulate the
@@ -2398,14 +2468,9 @@ async function handleTurn(gw, msg, decision) {
   // Both strategies can now return [pass] — code paces eligibility,
   // model still decides if this specific moment is worth speaking into.
   if (decision.ambient && isAmbientAbstain(rawReply)) {
-    session.messages = [
-      ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
-    ];
-    session.audienceTag = audienceTag;
-    session.updatedAt   = new Date().toISOString();
+    // The message was already persisted before the model call — just note it.
+    session.updatedAt = new Date().toISOString();
     await writeSessionLog(session);
-    await touchLocation(decision.locationKey, session.sessionId);
     const reasoning = stripLeadingSilenceTags(rawReply);
     console.log(`[discord] ambient abstain in ${decision.locationKey} — stayed quiet`
       + (reasoning ? ` (reasoning: ${reasoning.slice(0, 80)})` : ''));
@@ -2424,26 +2489,21 @@ async function handleTurn(gw, msg, decision) {
     // Wait-streak (Pass 1): an offered defer, taken. ([pass] deliberately
     // does NOT count — room pacing, not outreach deferral.)
     Promise.resolve(recordWait('discord-defer')).catch(() => {});
-    session.messages = [
-      ...(session.messages ?? []),
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
-    ];
-    session.audienceTag = audienceTag;
-    session.updatedAt   = new Date().toISOString();
+    // The message was already persisted before the model call — just note it.
+    session.updatedAt = new Date().toISOString();
     await writeSessionLog(session);
-    await touchLocation(decision.locationKey, session.sessionId);
     console.log(`[discord] ambient defer in ${decision.locationKey} — revisit in ${Math.round(ms / 60_000)}min`);
     return;
   }
 
   // Pillar D filter → send → persist → rate slot → status, all shared with
   // the deferred-revisit path so neither can skip a step the other runs.
+  // My human's message is already in session.messages (persisted before the
+  // model call), so deliverReply only appends the assistant reply — no
+  // priorMessages, or it would double-record the turn.
   await deliverReply(gw, {
     rawReply, audienceTag, apiMessages, conn, settings,
     channelId: msg.channel_id, session, locationKey: decision.locationKey, regLoc,
-    priorMessages: [
-      { id: randomUUID(), role: 'user', content: userContent, timestamp: nowIso, speaker: turnSpeaker, targets: msgTargets, namedMe: msgNamedMe, ...turnAttField },
-    ],
   });
   console.log(`[discord] replied in ${decision.locationKey} (${decision.kind}, audience=${audienceTag})`);
 }

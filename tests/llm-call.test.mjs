@@ -1,7 +1,7 @@
 // llm-call.js — the shared background-loop chat call + thinking-model handling.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { callProviderChat, extractContent, foldReasoningIntoContent } from '../llm-call.js';
+import { callProviderChat, extractContent, foldReasoningIntoContent, extractTurnReply } from '../llm-call.js';
 
 const okFetch = (body) => async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
 
@@ -77,4 +77,30 @@ test('callProviderChat: HTTP error and provider error surface clearly', async ()
 
 test('callProviderChat: unknown provider throws before any fetch', async () => {
   await assert.rejects(() => callProviderChat({ provider: 'nope', apiKey: 'k', model: 'm', prompt: 'p' }), /Unknown provider/);
+});
+
+test('callProviderChat: sends reasoning_effort only when passed (opt-in)', async () => {
+  let sentBody;
+  const cap = async (_url, opts) => { sentBody = JSON.parse(opts.body); return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }) }; };
+  // Not passed → absent, so the ward-signed triage call stays byte-identical.
+  await callProviderChat({ provider: 'zai', apiKey: 'k', model: 'm', prompt: 'p', fetchFn: cap });
+  assert.equal('reasoning_effort' in sentBody, false);
+  // Passed → present.
+  await callProviderChat({ provider: 'zai', apiKey: 'k', model: 'm', prompt: 'p', reasoningEffort: 'low', fetchFn: cap });
+  assert.equal(sentBody.reasoning_effort, 'low');
+});
+
+test('extractTurnReply: content wins; length-exhaustion never dumps raw reasoning', () => {
+  // Real content always wins.
+  assert.equal(extractTurnReply({ message: { content: 'hello' }, finish_reason: 'stop' }), 'hello');
+  // THE bug: empty content + only reasoning + cut at the token cap → NOT an
+  // answer. Must return '' so the caller shows an honest note, not the CoT.
+  assert.equal(extractTurnReply({ message: { content: '', reasoning_content: 'long chain of thought…' }, finish_reason: 'length' }), '');
+  // Empty + stop + a parked answer in reasoning_content → recover it (the
+  // legitimate proxy-parking case foldReasoningIntoContent also serves).
+  assert.equal(extractTurnReply({ message: { content: '', reasoning_content: 'the answer' }, finish_reason: 'stop' }), 'the answer');
+  assert.equal(extractTurnReply({ message: { reasoning: 'r' }, finish_reason: 'stop' }), 'r');
+  // Nothing at all → ''.
+  assert.equal(extractTurnReply({ message: {}, finish_reason: 'stop' }), '');
+  assert.equal(extractTurnReply({}), '');
 });

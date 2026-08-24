@@ -263,7 +263,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Provider chat-completions URLs live in providers.js so thalamus.js can
 // share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
-import { PROVIDER_URLS } from './providers.js';
+import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
 import { listProviderModels } from './provider-models.js';
 import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './voice-bench-run.js';
 import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './voice-models.js';
@@ -333,7 +333,7 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts } = req.body;
+  const { provider, apiKey, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort } = req.body;
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —
@@ -686,6 +686,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   const payload = { model: model.trim(), messages: enrichedMessages, stream: !!stream };
   if (typeof temperature === 'number') payload.temperature = temperature;
   if (typeof max_tokens === 'number' && max_tokens > 0) payload.max_tokens = max_tokens;
+  // Reasoning effort for always-on-thinking models (GLM-5.3+): resolved from the
+  // active connection's setting + provider (default low for the z.ai family, off
+  // elsewhere unless set). Keeps chat answer-first instead of spending the whole
+  // budget reasoning. Same helper the Discord path uses.
+  {
+    const effort = resolveReasoningEffort({ provider, reasoningEffort });
+    if (effort) payload.reasoning_effort = effort;
+  }
   // Context-sensitive tool surfacing (tool-surfacing-build-spec): when the
   // ward has it on, only core + triggered modules are advertised; everything
   // stays reachable via request_tools (same-turn recovery). Default OFF.

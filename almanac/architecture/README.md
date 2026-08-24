@@ -126,6 +126,10 @@ unregistered guild channel's activity: off, it goes into the capped knock list f
 registration; on, `noteUnregisteredGuild` auto-creates a Location for it via `upsertLocation`,
 born at the Strangers floor so it grants nothing until the ward assigns it a circle — the same
 "a knock grants nothing" guarantee, just pre-listed instead of queued [@discord-gateway-js].
+Alongside the villager-facing `!consent` menu, `discord-gateway.js` intercepts two more
+component menus in the ward's own DM only: `!queue` and `!connection` — see
+[Ward Discord console](ward-console) for the pending memory-consent queue, connection routing,
+and reasoning-effort controls they expose.
 
 ## Storage shape
 
@@ -152,6 +156,7 @@ If you're asking yourself... go to:
 - **How does the Familiar click and fill on the web?** → [Browser](browser)
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
+- **How does the ward control settings from Discord instead of the web app?** → [Ward Discord console](ward-console)
 
 ## Where to go next
 
@@ -182,6 +187,9 @@ If you're asking yourself... go to:
   human trusted contact works.
 - [Injection guard: wiring history](injection-guard-gap) — the pattern-scanner's
   wiring history and current boundaries, and the incident that produced it.
+- [Ward Discord console](ward-console) — the ward-only `!queue` and `!connection` Discord
+  menus: the pending memory-consent queue, active-connection and per-feature routing, and
+  per-connection reasoning-effort control.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
 - [Entity-as-subject](../concepts/entity-as-subject) and
