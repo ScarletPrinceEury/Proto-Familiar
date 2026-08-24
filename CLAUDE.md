@@ -426,6 +426,25 @@ later tuned per-surface in 0.9.8) is the reference implementation: on budget
 exhaustion, force one closing text round with tools stripped, plus a
 first-person note that the pending calls did NOT run.
 
+**RULE B corollary — an always-on-thinking model turns "generous cap + reasoning
+fallback" against you (0.11.20, GLM-5.3).** The RULE A guarantees assume a
+thinking model that *usually* produces content and only *sometimes* parks the
+answer in `reasoning_content`. GLM-5.3 made thinking MANDATORY (`reasoning_effort`
+defaults to `max`, can't be turned off), so a normally-shaped request routinely
+spends the WHOLE budget reasoning and returns empty content — at which point the
+`reasoning_content` fallback (`extractContent`) faithfully surfaces the raw
+chain-of-thought AS the reply (the "thinking dump"), and every empty/throw path
+silently dropped the user's own message. Three compounding lessons: (1) **send an
+explicit `reasoning_effort`** for always-on-thinking providers (`resolveReasoningEffort`,
+per-connection, auto-`low` for the z.ai family) — don't let the model's own `max`
+default stand. (2) **The interactive reply extractor is NOT `extractContent`** —
+use `extractTurnReply`, which returns `''` on `finish_reason='length'` (budget
+exhausted = no answer, never dump CoT) and only falls back to reasoning on a
+non-length empty. (3) **Persist my human's message BEFORE the model call**, not at
+the reply — their words must never depend on the model succeeding. The recorded
+mistake: the message that triggered the turn vanished from the session log, so the
+next turn had no idea what was asked, and the whole thing looped.
+
 **RULE C — a capability lands in the shared turn path, or the spec carries a
 surface matrix.** Turn-machinery features must live in code all surfaces
 share; where per-surface wiring is unavoidable, the build spec must contain

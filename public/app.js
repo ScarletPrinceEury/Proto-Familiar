@@ -1496,6 +1496,34 @@ function renderConnectionsList() {
     });
     info.appendChild(visRow);
 
+    // Reasoning effort (always-on-thinking models like GLM-5.3). Default = the
+    // app's sensible choice (low for z.ai reasoning models, nothing sent
+    // elsewhere); Low/High/Max override it; Off never sends it. Stored on the
+    // connection, which already syncs. Set this to Low on a GLM-5.3 connection
+    // if replies come back as raw "thinking" — 5.3 reasons at max by default.
+    const reRow = document.createElement('div');
+    reRow.className = 'conn-vision';   // reuse the same compact row styling
+    const rcur = ['low', 'high', 'max', 'off'].includes(conn.reasoningEffort) ? conn.reasoningEffort : '';
+    const rId = `conn-effort-${conn.id}`;
+    reRow.innerHTML =
+      `<label for="${rId}">Reasoning effort</label>` +
+      `<select id="${rId}" class="ke-select">` +
+      `<option value=""${rcur === ''    ? ' selected' : ''}>Default</option>` +
+      `<option value="low"${rcur === 'low'  ? ' selected' : ''}>Low</option>` +
+      `<option value="high"${rcur === 'high' ? ' selected' : ''}>High</option>` +
+      `<option value="max"${rcur === 'max'  ? ' selected' : ''}>Max</option>` +
+      `<option value="off"${rcur === 'off'  ? ' selected' : ''}>Off</option>` +
+      `</select>`;
+    reRow.querySelector('select').addEventListener('change', (e) => {
+      const c = state.connections.find(x => x.id === conn.id);
+      if (c) {
+        if (e.target.value) c.reasoningEffort = e.target.value;
+        else delete c.reasoningEffort;   // Default = unset
+        saveSettings();
+      }
+    });
+    info.appendChild(reRow);
+
     // Actions column
     const actions = document.createElement('div');
     actions.className = 'conn-actions';
@@ -3464,6 +3492,7 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       provider:    conn.provider,
       apiKey:      conn.apiKey,
       model:       conn.model,
+      reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
       stream:      true,
       temperature: state.temperature,
@@ -3679,6 +3708,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       provider:    conn.provider,
       apiKey:      conn.apiKey,
       model:       conn.model,
+      reasoningEffort: conn.reasoningEffort,   // server resolves (default low for z.ai reasoning models)
       messages:    apiMessages,
       stream:      false,
       temperature: state.temperature,

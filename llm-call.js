@@ -41,6 +41,27 @@ export function extractContent(message = {}) {
 }
 
 /**
+ * The reply for an INTERACTIVE chat turn, unlike extractContent's blanket
+ * reasoning fallback. A reasoning model whose budget ran out mid-thought
+ * (finish_reason === 'length', empty content) has produced NO answer — only
+ * chain-of-thought parked in reasoning_content. Surfacing that raw CoT as the
+ * reply is the GLM-5.3 "thinking dump" bug. So:
+ *   - real content wins,
+ *   - empty + finish_reason 'length' → '' (budget exhausted: the caller treats
+ *     it as no-reply — an honest note or a closing round, never a CoT dump),
+ *   - empty otherwise → the reasoning fallback (a proxy that legitimately parks
+ *     a *finished* answer in reasoning_content, the case extractContent serves).
+ * Pass the whole `choice` so finish_reason is in scope.
+ */
+export function extractTurnReply(choice = {}) {
+  const message = choice?.message ?? {};
+  const content = message?.content ?? '';
+  if (content && content.trim()) return content;
+  if (choice?.finish_reason === 'length') return '';
+  return message?.reasoning_content || message?.reasoning || '';
+}
+
+/**
  * Normalise a completion's `message` in place so `content` carries the answer a
  * non-stream caller reads. A thinking model leaves `content` empty with the
  * answer in `reasoning_content`; without this, a raw passthrough hands the
@@ -64,6 +85,7 @@ export function foldReasoningIntoContent(message) {
 export async function callProviderChat({
   provider, apiKey, model, prompt, messages,
   maxTokens = DEFAULT_MAX_TOKENS, temperature = 0.7, fetchFn = fetch,
+  reasoningEffort = null,
 }) {
   const url = PROVIDER_URLS[provider];
   if (!url) throw new Error(`Unknown provider: ${provider}`);
@@ -81,6 +103,9 @@ export async function callProviderChat({
       stream:      false,
       temperature,
       max_tokens:  maxTokens,
+      // Opt-in only: callers that want it pass a resolved value. The ward-signed
+      // triage call does NOT pass it, so its request stays byte-identical.
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     }),
   });
 
