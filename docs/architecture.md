@@ -1001,7 +1001,11 @@ a room) and intercepted before any turn, beside `!update`/`!call`.
     locked, atomic, wholesale-top-level `mergeSettings` write the HTTP
     `PUT /api/settings` uses, so a Discord change and a web change can't
     tear the file. `pfconn:*` custom_ids; a `__default__` sentinel clears a
-    feature override back to the primary.
+    feature override back to the primary. A **Reasoning effort** submenu
+    (0.11.20) sets each connection's `reasoningEffort` (Default/Low/High/Max/Off
+    — the Discord twin of the connection-editor dropdown) by rewriting the whole
+    `connections` array through the same `patchWardSettings`; `__default__`
+    clears the override.
   - Both interaction handlers **re-check that the clicking user is the ward**
     on every event (`interactionIsWard` → `discordWardUserId`) — a villager
     clicking a forwarded control is refused. The gateway's

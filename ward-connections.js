@@ -87,9 +87,94 @@ export function buildConnHomeView({ connections = [], primaryId = null, featureC
   }
   components.push(row(
     btn(`${CONN_CID}:features`, 'Per-feature routing →', 2, conns.length === 0),
+    btn(`${CONN_CID}:efforts`, 'Reasoning effort →', 2, conns.length === 0),
     btn(`${CONN_CID}:done`, 'Done', 1),
   ));
   return { embeds: [embed], components };
+}
+
+// Reasoning-effort choices for the per-connection picker. DEFAULT_VALUE clears
+// the override (back to the app default: low for z.ai reasoning models).
+const EFFORT_CHOICES = [
+  { value: DEFAULT_VALUE, label: 'Default' },
+  { value: 'low',  label: 'Low' },
+  { value: 'high', label: 'High' },
+  { value: 'max',  label: 'Max' },
+  { value: 'off',  label: 'Off' },
+];
+const EFFORT_VALUES = new Set(['low', 'high', 'max', 'off']);
+
+/** A connection's current reasoning-effort setting as a display word. */
+export function effortLabelOf(conn) {
+  const e = String(conn?.reasoningEffort ?? '').trim().toLowerCase();
+  return EFFORT_VALUES.has(e) ? e : 'default';
+}
+
+/** Is a value a settable effort (including the clear-to-default sentinel)? */
+export function isSettableEffort(value) {
+  return value === DEFAULT_VALUE || EFFORT_VALUES.has(value);
+}
+
+/** The list of connections with their current effort + a picker. */
+export function buildEffortsView({ connections = [] } = {}) {
+  const conns = Array.isArray(connections) ? connections : [];
+  const lines = conns.map(c => `• **${connLabel(c)}** — ${effortLabelOf(c)}`);
+  return {
+    embeds: [{
+      title: 'Reasoning effort',
+      color: EMBED_COLOR,
+      description:
+        `How hard each connection's model thinks before it answers. Always-on-thinking ` +
+        `models (GLM-5.3) reason at **max** by default — set one to **Low** if its replies ` +
+        `come back as raw "thinking".\n\n` +
+        (lines.length ? lines.join('\n') : 'No connections yet.'),
+      footer: { text: 'Choose a connection to change its effort.' },
+    }],
+    components: [
+      ...(conns.length ? [row({
+        type: 3,
+        custom_id: `${CONN_CID}:effpick`,
+        placeholder: 'Choose a connection…',
+        options: conns.slice(0, 25).map(c => ({
+          label: connLabel(c),
+          value: String(c.id),
+          description: `now: ${effortLabelOf(c)}`.slice(0, 100),
+        })),
+      })] : []),
+      row(btn(`${CONN_CID}:home`, '← Back', 2)),
+    ],
+  };
+}
+
+/** One connection: pick its reasoning effort (or reset to default). */
+export function buildEffortView({ connId, connections = [] }) {
+  const conns = Array.isArray(connections) ? connections : [];
+  const conn = conns.find(c => String(c.id) === String(connId));
+  const cur = effortLabelOf(conn);
+  return {
+    embeds: [{
+      title: conn ? connLabel(conn) : 'Reasoning effort',
+      color: EMBED_COLOR,
+      description:
+        `Right now: **${cur}**.\n\n` +
+        `**Default** — my sensible choice (Low for z.ai reasoning models, nothing sent elsewhere).\n` +
+        `**Low / High / Max** — how deeply the model reasons (higher = slower, more tokens).\n` +
+        `**Off** — never send an effort (only if the model rejects the setting).`,
+    }],
+    components: [
+      row({
+        type: 3,
+        custom_id: `${CONN_CID}:effset:${connId}`,
+        placeholder: 'Set reasoning effort…',
+        options: EFFORT_CHOICES.map(ch => ({
+          label: ch.label,
+          value: ch.value,
+          default: ch.value === DEFAULT_VALUE ? cur === 'default' : ch.value === cur,
+        })),
+      }),
+      row(btn(`${CONN_CID}:efforts`, '← Back', 2)),
+    ],
+  };
 }
 
 /** The per-feature list — each feature with its current routing + a picker. */

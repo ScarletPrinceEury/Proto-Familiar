@@ -59,6 +59,7 @@ import {
 import {
   isConnectionCommand, CONN_CID, DEFAULT_VALUE, FEATURE_CONNECTIONS,
   buildConnHomeView, buildFeaturesView, buildFeatureView, buildConnDoneView, buildConnText,
+  buildEffortsView, buildEffortView, isSettableEffort,
 } from './ward-connections.js';
 import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
 import { scoreMessage } from './crisis-signals.js';
@@ -1694,6 +1695,33 @@ async function handleConnectionInteraction(gw, d) {
         console.log(`[discord] connection: ward routed ${feature} -> ${value === DEFAULT_VALUE ? 'primary' : value}`);
       }
       await respond(buildFeatureView({ feature, ...snap() }));
+      return;
+    }
+    if (verb === 'efforts') { await respond(buildEffortsView(snap())); return; }
+    if (verb === 'effpick') {
+      const connId = d.data?.values?.[0];
+      await respond(buildEffortView({ connId, ...snap() }));
+      return;
+    }
+    if (verb === 'effset') {
+      // pfconn:effset:<connId> — connId parsed defensively (ids carry no ':').
+      const connId = parts.slice(2).join(':');
+      const value  = d.data?.values?.[0];
+      const s = snap();
+      if (isSettableEffort(value) && s.connections.some(c => String(c.id) === String(connId))) {
+        // Rewrite the whole connections array (mergeSettings replaces top-level
+        // keys wholesale): copy the target, set or clear its reasoningEffort.
+        const nextConns = s.connections.map(c => {
+          if (String(c.id) !== String(connId)) return c;
+          const copy = { ...c };
+          if (value === DEFAULT_VALUE) delete copy.reasoningEffort;
+          else copy.reasoningEffort = value;
+          return copy;
+        });
+        await patchWardSettings({ connections: nextConns });
+        console.log(`[discord] connection: ward set reasoning effort ${connId} -> ${value === DEFAULT_VALUE ? 'default' : value}`);
+      }
+      await respond(buildEffortView({ connId, ...snap() }));
       return;
     }
     await respond({ embeds: [{ description: 'That control has expired — type `!connection` for a fresh menu.' }], components: [] });
