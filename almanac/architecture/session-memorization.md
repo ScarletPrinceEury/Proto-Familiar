@@ -20,6 +20,9 @@ sources:
   - id: tomes-doc
     type: file
     path: docs/tomes.md
+  - id: ward-consent-queue-js
+    type: file
+    path: ward-consent-queue.js
   - id: naming-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/6ad1c817-Naming_a_new_entitycore_module.txt
@@ -130,7 +133,7 @@ The consent gate (`resolveRememberGate`) is source-aware and takes `{direct, has
 - **Third-party subjects** (a registered villager subject, OR a named-but-unregistered person → `hasNamedSubjects`) → **asks for sensitive categories in any channel** [@claude-md]. A stranger's sensitive fact is never swept in without asking.
 - **Indirect channels** (group room, shared surface) → **still asks** [@claude-md]. Even ward-private content surfaced indirectly needs explicit consent.
 
-This design killed the confusing flood of date-less consent asks for things the ward said directly. Rationale: memories are what the Familiar *experienced*; being told something directly IS the consent. The `[PENDING MEMORY CONSENT]` block now carries each item's `date` + `reason` (`shared-room`/`third-party`) so asks are explained and time-anchored [@claude-md]. Outcomes are tracked in `.consent-pending.json` for `thalamus.js` to surface.
+This design killed the confusing flood of date-less consent asks for things the ward said directly. Rationale: memories are what the Familiar *experienced*; being told something directly IS the consent. The `[PENDING MEMORY CONSENT]` block now carries each item's `date` + `reason` (`shared-room`/`third-party`) so asks are explained and time-anchored [@claude-md]. Outcomes are tracked in `.consent-pending.json` for `thalamus.js` to surface. The same file also backs a Discord twin of this queue: the ward's `!queue` command in the [Ward Discord console](ward-console) settles items from a Discord menu through the same `confirmConsentMemories`/`dropPendingMemories` calls, so an item settled from either surface disappears from both [@ward-consent-queue-js].
 
 Both paths (day-anchored segmentation and consent gating) extend the same queue and retry mechanics described above rather than replacing them.
 
@@ -157,3 +160,5 @@ and the audience floor at recall time.
   not-yet-implemented design for reconciling writes when more than one process can write to the
   same Tome entry; this subsystem's single-writer, mutex-serialized model is the simpler thing
   that shipped instead.
+- [Ward Discord console](ward-console) — the `!queue` command, a Discord twin of the pending
+  memory-consent queue this page describes.
