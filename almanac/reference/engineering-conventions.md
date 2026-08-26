@@ -32,6 +32,9 @@ sources:
   - id: voice-transcribe-js
     type: file
     path: voice-transcribe.js
+  - id: tome-macros-js
+    type: file
+    path: tome-macros.js
 ---
 
 # Engineering Conventions
@@ -183,6 +186,15 @@ literal string "my human" instead of a macro token, because those blocks are ass
 injected directly by `server.js`/`thalamus.js`/`temporal-format.js` rather than passed
 through a macro-substitution call site [@claude-md]. Reintroducing a macro token into one of
 those blocks is a regression CLAUDE.md records having already fixed once (the 0.7.83 audit).
+
+Tome (lorebook) content is a fourth, deliberately named exception to the closed three-boundary
+list above, added in 0.11.22-alpha: `tome-macros.js`'s `resolveTomeMacros(text, settings)`
+resolves `{{user}}`/`{{char}}` plus a set of toggle and value macros inside injected Tome
+entries specifically, because a lorebook entry can describe live ward-facing state and is only
+accurate if resolved at injection time rather than at authoring time [@tome-macros-js]. See
+[Tomes and keyword lore](../architecture/tomes-and-lore) for the full macro table, why toggle
+macros read the ward-facing setting rather than the deployment env off-switch, and the
+self-documenting Familiar Manual tome this boundary exists to serve.
 
 The browser's own prompt assembly is a separate implementation of the same boundary-1
 principle: `public/app.js`'s `applyNameVars` resolves `{{user}}` and `{{char}}`, plus two

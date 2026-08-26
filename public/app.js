@@ -1795,7 +1795,25 @@ function applyNameVars(text) {
     .replace(/\{\{timeSinceLastSession\}\}/gi, () => {
       const ms = timeSinceLastSessionEnded();
       return ms !== null ? formatDuration(ms) : 'no prior session';
-    });
+    })
+    // Live-settings macros for tome content (the self-documenting manual tome).
+    // ⚠️ PARITY: the names + on/off logic mirror TOME_MACROS in tome-macros.js
+    // (server); keep the two in sync — a test pins the shared name set.
+    .replace(/\{\{\s*visionActive\s*\}\}/gi,    () => (state.visionEnabled    !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*voiceActive\s*\}\}/gi,     () => (state.voiceEnabled     === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*discordActive\s*\}\}/gi,   () => (state.discordEnabled   === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*ponderingActive\s*\}\}/gi, () => (state.ponderingEnabled !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*warmthActive\s*\}\}/gi,    () => (state.warmthEnabled    !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*noticingActive\s*\}\}/gi,  () => (state.noticingEnabled  !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*calendarActive\s*\}\}/gi,  () => (state.gcalEnabled      === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*browserActive\s*\}\}/gi,   () => (state.browseEnabled    === true  ? 'on' : 'off'))
+    .replace(/\{\{\s*charName\s*\}\}/gi,         () => (state.charName || 'the Familiar'))
+    .replace(/\{\{\s*userName\s*\}\}/gi,         () => (state.userName || 'my human'))
+    .replace(/\{\{\s*activeModel\s*\}\}/gi,      () => {
+      const c = (state.connections || []).find(x => x.id === state.primaryConnectionId);
+      return c?.name || c?.model || 'not set';
+    })
+    .replace(/\{\{\s*scanDepth\s*\}\}/gi,        () => String(state.tomeScanDepth ?? 4));
 }
 
 // ── Message building ─────────────────────────────────────────────

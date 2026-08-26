@@ -264,6 +264,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // share them when it builds the env block for Phylactery. See that file
 // for the rationale and how to add a new provider.
 import { PROVIDER_URLS, resolveReasoningEffort } from './providers.js';
+import { ensureManualTome } from './manual-tome.js';
 import { listProviderModels } from './provider-models.js';
 import { startBenchmark, statusOf, cancelBenchmark, resetBenchmark, reportPathsRelative } from './voice-bench-run.js';
 import { composePlan, evaluatePlan, availableAsrLangs, CAPABILITY_TIERS, VOICE_ENGINES, formatBytes } from './voice-models.js';
@@ -5206,6 +5207,11 @@ const httpServer = app.listen(PORT, HOST, async () => {
   } else {
     console.log('[threat] crisis-signal detection ACTIVE in chat path. Each fire is logged as "[threat] scored ±N on chat msg [signal,...]". Hard-disable with PROTO_FAMILIAR_THREAT_DISABLED=1.');
   }
+  // Seed the self-documenting manual tome once (enabled + graduation-protected).
+  // Flag-tracked inside, so a ward who deletes it isn't overridden. Best-effort.
+  ensureManualTome(TOMES_DIR)
+    .then(r => { if (r.seeded) console.log(`[manual] seeded the "${'Familiar Manual'}" tome (enabled, protected)`); })
+    .catch(err => console.error('[manual] seed failed (skipping):', err?.message ?? err));
   startMemorizationWorker();
   startAutonomousPondering();
   startRemindersScheduler();
