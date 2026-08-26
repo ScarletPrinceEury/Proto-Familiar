@@ -1,13 +1,40 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { findChromium, status, extractPageData } from '../browser-driver.js';
+import { findChromium, status, extractPageData, settlePage } from '../browser-driver.js';
 import { buildRefTable, isProtectedField } from '../browser-lens.js';
 
 test('status() before any launch reports not running, never throws', () => {
   const s = status();
   assert.equal(s.running, false);
   assert.equal(s.tabs, 0);
+});
+
+test('settlePage: waits for load → networkidle → a floor, bounded, swallowing rejections', async () => {
+  // The JS-render fix: after domcontentloaded we wait for the page to finish
+  // loading + wiring before reading it, but never hang on a site that never
+  // idles. A mock page proves the contract with no browser.
+  const calls = [];
+  const pg = {
+    waitForLoadState: async (state, opts) => {
+      calls.push({ kind: 'load-state', state, timeout: opts?.timeout });
+      if (state === 'networkidle') throw new Error('never goes idle'); // must be swallowed
+    },
+    waitForTimeout: async (ms) => { calls.push({ kind: 'floor', ms }); },
+  };
+  await assert.doesNotReject(() => settlePage(pg, { total: 3500 }));
+  assert.deepEqual(calls.map(c => c.kind === 'load-state' ? c.state : 'floor'),
+    ['load', 'networkidle', 'floor']);
+  // Every wait is bounded to the remaining budget (can't exceed total).
+  for (const c of calls) {
+    const t = c.timeout ?? c.ms;
+    if (typeof t === 'number') assert.ok(t >= 0 && t <= 3500, `bounded: ${t}`);
+  }
+});
+
+test('settlePage: total:0 still resolves without throwing', async () => {
+  const pg = { waitForLoadState: async () => {}, waitForTimeout: async () => {} };
+  await assert.doesNotReject(() => settlePage(pg, { total: 0 }));
 });
 
 test('findChromium returns a path or null, never throws', () => {

@@ -436,11 +436,30 @@ export async function snapshot() {
 }
 
 // ── Navigation & acts ──────────────────────────────────────────────────────
+
+// Let a JS-rendered page finish loading + wiring itself up before we read or
+// act on it. `domcontentloaded` fires when the HTML is parsed but BEFORE the
+// external JS runs — on an SPA / framework / Carrd-style site the interactive
+// handlers aren't attached yet, so a snapshot taken then reads a half-built page
+// and a click lands on an un-wired element and appears to do nothing (the
+// reported "sees some links but nothing reacts"). Each wait is bounded and
+// best-effort so a site that never goes idle (analytics, websockets, long-poll)
+// can't hang the turn — we wait for `load`, then a short quiet window, then a
+// small floor for framework microtasks / hash-nav handlers to run.
+export async function settlePage(pg, { total = 3500 } = {}) {
+  const deadline = Date.now() + Math.max(0, total);
+  const left = () => Math.max(0, deadline - Date.now());
+  try { await pg.waitForLoadState('load', { timeout: Math.min(left(), 2500) }); } catch { /* slow/streaming — proceed */ }
+  try { await pg.waitForLoadState('networkidle', { timeout: Math.min(left(), 1500) }); } catch { /* never idle — proceed */ }
+  try { await pg.waitForTimeout(Math.min(left(), 250)); } catch { /* closed — proceed */ }
+}
+
 export async function navigate(url, opts) {
   await ensureContext(opts);
   const pg = currentPage();
   pg.__pfGeneration = (pg.__pfGeneration || 0) + 1;
   await pg.goto(url, { waitUntil: 'domcontentloaded' });
+  await settlePage(pg);            // wait for JS to render + wire before the first read
   return snapshot();
 }
 
@@ -463,6 +482,7 @@ export async function readPage(url, opts) {
   state.tabs.delete(pg);                       // belt-and-suspenders if the event still registered it
   try {
     await pg.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+    await settlePage(pg);            // let JS render before we read the DOM string
     return { html: await pg.content(), url: pg.url() };
   } finally {
     await pg.close().catch(() => {});
@@ -599,7 +619,13 @@ export async function act({ ref, target, role = null, action, value, onDialog = 
     pg.off('dialog', onDlg);
     return { error: `couldn't ${action} ${ref}: ${err.message.split('\n')[0]}` };
   }
-  await pg.waitForTimeout(150); // let a nav/DOM settle enough to diff
+  // Give a JS-driven effect (a framework re-render, a Carrd section swap, a
+  // client-side route or hash-nav) time to land before we re-read — the fixed
+  // 150ms missed anything slower than a synchronous DOM tweak. Bounded so it
+  // can't hang. Shorter budget than a full navigation. A URL/hash change is
+  // still surfaced by computeDelta's before/after url diff, so the Familiar can
+  // tell an in-page anchor (Carrd's `#characters`) actually moved.
+  await settlePage(pg, { total: 2000 });
   pg.off('dialog', onDlg);
   const after = await snapshot();
   return { before, after: after.pageData, event, actedRef: ref, actionLabel: action, grantUsed };
