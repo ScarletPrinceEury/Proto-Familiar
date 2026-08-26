@@ -52,6 +52,8 @@ import {
 } from './villager-consent.js';
 import { findVillagerByAlias } from './village.js';
 import { mergeSettings } from './settings-merge.js';
+import { readAllTomes } from './tome-store.js';
+import { activateLore, foldLoreForPrompt } from './tome-lore.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
@@ -1115,6 +1117,45 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
   const data = JSON.parse(text);
   if (data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message ?? 'provider error'));
   return data;
+}
+
+function discordTomesOff() {
+  return process.env.PROTO_FAMILIAR_DISCORD_TOMES_DISABLED === '1';
+}
+
+// Keyword-lore (tomes) for a Discord turn. The browser matches lore against its
+// own tome cache; a Discord turn has no browser, so we read the tome files and
+// run the same engine (tome-lore.js) here. Returns injectable strings by slot
+// ({ lead, tail, atDepth }) — empty when off, when there are no tomes, or when
+// nothing matched. NEVER throws into the turn; a bad tome degrades to no lore.
+async function activeDiscordLore({ content, session, settings, locationKey }) {
+  const none = { lead: '', tail: '', atDepth: '' };
+  if (discordTomesOff()) return none;
+  try {
+    const tomes = await readAllTomes(path.join(__dirname, 'tomes'));
+    if (!tomes.length) return none;
+    const priorTurns = (session.messages ?? []).filter(m => m.role === 'user' || m.role === 'assistant');
+    const activated = activateLore(tomes, content, {
+      messages: session.messages ?? [],
+      opts: {
+        scanDepth:         settings.tomeScanDepth,
+        recursive:         settings.tomeRecursive,
+        maxRecursionSteps: settings.tomeMaxRecursionSteps,
+        caseSensitive:     settings.tomeCaseSensitive,
+        matchWholeWords:   settings.tomeMatchWholeWords,
+      },
+      // turnCount drives per-entry `delay`; timedEffects (sticky/cooldown) are
+      // not persisted across Discord turns yet (v1) — a documented follow-up.
+      env: { turnCount: priorTurns.length, charName: settings.charName, generationMode: 'normal' },
+    });
+    const n = ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth']
+      .reduce((s, k) => s + (activated[k]?.length || 0), 0);
+    if (n) console.log(`[discord] tomes: ${n} lore entr${n === 1 ? 'y' : 'ies'} activated in ${locationKey}`);
+    return foldLoreForPrompt(activated);
+  } catch (err) {
+    console.error('[discord] tome lore activation failed (skipping):', err?.message ?? err);
+    return none;
+  }
 }
 
 async function callChat({ conn, messages, settings }) {
@@ -2234,7 +2275,13 @@ async function handleTurn(gw, msg, decision) {
   // Discord" bug). Fold them in here from settings: the core segment sits with
   // the identity (static → persona), the post-history prompt trails the turn.
   const coreSeg = coreSystemSegment(settings);
-  const systemContent = [enriched.static, coreSeg, preamble, availability].filter(Boolean).join('\n\n---\n\n');
+  // Keyword-lore (tomes): matched server-side (the browser isn't here), injected
+  // by slot. lead (sys_top + before_char) sits ABOVE the identity; tail
+  // (after_char + sys_bottom) BELOW the system block; at-depth rides near the
+  // turn (added to apiMessages below). session.messages here is prior history —
+  // the current message (`content`) is scanned as the live input, not yet in it.
+  const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey });
+  const systemContent = [lore.lead, enriched.static, coreSeg, preamble, availability, lore.tail].filter(Boolean).join('\n\n---\n\n');
   const history = (session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
@@ -2282,6 +2329,7 @@ async function handleTurn(gw, msg, decision) {
     ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
     ...history,
     ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
+    ...(lore.atDepth ? [{ role: 'system', content: lore.atDepth }] : []),
     { role: 'user', content: userContent, ...turnAttField },
     ...(phMsg ? [phMsg] : []),
   ];

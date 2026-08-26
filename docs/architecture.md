@@ -1041,6 +1041,23 @@ raw chain-of-thought is never delivered as the reply; `callChatRaw` sends
 own direct turn an empty result yields an honest note (`THINKING_BUDGET_NOTE`)
 rather than dead air or a CoT dump; villager/ambient empties stay quiet. Every
 downstream branch reuses the one persisted turn (no double-record).
+**Keyword-lore (tomes) server-side (0.11.21).** Tomes are keyword-triggered
+lore; the browser matched them against `state.tomeCache`, so a Discord turn
+(no browser) was blind to them. `tome-lore.js` is a faithful Node port of
+`app.js`'s `activateTomeEntries` (keys / secondary-selective logic / constant /
+probability / position / insertion_order / per-entry scanDepth / case+whole-word
+/ groups / recursion / delay / triggers / characterFilter — every input
+injected, pure, tested). `tome-store.js` `readAllTomes(dir)` reads the same
+`tomes/*.json` files the endpoints write. `handleTurn` calls `activeDiscordLore`
+(off-switch `PROTO_FAMILIAR_DISCORD_TOMES_DISABLED=1`, reuses the `tome*` scan
+settings): it scans prior history + the live message, then injects activated
+entries — `sys_top`+`before_char` as the system LEAD (above identity),
+`after_char`+`sys_bottom` as the TAIL, `at_depth` as a system message near the
+turn. Fail-soft: a bad/corrupt tome degrades to no lore, never throws into the
+turn. **Parity is hand-maintained** (app.js is a classic script, no ES modules,
+so no single shared source without a build step); tests pin the behavior — change
+one engine, change the other. Timed effects (sticky/cooldown) aren't persisted
+across Discord turns yet (v1); `delay` works via the session turn count.
 Off-switch: `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
 `GET /api/discord/status`.
 
