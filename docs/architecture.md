@@ -1058,8 +1058,22 @@ turn. **Parity is hand-maintained** (app.js is a classic script, no ES modules,
 so no single shared source without a build step); tests pin the behavior — change
 one engine, change the other. Timed effects (sticky/cooldown) aren't persisted
 across Discord turns yet (v1); `delay` works via the session turn count.
-Off-switch: `PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability:
-`GET /api/discord/status`.
+**Live tome macros + the manual tome (0.11.22).** Tome content can carry macros
+that resolve at INJECTION time so the lore reads true now: `tome-macros.js`
+`resolveTomeMacros(text, settings)` folds `{{user}}`/`{{char}}` (via `macros.js`)
+plus toggle macros (`{{visionActive}}`/`{{voiceActive}}`/`{{discordActive}}`/
+`{{ponderingActive}}`/`{{warmthActive}}`/`{{noticingActive}}`/`{{calendarActive}}`/
+`{{browserActive}}` → on/off from the ward-facing setting) and value macros
+(`{{charName}}`/`{{userName}}`/`{{activeModel}}`/`{{scanDepth}}`). Applied
+server-side via `foldLoreForPrompt(activated, resolve)`; the browser mirrors the
+same names in `applyNameVars` (**hand-maintained parity**, a test pins the shared
+name set). `manual-tome.js` ships the **Familiar Manual** — a protected
+(`graduationExempt`), enabled-by-default lorebook whose entries explain each
+feature + where its setting lives, keyed to how a ward asks ("send you pictures"),
+quoting live macros so "Vision is currently {{visionActive}}" stays accurate.
+`ensureManualTome(TOMES_DIR)` seeds it ONCE on boot (flag `.manual-tome-seeded.json`)
+so a ward who deletes or edits it is never overridden. Off-switch:
+`PROTO_FAMILIAR_DISCORD_DISABLED=1`. Observability: `GET /api/discord/status`.
 
 *Presence modes (V8).* Messages the Familiar isn't addressed in resolve
 to `action: 'observe'` (lurk, and active turns it sits out): the message

@@ -54,6 +54,7 @@ import { findVillagerByAlias } from './village.js';
 import { mergeSettings } from './settings-merge.js';
 import { readAllTomes } from './tome-store.js';
 import { activateLore, foldLoreForPrompt } from './tome-lore.js';
+import { resolveTomeMacros } from './tome-macros.js';
 import {
   isQueueCommand, QUEUE_CID,
   buildQueueHomeView, buildQueueItemView, buildQueueDoneView, buildQueueText,
@@ -1151,7 +1152,9 @@ async function activeDiscordLore({ content, session, settings, locationKey }) {
     const n = ['sys_top', 'before_char', 'after_char', 'sys_bottom', 'at_depth']
       .reduce((s, k) => s + (activated[k]?.length || 0), 0);
     if (n) console.log(`[discord] tomes: ${n} lore entr${n === 1 ? 'y' : 'ies'} activated in ${locationKey}`);
-    return foldLoreForPrompt(activated);
+    // Resolve live macros ({{visionActive}}, {{char}}, …) against current
+    // settings so the self-documenting manual tome always reads true.
+    return foldLoreForPrompt(activated, (t) => resolveTomeMacros(t, settings));
   } catch (err) {
     console.error('[discord] tome lore activation failed (skipping):', err?.message ?? err);
     return none;

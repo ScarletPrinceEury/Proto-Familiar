@@ -233,7 +233,8 @@ export function activateLore(tomes, userInput, { messages = [], opts = {}, env =
   };
 }
 
-const renderEntries = (arr) => (arr ?? []).map(e => String(e?.content ?? '').trim()).filter(Boolean).join('\n\n');
+const renderEntries = (arr, resolve) =>
+  (arr ?? []).map(e => resolve(String(e?.content ?? '')).trim()).filter(Boolean).join('\n\n');
 
 /**
  * Fold activated lore into the shape the Discord/voice assembly needs:
@@ -242,13 +243,16 @@ const renderEntries = (arr) => (arr ?? []).map(e => String(e?.content ?? '').tri
  *   - `atDepth` → the at_depth content, injected as a system message near the turn.
  * (The web's exact char-card boundary doesn't exist in the server assembly, so
  * top/before become the lead and after/bottom the tail — documented mapping.)
+ *
+ * `resolve(text)` is applied to each entry's content — pass the tome-macro
+ * resolver so live macros ({{visionActive}} …) render; defaults to identity.
  */
-export function foldLoreForPrompt(activated) {
+export function foldLoreForPrompt(activated, resolve = (t) => t) {
   const a = activated ?? {};
   return {
-    lead:    renderEntries([...(a.sys_top ?? []), ...(a.before_char ?? [])]),
-    tail:    renderEntries([...(a.after_char ?? []), ...(a.sys_bottom ?? [])]),
-    atDepth: renderEntries(a.at_depth ?? []),
+    lead:    renderEntries([...(a.sys_top ?? []), ...(a.before_char ?? [])], resolve),
+    tail:    renderEntries([...(a.after_char ?? []), ...(a.sys_bottom ?? [])], resolve),
+    atDepth: renderEntries(a.at_depth ?? [], resolve),
   };
 }
 
