@@ -1,6 +1,6 @@
 ---
 title: Session Memorization
-topics: [architecture, memorization]
+topics: [architecture, memorization, tomes]
 sources:
   - id: claude-md
     type: file
@@ -38,7 +38,8 @@ single in-process worker calls the configured LLM, parses the response, and writ
 resulting entries into a dedicated Tome [@memorization-js] [@sessions-doc]. This subsystem is
 one of the two places long-running memory lives in Proto-Familiar — the other is
 [Phylactery](phylactery), which owns the Familiar's canonical, autonomously-retrieved memory.
-Tomes are explicitly the other kind: human-editable, keyword-triggered lorebook entries, and
+Tomes are explicitly the other kind: human-editable, keyword-triggered lorebook entries (see
+[Tomes and keyword lore](tomes-and-lore) for the activation engine and entry format), and
 memorization is the automated writer that populates one particular Tome with that shape of
 entry [@tomes-doc]. The queue design and its trigger set were a deliberate rewrite to close a
 data-loss bug; see [Session memorization: durable queue](../decisions/session-memorization-queue)
@@ -156,6 +157,8 @@ and the audience floor at recall time.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how the memorization
   worker resolves which connection to call, independent of whichever connection the ward
   chats on.
+- [Tomes and keyword lore](tomes-and-lore) — the keyword-activation engine and entry format
+  every Tome, including this one, is scanned and injected through.
 - [Tome multi-writer merge policy](../decisions/tome-multi-writer-merge-policy) — a broader,
   not-yet-implemented design for reconciling writes when more than one process can write to the
   same Tome entry; this subsystem's single-writer, mutex-serialized model is the simpler thing

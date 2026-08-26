@@ -151,6 +151,7 @@ If you're asking yourself... go to:
 - **How does the Familiar notice someone is in crisis?** → [Safety spine](safety-spine)
 - **What does the schedule graph do?** → [Unruh](unruh) and [Temporal assurance](../concepts/temporal-assurance)
 - **How do sessions turn into lasting memories?** → [Session memorization](session-memorization)
+- **How does keyword-triggered lore work, and what is the Familiar Manual tome?** → [Tomes and keyword lore](tomes-and-lore)
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
 - **How does image input work?** → [Vision and media](vision-and-media)
 - **How does the Familiar click and fill on the web?** → [Browser](browser)
@@ -167,6 +168,8 @@ If you're asking yourself... go to:
   not others.
 - [Session memorization](session-memorization) — the durable job queue that turns a session or
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
+- [Tomes and keyword lore](tomes-and-lore) — the keyword-activation engine shared by web and
+  Discord, the live tome-macro boundary, and the self-documenting Familiar Manual tome.
 - [Unruh](unruh) — the temporal-context specialist: the schedule graph, the interest weight
   system, and the local-naive time model.
 - [Weather](weather) — ward-local weather sensing, the provider chain, and the

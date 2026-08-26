@@ -90,7 +90,9 @@ than owning a `setInterval` of its own [@architecture-doc].)
 Tome graduation and needs tracking are opt-in because they write to
 [Phylactery](phylactery), the canonical self — the milestone note in CLAUDE.md treats writes
 to canonical state as requiring an explicit ward decision, not a shipped default
-[@architecture-doc]. Google Calendar sync is opt-in for a related but distinct reason: it is
+[@architecture-doc]. See [Tomes and keyword lore](tomes-and-lore) for what a Tome is and why
+the self-documenting Familiar Manual tome ships `graduationExempt` so this loop never sweeps
+its entries into Phylactery. Google Calendar sync is opt-in for a related but distinct reason: it is
 the one loop that can eventually reach an external service the ward's real calendar depends
 on, and its write-back path (`schedule_push_to_google`) is gated behind its own separate
 opt-in on top of the loop being enabled at all [@architecture-doc].
