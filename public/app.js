@@ -13350,6 +13350,9 @@ function vlServerName(guildId) {
   return s?.name || `Server ${guildId}`;
 }
 
+// Collapse state for the server list, kept across re-renders within a session.
+let _vlServersCollapsed = false;
+
 async function vlLoadServers() {
   try {
     const r = await fetch('/api/village/servers');
@@ -13367,22 +13370,31 @@ function vlRenderServers() {
     return;
   }
   box.classList.remove('hidden');
-  box.innerHTML = `<div class="vl-knocks-head">🖥 Servers <span class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</span></div>`
-    + _vlServers.map((s, i) => {
-      const sub = [
-        `id ${esc(s.guildId)}`,
-        s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
-      ].filter(Boolean).join(' · ');
-      return `<div class="vl-knock" data-si="${i}">
-        <div class="vl-knock-info">
-          <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
-          <div class="vl-knock-sub">${sub}</div>
-        </div>
-        <div class="vl-knock-actions">
-          <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
-        </div>
-      </div>`;
-    }).join('');
+  const collapsed = _vlServersCollapsed;
+  const rows = _vlServers.map((s, i) => {
+    const sub = [
+      `id ${esc(s.guildId)}`,
+      s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="vl-knock" data-si="${i}">
+      <div class="vl-knock-info">
+        <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
+        <div class="vl-knock-sub">${sub}</div>
+      </div>
+      <div class="vl-knock-actions">
+        <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = `<button class="vl-servers-toggle vl-knocks-head" type="button" aria-expanded="${!collapsed}" aria-controls="vl-servers-body">
+      <span class="hint-chev">▶</span> 🖥 Servers <span class="vl-servers-count">(${_vlServers.length})</span>
+    </button>
+    <div class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</div>
+    <div id="vl-servers-body" class="vl-servers-body${collapsed ? ' hidden' : ''}">${rows}</div>`;
+  box.querySelector('.vl-servers-toggle')?.addEventListener('click', () => {
+    _vlServersCollapsed = !_vlServersCollapsed;
+    vlRenderServers();
+  });
   box.querySelectorAll('.vl-knock').forEach(row => {
     const s = _vlServers[Number(row.dataset.si)];
     row.querySelector('.vl-server-x').addEventListener('click', () => vlDismissServer(s));
