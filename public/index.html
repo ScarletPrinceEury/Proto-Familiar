@@ -330,7 +330,16 @@
             <span class="chevron">▾</span>
           </button>
           <div class="section-content" id="content-debug">
-            <p class="field-hint">Generate a plain-text report with system info, the recent in-app event log, and the last sent prompt summary. Paste into a bug report.</p>
+            <div class="field-row">
+              <label for="organ-status-block">Organ-status readout in context</label>
+              <select id="organ-status-block" class="ke-select">
+                <option value="degraded">Only when one is down</option>
+                <option value="always">Always show</option>
+                <option value="off">Never (tool only)</option>
+              </select>
+            </div>
+            <p class="field-hint">A small 🟢/⚫ readout of which organs (Phylactery, Unruh, Village, Tomes) answered this turn. My Familiar can also check live any time by running its <code>organ_status</code> tool.</p>
+            <p class="field-hint" style="margin-top:10px">Generate a plain-text report with system info, the recent in-app event log, and the last sent prompt summary. Paste into a bug report.</p>
             <div class="action-row" style="margin-top:4px">
               <button id="diagnostics-btn" class="btn-secondary">🩺 Generate diagnostic report</button>
             </div>

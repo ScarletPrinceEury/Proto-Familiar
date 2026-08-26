@@ -88,6 +88,20 @@ versa — and `enrich()` fans out across whichever peers are live
 via `Promise.allSettled`. Empty sub-blocks render as nothing in the
 prompt; the LLM only sees scaffolding when there's content.
 
+**Organ status (0.11.24, `organs.js`).** `enrich()` records which
+organs actually delivered this turn — Phylactery / Unruh / Village /
+Tomes — and can surface a small `[Organ status]` block (🟢 answered ·
+⚫ silent) so a degraded organ reads as an explicit absence rather than
+mystery-quiet context. Injection is ward-configurable via
+`organStatusBlock` (Settings → Diagnostics): `degraded` (default —
+show only when at least one organ is down), `always`, or `off`. The
+turn-status is read from the same settled results the sections are
+built from (identity/temporal settled state, plus a file/dir check for
+Village and Tomes). The Familiar can also run a live reachability probe
+on demand via the `organ_status` tool (`probeOrgans` — bounded MCP
+pings to Phylactery/Unruh, file checks for Village/Tomes), independent
+of the injected block.
+
 The **caring spine** modules are not MCP children — they are
 Node-side modules that read from / write to Unruh and the local
 state files. They run alongside the chat path (detection,

@@ -24,6 +24,7 @@ import { recentReachOuts, formatReachOutBlock } from './reach-out-log.js';
 import { randomUUID } from 'crypto';
 import { wardLocalNowISO } from './relative-time.js';
 import { mcpToolError } from './phylactery-result.js';
+import { formatOrganStatus, anyDown } from './organs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,6 +38,55 @@ const PKG_VERSION = (() => {
 // Consent-pending tracking file — written by memorization.js, read here so the
 // Familiar sees pending ask-gate items without an extra MCP call every turn.
 const CONSENT_PENDING_FILE = path.join(__dirname, 'tomes', '.consent-pending.json');
+
+// ── Organ status (diagnostic) ───────────────────────────────────────────────
+const ORGAN_TOMES_DIR   = path.join(__dirname, 'tomes');
+const ORGAN_VILLAGE_FILE = path.join(__dirname, 'village.json');
+const ORGAN_PROBE_TIMEOUT_MS = 2500;
+
+// The ward's injection policy for the organ-status block: 'off' | 'degraded'
+// (default — inject only when an organ is down) | 'always'.
+function organStatusBlockSetting() {
+  try {
+    const v = String(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')).organStatusBlock ?? '').trim().toLowerCase();
+    return (v === 'off' || v === 'always') ? v : 'degraded';
+  } catch { return 'degraded'; }
+}
+
+// A local file/dir organ is "up" if it reads (or is simply absent — an empty
+// registry / no-tomes-yet is a healthy organ, not a failure); only a corrupt or
+// unreadable one is down. Never throws.
+async function organFileOk(file) {
+  try { JSON.parse(await fsp.readFile(file, 'utf8')); return true; }
+  catch (e) { return e?.code === 'ENOENT'; }
+}
+async function organDirOk(dir) {
+  try { await fsp.readdir(dir); return true; }
+  catch (e) { return e?.code === 'ENOENT'; }
+}
+function withOrganTimeout(promise, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ORGAN_PROBE_TIMEOUT_MS).unref?.()),
+  ]);
+}
+
+/**
+ * Live probe of each context organ — does it actually respond right now?
+ * Phylactery/Unruh get a bounded real MCP call (a hung one reads as down);
+ * Village/Tomes are local reads. Fail-safe: a throw/timeout → down. Returns
+ * { phylactery, unruh, village, tomes } booleans. Backs the organ_status tool.
+ */
+export async function probeOrgans() {
+  const ok = async (fn) => { try { await fn(); return true; } catch { return false; } };
+  const [phylactery, unruh, village, tomes] = await Promise.all([
+    !mcpClient   ? Promise.resolve(false) : ok(() => withOrganTimeout(mcpClient.callTool({ name: 'identity_get_all', arguments: {} }), 'phylactery')),
+    !unruhClient ? Promise.resolve(false) : ok(() => withOrganTimeout(unruhClient.callTool({ name: 'temporal_context', arguments: { now: wardLocalNowISO(wardTimeZoneSetting()) } }), 'unruh')),
+    organFileOk(ORGAN_VILLAGE_FILE),
+    organDirOk(ORGAN_TOMES_DIR),
+  ]);
+  return { phylactery, unruh, village, tomes };
+}
 
 // Phylactery — the canonical in-tree self-store. Ships at ./phylactery/
 // (subdirectory, same pattern as Unruh). Launched via `uv run python -m
@@ -2467,7 +2517,32 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // Organ-status readout: which context organs delivered this turn. Gated by
+    // organStatusBlock ('degraded' default → shown only when one is down;
+    // 'always'; 'off'). Ward-private, non-static turns only. Phylactery/Unruh
+    // come free from this turn's fan-out; Village/Tomes are cheap local reads
+    // (a 'skipped' Unruh reason means it was gated off, not down). Never breaks
+    // enrich — a diagnostic must not cost the turn.
+    let organStatusBlock = '';
+    try {
+      const mode = organStatusBlockSetting();
+      if (mode !== 'off' && !staticOnly && !gated) {
+        const temporalReason = String(temporalSettled.reason?.message ?? '');
+        const st = {
+          phylactery: idSettled.status === 'fulfilled',
+          unruh: temporalSettled.status === 'fulfilled'
+            || (temporalSettled.status === 'rejected' && /skipped/.test(temporalReason) && !!unruhClient),
+          village: await organFileOk(ORGAN_VILLAGE_FILE),
+          tomes: await organDirOk(ORGAN_TOMES_DIR),
+        };
+        if (mode === 'always' || anyDown(st)) {
+          organStatusBlock = formatOrganStatus(st, { title: '[Organ status — who delivered this turn]' });
+        }
+      }
+    } catch { /* diagnostic must never break enrich */ }
+
     const dynamicSections = [];
+    if (organStatusBlock)       dynamicSections.push(organStatusBlock);
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
