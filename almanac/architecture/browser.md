@@ -81,9 +81,11 @@ Work continued past the spec's four passes: two Chromium-acquisition hardening f
 0.11.12, covered below), page watches (0.11.13, a scheduled watch-and-notify loop that reuses
 the static web-read path rather than the driver), and a run of interaction-model refinements
 (0.11.14–0.11.16) that made refs meaning-bearing, let the model act by naming what it sees, gave
-it awareness of images on a page, and added page-level scroll. A CDP-attach engine backing for
-the ward's own logged-in Chrome (spec §9 Horizon #2) is fully designed but deliberately parked,
-not built — see the CDP mode section below.
+it awareness of images on a page, and added page-level scroll, followed by a JS-render timing
+fix (0.11.23, covered below) that made reads and acts wait for a page's own JS to finish wiring
+up before touching it. A CDP-attach engine backing for the ward's own logged-in Chrome (spec §9
+Horizon #2) is fully designed but deliberately parked, not built — see the CDP mode section
+below.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
 `PROTO_FAMILIAR_BROWSE_DISABLED` env kill switch) and ward-only: the `browse_*` tools are
@@ -164,6 +166,32 @@ This ref/generation design exists specifically because `playwright-core` 1.62.1 
 refs, and `getByRole(name)` is ambiguous whenever a page has duplicate accessible names — so
 the CSS-path resolver was the fallback the installed API actually supports, not the first
 choice from the spec [@browser-driver-js].
+
+## Reading before a JS-driven page has finished wiring itself up (0.11.23)
+
+An early live use surfaced a page the Familiar could partly see but not act on: it read some
+links on a Carrd-built interactive site but a click or follow did nothing. The root cause was
+timing, not the ref/generation model above — `navigate()`, `readPage()`, and `act()` all read
+the DOM at Playwright's `domcontentloaded` event, which fires once the HTML is parsed but
+*before* a page's external JS has run and wired up its interactivity, so a snapshot taken then
+reads a half-built page and a click lands on an element that has not been attached to its
+handler yet [@browser-driver-js]. The re-snapshot after an act had the same problem from the
+other side: a fixed 150ms wait was too short for any JS-driven effect — a framework re-render,
+a Carrd section swap, a client-side route or hash change.
+
+`settlePage(pg, { total })` fixes both without risking a hang: after `domcontentloaded`, it
+best-effort-waits for Playwright's `load` event, then a short `networkidle` window, then a
+small fixed floor for framework microtasks and hash-nav handlers to finish — each wait is
+individually try/caught and clamped against a shared deadline, so a page that never goes fully
+idle (analytics, websockets, long-polling) cannot hang the turn; it just falls through to the
+floor and proceeds [@browser-driver-js]. `navigate()` and `readPage()` call it with a 3.5s
+budget before their first read, and `act()` calls it with a 2s budget in place of the old fixed
+150ms before re-snapshotting [@browser-driver-js]. A URL or hash change is still caught
+independently by `computeDelta()`'s before/after URL diff, so an in-page anchor navigation
+still reads as movement even though `settlePage()` itself only waits, it does not inspect
+content. The fix is general — it helps any SPA or framework-rendered page, not just the site
+that surfaced it. Shadow-DOM and iframe traversal remain a separate, still-open gap; the
+snapshot walk in `browser-driver.js` does not cross either boundary.
 
 ## SSRF is enforced by a proxy the app owns, not a pre-navigation check
 
