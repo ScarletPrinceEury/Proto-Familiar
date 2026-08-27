@@ -715,6 +715,15 @@ the interceptor sits inside `read_webpage` rather than inside `browser.js`, it i
 separate wired call site for the injection guard beyond the ones recorded on
 [Injection guard: wiring history](injection-guard-gap).
 
+**This fix was not the end of the story.** The public `.json` endpoint the paragraphs above
+describe is itself blocked from a datacenter/server IP at the network layer — the same
+anti-bot wall catches a plain Node fetch, not just a headless-browser fingerprint — so a
+ward running the app outside a residential network still saw empty reads. 0.11.30 added a
+third tier, fetched through the ward's own authenticated browser session, and generalized
+the whole "which door gets me into this site" question into a registry any future gated
+site can join — see [Reader router](reader-router) for the fix and the pattern it now
+follows.
+
 ## CDP mode (Horizon #2): driving the ward's own Chrome — designed, not built
 
 `docs/browser-cdp-mode-build-spec.md` specs an alternate engine backing for the same `browse_*`
@@ -753,6 +762,10 @@ anti-bot wall can fingerprint.
 
 ## Related
 
+- [Reader router: reading gated and blocked sites](reader-router) — the 0.11.30
+  generalization of the Reddit-JSON fix above into a per-site backend registry and a
+  reachability doctor, built on a new `browser-driver.contextRequest` primitive this page's
+  driver now exposes.
 - [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
   — the design decisions behind the SSRF proxy, the Stranger-tier default, and the consent,
   vault, and handoff surfaces Pass 3 built.
