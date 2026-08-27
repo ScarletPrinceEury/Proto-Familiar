@@ -22,7 +22,7 @@ topics:
   - slug: safety
     title: Safety
     description: Crisis detection, threat tracking, and escalation to a human
-    parents: [architecture]
+    parents: [architecture, decisions, concepts]
   - slug: installer
     title: Installer
     description: Cross-platform one-click install, update, and launch tooling
