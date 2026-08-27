@@ -158,6 +158,7 @@ import {
   initVillageSync, bootSync as villageBootSync,
   pendingCategoryAudienceRemap,
 } from './village.js';
+import { parseRegistryJson } from './village-registry-json.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './audience.js';
 import { normalizeTag } from './content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './media.js';
@@ -5064,7 +5065,12 @@ async function startVillageSync() {
         pullReached = true;
         const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
         const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
-        return m ? JSON.parse(m[1]) : null;
+        if (!m) return null;
+        const { value, repaired } = parseRegistryJson(m[1]);
+        if (repaired) {
+          console.warn('[village] canonical registry carried stray control characters — repaired on read; it will be rewritten cleanly on the next registry change');
+        }
+        return value;
       } catch (err) {
         pullReached = false;
         console.warn('[village] canonical pull failed:', err?.message ?? err);
