@@ -160,6 +160,25 @@
             <div class="field-actions">
               <button class="btn-secondary" id="web-search-configure-btn" type="button">⚙ Configure search backend…</button>
             </div>
+            <details class="field" id="reddit-settings" style="margin-top:10px">
+              <summary>Reddit reading</summary>
+              <div class="field-row" style="margin-top:8px">
+                <label for="reddit-reader-enabled">Read Reddit via its API</label>
+                <input type="checkbox" id="reddit-reader-enabled" checked>
+              </div>
+              <p class="field-hint">Reddit blocks the in-app browser's automated traffic, so I read it through Reddit's JSON API instead. The public path needs no setup. For pages Reddit still refuses, add API credentials below — a free “script” app at <code>reddit.com/prefs/apps</code> — and I'll use the sanctioned API, which never hits the block.</p>
+                <label for="reddit-user-agent" class="field-label">User-Agent (optional)</label>
+                <input type="text" id="reddit-user-agent" placeholder="proto-familiar/1.0 (by /u/yourname)" autocomplete="off">
+                <label for="reddit-client-id" class="field-label">API client ID (optional)</label>
+                <input type="text" id="reddit-client-id" autocomplete="off">
+                <label for="reddit-client-secret" class="field-label">API client secret (optional)</label>
+                <input type="password" id="reddit-client-secret" autocomplete="off">
+                <label for="reddit-username" class="field-label">Reddit username (optional)</label>
+                <input type="text" id="reddit-username" autocomplete="off">
+                <label for="reddit-password" class="field-label">Reddit password (optional)</label>
+                <input type="password" id="reddit-password" autocomplete="off">
+              <p class="field-hint hint-keep">Stored in your own settings on this machine. If you'd rather not keep the password here, set the <code>PROTO_FAMILIAR_REDDIT_*</code> environment variables instead — they take precedence.</p>
+            </details>
           </div>
         </div>
 

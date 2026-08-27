@@ -187,6 +187,9 @@ export async function guardedFetch(rawUrl, {
   maxRedirects = MAX_REDIRECTS,
   fetchFn      = fetch,
   lookupFn,
+  headers      = null,
+  method       = 'GET',
+  body         = null,
 } = {}) {
   let target = rawUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
@@ -196,9 +199,13 @@ export async function guardedFetch(rawUrl, {
     let res;
     try {
       res = await fetchFn(u.href, {
+        method,
+        body,
         redirect: 'manual',
         signal:   ctrl.signal,
-        headers:  { 'User-Agent': WEB_UA, 'Accept': 'text/html,application/xhtml+xml' },
+        // Caller headers override the defaults (e.g. a descriptive UA + JSON
+        // Accept for the Reddit reader), but the SSRF guard above still runs.
+        headers:  headers || { 'User-Agent': WEB_UA, 'Accept': 'text/html,application/xhtml+xml' },
       });
     } finally {
       clearTimeout(timer);

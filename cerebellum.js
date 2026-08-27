@@ -4215,6 +4215,20 @@ export const TOOL_EXECUTORS = {
   look_up: async ({ query } = {}) => lookUp(query, readSettingsSync()),
   read_webpage: async ({ url } = {}, ctx = {}) => {
     const s = readSettingsSync();
+    // Reddit: its anti-bot wall 403s automated BROWSER traffic before render, so
+    // reading it through the browser (or a plain HTML fetch) is a dead end. Route
+    // Reddit URLs through the JSON API instead — public .json, or the sanctioned
+    // OAuth API when the ward set credentials. A definitive Reddit-side block/auth
+    // outcome is surfaced honestly; only an unrecognised page falls through.
+    if (process.env.PROTO_FAMILIAR_REDDIT_DISABLED !== '1' && s?.redditReaderEnabled !== false) {
+      try {
+        const rr = await import('./reddit-reader.js');
+        if (rr.isRedditUrl(url)) {
+          const r = await rr.readReddit(url, { settings: s });
+          if (r.ok || r.hard) return r.text;
+        }
+      } catch { /* fall through to the normal read path */ }
+    }
     // Browser-backed read (§0.1): when browsing is on + a browser exists + the
     // ward hasn't pinned 'static', read the LIVE JS-rendered DOM. Any failure
     // (browser off/unavailable, a bad read) falls through to the static floor —

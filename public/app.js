@@ -292,6 +292,12 @@ const state = {
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
+  redditReaderEnabled:     true,     // read Reddit via its JSON API (browser is anti-bot-walled)
+  redditUserAgent:         '',       // optional descriptive UA for Reddit requests
+  redditClientId:          '',       // optional Reddit script-app OAuth credentials
+  redditClientSecret:      '',
+  redditUsername:          '',
+  redditPassword:          '',
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
   // pulls anything else via request_tools. Sticky = extra turns a surfaced
@@ -507,6 +513,7 @@ const SERVER_SYNCED_KEYS = [
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'uiShowAdvanced', 'organStatusBlock',
+  'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
@@ -3988,6 +3995,12 @@ function readSettingsFromUI() {
   if ($('browse-confirm-domains')) state.browseConfirmDomains = $('browse-confirm-domains').value;
   if ($('browse-confirm-mode')) state.browseConfirmMode = $('browse-confirm-mode').value;
   if ($('organ-status-block')) state.organStatusBlock = $('organ-status-block').value;
+  if ($('reddit-reader-enabled')) state.redditReaderEnabled = $('reddit-reader-enabled').checked;
+  if ($('reddit-user-agent'))    state.redditUserAgent    = $('reddit-user-agent').value.trim();
+  if ($('reddit-client-id'))     state.redditClientId     = $('reddit-client-id').value.trim();
+  if ($('reddit-client-secret')) state.redditClientSecret = $('reddit-client-secret').value.trim();
+  if ($('reddit-username'))       state.redditUsername    = $('reddit-username').value.trim();
+  if ($('reddit-password'))       state.redditPassword    = $('reddit-password').value;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4174,6 +4187,12 @@ function writeSettingsToUI() {
   if ($('browse-confirm-domains')) setIfNotFocused($('browse-confirm-domains'), 'value', state.browseConfirmDomains || '');
   if ($('browse-confirm-mode')) setIfNotFocused($('browse-confirm-mode'), 'value', state.browseConfirmMode || 'refuse');
   if ($('organ-status-block')) setIfNotFocused($('organ-status-block'), 'value', state.organStatusBlock || 'degraded');
+  if ($('reddit-reader-enabled')) setIfNotFocused($('reddit-reader-enabled'), 'checked', state.redditReaderEnabled !== false);
+  if ($('reddit-user-agent'))    setIfNotFocused($('reddit-user-agent'),    'value', state.redditUserAgent || '');
+  if ($('reddit-client-id'))     setIfNotFocused($('reddit-client-id'),     'value', state.redditClientId || '');
+  if ($('reddit-client-secret')) setIfNotFocused($('reddit-client-secret'), 'value', state.redditClientSecret || '');
+  if ($('reddit-username'))       setIfNotFocused($('reddit-username'),      'value', state.redditUsername || '');
+  if ($('reddit-password'))       setIfNotFocused($('reddit-password'),      'value', state.redditPassword || '');
   { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
@@ -5562,6 +5581,7 @@ function init() {
     'routine-review-toggle', 'routine-review-days',
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
+    'reddit-reader-enabled', 'reddit-user-agent', 'reddit-client-id', 'reddit-client-secret', 'reddit-username', 'reddit-password',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
