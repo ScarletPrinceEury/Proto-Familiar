@@ -119,6 +119,24 @@ test('fetchRedditJson: with credentials → OAuth token then bearer call to oaut
   assert.equal(calls[1].auth, 'Bearer tok123');
 });
 
+test('fetchRedditJson: an authenticated context fetch (browser session) wins before the public path', async () => {
+  let publicCalled = false;
+  const fetchFn = async () => { publicCalled = true; return resp(200, { json: commentsFixture }); };
+  const contextFetch = async () => ({ ok: true, status: 200, contentType: 'application/json', text: JSON.stringify(commentsFixture) });
+  const r = await fetchRedditJson('https://www.reddit.com/r/tea/comments/x/y/', { settings: {}, deps: { fetchFn, lookupFn, contextFetch } });
+  assert.equal(r.ok, true);
+  assert.equal(r.via, 'browser-session');
+  assert.equal(publicCalled, false);   // the context fetch short-circuited the public one
+});
+
+test('fetchRedditJson: a context challenge (html/403) falls through to the public path', async () => {
+  const contextFetch = async () => ({ ok: false, status: 403, contentType: 'text/html', text: '<blocked>' });
+  const fetchFn = async () => resp(200, { json: commentsFixture });
+  const r = await fetchRedditJson('https://www.reddit.com/r/tea/comments/x/y/', { settings: {}, deps: { fetchFn, lookupFn, contextFetch } });
+  assert.equal(r.ok, true);
+  assert.equal(r.via, 'public-json');
+});
+
 test('redditCredentials: env overrides settings; complete only when all four present', () => {
   assert.equal(redditCredentials({ redditClientId: 'a' }).complete, false);
   const full = redditCredentials({ redditClientId: 'a', redditClientSecret: 'b', redditUsername: 'c', redditPassword: 'd' });

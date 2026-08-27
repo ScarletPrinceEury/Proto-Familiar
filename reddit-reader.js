@@ -115,31 +115,59 @@ export async function fetchRedditJson(url, { settings = {}, deps = {} } = {}) {
   if (!api) return { ok: false, error: 'not-a-reddit-listing' };
   const ua = redditUserAgent(settings);
   const creds = redditCredentials(settings);
-  try {
-    let res;
-    if (creds.complete) {
+
+  // Tier 1 — the sanctioned OAuth API (never touches the anti-bot wall).
+  if (creds.complete) {
+    try {
       const token = await getOAuthToken(creds, ua, deps);
-      res = await guardedFetch(`https://${OAUTH_HOST}${api.path}${api.search}`, {
+      const res = await guardedFetch(`https://${OAUTH_HOST}${api.path}${api.search}`, {
         ...deps, headers: { 'Authorization': `Bearer ${token}`, 'User-Agent': ua, 'Accept': 'application/json' },
       });
-    } else {
-      res = await guardedFetch(`https://${PUBLIC_HOST}${api.path}${api.search}`, {
-        ...deps, headers: { 'User-Agent': ua, 'Accept': 'application/json' },
-      });
+      const out = await normalizeJsonResponse(res, { authed: true, via: 'oauth' });
+      if (out.ok) return out;
+      return { ...out, authed: true };
+    } catch (err) {
+      if (err instanceof WebAccessError) return { ok: false, blocked: true, error: err.message, authed: true, via: 'oauth' };
+      return { ok: false, error: err?.message || 'oauth fetch failed', authed: true, via: 'oauth' };
     }
-    if (!res.ok) {
-      const blocked = res.status === 403 || res.status === 429 || res.status === 401;
-      return { ok: false, status: res.status, blocked, error: `http ${res.status}`, authed: creds.complete };
-    }
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    if (!ct.includes('json')) return { ok: false, blocked: true, error: 'non-json (blocked)', authed: creds.complete };
-    const data = await res.json();
-    return { ok: true, data, authed: creds.complete };
+  }
+
+  const publicUrl = `https://${PUBLIC_HOST}${api.path}${api.search}`;
+
+  // Tier 2 — fetch THROUGH the authenticated browser context when available: the
+  // ward's real browser fingerprint + any logged-in Reddit session, the door
+  // past Reddit's network-layer block on server-side fetches. Only trusted if it
+  // comes back as real JSON; a challenge/HTML shell falls through to tier 3.
+  if (typeof deps.contextFetch === 'function') {
+    try {
+      const cr = await deps.contextFetch(publicUrl, { headers: { 'User-Agent': ua, 'Accept': 'application/json' } });
+      if (cr && cr.ok && (cr.contentType || '').includes('json')) {
+        try { return { ok: true, data: JSON.parse(cr.text), via: 'browser-session' }; } catch { /* fall through */ }
+      }
+    } catch { /* fall through to the plain public fetch */ }
+  }
+
+  // Tier 3 — a plain public .json fetch (best-effort; often network-blocked
+  // outside a residential IP).
+  try {
+    const res = await guardedFetch(publicUrl, { ...deps, headers: { 'User-Agent': ua, 'Accept': 'application/json' } });
+    return await normalizeJsonResponse(res, { authed: false, via: 'public-json' });
   } catch (err) {
-    if (err instanceof WebAccessError) return { ok: false, blocked: true, error: err.message, authed: creds.complete };
+    if (err instanceof WebAccessError) return { ok: false, blocked: true, error: err.message, via: 'public-json' };
     if (err?.name === 'AbortError') return { ok: false, error: 'timeout' };
     return { ok: false, error: err?.message || 'fetch failed' };
   }
+}
+
+/** Normalise a websearch-style Response into { ok, data } / { ok:false, blocked }. */
+async function normalizeJsonResponse(res, { authed, via }) {
+  if (!res.ok) {
+    const blocked = res.status === 403 || res.status === 429 || res.status === 401;
+    return { ok: false, status: res.status, blocked, error: `http ${res.status}`, authed, via };
+  }
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (!ct.includes('json')) return { ok: false, blocked: true, error: 'non-json (blocked)', authed, via };
+  return { ok: true, data: await res.json(), authed, via };
 }
 
 // ── Parsing (pure) ──────────────────────────────────────────────────────────

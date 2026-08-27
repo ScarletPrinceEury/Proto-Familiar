@@ -528,6 +528,37 @@ export async function readPage(url, opts) {
 }
 
 /**
+ * Fetch a URL THROUGH the persistent browser context — the ward's real browser
+ * network stack (TLS fingerprint, HTTP/2) plus the profile's own cookie jar and
+ * any logged-in session. This is the door past sites that block server-side
+ * fetches at the network layer (Reddit's anti-bot wall) or gate content behind
+ * login: a Node fetch looks like a bot, but `context.request` carries the same
+ * fingerprint and session as a real page load. Returns a normalised
+ * { ok, status, contentType, text } and never throws.
+ */
+export async function contextRequest(url, { headers = null, method = 'GET', timeoutMs = NAV_TIMEOUT_MS, opts = {} } = {}) {
+  try {
+    await ensureContext(opts);
+  } catch (err) {
+    return { ok: false, status: 0, contentType: '', text: '', error: err.message };
+  }
+  try {
+    const res = await state.context.request.fetch(url, {
+      method,
+      headers: headers || undefined,
+      timeout: timeoutMs,
+      failOnStatusCode: false,
+      maxRedirects: 8,
+    });
+    const contentType = (res.headers()['content-type'] || '').toLowerCase();
+    const text = await res.text();
+    return { ok: res.ok(), status: res.status(), contentType, text };
+  } catch (err) {
+    return { ok: false, status: 0, contentType: '', text: '', error: err?.message || 'context fetch failed' };
+  }
+}
+
+/**
  * Perform an act on a ref. `onDialog` ('dismiss'|'accept') pre-authorises how a
  * confirm this act triggers is answered (§4.1); the accept is only honoured for
  * a benign, non-protected target — the caller (browser-tools) enforces the §5
