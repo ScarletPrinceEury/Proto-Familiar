@@ -99,3 +99,7 @@ topics:
     title: Memory and Knowledge
     description: How the layered memory systems (Phylactery, Unruh, Tomes, Session Memorization, Content-Gating) fit together and where each kind of knowledge lives
     parents: [architecture, phylactery, memorization]
+  - slug: plugins
+    title: Plugins
+    description: "The \"Grimoire\" plugin surface: Psycheros-compatible extension points, the tiered Node/Deno loader, and the safety-path exclusion wall (designed, not yet built)"
+    parents: [architecture, decisions]

@@ -56,6 +56,15 @@ sources:
   - id: browser-cdp-spec
     type: file
     path: docs/browser-cdp-mode-build-spec.md
+  - id: reddit-reader-js
+    type: file
+    path: reddit-reader.js
+  - id: reddit-reader-test
+    type: file
+    path: tests/reddit-reader.test.mjs
+  - id: websearch-js
+    type: file
+    path: websearch.js
 ---
 
 # Browser: Click-and-Fill Web Access
@@ -85,10 +94,13 @@ the static web-read path rather than the driver), and a run of interaction-model
 (0.11.14–0.11.16) that made refs meaning-bearing, let the model act by naming what it sees, gave
 it awareness of images on a page, and added page-level scroll, followed by a JS-render timing
 fix (0.11.23, covered below) that made reads and acts wait for a page's own JS to finish wiring
-up before touching it, and open shadow-DOM piercing plus a per-browse reader mirror (0.11.28,
-covered below) that closed the shadow-DOM half of the extraction gap the 0.11.23 fix left open.
-A CDP-attach engine backing for the ward's own logged-in Chrome (spec §9 Horizon #2) is fully
-designed but deliberately parked, not built — see the CDP mode section below.
+up before touching it, open shadow-DOM piercing plus a per-browse reader mirror (0.11.28,
+covered below) that closed the shadow-DOM half of the extraction gap the 0.11.23 fix left open,
+and a Reddit JSON-API reader (0.11.29, covered below) that routes `read_webpage` around
+Reddit's anti-bot wall entirely, because that wall blocks the browser's own traffic regardless
+of what the shadow-DOM fix rendered. A CDP-attach engine backing for the ward's own logged-in
+Chrome (spec §9 Horizon #2) is fully designed but deliberately parked, not built — see the CDP
+mode section below.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
 `PROTO_FAMILIAR_BROWSE_DISABLED` env kill switch) and ward-only: the `browse_*` tools are
@@ -654,6 +666,55 @@ only when an app-style page has already read badly, matching this page's shipped
 opt-in surfaces layered on a safe default rather than an automatic rewrite that could surprise
 the model about which page it is looking at.
 
+## Reddit reads bypass the browser entirely: a JSON-API interceptor (0.11.29)
+
+The reader mirror above swaps in `old.reddit.com` for `browse_open`, but a ward report showed
+it does not solve Reddit for `read_webpage`: Reddit's anti-bot layer fingerprints automated
+*browser* traffic and 403s it before the page renders, on every Reddit host including the
+mirror — no amount of DOM-extraction polish gets past a wall that blocks the request before
+render [@reddit-reader-js]. The fix is a different door rather than a better browser: plain
+HTTP against Reddit's own JSON API carries no headless-browser fingerprint at all.
+
+**`reddit-reader.js` intercepts `read_webpage` in `cerebellum.js`, before the browser/static
+path ever runs.** `TOOL_EXECUTORS.read_webpage` checks `isRedditUrl(url)` first; on a match it
+calls `readReddit(url, { settings })` and returns its text immediately on `ok` or `hard` outcomes,
+falling through to the normal browser/static read only when the module throws or the URL is not
+a recognized Reddit listing shape [@reddit-reader-js]. This sits one level above the
+`shouldBrowserRead`/`browseRead`/static-`fetchReadable` fallback chain described above in
+"`read_webpage` is re-backed onto the live DOM" — Reddit never reaches that chain at all once the
+interceptor claims the URL. It is a distinct mechanism from the `browse_open` reader mirror: the
+mirror still exists for interactive click-and-fill browsing, where Reddit's anti-bot wall is a
+still-open gap this fix does not address, since `browse_open` still drives a real browser.
+
+`redditApiPath(url)` normalizes a front-end Reddit URL (post, comments page, subreddit or user
+listing, search) to its `.json` endpoint, bounding `limit` and forcing `raw_json=1`, and returns
+`null` for media/API/oauth subdomains or non-Reddit hosts, so the interceptor is a safe no-op
+outside the shapes it understands [@reddit-reader-js]. `fetchRedditJson` reuses
+`websearch.js`'s `guardedFetch` — the same SSRF guard every other web read goes through — which
+gained a headers/method/body override in this change specifically to carry a descriptive
+User-Agent, a JSON `Accept` header, and the OAuth token POST [@reddit-reader-js] [@websearch-js].
+Two tiers are available: the public `.json` endpoint (default, no setup, but rate-limited and
+still refusable from a datacenter IP) and, when the ward sets script-app credentials in Settings,
+the OAuth password-grant API on `oauth.reddit.com` with an in-memory-only bearer token, which
+does not touch the anti-bot wall at all [@reddit-reader-js]. Both tiers, the URL-to-`.json`
+mapping, and the honest-degradation outcomes are pinned by `tests/reddit-reader.test.mjs`, which
+stubs the fetch layer to exercise the public/403/non-JSON/OAuth flows without a live Reddit
+dependency [@reddit-reader-test]. `parseRedditReadable` renders a
+comments page (post plus threaded top comments, capped) or a listing (numbered posts with score,
+comment count, age, and a snippet) into plain text, and `readReddit` runs that text through
+`injection-guard.js`'s `sanitizeExternal()` before returning it, because comment and post bodies
+are user-authored content read from a third party like any other web page
+[@reddit-reader-js]. A definitive Reddit-side outcome (blocked, or an OAuth auth failure) comes
+back with `hard:true` so the executor reports it honestly instead of silently falling through to
+the also-walled browser path; an unrecognized page shape falls through instead.
+
+The feature is on by default (`settings.redditReaderEnabled`, opt out per ward) with a hard
+`PROTO_FAMILIAR_REDDIT_DISABLED` env kill switch, and credentials/UA are read from
+`PROTO_FAMILIAR_REDDIT_*` environment variables first, then Settings [@reddit-reader-js]. Because
+the interceptor sits inside `read_webpage` rather than inside `browser.js`, it is also a new,
+separate wired call site for the injection guard beyond the ones recorded on
+[Injection guard: wiring history](injection-guard-gap).
+
 ## CDP mode (Horizon #2): driving the ward's own Chrome — designed, not built
 
 `docs/browser-cdp-mode-build-spec.md` specs an alternate engine backing for the same `browse_*`
@@ -684,8 +745,11 @@ earlier (`browseConfirmMode: 'ask'` approve-resume, 0.11.5, and the headed hando
 hand-back-and-resume, 0.11.6), and Pass 4's unattended pondering research (0.11.7, shipped as a
 plan-and-read loop rather than the spec's tool-calling design). Work has continued past the
 spec's four passes — see the Chromium-acquisition, page-watches, ref, image/scroll,
-JS-render-settle, and shadow-DOM sections above — and the driver's own in-page walk still does
-not cross an iframe boundary, which remains the one open extraction gap.
+JS-render-settle, shadow-DOM, and Reddit-JSON-reader sections above — and the driver's own
+in-page walk still does not cross an iframe boundary, which remains the one open extraction gap.
+Interactive `browse_open`/`browse_act` on Reddit also remains open: the JSON reader fixes
+`read_webpage` only, and a real click-and-fill session there still drives a browser Reddit's
+anti-bot wall can fingerprint.
 
 ## Related
 
