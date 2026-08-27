@@ -35,6 +35,30 @@ export function browseEnabled(settings) {
   return settings?.browseEnabled === true; // default OFF
 }
 
+/**
+ * A lighter, reader-friendly mirror of a URL, when a well-known one exists.
+ * Currently Reddit's front-end hosts (www/new/np/amp/m) → old.reddit.com:
+ * server-rendered, no shadow DOM, no login-wall/infinite-scroll friction, and
+ * paginated instead of endless. Returns null when no mirror applies (including
+ * for old.reddit itself and for media subdomains like i.redd.it). Pure +
+ * testable — the Familiar opts in per browse via `reader:true`, never forced.
+ */
+export function readerMirrorUrl(url) {
+  let u;
+  try { u = new URL(String(url ?? '')); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  const host = u.hostname.toLowerCase().replace(/^www\./, '');
+  if (host === 'reddit.com' || host.endsWith('.reddit.com')) {
+    const sub = host === 'reddit.com' ? '' : host.slice(0, -'.reddit.com'.length);
+    // Only the human-facing front-ends; never oauth/api/old/media hosts.
+    if (['', 'new', 'np', 'amp', 'm'].includes(sub)) {
+      u.hostname = 'old.reddit.com';
+      return u.toString();
+    }
+  }
+  return null;
+}
+
 /** Normalise a site list (array | comma/newline string) → lowercase domains. */
 function siteList(settings) {
   const raw = settings?.browseSiteList;
@@ -85,11 +109,16 @@ const opts = (settings) => ({
   siteGuard: (u) => siteModeAllows(u, settings),
 });
 
-export async function browseOpen({ url } = {}, { settings, sessionId } = {}) {
+export async function browseOpen({ url, reader = false } = {}, { settings, sessionId } = {}) {
   if (!browseEnabled(settings)) return 'My browsing is turned off right now.';
   { const hb = handbackPending(); if (hb) return hb; }
-  const target = String(url ?? '').trim();
-  if (!target) return 'I need a URL to open.';
+  const asked = String(url ?? '').trim();
+  if (!asked) return 'I need a URL to open.';
+  // Per-browse reader opt-in: swap to a lighter mirror when one exists (Reddit →
+  // old.reddit.com). Silent no-op when no mirror applies, so `reader:true` is
+  // always safe to pass.
+  const mirror = reader ? readerMirrorUrl(asked) : null;
+  const target = mirror || asked;
   if (!siteModeAllows(target, settings)) {
     const mode = settings?.browseSiteMode;
     logBrowserAction({ tool: 'browse_open', target, verdict: `blocked by site mode (${mode})`, sessionId });
@@ -100,8 +129,9 @@ export async function browseOpen({ url } = {}, { settings, sessionId } = {}) {
   try {
     const { pageData } = await driver.navigate(target, opts(settings));
     const { text } = renderSnapshot(pageData, { level: 'outline' });
-    const out = frame(text);
-    logBrowserAction({ tool: 'browse_open', target, verdict: `opened ${pageData.url}`, sessionId });
+    const note = mirror ? 'I opened the lighter old.reddit.com reader mirror for this.\n\n' : '';
+    const out = note + frame(text);
+    logBrowserAction({ tool: 'browse_open', target, verdict: `opened ${pageData.url}${mirror ? ' (reader mirror)' : ''}`, sessionId });
     return out;
   } catch (err) {
     logBrowserAction({ tool: 'browse_open', target, verdict: `failed: ${err.message}`, sessionId });

@@ -1,10 +1,44 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { browseOpen, browseAct, browseScreenshot, browseTabs, _setDriverForTest } from '../browser.js';
+import { browseOpen, browseAct, browseScreenshot, browseTabs, readerMirrorUrl, _setDriverForTest } from '../browser.js';
 import { TOOL_EXECUTORS, BUILTIN_TOOLS } from '../cerebellum.js';
 
 const ward = { settings: { browseEnabled: true }, sessionId: 's-test' };
+
+// ── Reader mirror (pure) ───────────────────────────────────────────────────
+test('readerMirrorUrl: Reddit front-ends → old.reddit, path/query/hash preserved', () => {
+  assert.equal(readerMirrorUrl('https://www.reddit.com/r/ooer/comments/x/y/?sort=top#c1'),
+    'https://old.reddit.com/r/ooer/comments/x/y/?sort=top#c1');
+  assert.equal(readerMirrorUrl('https://reddit.com/r/x'), 'https://old.reddit.com/r/x');
+  assert.equal(readerMirrorUrl('https://new.reddit.com/r/x'), 'https://old.reddit.com/r/x');
+});
+test('readerMirrorUrl: no mirror for old.reddit itself, media, api, or non-reddit', () => {
+  assert.equal(readerMirrorUrl('https://old.reddit.com/r/x'), null);   // already old
+  assert.equal(readerMirrorUrl('https://i.redd.it/abc.png'), null);    // media host
+  assert.equal(readerMirrorUrl('https://oauth.reddit.com/api'), null); // api/auth host
+  assert.equal(readerMirrorUrl('https://example.com/reddit.com'), null); // not reddit
+  assert.equal(readerMirrorUrl('not a url'), null);
+  assert.equal(readerMirrorUrl('ftp://reddit.com/x'), null);           // non-http
+});
+
+test('browseOpen reader:true routes Reddit through the old.reddit mirror + notes it', async () => {
+  let navigated = null;
+  _setDriverForTest({ navigate: async (u) => { navigated = u; return { pageData: { url: u, title: '', nodes: [], text: 'hi' } }; } });
+  const out = await browseOpen({ url: 'https://www.reddit.com/r/x', reader: true }, ward);
+  assert.equal(navigated, 'https://old.reddit.com/r/x');
+  assert.match(out, /old\.reddit\.com reader mirror/i);
+  _setDriverForTest(null);
+});
+
+test('browseOpen reader:true is a no-op on a site with no mirror', async () => {
+  let navigated = null;
+  _setDriverForTest({ navigate: async (u) => { navigated = u; return { pageData: { url: u, title: '', nodes: [], text: 'hi' } }; } });
+  const out = await browseOpen({ url: 'https://example.com/page', reader: true }, ward);
+  assert.equal(navigated, 'https://example.com/page');
+  assert.doesNotMatch(out, /reader mirror/i);
+  _setDriverForTest(null);
+});
 
 // ── The off-switch gate (no browser needed) ────────────────────────────────
 test('browsing disabled → a calm "turned off" line, engine never touched', async () => {

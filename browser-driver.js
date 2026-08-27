@@ -375,12 +375,42 @@ const EXTRACT_FN = `() => {
   };
   const nodes = [];
   const seen = new Map();
+  // Pierce OPEN shadow DOM. Modern sites (Reddit's shreddit-* web components,
+  // many framework apps) render their real content inside shadow roots, which
+  // BOTH document.querySelectorAll and innerText silently skip — so the page
+  // reads as empty chrome (the reported "sees some links but the content's
+  // missing"). Collect every open shadow root (nested included) and query across
+  // all of them. A hostile page can throw mid-walk; the light DOM still works.
+  const roots = [document];
+  try {
+    for (let i = 0; i < roots.length; i++) {
+      for (const el of roots[i].querySelectorAll('*')) { if (el.shadowRoot) roots.push(el.shadowRoot); }
+    }
+  } catch (e) { /* light DOM is already in roots[0] */ }
+  const deepQuery = (sel) => {
+    const out = [];
+    for (const r of roots) { try { for (const el of r.querySelectorAll(sel)) out.push(el); } catch (e) {} }
+    return out;
+  };
+  // A shadow-DOM element can't be addressed by a document-rooted CSS path, but
+  // Playwright's locator pierces OPEN shadow roots — so we stamp such elements
+  // with a unique marker and address them by it. Light-DOM elements keep their
+  // natural selector (byte-identical to before for the common case). The counter
+  // lives on window so marks stay unique across re-snapshots of the same page.
+  if (typeof window.__pfShadowSeq !== 'number') window.__pfShadowSeq = 0;
+  const cssFor = (el) => {
+    let root; try { root = el.getRootNode(); } catch (e) { root = document; }
+    if (root === document) return uniqueCss(el);
+    let mark = el.getAttribute('data-pfsx');
+    if (!mark) { mark = 's' + (window.__pfShadowSeq++); try { el.setAttribute('data-pfsx', mark); } catch (e) { return uniqueCss(el); } }
+    return '[data-pfsx="' + mark + '"]';
+  };
   // Structure: headings + landmarks (for the outline skeleton).
-  for (const h of document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role=region],main,nav,header,footer')) {
+  for (const h of deepQuery('h1,h2,h3,h4,h5,h6,[role=region],main,nav,header,footer')) {
     if (!visible(h)) continue;
     nodes.push({ role: roleOf(h), name: nameOf(h), tag: h.tagName.toLowerCase(), interactable: false, inViewport: inVp(h), landmark: /MAIN|NAV|HEADER|FOOTER/.test(h.tagName) });
   }
-  for (const el of document.querySelectorAll(interactableSel)) {
+  for (const el of deepQuery(interactableSel)) {
     if (!visible(el)) continue;
     const role = roleOf(el), name = nameOf(el);
     const key = role + '|' + name;
@@ -390,7 +420,7 @@ const EXTRACT_FN = `() => {
       type: el.getAttribute && el.getAttribute('type') ? el.getAttribute('type').toLowerCase() : null,
       autocomplete: el.getAttribute && el.getAttribute('autocomplete') || '',
       inputmode: el.getAttribute && el.getAttribute('inputmode') || '',
-      interactable: true, inViewport: inVp(el), section: sectionOf(el), nth, css: uniqueCss(el),
+      interactable: true, inViewport: inVp(el), section: sectionOf(el), nth, css: cssFor(el),
     });
   }
   // Images — so the model can PERCEIVE that pictures are on the page and decide
@@ -399,7 +429,7 @@ const EXTRACT_FN = `() => {
   // pixel; capped to bound tokens. Each carries a css so a screenshot can scope
   // to one image.
   let imgCount = 0;
-  for (const el of document.querySelectorAll('img,[role=img],svg[aria-label],svg[role=img],figure,canvas')) {
+  for (const el of deepQuery('img,[role=img],svg[aria-label],svg[role=img],figure,canvas')) {
     if (imgCount >= 40) break;
     if (!visible(el)) continue;
     const box = el.getBoundingClientRect();
@@ -408,10 +438,18 @@ const EXTRACT_FN = `() => {
     const alt = (el.getAttribute && el.getAttribute('alt') || '').replace(/\\s+/g, ' ').trim().slice(0, 200);
     if (!nm && !alt && !(box.width >= 100 && box.height >= 100)) continue;   // skip tiny + nameless (decorative/icons)
     imgCount++;
-    nodes.push({ role: 'image', name: nm, alt, tag: el.tagName.toLowerCase(), isImage: true, interactable: false, inViewport: inVp(el), section: sectionOf(el), css: uniqueCss(el) });
+    nodes.push({ role: 'image', name: nm, alt, tag: el.tagName.toLowerCase(), isImage: true, interactable: false, inViewport: inVp(el), section: sectionOf(el), css: cssFor(el) });
   }
   const main = document.querySelector('main') || document.body;
-  const text = (main?.innerText || '').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 12000);
+  let text = (main && main.innerText) || '';
+  // innerText skips shadow content, so append each open shadow root's own
+  // rendered text. Nested roots are separate entries in the roots list, so every
+  // level is covered exactly once; a child's innerText excludes its deeper shadow.
+  for (const r of roots) {
+    if (r === document) continue;
+    for (const child of r.children) { const t = child.innerText; if (t) text += '\\n' + t; }
+  }
+  text = text.replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, 12000);
   return { url: location.href, title: document.title, nodes, text };
 }`;
 

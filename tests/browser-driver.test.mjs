@@ -95,6 +95,61 @@ live('extractPageData walks the real DOM into the lens shape; css resolves + act
   }
 });
 
+live('extractPageData pierces OPEN shadow DOM (nodes, css that resolves + acts, text)', async () => {
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ headless: true, executablePath: exe });
+  const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+  try {
+    // A Reddit-shaped page: the real content lives inside nested open shadow
+    // roots, which document.querySelectorAll and innerText both skip.
+    await page.setContent(`
+      <main>
+        <h1>Light heading</h1>
+        <a href="/light">Light link</a>
+        <reddit-post></reddit-post>
+      </main>
+      <script>
+        const host = document.querySelector('reddit-post');
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML =
+          '<h2>Shadow heading</h2>' +
+          '<a href="/shadow-a">Shadow link A</a>' +
+          '<button aria-label="Upvote">up</button>' +
+          '<p id="log">idle</p>' +
+          '<nested-thing></nested-thing><p>Shadow prose here.</p>';
+        root.querySelector('button').addEventListener('click', () => root.getElementById('log').textContent = 'VOTED');
+        const nested = root.querySelector('nested-thing');
+        const nroot = nested.attachShadow({ mode: 'open' });
+        nroot.innerHTML = '<a href="/deep">Deep nested link</a>';
+      </script>`);
+    await page.waitForTimeout(50);
+
+    const data = await extractPageData(page);
+    const names = data.nodes.map(n => n.name);
+    // Content from every shadow level is present, not just the light DOM.
+    for (const expected of ['Light link', 'Shadow link A', 'Upvote', 'Deep nested link']) {
+      assert.ok(names.includes(expected), `missing "${expected}"; got: ${names.join(', ')}`);
+    }
+    // Shadow prose reaches the text channel (innerText alone would miss it).
+    assert.ok(data.text.includes('Shadow prose here.'), 'shadow prose missing from text');
+
+    // The shadow button's css must resolve to exactly one element via Playwright's
+    // piercing locator, and clicking it must actually reach the shadow handler.
+    const upvote = data.nodes.find(n => n.name === 'Upvote');
+    assert.ok(upvote && upvote.css, 'no css for shadow button');
+    assert.equal(await page.locator(upvote.css).count(), 1, `shadow css not unique: ${upvote.css}`);
+    await page.locator(upvote.css).click();
+    await page.waitForTimeout(50);
+    assert.equal(
+      await page.evaluate(() => document.querySelector('reddit-post').shadowRoot.getElementById('log').textContent),
+      'VOTED',
+      'click did not reach the shadow-DOM handler',
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 // ── Auto-fetch state machine (injected spawn — no real download) ───────────
 import { startChromiumFetch, chromiumInstallState, systemBrowserCandidates } from '../browser-driver.js';
 import { EventEmitter } from 'node:events';
