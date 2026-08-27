@@ -95,3 +95,7 @@ topics:
     title: Tomes
     description: Keyword-triggered lorebook entries, the shared web/Discord activation engine, live tome macros, and the self-documenting Familiar Manual tome
     parents: [architecture, memorization]
+  - slug: memory-and-knowledge
+    title: Memory and Knowledge
+    description: How the layered memory systems (Phylactery, Unruh, Tomes, Session Memorization, Content-Gating) fit together and where each kind of knowledge lives
+    parents: [architecture, phylactery, memorization]

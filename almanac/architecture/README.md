@@ -182,6 +182,9 @@ If you're asking yourself... go to:
 
 ## Where to go next
 
+- [Memory and knowledge](memory-and-knowledge) — how the layered memory systems (Phylactery,
+  Unruh, Tomes, Session Memorization, Content-Gating) fit together and where each kind of
+  knowledge lives.
 - [Phylactery](phylactery) — the canonical self-store: identity, memory, and the knowledge
   graph.
 - [Content-based memory gating](content-gating) — the per-topic sensitivity axis layered on top
