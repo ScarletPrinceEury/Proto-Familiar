@@ -201,8 +201,9 @@ If you're asking yourself... go to:
 - [Vision and media](vision-and-media) — multimodal image input, content-addressed storage,
   and modality fallback at the materialization seam.
 - [Browser](browser) — the opt-in, ward-only click-and-fill web subsystem: the SSRF-guarding
-  proxy, the ref/generation model, and the five shipped passes (through 0.11.16) plus the parked
-  CDP-mode alternate engine.
+  proxy, the ref/generation model, the five shipped build-spec passes plus the work that
+  continued past them through 0.11.28 (open shadow-DOM piercing, the Reddit reader mirror,
+  page watches, and JS-render settling), and the parked CDP-mode alternate engine.
 - [Voice](voice) — the multi-pass voice milestone: the model supply chain, the disk-footprint
   budget, the ward-facing benchmark tool, and read-aloud text-to-speech.
 - [Core prompts and multi-surface assembly](core-prompts) — the ward's four core prompt fields

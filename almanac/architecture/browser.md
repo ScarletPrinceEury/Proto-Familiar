@@ -64,7 +64,9 @@ The browser subsystem lets the Familiar navigate, read, and act on live web page
 click, fill, scroll, and multi-step flows — instead of only reading a page through the
 existing static `read_webpage` extractor. It shipped in five passes: Pass 1 (0.11.0, the
 spine: driver, lens, guarded proxy, `browse_open`/`see`/`act`/`close`, the audit log), Pass 2
-(0.11.1, screenshots, tabs, downloads, history), Pass 3a (0.11.3, synchronous safety gates),
+(0.11.1, screenshots, tabs, downloads, history, closed by `read_webpage`'s re-backing onto the
+live DOM at 0.11.2 — see "`read_webpage` is re-backed onto the live DOM" below), Pass 3a (0.11.3,
+synchronous safety gates),
 Pass 3b (0.11.4, the ward-in-the-loop and consent-gated surfaces), and Pass 4 (0.11.7,
 unattended web research on [pondering](pondering) ticks), followed by two async
 refinements to Pass 3b's synchronous hard-stops: `browseConfirmMode: 'ask'` approve-resume
@@ -83,9 +85,10 @@ the static web-read path rather than the driver), and a run of interaction-model
 (0.11.14–0.11.16) that made refs meaning-bearing, let the model act by naming what it sees, gave
 it awareness of images on a page, and added page-level scroll, followed by a JS-render timing
 fix (0.11.23, covered below) that made reads and acts wait for a page's own JS to finish wiring
-up before touching it. A CDP-attach engine backing for the ward's own logged-in Chrome (spec §9
-Horizon #2) is fully designed but deliberately parked, not built — see the CDP mode section
-below.
+up before touching it, and open shadow-DOM piercing plus a per-browse reader mirror (0.11.28,
+covered below) that closed the shadow-DOM half of the extraction gap the 0.11.23 fix left open.
+A CDP-attach engine backing for the ward's own logged-in Chrome (spec §9 Horizon #2) is fully
+designed but deliberately parked, not built — see the CDP mode section below.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
 `PROTO_FAMILIAR_BROWSE_DISABLED` env kill switch) and ward-only: the `browse_*` tools are
@@ -190,8 +193,9 @@ budget before their first read, and `act()` calls it with a 2s budget in place o
 independently by `computeDelta()`'s before/after URL diff, so an in-page anchor navigation
 still reads as movement even though `settlePage()` itself only waits, it does not inspect
 content. The fix is general — it helps any SPA or framework-rendered page, not just the site
-that surfaced it. Shadow-DOM and iframe traversal remain a separate, still-open gap; the
-snapshot walk in `browser-driver.js` does not cross either boundary.
+that surfaced it. At the time of this fix, shadow-DOM and iframe traversal were still a separate,
+open gap; open shadow DOM is now pierced — see "Piercing open shadow DOM" below — while iframe
+traversal remains unaddressed.
 
 ## SSRF is enforced by a proxy the app owns, not a pre-navigation check
 
@@ -249,6 +253,28 @@ text-only reads [@browser-js]:
   documents, images, and audio — never an executable — with a size cap [@browser-js].
 - **`browse_tabs`** (list/switch/close) and **`browse_history`** (query
   `logs/browser-actions.jsonl`) round out the tool surface [@browser-js] [@browser-audit-js].
+
+## `read_webpage` is re-backed onto the live DOM (the last Pass 2 item, 0.11.2)
+
+`read_webpage` is re-backed by this driver, not left on the static extractor alone. This was the
+one item `docs/browser-build-spec.md` originally placed inside Pass 2 and held back until the
+driver had shipped [@browser-build-spec]; it landed as Pass 2's closing commit at 0.11.2, before
+Pass 3a, so it has been true since early in the milestone [@browser-js]. `browseRead({ url })`
+reads the live JS-rendered DOM through an ephemeral, tab-cap-exempt page (`driver.readPage`) and
+runs the result through `websearch.js`'s shared `extractReadable(html, { url, maxChars })` — the
+same Readability-to-markdown pipeline the static path uses — so browser-backed and static output
+can never drift into two different formats [@browser-js]. The `read_webpage` executor calls
+`shouldBrowserRead(settings)` first, which is true only when browsing is enabled, the ward has
+not forced `webReadBackend: 'static'`, and a Chromium is actually available; otherwise, and on
+any failure of the live read itself (`browseRead` never throws — a caught error returns
+`{ ok: false }`), the executor falls through to the pre-existing static `fetchReadable` floor
+[@browser-js]. This closes the class of silent failure where a modern JS-only page extracted as
+boilerplate or nothing under the static-only path, while keeping the static extractor as the
+degradation floor for a browser-disabled or driver-unavailable turn.
+
+A site the ward's site mode blocks is refused before either path runs, and reports a distinct
+`blocked` result rather than silently falling through to the static floor — the same distinct
+signal the Pass 3a site-modes section below describes for `browse_open` [@browser-js].
 
 ## What Pass 3a (0.11.3) added: synchronous safety gates
 
@@ -591,6 +617,43 @@ at, let alone which one [@browser-lens-js].
 below-the-fold or lazy-loaded/infinite-scroll content that `browse_see`'s viewport-only outline
 level would otherwise never mention.
 
+## Piercing open shadow DOM, and a per-browse reader mirror (0.11.28)
+
+A ward report — the Familiar could see some links on a site but the actual content was missing
+or unclickable — traced to a gap neither the ref/generation model nor the JS-render settle fix
+above touches: `document.querySelectorAll` and `main.innerText` both silently skip shadow DOM,
+so a modern web-component site (Reddit's `shreddit-*` elements, many framework apps) rendered
+its real content inside open shadow roots and the extractor read it as empty chrome
+[@browser-driver-js]. This closes the "iframe and shadow-DOM traversal" gap named in the
+JS-render settle section above, for shadow DOM specifically; iframe traversal is still not
+crossed.
+
+The in-page walk in `browser-driver.js`'s `EXTRACT_FN` now collects every *open* shadow root,
+nested roots included, and queries interactable nodes and image nodes across all of them, then
+appends each shadow root's own `innerText` to the page text channel — because `innerText` skips
+shadow content the same way `querySelectorAll` does [@browser-driver-js]. A shadow-DOM element
+cannot be addressed by a document-rooted CSS path the way a light-DOM element can, so such
+elements are stamped with a unique `data-pfsx` marker and addressed by
+`[data-pfsx="…"]`; Playwright's locator resolves that selector through an open shadow root, so
+the existing act-time resolve-and-click path (described above in "Refs never hold a live
+element") works unchanged once a shadow element has a marker. Light-DOM elements keep their
+natural `uniqueCss` path, so a non-shadow site's extraction output is byte-identical to before —
+this is a strict addition, not a rewrite of the extraction path [@browser-driver-js].
+
+**`browse_open` also gained an opt-in reader mirror.** `readerMirrorUrl(url)` in `browser.js` is
+a pure function that maps a well-known heavy front-end to a lighter, server-rendered
+equivalent when one exists — currently Reddit's `www`/`new`/`np`/`amp`/`m` hosts to
+`old.reddit.com`, which has no shadow DOM, no login wall, and no infinite scroll, with the
+path, query, and hash preserved [@browser-js]. It is a safe no-op for `old.reddit.com` itself,
+for Reddit's media/API subdomains, and for any non-Reddit URL, so passing `reader:true` is
+always harmless even when no mirror applies [@browser-js]. `browse_open({ url, reader: true })`
+swaps to the mirror before the site-mode and driver checks run, and the result notes the swap
+("I opened the lighter old.reddit.com reader mirror for this.") so the Familiar knows which page
+it actually opened [@browser-js]. Nothing is auto-rewritten: the Familiar opts in per browse call
+only when an app-style page has already read badly, matching this page's shipped pattern of
+opt-in surfaces layered on a safe default rather than an automatic rewrite that could surprise
+the model about which page it is looking at.
+
 ## CDP mode (Horizon #2): driving the ward's own Chrome — designed, not built
 
 `docs/browser-cdp-mode-build-spec.md` specs an alternate engine backing for the same `browse_*`
@@ -613,20 +676,16 @@ floor, plus a forced single-domain allowlist and two independent human acts noth
 were judged an acceptable design for a capability this high-stakes — read it in full before
 resuming this work.
 
-## What is deliberately still deferred
-
-`read_webpage` is not re-backed by this driver. It stays on its existing static extractor even
-after Pass 1 through 4 have shipped, on purpose: `read_webpage` is an always-on, widely used
-tool, and the spec's ordering is to prove the driver on the opt-in `browse_*` surface first,
-then flip the always-on tool to it only once the driver has shaken out under real use
-[@browser-build-spec]. This is the one item the spec originally placed inside Pass 2 that
-remains undone as of 0.11.7.
+## The whole spec is built, and work has continued past it
 
 The whole browser milestone specced in `docs/browser-build-spec.md`'s Passes 1 through 4 is now
-built, including both Pass 3b refinements named above (`browseConfirmMode: 'ask'`
-approve-resume, 0.11.5, and the headed handoff hand-back-and-resume, 0.11.6) and Pass 4's
-unattended pondering research (0.11.7, shipped as a plan-and-read loop rather than the spec's
-tool-calling design). What remains is `read_webpage`'s re-backing onto this driver.
+built, including `read_webpage`'s re-backing (above, 0.11.2), both Pass 3b refinements named
+earlier (`browseConfirmMode: 'ask'` approve-resume, 0.11.5, and the headed handoff
+hand-back-and-resume, 0.11.6), and Pass 4's unattended pondering research (0.11.7, shipped as a
+plan-and-read loop rather than the spec's tool-calling design). Work has continued past the
+spec's four passes — see the Chromium-acquisition, page-watches, ref, image/scroll,
+JS-render-settle, and shadow-DOM sections above — and the driver's own in-page walk still does
+not cross an iframe boundary, which remains the one open extraction gap.
 
 ## Related
 
