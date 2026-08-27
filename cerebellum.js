@@ -2038,6 +2038,14 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'reader_doctor',
+      description: "I check which gated sites I can actually read right now — Reddit and the other login-walled places that block plain fetches — and what would open the ones I can't. Each comes back reachable or blocked, by which route, plus the one thing that would unlock it (a log-in through my browser, or credentials {{user}} can set). I run this when a page comes back empty or blocked and I want to tell {{user}} exactly why and how to fix it, instead of just failing.",
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'convert_ids_to_slugs',
       description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my memories, my ponderings, and the outbox, with every internal cross-reference (and embeddings) updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -3736,6 +3744,18 @@ export const TOOL_EXECUTORS = {
       return `I couldn't run my organ check just now: ${err?.message ?? err}`;
     }
   },
+
+  reader_doctor: async (_args = {}, ctx = {}) => {
+    const s = readSettingsSync();
+    try {
+      const rd = await import('./reader-doctor.js');
+      const wardTurn = !ctx?.audienceTag || ctx.audienceTag === 'ward-private';
+      const report = await rd.runReaderDoctor({ settings: s, wardTurn });
+      return rd.formatReaderReport(report);
+    } catch (err) {
+      return `I couldn't run my reader check just now: ${err?.message ?? err}`;
+    }
+  },
   convert_ids_to_slugs: async () => {
     const report = [];
     try {
@@ -4224,7 +4244,22 @@ export const TOOL_EXECUTORS = {
       try {
         const rr = await import('./reddit-reader.js');
         if (rr.isRedditUrl(url)) {
-          const r = await rr.readReddit(url, { settings: s });
+          // On the ward's own turn, offer the authenticated-browser-context fetch
+          // (their real browser fingerprint + logged-in Reddit session) — the door
+          // past Reddit's network-layer block. Never on a gated/villager turn: the
+          // session is the ward's. Falls back to public/OAuth inside readReddit.
+          const deps = {};
+          const wardTurn = !ctx?.audienceTag || ctx.audienceTag === 'ward-private';
+          if (wardTurn) {
+            try {
+              const b = await import('./browser.js');
+              if (b.browseEnabled(s)) {
+                const drv = await import('./browser-driver.js');
+                deps.contextFetch = (u, o) => drv.contextRequest(u, o);
+              }
+            } catch { /* no browser → public/OAuth only */ }
+          }
+          const r = await rr.readReddit(url, { settings: s, deps });
           if (r.ok || r.hard) return r.text;
         }
       } catch { /* fall through to the normal read path */ }

@@ -2629,6 +2629,19 @@ app.get('/api/browser/status', async (_req, res) => {
   }
 });
 
+app.get('/api/reader-doctor', async (_req, res) => {
+  // Ward-facing diagnostic: which gated sites are reachable and what unlocks the
+  // rest. The endpoint is the ward's own surface, so the browser-session backend
+  // is allowed (wardTurn:true).
+  try {
+    const { runReaderDoctor } = await import('./reader-doctor.js');
+    const report = await runReaderDoctor({ settings: readSettingsSync(), wardTurn: true });
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
+});
+
 app.get('/api/browser-actions', async (_req, res) => {
   try {
     const { readBrowserActions } = await import('./browser-audit.js');
