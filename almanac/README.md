@@ -37,7 +37,7 @@ entity whose identity and memory live in a separate canonical store. Start with:
   rules (versioning, degradation, ids) referenced throughout the architecture pages.
 
 [Concepts](concepts) indexes all repo-specific vocabulary by cluster, and
-[Decisions](decisions) indexes all twenty-two recorded decisions by the question each one
+[Decisions](decisions) indexes all twenty-three recorded decisions by the question each one
 answers.
 
 ## Notability Bar

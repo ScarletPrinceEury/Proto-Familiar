@@ -176,6 +176,7 @@ If you're asking yourself... go to:
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning
 - **How does image input work?** → [Vision and media](vision-and-media)
 - **How does the Familiar click and fill on the web?** → [Browser](browser)
+- **What happens when a site (Reddit today) blocks a plain fetch?** → [Reader router](reader-router)
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
 - **How does the ward control settings from Discord instead of the web app?** → [Ward Discord console](ward-console)
@@ -206,6 +207,10 @@ If you're asking yourself... go to:
   reader mirror, page watches, JS-render settling, and a Reddit JSON-API reader that routes
   `read_webpage` around Reddit's anti-bot wall entirely), and the parked CDP-mode alternate
   engine.
+- [Reader router](reader-router) — the 0.11.30 gated-site registry and reachability doctor
+  that generalizes the Reddit fix above: a `browser-driver.contextRequest` primitive fetches
+  through the ward's own authenticated browser session for any site a plain server-side
+  fetch cannot reach.
 - [Voice](voice) — the multi-pass voice milestone: the model supply chain, the disk-footprint
   budget, the ward-facing benchmark tool, and read-aloud text-to-speech.
 - [Core prompts and multi-surface assembly](core-prompts) — the ward's four core prompt fields
