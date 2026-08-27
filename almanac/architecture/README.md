@@ -14,6 +14,12 @@ sources:
   - id: discord-gateway-js
     type: file
     path: discord-gateway.js
+  - id: organs-js
+    type: file
+    path: organs.js
+  - id: thalamus-js
+    type: file
+    path: thalamus.js
 ---
 
 # Architecture
@@ -52,6 +58,21 @@ context; it never executes actions. Each peer is
 treated as a plural, independently-failing collaborator — a downed Phylactery does not take
 Unruh's temporal context out with it, and an empty sub-block simply renders as nothing in the
 prompt rather than as an error [@architecture-doc].
+
+That graceful degradation used to be silent: a missing organ just meant the Familiar reasoned
+with less context, with no signal to the ward or a debugging agent that anything had gone
+missing. `organs.js` (0.11.24) is a small pure module — `ORGAN_ORDER`, `formatOrganStatus()`,
+`anyDown()` — that turns Phylactery/Unruh/Village/Tomes availability into a 🟢/⚫ readout
+[@organs-js]. `enrich()` derives per-organ status for the current turn from the same settled
+fan-out the context sections are already built from (Phylactery and Unruh from
+`idSettled`/`temporalSettled`; Village and Tomes from cheap local file/dir reads) and, on a
+ward-private non-static turn, pushes an `[Organ status]` block per the ward's
+`organStatusBlock` setting: `'degraded'` (default — inject only when `anyDown()` is true),
+`'always'`, or `'off'` [@thalamus-js]. A separate `probeOrgans()` runs a bounded *live*
+reachability probe — a real MCP call to Phylactery/Unruh, not last turn's fan-out result — and
+backs the ward-facing `organ_status` tool, so the Familiar can check organ health on demand
+independent of the injected block [@thalamus-js]. Both paths are wrapped so a probe failure can
+never break `enrich()` itself; the diagnostic must not cost the turn it is reporting on.
 
 **`cerebellum.js`** is the motor module — the outbound counterpart to thalamus. It owns the
 tool registry (`BUILTIN_TOOLS` + `TOOL_EXECUTORS`), the tool-call loop, the silence-triage
