@@ -24,6 +24,9 @@ entity whose identity and memory live in a separate canonical store. Start with:
 - [Entity-as-subject](concepts/entity-as-subject) and
   [Multi-embodiment](concepts/multi-embodiment) — the design stance everything else in this
   repo is built to serve.
+- [Core prompts and multi-surface assembly](architecture/core-prompts) — the four core prompts
+  that define identity, why they must be assembled server-side, and the lesson for building
+  capabilities that work across web, Discord, and voice.
 - [Proactivity over caution](decisions/proactivity-over-caution) — the incident that shapes
   every prompt governing when the Familiar acts on its own.
 - [Weather](architecture/weather) and [Location privacy](decisions/location-privacy) — how the
