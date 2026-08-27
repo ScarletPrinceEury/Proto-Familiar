@@ -63,7 +63,9 @@ import {
   searchMemoryRestricted, searchMemory, memByTimerange,
   setCurrentLocation, listLocations,
   withLock,
+  probeOrgans,
 } from './thalamus.js';
+import { formatOrganStatus } from './organs.js';
 import { audienceTagFor, deriveNodeAudience } from './audience.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './graph-vocab.js';
@@ -2028,6 +2030,14 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'organ_status',
+      description: 'I check which of my organs are actually answering right now — Phylactery (my identity + memory), Unruh (my sense of time), the Village (who I know), and my Tomes (keyword-lore). Each comes back 🟢 if it responded or ⚫ if it didn\'t. I run this when {{user}} asks whether I\'m all here, or when something feels missing — a blank where a memory or a reminder should be — so I can tell them plainly which part went quiet instead of guessing.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'convert_ids_to_slugs',
       description: 'I tidy my own records: every old-style 32-character hex id still in my stores becomes a short readable slug ("dentist-k3" instead of a hex blob) — schedule and interests, my knowledge graph, my memories, my ponderings, and the outbox, with every internal cross-reference (and embeddings) updated in one sweep. Purely mechanical, idempotent (running it again finds nothing left to convert), and no information is lost — items only get easier for me to read and address. This is a one-time housekeeping pass after the id overhaul; I run it when {{user}} asks me to convert the old ids. Session logs keep their historical names (renaming archives would break their cross-references).',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -3713,6 +3723,16 @@ export const TOOL_EXECUTORS = {
     } catch (err) { return `I couldn't apply the template: ${err.message}`; }
   },
 
+  organ_status: async () => {
+    // Live probe (thalamus owns the checks + timeouts); pure formatter renders
+    // the bubbles. A failure degrades to all-down rather than throwing.
+    try {
+      const status = await probeOrgans();
+      return formatOrganStatus(status, { title: 'Organ status (🟢 answered · ⚫ silent):' });
+    } catch (err) {
+      return `I couldn't run my organ check just now: ${err?.message ?? err}`;
+    }
+  },
   convert_ids_to_slugs: async () => {
     const report = [];
     try {

@@ -3846,6 +3846,35 @@ details[open] > .pi-summary::before { content: '\25be\00a0'; }
 .vl-knocks.hidden { display: none; }
 .vl-servers.hidden { display: none; }
 .vl-knocks-head { font-size: 0.82rem; font-weight: 600; }
+/* The server list header doubles as a collapse toggle. */
+.vl-servers-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.vl-servers-toggle .hint-chev {
+  font-size: 0.6rem;
+  transition: transform 0.15s;
+  transform: rotate(0deg);
+  color: var(--text-dim);
+}
+.vl-servers-toggle[aria-expanded="true"] .hint-chev { transform: rotate(90deg); }
+.vl-servers-toggle:hover .hint-chev { color: var(--accent); }
+.vl-servers-count { font-weight: 400; color: var(--text-dim); }
+.vl-servers-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.vl-servers-body.hidden { display: none; }
 /* Server-name subheader that groups a run of channel knocks. */
 .vl-knock-group + .vl-knock-group { margin-top: 8px; }
 .vl-knock-group-head {

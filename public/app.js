@@ -291,6 +291,7 @@ const state = {
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   notificationSounds:      true,    // in-app chime on new messages (default on)
+  organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
   // pulls anything else via request_tools. Sticky = extra turns a surfaced
@@ -505,7 +506,7 @@ const SERVER_SYNCED_KEYS = [
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
-  'memorySweepEnabled', 'uiShowAdvanced',
+  'memorySweepEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
@@ -3986,6 +3987,7 @@ function readSettingsFromUI() {
   if ($('browse-site-list')) state.browseSiteList = $('browse-site-list').value;
   if ($('browse-confirm-domains')) state.browseConfirmDomains = $('browse-confirm-domains').value;
   if ($('browse-confirm-mode')) state.browseConfirmMode = $('browse-confirm-mode').value;
+  if ($('organ-status-block')) state.organStatusBlock = $('organ-status-block').value;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4171,6 +4173,7 @@ function writeSettingsToUI() {
   if ($('browse-site-list'))   setIfNotFocused($('browse-site-list'),   'value',   state.browseSiteList || '');
   if ($('browse-confirm-domains')) setIfNotFocused($('browse-confirm-domains'), 'value', state.browseConfirmDomains || '');
   if ($('browse-confirm-mode')) setIfNotFocused($('browse-confirm-mode'), 'value', state.browseConfirmMode || 'refuse');
+  if ($('organ-status-block')) setIfNotFocused($('organ-status-block'), 'value', state.organStatusBlock || 'degraded');
   { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
@@ -5552,6 +5555,7 @@ function init() {
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle', 'page-watch-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
+    'organ-status-block',
     'memory-sweep-toggle',
     'tool-surfacing-toggle', 'tool-sticky-turns', 'tool-rounds-per-turn',
     'stewardship-toggle', 'day-start-anchor', 'day-start-gap-hours', 'brief-lookahead-days', 'docket-min-age-days',
@@ -13346,6 +13350,9 @@ function vlServerName(guildId) {
   return s?.name || `Server ${guildId}`;
 }
 
+// Collapse state for the server list, kept across re-renders within a session.
+let _vlServersCollapsed = false;
+
 async function vlLoadServers() {
   try {
     const r = await fetch('/api/village/servers');
@@ -13363,22 +13370,31 @@ function vlRenderServers() {
     return;
   }
   box.classList.remove('hidden');
-  box.innerHTML = `<div class="vl-knocks-head">🖥 Servers <span class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</span></div>`
-    + _vlServers.map((s, i) => {
-      const sub = [
-        `id ${esc(s.guildId)}`,
-        s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
-      ].filter(Boolean).join(' · ');
-      return `<div class="vl-knock" data-si="${i}">
-        <div class="vl-knock-info">
-          <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
-          <div class="vl-knock-sub">${sub}</div>
-        </div>
-        <div class="vl-knock-actions">
-          <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
-        </div>
-      </div>`;
-    }).join('');
+  const collapsed = _vlServersCollapsed;
+  const rows = _vlServers.map((s, i) => {
+    const sub = [
+      `id ${esc(s.guildId)}`,
+      s.lastSeenAt ? `seen ${new Date(s.lastSeenAt).toLocaleDateString()}` : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="vl-knock" data-si="${i}">
+      <div class="vl-knock-info">
+        <div class="vl-knock-name">${esc(s.name || `Server ${s.guildId}`)}</div>
+        <div class="vl-knock-sub">${sub}</div>
+      </div>
+      <div class="vl-knock-actions">
+        <button class="btn-ghost vl-server-x" type="button" title="Forget this server (it reappears if my Familiar is active there again)" aria-label="Forget server">${msIcon('close')}</button>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = `<button class="vl-servers-toggle vl-knocks-head" type="button" aria-expanded="${!collapsed}" aria-controls="vl-servers-body">
+      <span class="hint-chev">▶</span> 🖥 Servers <span class="vl-servers-count">(${_vlServers.length})</span>
+    </button>
+    <div class="field-hint">— the Discord servers my Familiar is in, derived from where it's been. Naming only; access is set by Locations + circles below.</div>
+    <div id="vl-servers-body" class="vl-servers-body${collapsed ? ' hidden' : ''}">${rows}</div>`;
+  box.querySelector('.vl-servers-toggle')?.addEventListener('click', () => {
+    _vlServersCollapsed = !_vlServersCollapsed;
+    vlRenderServers();
+  });
   box.querySelectorAll('.vl-knock').forEach(row => {
     const s = _vlServers[Number(row.dataset.si)];
     row.querySelector('.vl-server-x').addEventListener('click', () => vlDismissServer(s));
