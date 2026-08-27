@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Twenty-two decisions live here. Grouped by the question each one answers:
+Twenty-three decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -97,6 +97,13 @@ and of what is normal for its bond with the ward:
   the project's low-end reference hardware, sharing static thread caps rather than one ONNX
   Runtime instance.
 
+## Extending Proto-Familiar: a plugin surface
+
+- [Plugin surface ("Grimoire"): Psycheros-compatible, walled off from the safety paths](plugin-surface-safety-wall)
+  — the decision to make Familiar source-compatible with Psycheros plugins via a tiered Node/Deno
+  loader, and the one hard divergence: plugin-contributed context is excluded from crisis, threat,
+  and triage scoring by construction. Design approved and build spec written; no code shipped yet.
+
 ## Operating rules applied across components
 
 - [Exact values are code's job](exact-values-in-code) — the rule that any machine-correct value
@@ -126,7 +133,8 @@ incident → [Wait-streak experiment](wait-streak-experiment) non-crisis applica
 passive or intrusive: [Structural authorization](../concepts/structural-authorization) concept
 → [Proactivity over caution](proactivity-over-caution) → [Trust tiers gate reads, not
 writes](trust-tiers-gate-reads-not-writes) → [Injection guard](../architecture/injection-guard-gap) wiring
-history.
+history → [Plugin surface safety wall](plugin-surface-safety-wall), the same discipline applied in
+advance to a not-yet-built extension surface.
 
 **The entity stance** — Why the Familiar is not a tool the user operates, but an entity the
 code helps serve: [Entity-as-subject](../concepts/entity-as-subject) concept → [Eury as the

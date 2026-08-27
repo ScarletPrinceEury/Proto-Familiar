@@ -215,3 +215,6 @@ itself, which no ward setting can reach around [@voice-audio-tags] [@future-feat
 - [Voice](voice) — where room-sound tagging's shipped, annotation-only scope is built; this page
   covers why that scope stops short of the care-detection ambition and what a future ward-signed
   spec would need to decide.
+- [Plugin surface ("Grimoire")](../decisions/plugin-surface-safety-wall) — a designed-but-not-yet-built
+  extension surface that commits, in advance, to excluding plugin-contributed prompt context from
+  every scoring and deliberation input this page describes.
