@@ -70,7 +70,7 @@ async function mkVideo(label = 'clip', over = {}) {
 }
 
 test('looksVideoCapable: TIGHT — Gemini/Qwen-VL yes; images-only VLMs and text no', () => {
-  for (const m of ['gemini-2.0-flash', 'gemini-1.5-pro', 'qwen2.5-vl-72b', 'qwen3-vl-plus', 'some-video-model']) {
+  for (const m of ['gemini-2.0-flash', 'gemini-1.5-pro', 'qwen2.5-vl-72b', 'qwen3-vl-plus', 'some-video-model', 'glm-5.3-flash', 'glm5.3-flash']) {
     assert.equal(looksVideoCapable('p', m), true, `${m} should read as video-capable`);
   }
   for (const m of ['glm-4.6v', 'pixtral-12b', 'llava-1.6', 'gpt-4o', 'claude-opus-4-8', 'glm-4.6', '']) {

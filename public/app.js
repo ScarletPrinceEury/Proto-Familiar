@@ -1507,6 +1507,30 @@ function renderConnectionsList() {
     });
     info.appendChild(visRow);
 
+    // Video capability tri-state — its own axis, because far fewer models take a
+    // live video part than take images, and a wrong Auto attempt ships megabytes
+    // before the provider rejects it. Auto only says yes for families we know
+    // (Gemini, Qwen-VL, GLM-V/flash, explicit -video); NanoGPT proxies a huge
+    // model space no heuristic can cover, so this is how the ward pins any
+    // video-capable connection they've confirmed (GLM 5.3 Flash, a NanoGPT video
+    // model, …). Stored on the connection, which already syncs.
+    const vidRow = document.createElement('div');
+    vidRow.className = 'conn-vision';
+    const dcur = conn.videoCapable === 'yes' || conn.videoCapable === 'no' ? conn.videoCapable : 'auto';
+    const dId = `conn-video-${conn.id}`;
+    vidRow.innerHTML =
+      `<label for="${dId}">Can watch video?</label>` +
+      `<select id="${dId}" class="ke-select">` +
+      `<option value="auto"${dcur === 'auto' ? ' selected' : ''}>Auto</option>` +
+      `<option value="yes"${dcur === 'yes' ? ' selected' : ''}>Yes</option>` +
+      `<option value="no"${dcur === 'no' ? ' selected' : ''}>No</option>` +
+      `</select>`;
+    vidRow.querySelector('select').addEventListener('change', (e) => {
+      const c = state.connections.find(x => x.id === conn.id);
+      if (c) { c.videoCapable = e.target.value; saveSettings(); }
+    });
+    info.appendChild(vidRow);
+
     // Reasoning effort (always-on-thinking models like GLM-5.3). Default = the
     // app's sensible choice (low for z.ai reasoning models, nothing sent
     // elsewhere); Low/High/Max override it; Off never sends it. Stored on the

@@ -183,6 +183,8 @@ export function looksVideoCapable(provider, model) {
   return [
     /gemini/,                                   // Gemini is natively multimodal incl. video
     /qwen.*-vl/, /qwen\d[.\d]*-?vl/, /qwenvl/,   // Qwen-VL accepts video
+    /glm-?5[.\d]*-?flash/,                        // GLM 5.3 Flash (ward-confirmed video). NB: GLM-V
+                                                 // image models (glm-4.6v) are image-only — not here.
     /\bvideo\b/, /-video/,                       // a model that names video explicitly
   ].some((re) => re.test(m));
 }

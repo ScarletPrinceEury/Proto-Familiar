@@ -46,15 +46,27 @@ provider-dependent: it WORKS where `video_url` is accepted, and DEGRADES cleanly
 elsewhere. The tight `videoCapable` heuristic + the ward's per-connection
 `'yes'`/`'no'` are how a ward pins a provider they've confirmed.
 
+**This inline path is NOT Gemini-only** — it's the OpenAI-compat `video_url`
+part, so any chat-completions provider that accepts it works: **Zhipu GLM-V /
+GLM 5.3 Flash**, Qwen-VL, and video models proxied through **NanoGPT** all ride
+it (the File-API path in §4 is the Gemini-specific extra, only for clips too big
+to inline). The Auto heuristic recognises the families we know by name; for a
+NanoGPT model (or any provider whose model name doesn't encode modality) the ward
+flips the connection's "Can watch video?" to **Yes** and the inline part is sent.
+
 ## 3. Known gaps (v1)
 
 - **No video-describe.** `describeAsset` is image-only; a stood-in video carries
   no description (just the marker + the don't-invent guard). A frame-extract →
   describe path (needs ffmpeg) is future, and closed shadow DOM / frame reading
   ride the same "needs a media decoder" bucket.
-- **No connection-editor `videoCapable` dropdown yet.** The tri-state exists on
-  the connection object and is honored; wiring a UI control (mirroring the vision
-  one) is a small follow-up. Until then `auto` (the heuristic) + env decide.
+- **Connection-editor `videoCapable` dropdown — DONE (0.11.36).** A "Can watch
+  video?" tri-state (Auto/Yes/No) sits under the vision one in the Connections
+  editor, stored on the connection (already synced). This is the robust answer to
+  "which models take video" — `looksVideoCapable`'s Auto only says yes for the
+  families we actually know (Gemini, Qwen-VL, **GLM-V / GLM 5.3 Flash**, explicit
+  `-video`), and NanoGPT proxies a model space too large for any heuristic, so the
+  ward pins any video-capable connection they've confirmed with `Yes`.
 - **Discord video ingest** — DONE (0.11.34): `ingestDiscordImages` became
   `ingestDiscordMedia`, which also fetches video attachments RAW (no resizer for
   video) at arrival, size-capped to `VIDEO_MAX_BYTES`, under the same audience
