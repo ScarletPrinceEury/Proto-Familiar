@@ -40,7 +40,7 @@ import { buildAvailabilityBlock } from './schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from './village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from './audience.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from './cerebellum.js';
-import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, MAX_IMAGES_PER_MESSAGE } from './media.js';
+import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from './media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from './vision.js';
 import { hearVoiceNotes } from './voice-transcribe.js';
 import { extractTurnReply } from './llm-call.js';
@@ -1952,6 +1952,16 @@ export function isDiscordImageAttachment(att) {
   return /\.(jpe?g|png|webp|gif)$/i.test(att?.filename || '');
 }
 
+const DISCORD_VIDEO_MIMES = new Set(Object.keys(VIDEO_MIME_EXT));
+// Does a Discord attachment look like a video we ingest? Declared mime, else the
+// filename extension. Pure. Video is NOT resized (there's no video resizer) —
+// it's fetched raw and size-capped, so only short clips ingest inline.
+export function isDiscordVideoAttachment(att) {
+  const mime = String(att?.content_type || '').split(';')[0].trim();
+  if (DISCORD_VIDEO_MIMES.has(mime)) return true;
+  return /\.(mp4|webm|mov|mkv|mpe?g|3gp)$/i.test(att?.filename || '');
+}
+
 // The download URL for a Discord image, downscaled via the media proxy's own
 // resize params (long edge `edge`) when dimensions are known and exceed it.
 // Falls back to the plain proxy_url/url. Pure; returns '' when there's no url.
@@ -2006,21 +2016,58 @@ async function fetchDiscordImage(att, { timeoutMs = 8000 } = {}) {
   } catch { return null; }
 }
 
-// Ingest a message's image attachments. Returns { attachments:[{id,kind,mime}],
-// failed:<count> }. Never throws — a failed fetch is a count, not an error.
-async function ingestDiscordImages(msg, decision, { audienceTag, sessionId }) {
+// Fetch one Discord VIDEO attachment RAW (no resizer exists for video), bounded
+// by a timeout + VIDEO_MAX_BYTES (the inline cap — a bigger clip is skipped, not
+// truncated). Returns {buffer, mime} or null.
+async function fetchDiscordVideo(att, { timeoutMs = 12000 } = {}) {
+  try {
+    const url = att?.url || att?.proxy_url;
+    if (!url) return null;
+    // Skip an over-cap clip by its declared size before spending the download.
+    if (Number.isFinite(Number(att?.size)) && Number(att.size) > VIDEO_MAX_BYTES) return null;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    let res;
+    try { res = await fetch(url, { signal: ac.signal }); }
+    finally { clearTimeout(timer); }
+    if (!res.ok) return null;
+    let mime = (res.headers.get('content-type') || att.content_type || '').split(';')[0].trim();
+    if (!VIDEO_MIME_EXT[mime]) {
+      // Discord sometimes serves video as octet-stream — fall back to the ext.
+      const m = /\.(mp4|webm|mov|mkv|mpe?g|3gp)$/i.exec(att?.filename || '');
+      const byExt = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska', mpg: 'video/mpeg', mpeg: 'video/mpeg', '3gp': 'video/3gpp' }[(m?.[1] || '').toLowerCase()];
+      if (!byExt) return null;
+      mime = byExt;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > VIDEO_MAX_BYTES) return null;
+    return { buffer: buf, mime };
+  } catch { return null; }
+}
+
+// Ingest a message's image AND video attachments at arrival (CDN urls expire).
+// Returns { attachments:[{id,kind,mime}], failed:<count> }. Never throws — a
+// failed fetch is a count, not an error. Images are downscaled; video is fetched
+// raw and size-capped (VIDEO_MAX_BYTES → only short clips ingest inline). The
+// SAME audience rule and caps apply to both.
+async function ingestDiscordMedia(msg, decision, { audienceTag, sessionId }) {
   if (discordVisionOff()) return { attachments: [], failed: 0 };
   // Ward always; registered villager yes; stranger never.
   if (!decision.isWard && !decision.villager) return { attachments: [], failed: 0 };
   const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
-  const images = atts.filter(isDiscordImageAttachment);
-  if (!images.length) return { attachments: [], failed: 0 };
+  const videoOff = process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1';
+  // Images first, then video — a mixed message favours the pictures under the cap.
+  const items = [
+    ...atts.filter(isDiscordImageAttachment).map(a => ({ att: a, kind: 'image' })),
+    ...(videoOff ? [] : atts.filter(a => !isDiscordImageAttachment(a) && isDiscordVideoAttachment(a)).map(a => ({ att: a, kind: 'video' }))),
+  ];
+  if (!items.length) return { attachments: [], failed: 0 };
   const cap = clampDiscordMediaPerHour(readSettingsSync()?.discordMediaPerHour);
   const out = [];
   let failed = 0;
-  for (const a of images.slice(0, MAX_IMAGES_PER_MESSAGE)) {
+  for (const { att: a, kind } of items.slice(0, MAX_IMAGES_PER_MESSAGE)) {
     if (discordMediaHourCount(decision.locationKey) >= cap) break;
-    const got = await fetchDiscordImage(a);
+    const got = kind === 'video' ? await fetchDiscordVideo(a) : await fetchDiscordImage(a);
     if (!got) { failed++; continue; }
     const meta = await saveAsset({
       buffer: got.buffer, mime: got.mime,
@@ -2028,7 +2075,7 @@ async function ingestDiscordImages(msg, decision, { audienceTag, sessionId }) {
       audienceTag: audienceTag || 'ward-private',
       label: a.filename || '',
     });
-    if (meta?.id) { out.push({ id: meta.slugs?.[0] ?? meta.id, kind: 'image', mime: meta.mime }); noteDiscordMediaIngest(decision.locationKey); }
+    if (meta?.id) { out.push({ id: meta.slugs?.[0] ?? meta.id, kind: meta.kind, mime: meta.mime }); noteDiscordMediaIngest(decision.locationKey); }
     else failed++;
   }
   return { attachments: out, failed };
@@ -2085,7 +2132,7 @@ async function observeMessage(gw, msg, decision) {
   // Ingest image attachments at arrival (§5) — observing counts too, so when
   // someone finally turns to me I can see what the room was looking at. A
   // failed fetch degrades to a visible note, never blocks.
-  const { attachments: obsAttachments, failed: obsFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const { attachments: obsAttachments, failed: obsFailed } = await ingestDiscordMedia(msg, decision, { audienceTag, sessionId: session.sessionId });
   const failNote = obsFailed > 0 ? '\n[image failed to load]' : '';
   const wardName = (readSettingsSync()?.userName || '').trim() || 'my human';
   const userContent = attributeUserContent({
@@ -2305,7 +2352,7 @@ async function handleTurn(gw, msg, decision) {
   // as the web chat (attributeUserContent gates on decision.kind).
   // Ingest this message's image attachments at arrival (§5) — stored beside
   // the content, materialized into provider image parts just before the call.
-  const { attachments: turnAttachments, failed: turnFailed } = await ingestDiscordImages(msg, decision, { audienceTag, sessionId: session.sessionId });
+  const { attachments: turnAttachments, failed: turnFailed } = await ingestDiscordMedia(msg, decision, { audienceTag, sessionId: session.sessionId });
   const turnFailNote = turnFailed > 0 ? '\n[image failed to load]' : '';
   const wardName = (settings?.userName || '').trim() || 'my human';
   const userContent = attributeUserContent({

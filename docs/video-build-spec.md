@@ -51,8 +51,14 @@ elsewhere. The tight `videoCapable` heuristic + the ward's per-connection
 - **No connection-editor `videoCapable` dropdown yet.** The tri-state exists on
   the connection object and is honored; wiring a UI control (mirroring the vision
   one) is a small follow-up. Until then `auto` (the heuristic) + env decide.
-- **Discord video ingest** not wired this pass (images are; video mirrors
-  `ingestDiscordImages`). Follow-up.
+- **Discord video ingest** — DONE (0.11.34): `ingestDiscordImages` became
+  `ingestDiscordMedia`, which also fetches video attachments RAW (no resizer for
+  video) at arrival, size-capped to `VIDEO_MAX_BYTES`, under the same audience
+  rule (ward always / villager yes / stranger never) and per-message + hourly
+  caps as images. `isDiscordVideoAttachment` detects by mime or extension
+  (octet-stream falls back to the ext). Over-cap clips are skipped by declared
+  size before the download. Off-switch `PROTO_FAMILIAR_VIDEO_DISABLED=1` gates
+  the video half.
 
 ## 4. Next pass — the File-API path (ward chose "inline now + File-API next")
 

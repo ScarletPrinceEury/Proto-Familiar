@@ -26,6 +26,7 @@ import {
   webSocketCtor,
   clampDiscordMediaPerHour,
   isDiscordImageAttachment,
+  isDiscordVideoAttachment,
   discordResizeUrl,
   attributeUserContent,
 } from '../discord-gateway.js';
@@ -998,6 +999,15 @@ describe('Discord image ingest helpers (vision Pass 3)', () => {
     assert.equal(isDiscordImageAttachment({ content_type: 'application/pdf', filename: 'doc.pdf' }), false);
     assert.equal(isDiscordImageAttachment({ content_type: 'video/mp4', filename: 'clip.mp4' }), false);
     assert.equal(isDiscordImageAttachment({}), false);
+  });
+
+  it('isDiscordVideoAttachment matches video by mime OR filename extension, not images', () => {
+    assert.equal(isDiscordVideoAttachment({ content_type: 'video/mp4' }), true);
+    assert.equal(isDiscordVideoAttachment({ content_type: 'video/webm; codecs=x' }), true);
+    assert.equal(isDiscordVideoAttachment({ filename: 'clip.MOV' }), true);          // no mime, ext wins
+    assert.equal(isDiscordVideoAttachment({ content_type: 'application/octet-stream', filename: 'movie.mp4' }), true);
+    assert.equal(isDiscordVideoAttachment({ content_type: 'image/png', filename: 'cat.png' }), false);
+    assert.equal(isDiscordVideoAttachment({}), false);
   });
 
   it('discordResizeUrl downscales via the proxy when the long edge exceeds the cap', () => {
