@@ -32,11 +32,17 @@ sources:
   - id: claude-md
     type: file
     path: CLAUDE.md
+  - id: gemini-file-api-js
+    type: file
+    path: gemini-file-api.js
+  - id: video-build-spec
+    type: file
+    path: docs/video-build-spec.md
 ---
 
 # Vision and Media Input
 
-Proto-Familiar 0.9.0 introduces multimodal image input, letting the ward send images to the Familiar alongside messages. The vision system is built in layers: a content-addressed media store (`media.js`), a materialization seam (`vision.js`) that converts stored attachments into provider-consumable image data at chat time, and graceful degradation when modality is not available.
+Proto-Familiar 0.9.0 introduces multimodal image input, letting the ward send images to the Familiar alongside messages. The vision system is built in layers: a content-addressed media store (`media.js`), a materialization seam (`vision.js`) that converts stored attachments into provider-consumable image data at chat time, and graceful degradation when modality is not available. Starting in 0.11.33-alpha, the same store and materialization seam grow a `video` media kind, covered in the Video media section below [@video-build-spec].
 
 The load-bearing constraint is that `message.content` stays a plain string forever. Media rides beside it as an optional `attachments` field, so every existing string-assuming consumer keeps working untouched. The reference seam where attachments become LLM-visible content is exactly one code path: `materializeAttachments()` in `vision.js` [@vision-js].
 
@@ -161,6 +167,39 @@ Images are saved through `saveAsset()` with `origin.surface='discord'`, `origin.
 
 **Import structure**: `discord-gateway.js` imports `saveAsset` + caps from `media.js` and `materializeAttachments` + `resolveVisionCapable` from `vision.js`. No cycle: `media.js` and `vision.js` do not import `discord-gateway.js`.
 
+## Video media (0.11.33 – 0.11.37)
+
+Video rides the exact rails [Message attachments ride beside content](../decisions/message-attachments-format) predicted for a future modality: `message.content` stays a string, video is another `attachments` entry, and `materializeAttachments()` stays the one seam that turns a stored reference into a provider content-part [@video-build-spec]. "A video-capable model is a change here, not a message-format migration" is that decision's own framing, now exercised.
+
+**Store.** `media.js` adds a `video` kind: `VIDEO_MIME_EXT` recognizes mp4/webm/mov/mkv/mpeg/3gp, folded into the shared `MEDIA_KINDS` table alongside images and audio [@media-js]. Two separate byte ceilings apply to the same asset: `VIDEO_MAX_BYTES` (20 MB) is the **inline-eligibility** cap — base64-encoding a bigger clip would blow the provider request-size cap — while `VIDEO_STORE_MAX_BYTES` (300 MB) is what the store will accept onto disk at all, so a long clip destined for upload has somewhere to live before it is ever sent anywhere [@media-js]. `buildStandin()` gained a video voice ("what I saw when I watched" / "I haven't watched this one yet" / "I have no way to watch videos right now") [@video-build-spec].
+
+**Materializer.** `resolveVideoCapable(connection, settings)` in `vision.js` decides whether a video rides live: a ward per-connection `videoCapable` tri-state (`'yes'`/`'no'`/`auto`) takes priority, and `auto` falls back to `looksVideoCapable()`, a name-based allowlist [@vision-js]. `DEFAULT_MAX_LIVE_VIDEOS` fixes the live-video budget at 1 per turn (newest-first), tighter than the 4-image budget, because a wrong live attempt ships megabytes rather than kilobytes [@vision-js]. A live video becomes a `{type:'video_url', video_url:{url:'data:...'}}` content part; anything over budget or on a non-video-capable connection degrades to a text stand-in, reusing the same blind-confabulation guard images use [@vision-js].
+
+**`looksVideoCapable()` is deliberately tighter than its vision counterpart.** [Vision capability defaults to BLIND](../decisions/vision-capability-defaults) already established the asymmetry principle — default ambiguous cases toward the cheap-to-be-wrong branch, require positive evidence before the expensive-to-be-wrong branch — for images. Video inherits that principle and tightens it further: the allowlist recognizes only names it actually knows (Gemini, Qwen-VL, GLM-V/GLM 5.3 Flash, an explicit `-video` suffix), and any provider whose model-name space is too large to pattern-match (NanoGPT, which proxies many underlying models under one connection) relies entirely on the ward's explicit `'yes'` rather than a name guess [@video-build-spec].
+
+**Ingress.** `POST /api/media` accepts `video/*` bodies alongside `image/*` and `audio/*` [@server-js]. The web composer attaches raw video (no client-side downscale, unlike images) up to the applicable cap and renders a `<video>` thumbnail chip; because `materializeAttachments()` already runs on every chat turn, a video attachment needs no per-surface wiring to reach the model [@video-build-spec].
+
+**Discord video ingest (0.11.34-alpha).** `ingestDiscordImages()` in `discord-gateway.js` became `ingestDiscordMedia()`, which also fetches video attachments raw (no resizer — video isn't proxy-resizable the way images are) at arrival time, capped to `VIDEO_MAX_BYTES` and gated by the same ward-always/villager-yes/stranger-never audience rule and per-message + hourly caps images use [@discord-gateway-js]. `isDiscordVideoAttachment()` detects a video by MIME type or, when Discord reports `application/octet-stream`, by file extension; an over-cap clip is skipped by its declared size before any bytes are downloaded [@discord-gateway-js].
+
+**Connection-editor tri-state (0.11.36-alpha).** A "Can watch video?" Auto/Yes/No control sits under the vision one in the Connections editor and is stored on the connection object (`conn.videoCapable`) [@video-build-spec]. This is the robust answer to "which models take video": `looksVideoCapable()`'s Auto only recognizes the families it knows by name, so a ward on a proxy provider like NanoGPT pins their confirmed video-capable connection to `Yes` explicitly rather than waiting on a heuristic that structurally cannot cover an unbounded model space [@video-build-spec].
+
+**Provider reality: `video_url` is not universal.** Every inline chat request goes through the OpenAI chat-completions shape (`providers.js`), even Google's Gemini via its `.../openai/chat/completions` compatibility endpoint [@providers-js]. There is no universal `video_url` content part in that shape: Qwen/DashScope and Zhipu's GLM-V/GLM 5.3 Flash accept it on their OpenAI-compat gateways, but Google's own compat layer does not — native Gemini instead wants `inline_data`/`file_data` on a different, non-OpenAI-compat endpoint [@video-build-spec]. So the inline path is honest but provider-dependent: it works wherever `video_url` is accepted (Qwen-VL, GLM-V, and video models proxied through NanoGPT) and degrades cleanly to a text stand-in everywhere else, via the existing modality-reject fallback [@video-build-spec]. GLM's video contract was checked against z.ai's own API reference and the MetaGLM cookbook: the same `{type:'video_url', video_url:{url:...}}` shape, with a 200 MB provider-side size limit well above the 20 MB inline cap — leaving a 20–200 MB GLM clip unreachable by either path today, a documented gap rather than a bug, since the File-API upload path below is Gemini-only [@video-build-spec].
+
+## The File-API path for long clips (Gemini-only, 0.11.35-alpha)
+
+A clip too big to inline (over `VIDEO_MAX_BYTES` but under the 300 MB store ceiling) cannot ride the OpenAI-compat `video_url` part at all; each provider that supports longer video has its own upload-and-reference flow, and only Google's is built. The path is deliberately isolated rather than folded into the shared chat handler, the same posture [CDP mode](../decisions/browser-cdp-mode) takes for a capability whose live behavior cannot be exercised from CI [@video-build-spec]:
+
+- **`gemini-file-api.js`** is a new, standalone module; every exported function takes an injectable `fetchFn` for testability [@gemini-file-api-js]. `uploadVideoToGemini()` drives Gemini's resumable upload (start → upload+finalize → poll `files.get` until `ACTIVE`); `toGeminiRequest()` translates the OpenAI-ish chat history into Gemini's native `contents` shape (system → `system_instruction`, assistant → `model`, the `file_data` reference attached to the final user turn); `generateWithGeminiFile()` calls the native `models/<model>:generateContent` endpoint (not the OpenAI-compat one); `answerAboutVideo()` orchestrates the three. Every failure path returns `{ok:false}` rather than throwing, so a caller always has a defined fallback [@gemini-file-api-js].
+- **A dedicated endpoint, not `/api/chat`.** `POST /api/video-understand {assetId, prompt, provider, model, apiKey}` in `server.js` is a separate route from the streaming/tool-loop chat handler, so a bug in the Gemini upload/poll cycle has zero blast radius on the main turn path [@server-js]. It is default-off (`videoFileApiEnabled`), ward-only, gated by `PROTO_FAMILIAR_VIDEO_DISABLED=1`, and validates that the target connection is actually Gemini before calling out [@server-js].
+- **Client surface.** A too-big-to-inline pending video shows a "Watch full clip" button; clicking it posts to the endpoint (the composer's typed text becomes the prompt) and the answer lands in the chat as a normal turn. A non-Gemini primary connection is refused with an explicit message rather than silently misrouting [@video-build-spec].
+- **Live shakeout still open.** Every piece above is unit-tested against a stubbed Google backend, but the real resumable-upload round-trip has not been exercised against Gemini's live API — it needs the ward's own key, the same class of gap [CDP mode](../decisions/browser-cdp-mode) records for its own live attach-and-drive [@video-build-spec].
+
+**Known follow-ups, named rather than silently deferred**: Discord has no long-video path (the endpoint is web-only); the File-API answer is one non-streaming turn, not wired into the tool-call loop; no other provider has an uploader behind the same seam yet; a stood-in long clip has no describe/thumbnail step [@video-build-spec].
+
+## Known gaps in video (v1)
+
+There is no video-describe path: `describeAsset()` is image-only, so a stood-in video carries only its marker text and the don't-invent guard, never a semantic description. Frame-extraction-based description would need an `ffmpeg` dependency the project has deliberately avoided for images (see the pure-JS image-dimension reading above) and is left for a later pass [@video-build-spec].
+
 ## z.ai Coding Plan vision allotment (0.9.5-alpha, PR #220)
 
 The z.ai Coding Plan delivers vision through a separate, quota-isolated channel: a "Vision Understanding" MCP server (`@z_ai/mcp-server`, powered by GLM-4.6V) with its own 5-hour prompt resource pool, distinct from the coding-prompt allotment [@zai-vision-js]. The `zai-coding` provider connects to `https://api.z.ai/api/coding/paas/v4/chat/completions` [@providers-js].
@@ -197,6 +236,10 @@ The feature is known to false-positive on fictional violence (horror film stills
   chat path got this wiring first; Discord initially did not, a gap named
   [RULE C](../reference/engineering-conventions) in CLAUDE.md's operating rules, fixed in 0.9.6
   [@claude-md].
+- **Video inline core** (0.11.33-alpha): a `video` media kind, tight video-capability detection,
+  and Discord video ingest (0.11.34).
+- **Connection-editor video tri-state** (0.11.36-alpha) and **Gemini File-API path for long clips**
+  (0.11.35-alpha, live shakeout still pending) — see Video media above [@video-build-spec].
 
 Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
 milestone rather than this one; see [Voice](voice) for those.
@@ -210,7 +253,8 @@ Two ward-flagged threat-scoring refinements remain (out of the main spec):
 
 ## Related
 
-- [Vision capability defaults](../decisions/vision-capability-defaults) — the design decision to default unknown models to BLIND and require allowlist proof before sending images live
-- [Message format and attachments](../decisions/message-attachments-format) — the design decision to keep `message.content` as a plain string and ride media beside it
+- [Vision capability defaults](../decisions/vision-capability-defaults) — the design decision to default unknown models to BLIND and require allowlist proof before sending images live; video's tighter allowlist and one-live-clip budget extend the same asymmetry principle
+- [Message format and attachments](../decisions/message-attachments-format) — the design decision to keep `message.content` as a plain string and ride media beside it; video is the modality expansion that decision predicted
 - [Graceful degradation](../reference/engineering-conventions) — the repo-wide principle this subsystem follows
 - [Safety spine](../architecture/safety-spine) — threat detection, tracking, and escalation; now includes image-derived signals
+- [CDP mode](../decisions/browser-cdp-mode) — the same code-is-shipped-but-live-path-unverified posture the Gemini File-API path is in, both needing a ward desktop shakeout before the untested piece can be trusted

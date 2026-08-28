@@ -58,6 +58,10 @@ Generalizable design principles for future capability detection work:
 
 3. **Add hard invariants where describe/stand-in can still fail**: Even when images degrade to descriptions, the model could still confabulate details it's not supposed to know. Add a prompt-level invariant in the shared seam that the model must never guess about unseen content — it must plainly say it can't see and ask. This protection rides every surface equally, not embedded per-UI-layer.
 
+## Extension to video
+
+The 0.11.33-alpha video milestone reuses this same asymmetry rather than inventing a new one, and tightens it further: `looksVideoCapable()`'s allowlist recognizes fewer families than its image counterpart, and the live-video budget is fixed at one clip per turn rather than four, because a wrong live attempt ships megabytes of base64 instead of a few kilobytes of text. See [Vision and media](../architecture/vision-and-media) for the video-specific allowlist and budget.
+
 ## Related
 
 - [Vision and media](../architecture/vision-and-media) — the architecture that implements this decision, including allowlist checks, explicit assignment, and the confabulation guard injection point.
