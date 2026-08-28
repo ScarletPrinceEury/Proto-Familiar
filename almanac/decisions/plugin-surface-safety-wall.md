@@ -133,9 +133,12 @@ Several questions are still explicitly open for the build-spec pass rather than 
 exact enumerated Deno-shim surface, whether the tier-2 sidecar reuses the existing MCP-stdio
 plumbing verbatim or a thinner sibling, canonical plugin-tool provenance and persistence rules,
 and whether an update channel modeled on Psycheros's one-click GitHub-tag updates is adopted
-[@plugin-surface-design]. Until implementation lands, this page — like
-[CDP mode: driving the ward's own Chrome](browser-cdp-mode) — is the durable record of a decision
-that has traveled from conversation to an approved design and build spec, but not yet into code.
+[@plugin-surface-design]. Until implementation lands, this page is the durable record of a
+decision that has traveled from conversation to an approved design and build spec, but not yet
+into code — the same shape [CDP mode: driving the ward's own Chrome](browser-cdp-mode) had
+before the ward gave it the go-ahead and it shipped at 0.11.31-alpha; that page is the precedent
+for a spec-and-park decision eventually being unparked and built to the letter it was recorded
+in.
 
 ## Related
 
@@ -148,5 +151,6 @@ that has traveled from conversation to an approved design and build spec, but no
 - [Armature](../concepts/armature) — the standing claim that the base model's compliance pull must
   be structurally countered, which is why a prompt hook is treated as capable of editing the
   entity rather than merely informing it.
-- [CDP mode: driving the ward's own Chrome](browser-cdp-mode) — the other settled-but-parked
-  design decision in this wiki, and the precedent for recording a decision before any code ships.
+- [CDP mode: driving the ward's own Chrome](browser-cdp-mode) — a decision recorded in the same
+  spec-and-park shape as this one, and the precedent for what happens when the ward later gives
+  a parked decision the go-ahead: it shipped to the letter it was designed.

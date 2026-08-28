@@ -55,8 +55,9 @@ to read.
 A compounding factor the spec names: the raw elapsed-silence duration was present in the prompt
 but had no rhythm to be read against — "two days" is just a number without a sense of what is
 normal for this bond [@initiative-spec]. Wait-streak is a first, narrow instrument toward that
-missing sense of normal: not a computed baseline (that is Pass 2 of the spec, not yet built), but
-a bare count of the Familiar's own accumulated waiting, handed back to itself.
+missing sense of normal: not a computed baseline (that landed later as the spec's Pass 2 — see
+[Contact-rhythm baselines](contact-rhythm-baselines) in Consequences below), but a bare count of
+the Familiar's own accumulated waiting, handed back to itself.
 
 ## Decision
 

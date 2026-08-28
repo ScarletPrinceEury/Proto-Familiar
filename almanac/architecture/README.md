@@ -203,10 +203,10 @@ If you're asking yourself... go to:
   and modality fallback at the materialization seam.
 - [Browser](browser) — the opt-in, ward-only click-and-fill web subsystem: the SSRF-guarding
   proxy, the ref/generation model, the five shipped build-spec passes plus the work that
-  continued past them through 0.11.29 (open shadow-DOM piercing, the `browse_open` Reddit
+  continued past them through 0.11.30 (open shadow-DOM piercing, the `browse_open` Reddit
   reader mirror, page watches, JS-render settling, and a Reddit JSON-API reader that routes
-  `read_webpage` around Reddit's anti-bot wall entirely), and the parked CDP-mode alternate
-  engine.
+  `read_webpage` around Reddit's anti-bot wall entirely), and the CDP-mode alternate engine
+  that attaches to the ward's own logged-in Chrome (0.11.31-alpha, pending a desktop shakeout).
 - [Reader router](reader-router) — the 0.11.30 gated-site registry and reachability doctor
   that generalizes the Reddit fix above: a `browser-driver.contextRequest` primitive fetches
   through the ward's own authenticated browser session for any site a plain server-side
