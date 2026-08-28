@@ -185,7 +185,11 @@
                 <label for="cdp-mode-enabled">Allow driving my own Chrome</label>
                 <input type="checkbox" id="cdp-mode-enabled">
               </div>
-              <p class="field-hint hint-keep">For a site you're logged into, your Familiar can drive <strong>your own Chrome</strong> instead of its logged-out browser — the natural way past login walls and sites that block automation. This is the highest-trust browser mode: while armed, it acts inside the browser holding your real logins. It stays <strong>inert</strong> until BOTH are true: (1) you launched Chrome yourself with <code>--remote-debugging-port=9222</code>, and (2) you arm it below for one site, briefly. Your Familiar can ask for an arm; it can never arm itself.</p>
+              <p class="field-hint hint-keep">For a site you're logged into, your Familiar can drive a <strong>real Chrome</strong> instead of its logged-out browser — the natural way past login walls and sites that block automation. It stays <strong>inert</strong> until you (1) open the special Chrome and (2) arm it for one site, briefly. Your Familiar can ask for an arm; it can never arm itself.</p>
+              <div class="field-actions">
+                <button class="btn-secondary" id="cdp-setup-btn" type="button">① Set up my Chrome…</button>
+              </div>
+              <p class="field-hint" id="cdp-setup-status" aria-live="polite">One-time: I'll put a “Start Familiar Chrome” shortcut on your Desktop. It opens a fresh, separate Chrome (not your everyday one) — log into the sites you want help with there.</p>
               <div class="field-row" style="margin-top:8px">
                 <input type="text" id="cdp-arm-domain" placeholder="github.com" autocomplete="off" style="flex:1">
                 <select id="cdp-arm-minutes" class="ke-select" style="max-width:120px">
@@ -195,7 +199,7 @@
                 </select>
               </div>
               <div class="field-actions">
-                <button class="btn-secondary" id="cdp-arm-btn" type="button">Arm for this site</button>
+                <button class="btn-secondary" id="cdp-arm-btn" type="button">② Arm for this site</button>
                 <button class="btn-ghost" id="cdp-disarm-btn" type="button">Disarm</button>
               </div>
               <p class="field-hint" id="cdp-arm-status" aria-live="polite">Not armed.</p>

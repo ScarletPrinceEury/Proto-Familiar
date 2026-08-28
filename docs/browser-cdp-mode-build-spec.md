@@ -16,6 +16,18 @@
 > Familiar drives that tab and that disarm/expiry/`browse_close` leave your
 > Chrome and its other tabs untouched.
 >
+> **Setup accessibility (0.11.32, ward-requested).** Gate 1 (the ward launches
+> debug Chrome themselves) is a real barrier for this app's audience — hand-adding
+> `--remote-debugging-port=9222` to a shortcut is exactly the techie step the app
+> exists to spare them. `cdp-launcher.js` + `POST /api/browser/cdp-setup` add a
+> **one-click "Set up my Chrome"** button that drops a double-clickable Desktop
+> launcher (per-OS). It preserves gate 1 — the app writes a shortcut, the ward
+> still chooses to run it — and IMPROVES the blast radius: the launcher uses a
+> **dedicated Chrome profile**, so the drivable browser starts logged out and
+> holds only the sites the ward signs into there; their everyday Chrome (bank,
+> email) is never exposed to the debug port. Ward-approved deviation from the
+> spec's "attach to your everyday Chrome."
+>
 > This is the highest-stakes variant in the whole browser milestone: the blast
 > radius is the ward's *authenticated life* (email, bank, socials — every site
 > their real Chrome is already logged into). The main browser spec pinned it as
