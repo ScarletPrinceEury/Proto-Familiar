@@ -120,11 +120,15 @@ test('materialize: video budget is newest-first (only the newest rides live)', a
   assert.equal(r.videosStoodIn, 1);
 });
 
-test('a z.ai-coding connection is NOT live-capable (chat cannot see) but IS chosen for describe', async () => {
-  // Live capability: coding chat models can't take image_url → false, so the
-  // materializer stands images in rather than sending them live.
-  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', visionCapable: 'yes' }, {}), false);
-  // Describe: resolveVisionConnection still picks the coding connection (its
+test('a z.ai-coding connection is capability-by-MODEL: text/code blind, GLM 5.3 Flash sees; still chosen for describe', async () => {
+  // A text/code coding model can't take live image_url parts → false, so the
+  // materializer stands images in (and describes via the Vision MCP).
+  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', model: 'glm-4.7' }, {}), false);
+  // GLM 5.3 Flash is natively multimodal on the SAME coding chat endpoint → live.
+  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', model: 'glm-5.3-flash' }, {}), true);
+  // The ward's explicit 'yes' is now honored (it used to be ignored — the bug).
+  assert.equal(await resolveVisionCapable({ provider: 'zai-coding', model: 'glm-4.7', visionCapable: 'yes' }, {}), true);
+  // Describe: resolveVisionConnection still picks a coding connection (its
   // describe rides the coding-plan Vision MCP allotment).
   const settings = {
     connections: [{ id: 'coding', provider: 'zai-coding', model: 'glm-4.7', apiKey: 'k' }],
@@ -133,6 +137,14 @@ test('a z.ai-coding connection is NOT live-capable (chat cannot see) but IS chos
   };
   const conn = await resolveVisionConnection(settings);
   assert.equal(conn?.provider, 'zai-coding');
+});
+
+test('resolveVideoCapable: GLM 5.3 Flash on the coding plan can watch video', async () => {
+  assert.equal(await resolveVideoCapable({ provider: 'zai-coding', model: 'glm-5.3-flash' }, {}), true);
+  // A text/code coding model still cannot.
+  assert.equal(await resolveVideoCapable({ provider: 'zai-coding', model: 'glm-4.7' }, {}), false);
+  // The ward can still force it on a coding connection they've confirmed.
+  assert.equal(await resolveVideoCapable({ provider: 'zai-coding', model: 'glm-4.7', videoCapable: 'yes' }, {}), true);
 });
 
 test('findConnection matches by provider+model', () => {

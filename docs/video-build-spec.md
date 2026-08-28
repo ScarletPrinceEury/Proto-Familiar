@@ -83,13 +83,25 @@ path is Gemini-only) — a documented follow-up, not a bug.
   `analyze_image` MCP tool (GLM-4.6V) which only takes images; a video's bytes
   written to a temp file and handed to it is the exact 400 the ward hit on both
   web and Discord. Regression-tested (proven red without the guard).
-- **The z.ai CODING PLAN cannot watch video at all.** Its chat models take no live
-  media parts (`resolveVideoCapable` returns false for `zai-coding`), and its only
-  vision surface is the image-only `analyze_image` MCP. So a video there stands in
-  as "I haven't watched this one yet" and the Familiar says so honestly — it does
-  NOT confabulate. To actually watch a clip the ward needs a **Gemini** connection
-  (inline ≤20 MB, or the File-API "Watch full clip" path) or a **standard z.ai API**
-  (non-coding) GLM 5.3 Flash connection where `video_url` rides the chat endpoint.
+- **The z.ai coding plan is capability-by-MODEL (0.11.40), not blanket-blind.**
+  The coding endpoint (`/api/coding/paas/v4/chat/completions`) is the SAME
+  OpenAI-compat chat surface as standard z.ai — only the URL path + quota pool
+  differ — so a natively-multimodal coding model **watches video live on it**.
+  `looksVisionCapable`/`looksVideoCapable` recognise **GLM 5.3 Flash** (the first
+  natively-multimodal GLM-5), and `resolveVisionCapable`/`resolveVideoCapable` no
+  longer blanket-block `zai-coding` — they fall through to the ward tri-state +
+  the name heuristic like every other provider. So a GLM 5.3 Flash coding
+  connection now rides `image_url` AND `video_url` parts on chat; the older
+  text/code coding models (GLM-4.6) still read blind (heuristic false) and route
+  images to the image-only `analyze_image` describe MCP. **This is what the ward
+  reported: GLM 5 Flash could watch video on the coding plan, the code wouldn't
+  let it.** (The 0.11.39 describe guard stays as defense-in-depth — a blind coding
+  model's shared video still never reaches the image describer.) A ward `Yes` on
+  "Can watch video?" forces it for any coding model they've confirmed. Residual for
+  the live shakeout: the materializer sends a `data:` URL, not raw base64 — z.ai
+  accepts `data:` for images on the same gateway, so its video parallel almost
+  certainly does too. Gemini remains the other route (inline ≤20 MB or the
+  "Watch full clip" File-API path for 20–200 MB).
 - **Connection-editor `videoCapable` dropdown — DONE (0.11.36).** A "Can watch
   video?" tri-state (Auto/Yes/No) sits under the vision one in the Connections
   editor, stored on the connection (already synced). This is the robust answer to

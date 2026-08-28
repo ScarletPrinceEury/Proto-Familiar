@@ -120,9 +120,10 @@ export function looksVisionCapable(provider, model) {
     /pixtral/, /mistral-small-3/,
     // Meta — Llama 3.2 vision + Llama 4 + LLaVA
     /llama-3\.2-.*vision/, /llama-3\.2-(11|90)b/, /llama-4/, /llava/,
-    // Zhipu GLM — the `v` vision variants ONLY (glm-4v / glm-4.5v / glm-4.6v /
-    // glm-4.1v). Bare glm-4.6 / glm-5.2 are text-only and deliberately excluded.
-    /glm-4[.\d]*v/, /glm-\d+v/,
+    // Zhipu GLM — the `v` vision variants (glm-4v / glm-4.5v / glm-4.6v /
+    // glm-4.1v) PLUS GLM 5.3 Flash, the first natively-multimodal GLM-5 (image +
+    // video, on chat). Bare glm-4.6 / glm-5.2 are text-only and stay excluded.
+    /glm-4[.\d]*v/, /glm-\d+v/, /glm-?5[.\d]*-?flash/,
     // Assorted open + hosted VLMs
     /internvl/, /minicpm-v/, /\bmolmo/, /phi-3.*vision/, /phi-3\.5-vision/,
     /phi-4-multimodal/, /grok.*vision/, /grok-2-vision/, /step-1v/, /yi-vision/,
@@ -143,11 +144,15 @@ export function looksVisionCapable(provider, model) {
  * `connection` may be a saved connection object OR a bare {provider, model}.
  */
 export async function resolveVisionCapable(connection, settings) {
-  // A z.ai-coding connection can NOT see live in chat (the coding chat models
-  // don't take image_url parts) — its vision rides the separate Vision MCP
-  // (describe-only). So for the materializer it's never live-capable; images
-  // stand in, and describeAsset routes to the coding vision allotment.
-  if (connection?.provider === 'zai-coding') return false;
+  // z.ai-coding is capability-by-MODEL, not blanket-blind. The coding endpoint
+  // (/api/coding/paas/v4/chat/completions) is the SAME OpenAI-compat chat
+  // surface as standard z.ai — only the URL path + quota pool differ — so a
+  // natively-multimodal coding model (GLM 5.3 Flash) DOES take live image_url
+  // parts. The heuristic below returns false for the older text/code coding
+  // models (GLM-4.6), so they stay blind and route to the Vision MCP describe;
+  // the ward tri-state overrides either way. (Before this, the blanket block
+  // here forced EVERY coding image to stand in — and a shared video onto the
+  // image-only describe MCP, the reported HTTP 400.)
   const explicit = connection?.visionCapable;
   if (explicit === 'yes') return true;
   if (explicit === 'no')  return false;
@@ -192,11 +197,13 @@ export function looksVideoCapable(provider, model) {
 /**
  * Whether this connection can take a live VIDEO part. Mirrors resolveVisionCapable
  * but tighter and with no capability cache (a wrong 'auto' attempt degrades via
- * the modality-reject fallback). Off-switch + zai-coding + ward tri-state honored.
+ * the modality-reject fallback). Off-switch + ward tri-state honored. z.ai-coding
+ * is capability-by-MODEL like vision: GLM 5.3 Flash (natively multimodal, matched
+ * by looksVideoCapable) takes video live on the same coding chat endpoint; the
+ * older text/code coding models don't and the heuristic returns false for them.
  */
 export async function resolveVideoCapable(connection, settings) {
   if (process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1') return false;
-  if (connection?.provider === 'zai-coding') return false;   // coding models take no live parts
   const explicit = connection?.videoCapable;
   if (explicit === 'yes') return true;
   if (explicit === 'no')  return false;
@@ -413,11 +420,12 @@ const DESCRIBE_PROMPT =
 
 // A connection can DESCRIBE images if either its chat endpoint sees live, OR
 // it's a z.ai-coding connection (describe via the coding Vision MCP allotment).
-// The latter is describe-capable even though resolveVisionCapable is false for
-// it (that governs LIVE chat parts, which coding models can't take).
+// A coding connection always counts: a multimodal coding model (GLM 5.3 Flash)
+// could describe on its own chat vision, and a blind one (GLM-4.6) describes
+// through the image-only Vision MCP — either way there's an eye.
 async function isDescribeCapable(c, settings) {
   if (!c?.apiKey) return false;
-  if (c.provider === 'zai-coding') return true;   // via the Vision MCP
+  if (c.provider === 'zai-coding') return true;   // via the Vision MCP (or its own chat vision)
   return !!c.model && await resolveVisionCapable(c, settings);
 }
 
