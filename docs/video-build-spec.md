@@ -1,6 +1,10 @@
 # Video media — build spec (a vision patch)
 
-> **Status: INLINE CORE SHIPPED (0.11.33-alpha). File-API path = the next pass (§4).**
+> **Status: INLINE CORE (0.11.33) + Gemini File-API path (0.11.35) SHIPPED.**
+> The File-API path (§4) is built, ISOLATED (its own module + endpoint, never the
+> chat handler), default-OFF, and fully unit-tested against a stubbed Google — the
+> LIVE round-trip needs the ward's key + a real Gemini connection (a desktop
+> shakeout, same as CDP). Other providers stay inline-only.
 > Video rides the exact rails the vision milestone built (`docs/vision-build-spec.md`):
 > `message.content` stays a string, video rides beside it as an `attachments`
 > sibling, and `materializeAttachments` is the ONE seam that turns a reference
@@ -60,11 +64,36 @@ elsewhere. The tight `videoCapable` heuristic + the ward's per-connection
   size before the download. Off-switch `PROTO_FAMILIAR_VIDEO_DISABLED=1` gates
   the video half.
 
-## 4. Next pass — the File-API path (ward chose "inline now + File-API next")
+## 4. The File-API path — SHIPPED for Gemini (0.11.35)
 
 Longer video can't ride inline; each provider has its own upload + reference
-flow. This is a real, provider-specific build that CANNOT be verified from CI —
-it needs the ward's live keys, same posture as the CDP desktop shakeout.
+flow. This CANNOT be verified from CI — it needs the ward's live key, same
+posture as the CDP desktop shakeout. What shipped:
+
+- **`gemini-file-api.js`** (new, ISOLATED, every fn takes an injectable `fetchFn`):
+  `uploadVideoToGemini` (resumable upload START → upload+finalize → poll
+  `files.get` until `ACTIVE`), `toGeminiRequest` (OpenAI-ish history →
+  Gemini `contents`, system→`system_instruction`, assistant→`model`, the
+  `file_data` part on the final user turn), `generateWithGeminiFile` (native
+  `models/<m>:generateContent`), `answerAboutVideo` (the orchestrator). Every
+  failure returns `{ok:false}` — the caller falls back, nothing throws.
+- **Seam:** a DEDICATED endpoint `POST /api/video-understand {assetId,prompt,
+  provider,model,apiKey}` — NOT the `/api/chat` handler (zero blast radius on the
+  streaming/tool loop). Default-OFF (`videoFileApiEnabled`), ward-only (web),
+  gated by `PROTO_FAMILIAR_VIDEO_DISABLED`. Validates a Gemini connection.
+- **Store split:** `VIDEO_MAX_BYTES` (20 MB) is inline-eligibility only;
+  `VIDEO_STORE_MAX_BYTES` (300 MB) is what the store accepts, so a long clip can
+  be held for upload. The materializer only inlines clips ≤ the inline cap; a
+  bigger one stands in and is handled by the File-API endpoint.
+- **Client:** the composer accepts up to the store cap when the flag is on; a
+  too-big-to-inline pending video shows a **🎬 Watch full clip** button that
+  posts to the endpoint (composer text = the prompt) and drops the answer into
+  the chat as a turn. A non-Gemini primary is refused with a clear line.
+
+**Still open (next):** Discord long-video (the endpoint is web-only); tool-using
+/ streaming answers over a long clip (this path is one non-streaming answer);
+other-provider uploaders behind the same seam; a describe/thumbnail for a stood-in
+long clip. And the **live shakeout** — I could not exercise the real Google API.
 
 - **The seam:** in `materializeAttachments`, a video over `VIDEO_MAX_BYTES` (or a
   ward "prefer upload" flag) routes to an **uploader** instead of inlining, which

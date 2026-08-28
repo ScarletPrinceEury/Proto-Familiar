@@ -53,9 +53,17 @@ export const AUDIO_MAX_BYTES = 24 * 1024 * 1024;
  * provider request ceiling.
  */
 export const VIDEO_MAX_BYTES = 20 * 1024 * 1024;
+/**
+ * The STORAGE ceiling for video is larger than the inline one: a longer clip can
+ * be stored and sent to a model via a provider File-API upload (the Gemini File
+ * API path, docs/video-build-spec.md §4) even though it's too big to inline as
+ * base64. `VIDEO_MAX_BYTES` decides inline eligibility; `VIDEO_STORE_MAX_BYTES`
+ * decides whether the store accepts the bytes at all.
+ */
+export const VIDEO_STORE_MAX_BYTES = 300 * 1024 * 1024;
 export const MAX_IMAGES_PER_MESSAGE = 4;
 /** The cap that applies to a kind. Derived, so the three can't drift. */
-export const maxBytesForKind = (kind) => (kind === 'audio' ? AUDIO_MAX_BYTES : kind === 'video' ? VIDEO_MAX_BYTES : MEDIA_MAX_BYTES);
+export const maxBytesForKind = (kind) => (kind === 'audio' ? AUDIO_MAX_BYTES : kind === 'video' ? VIDEO_STORE_MAX_BYTES : MEDIA_MAX_BYTES);
 // mime → file extension allow-list. A mime not in this map is rejected; the
 // model kind is derived from the map, never from sniffing (spec §2 `kind`).
 export const IMAGE_MIME_EXT = {

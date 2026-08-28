@@ -299,6 +299,7 @@ const state = {
   redditUsername:          '',
   redditPassword:          '',
   cdpModeEnabled:          false,    // allow driving the ward's own Chrome over CDP (default OFF; inert without an arm)
+  videoFileApiEnabled:     false,    // longer clips → Gemini File API upload path (default OFF)
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
   // pulls anything else via request_tools. Sticky = extra turns a surfaced
@@ -515,7 +516,7 @@ const SERVER_SYNCED_KEYS = [
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
-  'cdpModeEnabled',
+  'cdpModeEnabled', 'videoFileApiEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
@@ -2758,11 +2759,15 @@ async function uploadImage(file) {
   return res.json();
 }
 
-const VIDEO_MAX_BYTES_CLIENT = 20 * 1024 * 1024;   // mirrors media.js VIDEO_MAX_BYTES (inline cap)
+const VIDEO_INLINE_MAX_CLIENT = 20 * 1024 * 1024;         // media.js VIDEO_MAX_BYTES (inline cap)
+const VIDEO_STORE_MAX_CLIENT  = 300 * 1024 * 1024;        // media.js VIDEO_STORE_MAX_BYTES (File-API path)
 
 async function uploadVideo(file) {
-  if (file.size > VIDEO_MAX_BYTES_CLIENT) {
-    throw new Error('that clip is over ~20 MB — too big to send inline for now (short clips only)');
+  const cap = state.videoFileApiEnabled ? VIDEO_STORE_MAX_CLIENT : VIDEO_INLINE_MAX_CLIENT;
+  if (file.size > cap) {
+    throw new Error(state.videoFileApiEnabled
+      ? 'that clip is over ~300 MB — too big even for the upload path'
+      : 'that clip is over ~20 MB — send a shorter one, or turn on “Send longer clips to Gemini” in Settings');
   }
   const label = (file.name && !/^(video|clipboard)\.?\w*$/i.test(file.name)) ? file.name : '';
   const qs = new URLSearchParams();
@@ -2794,7 +2799,7 @@ async function addPendingImages(fileList) {
     try {
       const meta = isVideo ? await uploadVideo(file) : await uploadImage(file);
       if (meta?.id) {
-        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id, kind: meta.kind || (isVideo ? 'video' : 'image') });
+        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id, kind: meta.kind || (isVideo ? 'video' : 'image'), bytes: meta.bytes });
         renderAttachStrip();
       }
     } catch (err) {
@@ -2811,6 +2816,46 @@ function removePendingAttachment(id) {
 function clearPendingAttachments() {
   state.pendingAttachments = [];
   renderAttachStrip();
+}
+
+// Have the Familiar watch a full (too-big-to-inline) video clip via the Gemini
+// File API (docs/video-build-spec.md §4). Isolated from the normal send path:
+// it hits /api/video-understand and drops the answer into the chat as a turn.
+async function askAboutClip(a) {
+  const gemini = (Array.isArray(state.connections) ? state.connections : [])
+    .find(c => /gemini/i.test(c.model || '') && /^(google|gemini)$/i.test(c.provider || ''));
+  const conn = gemini || (typeof getPrimaryConnection === 'function' ? getPrimaryConnection() : null);
+  if (!conn?.apiKey) { appendErrorMessage('I need a Google Gemini connection (with an API key) to watch a long clip.'); return; }
+  const input = $('user-input');
+  const promptText = (input?.value || '').trim();
+  const waiting = createMessageEl('assistant', '🎬 Watching the clip…');
+  $('messages').appendChild(waiting.el);
+  scrollToBottom();
+  try {
+    const r = await (await fetch('/api/video-understand', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assetId: a.sha || a.id, prompt: promptText, provider: conn.provider, model: conn.model, apiKey: conn.apiKey }),
+    })).json();
+    waiting.el.remove();
+    if (!r?.ok) { appendErrorMessage(r?.error || "I couldn't watch that clip."); return; }
+    const ts = new Date().toISOString();
+    const userMsg = { role: 'user', content: promptText || '(watch this clip)', timestamp: ts, id: generateId(), attachments: [{ id: a.id, sha: a.sha, kind: 'video' }] };
+    const asstMsg = { role: 'assistant', content: r.text, timestamp: ts, id: generateId() };
+    state.messages.push(userMsg, asstMsg);
+    const uEl = createMessageEl('user', esc(userMsg.content).replace(/\n/g, '<br>'), ts, userMsg.attachments);
+    $('messages').appendChild(uEl.el);
+    const aEl = createMessageEl('assistant', renderMarkdown(r.text), ts);
+    if (aEl.copyBtn) wireCopyButton(aEl.copyBtn, () => r.text);
+    if (aEl.speakBtn) wireSpeakButton(aEl.speakBtn, () => r.text);
+    $('messages').appendChild(aEl.el);
+    saveHistory();
+    removePendingAttachment(a.id);
+    if (input) input.value = '';
+    scrollToBottom();
+  } catch (err) {
+    waiting.el.remove();
+    appendErrorMessage(`I couldn't watch that clip: ${err.message}`);
+  }
 }
 
 function renderAttachStrip() {
@@ -2846,6 +2891,17 @@ function renderAttachStrip() {
     chip.appendChild(img);
     chip.appendChild(rm);
     chip.appendChild(tag);
+    // A clip too big to inline gets a "watch full clip" action (Gemini File API).
+    if (isVideo && state.videoFileApiEnabled && (a.bytes || 0) > VIDEO_INLINE_MAX_CLIENT) {
+      const watch = document.createElement('button');
+      watch.type = 'button';
+      watch.className = 'attach-chip-tag';
+      watch.setAttribute('aria-label', 'Have my Familiar watch the whole clip (Gemini)');
+      watch.title = 'Watch full clip (Gemini File API)';
+      watch.textContent = '🎬';
+      watch.addEventListener('click', (e) => { e.stopPropagation(); askAboutClip(a); });
+      chip.appendChild(watch);
+    }
     if (a.tagLabel) {
       const badge = document.createElement('span');
       badge.className = 'attach-chip-badge';
@@ -4030,6 +4086,7 @@ function readSettingsFromUI() {
   if ($('reddit-username'))       state.redditUsername    = $('reddit-username').value.trim();
   if ($('reddit-password'))       state.redditPassword    = $('reddit-password').value;
   if ($('cdp-mode-enabled'))      state.cdpModeEnabled    = $('cdp-mode-enabled').checked;
+  if ($('video-fileapi-enabled')) state.videoFileApiEnabled = $('video-fileapi-enabled').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4223,6 +4280,7 @@ function writeSettingsToUI() {
   if ($('reddit-username'))       setIfNotFocused($('reddit-username'),      'value', state.redditUsername || '');
   if ($('reddit-password'))       setIfNotFocused($('reddit-password'),      'value', state.redditPassword || '');
   if ($('cdp-mode-enabled'))      setIfNotFocused($('cdp-mode-enabled'),     'checked', state.cdpModeEnabled === true);
+  if ($('video-fileapi-enabled')) setIfNotFocused($('video-fileapi-enabled'), 'checked', state.videoFileApiEnabled === true);
   { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
@@ -5612,7 +5670,7 @@ function init() {
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'reddit-reader-enabled', 'reddit-user-agent', 'reddit-client-id', 'reddit-client-secret', 'reddit-username', 'reddit-password',
-    'cdp-mode-enabled',
+    'cdp-mode-enabled', 'video-fileapi-enabled',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
