@@ -20,7 +20,7 @@ import path from 'path';
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 1;
+export const MANUAL_TOME_VERSION = 2;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -62,7 +62,7 @@ export function buildManualTome() {
 
   add(
     ['how do you work', 'what can you do', 'help', 'guide me', 'your functions', 'manual', 'how do I use you'],
-    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, voice & calls, Discord, memory & consent, reminders & scheduling, my calendar sync, browsing the web, which model I run on, tomes/lorebook, and my self-directed habits (pondering, warm reach-outs, noticing). Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
+    `[Familiar Manual] I can explain any of my features and where to change its setting — {{user}} can just ask. Areas I can walk them through: seeing images, watching video, voice & calls, Discord, memory & consent, reminders & scheduling, my calendar sync, browsing the web, which model I run on, tomes/lorebook, and my self-directed habits (pondering, warm reach-outs, noticing). Most settings live in the app's Settings panel (it has a search box); a few have their own modals (Connections, Tomes, People) or Discord commands. I answer from what's actually switched on right now, not a frozen doc.`,
     { comment: 'Overview / help' },
   );
 
@@ -70,6 +70,12 @@ export function buildManualTome() {
     ['send you pictures', 'send pictures', 'send images', 'send a photo', 'screenshot', 'show you an image', 'can you see', 'vision', 'look at this'],
     `[Manual: Images] Vision is currently turned {{visionActive}}. When it's on, {{user}} can show me pictures and I actually see them. On the web chat: attach with the paperclip, paste, or drag-and-drop into the composer. On Discord: just attach the image to the message. Per-connection control lives in the Connections modal ("Can see images?" on each connection); the overall vision feature toggles in Settings. If a connection can't see images I fall back to a text description of them.`,
     { comment: 'Images / vision' },
+  );
+
+  add(
+    ['send you a video', 'send a video', 'watch a video', 'video clip', 'can you watch', 'show you a clip', 'video'],
+    `[Manual: Video] Video is currently turned {{videoActive}}. When it's on and I'm running on a model that can watch video, {{user}} can share a clip and I actually watch it — attach or drag it into the web composer, or attach it to a Discord message. Models that watch video: Google Gemini, and Zhipu GLM 5.3 Flash (including on the z.ai coding plan). Per-connection control is the "Can watch video?" switch in the Connections modal, next to "Can see images?" — set it to Yes for a model I've confirmed can watch. Short clips (up to ~20 MB) ride inline; for a longer clip on a Gemini connection there's a "Watch full clip" button that uploads it and I answer about the whole thing. On a model that can't watch video, the clip stands in as text and I say plainly that I haven't watched it — I never pretend I did.`,
+    { comment: 'Video' },
   );
 
   add(

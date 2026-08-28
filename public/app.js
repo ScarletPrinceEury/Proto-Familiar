@@ -1835,6 +1835,7 @@ function applyNameVars(text) {
     // ⚠️ PARITY: the names + on/off logic mirror TOME_MACROS in tome-macros.js
     // (server); keep the two in sync — a test pins the shared name set.
     .replace(/\{\{\s*visionActive\s*\}\}/gi,    () => (state.visionEnabled    !== false ? 'on' : 'off'))
+    .replace(/\{\{\s*videoActive\s*\}\}/gi,     () => (state.videoEnabled     !== false ? 'on' : 'off'))
     .replace(/\{\{\s*voiceActive\s*\}\}/gi,     () => (state.voiceEnabled     === true  ? 'on' : 'off'))
     .replace(/\{\{\s*discordActive\s*\}\}/gi,   () => (state.discordEnabled   === true  ? 'on' : 'off'))
     .replace(/\{\{\s*ponderingActive\s*\}\}/gi, () => (state.ponderingEnabled !== false ? 'on' : 'off'))

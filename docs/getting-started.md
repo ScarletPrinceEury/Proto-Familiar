@@ -246,11 +246,11 @@ Phylactery's own env vars (read by Phylactery itself, not by Proto-Familiar; doc
 
 ### Z.ai — Standard API
 - **Endpoint:** `https://api.z.ai/api/paas/v4/chat/completions`
-- **Suggested models:** `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5`, `glm-4.5-air`, `glm-4-flash`, `glm-z1-rumination`
+- **Suggested models:** `glm-5.3-flash` (natively multimodal — watches images + video), `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5`, `glm-4.5-air`, `glm-4-flash`, `glm-z1-rumination`
 
 ### Z.ai — Coding Plan
-- **Endpoint:** `https://api.z.ai/api/coding/paas/v4/chat/completions` (separate quota from Standard)
-- **Suggested models:** `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
+- **Endpoint:** `https://api.z.ai/api/coding/paas/v4/chat/completions` (separate quota from Standard — same OpenAI-compat chat surface, so a multimodal model watches media live here too)
+- **Suggested models:** `glm-5.3-flash` (multimodal — watches images + video on the coding plan), `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.5-air`
 
 ### Google AI Studio — Gemini
 - **Endpoint:** `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` (Google's OpenAI-compatible surface)

@@ -66,6 +66,15 @@ test('buildManualTome: the images entry is keyed to "send you pictures" and quot
   assert.match(imgEntry.content, /\{\{visionActive\}\}/);
 });
 
+test('buildManualTome: the video entry quotes {{videoActive}} and names GLM 5.3 Flash', () => {
+  const t = buildManualTome();
+  const vid = Object.values(t.entries).find(e => e.keys.includes('watch a video'));
+  assert.ok(vid, 'there is a video entry');
+  assert.match(vid.content, /\{\{videoActive\}\}/);
+  assert.match(vid.content, /GLM 5\.3 Flash/);
+  assert.match(vid.content, /Can watch video\?/);
+});
+
 // ── seed-once behavior ─────────────────────────────────────────────
 test('ensureManualTome: seeds once, then respects deletion (flag-tracked)', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pf-manual-'));

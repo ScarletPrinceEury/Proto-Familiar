@@ -20,9 +20,10 @@
   `buildStandin` gains a video voice ("what I saw when I watched" / "I haven't
   watched this one yet" / "I have no way to watch videos right now").
 - **Materializer (`vision.js`).** `resolveVideoCapable` (a TIGHT name heuristic —
-  Gemini, Qwen-VL, explicit `video` models — plus the ward's `videoCapable`
-  tri-state; much narrower than vision because a wrong live attempt ships
-  megabytes) + a newest-first `DEFAULT_MAX_LIVE_VIDEOS`=1 budget. A live video
+  Gemini, Qwen-VL, GLM 5.3 Flash, explicit `video` models — plus the ward's
+  `videoCapable` tri-state; much narrower than vision because a wrong live attempt
+  ships megabytes; `zai-coding` is capability-by-model here too, not blanket-blind)
+  + a newest-first `DEFAULT_MAX_LIVE_VIDEOS`=1 budget. A live video
   becomes a `{type:'video_url', video_url:{url:data:…}}` part; otherwise a text
   stand-in, with the same blind-confabulation guard images get and a video
   legibility line. Off-switch `PROTO_FAMILIAR_VIDEO_DISABLED=1`.
