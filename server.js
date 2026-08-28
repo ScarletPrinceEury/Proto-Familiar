@@ -2690,6 +2690,28 @@ app.post('/api/browser/cdp-disarm', async (_req, res) => {
   }
 });
 
+// One-click "Set up my Chrome": drop a double-clickable launcher on the Desktop
+// that opens a Chrome the Familiar can drive (debug port + a DEDICATED profile,
+// so the ward's everyday browser is never exposed). The app writes a shortcut;
+// it never launches Chrome itself — the ward still chooses to run it (§3 gate 1).
+app.post('/api/browser/cdp-setup', async (_req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSER_CDP_DISABLED === '1') return res.status(403).json({ ok: false, error: 'CDP mode is turned off by env.' });
+  try {
+    const { launcherPlan, launcherInstructions, findWardChrome, cdpChromeProfileDir, desktopDir } = await import('./cdp-launcher.js');
+    const chromePath = findWardChrome();
+    if (!chromePath) return res.json({ ok: false, error: "I couldn't find Chrome (or Edge/Chromium) on this computer. Install Google Chrome, then try this again." });
+    const profileDir = cdpChromeProfileDir();
+    mkdirSync(profileDir, { recursive: true });
+    const plan = launcherPlan({ platform: process.platform, chromePath, profileDir });
+    const outPath = path.join(desktopDir(), plan.filename);
+    await fsp.writeFile(outPath, plan.content);
+    try { await fsp.chmod(outPath, plan.mode); } catch { /* Windows / restricted fs — mode is best-effort */ }
+    res.json({ ok: true, path: outPath, filename: plan.filename, instructions: launcherInstructions(process.platform) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
 // The ward's "hand it back" after a headed handoff (§4.8) — close the window,
 // relaunch headless at the same URL, now signed in.
 app.post('/api/browser/handback', async (_req, res) => {

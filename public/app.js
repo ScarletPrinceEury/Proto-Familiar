@@ -5704,6 +5704,15 @@ function init() {
       }
     } catch { el.textContent = 'Not armed.'; }
   }
+  $('cdp-setup-btn')?.addEventListener('click', async () => {
+    const el = $('cdp-setup-status'); if (el) el.textContent = 'Setting up…';
+    try {
+      const r = await (await fetch('/api/browser/cdp-setup', { method: 'POST' })).json();
+      if (el) el.textContent = r?.ok
+        ? `✓ Done — “${r.filename}” is on your Desktop. ${r.instructions}`
+        : (r?.error || 'Could not set that up.');
+    } catch { if (el) el.textContent = 'Could not reach the server to set that up.'; }
+  });
   $('cdp-arm-btn')?.addEventListener('click', async () => {
     const domain = ($('cdp-arm-domain')?.value || '').trim();
     const minutes = Number($('cdp-arm-minutes')?.value || 15);
