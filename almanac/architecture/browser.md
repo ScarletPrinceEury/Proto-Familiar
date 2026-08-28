@@ -56,6 +56,12 @@ sources:
   - id: browser-cdp-spec
     type: file
     path: docs/browser-cdp-mode-build-spec.md
+  - id: browser-cdp-arm-js
+    type: file
+    path: browser-cdp-arm.js
+  - id: browser-cdp-arm-test
+    type: file
+    path: tests/browser-cdp-arm.test.mjs
   - id: reddit-reader-js
     type: file
     path: reddit-reader.js
@@ -99,8 +105,9 @@ covered below) that closed the shadow-DOM half of the extraction gap the 0.11.23
 and a Reddit JSON-API reader (0.11.29, covered below) that routes `read_webpage` around
 Reddit's anti-bot wall entirely, because that wall blocks the browser's own traffic regardless
 of what the shadow-DOM fix rendered. A CDP-attach engine backing for the ward's own logged-in
-Chrome (spec §9 Horizon #2) is fully designed but deliberately parked, not built — see the CDP
-mode section below.
+Chrome (spec §9 Horizon #2), specced in full and deliberately parked while the owned-profile
+modes proved themselves, shipped at 0.11.31-alpha once the ward gave the go-ahead — see the
+CDP mode section below.
 
 The feature is opt-in (`settings.browseEnabled`, default off, with a hard
 `PROTO_FAMILIAR_BROWSE_DISABLED` env kill switch) and ward-only: the `browse_*` tools are
@@ -724,27 +731,77 @@ the whole "which door gets me into this site" question into a registry any futur
 site can join — see [Reader router](reader-router) for the fix and the pattern it now
 follows.
 
-## CDP mode (Horizon #2): driving the ward's own Chrome — designed, not built
+## CDP mode (Horizon #2): driving the ward's own Chrome (0.11.31-alpha)
 
 `docs/browser-cdp-mode-build-spec.md` specs an alternate engine backing for the same `browse_*`
-tool surface: instead of the Familiar's own isolated profile, it would attach to the ward's
+tool surface: instead of the Familiar's own isolated profile, attach to the ward's
 **already-running, already-logged-in** Chrome via `chromium.connectOverCDP()`, so tasks that the
-owned-profile mode has to hand back to the ward — anything behind a login — could proceed without
-a handoff [@browser-cdp-spec]. The ward reviewed the design and chose to **spec-and-park** it
-rather than build it now: the owned-profile browser this page describes had only just entered
-real use, and CDP mode belongs in the same "prove the cheaper modes first" bucket as the
-still-undesigned delegated task-flow horizon [@browser-cdp-spec]. No code exists yet — the design
-is settled and answered (§7 of the spec), and this section exists so that work is not lost before
-a future ward go-ahead revives it.
+owned-profile mode has to hand back to the ward — anything behind a login — can proceed without
+a handoff [@browser-cdp-spec]. The design was specced in full and deliberately parked while the
+owned-profile browser this page describes proved itself in real use; the ward then gave the
+go-ahead and it was built to the letter at 0.11.31-alpha. See
+[CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) for why the design is
+shaped the way it is — the forced single-domain allowlist, the two independent human acts
+nothing can fake, and the arm-expiry drop to the owned profile — this section covers how that
+design landed in code.
 
-The design's central problem is that this page's "SSRF is enforced by a proxy the app owns"
-guarantee cannot apply under CDP: that guarantee depends on the app launching the browser through
-`launch({proxy})`, and CDP attaches to a browser it did not launch, so the network floor degrades
-from an airtight IP-resolution check to a best-effort URL allowlist [@browser-cdp-spec]. See
-[CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) for why that degraded
-floor, plus a forced single-domain allowlist and two independent human acts nothing can fake,
-were judged an acceptable design for a capability this high-stakes — read it in full before
-resuming this work.
+**The central problem the design had to answer:** this page's "SSRF is enforced by a proxy the
+app owns" guarantee cannot apply under CDP, because that guarantee depends on the app launching
+the browser through `launch({proxy})`, and CDP attaches to a browser it did not launch. The
+network floor degrades from an airtight IP-resolution check to a best-effort URL allowlist
+[@browser-cdp-spec]. The shipped code closes that gap with a scope narrow and short-lived enough
+to stand in for the missing guarantee, not by pretending the guarantee still holds.
+
+**`browser-cdp-arm.js` is the arm gate** — the ward-only, time-boxed grant that is the whole
+network floor under CDP. `armCdp({domain, minutes})` normalizes a ward-supplied domain (refusing
+IPs and private/loopback/metadata literals), clamps the duration to a 15-minute default and a
+60-minute ceiling, and stores the arm in memory only — a process restart drops it, because a
+time-boxed grant must never silently survive one [@browser-cdp-arm-js]. `armAllowsHost(host)` is
+the request-level check every CDP-mode navigation and subresource goes through: it is `false`
+whenever no arm is active, and otherwise matches only the armed domain or a subdomain of it,
+which makes the armed domain the allowlist rather than a typed list the ward maintains
+[@browser-cdp-arm-js]. `CDP_ENDPOINT` is hardcoded to `127.0.0.1:9222`, so the app can never be
+pointed at a remote CDP target even by configuration [@browser-cdp-arm-js]. This module is pure
+and fully unit-tested (`tests/browser-cdp-arm.test.mjs`: domain normalization, private/loopback
+refusal, the allowlist, expiry plus its one-shot note, disarm, and the env hard-disable)
+[@browser-cdp-arm-test] — the same "safety-critical judgment lives in a pure, fixture-tested
+module" pattern the fill-source gate above already follows.
+
+**`browser-driver.js`'s `ensureContext` branches on `cdpArmActive()`.** When an arm is live it
+calls `ensureCdpContext()`, which attaches via `connectOverCDP(CDP_ENDPOINT)`, opens a
+**dedicated** new tab in the ward's browser rather than reusing one of their existing tabs, and
+installs the same `armAllowsHost` check as a `context.route` guard on that tab so a page cannot
+pivot the Familiar's CDP session off the armed domain [@browser-driver-js] [@browser-cdp-arm-js].
+If a context is already open in the wrong mode (CDP when the arm just ended, or owned when an
+arm just started), `ensureContext` closes it first via `closeBrowser`, which is where the
+milestone's hardest invariant lives: the `cdp` branch closes only the dedicated tab it opened
+and then **disconnects** — it never calls `browser.close()` on the ward's real Chrome, and the
+ward's other tabs are untouched [@browser-driver-js]. An arm that lapses mid-task drops back to
+the owned profile automatically, with a one-shot first-person note
+(`consumeCdpDropNote`/RULE B) prepended to the next tool result so the Familiar always knows
+what it is actually driving and never claims a logged-in result it no longer has
+[@browser-driver-js] [@browser-js]. `engineMode()` and `browserStatus()` surface the current
+mode and armed domain for the audit trail and the Settings UI [@browser-driver-js].
+
+**Ward-only surface, nothing the model can trigger.** The ward turns CDP mode on in Settings
+(`cdpModeEnabled`, default off) and arms it from a collapsed "Drive my own Chrome (advanced)"
+panel — a domain field, a minutes selector, and Arm/Disarm buttons hitting
+`POST /api/browser/cdp-arm` and `/api/browser/cdp-disarm`, gated on `cdpModeEnabled` plus the
+hard env off-switch `PROTO_FAMILIAR_BROWSER_CDP_DISABLED=1` [@browser-cdp-arm-js]. The model has
+no tool that can call either endpoint; `cerebellum.js`'s `browse_open` description only tells
+the Familiar it may **ask** the ward to arm a domain for a logged-in task, never that it can arm
+one itself, so a hostile page can never talk the Familiar into self-arming. Every `browse_open`
+and `browse_act` audit entry stamps `mode` and, under CDP, `cdpDomain`, so a review of
+`logs/browser-actions.jsonl` can tell at a glance which actions ran against the ward's own
+Chrome [@browser-js].
+
+**What is shipped versus what is still unverified.** All of the above is built and the arm-gate
+logic is fully unit-tested, but the live attach-and-drive against a real Chrome instance cannot
+run in headless CI — there is no actual Chrome with a debug port to attach to in that
+environment — so it needs the same kind of ward desktop shakeout the headed-handoff hand-back
+required before it could be trusted: launch Chrome with `--remote-debugging-port=9222`, arm a
+domain, and confirm the drive works and that disarm, expiry, and `browse_close` leave the
+ward's own Chrome and its other tabs untouched [@browser-cdp-spec].
 
 ## The whole spec is built, and work has continued past it
 
@@ -754,11 +811,12 @@ earlier (`browseConfirmMode: 'ask'` approve-resume, 0.11.5, and the headed hando
 hand-back-and-resume, 0.11.6), and Pass 4's unattended pondering research (0.11.7, shipped as a
 plan-and-read loop rather than the spec's tool-calling design). Work has continued past the
 spec's four passes — see the Chromium-acquisition, page-watches, ref, image/scroll,
-JS-render-settle, shadow-DOM, and Reddit-JSON-reader sections above — and the driver's own
-in-page walk still does not cross an iframe boundary, which remains the one open extraction gap.
-Interactive `browse_open`/`browse_act` on Reddit also remains open: the JSON reader fixes
-`read_webpage` only, and a real click-and-fill session there still drives a browser Reddit's
-anti-bot wall can fingerprint.
+JS-render-settle, shadow-DOM, and Reddit-JSON-reader sections above — and the §9 Horizon #2 CDP
+mode described above is also now built, at 0.11.31-alpha, pending its desktop shakeout. The
+driver's own in-page walk still does not cross an iframe boundary, which remains the one open
+extraction gap. Interactive `browse_open`/`browse_act` on Reddit also remains open: the JSON
+reader fixes `read_webpage` only, and a real click-and-fill session there still drives a browser
+Reddit's anti-bot wall can fingerprint.
 
 ## Related
 
@@ -769,8 +827,8 @@ anti-bot wall can fingerprint.
 - [Browser milestone: guardrails in code, not prompts](../decisions/browser-guardrails-in-code)
   — the design decisions behind the SSRF proxy, the Stranger-tier default, and the consent,
   vault, and handoff surfaces Pass 3 built.
-- [CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) — the settled,
-  parked design for the Horizon #2 alternate engine backing, and why its degraded network floor
+- [CDP mode: driving the ward's own Chrome](../decisions/browser-cdp-mode) — the shipped
+  design for the Horizon #2 alternate engine backing, and why its degraded network floor
   was judged acceptable.
 - [Exact values are code's job](../decisions/exact-values-in-code) — the general rule
   `readVaultEntry()` applies to secrets, and the readable-slug-id law page watches and

@@ -55,9 +55,9 @@ reoccurring.
   including the credential/payment gates and the consent-vault handoff flow — see
   [Browser](../architecture/browser) for the built subsystem.
 - [CDP mode: driving the ward's own Chrome](browser-cdp-mode) — the browser milestone's §9
-  Horizon #2 alternate engine backing, designed in full and deliberately parked with no code
-  because the owned SSRF-proxy floor it depends on cannot apply to a Chrome instance the app
-  did not launch.
+  Horizon #2 alternate engine backing: designed in full, deliberately parked while the owned
+  SSRF-proxy floor it cannot rely on proved itself elsewhere, then shipped to spec at
+  0.11.31-alpha behind a forced single-domain allowlist and two human gates nothing can fake.
 
 ## The Initiative build spec: wait-streak and contact rhythm
 
