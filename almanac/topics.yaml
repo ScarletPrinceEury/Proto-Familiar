@@ -77,7 +77,7 @@ topics:
     parents: [architecture, autonomous-loops]
   - slug: vision
     title: Vision
-    description: Multimodal image input, media storage, and modality fallback
+    description: Multimodal image and video input, media storage, and modality fallback
     parents: [architecture]
   - slug: content-gating
     title: Content Gating

@@ -89,7 +89,10 @@ driver seam the owned-profile launch uses, via a dedicated `ensureCdpContext()` 
 
 See [Browser: click-and-fill web access](../architecture/browser) for how this engine backing
 fits alongside the owned-profile driver it can swap with, and for the desktop-shakeout testing
-gap this page shares with the headed-handoff hand-back refinement.
+gap this page shares with the headed-handoff hand-back refinement. [Vision and media](../architecture/vision-and-media)'s
+Gemini File-API path (0.11.35-alpha) is in the same position: unit-tested against a stub, isolated
+in its own module and endpoint, and waiting on a live ward shakeout before the untested piece can
+be trusted.
 
 The general lesson worth carrying: a capability whose safety depends on a guarantee the
 architecture can't provide (here, the owned proxy) should either not ship, or ship only behind
