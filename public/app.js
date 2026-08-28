@@ -2762,6 +2762,21 @@ async function uploadImage(file) {
 const VIDEO_INLINE_MAX_CLIENT = 20 * 1024 * 1024;         // media.js VIDEO_MAX_BYTES (inline cap)
 const VIDEO_STORE_MAX_CLIENT  = 300 * 1024 * 1024;        // media.js VIDEO_STORE_MAX_BYTES (File-API path)
 
+// Recognise a media file by MIME OR filename extension — some video files
+// (.mov/.mkv especially) arrive with an empty or odd `type` on paste/drop, so a
+// MIME-only check would silently ignore them. Extension → a real video MIME so
+// the raw upload still carries a Content-Type the store accepts.
+const VIDEO_EXT_MIME = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', qt: 'video/quicktime', mkv: 'video/x-matroska', mpg: 'video/mpeg', mpeg: 'video/mpeg', '3gp': 'video/3gpp' };
+function videoMimeFor(file) {
+  const t = (file?.type || '').toLowerCase();
+  if (t.startsWith('video/')) return t;
+  const ext = (/\.([a-z0-9]+)$/i.exec(file?.name || '')?.[1] || '').toLowerCase();
+  return VIDEO_EXT_MIME[ext] || '';
+}
+function isImageFile(file) { return (file?.type || '').startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(file?.name || ''); }
+function isVideoFile(file) { return !!videoMimeFor(file); }
+function isMediaFile(file) { return !!file && (isImageFile(file) || isVideoFile(file)); }
+
 async function uploadVideo(file) {
   const cap = state.videoFileApiEnabled ? VIDEO_STORE_MAX_CLIENT : VIDEO_INLINE_MAX_CLIENT;
   if (file.size > cap) {
@@ -2775,7 +2790,7 @@ async function uploadVideo(file) {
   if (state.sessionId) qs.set('sessionId', state.sessionId);
   const res = await fetch(`/api/media${qs.toString() ? `?${qs}` : ''}`, {
     method: 'POST',
-    headers: { 'Content-Type': file.type },
+    headers: { 'Content-Type': videoMimeFor(file) || file.type },  // ext-derived MIME for empty-type clips (.mov/.mkv)
     body: file,   // video rides raw — no canvas downscale
   });
   if (!res.ok) {
@@ -2789,13 +2804,13 @@ async function uploadVideo(file) {
 async function addPendingImages(fileList) {
   if (!visionActive()) return;
   state.pendingAttachments ||= [];
-  const files = Array.from(fileList || []).filter(f => f && f.type && (f.type.startsWith('image/') || f.type.startsWith('video/')));
+  const files = Array.from(fileList || []).filter(isMediaFile);
   for (const file of files) {
     if (state.pendingAttachments.length >= VISION_MAX_PER_MESSAGE) {
       appendErrorMessage(`I can hold up to ${VISION_MAX_PER_MESSAGE} items per message.`);
       break;
     }
-    const isVideo = file.type.startsWith('video/');
+    const isVideo = isVideoFile(file);
     try {
       const meta = isVideo ? await uploadVideo(file) : await uploadImage(file);
       if (meta?.id) {
@@ -5944,7 +5959,7 @@ function init() {
 
   $('user-input')?.addEventListener('paste', (e) => {
     if (!visionActive()) return;
-    const items = Array.from(e.clipboardData?.items || []).filter(it => it.type?.startsWith('image/'));
+    const items = Array.from(e.clipboardData?.items || []).filter(it => it.type?.startsWith('image/') || it.type?.startsWith('video/'));
     if (!items.length) return;
     e.preventDefault();
     addPendingImages(items.map(it => it.getAsFile()).filter(Boolean));
@@ -5959,7 +5974,7 @@ function init() {
     ['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, () => dropZone.classList.remove('drag-over')));
     dropZone.addEventListener('drop', (e) => {
       if (!visionActive()) return;
-      const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith('image/'));
+      const files = Array.from(e.dataTransfer?.files || []).filter(isMediaFile);
       if (files.length) { e.preventDefault(); addPendingImages(files); }
     });
   }
