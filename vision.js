@@ -170,7 +170,43 @@ export async function resolveVisionCapable(connection, settings) {
   return looksVisionCapable(provider, model);
 }
 
+/**
+ * A TIGHT name heuristic for models that take video content parts — much
+ * narrower than vision, because far fewer models do and a wrong live attempt
+ * ships megabytes before the provider rejects it. Only families we actually
+ * know accept video ride 'auto'; everything else stands in. A ward `videoCapable:
+ * 'yes'` on the connection forces it on for a provider they've confirmed.
+ */
+export function looksVideoCapable(provider, model) {
+  const m = String(model ?? '').toLowerCase().trim();
+  if (!m) return false;
+  return [
+    /gemini/,                                   // Gemini is natively multimodal incl. video
+    /qwen.*-vl/, /qwen\d[.\d]*-?vl/, /qwenvl/,   // Qwen-VL accepts video
+    /\bvideo\b/, /-video/,                       // a model that names video explicitly
+  ].some((re) => re.test(m));
+}
+
+/**
+ * Whether this connection can take a live VIDEO part. Mirrors resolveVisionCapable
+ * but tighter and with no capability cache (a wrong 'auto' attempt degrades via
+ * the modality-reject fallback). Off-switch + zai-coding + ward tri-state honored.
+ */
+export async function resolveVideoCapable(connection, settings) {
+  if (process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1') return false;
+  if (connection?.provider === 'zai-coding') return false;   // coding models take no live parts
+  const explicit = connection?.videoCapable;
+  if (explicit === 'yes') return true;
+  if (explicit === 'no')  return false;
+  const conn = connection?.provider ? connection : findConnection(settings, connection || {});
+  if (conn?.videoCapable === 'no')  return false;
+  if (conn?.videoCapable === 'yes') return true;
+  return looksVideoCapable(conn?.provider ?? connection?.provider, conn?.model ?? connection?.model);
+}
+
 // ── The materializer ──────────────────────────────────────────────
+
+export const DEFAULT_MAX_LIVE_VIDEOS = 1;   // video is expensive; one live clip per request
 
 function dataUrl(mime, buffer) {
   return `data:${mime};base64,${buffer.toString('base64')}`;
@@ -198,9 +234,11 @@ export async function materializeAttachments(apiMessages, {
   if (!anyAttachments) return { messages, imagesLive: 0, imagesStoodIn: 0, notesStoodIn: 0 };
 
   const capable = await resolveVisionCapable(connection, settings);
+  const videoCapable = await resolveVideoCapable(connection, settings);
   const budget = Number.isFinite(maxLive) ? maxLive
     : Number.isFinite(settings?.visionMaxLiveImages) ? settings.visionMaxLiveImages
     : DEFAULT_MAX_LIVE_IMAGES;
+  const videoBudget = DEFAULT_MAX_LIVE_VIDEOS;   // fixed for v1 (no ward control yet — spec §3)
   const gateSet = visibleAudiences == null ? null
     : (visibleAudiences instanceof Set ? visibleAudiences : new Set(visibleAudiences));
 
@@ -229,14 +267,21 @@ export async function materializeAttachments(apiMessages, {
       if (refs[i].meta?.kind === 'image') liveIds.add(`${refs[i].mi}:${refs[i].id}`);
     }
   }
+  // Video rides its own newest-first budget on a video-capable connection.
+  const liveVideoIds = new Set();
+  if (videoCapable && videoBudget > 0) {
+    for (let i = refs.length - 1; i >= 0 && liveVideoIds.size < videoBudget; i--) {
+      if (refs[i].meta?.kind === 'video') liveVideoIds.add(`${refs[i].mi}:${refs[i].id}`);
+    }
+  }
 
   // The outgoing provider message never carries `attachments` — it's a
   // Proto-Familiar-internal sibling field, consumed into content parts (or a
   // stand-in) here. Some strict providers reject unknown message fields.
   const stripAtt = (m) => { if (!m || !('attachments' in m)) return m; const { attachments, ...rest } = m; return rest; };
 
-  let imagesLive = 0, imagesStoodIn = 0, notesStoodIn = 0;
-  let blindImageStandins = 0;      // image stand-ins carrying NO description (confabulation risk)
+  let imagesLive = 0, imagesStoodIn = 0, notesStoodIn = 0, videosLive = 0, videosStoodIn = 0;
+  let blindImageStandins = 0;      // image/video stand-ins carrying NO description (confabulation risk)
   const stoodInUndescribed = [];   // asset ids stood in with no description yet
   const out = [];
   for (let mi = 0; mi < messages.length; mi++) {
@@ -245,40 +290,42 @@ export async function materializeAttachments(apiMessages, {
     if (!myRefs.length) { out.push(stripAtt(msg)); continue; }
 
     const baseText = typeof msg.content === 'string' ? msg.content : '';
-    const imageParts = [];
+    const mediaParts = [];
     const standinLines = [];
     for (const ref of myRefs) {
-      const goLive = liveIds.has(`${mi}:${ref.id}`);
+      const isVideo = ref.meta?.kind === 'video';
+      const goLive = isVideo ? liveVideoIds.has(`${mi}:${ref.id}`) : liveIds.has(`${mi}:${ref.id}`);
       if (goLive) {
         const got = await getAsset(ref.id);
         if (got?.buffer && got?.meta) {
-          imageParts.push({ type: 'image_url', image_url: { url: dataUrl(got.meta.mime, got.buffer) } });
-          imagesLive++;
+          if (isVideo) { mediaParts.push({ type: 'video_url', video_url: { url: dataUrl(got.meta.mime, got.buffer) } }); videosLive++; }
+          else { mediaParts.push({ type: 'image_url', image_url: { url: dataUrl(got.meta.mime, got.buffer) } }); imagesLive++; }
           continue;
         }
         // Bytes vanished under us — degrade to a stand-in, never an error.
       }
       const standin = ref.meta ? buildStandin(ref.meta, { now })
-        : `[image ${ref.id ?? '?'}: no longer available]`;
+        : `[${isVideo ? 'video' : 'image'} ${ref.id ?? '?'}: no longer available]`;
       standinLines.push(standin);
-      if (ref.meta?.kind === 'audio') notesStoodIn++; else imagesStoodIn++;
-      // An image standing in with NO real description is the confabulation
-      // hazard: the model has a marker for an image but nothing about its
-      // contents. Count it so the seam can inject a hard don't-invent rule.
+      if (ref.meta?.kind === 'audio') notesStoodIn++; else if (isVideo) videosStoodIn++; else imagesStoodIn++;
+      // An image/video standing in with NO real description is the confabulation
+      // hazard: the model has a marker but nothing about its contents. Count it
+      // so the seam can inject a hard don't-invent rule.
       if (ref.meta?.kind !== 'audio') {
         const hasDesc = !!(ref.meta?.description && typeof ref.meta.description.text === 'string' && ref.meta.description.text.trim());
         if (!hasDesc) blindImageStandins++;
       }
-      // An undescribed asset stood in as text is a candidate for a background
-      // describe (§6) — so NEXT time it carries real words, not "not yet described".
-      if (ref.meta && ref.meta.description === null) stoodInUndescribed.push(ref.meta.id);
+      // An undescribed IMAGE stood in as text is a candidate for a background
+      // describe (§6). Video is excluded — there's no video-describe path in this
+      // patch (describeAsset is image-only), so queuing one would just error.
+      if (ref.meta && ref.meta.description === null && !isVideo) stoodInUndescribed.push(ref.meta.id);
     }
 
-    if (imageParts.length) {
+    if (mediaParts.length) {
       // Content becomes a parts array: the existing string (timestamps and
-      // all) plus any non-live stand-ins as the text part, then the images.
+      // all) plus any non-live stand-ins as the text part, then the media.
       const text = standinLines.length ? `${baseText}\n${standinLines.join('\n')}` : baseText;
-      out.push({ ...stripAtt(msg), content: [{ type: 'text', text }, ...imageParts] });
+      out.push({ ...stripAtt(msg), content: [{ type: 'text', text }, ...mediaParts] });
     } else {
       // No live parts → stays a string; the request shape is unchanged.
       const text = standinLines.length
@@ -307,6 +354,12 @@ export async function materializeAttachments(apiMessages, {
       content: '[The [image …] notes in this conversation are images that were shared with me. "What I saw when I looked" is exactly that — I looked at the image and those are my own words about it. I talk about these images naturally, from what I saw. One marked "I haven\'t looked at this one yet" is one I genuinely haven\'t seen.]',
     });
   }
+  if (videosStoodIn > 0) {
+    out.push({
+      role: 'system',
+      content: '[The [video …] notes in this conversation are video clips that were shared with me. One marked "I haven\'t watched this one yet" or "I have no way to watch videos right now" is one I genuinely cannot see — for those I don\'t guess what happens in the clip or who is in it; I say plainly I can\'t watch it and ask what\'s in it if it matters.]',
+    });
+  }
   // Hard guard against the worst break: an image I have NO description for. The
   // softer convention line above isn't enough on its own — a model handed a
   // marker for an unseen image will otherwise invent its contents (a tester
@@ -320,7 +373,7 @@ export async function materializeAttachments(apiMessages, {
       content: '[This is only about images marked "I haven\'t looked at this one yet" or "I have no way to look at images right now" — those specifically I genuinely cannot see and have no description of, so for THOSE I don\'t describe them, guess their contents, or name who or what is in them; I say plainly I can\'t see it (yet) and ask what\'s in it if it matters. It does NOT apply to an image marked "what I saw when I looked: …" — that description IS my sight of it, and I talk about it normally, in full, as something I saw. A text description still counts as having seen the image. Inventing what an unseen image shows would be a serious breach — I never do that.]',
     });
   }
-  return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, stoodInUndescribed, blindImageStandins };
+  return { messages: out, imagesLive, imagesStoodIn, notesStoodIn, videosLive, videosStoodIn, stoodInUndescribed, blindImageStandins };
 }
 
 /**

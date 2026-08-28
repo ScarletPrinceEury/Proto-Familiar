@@ -44,9 +44,18 @@ export const MEDIA_MAX_BYTES = 6 * 1024 * 1024;   // 6 MB per image
  * recorder says so before it stops rather than after.
  */
 export const AUDIO_MAX_BYTES = 24 * 1024 * 1024;
+/**
+ * Video's ceiling is the INLINE limit: a clip small enough to ride a chat
+ * request as base64 (roughly ~10–20s at typical bitrates). Anything larger is a
+ * File-API job (docs/video-build-spec.md), not an inline part — the recorder /
+ * composer says so before it accepts the bytes rather than after a provider
+ * rejects a 40 MB body. 20 MB keeps the base64-inflated payload under the common
+ * provider request ceiling.
+ */
+export const VIDEO_MAX_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGES_PER_MESSAGE = 4;
-/** The cap that applies to a kind. Derived, so the two can't drift. */
-export const maxBytesForKind = (kind) => (kind === 'audio' ? AUDIO_MAX_BYTES : MEDIA_MAX_BYTES);
+/** The cap that applies to a kind. Derived, so the three can't drift. */
+export const maxBytesForKind = (kind) => (kind === 'audio' ? AUDIO_MAX_BYTES : kind === 'video' ? VIDEO_MAX_BYTES : MEDIA_MAX_BYTES);
 // mime → file extension allow-list. A mime not in this map is rejected; the
 // model kind is derived from the map, never from sniffing (spec §2 `kind`).
 export const IMAGE_MIME_EXT = {
@@ -80,6 +89,22 @@ export const AUDIO_MIME_EXT = {
 };
 
 /**
+ * Video my human can hand me (vision spec — the video patch). Same store, same
+ * content-addressing, same audience tag; what differs is only what the
+ * materializer does — a video becomes a `video_url` provider content-part for a
+ * video-capable model, or a text stand-in otherwise (mirrors the image path).
+ * mp4/mov come off phones and desktop tools; webm is what browsers record.
+ */
+export const VIDEO_MIME_EXT = {
+  'video/mp4':        'mp4',
+  'video/webm':       'webm',
+  'video/quicktime':  'mov',
+  'video/x-matroska': 'mkv',
+  'video/mpeg':       'mpeg',
+  'video/3gpp':       '3gp',
+};
+
+/**
  * Every media type the store accepts, and which kind each one is.
  *
  * ONE map, derived rather than written twice — `saveAsset` used to hard-code
@@ -90,6 +115,7 @@ export const AUDIO_MIME_EXT = {
 export const MEDIA_KINDS = Object.freeze({
   ...Object.fromEntries(Object.entries(IMAGE_MIME_EXT).map(([m, ext]) => [m, { kind: 'image', ext }])),
   ...Object.fromEntries(Object.entries(AUDIO_MIME_EXT).map(([m, ext]) => [m, { kind: 'audio', ext }])),
+  ...Object.fromEntries(Object.entries(VIDEO_MIME_EXT).map(([m, ext]) => [m, { kind: 'video', ext }])),
 });
 
 /** What kind of thing is this, if anything we accept? */
@@ -263,7 +289,7 @@ export async function saveAsset({ buffer, mime, origin = {}, audienceTag = 'ward
   const durationSec = kind === 'audio' ? readAudioDuration(buffer, ext) : null;
   // Mint the arrival slug from the best label present (caption / meaningful
   // filename); camera-noise names fall back inside meaningSlugId.
-  const slug = meaningSlugId(label, { fallbackKind: kind === 'audio' ? 'snd' : 'img' });
+  const slug = meaningSlugId(label, { fallbackKind: kind === 'audio' ? 'snd' : kind === 'video' ? 'vid' : 'img' });
   const meta = {
     id,
     slugs: [slug],
@@ -540,14 +566,15 @@ function sharedByPhrase(meta) {
 export function buildStandin(meta, { now = Date.now() } = {}) {
   if (!meta || !meta.id) return '';
   if (meta.kind === 'audio') return buildVoiceNoteStandin(meta, { now });
+  const isVideo = meta.kind === 'video';
   const slug = meta.slugs?.[0] ?? meta.id;
   let body;
   if (meta.description && typeof meta.description.text === 'string' && meta.description.text.trim()) {
-    body = `what I saw when I looked: ${meta.description.text.trim()}`;
+    body = `${isVideo ? 'what I saw when I watched' : 'what I saw when I looked'}: ${meta.description.text.trim()}`;
   } else if (meta.description === null) {
-    body = "I haven't looked at this one yet";
+    body = isVideo ? "I haven't watched this one yet" : "I haven't looked at this one yet";
   } else {
-    body = 'I have no way to look at images right now';
+    body = isVideo ? 'I have no way to watch videos right now' : 'I have no way to look at images right now';
   }
   // Named node links (picture→node, §6.5) ride in the stand-in so the Familiar
   // reads WHO/WHAT an image depicts — continuity across everything it's seen of
@@ -559,7 +586,7 @@ export function buildStandin(meta, { now = Date.now() } = {}) {
   // Delimiter after the id stays `: ` — the whole codebase (view_image's tool
   // description, the "no longer available" forms, tool-surfacing) reads the
   // marker as `[image <id>: …]`; only the BODY prose carries the reframing.
-  return `[image ${slug}: ${body}${linkPart} — ${sharedByPhrase(meta)}${whenPart}]`;
+  return `[${isVideo ? 'video' : 'image'} ${slug}: ${body}${linkPart} — ${sharedByPhrase(meta)}${whenPart}]`;
 }
 
 /**
