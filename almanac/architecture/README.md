@@ -193,6 +193,8 @@ If you're asking yourself... go to:
   not others.
 - [Session memorization](session-memorization) — the durable job queue that turns a session or
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
+- [Data ingestion](data-ingestion) — importing conversation logs from other platforms and
+  formats (ChatGPT, SillyTavern, OpenClaw, timestamped text) into the memorization pipeline.
 - [Tomes and keyword lore](tomes-and-lore) — the keyword-activation engine shared by web and
   Discord, the live tome-macro boundary, and the self-documenting Familiar Manual tome.
 - [Unruh](unruh) — the temporal-context specialist: the schedule graph, the interest weight
