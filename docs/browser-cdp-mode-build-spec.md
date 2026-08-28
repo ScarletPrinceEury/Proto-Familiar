@@ -1,12 +1,20 @@
 # Browser CDP mode — driving the ward's own logged-in Chrome (§9 Horizon #2)
 
-> **STATUS: PARKED (design accepted, deferred). No code yet.** The ward reviewed
-> this design and chose to **spec-and-park** it: the owned-profile browser
-> (Passes 1–4 + page watches) has only just entered real use, and CDP mode — like
-> the Horizon #3 task-flows — should wait until the cheaper modes are proven in
-> practice. The design below is settled and ready to build when the ward decides;
-> the three load-bearing decisions in §7 are **answered** (recorded inline). Do
-> not start implementation without a fresh ward go-ahead.
+> **STATUS: BUILT (0.11.31-alpha), pending desktop shakeout.** The ward gave the
+> fresh go-ahead and this shipped to spec: `browser-cdp-arm.js` (the arm gate),
+> the `ensureContext` CDP branch driving a dedicated tab in the ward's Chrome,
+> the disconnect-never-close teardown invariant, the forced single-domain
+> allowlist, arm-expiry→owned-profile drop with the RULE-B note, the
+> `/api/browser/cdp-arm|cdp-disarm` endpoints, the Settings arm surface,
+> `cdpModeEnabled` (default OFF) + `PROTO_FAMILIAR_BROWSER_CDP_DISABLED=1`.
+> **The arm-gate logic is fully unit-tested** (`tests/browser-cdp-arm.test.mjs`:
+> domain normalisation, private/loopback refusal, the single-domain allowlist,
+> expiry + the one-shot note, disarm, env hard-disable). **The live CDP attach +
+> real-Chrome drive still needs a ward desktop shakeout** (§8 — it cannot run in
+> headless CI, same posture as the headed-handoff hand-back): launch Chrome with
+> `--remote-debugging-port=9222`, arm a domain in Settings, and confirm the
+> Familiar drives that tab and that disarm/expiry/`browse_close` leave your
+> Chrome and its other tabs untouched.
 >
 > This is the highest-stakes variant in the whole browser milestone: the blast
 > radius is the ward's *authenticated life* (email, bank, socials — every site

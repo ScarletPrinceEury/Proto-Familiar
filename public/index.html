@@ -179,6 +179,27 @@
                 <input type="password" id="reddit-password" autocomplete="off">
               <p class="field-hint hint-keep">Stored in your own settings on this machine. If you'd rather not keep the password here, set the <code>PROTO_FAMILIAR_REDDIT_*</code> environment variables instead — they take precedence.</p>
             </details>
+            <details class="field" id="cdp-settings" style="margin-top:10px">
+              <summary>Drive my own Chrome (advanced)</summary>
+              <div class="field-row" style="margin-top:8px">
+                <label for="cdp-mode-enabled">Allow driving my own Chrome</label>
+                <input type="checkbox" id="cdp-mode-enabled">
+              </div>
+              <p class="field-hint hint-keep">For a site you're logged into, your Familiar can drive <strong>your own Chrome</strong> instead of its logged-out browser — the natural way past login walls and sites that block automation. This is the highest-trust browser mode: while armed, it acts inside the browser holding your real logins. It stays <strong>inert</strong> until BOTH are true: (1) you launched Chrome yourself with <code>--remote-debugging-port=9222</code>, and (2) you arm it below for one site, briefly. Your Familiar can ask for an arm; it can never arm itself.</p>
+              <div class="field-row" style="margin-top:8px">
+                <input type="text" id="cdp-arm-domain" placeholder="github.com" autocomplete="off" style="flex:1">
+                <select id="cdp-arm-minutes" class="ke-select" style="max-width:120px">
+                  <option value="15">15 min</option>
+                  <option value="30">30 min</option>
+                  <option value="60">60 min</option>
+                </select>
+              </div>
+              <div class="field-actions">
+                <button class="btn-secondary" id="cdp-arm-btn" type="button">Arm for this site</button>
+                <button class="btn-ghost" id="cdp-disarm-btn" type="button">Disarm</button>
+              </div>
+              <p class="field-hint" id="cdp-arm-status" aria-live="polite">Not armed.</p>
+            </details>
           </div>
         </div>
 
