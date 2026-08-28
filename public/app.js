@@ -2758,23 +2758,47 @@ async function uploadImage(file) {
   return res.json();
 }
 
+const VIDEO_MAX_BYTES_CLIENT = 20 * 1024 * 1024;   // mirrors media.js VIDEO_MAX_BYTES (inline cap)
+
+async function uploadVideo(file) {
+  if (file.size > VIDEO_MAX_BYTES_CLIENT) {
+    throw new Error('that clip is over ~20 MB — too big to send inline for now (short clips only)');
+  }
+  const label = (file.name && !/^(video|clipboard)\.?\w*$/i.test(file.name)) ? file.name : '';
+  const qs = new URLSearchParams();
+  if (label) qs.set('label', label);
+  if (state.sessionId) qs.set('sessionId', state.sessionId);
+  const res = await fetch(`/api/media${qs.toString() ? `?${qs}` : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type },
+    body: file,   // video rides raw — no canvas downscale
+  });
+  if (!res.ok) {
+    let msg = `upload failed (${res.status})`;
+    try { msg = (await res.json())?.error || msg; } catch { /* keep */ }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 async function addPendingImages(fileList) {
   if (!visionActive()) return;
   state.pendingAttachments ||= [];
-  const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+  const files = Array.from(fileList || []).filter(f => f && f.type && (f.type.startsWith('image/') || f.type.startsWith('video/')));
   for (const file of files) {
     if (state.pendingAttachments.length >= VISION_MAX_PER_MESSAGE) {
-      appendErrorMessage(`I can hold up to ${VISION_MAX_PER_MESSAGE} images per message.`);
+      appendErrorMessage(`I can hold up to ${VISION_MAX_PER_MESSAGE} items per message.`);
       break;
     }
+    const isVideo = file.type.startsWith('video/');
     try {
-      const meta = await uploadImage(file);
+      const meta = isVideo ? await uploadVideo(file) : await uploadImage(file);
       if (meta?.id) {
-        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id });
+        state.pendingAttachments.push({ id: meta.slugs?.[0] || meta.id, sha: meta.id, kind: meta.kind || (isVideo ? 'video' : 'image') });
         renderAttachStrip();
       }
     } catch (err) {
-      appendErrorMessage(`Couldn't attach that image: ${err.message}`);
+      appendErrorMessage(`Couldn't attach that ${isVideo ? 'video' : 'image'}: ${err.message}`);
     }
   }
 }
@@ -2800,9 +2824,11 @@ function renderAttachStrip() {
     if (a.kind === 'audio') { strip.appendChild(renderVoiceChip(a)); continue; }
     const chip = document.createElement('div');
     chip.className = 'attach-chip';
-    const img = document.createElement('img');
+    const isVideo = a.kind === 'video';
+    const img = document.createElement(isVideo ? 'video' : 'img');
     img.src = `/api/media/${encodeURIComponent(a.id)}`;
-    img.alt = 'pending image';
+    if (isVideo) { img.muted = true; img.setAttribute('playsinline', ''); img.preload = 'metadata'; }
+    else img.alt = 'pending image';
     const rm = document.createElement('button');
     rm.type = 'button';
     rm.className = 'attach-chip-remove';

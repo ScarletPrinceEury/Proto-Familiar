@@ -2750,10 +2750,10 @@ function visionThreatScoringOn() {
 // store: same content-addressing, same audience tag, same slug ids. What
 // differs is which consent governs them — seeing vs hearing — so the gate is
 // picked from the kind rather than assumed.
-app.post('/api/media', express.raw({ type: ['image/*', 'audio/*'], limit: '30mb' }), async (req, res) => {
+app.post('/api/media', express.raw({ type: ['image/*', 'audio/*', 'video/*'], limit: '30mb' }), async (req, res) => {
   const buffer = req.body;
   if (!Buffer.isBuffer(buffer) || !buffer.length) {
-    return res.status(400).json({ error: 'No bytes received (send a raw image/* or audio/* body).' });
+    return res.status(400).json({ error: 'No bytes received (send a raw image/*, audio/*, or video/* body).' });
   }
   const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
   const kind = mediaKindFor(mime);

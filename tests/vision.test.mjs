@@ -59,6 +59,67 @@ test('looksVisionCapable: recognises vision families, rejects their text-only si
   }
 });
 
+// ── Video (the vision patch) ──────────────────────────────────────
+import { looksVideoCapable, resolveVideoCapable } from '../vision.js';
+let _vseq = 5000;
+async function mkVideo(label = 'clip', over = {}) {
+  const b = Buffer.from(`fake-video-bytes-${_vseq++}`);   // unique bytes → unique sha
+  const m = await saveAsset({ buffer: b, mime: 'video/mp4', label, ...over });
+  created.push(m.id);
+  return m;
+}
+
+test('looksVideoCapable: TIGHT — Gemini/Qwen-VL yes; images-only VLMs and text no', () => {
+  for (const m of ['gemini-2.0-flash', 'gemini-1.5-pro', 'qwen2.5-vl-72b', 'qwen3-vl-plus', 'some-video-model']) {
+    assert.equal(looksVideoCapable('p', m), true, `${m} should read as video-capable`);
+  }
+  for (const m of ['glm-4.6v', 'pixtral-12b', 'llava-1.6', 'gpt-4o', 'claude-opus-4-8', 'glm-4.6', '']) {
+    assert.equal(looksVideoCapable('p', m), false, `${m} must NOT read as video-capable (image-vision ≠ video)`);
+  }
+});
+
+test("resolveVideoCapable: ward 'yes'/'no' win; auto follows the tight heuristic; off-switch forces false", async () => {
+  assert.equal(await resolveVideoCapable({ videoCapable: 'yes', model: 'glm-4.6' }, {}), true);
+  assert.equal(await resolveVideoCapable({ videoCapable: 'no', model: 'gemini-2.0-flash' }, {}), false);
+  assert.equal(await resolveVideoCapable({ provider: 'google', model: 'gemini-1.5-pro' }, {}), true);
+  assert.equal(await resolveVideoCapable({ provider: 'p', model: 'gpt-4o' }, {}), false);
+  process.env.PROTO_FAMILIAR_VIDEO_DISABLED = '1';
+  try { assert.equal(await resolveVideoCapable({ videoCapable: 'yes', model: 'gemini-1.5-pro' }, {}), false); }
+  finally { delete process.env.PROTO_FAMILIAR_VIDEO_DISABLED; }
+});
+
+test('materialize: a video-capable connection gets a video_url part', async () => {
+  const v = await mkVideo('demo');
+  const msgs = [{ role: 'user', content: 'watch this', attachments: [{ id: v.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.videosLive, 1);
+  const parts = r.messages[0].content;
+  assert.ok(Array.isArray(parts));
+  const vp = parts.find(p => p.type === 'video_url');
+  assert.ok(vp && /^data:video\/mp4;base64,/.test(vp.video_url.url), 'a data: video_url part is emitted');
+});
+
+test('materialize: a non-video model stands the clip in (no video_url), with the don\'t-invent guard', async () => {
+  const v = await mkVideo('demo2');
+  const msgs = [{ role: 'user', content: 'watch this', attachments: [{ id: v.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'p', model: 'gpt-4o' }, settings: {} });
+  assert.equal(r.videosLive, 0);
+  assert.equal(r.videosStoodIn, 1);
+  assert.equal(typeof r.messages[0].content, 'string');
+  assert.match(r.messages[0].content, /\[video [^\]]+\]/);
+  // A blind video stand-in raises the confabulation guard system line.
+  assert.ok(r.messages.some(m => m.role === 'system' && /never do that|can't see it/i.test(m.content) || /can't watch/i.test(m.content)));
+});
+
+test('materialize: video budget is newest-first (only the newest rides live)', async () => {
+  const a = await mkVideo('older');
+  const b = await mkVideo('newer');
+  const msgs = [{ role: 'user', content: 'two clips', attachments: [{ id: a.id }, { id: b.id }] }];
+  const r = await materializeAttachments(msgs, { connection: { provider: 'google', model: 'gemini-1.5-pro' }, settings: {} });
+  assert.equal(r.videosLive, 1);       // DEFAULT_MAX_LIVE_VIDEOS
+  assert.equal(r.videosStoodIn, 1);
+});
+
 test('a z.ai-coding connection is NOT live-capable (chat cannot see) but IS chosen for describe', async () => {
   // Live capability: coding chat models can't take image_url → false, so the
   // materializer stands images in rather than sending them live.
