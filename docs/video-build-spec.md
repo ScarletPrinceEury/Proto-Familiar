@@ -54,6 +54,20 @@ to inline). The Auto heuristic recognises the families we know by name; for a
 NanoGPT model (or any provider whose model name doesn't encode modality) the ward
 flips the connection's "Can watch video?" to **Yes** and the inline part is sent.
 
+**GLM video contract — verified against docs (0.11.37).** Checked z.ai's API
+reference (`docs.z.ai/api-reference/llm/chat-completion`) AND the MetaGLM cookbook
+(`glm-cookbook/vision/glm-v_for_video_understanding.ipynb`): GLM's video part is
+`{type:'video_url', video_url:{url:<base64>}}` — the SAME `type`/field the
+materializer emits, and base64 IS accepted (z.ai's video size limit is 200 MB,
+well above our 20 MB inline cap). **One residual to confirm on a live GLM
+shakeout:** the cookbook passes *raw* base64, while the materializer sends a
+`data:video/mp4;base64,…` **data-URL** (the form z.ai's docs explicitly accept for
+IMAGES on the same OpenAI-compat gateway, so its video parallel almost certainly
+normalizes it too — but this is the one untested detail, and the likeliest suspect
+if a GLM video turn returns empty). Because GLM allows 200 MB but our inline cap is
+20 MB, a 20–200 MB GLM clip is not reachable yet (the "Watch full clip" File-API
+path is Gemini-only) — a documented follow-up, not a bug.
+
 ## 3. Known gaps (v1)
 
 - **No video-describe.** `describeAsset` is image-only; a stood-in video carries
