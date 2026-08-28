@@ -2665,6 +2665,31 @@ app.post('/api/browser/confirm', async (req, res) => {
   }
 });
 
+// CDP mode arm/disarm (docs/browser-cdp-mode-build-spec.md §3). The ward arms a
+// scoped, time-boxed grant to let the Familiar drive their OWN logged-in Chrome.
+// This is a WARD action by construction — the model has no tool to arm; arming
+// only through this endpoint is the second of the two human gates.
+app.post('/api/browser/cdp-arm', async (req, res) => {
+  if (process.env.PROTO_FAMILIAR_BROWSER_CDP_DISABLED === '1') return res.status(403).json({ ok: false, error: 'CDP mode is turned off by env.' });
+  const s = (() => { try { return readSettingsSync(); } catch { return {}; } })();
+  if (s?.cdpModeEnabled !== true) return res.status(403).json({ ok: false, error: 'Turn on “Drive my own Chrome (CDP)” in Settings first.' });
+  try {
+    const { armCdp } = await import('./browser-cdp-arm.js');
+    const r = armCdp({ domain: req.body?.domain, minutes: req.body?.minutes });
+    res.status(r.ok ? 200 : 400).json(r);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+app.post('/api/browser/cdp-disarm', async (_req, res) => {
+  try {
+    const { disarmCdp } = await import('./browser-cdp-arm.js');
+    res.json(disarmCdp('ward'));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
 // The ward's "hand it back" after a headed handoff (§4.8) — close the window,
 // relaunch headless at the same URL, now signed in.
 app.post('/api/browser/handback', async (_req, res) => {

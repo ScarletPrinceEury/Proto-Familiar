@@ -298,6 +298,7 @@ const state = {
   redditClientSecret:      '',
   redditUsername:          '',
   redditPassword:          '',
+  cdpModeEnabled:          false,    // allow driving the ward's own Chrome over CDP (default OFF; inert without an arm)
   // Context-sensitive tool surfacing (default OFF until behaviorally tested):
   // only core + triggered tool modules are advertised per turn; the Familiar
   // pulls anything else via request_tools. Sticky = extra turns a surfaced
@@ -514,6 +515,7 @@ const SERVER_SYNCED_KEYS = [
   'intentionStandingPerPhase', 'intentionOpenOneShots',
   'memorySweepEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
+  'cdpModeEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
@@ -4001,6 +4003,7 @@ function readSettingsFromUI() {
   if ($('reddit-client-secret')) state.redditClientSecret = $('reddit-client-secret').value.trim();
   if ($('reddit-username'))       state.redditUsername    = $('reddit-username').value.trim();
   if ($('reddit-password'))       state.redditPassword    = $('reddit-password').value;
+  if ($('cdp-mode-enabled'))      state.cdpModeEnabled    = $('cdp-mode-enabled').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4193,6 +4196,7 @@ function writeSettingsToUI() {
   if ($('reddit-client-secret')) setIfNotFocused($('reddit-client-secret'), 'value', state.redditClientSecret || '');
   if ($('reddit-username'))       setIfNotFocused($('reddit-username'),      'value', state.redditUsername || '');
   if ($('reddit-password'))       setIfNotFocused($('reddit-password'),      'value', state.redditPassword || '');
+  if ($('cdp-mode-enabled'))      setIfNotFocused($('cdp-mode-enabled'),     'checked', state.cdpModeEnabled === true);
   { const m = state.browseSiteMode || 'open'; const show = m !== 'open';
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
@@ -5582,6 +5586,7 @@ function init() {
     'tome-graduation-toggle', 'tome-graduation-tidy', 'needs-tracking-toggle',
     'notif-sound-toggle',
     'reddit-reader-enabled', 'reddit-user-agent', 'reddit-client-id', 'reddit-client-secret', 'reddit-username', 'reddit-password',
+    'cdp-mode-enabled',
     'gcal-toggle', 'gcal-ical-url', 'gcal-interval',
     'gcal-source', 'gcal-cli-command', 'gcal-cli-format', 'gcal-lookahead',
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
@@ -5683,6 +5688,36 @@ function init() {
     } catch { pre.textContent = "Couldn't load browser activity."; }
   }
   $('browse-activity-btn')?.addEventListener('click', renderBrowserActivity);
+
+  // CDP mode: arm/disarm the ward's own Chrome for one site, briefly. Arming is
+  // a WARD action (this button) — never something the Familiar can do.
+  async function refreshCdpArmStatus() {
+    const el = $('cdp-arm-status'); if (!el) return;
+    try {
+      const st = await (await fetch('/api/browser/status')).json();
+      const c = st?.cdp;
+      if (c?.armed) {
+        const mins = Math.max(0, Math.round((c.remainingMs || 0) / 60000));
+        el.textContent = `Armed on ${c.domain} — ~${mins} min left${st.mode === 'cdp' ? ', connected now' : ''}.`;
+      } else {
+        el.textContent = 'Not armed.';
+      }
+    } catch { el.textContent = 'Not armed.'; }
+  }
+  $('cdp-arm-btn')?.addEventListener('click', async () => {
+    const domain = ($('cdp-arm-domain')?.value || '').trim();
+    const minutes = Number($('cdp-arm-minutes')?.value || 15);
+    if (!domain) { $('cdp-arm-status').textContent = 'Enter a site to arm (e.g. github.com).'; return; }
+    try {
+      const r = await (await fetch('/api/browser/cdp-arm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain, minutes }) })).json();
+      $('cdp-arm-status').textContent = r?.ok ? `Armed on ${r.domain} for ${r.minutes} min.` : (r?.error || 'Could not arm.');
+    } catch { $('cdp-arm-status').textContent = 'Could not reach the server to arm.'; }
+  });
+  $('cdp-disarm-btn')?.addEventListener('click', async () => {
+    try { await fetch('/api/browser/cdp-disarm', { method: 'POST' }); } catch {}
+    refreshCdpArmStatus();
+  });
+  $('cdp-settings')?.addEventListener('toggle', (e) => { if (e.target.open) refreshCdpArmStatus(); });
 
   // Provider change → refresh model suggestions and set sane default. Also
   // auto-fill the API key field from any saved connection using the same

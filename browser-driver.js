@@ -27,6 +27,7 @@ import { spawn } from 'node:child_process';
 import { createGuardedProxy } from './browser-proxy.js';
 import { buildRefTable, evaluateFill, resolveTarget } from './browser-lens.js';
 import { readGrants } from './browser-grants.js';
+import { cdpArmActive, cdpArmState, consumeCdpExpiryNote, armAllowsHost, CDP_ENDPOINT } from './browser-cdp-arm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_DIR = path.join(__dirname, 'browser', 'profile');
@@ -196,9 +197,35 @@ function armIdle(idleMs) {
 }
 
 /** Lazy-launch (or reuse) the persistent context, wired through the guarded proxy. */
+// One-shot note handed to the tool layer when an arm lapsed mid-task and we
+// dropped back to the owned profile (RULE B — the Familiar always knows what it
+// is actually driving; §5 of the CDP spec).
+let _cdpDropNote = null;
+export function consumeCdpDropNote() { const n = _cdpDropNote; _cdpDropNote = null; return n; }
+
+/** Which engine is live: for the audit stamp (§5.6) and status. */
+export function engineMode() {
+  if (!state) return { mode: 'none' };
+  return state.cdp ? { mode: 'cdp', domain: state.armDomain || null } : { mode: 'owned' };
+}
+
 export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_MAX_TABS_DEFAULT, lookupFn, siteGuard } = {}) {
   if (handoff) throw new Error('awaiting handback');   // the ward's headed window holds the profile
-  if (state?.context) { if (siteGuard) state.siteGuard = siteGuard; armIdle(idleMs); return state; }
+
+  const wantCdp = cdpArmActive();
+  // Mode changed under a live context (arm activated, or expired/disarmed mid-
+  // session): tear the current one down SAFELY (closeBrowser branches on mode —
+  // CDP disconnects, never closes the ward's browser) before re-establishing.
+  if (state?.context && !!state.cdp !== wantCdp) {
+    await closeBrowser(wantCdp ? 'arm-activated' : 'arm-ended');
+    if (!wantCdp && consumeCdpExpiryNote()) {
+      _cdpDropNote = 'My arm on your Chrome lapsed, so I\'m back on my own browser now — logged out. Anything that needed your login won\'t work until you arm it again.';
+    }
+  }
+
+  if (state?.context) { if (siteGuard && !state.cdp) state.siteGuard = siteGuard; armIdle(idleMs); return state; }
+
+  if (wantCdp) return ensureCdpContext({ idleMs, maxTabs });
 
   const exe = findChromium();
   if (!exe) {
@@ -271,6 +298,66 @@ export async function ensureContext({ idleMs = 5 * 60 * 1000, maxTabs = BROWSE_M
   const active = readGrants().active;
   if (active.length) console.warn(`[browser] ⚠ AUTONOMY GRANTS ACTIVE: ${active.join(', ')} (browser/autonomy-grants.json)`);
 
+  return state;
+}
+
+/**
+ * Attach to the ward's OWN running Chrome over CDP (loopback only) and drive a
+ * DEDICATED tab we open on the armed domain. The SSRF launch-proxy floor is gone
+ * here (we didn't launch the browser), so the network gate degrades to a
+ * per-tab URL allowlist == the armed domain (`armAllowsHost`, fail-closed). We
+ * NEVER touch the ward's other tabs, and teardown DISCONNECTS — never closes
+ * their browser (closeBrowser's cdp branch). See docs/browser-cdp-mode-build-spec.md.
+ */
+async function ensureCdpContext({ idleMs, maxTabs }) {
+  let chromium;
+  try { ({ chromium } = await import('playwright-core')); }
+  catch { throw new Error('playwright-core is not installed'); }
+
+  // Loopback only, always. A non-loopback endpoint would be a remote-control
+  // surface of its own — refuse it in code even though CDP_ENDPOINT is a const.
+  let host;
+  try { host = new URL(CDP_ENDPOINT).hostname; } catch { host = ''; }
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+    throw new Error('CDP endpoint must be loopback');
+  }
+
+  let browser;
+  try { browser = await chromium.connectOverCDP(CDP_ENDPOINT); }
+  catch (err) {
+    throw new Error(`I couldn't attach to your Chrome — is it running with --remote-debugging-port=9222? (${String(err.message).split('\n')[0]})`);
+  }
+  const context = browser.contexts()[0];
+  if (!context) { try { await browser.close(); } catch {} throw new Error('your Chrome exposed no context over CDP'); }
+
+  const armDomain = cdpArmState().domain || null;
+  let pg;
+  try { pg = await context.newPage(); }
+  catch (err) { try { await browser.close(); } catch {} throw new Error(`couldn't open a tab in your Chrome: ${String(err.message).split('\n')[0]}`); }
+
+  // The whole network floor under CDP: this tab may only talk to the armed
+  // domain (host or subdomain). Off-domain — every private/loopback literal
+  // included, since none can match a public armed domain — is aborted.
+  try {
+    await pg.route('**/*', (route) => {
+      let h = '';
+      try { h = new URL(route.request().url()).hostname; } catch {}
+      if (!armAllowsHost(h)) { if (state) state.blockedCdpReq = (state.blockedCdpReq || 0) + 1; return route.abort('blockedbyclient'); }
+      return route.continue();
+    });
+  } catch { /* if routing can't install, the page below still can't leave the armed domain via nav guard */ }
+
+  context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  context.setDefaultTimeout(ACT_TIMEOUT_MS);
+
+  state = {
+    context, cdp: true, cdpBrowser: browser, cdpPage: pg, armDomain,
+    tabs: new Map(), idleTimer: null, launchedAt: Date.now(), crashes: [],
+    maxTabs, idleMs, pendingConfirms: new Map(),
+  };
+  registerTab(pg);
+  armIdle(idleMs);
+  console.warn(`[browser] ⚠ CDP MODE ACTIVE — driving your Chrome, scoped to ${armDomain} (${cdpArmState().remainingMs ? Math.round(cdpArmState().remainingMs / 60000) + ' min left' : 'expiring'})`);
   return state;
 }
 
@@ -764,6 +851,15 @@ export async function closeBrowser(reason = 'close') {
   if (!state) return { ok: true };
   clearIdle();
   const s = state; state = null;
+  if (s.cdp) {
+    // HARD INVARIANT (CDP spec §5): NEVER close the ward's context/browser — that
+    // would kill their real Chrome and every tab they had open. Close ONLY our
+    // own dedicated tab, then disconnect the CDP session. For a connectOverCDP
+    // handle, browser.close() detaches the connection; it does NOT quit Chrome.
+    try { await s.cdpPage?.close(); } catch {}
+    try { await s.cdpBrowser?.close(); } catch {}
+    return { ok: true, reason, mode: 'cdp' };
+  }
   try { await s.context.close(); } catch {}
   try { await s.proxy.close(); } catch {}
   return { ok: true, reason };
@@ -871,5 +967,7 @@ export function status() {
     install: chromiumInstallState(),
     awaitingHandback: !!handoff,
     handoffUrl: handoff?.url ?? null,
+    mode: state?.cdp ? 'cdp' : (state ? 'owned' : null),
+    cdp: cdpArmState(),
   };
 }

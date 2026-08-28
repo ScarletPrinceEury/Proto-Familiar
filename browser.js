@@ -35,6 +35,12 @@ export function browseEnabled(settings) {
   return settings?.browseEnabled === true; // default OFF
 }
 
+/** The engine mode ({mode:'cdp',domain} | {mode:'owned'}) for the audit stamp. */
+function engineMode() { try { return driver.engineMode?.() || { mode: 'owned' }; } catch { return { mode: 'owned' }; } }
+/** One-shot "the arm lapsed" note, prepended to the next tool result (RULE B). */
+function cdpDropNote() { try { return driver.consumeCdpDropNote?.() || ''; } catch { return ''; } }
+function withDropNote(text) { const n = cdpDropNote(); return n ? `${n}\n\n${text}` : text; }
+
 /**
  * A lighter, reader-friendly mirror of a URL, when a well-known one exists.
  * Currently Reddit's front-end hosts (www/new/np/amp/m) → old.reddit.com:
@@ -130,8 +136,9 @@ export async function browseOpen({ url, reader = false } = {}, { settings, sessi
     const { pageData } = await driver.navigate(target, opts(settings));
     const { text } = renderSnapshot(pageData, { level: 'outline' });
     const note = mirror ? 'I opened the lighter old.reddit.com reader mirror for this.\n\n' : '';
-    const out = note + frame(text);
-    logBrowserAction({ tool: 'browse_open', target, verdict: `opened ${pageData.url}${mirror ? ' (reader mirror)' : ''}`, sessionId });
+    const out = withDropNote(note + frame(text));
+    const em = engineMode();
+    logBrowserAction({ tool: 'browse_open', target, verdict: `opened ${pageData.url}${mirror ? ' (reader mirror)' : ''}`, sessionId, mode: em.mode, cdpDomain: em.domain || undefined });
     return out;
   } catch (err) {
     logBrowserAction({ tool: 'browse_open', target, verdict: `failed: ${err.message}`, sessionId });
@@ -204,8 +211,9 @@ export async function browseAct({ ref, target, role, action, value, on_dialog, v
         verdict += `\n  downloaded "${dl.name}" — not a type I keep (only documents/images/audio)`;
       }
     }
-    logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict, sessionId, grant: res.grantUsed || null });
-    return sanitizeExternal(verdict, { source: 'web', context: 'browser' });
+    const em = engineMode();
+    logBrowserAction({ tool: 'browse_act', target: `${action} ${ref}`, verdict, sessionId, grant: res.grantUsed || null, mode: em.mode, cdpDomain: em.domain || undefined });
+    return withDropNote(sanitizeExternal(verdict, { source: 'web', context: 'browser' }));
   } catch (err) {
     return degrade(err, `I couldn't ${action} ${ref}`);
   }
