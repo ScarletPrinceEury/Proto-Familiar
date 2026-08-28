@@ -2780,6 +2780,38 @@ app.post('/api/media', express.raw({ type: ['image/*', 'audio/*', 'video/*'], li
 
 // Stream bytes for a UI thumbnail (accepts slug or sha). Behind the same
 // loopback/Tailscale gate as every endpoint.
+// Long-video understanding via the Gemini File API (docs/video-build-spec.md §4).
+// ISOLATED from /api/chat: a single native generateContent call over an uploaded
+// clip, default-OFF, ward-only (web). Any failure → {ok:false} and the ward is
+// told; it never falls into the chat path.
+app.post('/api/video-understand', express.json({ limit: '256kb' }), async (req, res) => {
+  if (process.env.PROTO_FAMILIAR_VIDEO_DISABLED === '1') return res.status(403).json({ ok: false, error: 'Video is turned off.' });
+  const s = (() => { try { return readSettingsSync() || {}; } catch { return {}; } })();
+  if (s.videoFileApiEnabled !== true) {
+    return res.status(403).json({ ok: false, error: 'Long clips are off — turn on “Send longer clips to Gemini (File API)” in Settings first.' });
+  }
+  const { assetId, prompt, provider, model, apiKey } = req.body || {};
+  try {
+    const gm = await import('./gemini-file-api.js');
+    if (!gm.isGeminiVideoProvider(provider, model)) {
+      return res.status(400).json({ ok: false, error: 'Longer clips go through Gemini — pick a Google Gemini connection for this.' });
+    }
+    if (!apiKey) return res.status(400).json({ ok: false, error: 'That connection has no API key.' });
+    let asset = null;
+    try { asset = await getAsset(assetId); } catch { asset = null; }
+    if (!asset?.buffer || asset?.meta?.kind !== 'video') return res.status(404).json({ ok: false, error: 'I don\'t have that video.' });
+    const r = await gm.answerAboutVideo({
+      buffer: asset.buffer, mime: asset.meta.mime, displayName: asset.meta.slugs?.[0] || 'clip',
+      model, apiKey,
+      prompt: (typeof prompt === 'string' && prompt.trim()) ? prompt : 'Please watch this video and tell me what happens in it.',
+    });
+    if (r.ok) return res.json({ ok: true, text: r.text });
+    return res.json({ ok: false, error: `I couldn't watch that clip: ${r.error}` });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+  }
+});
+
 app.get('/api/media/:id', async (req, res) => {
   const got = await getAsset(req.params.id);
   if (got?.ok === false) return res.status(404).json({ error: 'Not found.' });

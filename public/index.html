@@ -179,6 +179,11 @@
                 <input type="password" id="reddit-password" autocomplete="off">
               <p class="field-hint hint-keep">Stored in your own settings on this machine. If you'd rather not keep the password here, set the <code>PROTO_FAMILIAR_REDDIT_*</code> environment variables instead — they take precedence.</p>
             </details>
+            <div class="field-row" style="margin-top:10px">
+              <label for="video-fileapi-enabled">Send longer clips to Gemini (File API)</label>
+              <input type="checkbox" id="video-fileapi-enabled">
+            </div>
+            <p class="field-hint">Short video clips ride inline to any video-capable model. LONGER clips (past ~20&nbsp;seconds) need Google's upload path — turn this on and, on a pending video, use “🎬 Watch full clip” to have your Gemini connection watch the whole thing. Needs a Google Gemini connection.</p>
             <details class="field" id="cdp-settings" style="margin-top:10px">
               <summary>Drive my own Chrome (advanced)</summary>
               <div class="field-row" style="margin-top:8px">

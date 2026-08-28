@@ -24,7 +24,7 @@
 import path from 'path';
 import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
-import { getAsset, getAssetMeta, setAssetDescription, buildStandin } from './media.js';
+import { getAsset, getAssetMeta, setAssetDescription, buildStandin, VIDEO_MAX_BYTES } from './media.js';
 import { shortSlug } from './slug-ids.js';
 import { callProviderChat } from './llm-call.js';
 import { connectionForFeature, primaryConnectionFrom } from './cerebellum.js';
@@ -183,6 +183,8 @@ export function looksVideoCapable(provider, model) {
   return [
     /gemini/,                                   // Gemini is natively multimodal incl. video
     /qwen.*-vl/, /qwen\d[.\d]*-?vl/, /qwenvl/,   // Qwen-VL accepts video
+    /glm-?5[.\d]*-?flash/,                        // GLM 5.3 Flash (ward-confirmed video). NB: GLM-V
+                                                 // image models (glm-4.6v) are image-only — not here.
     /\bvideo\b/, /-video/,                       // a model that names video explicitly
   ].some((re) => re.test(m));
 }
@@ -271,7 +273,12 @@ export async function materializeAttachments(apiMessages, {
   const liveVideoIds = new Set();
   if (videoCapable && videoBudget > 0) {
     for (let i = refs.length - 1; i >= 0 && liveVideoIds.size < videoBudget; i--) {
-      if (refs[i].meta?.kind === 'video') liveVideoIds.add(`${refs[i].mi}:${refs[i].id}`);
+      // Only clips small enough to inline as base64 ride live here; a bigger one
+      // stands in and is sent via the File-API path (docs/video-build-spec.md §4).
+      const m = refs[i].meta;
+      if (m?.kind === 'video' && Number.isFinite(m.bytes) && m.bytes <= VIDEO_MAX_BYTES) {
+        liveVideoIds.add(`${refs[i].mi}:${refs[i].id}`);
+      }
     }
   }
 
