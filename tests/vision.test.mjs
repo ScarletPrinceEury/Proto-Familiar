@@ -341,6 +341,33 @@ test('describeAsset returns a reason (not a throw) when no connection can see', 
   assert.equal((await getAssetMeta(m.id)).description, null);   // stays null (retry later)
 });
 
+test('describeAsset refuses a video without calling the describer (the coding-plan 400)', async () => {
+  const v = await mkVideo('a short clip');
+  let calls = 0;
+  const fetchFn = async () => { calls++; return okCompletion('should never run'); };
+  const settings = { connections: [{ id: 'v', provider: 'zai', model: 'x', apiKey: 'k', visionCapable: 'yes' }], primaryConnectionId: 'v' };
+  const r = await describeAsset(v.id, settings, { fetchFn });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not-image');
+  assert.equal(calls, 0);                              // never reached the image describer
+  assert.equal((await getAssetMeta(v.id)).description, null);
+});
+
+test('ensureDescribed skips a video and only describes the image beside it', async () => {
+  const img = await mk('an image to describe');
+  const vid = await mkVideo('a clip that must be skipped');
+  const settings = { connections: [{ id: 'v', provider: 'zai', model: 'x', apiKey: 'k', visionCapable: 'yes' }], primaryConnectionId: 'v' };
+  let calls = 0;
+  const fetchFn = async () => { calls++; return okCompletion('the image, described'); };
+  const r = await ensureDescribed(
+    [{ attachments: [{ id: img.id }, { id: vid.id }] }],
+    settings, { fetchFn },
+  );
+  assert.equal(r.described, 1);                        // the image only
+  assert.equal(calls, 1);                              // the video never triggered a describe call
+  assert.equal((await getAssetMeta(vid.id)).description, null);
+});
+
 // ── Image → threat scoring (§15.1, ward-signed) ───────────────────
 
 test('scoreImageDescriptionThreat: raises the tier on a distressing description (full weight)', async () => {

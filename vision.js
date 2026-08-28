@@ -472,6 +472,14 @@ export async function describeAsset(idOrSlug, settings = {}, { fetchFn = fetch }
     const meta = await getAssetMeta(idOrSlug);
     if (!meta) return { ok: false, reason: 'not-found' };
     if (meta.description) return meta;   // already described — never regenerate
+    // Describe is IMAGE-ONLY — there is no video (or audio) describe path. A
+    // video's bytes routed to the image analyzer (z.ai's analyze_image, or an
+    // image_url part on a normal provider) is exactly the coding-plan
+    // "HTTP 400 图片输入格式/解析错误" (image parse error) report. Refuse at the
+    // door so NO caller can push a non-image through. A missing kind is a legacy
+    // image asset (describe predates video), so only an explicit non-image is
+    // turned away.
+    if (meta.kind && meta.kind !== 'image') return { ok: false, reason: 'not-image' };
 
     const conn = await resolveVisionConnection(settings);
     if (!conn) {
@@ -560,6 +568,7 @@ export async function ensureDescribed(messages, settings = {}, { fetchFn = fetch
     let meta;
     try { meta = await getAssetMeta(id); } catch { continue; }
     if (!meta || meta.description !== null) continue;   // gone, or already described
+    if (meta.kind && meta.kind !== 'image') continue;   // describe is image-only — a video never rides this path (the coding-plan 400)
     const p = describeAsset(id, settings, { fetchFn });
     let res, timer;
     try {

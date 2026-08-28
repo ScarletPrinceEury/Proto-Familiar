@@ -70,10 +70,26 @@ path is Gemini-only) — a documented follow-up, not a bug.
 
 ## 3. Known gaps (v1)
 
-- **No video-describe.** `describeAsset` is image-only; a stood-in video carries
-  no description (just the marker + the don't-invent guard). A frame-extract →
-  describe path (needs ffmpeg) is future, and closed shadow DOM / frame reading
-  ride the same "needs a media decoder" bucket.
+- **No video-describe — and describe now REFUSES video at the door (0.11.39).**
+  `describeAsset` is image-only; a stood-in video carries no description (just the
+  marker + the don't-invent guard). A frame-extract → describe path (needs ffmpeg)
+  is future, and closed shadow DOM / frame reading ride the same "needs a media
+  decoder" bucket. **The 0.11.39 fix:** `describeAsset` returns `{ok:false,
+  reason:'not-image'}` for any non-image kind BEFORE touching a connection, and
+  `ensureDescribed` skips non-image attachments. Without this, a video shared on a
+  blind connection (text-only, or **z.ai coding plan**) went through the
+  synchronous describe → the image analyzer → **`HTTP 400 图片输入格式/解析错误`**
+  (image parse error). On z.ai coding-plan specifically the analyzer is the
+  `analyze_image` MCP tool (GLM-4.6V) which only takes images; a video's bytes
+  written to a temp file and handed to it is the exact 400 the ward hit on both
+  web and Discord. Regression-tested (proven red without the guard).
+- **The z.ai CODING PLAN cannot watch video at all.** Its chat models take no live
+  media parts (`resolveVideoCapable` returns false for `zai-coding`), and its only
+  vision surface is the image-only `analyze_image` MCP. So a video there stands in
+  as "I haven't watched this one yet" and the Familiar says so honestly — it does
+  NOT confabulate. To actually watch a clip the ward needs a **Gemini** connection
+  (inline ≤20 MB, or the File-API "Watch full clip" path) or a **standard z.ai API**
+  (non-coding) GLM 5.3 Flash connection where `video_url` rides the chat endpoint.
 - **Connection-editor `videoCapable` dropdown — DONE (0.11.36).** A "Can watch
   video?" tri-state (Auto/Yes/No) sits under the vision one in the Connections
   editor, stored on the connection (already synced). This is the robust answer to
