@@ -25,7 +25,7 @@ const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
-export const MANUAL_TOME_VERSION = 2;
+export const MANUAL_TOME_VERSION = 3;
 const SEED_FLAG = '.manual-tome-seeded.json';
 
 let _uidSeq = 0;
@@ -93,6 +93,12 @@ export function buildManualTome() {
     ['discord', 'discord bot', 'connect discord', 'bot token', 'use you on discord', 'add you to a server'],
     `[Manual: Discord] Discord is currently turned {{discordActive}}. To connect me, put a bot token in Settings → Discord and enable it; I then run in DMs and any server channels I'm added to. Per-channel presence modes (reply-only / lurk / chime in) are set in the Locations UI. Ward-only chat commands: \`!queue\` (review pending memories), \`!connection\` (pick my model / routing), \`!call\`/\`!leave\` (voice).`,
     { comment: 'Discord setup' },
+  );
+
+  add(
+    ['same conversation', 'continue on discord', 'pick up where we left off', 'web and discord', 'switch to discord', 'move our chat', 'one conversation', 'unify sessions'],
+    `[Manual: One conversation across surfaces] When "One conversation across web & Discord" is on (Settings), my web chat with {{user}} and our Discord DM are the SAME ongoing session: a message on either surface shows up on the other, and the open web chat pulls in new Discord turns within a few seconds. So we can start on the web and keep going in a DM, or the reverse, without losing the thread. {{user}} can also press "Continue on Discord" on any of our past sessions (Knowledge → Sessions) to make their next DM pick that one up. This only ever covers OUR private conversation — group channels and other people's DMs stay their own separate sessions.`,
+    { comment: 'Unified sessions' },
   );
 
   add(

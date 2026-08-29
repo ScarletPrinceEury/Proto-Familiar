@@ -2419,11 +2419,15 @@ app.get('/api/logs', async (_req, res) => {
       if (!f.endsWith('.json')) continue;
       try {
         const raw = await fsp.readFile(path.join(LOGS_DIR, f), 'utf8');
-        const { sessionId, startedAt, endedAt, updatedAt, provider, model, messages, location, origin } = JSON.parse(raw);
+        const { sessionId, startedAt, endedAt, updatedAt, provider, model, messages, location, origin, audienceTag } = JSON.parse(raw);
         sessions.push({ sessionId, startedAt, endedAt, updatedAt, provider, model,
           location: location ?? null,
           locationLabel: sessionLocationLabel(location, origin),
           platform: location?.platform ?? (origin === 'voice-call' ? 'voice' : 'web'),
+          // Whether this is the ward's own private conversation — gates the
+          // "Continue on Discord" handoff so a villager's session is never bound
+          // as the ward-private pointer. Web sessions have no tag (ward-private).
+          wardPrivate: !audienceTag || audienceTag === 'ward-private',
           messageCount: Array.isArray(messages) ? messages.length : 0 });
       } catch { /* skip corrupt files */ }
     }
