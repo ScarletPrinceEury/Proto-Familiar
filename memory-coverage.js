@@ -59,10 +59,20 @@ async function persist(ledgerFile, ledger) {
 
 /**
  * Mark a (date, session) slice as memorized through `throughCount` messages.
- * `flag` ('shared-room' | 'extract-failed' | null) is sticky once set, so a day
- * touched by a shared room stays "uncertain" until reviewed. Never throws.
+ *
+ * `flag` is now REPLACE-and-clearable, and reserved for genuine UNCERTAINTY
+ * (a failed extraction): `undefined` leaves it untouched, `null` clears it, a
+ * string sets it. A successful run passes `null`, so a slice that once failed
+ * and later succeeds reads complete again — "clear once resolved".
+ *
+ * `sharedRoom` is a separate, sticky, INFORMATIONAL marker ("this day had group
+ * activity"). It does NOT drive status — a fully-memorized group-room day reads
+ * complete, not permanently "uncertain". (The old behaviour flagged every
+ * shared-room slice 'shared-room' forever, turning whole months purple; that
+ * legacy flag is migrated to `sharedRoom` on read here and in computeCoverage.)
+ * Never throws.
  */
-export async function recordSegmentRun({ date, sessionId, throughCount = 0, facts = 0, flag = null }, { ledgerFile = DEFAULT_LEDGER_FILE } = {}) {
+export async function recordSegmentRun({ date, sessionId, throughCount = 0, facts = 0, flag = undefined, sharedRoom = undefined }, { ledgerFile = DEFAULT_LEDGER_FILE } = {}) {
   if (!date || !sessionId) return;
   try {
     const ledger = await load(ledgerFile);
@@ -70,7 +80,10 @@ export async function recordSegmentRun({ date, sessionId, throughCount = 0, fact
     const seg = ledger.days[date].segments[sessionId] ?? { memorizedThrough: 0, facts: 0, flag: null };
     seg.memorizedThrough = Math.max(seg.memorizedThrough ?? 0, throughCount);
     seg.facts = (seg.facts ?? 0) + (facts ?? 0);
-    seg.flag = flag ?? seg.flag ?? null;
+    if (flag !== undefined) seg.flag = flag;
+    // Migrate the legacy sticky 'shared-room' status-flag → the info marker.
+    if (seg.flag === 'shared-room') { seg.flag = null; seg.sharedRoom = true; }
+    if (sharedRoom) seg.sharedRoom = true;
     seg.lastRun = new Date().toISOString();
     ledger.days[date].segments[sessionId] = seg;
     ledger.days[date].updatedAt = seg.lastRun;
@@ -141,10 +154,14 @@ export async function computeCoverage({ logsDir = DEFAULT_LOGS_DIR, ledgerFile =
     for (const seg of segmentByDay(messages)) {
       if (seg.readableCount < 2) continue;
       const led = ledger.days?.[seg.date]?.segments?.[sessionId];
+      // Legacy 'shared-room' flags are informational, not a status — heal them
+      // at read-time so existing months un-purple without a re-run.
+      const legacyShared = led?.flag === 'shared-room';
       (days[seg.date] ??= { sessions: {}, facts: 0 }).sessions[sessionId] = {
         memorized: led?.memorizedThrough ?? 0,
         total: seg.count,
-        flag: led?.flag ?? null,
+        flag: legacyShared ? null : (led?.flag ?? null),
+        sharedRoom: !!(led?.sharedRoom || legacyShared),
       };
       days[seg.date].facts += led?.facts ?? 0;
     }
@@ -157,6 +174,7 @@ export async function computeCoverage({ logsDir = DEFAULT_LOGS_DIR, ledgerFile =
       status: deriveStatus(sessions),
       facts: d.facts,
       flags: [...new Set(sessions.map(s => s.flag).filter(Boolean))],
+      sharedRoom: sessions.some(s => s.sharedRoom),
       sessions,
     };
   }

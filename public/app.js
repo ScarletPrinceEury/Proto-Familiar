@@ -9642,9 +9642,11 @@ function keOpenCoverageDay(date) {
   const sessions = entry.sessions ?? [];
   const rows = sessions.map(s => {
     const done = s.memorized >= s.total;
-    const flag = s.flag ? ` <span class="ke-badge ke-badge-register">${esc(s.flag)}</span>` : '';
+    // A real failure flag reads as an alert; a group-room slice is just info.
+    const flag  = s.flag ? ` <span class="ke-badge ke-badge-register">${esc(s.flag)}</span>` : '';
+    const group = s.sharedRoom ? ` <span class="ke-badge">group</span>` : '';
     return `<div class="ke-cov-srow">${done ? '✓' : '○'} <code>${esc(s.sessionId.slice(0, 8))}</code> `
-      + `<span class="field-hint">${s.memorized}/${s.total} msgs</span>${flag}</div>`;
+      + `<span class="field-hint">${s.memorized}/${s.total} msgs</span>${flag}${group}</div>`;
   }).join('');
   det.innerHTML = `
     <div class="ke-detail-header">
