@@ -167,7 +167,7 @@ Images are saved through `saveAsset()` with `origin.surface='discord'`, `origin.
 
 **Import structure**: `discord-gateway.js` imports `saveAsset` + caps from `media.js` and `materializeAttachments` + `resolveVisionCapable` from `vision.js`. No cycle: `media.js` and `vision.js` do not import `discord-gateway.js`.
 
-## Video media (0.11.33 – 0.11.37)
+## Video media (0.11.33 – 0.11.40)
 
 Video rides the exact rails [Message attachments ride beside content](../decisions/message-attachments-format) predicted for a future modality: `message.content` stays a string, video is another `attachments` entry, and `materializeAttachments()` stays the one seam that turns a stored reference into a provider content-part [@video-build-spec]. "A video-capable model is a change here, not a message-format migration" is that decision's own framing, now exercised.
 
@@ -200,6 +200,8 @@ A clip too big to inline (over `VIDEO_MAX_BYTES` but under the 300 MB store ceil
 
 There is no video-describe path: `describeAsset()` is image-only, so a stood-in video carries only its marker text and the don't-invent guard, never a semantic description. Frame-extraction-based description would need an `ffmpeg` dependency the project has deliberately avoided for images (see the pure-JS image-dimension reading above) and is left for a later pass [@video-build-spec].
 
+**`describeAsset()` refuses non-image assets at the door (0.11.39).** Before this fix, a shared video on a blind connection reached the synchronous describe path anyway: `ensureDescribed()` queued it, the resolved connection's image analyzer received the video's bytes, and the request came back `HTTP 400 图片输入格式/解析错误` (image parse error) — reported on both web and on a z.ai coding-plan connection, where the analyzer is the `analyze_image` MCP tool (GLM-4.6V), an image-only tool [@video-build-spec]. `describeAsset()` now checks `meta.kind` before touching any connection and returns `{ok:false, reason:'not-image'}` for any non-image kind; a missing `kind` (a legacy pre-video image asset) still passes through untouched [@vision-js]. `ensureDescribed()` skips non-image attachments so a video is never even queued. `tests/vision.test.mjs` pins the `not-image` return, proven red before the guard existed [@vision-js].
+
 ## z.ai Coding Plan vision allotment (0.9.5-alpha, PR #220)
 
 The z.ai Coding Plan delivers vision through a separate, quota-isolated channel: a "Vision Understanding" MCP server (`@z_ai/mcp-server`, powered by GLM-4.6V) with its own 5-hour prompt resource pool, distinct from the coding-prompt allotment [@zai-vision-js]. The `zai-coding` provider connects to `https://api.z.ai/api/coding/paas/v4/chat/completions` [@providers-js].
@@ -210,9 +212,11 @@ A `zai-coding` connection can DESCRIBE images via this allotment, even though it
 
 **Graceful**: any spawn/connect/call failure returns `{ok:false}`, leaving the image description null (retried later) and never breaking the chat turn [@zai-vision-js]. Off-switch: `PROTO_FAMILIAR_ZAI_VISION_DISABLED=1` [@zai-vision-js]. Shutdown is wired into `server.js` via dynamic import [@zai-vision-js].
 
-**Live capability**: `resolveVisionCapable()` returns `false` for `zai-coding` (the coding chat models cannot see images on the wire), so images always degrade to stand-ins in the live turn [@vision-js]. This is separate from describe-capability: `isDescribeCapable()` returns `true` for `zai-coding` because it can describe through the Vision MCP [@vision-js].
+**Live capability is by MODEL, not blanket-blind (0.11.40).** `resolveVisionCapable()` and `resolveVideoCapable()` used to hard-block every `zai-coding` connection, on the assumption that coding-plan chat models are text-only. That blanket block was wrong for GLM 5.3 Flash — the first natively-multimodal GLM-5 — which takes live `image_url` and `video_url` parts on the SAME OpenAI-compat chat surface as standard z.ai; the coding endpoint (`/api/coding/paas/v4/chat/completions`) differs only in URL path and quota pool, not request shape [@video-build-spec]. `looksVisionCapable()`/`looksVideoCapable()` now match `glm-?5[.\d]*-?flash` (GLM 5.3 Flash) and `resolveVisionCapable()`/`resolveVideoCapable()` no longer short-circuit on `provider === 'zai-coding'`; they fall through to the ward tri-state and the name heuristic like any other provider [@vision-js]. Older text/code coding models (bare GLM-4.6) still fail the heuristic and stay blind, routing images to the image-only `analyze_image` describe MCP as before; a ward `'yes'` on either tri-state forces a coding connection they've confirmed. This is what closed the reported gap: the ward could confirm GLM 5.3 Flash watched video on the coding plan, but the code was blocking it categorically. `tests/vision.test.mjs` pins `resolveVisionCapable`/`resolveVideoCapable` returning `true` for a `glm-5.3-flash` `zai-coding` connection and `false` for a bare `glm-4.7` one [@vision-js].
 
-**Net effect**: a ward on the Coding Plan assigns their `zai-coding` connection to the vision feature → every image is DESCRIBED via the coding vision allotment, then read as a text stand-in, on z.ai's quota rather than a separate pay-as-you-go vision key [@vision-js].
+This is separate from describe-capability: `isDescribeCapable()` still returns `true` for every `zai-coding` connection regardless of model, because even a blind coding model can describe through the Vision MCP [@vision-js].
+
+**Net effect**: a ward on the Coding Plan with an older text/code coding model assigned to vision gets every image DESCRIBED via the coding vision allotment, then read as a text stand-in. A ward with a GLM 5.3 Flash coding connection gets live `image_url`/`video_url` parts on that same connection — no separate pay-as-you-go vision key needed either way [@vision-js]. The 0.11.39 `not-image` describe guard (see Known gaps in video above) still applies underneath this as defense-in-depth: even a blind coding model's shared video never reaches the image-only describe MCP [@video-build-spec].
 
 **Unverified**: the real @z_ai/mcp-server spawn was NOT tested end-to-end (requires a coding key + network access) [@zai-vision-js]. Built defensively with runtime schema discovery and graceful degradation; the `analyze_image` param name/shape is the main unknown. All failures degrade to `description=null`, never breaking the chat path.
 
@@ -240,6 +244,13 @@ The feature is known to false-positive on fictional violence (horror film stills
   and Discord video ingest (0.11.34).
 - **Connection-editor video tri-state** (0.11.36-alpha) and **Gemini File-API path for long clips**
   (0.11.35-alpha, live shakeout still pending) — see Video media above [@video-build-spec].
+- **GLM video contract verified + describe-guard fix** (0.11.37, 0.11.39): confirmed against
+  z.ai's own API reference and the MetaGLM cookbook, and closed the video-through-image-describer
+  400 by making `describeAsset()` refuse non-image assets — see Known gaps in video above
+  [@video-build-spec].
+- **z.ai coding-plan vision/video by model, not blanket-blind** (0.11.40): GLM 5.3 Flash watches
+  image and video live on the coding plan; older coding models stay blind and describe-only — see
+  the z.ai Coding Plan section above [@video-build-spec].
 
 Later passes (group-call presence, voiceprint enrolment, room-sound tagging) belong to the voice
 milestone rather than this one; see [Voice](voice) for those.

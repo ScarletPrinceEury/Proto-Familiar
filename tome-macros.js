@@ -31,6 +31,7 @@ function activeModelName(s) {
 // voiceEnabled/discordEnabled/gcalEnabled/browseEnabled default OFF).
 export const TOME_MACROS = {
   visionActive:    s => onoff(s?.visionEnabled    !== false),
+  videoActive:     s => onoff(s?.videoEnabled     !== false),
   voiceActive:     s => onoff(s?.voiceEnabled     === true),
   discordActive:   s => onoff(s?.discordEnabled   === true),
   ponderingActive: s => onoff(s?.ponderingEnabled !== false),

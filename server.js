@@ -5305,10 +5305,15 @@ const httpServer = app.listen(PORT, HOST, async () => {
   } else {
     console.log('[threat] crisis-signal detection ACTIVE in chat path. Each fire is logged as "[threat] scored ±N on chat msg [signal,...]". Hard-disable with PROTO_FAMILIAR_THREAT_DISABLED=1.');
   }
-  // Seed the self-documenting manual tome once (enabled + graduation-protected).
-  // Flag-tracked inside, so a ward who deletes it isn't overridden. Best-effort.
+  // Seed the self-documenting manual tome, and auto-refresh it when its version
+  // bumps — flag-tracked inside, so a ward who deletes or edits it isn't
+  // overridden (only an untouched manual is refreshed). Best-effort.
   ensureManualTome(TOMES_DIR)
-    .then(r => { if (r.seeded) console.log(`[manual] seeded the "${'Familiar Manual'}" tome (enabled, protected)`); })
+    .then(r => {
+      if (r.seeded) console.log('[manual] seeded the "Familiar Manual" tome (enabled, protected)');
+      else if (r.refreshed) console.log('[manual] refreshed the "Familiar Manual" tome to the current version (was unedited)');
+      else if (r.reason === 'ward-edited') console.log('[manual] a newer manual shipped, but yours is edited — leaving it as-is');
+    })
     .catch(err => console.error('[manual] seed failed (skipping):', err?.message ?? err));
   startMemorizationWorker();
   startAutonomousPondering();
