@@ -8,15 +8,20 @@
  * The ward can then ask their Familiar to walk them through the app, and the
  * answer reflects reality instead of a frozen doc.
  *
- * Seeded ONCE on boot (flag-tracked) so a ward who deletes it isn't overridden;
- * shipped `enabled: true` + `graduationExempt: true` so Tome Graduation never
+ * Seeded on boot and AUTO-REFRESHED when MANUAL_TOME_VERSION bumps (flag-tracked
+ * with a content hash) — but only when the on-disk manual is still the app's own
+ * unedited seed; a ward who deletes or edits it is respected and never overridden.
+ * Shipped `enabled: true` + `graduationExempt: true` so Tome Graduation never
  * strips it. Content is reference the Familiar reads and relays in its own voice
  * — kept plain and accurate; where an exact UI label isn't certain it says
  * "in Settings" rather than inventing a path.
  */
 import { promises as fsp } from 'fs';
 import { mkdirSync } from 'fs';
+import { createHash } from 'crypto';
 import path from 'path';
+
+const hashContent = (str) => createHash('sha256').update(str).digest('hex');
 
 export const MANUAL_TOME_ID = 'familiar-manual';
 export const MANUAL_TOME_NAME = 'Familiar Manual';
@@ -162,30 +167,78 @@ export function buildManualTome() {
 }
 
 /**
- * Seed the manual tome ONCE. If the seed flag exists, does nothing (so a ward
- * who deleted or edited it is respected). Writes the tome atomically, then the
- * flag. Never throws — a seed failure must not block boot.
- * @returns {Promise<{seeded:boolean, reason?:string}>}
+ * Seed the manual tome, and auto-REFRESH it when MANUAL_TOME_VERSION bumps —
+ * without ever clobbering a manual the ward has edited. The flag records the
+ * version + a `contentHash` of exactly what we last wrote; on a version bump we
+ * refresh only when the on-disk file still matches that hash (i.e. the ward
+ * hasn't touched it). A ward edit, or a deletion, is respected: we adopt the new
+ * version in the flag and stop trying, so a customised manual is never resurrected
+ * or overwritten. Writes file-then-flag atomically; never throws (a failure here
+ * must not block boot).
+ *
+ * Migration: a pre-hash flag (seeded before this version, no `contentHash`) is
+ * treated as pristine — manual-tome editing was never a surfaced flow before now,
+ * so an existing file is by definition the app's own untouched seed and is
+ * refreshed. Going forward, the hash protects real ward edits.
+ * @returns {Promise<{seeded:boolean, refreshed?:boolean, reason?:string}>}
  */
 export async function ensureManualTome(tomesDir) {
   try {
     mkdirSync(tomesDir, { recursive: true });
     const flagPath = path.join(tomesDir, SEED_FLAG);
-    try { await fsp.access(flagPath); return { seeded: false, reason: 'already-seeded' }; }
-    catch { /* not seeded yet */ }
 
     const tome = buildManualTome();
     const file = path.join(tomesDir, `${tome.id}.json`);
-    let wrote = false;
-    try { await fsp.access(file); }
-    catch {
+    const json = JSON.stringify(tome, null, 2);
+    const newHash = hashContent(json);
+
+    const writeAtomic = async () => {
       const tmp = file + '.tmp';
-      await fsp.writeFile(tmp, JSON.stringify(tome, null, 2), 'utf8');
+      await fsp.writeFile(tmp, json, 'utf8');
       await fsp.rename(tmp, file);
-      wrote = true;
+    };
+    const writeFlag = (extra = {}) => fsp.writeFile(
+      flagPath,
+      JSON.stringify({ seededAt: new Date().toISOString(), version: tome.version, contentHash: newHash, ...extra }, null, 2),
+      'utf8',
+    );
+
+    let flag = null;
+    try { flag = JSON.parse(await fsp.readFile(flagPath, 'utf8')); } catch { /* no/unreadable flag */ }
+
+    let onDisk = null;
+    try { onDisk = await fsp.readFile(file, 'utf8'); } catch { /* file absent */ }
+
+    // ── First run: no flag yet ──
+    if (!flag) {
+      if (onDisk == null) { await writeAtomic(); await writeFlag(); return { seeded: true }; }
+      // A manual file exists with no flag — adopt it as the ward's baseline; never clobber.
+      await fsp.writeFile(flagPath, JSON.stringify(
+        { seededAt: new Date().toISOString(), version: tome.version, contentHash: hashContent(onDisk), adopted: true }, null, 2), 'utf8');
+      return { seeded: false, reason: 'adopted-existing' };
     }
-    await fsp.writeFile(flagPath, JSON.stringify({ seededAt: new Date().toISOString(), version: tome.version }, null, 2), 'utf8');
-    return { seeded: wrote, reason: wrote ? undefined : 'file-existed' };
+
+    // ── Already on the current version ──
+    if ((Number(flag.version) || 0) >= tome.version) return { seeded: false, reason: 'already-current' };
+
+    // ── Version bump: refresh only a pristine, present manual ──
+    if (onDisk == null) {
+      // Ward deleted it — respect that; adopt the new version so we stop re-checking.
+      await fsp.writeFile(flagPath, JSON.stringify(
+        { ...flag, version: tome.version, contentHash: null, deletedRespected: true }, null, 2), 'utf8');
+      return { seeded: false, refreshed: false, reason: 'deleted-respected' };
+    }
+    // Pre-hash flags have no contentHash → treat as pristine (see migration note).
+    const pristine = flag.contentHash ? hashContent(onDisk) === flag.contentHash : true;
+    if (!pristine) {
+      // Ward edited the manual — respect it; adopt their content at the new version.
+      await fsp.writeFile(flagPath, JSON.stringify(
+        { ...flag, version: tome.version, contentHash: hashContent(onDisk), wardEdited: true }, null, 2), 'utf8');
+      return { seeded: false, refreshed: false, reason: 'ward-edited' };
+    }
+    await writeAtomic();
+    await writeFlag();
+    return { seeded: false, refreshed: true, reason: 'refreshed' };
   } catch (err) {
     return { seeded: false, reason: `error: ${err?.message ?? err}` };
   }

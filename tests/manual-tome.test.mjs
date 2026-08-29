@@ -7,7 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { resolveTomeMacros, TOME_MACROS, TOME_MACRO_NAMES } from '../tome-macros.js';
-import { buildManualTome, ensureManualTome, MANUAL_TOME_ID, MANUAL_TOME_NAME } from '../manual-tome.js';
+import { buildManualTome, ensureManualTome, MANUAL_TOME_ID, MANUAL_TOME_NAME, MANUAL_TOME_VERSION } from '../manual-tome.js';
 import { foldLoreForPrompt } from '../tome-lore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -90,8 +90,84 @@ test('ensureManualTome: seeds once, then respects deletion (flag-tracked)', asyn
     await fsp.rm(file);
     const second = await ensureManualTome(dir);
     assert.equal(second.seeded, false);
-    assert.equal(second.reason, 'already-seeded');
+    assert.equal(second.reason, 'already-current');
     await assert.rejects(() => fsp.access(file));   // stays gone
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+const FLAG = '.manual-tome-seeded.json';
+
+// Force a "the app shipped a newer manual" state by rewinding the flag's version.
+async function rewindFlag(dir, over = {}) {
+  const flagPath = path.join(dir, FLAG);
+  const flag = JSON.parse(await fsp.readFile(flagPath, 'utf8'));
+  await fsp.writeFile(flagPath, JSON.stringify({ ...flag, version: MANUAL_TOME_VERSION - 1, ...over }, null, 2), 'utf8');
+}
+
+test('ensureManualTome: refreshes an UNEDITED manual when the version bumps', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pf-manual-'));
+  try {
+    await ensureManualTome(dir);                    // seed at current version + hash
+    const file = path.join(dir, `${MANUAL_TOME_ID}.json`);
+    await fsp.writeFile(file, JSON.stringify({ id: MANUAL_TOME_ID, stale: true }, null, 2), 'utf8');
+    // Flag now claims the OLD version but its hash matches the ORIGINAL seed, not
+    // this stale file — so re-point the hash at the stale file to model "unedited
+    // since we last wrote it", then rewind the version.
+    const flagPath = path.join(dir, FLAG);
+    const { createHash } = await import('crypto');
+    const staleHash = createHash('sha256').update(await fsp.readFile(file, 'utf8')).digest('hex');
+    const flag = JSON.parse(await fsp.readFile(flagPath, 'utf8'));
+    await fsp.writeFile(flagPath, JSON.stringify({ ...flag, version: MANUAL_TOME_VERSION - 1, contentHash: staleHash }, null, 2), 'utf8');
+
+    const r = await ensureManualTome(dir);
+    assert.equal(r.refreshed, true);
+    const rewritten = JSON.parse(await fsp.readFile(file, 'utf8'));
+    assert.equal(rewritten.name, MANUAL_TOME_NAME);   // real manual restored
+    assert.ok(!rewritten.stale);
+    const flag2 = JSON.parse(await fsp.readFile(flagPath, 'utf8'));
+    assert.equal(flag2.version, MANUAL_TOME_VERSION);  // caught up
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensureManualTome: does NOT clobber a ward-edited manual on a version bump', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pf-manual-'));
+  try {
+    await ensureManualTome(dir);
+    const file = path.join(dir, `${MANUAL_TOME_ID}.json`);
+    // Ward edits the manual (hash now diverges from the flag's contentHash)...
+    await fsp.writeFile(file, JSON.stringify({ id: MANUAL_TOME_ID, name: 'My Custom Manual' }, null, 2), 'utf8');
+    await rewindFlag(dir);   // ...and the app ships a newer version
+
+    const r = await ensureManualTome(dir);
+    assert.equal(r.refreshed, false);
+    assert.equal(r.reason, 'ward-edited');
+    const kept = JSON.parse(await fsp.readFile(file, 'utf8'));
+    assert.equal(kept.name, 'My Custom Manual');   // the ward's edit survives
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('ensureManualTome: a pre-hash flag (old install) refreshes on upgrade', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pf-manual-'));
+  try {
+    const file = path.join(dir, `${MANUAL_TOME_ID}.json`);
+    const flagPath = path.join(dir, FLAG);
+    // Model an install seeded by the pre-hash code: a v1 flag with NO contentHash.
+    await fsp.writeFile(file, JSON.stringify({ id: MANUAL_TOME_ID, old: true }, null, 2), 'utf8');
+    await fsp.writeFile(flagPath, JSON.stringify({ seededAt: '2026-01-01T00:00:00Z', version: 1 }, null, 2), 'utf8');
+
+    const r = await ensureManualTome(dir);
+    assert.equal(r.refreshed, true);   // treated as pristine → refreshed
+    const rewritten = JSON.parse(await fsp.readFile(file, 'utf8'));
+    assert.equal(rewritten.name, MANUAL_TOME_NAME);
+    const flag2 = JSON.parse(await fsp.readFile(flagPath, 'utf8'));
+    assert.equal(flag2.version, MANUAL_TOME_VERSION);
+    assert.ok(flag2.contentHash);   // now hash-tracked going forward
   } finally {
     await fsp.rm(dir, { recursive: true, force: true });
   }
