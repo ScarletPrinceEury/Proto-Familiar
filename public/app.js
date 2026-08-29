@@ -286,6 +286,7 @@ const state = {
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
+  sessionUnifyEnabled:     true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
@@ -514,7 +515,7 @@ const SERVER_SYNCED_KEYS = [
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
-  'memorySweepEnabled', 'uiShowAdvanced', 'organStatusBlock',
+  'memorySweepEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'cdpModeEnabled', 'videoFileApiEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
@@ -1021,6 +1022,7 @@ function loadPersisted() {
   if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
   if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
+  if (typeof state.sessionUnifyEnabled !== 'boolean') state.sessionUnifyEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
     state.warmthQuietHoursStart = 23;
@@ -1191,9 +1193,22 @@ async function syncSettingsFromServer() {
 async function autoResumeMostRecentSession() {
   let remote;
   try {
-    const r = await fetch('/api/active-session');
-    if (!r.ok) return;
-    remote = await r.json();
+    // Prefer the ward-private "current conversation" pointer (the one shared with
+    // the Discord DM) so opening the web adopts the unified session — including
+    // turns just sent on Discord. Fall back to the raw most-recent session when
+    // unification is off or no pointer is set yet. The scoped pointer never
+    // surfaces a villager DM / guild room (privacy).
+    if (sessionUnifyOn()) {
+      try {
+        const ar = await fetch('/api/session/active');
+        if (ar.ok) remote = await ar.json();
+      } catch { /* fall through to the unscoped endpoint */ }
+    }
+    if (!remote?.sessionId) {
+      const r = await fetch('/api/active-session');
+      if (!r.ok) return;
+      remote = await r.json();
+    }
   } catch { return; }
 
   if (!remote?.sessionId) return;
@@ -1709,6 +1724,83 @@ async function saveToServer() {
       }),
     });
   } catch { /* non-critical */ }
+}
+
+// ── Live session sync (composer-safe) ────────────────────────────────
+// The ward's web chat and their Discord DM are ONE session (auto-unify). This
+// poller pulls in turns that arrived on the OTHER surface and APPENDS them.
+//
+// ⚠️ HARD INVARIANT: it NEVER re-renders or touches the composer — it does not
+// read, write, focus, or clear #user-input, and does not rebuild the input area.
+// It only appends bubbles to #messages (or, for a rare tool-carrying turn,
+// re-renders the message LIST — still never the composer). So typing, the caret,
+// and text selection in the input are never disturbed.
+const SESSION_POLL_MS = 3000;
+let _sessionPollTimer = null;
+
+function sessionUnifyOn() { return state.sessionUnifyEnabled !== false; }
+
+function isNearBottom() {
+  const s = $('messages-scroller');
+  if (!s) return true;
+  return s.scrollHeight - s.scrollTop - s.clientHeight < 80;
+}
+
+// Claim the current session as the ward's active private conversation, so their
+// next Discord DM continues THIS one. Gated on the unify toggle; fire-and-forget.
+async function claimActiveSession(sessionId) {
+  if (!sessionUnifyOn() || !sessionId) return;
+  try {
+    await fetch('/api/session/active', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+  } catch { /* non-critical */ }
+}
+
+async function pollSessionDelta() {
+  // Guards: a session must be open, the tab visible, and NOT mid-send/stream
+  // (the typing indicator is the in-flight signal). id-dedupe below is the belt.
+  if (!state.sessionId) return;
+  if (document.hidden) return;
+  const typing = $('typing-indicator');
+  if (typing && !typing.classList.contains('hidden')) return;
+
+  let data;
+  try {
+    const r = await fetch(`/api/logs/${encodeURIComponent(state.sessionId)}?afterCount=${state.messages.length}`);
+    if (!r.ok) return;
+    data = await r.json();
+  } catch { return; }
+  const incoming = Array.isArray(data?.newMessages) ? data.newMessages : [];
+  if (!incoming.length) return;
+
+  const known = new Set(state.messages.map(m => m.id).filter(Boolean));
+  const fresh = incoming.filter(m => !(m.id && known.has(m.id)));
+  if (!fresh.length) return;
+
+  const atBottom = isNearBottom();
+  const startIdx = state.messages.length;
+  for (const m of fresh) state.messages.push(m);
+
+  // Plain turns append in place; a rare tool-carrying turn needs the tool-block
+  // layout, so re-render the message LIST (still never the composer).
+  const needsFull = fresh.some(m => m.role === 'tool' || (Array.isArray(m.tool_calls) && m.tool_calls.length));
+  if (needsFull) {
+    renderAllMessages();
+  } else {
+    fresh.forEach((m, k) => appendMessageEl(m, startIdx + k));
+    if (atBottom) scrollToBottom();
+  }
+  // The appended turns are already ON the server (that's where they came from),
+  // so persist to localStorage only — no server POST, no write-back loop.
+  try { localStorage.setItem('pf_history', JSON.stringify(state.messages)); } catch { /* ignore */ }
+  refreshTopicGutter();
+}
+
+function startSessionPoller() {
+  if (_sessionPollTimer) return;
+  _sessionPollTimer = setInterval(() => { pollSessionDelta(); }, SESSION_POLL_MS);
 }
 
 // ── Macro substitution ──────────────────────────────────────────
@@ -2665,27 +2757,32 @@ function renderAllMessages() {
     // Orphaned tool result (shouldn't normally appear) — skip
     if (msg.role === 'tool') { i++; continue; }
 
-    // Strip the leading [HH:MM] tag from the displayed content. The tag
-    // is metadata for the LLM (added by toApiMessage so the Familiar
-    // perceives per-message timing) and the LLM occasionally echoes it
-    // back into responses; the chat UI already shows times via its own
-    // timestamp element, so the tag in the message body is just noise
-    // to the human reader. Memorization and RAG still see the raw
-    // content via state.messages, so they keep the temporal signal.
-    const displayContent = stripDisplayTimestamps(msg.content ?? '');
-    const html = msg.role === 'user'
-      ? esc(displayContent).replace(/\n/g, '<br>')
-      : renderMarkdown(displayContent);
-    const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
-    el.dataset.msgIndex = String(i);
-    const capturedContent = msg.content;
-    wireCopyButton(copyBtn, () => capturedContent);
-    wireSpeakButton(speakBtn, () => capturedContent);
-    container.appendChild(el);
+    appendMessageEl(msg, i);
     i++;
   }
   refreshTopicGutter();
   scrollToBottom();
+}
+
+// Render ONE plain (user/assistant/error) message and append it to #messages.
+// The single place that turns a stored message into a bubble — reused by the
+// full render AND the live poller, so an appended Discord/other-surface turn
+// looks identical to one rendered on load. Appends only; never touches the
+// composer. Strips the leading [HH:MM] tag (LLM-perceived timing metadata the
+// UI shows via its own timestamp element); state.messages keeps the raw content
+// so memorization/RAG still see the temporal signal.
+function appendMessageEl(msg, index) {
+  const displayContent = stripDisplayTimestamps(msg.content ?? '');
+  const html = msg.role === 'user'
+    ? esc(displayContent).replace(/\n/g, '<br>')
+    : renderMarkdown(displayContent);
+  const { el, copyBtn, speakBtn } = createMessageEl(msg.role, html, msg.timestamp, msg.attachments, msg.speaker);
+  if (Number.isInteger(index)) el.dataset.msgIndex = String(index);
+  const capturedContent = msg.content;
+  wireCopyButton(copyBtn, () => capturedContent);
+  wireSpeakButton(speakBtn, () => capturedContent);
+  $('messages').appendChild(el);
+  return el;
 }
 
 // ── API communication ────────────────────────────────────────────
@@ -3415,6 +3512,9 @@ async function sendMessage(userInput) {
 
   // Optimistic UI
   appendUserMessage(userInput, userTimestamp, attachments);
+  // Claim this as the ward's active private conversation, so their next Discord
+  // DM continues THIS session (auto-unify). Fire-and-forget; gated on the toggle.
+  claimActiveSession(state.sessionId);
   setInputLocked(true);
   setTyping(true);
   setStatus('busy');
@@ -4128,6 +4228,7 @@ function readSettingsFromUI() {
   if ($('cdp-mode-enabled'))      state.cdpModeEnabled    = $('cdp-mode-enabled').checked;
   if ($('video-fileapi-enabled')) state.videoFileApiEnabled = $('video-fileapi-enabled').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
+  if ($('session-unify-toggle')) state.sessionUnifyEnabled = $('session-unify-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
@@ -4325,6 +4426,7 @@ function writeSettingsToUI() {
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
+  if ($('session-unify-toggle')) setIfNotFocused($('session-unify-toggle'), 'checked', state.sessionUnifyEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
@@ -5615,6 +5717,11 @@ function init() {
   // Auto-resume: if the server has a more recent session than what this
   // device has loaded, silently load it (empty local) or offer a banner.
   autoResumeMostRecentSession().catch(() => {});
+
+  // Live session sync: append turns that land on the other surface (Discord DM)
+  // into the open web session. Self-guarded (visible tab, not mid-send, id-dedupe)
+  // and composer-safe — see pollSessionDelta.
+  startSessionPoller();
 
   // Outbox polling (M11 reminders, M12 silence triage). Cheap GET every
   // 30s; pending items are injected as chat messages in the active session.

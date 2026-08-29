@@ -76,12 +76,12 @@ import { writeSessionLog as writeSessionLogShared } from './session-log.js';
 import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './session-bindings.js';
 
 // Auto-unify: the ward's Discord DM shares ONE session with their web private
-// chat (both bind to the ward-private pointer). Default ON; hard off-switch for
-// when a ward wants the surfaces kept separate (the friendly Settings toggle
-// ships with the web adopt/poll pass). Villager DMs and guild rooms are never
-// unified.
+// chat (both bind to the ward-private pointer). Default ON; the ward toggle
+// ("One conversation across web & Discord") and a hard env off-switch both turn
+// it off. Villager DMs and guild rooms are never unified.
 function sessionUnifyEnabled() {
-  return process.env.PROTO_FAMILIAR_SESSION_UNIFY_DISABLED !== '1';   // default ON
+  if (process.env.PROTO_FAMILIAR_SESSION_UNIFY_DISABLED === '1') return false;
+  return readSettingsSync()?.sessionUnifyEnabled !== false;   // default ON
 }
 import { substituteMacros } from './macros.js';
 import { coreSystemSegment, postHistoryMessage } from './core-prompts.js';
