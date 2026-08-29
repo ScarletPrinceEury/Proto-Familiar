@@ -5408,6 +5408,8 @@ function closeLogsModal() {
   closeKnowledgeModal();
 }
 
+let _logsSortMode = 'recent';   // 'recent' | 'location'
+
 async function refreshLogsList() {
   const container = $('logs-list');
   container.innerHTML = '<p class="logs-loading">Loading…</p>';
@@ -5420,7 +5422,30 @@ async function refreshLogsList() {
       return;
     }
 
+    // Sort by the ward's chosen mode. 'recent' keeps the server's newest-first
+    // order; 'location' groups by where the session happened, newest-first within.
+    if (_logsSortMode === 'location') {
+      sessions.sort((a, b) =>
+        (a.locationLabel || '').localeCompare(b.locationLabel || '')
+        || new Date(b.startedAt) - new Date(a.startedAt));
+    }
+
     container.innerHTML = '';
+
+    // Sort toolbar (calm, single control — reused across refreshes).
+    const bar = document.createElement('div');
+    bar.className = 'logs-toolbar';
+    bar.innerHTML =
+      `<label class="logs-sort-label">Sort <select id="logs-sort" class="ke-select">` +
+      `<option value="recent"${_logsSortMode === 'recent' ? ' selected' : ''}>Most recent</option>` +
+      `<option value="location"${_logsSortMode === 'location' ? ' selected' : ''}>By location</option>` +
+      `</select></label>`;
+    bar.querySelector('#logs-sort').addEventListener('change', (e) => {
+      _logsSortMode = e.target.value === 'location' ? 'location' : 'recent';
+      refreshLogsList();
+    });
+    container.appendChild(bar);
+
     for (const s of sessions) {
       const isActive  = s.sessionId === state.sessionId;
 
@@ -5441,13 +5466,15 @@ async function refreshLogsList() {
 
       const modelStr  = [s.provider, s.model].filter(Boolean).join(' / ');
       const countStr  = `${s.messageCount} msg${s.messageCount !== 1 ? 's' : ''}`;
+      const locLabel  = s.locationLabel || 'Web chat';
+      const locClass  = `log-loc log-loc-${esc(s.platform || 'web')}`;
 
       const row = document.createElement('div');
       row.className = 'log-row' + (isActive ? ' log-row-active' : '');
 
       row.innerHTML = `
         <div class="log-info">
-          <div class="log-date">${esc(startStr)} → ${esc(endStr)}${isActive ? ' <span class="log-current">(current)</span>' : ''}</div>
+          <div class="log-date"><span class="${locClass}" title="Where this session happened">${esc(locLabel)}</span> ${esc(startStr)} → ${esc(endStr)}${isActive ? ' <span class="log-current">(current)</span>' : ''}</div>
           <div class="log-meta">${esc(modelStr)} · ${esc(countStr)}</div>
         </div>
         <div class="log-actions"></div>

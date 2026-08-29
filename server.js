@@ -2380,8 +2380,9 @@ app.post('/api/log', async (req, res) => {
   // Uses the `id` field when present; falls back to last-writer-wins
   // for legacy messages without ids (they form a shared prefix).
   let finalMessages = messages;
+  let existing = null;
   try {
-    const existing = JSON.parse(await fsp.readFile(logPath, 'utf8'));
+    existing = JSON.parse(await fsp.readFile(logPath, 'utf8'));
     if (Array.isArray(existing.messages) && existing.messages.length > 0) {
       const clientIdSet = new Set(messages.filter(m => m.id).map(m => m.id));
       const serverOnly  = existing.messages.filter(m => m.id && !clientIdSet.has(m.id));
@@ -2404,8 +2405,14 @@ app.post('/api/log', async (req, res) => {
   } catch { /* no existing file or corrupt — use client's messages as-is */ }
 
   const data = {
+    // Preserve any fields another writer set (a Discord/voice session's location,
+    // participants, imported/source, audienceTag) — this handler only owns the
+    // web-chat fields, so it must never blank the rest when a session is shared.
+    ...(existing && typeof existing === 'object' ? existing : {}),
     sessionId, startedAt, endedAt: endedAt || null, provider, model,
     messages: finalMessages,
+    // A web POST with no pre-existing location IS the web chat surface.
+    location: existing?.location ?? { platform: 'web', label: 'Web chat' },
     updatedAt: new Date().toISOString(),
   };
   try {
@@ -2416,6 +2423,25 @@ app.post('/api/log', async (req, res) => {
   }
 });
 
+// A short, human "where did this session happen" label from a log's `location`
+// (web chat, a Discord DM / channel, a voice call). One place so the listing and
+// any future consumer read it the same way. Never throws.
+function sessionLocationLabel(location, origin) {
+  if (!location || typeof location !== 'object') {
+    // Older logs predate the `location` field — infer from `origin` when we can.
+    if (origin === 'voice-call') return 'Voice call';
+    return 'Web chat';
+  }
+  const { platform, label, kind } = location;
+  if (platform === 'web')   return label || 'Web chat';
+  if (platform === 'voice') return label || 'Voice call';
+  if (platform === 'discord') {
+    if (label) return label;
+    return kind === 'dm' ? 'Discord DM' : 'Discord';
+  }
+  return label || 'Web chat';
+}
+
 // GET /api/logs — list all sessions (metadata only)
 app.get('/api/logs', async (_req, res) => {
   try {
@@ -2425,8 +2451,11 @@ app.get('/api/logs', async (_req, res) => {
       if (!f.endsWith('.json')) continue;
       try {
         const raw = await fsp.readFile(path.join(LOGS_DIR, f), 'utf8');
-        const { sessionId, startedAt, endedAt, updatedAt, provider, model, messages } = JSON.parse(raw);
+        const { sessionId, startedAt, endedAt, updatedAt, provider, model, messages, location, origin } = JSON.parse(raw);
         sessions.push({ sessionId, startedAt, endedAt, updatedAt, provider, model,
+          location: location ?? null,
+          locationLabel: sessionLocationLabel(location, origin),
+          platform: location?.platform ?? (origin === 'voice-call' ? 'voice' : 'web'),
           messageCount: Array.isArray(messages) ? messages.length : 0 });
       } catch { /* skip corrupt files */ }
     }
