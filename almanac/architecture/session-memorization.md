@@ -23,6 +23,9 @@ sources:
   - id: ward-consent-queue-js
     type: file
     path: ward-consent-queue.js
+  - id: memory-coverage-js
+    type: file
+    path: memory-coverage.js
   - id: naming-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/6ad1c817-Naming_a_new_entitycore_module.txt
@@ -138,6 +141,27 @@ This design killed the confusing flood of date-less consent asks for things the 
 
 Both paths (day-anchored segmentation and consent gating) extend the same queue and retry mechanics described above rather than replacing them.
 
+### Coverage status: making 'shared-room' transient, not sticky
+
+`memory-coverage.js`'s per-day ledger backs the coverage view the ward sees for past months
+(memorized/uncertain/unmemorized, with uncertain rendering purple). Before 0.12.1,
+`memorization.js`'s success path flagged *every* day that touched a non-ward-private slice
+(a Discord group room, any shared-audience session) with a permanent `'shared-room'` status
+flag, and `deriveStatus` turns any flag on a day into `'uncertain'` regardless of whether that
+day's ward-private content was fully memorized [@memory-coverage-js]. The effect was that a
+month with any group-room activity stayed purple forever, even after every other day in it
+was cleanly memorized — the flag never cleared because nothing in the success path ever
+un-set it.
+
+The fix separates two things that had been conflated into one flag: `sharedRoom` is now a
+separate, sticky, purely informational marker ("this day had group activity") that never
+drives status on its own, while the ledger's `flag` field is reserved for a genuine
+`extract-failed` outcome — the kind of flag that is supposed to be replaceable and clearable
+by a later successful run [@memory-coverage-js]. `recordSegmentRun` and `computeCoverage` both
+migrate any legacy sticky `'shared-room'` flag they encounter into the new `sharedRoom`
+marker on read, so existing months un-purple automatically the next time the coverage view is
+computed, with no re-run of memorization needed [@memory-coverage-js].
+
 The extraction prompts built here also supply a `content_tag` per extracted fact — a topic plus
 a sensitivity level that later controls per-villager disclosure independently of `category`. See
 [Content-based memory gating](content-gating) for the tag vocabulary, the code-side validation
@@ -165,3 +189,6 @@ and the audience floor at recall time.
   that shipped instead.
 - [Ward Discord console](ward-console) — the `!queue` command, a Discord twin of the pending
   memory-consent queue this page describes.
+- [Unified Ward Sessions](session-unification) — the 0.12.1 mechanism that makes the ward's
+  web chat and Discord DM one continuous session; a different subsystem from this page's job
+  queue, but the source of the shared-room coverage fix described above.
