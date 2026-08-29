@@ -961,8 +961,11 @@ async function processJob(job) {
   // Day-anchored coverage (Phase 1): record this date-slice as processed so the
   // ledger / calendar can mark the day. A slice that produced zero kept facts is
   // still DONE (pleasantries memorize to nothing) — recording it stops the sweep
-  // re-running it forever. Shared-room slices are flagged so the day reads
-  // 'uncertain'. Fire-and-forget; coverage never fails the job.
+  // re-running it forever. This is the SUCCESS path, so it clears any prior
+  // failure flag (a group-room slice is DONE once memorized — it went through the
+  // consent gate like everything else); a group room is recorded as an
+  // informational `sharedRoom` marker, which never drives the day's status.
+  // Fire-and-forget; coverage never fails the job.
   if (job.scope === 'day' && job.topicId) {
     await recordSegmentRun({
       date:         job.topicId,
@@ -971,7 +974,8 @@ async function processJob(job) {
       // covered. So a tail-only run still advances coverage to the full day.
       throughCount: (job.priorThrough ?? 0) + (Array.isArray(job.messages) ? job.messages.length : 0),
       facts:        created,
-      flag:         (job.audienceTag && job.audienceTag !== 'ward-private') ? 'shared-room' : null,
+      flag:         null,
+      sharedRoom:   !!(job.audienceTag && job.audienceTag !== 'ward-private'),
     }).catch(() => {});
   }
 
