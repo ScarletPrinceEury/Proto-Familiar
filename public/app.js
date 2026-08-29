@@ -5546,6 +5546,26 @@ async function refreshLogsList() {
       _logsSortMode = e.target.value === 'location' ? 'location' : 'recent';
       refreshLogsList();
     });
+
+    // "Close all open" — finalize every unfinished session at once (skips the
+    // active one). Only shown when there's more than one still open, so it stays
+    // out of the way otherwise.
+    const openStale = sessions.filter(s => !s.endedAt && s.sessionId !== state.sessionId);
+    if (openStale.length > 1) {
+      const closeAll = document.createElement('button');
+      closeAll.className = 'btn-secondary log-action-btn';
+      closeAll.textContent = `Close all open (${openStale.length})`;
+      closeAll.style.marginLeft = '8px';
+      closeAll.addEventListener('click', async () => {
+        if (!confirm(`Mark ${openStale.length} unfinished sessions as ended?`)) return;
+        closeAll.disabled = true;
+        try {
+          await Promise.all(openStale.map(s =>
+            fetch(`/api/logs/${s.sessionId}/close`, { method: 'POST' }).catch(() => {})));
+        } finally { refreshLogsList(); }
+      });
+      bar.appendChild(closeAll);
+    }
     container.appendChild(bar);
 
     for (const s of sessions) {
@@ -5615,6 +5635,21 @@ async function refreshLogsList() {
           setTimeout(() => { contBtn.textContent = 'Continue on Discord'; contBtn.disabled = false; }, 4000);
         });
         actions.appendChild(contBtn);
+      }
+
+      // Close out a session that never got finalized (still reads as open). Not
+      // for the active session — that one IS ongoing; ending it is "new chat".
+      if (!s.endedAt && !isActive) {
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn-secondary log-action-btn';
+        closeBtn.textContent = 'Close out';
+        closeBtn.title = 'Mark this unfinished session as ended';
+        closeBtn.addEventListener('click', async () => {
+          closeBtn.disabled = true;
+          try { await fetch(`/api/logs/${s.sessionId}/close`, { method: 'POST' }); }
+          finally { refreshLogsList(); }
+        });
+        actions.appendChild(closeBtn);
       }
 
       const delBtn = document.createElement('button');

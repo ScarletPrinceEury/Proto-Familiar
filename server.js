@@ -2504,6 +2504,30 @@ app.delete('/api/logs/:id', async (req, res) => {
   }
 });
 
+// POST /api/logs/:id/close — manually mark a session ended. For sessions that
+// never got finalized (a tab closed, or one that never idle-rolled) and so still
+// read as "open". Stamps endedAt at the LAST message's real time (when the
+// conversation actually stopped), not "now" — falling back to updatedAt/now. A
+// session already ended is a no-op. Written through the merge writer so a
+// concurrent turn can't be dropped.
+app.post('/api/logs/:id/close', async (req, res) => {
+  const { id } = req.params;
+  if (!isValidSessionId(id)) return res.status(400).json({ error: 'Invalid session ID.' });
+  let log;
+  try {
+    log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8'));
+  } catch {
+    return res.status(404).json({ error: 'Session not found.' });
+  }
+  if (log.endedAt) return res.json({ ok: true, endedAt: log.endedAt, alreadyEnded: true });
+  const msgs = Array.isArray(log.messages) ? log.messages : [];
+  const lastTs = msgs.length ? msgs[msgs.length - 1]?.timestamp : null;
+  const endedAt = lastTs || log.updatedAt || new Date().toISOString();
+  const r = await persistSessionLog({ ...log, endedAt }, { logsDir: LOGS_DIR, merge: true });
+  if (r.ok) res.json({ ok: true, endedAt });
+  else res.status(500).json({ error: 'Failed to close session.' });
+});
+
 // GET /api/active-session — most recently updated session (metadata only).
 // The client calls this on startup to auto-resume if a newer session is on
 // the server than what's in the local browser. Returns null when no logs exist.
