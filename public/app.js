@@ -5599,6 +5599,24 @@ async function refreshLogsList() {
       memBtn.addEventListener('click', () => openMemorizeChoice(s));
       actions.appendChild(memBtn);
 
+      // Continue on Discord (#2): make THIS session the ward's active private
+      // conversation, so their next Discord DM continues it. Only for the ward's
+      // own (ward-private) sessions and only when unification is on — binding a
+      // villager's session as ward-private would be a privacy leak.
+      if (s.wardPrivate && sessionUnifyOn()) {
+        const contBtn = document.createElement('button');
+        contBtn.className = 'btn-secondary log-action-btn';
+        contBtn.textContent = 'Continue on Discord';
+        contBtn.title = 'Your next Discord DM will continue this session';
+        contBtn.addEventListener('click', async () => {
+          await claimActiveSession(s.sessionId);
+          contBtn.textContent = '✓ DM continues this';
+          contBtn.disabled = true;
+          setTimeout(() => { contBtn.textContent = 'Continue on Discord'; contBtn.disabled = false; }, 4000);
+        });
+        actions.appendChild(contBtn);
+      }
+
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-ghost log-action-btn';
       delBtn.textContent = 'Delete';
