@@ -19,23 +19,96 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-/**
- * Persist a session log. `data.sessionId` names the file; the rest is written
- * as-is. Returns { ok } and never throws — a failed log write must never sink a
- * call teardown or a chat turn.
- */
-export async function writeSessionLog(data, { logsDir } = {}) {
-  if (!data?.sessionId || !logsDir) return { ok: false, reason: 'missing sessionId or logsDir' };
-  try {
-    await fsp.mkdir(logsDir, { recursive: true });
-    const file = path.join(logsDir, `${data.sessionId}.json`);
-    const tmp  = `${file}.tmp`;
-    await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
-    await fsp.rename(tmp, file);
-    return { ok: true, file };
-  } catch (err) {
-    return { ok: false, reason: err?.message ?? String(err) };
+// ── Per-session write serialization ──────────────────────────────
+// Web (server.js) and Discord (discord-gateway.js) run in the SAME node process
+// and can both write the ward's unified session. An in-process promise-chain
+// lock per sessionId serializes those writes so a read-merge-write from one
+// surface can't interleave with the other's and drop a turn.
+const _locks = new Map();
+async function withSessionLock(sessionId, fn) {
+  const prev = _locks.get(sessionId) ?? Promise.resolve();
+  let release;
+  const next = prev.then(() => new Promise((r) => { release = r; }));
+  _locks.set(sessionId, next);
+  await prev.catch(() => {});
+  try { return await fn(); }
+  finally {
+    release();
+    if (_locks.get(sessionId) === next) _locks.delete(sessionId);
   }
+}
+
+/**
+ * Union two message arrays by `id`, preserving timestamp order. `incoming` is
+ * the writer's intended view; any id-carrying message that exists on disk but
+ * not in `incoming` (a turn the OTHER surface appended since this writer last
+ * read) is spliced back in at its timestamp position. Legacy id-less messages
+ * form a stable shared prefix and are never diffed. Pure — unit-tested.
+ */
+export function mergeMessages(existing = [], incoming = []) {
+  const inc = Array.isArray(incoming) ? incoming : [];
+  const ex  = Array.isArray(existing) ? existing : [];
+  const incomingIds = new Set(inc.filter((m) => m?.id).map((m) => m.id));
+  const extras = ex.filter((m) => m?.id && !incomingIds.has(m.id));
+  if (extras.length === 0) return inc;
+  // A missing timestamp sorts EARLIEST: id-less legacy messages are the oldest
+  // prefix of a session, so a timestamped extra must land after them, not before.
+  const merged = [...inc];
+  for (const m of extras) {
+    const ts = m.timestamp ? new Date(m.timestamp).getTime() : -Infinity;
+    let at = merged.length;
+    for (let i = merged.length - 1; i >= 0; i--) {
+      const mt = merged[i].timestamp ? new Date(merged[i].timestamp).getTime() : -Infinity;
+      if (mt <= ts) break;
+      at = i;
+    }
+    merged.splice(at, 0, m);
+  }
+  return merged;
+}
+
+/**
+ * Persist a session log. `data.sessionId` names the file. Serialized per-session
+ * and written atomically (tmp+rename). With `merge:true`, the on-disk log is
+ * read first and its id-carrying messages are unioned into `data.messages`
+ * (`mergeMessages`) and its other fields preserved under `data` — so a second
+ * writer never clobbers the first's turns or metadata (the ward's unified web +
+ * Discord session). Returns { ok } and never throws — a failed log write must
+ * never sink a call teardown or a chat turn.
+ */
+export async function writeSessionLog(data, { logsDir, merge = false } = {}) {
+  if (!data?.sessionId || !logsDir) return { ok: false, reason: 'missing sessionId or logsDir' };
+  return withSessionLock(data.sessionId, async () => {
+    try {
+      await fsp.mkdir(logsDir, { recursive: true });
+      const file = path.join(logsDir, `${data.sessionId}.json`);
+      let final = data;
+      if (merge) {
+        try {
+          const existing = JSON.parse(await fsp.readFile(file, 'utf8'));
+          if (existing && typeof existing === 'object') {
+            final = {
+              ...existing,
+              ...data,
+              messages: mergeMessages(existing.messages, data.messages ?? []),
+              // Set-once identity: whoever CREATED the session owns these, so a
+              // later writer from another surface can't relabel it (a Discord-born
+              // unified session stays Discord's location; startedAt stays the
+              // earliest). `endedAt` still flows through from `data`.
+              location:  existing.location  ?? data.location  ?? null,
+              startedAt: existing.startedAt ?? data.startedAt ?? null,
+            };
+          }
+        } catch { /* no existing / corrupt — write data as-is */ }
+      }
+      const tmp = `${file}.tmp`;
+      await fsp.writeFile(tmp, JSON.stringify(final, null, 2), 'utf8');
+      await fsp.rename(tmp, file);
+      return { ok: true, file, merged: merge };
+    } catch (err) {
+      return { ok: false, reason: err?.message ?? String(err) };
+    }
+  });
 }
 
 /**
