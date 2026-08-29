@@ -110,6 +110,7 @@ export function attachVoiceCall(deps) {
         startedAt:  new Date(sess.startedAt ?? Date.now()).toISOString(),
         endedAt:    endedIso,
         origin:     'voice-call',
+        location:   { platform: 'voice', label: 'Voice call' },
         audienceTag: 'ward-private',
         provider:   conn?.provider ?? null,
         model:      conn?.model ?? null,

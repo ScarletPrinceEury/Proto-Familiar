@@ -1911,6 +1911,35 @@ button { cursor: pointer; font-family: var(--font); }
   font-weight: 600;
 }
 
+/* Where a session happened — a small calm chip in the sessions list. */
+.log-loc {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border-radius: 10px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  vertical-align: middle;
+}
+.log-loc-discord { color: #8ea1f0; border-color: #3a4470; }
+.log-loc-voice   { color: #7ad0c0; border-color: #2f5c54; }
+
+.logs-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.logs-sort-label {
+  font-size: 0.73rem;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .log-actions {
   display: flex;
   gap: 5px;
