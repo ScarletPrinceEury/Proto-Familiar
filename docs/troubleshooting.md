@@ -530,6 +530,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_DISCORD_DISABLED` | the Discord gateway |
 | `PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED` | tools on Discord turns |
 | `PROTO_FAMILIAR_DISCORD_BATCH_DISABLED` | coalescing a burst into one reply |
+| `PROTO_FAMILIAR_SESSION_UNIFY_DISABLED` | unifying the ward's Discord DM with their web chat (one shared session) |
 | `PROTO_FAMILIAR_WEBSEARCH_DISABLED` | web search |
 | `PROTO_FAMILIAR_PAGE_WATCH_DISABLED` | watching web pages for changes |
 | `PROTO_FAMILIAR_TOOL_SURFACING_DISABLED` | surfacing relevant tools per turn |

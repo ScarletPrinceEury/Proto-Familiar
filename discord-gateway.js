@@ -73,6 +73,16 @@ import { recordKnock, recordLocationKnock, recordServer } from './knocks.js';
 import { filterOutgoingReply } from './outgoing-filter.js';
 import { enqueueOutbox, acknowledgePendingByKind } from './outbox.js';
 import { writeSessionLog as writeSessionLogShared } from './session-log.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './session-bindings.js';
+
+// Auto-unify: the ward's Discord DM shares ONE session with their web private
+// chat (both bind to the ward-private pointer). Default ON; hard off-switch for
+// when a ward wants the surfaces kept separate (the friendly Settings toggle
+// ships with the web adopt/poll pass). Villager DMs and guild rooms are never
+// unified.
+function sessionUnifyEnabled() {
+  return process.env.PROTO_FAMILIAR_SESSION_UNIFY_DISABLED !== '1';   // default ON
+}
 import { substituteMacros } from './macros.js';
 import { coreSystemSegment, postHistoryMessage } from './core-prompts.js';
 import { recordOutgoingPrompt } from './prompt-capture.js';
@@ -1003,18 +1013,23 @@ async function readSessionLog(sessionId) {
 
 async function writeSessionLog(data) {
   // One shared writer (session-log.js) — voice calls land as reviewable logs the
-  // same way, so the atomic tmp+rename lives in exactly one place.
-  const r = await writeSessionLogShared(data, { logsDir: LOGS_DIR });
+  // same way, so the atomic tmp+rename lives in exactly one place. merge:true so a
+  // write to the ward's UNIFIED session reconciles with any turn the web appended
+  // since this handler read it (a no-op union for a normal single-writer session).
+  const r = await writeSessionLogShared(data, { logsDir: LOGS_DIR, merge: true });
   if (!r.ok) console.warn(`[discord] session log write failed: ${r.reason}`);
 }
 
 /** Get (or rotate) the session for a location. One location = one live
  *  session thread; a long idle gap starts a fresh session so logs stay
  *  bounded and "sessions" keep meaning something. */
-async function sessionForLocation(locationKey, locationLabel, kind) {
+async function sessionForLocation(locationKey, locationLabel, kind, { bindKey = null } = {}) {
   return withLock('discord:session-map', async () => {
     const map = await readMap();
-    const entry = map[locationKey];
+    // The session pointer lives in the shared ward-private binding (so the web
+    // chat and this DM are ONE session) when bindKey is set, else the per-location
+    // discord map (villager DMs, guild rooms — never unified).
+    const entry = bindKey ? await getSessionBinding(bindKey) : map[locationKey];
     const nowMs = Date.now();
     if (entry?.sessionId) {
       const elapsedMs = nowMs - new Date(entry.lastTurnAt ?? 0).getTime();
@@ -1052,14 +1067,19 @@ async function sessionForLocation(locationKey, locationLabel, kind) {
       participants: [],
       updatedAt: new Date(nowMs).toISOString(),
     };
-    map[locationKey] = { sessionId: fresh.sessionId, lastTurnAt: fresh.startedAt };
-    await writeMap(map);
+    if (bindKey) {
+      await setSessionBinding(bindKey, fresh.sessionId, { at: fresh.startedAt });
+    } else {
+      map[locationKey] = { sessionId: fresh.sessionId, lastTurnAt: fresh.startedAt };
+      await writeMap(map);
+    }
     return fresh;
   });
 }
 
-async function touchLocation(locationKey, sessionId) {
+async function touchLocation(locationKey, sessionId, { bindKey = null } = {}) {
   await withLock('discord:session-map', async () => {
+    if (bindKey) { await setSessionBinding(bindKey, sessionId); return; }
     const map = await readMap();
     map[locationKey] = { sessionId, lastTurnAt: new Date().toISOString() };
     await writeMap(map);
@@ -2261,7 +2281,10 @@ async function handleTurn(gw, msg, decision) {
   if (decision.kind === 'guild' && !regLoc) {
     noteUnregisteredGuild(gw, { locationKey: decision.locationKey, guildId: msg.guild_id, channelId: msg.channel_id });
   }
-  const session = await sessionForLocation(decision.locationKey, label, decision.kind === 'guild' ? 'group' : 'private');
+  // The ward's DM shares the ward-private session with their web chat (auto-unify);
+  // villager DMs and guild rooms keep their own per-location session.
+  const bindKey = (decision.kind === 'ward-dm' && sessionUnifyEnabled()) ? WARD_PRIVATE_KEY : null;
+  const session = await sessionForLocation(decision.locationKey, label, decision.kind === 'guild' ? 'group' : 'private', { bindKey });
   // A real incoming message supersedes any pending revisit for this location.
   cancelRevisitsForLocation(decision.locationKey).catch(() => {});
   if (!decision.isWard && decision.speakerName) {
@@ -2372,7 +2395,7 @@ async function handleTurn(gw, msg, decision) {
   session.audienceTag = audienceTag;
   session.updatedAt   = nowIso;
   await writeSessionLog(session);
-  await touchLocation(decision.locationKey, session.sessionId);
+  await touchLocation(decision.locationKey, session.sessionId, { bindKey });
 
   const phMsg = postHistoryMessage(settings);
   let apiMessages = [

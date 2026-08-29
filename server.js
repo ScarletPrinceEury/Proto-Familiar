@@ -147,6 +147,8 @@ import {
   findOrCreateSessionMemoriesTome,
 } from './memorization.js';
 import { computeCoverage, collectDateSlices } from './memory-coverage.js';
+import { writeSessionLog as persistSessionLog } from './session-log.js';
+import { getSessionBinding, setSessionBinding, WARD_PRIVATE_KEY } from './session-bindings.js';
 import { parseImport, dateFromFilename, applyFallbackDate } from './log-import.js';
 import { segmentByDay } from './day-segments.js';
 import {
@@ -2374,53 +2376,19 @@ app.post('/api/log', async (req, res) => {
   if (!Array.isArray(messages))
     return res.status(400).json({ error: 'messages must be an array.' });
 
-  const logPath = path.join(LOGS_DIR, `${sessionId}.json`);
-
-  // Merge: keep any server-side messages the client doesn't have.
-  // Uses the `id` field when present; falls back to last-writer-wins
-  // for legacy messages without ids (they form a shared prefix).
-  let finalMessages = messages;
-  let existing = null;
-  try {
-    existing = JSON.parse(await fsp.readFile(logPath, 'utf8'));
-    if (Array.isArray(existing.messages) && existing.messages.length > 0) {
-      const clientIdSet = new Set(messages.filter(m => m.id).map(m => m.id));
-      const serverOnly  = existing.messages.filter(m => m.id && !clientIdSet.has(m.id));
-      if (serverOnly.length > 0) {
-        // Interleave server-only messages in timestamp order.
-        const merged = [...messages];
-        for (const msg of serverOnly) {
-          const msgTs = msg.timestamp ? new Date(msg.timestamp).getTime() : Infinity;
-          let insertAt = merged.length;
-          for (let i = merged.length - 1; i >= 0; i--) {
-            const mTs = merged[i].timestamp ? new Date(merged[i].timestamp).getTime() : Infinity;
-            if (mTs <= msgTs) break;
-            insertAt = i;
-          }
-          merged.splice(insertAt, 0, msg);
-        }
-        finalMessages = merged;
-      }
-    }
-  } catch { /* no existing file or corrupt — use client's messages as-is */ }
-
-  const data = {
-    // Preserve any fields another writer set (a Discord/voice session's location,
-    // participants, imported/source, audienceTag) — this handler only owns the
-    // web-chat fields, so it must never blank the rest when a session is shared.
-    ...(existing && typeof existing === 'object' ? existing : {}),
+  // The shared writer serializes per-session and unions by id under a lock, so a
+  // web POST that raced a Discord append to the same (unified) session can't drop
+  // the other surface's turn — and it preserves any fields another writer set
+  // (location, participants, audienceTag). A web POST with no prior location IS
+  // the web chat surface.
+  const r = await persistSessionLog({
     sessionId, startedAt, endedAt: endedAt || null, provider, model,
-    messages: finalMessages,
-    // A web POST with no pre-existing location IS the web chat surface.
-    location: existing?.location ?? { platform: 'web', label: 'Web chat' },
+    messages,
+    location: { platform: 'web', label: 'Web chat' },
     updatedAt: new Date().toISOString(),
-  };
-  try {
-    await fsp.writeFile(logPath, JSON.stringify(data, null, 2), 'utf8');
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to write log.' });
-  }
+  }, { logsDir: LOGS_DIR, merge: true });
+  if (r.ok) res.json({ ok: true });
+  else res.status(500).json({ error: 'Failed to write log.' });
 });
 
 // A short, human "where did this session happen" label from a log's `location`
@@ -2473,11 +2441,50 @@ app.get('/api/logs/:id', async (req, res) => {
     return res.status(400).json({ error: 'Invalid session ID.' });
   try {
     const raw = await fsp.readFile(path.join(LOGS_DIR, `${id}.json`), 'utf8');
+    // Delta mode (?afterCount=N): return only turns after index N plus the new
+    // total. This is what the web poller uses to pick up the OTHER surface's new
+    // turns cheaply — it never refetches a long log every few seconds.
+    const afterCount = Number.parseInt(req.query.afterCount, 10);
+    if (Number.isInteger(afterCount) && afterCount >= 0) {
+      const log = JSON.parse(raw);
+      const all = Array.isArray(log.messages) ? log.messages : [];
+      res.json({ sessionId: id, total: all.length, newMessages: all.slice(afterCount) });
+      return;
+    }
     res.setHeader('Content-Type', 'application/json');
     res.send(raw);
   } catch {
     res.status(404).json({ error: 'Session not found.' });
   }
+});
+
+// GET /api/session/active — the ward's CURRENT private conversation (the pointer
+// the web chat and the Discord DM share). Scoped to ward-private, so a villager
+// DM or a guild room never surfaces here. Returns the bound session's metadata
+// (or null). This is what the web adopts on open so a Discord DM shows up.
+app.get('/api/session/active', async (_req, res) => {
+  try {
+    const b = await getSessionBinding(WARD_PRIVATE_KEY);
+    if (!b?.sessionId) return res.json(null);
+    let messageCount = 0, updatedAt = null, startedAt = null;
+    try {
+      const log = JSON.parse(await fsp.readFile(path.join(LOGS_DIR, `${b.sessionId}.json`), 'utf8'));
+      messageCount = Array.isArray(log.messages) ? log.messages.length : 0;
+      updatedAt = log.updatedAt ?? null; startedAt = log.startedAt ?? null;
+    } catch { /* bound session has no log yet */ }
+    res.json({ sessionId: b.sessionId, lastTurnAt: b.lastTurnAt, messageCount, updatedAt, startedAt });
+  } catch { res.json(null); }
+});
+
+// POST /api/session/active {sessionId} — the web claims a session as the ward's
+// current private conversation, so the ward's next Discord DM continues THIS one.
+// Called on send / new-chat / a "continue elsewhere" handoff.
+app.post('/api/session/active', async (req, res) => {
+  const { sessionId } = req.body ?? {};
+  if (!isValidSessionId(sessionId)) return res.status(400).json({ error: 'Invalid session ID.' });
+  const r = await setSessionBinding(WARD_PRIVATE_KEY, sessionId);
+  if (r.ok) res.json({ ok: true, sessionId });
+  else res.status(500).json({ error: 'Failed to set active session.' });
 });
 
 // DELETE /api/logs/:id — remove a session log
