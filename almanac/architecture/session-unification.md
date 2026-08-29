@@ -1,0 +1,163 @@
+---
+title: Unified Ward Sessions
+topics: [architecture, memorization, multi-embodiment]
+sources:
+  - id: session-bindings-js
+    type: file
+    path: session-bindings.js
+  - id: discord-gateway-js
+    type: file
+    path: discord-gateway.js
+  - id: app-js
+    type: file
+    path: public/app.js
+  - id: server-js
+    type: file
+    path: server.js
+  - id: session-log-js
+    type: file
+    path: session-log.js
+---
+
+# Unified Ward Sessions
+
+As of 0.12.1, the ward's web private chat and their Discord DM are one continuous
+conversation instead of two independently-logged sessions: a message sent on Discord shows
+up in the web app's open chat, and vice versa, because both surfaces resolve the same
+session id rather than each minting its own [@session-bindings-js]. This auto-unify behavior
+is on by default and can be turned off with `PROTO_FAMILIAR_SESSION_UNIFY_DISABLED=1` or the
+ward's `sessionUnifyEnabled` setting ("One conversation across web & Discord")
+[@discord-gateway-js]. Unification is scoped narrowly: only the ward's own DM and the
+ward's own web chat ever share a session. A registered villager's DM and any guild room keep
+their own per-location session regardless of the toggle, because merging a villager's
+conversation into the ward's would leak it across a privacy boundary
+[@discord-gateway-js]. This is a session-identity analog of the
+[multi-embodiment](../concepts/multi-embodiment) stance — one continuous thing accessed
+through several interfaces — applied to a chat session's turn history rather than to
+Phylactery's identity and memory graph; the two mechanisms are unrelated at the code level
+(no MCP call is involved here), but solve the same shape of problem for a different kind of
+state.
+
+## The shared pointer: `session-bindings.js`
+
+`session-bindings.js` is a small, file-backed pointer: a canonical key, `ward-private`, maps
+to `{ sessionId, lastTurnAt }` in `tomes/.session-bindings.json`, an in-process-locked JSON
+store with the same never-throw, degrade-to-null discipline as the rest of the Tomes file
+storage [@session-bindings-js]. `getSessionBinding(key)` reads it; `setSessionBinding(key,
+sessionId)` claims or touches it, stamping `lastTurnAt`. Both the web server and the Discord
+gateway run in the same Node process, so the module's lock is a simple in-process promise
+chain rather than a cross-process file lock [@session-bindings-js]. This one pointer is the
+entire mechanism: there is no separate "unify" service, just an agreement that both surfaces
+read and write the same key instead of each keeping a private map.
+
+## Discord side: binding resolution and privacy scope
+
+`discord-gateway.js`'s `sessionForLocation(locationKey, locationLabel, kind, { bindKey })`
+decides whether to resolve the shared binding or the ordinary per-location session map: it
+reads the binding when a `bindKey` is passed, and reads `map[locationKey]` (the pre-existing
+per-DM/per-channel store) otherwise [@discord-gateway-js]. The caller only ever passes a
+`bindKey` when `decision.kind === 'ward-dm'` (the message is a DM from the ward) and
+`sessionUnifyEnabled()` is true; a villager DM or a guild room's `decision.kind` is never
+`'ward-dm'`, so those paths can never accidentally resolve the shared pointer
+[@discord-gateway-js]. `touchLocation(locationKey, sessionId, { bindKey })` updates whichever
+store `sessionForLocation` used, on every turn, so `lastTurnAt` keeps advancing for idle-gap
+detection. A session's `location` field for a unified conversation still records `platform:
+'discord'` if the session was born from a Discord message — see
+[Session location labels](#session-location-labels) below for how the "set-once" write rule
+that follows from this interacts with the web's own writes.
+
+## Web side: claiming and adopting the pointer
+
+`public/app.js` claims the binding whenever the ward sends a message or starts a new chat:
+`claimActiveSession(sessionId)` posts to `POST /api/session/active`, a thin wrapper around
+`setSessionBinding(WARD_PRIVATE_KEY, sessionId)`, gated on the unify toggle so it is a no-op
+when unification is off [@app-js] [@server-js]. On load, `autoResumeMostRecentSession()`
+prefers `GET /api/session/active` — the scoped pointer, which can only ever resolve to the
+ward's own private conversation, never a villager DM or guild room — and falls back to the
+older unscoped `GET /api/active-session` only when unification is off or no pointer has been
+set yet [@app-js] [@server-js]. This is what makes opening the web app after a Discord
+exchange show that exchange already in place, instead of an empty new session.
+
+## Multi-writer safety: merging one log from two writers
+
+Because the web server and the Discord gateway can now append to the *same* session log file
+from the same process, a naive full-array `POST /api/log` write from the web could race a
+Discord append and silently drop a turn. `session-log.js`'s `writeSessionLog(data, {
+merge: true })` closes that gap: writes are serialized per-session by an in-process
+promise-chain lock (`withSessionLock`), and with `merge: true` the on-disk log is read first
+and unioned with the incoming write via `mergeMessages`, which keeps every id-carrying
+message from both sides in timestamp order and treats id-less legacy messages as a stable,
+earliest shared prefix [@session-log-js]. The merge also enforces set-once ownership of two
+fields: `location` and `startedAt` come from whichever write created the file, so a later
+writer from the other surface cannot relabel a Discord-born unified session as `Web chat`, or
+vice versa; `endedAt` still flows through from whichever call passes it [@session-log-js].
+Both `POST /api/log` (web) and the Discord gateway's own session-log write go through this
+same function with `merge: true`, so the reconciliation logic lives in exactly one place
+[@server-js] [@session-log-js]. This is a narrower, already-shipped counterpart to
+[Tome multi-writer merge policy](../decisions/tome-multi-writer-merge-policy) — that page
+designs reconciliation for competing Tome-entry writers (user, sifter, agent) and remains
+unimplemented; this session-log merge solves the same *shape* of problem (two writers, one
+record) for chat session logs specifically, with a much simpler union-by-id policy rather
+than the tiered field-ownership scheme proposed there.
+
+## Live sync without disturbing the composer
+
+A unified session needs the open web tab to pick up turns that arrive over Discord without
+the ward doing anything. `pollSessionDelta()` in `public/app.js` polls
+`GET /api/logs/:id?afterCount=N` roughly every few seconds — only while the tab is visible
+and only when not mid-send (the typing indicator is the in-flight signal) — and appends any
+messages past `N` [@app-js] [@server-js]. The delta endpoint itself is cheap: given
+`?afterCount`, `GET /api/logs/:id` returns just `{ total, newMessages }` sliced from the
+stored array instead of the whole log [@server-js].
+
+The invariant this poller must never violate, stated directly from the feature's design
+concern, is that it must never re-render or touch `#user-input`, focus, caret position, or
+text selection — it may only append new bubbles to `#messages`, and only re-render the full
+message list for the rare tool-carrying turn that needs the tool-block layout (still never
+the composer) [@app-js]. `appendMessageEl` was extracted out of `renderAllMessages` so an
+appended turn renders pixel-identical to one that was present on load, rather than the
+poller needing its own separate rendering path [@app-js]. The invariant exists because the
+whole point of the poller is to surface the other surface's turns while the ward may be
+mid-thought typing a reply on web; a poller that stole focus or reset the caret would make
+unification actively worse than two separate sessions.
+
+## Continue on Discord: explicit handoff
+
+Aside from the automatic unify-by-default behavior, the ward can explicitly bind any one of
+their own past sessions (Knowledge → Sessions) as the ward-private pointer via a "Continue on
+Discord" button, so their next DM picks it up [@app-js]. The button is gated on two
+conditions from `GET /api/logs`: `wardPrivate` (derived server-side as `!audienceTag ||
+audienceTag === 'ward-private'`, so a session is considered the ward's own only when it
+carries no audience tag or an explicit ward-private one) and the unify toggle being on
+[@server-js] [@app-js]. This closes off the one gap automatic unification alone would leave:
+without it, a villager's logged conversation could never be bound as the ward-private
+pointer even by mistake, but there would be no way for the ward to deliberately resume an
+*older* one of their own sessions from Discord — the automatic path only ever tracks the most
+recently active one.
+
+## Session location labels
+
+Every session log carries a `location` object (`{ platform, label, kind }`, set once per the
+merge rule above), and `GET /api/logs` derives a human `locationLabel` from it via
+`sessionLocationLabel()`: `Web chat` for a web-born session, `Discord DM` / a channel label
+for Discord, `Voice call` for a voice session, falling back to inferring from a legacy `origin:
+'voice-call'` field for logs that predate the `location` field [@server-js]. The sessions list
+renders this as a chip per session plus a "Sort: recent / location" control, and (per the merge
+rule above) `POST /api/log` now preserves whatever `location` and other fields a different
+writer already set instead of blanking them on every web write [@server-js] [@app-js]. This
+labeling is what lets a ward reviewing Knowledge → Sessions tell which of their unified
+sessions started on which surface, and is a prerequisite for "Continue on Discord" showing a
+sensible session picker.
+
+## Related
+
+- [Multi-embodiment](../concepts/multi-embodiment) — the broader canonical-store model this
+  page's session-identity unification echoes for a different kind of state.
+- [Session memorization](session-memorization) — the pipeline that eventually turns a unified
+  (or any other) session into durable Tome entries; unrelated to how the session's live turns
+  are unified, but shares `memory-coverage.js` machinery with a companion fix recorded there.
+- [Tome multi-writer merge policy](../decisions/tome-multi-writer-merge-policy) — a broader,
+  unimplemented multi-writer design for Tome entries; this page's `mergeMessages` union is the
+  much simpler, already-shipped answer to the same class of problem for session logs.
+- [Ward Discord console](ward-console) — the other ward-only Discord-side machinery
+  (`!queue`, `!connection`) that, like this feature, is intercepted only in the ward's own DM.

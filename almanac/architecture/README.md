@@ -180,6 +180,7 @@ If you're asking yourself... go to:
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
 - **How does the ward control settings from Discord instead of the web app?** → [Ward Discord console](ward-console)
+- **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
 
 ## Where to go next
 
@@ -227,6 +228,9 @@ If you're asking yourself... go to:
 - [Ward Discord console](ward-console) — the ward-only `!queue` and `!connection` Discord
   menus: the pending memory-consent queue, active-connection and per-feature routing, and
   per-connection reasoning-effort control.
+- [Unified Ward Sessions](session-unification) — the shared session-binding pointer that
+  makes the ward's web private chat and Discord DM one continuous conversation, the
+  multi-writer log merge that makes that safe, and the composer-safe live-sync poller.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
 - [Entity-as-subject](../concepts/entity-as-subject) and
