@@ -180,6 +180,7 @@ If you're asking yourself... go to:
 - **How does the Familiar speak, and what governs what voice models it fetches?** → [Voice](voice)
 - **How is the Familiar consistent across web, Discord, and voice?** → [Core prompts and multi-surface assembly](core-prompts)
 - **How does the ward control settings from Discord instead of the web app?** → [Ward Discord console](ward-console)
+- **When do sessions end, and how can the ward manually close an open session?** → [Session lifecycle](session-lifecycle)
 - **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
 
 ## Where to go next
@@ -194,6 +195,8 @@ If you're asking yourself... go to:
   not others.
 - [Session memorization](session-memorization) — the durable job queue that turns a session or
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
+- [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
+  manual close-out mechanism for sessions that never received an `endedAt` timestamp.
 - [Data ingestion](data-ingestion) — importing conversation logs from other platforms and
   formats (ChatGPT, SillyTavern, OpenClaw, timestamped text) into the memorization pipeline.
 - [Tomes and keyword lore](tomes-and-lore) — the keyword-activation engine shared by web and

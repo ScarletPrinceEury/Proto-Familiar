@@ -1,6 +1,6 @@
 ---
 title: Session Memorization
-topics: [architecture, memorization, tomes]
+topics: [architecture, sessions, memorization, tomes]
 sources:
   - id: claude-md
     type: file
@@ -172,6 +172,8 @@ and the audience floor at recall time.
 
 - [Session memorization: durable queue](../decisions/session-memorization-queue) — why the
   queue, the dedicated tome, and the trigger set are shaped the way they are.
+- [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
+  manual close-out mechanism for open sessions.
 - [Phylactery](phylactery) — the canonical, autonomously-retrieved memory store that Tomes are
   deliberately kept separate from.
 - [Content-based memory gating](content-gating) — how the `content_tag` this pipeline extracts

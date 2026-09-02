@@ -1,6 +1,6 @@
 ---
 title: Unified Ward Sessions
-topics: [architecture, memorization, multi-embodiment]
+topics: [architecture, sessions, multi-embodiment]
 sources:
   - id: session-bindings-js
     type: file
@@ -153,6 +153,8 @@ sensible session picker.
 
 - [Multi-embodiment](../concepts/multi-embodiment) — the broader canonical-store model this
   page's session-identity unification echoes for a different kind of state.
+- [Session lifecycle](session-lifecycle) — session creation, normal endings, and the manual
+  close-out feature for sessions that never received an `endedAt`.
 - [Session memorization](session-memorization) — the pipeline that eventually turns a unified
   (or any other) session into durable Tome entries; unrelated to how the session's live turns
   are unified, but shares `memory-coverage.js` machinery with a companion fix recorded there.
