@@ -818,14 +818,28 @@ export function carriedExchange(messages, { currentSpeaker = null, lookback = 5,
 // grant ('coarse' | 'full'), fetch the window and build the LABEL-FREE
 // availability block so the Familiar can coordinate. Absent grant → '' (the
 // villager never learns anything about the schedule). Never throws.
-async function availabilityBlockFor(decision, audienceGrants) {
+//
+// OBSERVABLE by rule: this path used to fail SILENTLY — a permitted villager
+// whose block came back empty, or a villager the ward expected to have the
+// grant but doesn't, produced no log at all, so "my Familiar seemed unaware it
+// could schedule" was undiagnosable. Every villager-DM turn now logs the
+// resolved schedule grant and the block size, so the next attempt says plainly
+// whether the grant resolved and whether the coordinating block was injected.
+// `getWindow` is injectable for tests.
+export async function availabilityBlockFor(decision, audienceGrants, { getWindow = getScheduleWindow, now = Date.now } = {}) {
   try {
     if (decision?.kind !== 'villager-dm') return '';
+    const who = decision.speakerName ?? decision.villager?.name ?? 'a villager';
     const grant = audienceGrants?.schedule;
-    if (grant !== 'coarse' && grant !== 'full') return '';
-    const win = await getScheduleWindow({ limit: 400 });
+    if (grant !== 'coarse' && grant !== 'full') {
+      console.log(`[discord] availability: ${who} has schedule grant=${grant ?? 'none'} — no coordination block (they can't arrange time)`);
+      return '';
+    }
+    const win = await getWindow({ limit: 400 });
     const nodes = Array.isArray(win?.nodes) ? win.nodes : [];
-    return buildAvailabilityBlock(nodes, { grant, nowMs: Date.now(), days: 7 });
+    const block = buildAvailabilityBlock(nodes, { grant, nowMs: now(), days: 7 });
+    console.log(`[discord] availability: ${who} grant=${grant} → coordination block ${block.length} chars (${nodes.length} schedule nodes)`);
+    return block;
   } catch (err) {
     console.error('[discord] availability block failed:', err?.message ?? err);
     return '';
