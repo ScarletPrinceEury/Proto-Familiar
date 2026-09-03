@@ -29,6 +29,7 @@ import {
   isDiscordVideoAttachment,
   discordResizeUrl,
   attributeUserContent,
+  availabilityBlockFor,
 } from '../discord-gateway.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -1021,5 +1022,54 @@ describe('Discord image ingest helpers (vision Pass 3)', () => {
     assert.equal(discordResizeUrl({ proxy_url: 'https://m/x/s.png', width: 800, height: 600 }, 1568), 'https://m/x/s.png');
     assert.equal(discordResizeUrl({ url: 'https://cdn/x/s.png' }, 1568), 'https://cdn/x/s.png');   // no proxy_url → no resize
     assert.equal(discordResizeUrl({}), '');
+  });
+});
+
+// ── availabilityBlockFor: the villager scheduling coordination block ──────────
+// Regression guard for the reported "Familiar seemed unaware it could schedule
+// with a Care Network person" bug. The pure grant→block logic lives in
+// schedule-availability.test.mjs; this pins the GATEWAY seam that decides,
+// per villager-DM turn, whether to inject the block at all (kind + grant gate),
+// with getWindow injected so no live Unruh is needed.
+describe('availabilityBlockFor (villager scheduling seam)', () => {
+  const stubWindow = async () => ({ ok: true, nodes: [] });
+  const coarse = { schedule: 'coarse' };
+
+  it('coarse grant on a villager DM → injects the coordination block', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam', villager: { name: 'Sam' } },
+      coarse,
+      { getWindow: stubWindow },
+    );
+    assert.ok(block.length > 0, 'block should be present');
+    assert.match(block, /Coordinating my human's schedule/);
+    assert.doesNotMatch(block, /full access/); // coarse never names items
+  });
+
+  it('full grant → block present (labels branch allowed)', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam' }, { schedule: 'full' }, { getWindow: stubWindow },
+    );
+    assert.ok(block.length > 0);
+  });
+
+  it('no schedule grant → empty (villager cannot arrange time)', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam' }, { memories: 'shared' }, { getWindow: stubWindow },
+    );
+    assert.equal(block, '');
+  });
+
+  it('ward DM → empty (the ward is not coordinated-with)', async () => {
+    const block = await availabilityBlockFor({ kind: 'ward-dm' }, null, { getWindow: stubWindow });
+    assert.equal(block, '');
+  });
+
+  it('a thrown window fetch degrades to empty, never throws into the turn', async () => {
+    const block = await availabilityBlockFor(
+      { kind: 'villager-dm', speakerName: 'Sam' }, coarse,
+      { getWindow: async () => { throw new Error('unruh down'); } },
+    );
+    assert.equal(block, '');
   });
 });
