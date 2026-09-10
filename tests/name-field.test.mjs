@@ -10,6 +10,7 @@ import path from 'path';
 import {
   speakerNameField, nameFieldEnabledFor, recordNameFieldResult,
   _resetNameFieldCache, withNameFieldFallback, hydrateNameFieldCache,
+  stampNamesOnTurns,
 } from '../name-field.js';
 
 const NAME_SAFE = /^[^\s]+$/;   // the OpenAI `name` charset: no whitespace
@@ -22,6 +23,32 @@ test('speakerNameField: handles are name-safe; ward/villager/material/assistant'
   assert.equal(speakerNameField({ role: 'user', speaker: null, wardName: '' }), 'ward');
   assert.equal(speakerNameField({ role: 'user', material: true, speaker: 'x' }), 'session-archive');
   assert.equal(speakerNameField({ role: 'assistant', speaker: 'Chen' }), undefined);
+});
+
+// ── stampNamesOnTurns ───────────────────────────────────────────────
+test('stampNamesOnTurns: stamps people-bearing user turns, leaves system/assistant alone', () => {
+  const msgs = [
+    { role: 'system', content: 'identity' },
+    { role: 'user', content: 'hi', speaker: null },            // the ward
+    { role: 'assistant', content: 'hey' },                     // the Familiar
+    { role: 'user', content: '[Chen]: yo', speaker: 'Chen' },  // a villager
+    { role: 'user', content: 'an old log', material: true },   // archived material
+  ];
+  const out = stampNamesOnTurns(msgs, { wardName: 'Mary Anne' });
+  assert.equal('name' in out[0], false, 'system carries no name');
+  assert.equal(out[1].name, 'ward-mary-anne');
+  assert.equal('name' in out[2], false, 'assistant carries no name');
+  assert.equal(out[3].name, 'chen');
+  assert.equal(out[4].name, 'session-archive');
+  // Pure: the input array is untouched (returns a copy).
+  assert.equal('name' in msgs[1], false, 'original not mutated');
+});
+
+test('stampNamesOnTurns: stamp:false strips any name fields (the bare arm of the fallback)', () => {
+  const msgs = [{ role: 'user', content: 'hi', name: 'ward-x' }, { role: 'assistant', content: 'hey' }];
+  const bare = stampNamesOnTurns(msgs, { stamp: false });
+  assert.equal('name' in bare[0], false, 'name stripped for the bare retry');
+  assert.equal(bare[1].content, 'hey');
 });
 
 // ── capability policy (in-memory, persistence off) ──────────────────

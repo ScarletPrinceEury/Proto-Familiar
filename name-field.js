@@ -54,6 +54,22 @@ export function speakerNameField({ role, speaker, wardName = 'My human', materia
   return w ? `ward-${w}` : 'ward';
 }
 
+// Stamp `name` on the person-bearing user turns of an already-built message
+// array, returning a COPY (system blocks and assistant turns untouched). A user
+// turn's speaker comes from its own `speaker` field (a villager/stranger) or, if
+// absent, the ward (→ `ward-<slug>`); an archived-material turn is marked with
+// `material: true`. `stamp:false` returns the array unchanged (the bare arm of
+// the fallback). Idempotent and pure — safe to call on the same array twice.
+export function stampNamesOnTurns(messages, { wardName = 'My human', stamp = true } = {}) {
+  if (!Array.isArray(messages)) return messages;
+  if (!stamp) return messages.map(m => { const { name, ...rest } = m || {}; return rest; });
+  return messages.map(m => {
+    if (!m || m.role !== 'user') return m;
+    const name = speakerNameField({ role: 'user', speaker: m.speaker, wardName, material: m.material === true });
+    return name ? { ...m, name } : m;
+  });
+}
+
 // ── The capability cache (provider:model → 'yes' | 'no') ──────────────
 
 const _cache = new Map();          // `${provider}:${model}` → 'yes' | 'no'
