@@ -10,7 +10,7 @@ import path from 'path';
 import {
   speakerNameField, nameFieldEnabledFor, recordNameFieldResult,
   _resetNameFieldCache, withNameFieldFallback, hydrateNameFieldCache,
-  stampNamesOnTurns,
+  stampNamesOnTurns, sendWithNames,
 } from '../name-field.js';
 
 const NAME_SAFE = /^[^\s]+$/;   // the OpenAI `name` charset: no whitespace
@@ -87,6 +87,43 @@ test('withNameFieldFallback: 400 on names retries bare once and learns no; a rea
     callProviderFn: () => { throw new Error('Provider x returned 500: boom'); },
     onLearn: () => {},
   }), /500/);
+});
+
+// ── sendWithNames: the surface seam (stamp → 400 → bare → learn) ────
+test('sendWithNames: stamps, and on a name-field 400 retries bare once + learns no', async () => {
+  _resetNameFieldCache();
+  const job = { provider: 'p', model: 'm', baseUrl: null };
+  const seen = [];
+  const send = async (msgs) => {
+    seen.push(msgs);
+    if (msgs.some(m => 'name' in m)) throw new Error('provider p returned 400: name rejected');
+    return 'bare-reply';
+  };
+  const out = await sendWithNames({
+    job, settings: {}, wardName: 'Mary Anne',
+    messages: [{ role: 'user', content: 'hi' }],
+    send,
+  });
+  assert.equal(out, 'bare-reply');
+  assert.equal(seen.length, 2, 'one stamped attempt, one bare retry');
+  assert.equal(seen[0][0].name, 'ward-mary-anne', 'first attempt stamped the ward');
+  assert.equal('name' in seen[1][0], false, 'retry was bare');
+  assert.equal(nameFieldEnabledFor(job, {}), false, 'learned the provider 400s on names');
+  _resetNameFieldCache();
+});
+
+test('sendWithNames: the off-switch sends bare and learns nothing', async () => {
+  _resetNameFieldCache();
+  const job = { provider: 'p2', model: 'm', baseUrl: null };
+  let sawName = true;
+  await sendWithNames({
+    job, settings: {}, wardName: 'Bee', disabled: true,
+    messages: [{ role: 'user', content: 'hi' }],
+    send: async (msgs) => { sawName = 'name' in msgs[0]; return 'ok'; },
+  });
+  assert.equal(sawName, false, 'no name stamped when disabled');
+  assert.equal(nameFieldEnabledFor(job, {}), true, 'nothing learned (still optimistic)');
+  _resetNameFieldCache();
 });
 
 // ── persistence: survives a "restart"; a model change re-probes ─────

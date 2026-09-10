@@ -162,3 +162,23 @@ export async function withNameFieldFallback({ withNames, buildMessages, callProv
     throw err;
   }
 }
+
+// The one-call seam every user-role SURFACE uses: resolve the policy (off-switch
+// → ward tri-state → learned → optimistic), stamp the messages, run the 400
+// fallback, and learn the outcome for this provider:model. `send(messages)` is
+// the surface's own provider call, which MUST throw an error whose message
+// contains "returned 400" on a name-field rejection (a bare-field retry then
+// fires). `job` is { provider, model, baseUrl }. Returns whatever `send` returns
+// (a parsed body, or a streaming upstream Response to pipe — the caller's call).
+export async function sendWithNames({
+  job = {}, settings = {}, messages, wardName = 'My human', send,
+  disabled = process.env.PROTO_FAMILIAR_NAME_FIELDS_DISABLED === '1',
+}) {
+  const withNames = !disabled && nameFieldEnabledFor(job, settings);
+  return withNameFieldFallback({
+    withNames,
+    buildMessages: (names) => stampNamesOnTurns(messages, { wardName, stamp: names }),
+    callProviderFn: send,
+    onLearn: (v) => recordNameFieldResult(job, v),
+  });
+}
