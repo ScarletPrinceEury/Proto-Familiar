@@ -151,6 +151,40 @@ the ward**, not guessed — they trade recall against false check-ins, and false
 check-ins are cheap while the SEVERE ceiling keeps false *escalations* off the
 table.
 
+## 5.5 Additional signals — recovery (down) and normalization (a new warning)
+
+Beyond the distress classifier, two more signals, both ward-approved:
+
+**Recovery / wellbeing (eases, within the asymmetry).** Today the down-direction
+is: wellbeing/support language (the regex `safety` tier, −3/−2), time decay
+(~3d half-life), and manual reset — but the Familiar's only *active* downward
+lever is a full reset (all-or-nothing), while it can flag UP to severe. This adds
+a **bounded** recovery read: a confident wellbeing verdict may *ease* the level,
+under the SAME asymmetry — it can lower MILD/MODERATE, contribute to easing HIGH,
+but NEVER single-handedly clear a SEVERE state (decay + reset still own that).
+Its own off-switch. Fail-safe: absent → no easing (current behaviour).
+
+**Normalization / pro-suicide-attitude (a new RAISE-only warning).** A distinct
+signal for the register where someone has stopped arguing with the idea —
+treating suicide as rational/acceptable/settled, adopting normalizing language —
+which the distress detector misses and which is a recognised escalation marker.
+- **Detection-only, RAISE-only, its own off-switch.** It raises concern and
+  shifts the Familiar's posture toward firm, caring pushback + steering to help;
+  it never lowers anything, and the triage LLM still makes the actual call.
+- **The method-content boundary (hard, non-movable).** Its training source (the
+  gated `sanctioned-suicide-forum-scrape`) is used ONLY to derive detection
+  weights — never to generate, surface, teach, or store method content, and the
+  text is never shipped. The artifact scores; it does not speak. This boundary
+  does not move on request; it is the half that could harm rather than help.
+- **False-positive guards (as load-bearing as the detection).** Must NOT fire on
+  horror/dark-fiction fans, gallows humour, philosophical discussion of suicide,
+  considered views on bodily autonomy / assisted dying, or grief / fear-driven
+  reaching-out. Pathologising a belief or a personality is a failure, not a catch
+  — the eval explicitly includes these as negatives.
+- Trained + validated only on the ward's machine after they clear the dataset
+  gate; the trainer degrades gracefully (skips this head) when the gated set is
+  absent, so the rest still builds.
+
 ## 6. Distribution mismatch (Reddit posts → chat) — handled, not ignored
 
 The dataset is long-form Reddit posts; the Familiar sees short chat turns. So:
