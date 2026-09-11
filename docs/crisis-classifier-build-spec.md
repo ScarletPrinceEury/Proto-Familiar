@@ -160,26 +160,55 @@ The dataset is long-form Reddit posts; the Familiar sees short chat turns. So:
   Reddit held-out split, so we see transfer before trusting it.
 - The threshold is tuned conservatively for the chat register.
 
-## 7. Datasets (multi-source, each with a role)
+## 7. Datasets (vetted — full sweep of the `suicide` search, ~80 repos)
 
-Chosen from the `suicide` dataset search, by what each is actually good for:
-- **`vibhorag101/suicide_prediction_dataset_phr`** (232K, binary, MIT, pre-split)
-  — the **training bulk** for the distress probability. Heavily pre-cleaned (§6).
-- **`av9ash/CSSR-S_labelled_suicidewatch_posts_reddit`** (1.2K, CC-BY) — carries a
-  **Columbia-scale `severity`** integer (+ per-LLM labels). Small, so it's the
-  **tier-calibration + validation gold**: it maps the model's probability onto our
-  severe/high/moderate/mild tiers and checks the mapping, rather than training.
-- **`babytreecc/Implicit-suicide-detection`** (1.6K, synthetic) — **implicit**
-  ideation (no keywords), a recall stress-test for the subtle cases a lexicon
-  misses.
-- **Precision hard-negatives** — mundane frustration / technical-helpless / "I
-  can't do this, nothing works" style text (from the non-suicide class + a small
-  curated set), the false-positives the ward reported. The MILD/MODERATE
-  precision tuning (§1.2) is validated against these.
+The search is ~80 repos but collapses to a handful of distinct things: most are
+re-uploads of ONE corpus (the Kaggle r/SuicideWatch 232K set, Nikhileswar et al.
+2021), the rest are country mortality statistics, non-English, pre-tokenized,
+unlabeled, empty/broken, or (one) an ethically-excluded pro-suicide forum. The
+chosen set, each by role:
 
-License note: MIT + CC-BY are both fine for deriving weights; the shipped
-artifact is a set of numbers, not the text. Attribution kept in the trainer +
-this spec.
+- **TRAIN — `vibhorag101/phr_suicide_prediction_dataset_clean_light`** (218K,
+  binary, pre-split train/val/test). The decisive pick over the heavily-cleaned
+  sibling: it is cleaned *minimally* (numbers/URLs/emojis/accents/whitespace only
+  — **casing, punctuation, stopwords, contractions kept**), so the trainer's and
+  the JS inference's shared normalization can actually MATCH it, killing the
+  train/serve skew §6 worried about. (`Ram07/Detection-for-Suicide`, MIT, ships
+  raw `text`+`cleaned_text` as a fully-raw fallback if we want to own cleaning.)
+- **TIER CALIBRATION + PRECISION GOLD — `av9ash/CSSR-S…`** (1.2K, CC-BY): a
+  Columbia-scale `severity` 0–6 per post. Maps the model's probability onto our
+  severe/high/moderate/mild tiers AND is a built-in precision set — its
+  severity-0-yet-emotionally-intense rows ("really struggling after a party…
+  panic attack" = 0) are exactly the "distress ≠ suicidal" distinction we must
+  get right.
+- **RECALL STRESS — `babytreecc/Implicit-suicide-detection`** (1.6K, AFL-3.0):
+  implicit / keyword-free ideation, the subtle cases a lexicon misses.
+- **EVAL HARD-CASES — `apgard/youthsafebench-teen-suicide-and-self-harm`** (90):
+  curated, GRADED (1–4) teen self-harm/ideation messages with linguistic tags
+  (literal/figurative). Small, so it's a hand-check eval, not training.
+- **OPTIONAL VALIDATION — `jingjietan/sdcnl-suicide`** (1.9K, pre-split): the
+  SDCNL depression-vs-suicide set — tests the hard boundary (a depressed-but-not-
+  suicidal post scoring low), the same axis as the ward's precision concern.
+- **Precision hard-negatives** — the non-suicide class + the CSSR-S sev-0 rows +
+  a small curated "mundane frustration / can't-do-this-nothing-works" set. The
+  MILD/MODERATE precision tuning (§1.2) is validated against these.
+
+Excluded (with reason), so the sweep is on record: country mortality/rate stats
+(`electricsheep*`, `Rashmini`, `HHS-Official` — tabular, not text); clinical
+feature tables (`ajaxxxx/Suicide_Risk` — age/cortisol/HRV, not text);
+pre-tokenized BERT ids (`Madhavan0506` — no raw text); unlabeled
+(`re-mind`/`amaye15/suicide-descriptions`); synthetic + self-flagged-inaccurate
+(`infinite-dataset-hub`, 100 rows); non-English (all `*-es`, `*-gl`, Telugu,
+Cantonese `lihkg`, Arabic); historical news (`npedrazzini/*`); broken/empty
+viewers (`MindCastSogang/*`, `YenYein`, `maryamdavi`, `Goyam02`, and
+`lensy111/relabelled` — a promising *relabelled* set but its export is currently
+500-broken); and **`trentmkelly/sanctioned-suicide-forum-scrape` — excluded on
+ethics** (a pro-suicide "methods" forum; gated, and we do not train on
+method-instruction content regardless of access).
+
+License note: MIT / CC-BY / AFL are all fine for *deriving weights* for the
+ward's own install — the shipped artifact is numbers, not redistributed text.
+Attribution kept in the trainer header + here.
 
 ## 7.5 Training + validation (the gate)
 
