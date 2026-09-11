@@ -21,31 +21,58 @@ The ward chose to add an **ML classifier as a second signal** (not a
 replacement). This spec is that, built so it can only ever *help* the detector
 catch more, never cause it to catch less.
 
-## 1. Invariants (non-negotiable — these are the safety spine)
+## 0.1 What we are actually fixing (both directions)
 
-1. **Additive, never a replacement.** The regex scorer stays exactly as it is and
-   keeps running. The classifier is a separate signal combined with it.
-2. **Raise-only.** The classifier can only push threat UP. A "not suicide"
-   verdict contributes **0** — it can NEVER lower the regex-derived level or damp
-   a regex hit. (Mirrors the vision-threat raise-only rule.)
-3. **The classifier alone caps at HIGH, never SEVERE.** SEVERE is what drives
-   auto-escalation to trusted contacts (`cerebellum.js`). A black-box score must
-   not unilaterally contact a human. The classifier can raise threat up to HIGH,
-   which hands the moment to the silence-triage LLM to judge *with full context*
-   — improving the recall of what reaches triage, not bypassing it. SEVERE stays
-   gated on the explicit regex signals + the triage/LLM judgment.
-4. **Never remove a regex signal without evidence.** A blindly-built list can be
-   re-weighted or added to, but a currently-firing severe/high phrase is removed
-   only if the held-out data shows it is a proven false-positive — never blind.
-5. **Recall must be shown to go UP, not down, before it ships.** Validation on a
-   held-out split is a gate, not a nicety (§7).
-6. **Graceful degradation is absolute.** A missing, unparseable, or version-
-   mismatched model artifact → the classifier contributes 0 and the regex path is
-   completely unaffected. The classifier can never break or slow the chat path
-   into failure; a thrown inference is caught and treated as "no signal".
-7. **Off-switch in the same commit as the wiring.** `crisisClassifierEnabled`
-   (setting, synced) + `PROTO_FAMILIAR_CRISIS_CLASSIFIER_DISABLED=1`. Also stands
-   down whenever `PROTO_FAMILIAR_THREAT_DISABLED=1` (it's part of threat scoring).
+The detector is miscalibrated BOTH ways, and the overhaul must fix both:
+- **Recall** — a hand-built list misses real ideation (the original motivation).
+- **Precision** — it over-fires on mundane frustration, and a false distress hit
+  softens the Familiar out of its firm-caretaker register (the ward's live pain:
+  being gentle when it should be authoritative about small anti-rut tasks).
+
+Two causes, only one of which is this detector (measured, 2026-09):
+1. **A real regex over-fire.** e.g. *"I can't do this, nothing I try works"* trips
+   `cant_continue` at HIGH (4) — the mundane damping only knows specific tech
+   nouns, so bare frustration reads as crisis. THIS the detector fix addresses.
+2. **LLM prompt-level softening.** The literal *"I don't know how to solve this
+   software problem"* scores **0** here — the softening there is the model's own
+   read of helplessness in the personality / `surface-context` prompts, NOT the
+   threat tier. A SEPARATE prompt pass (anchor tone to identity — firm, not
+   default-care), tracked apart from this classifier. Naming it so it isn't
+   mistaken for a detector bug.
+
+## 1. Invariants (the safety spine)
+
+1. **Additive, never a replacement.** The regex scorer stays and keeps running;
+   the classifier is a separate combined signal.
+2. **Tier-asymmetric adjustment (the ward-decision at the heart of this).**
+   - **SEVERE and HIGH: raise-only, never lowered.** Neither the classifier nor
+     any regex narrowing may reduce a severe/high signal. A real crisis is never
+     softened. (Recall-protected, absolutely.)
+   - **MILD and MODERATE: precision-tunable.** Here a *confident not-distress*
+     classifier verdict (and data-validated damping) MAY suppress a hit — because
+     a false MILD/MODERATE is exactly what dilutes the firm register, and its
+     cost is low (normal tone restored; the SEVERE/HIGH detectors and the triage
+     LLM still catch any real escalation). This is a deliberate, ward-signed
+     loosening of the old pure-"raise-only" rule, made to fix the reported harm.
+3. **The classifier alone caps at HIGH, never SEVERE.** SEVERE drives auto-contact
+   of trusted people (`cerebellum.js`); a statistical score must not trigger that
+   alone. It raises to HIGH, handing the moment to the triage LLM to judge in
+   context.
+4. **Never remove a SEVERE/HIGH regex signal without evidence.** Non-severe
+   patterns may be tightened where held-out data shows a clear false-positive with
+   NO loss of true-positive recall; a severe/high phrase is never removed blind.
+5. **Recall must not drop and precision must rise — both shown on held-out data
+   before shipping.** Validation is a gate, not a nicety (§7). Specifically:
+   severe/high recall stays at 100% of the current detector's on the eval set.
+6. **Graceful degradation is absolute.** A missing / unparseable / version-
+   mismatched artifact → classifier contributes 0, regex path unaffected, chat
+   never breaks; a thrown inference is caught as "no signal". NB with the
+   asymmetry, "no classifier" means non-severe hits are NOT suppressed — i.e.
+   degradation fails toward the *current* (more sensitive) behaviour, never toward
+   a softer one.
+7. **Off-switch in the wiring commit.** `crisisClassifierEnabled` (synced) +
+   `PROTO_FAMILIAR_CRISIS_CLASSIFIER_DISABLED=1`; stands down under
+   `PROTO_FAMILIAR_THREAT_DISABLED=1`.
 
 ## 2. Architecture
 
@@ -133,7 +160,28 @@ The dataset is long-form Reddit posts; the Familiar sees short chat turns. So:
   Reddit held-out split, so we see transfer before trusting it.
 - The threshold is tuned conservatively for the chat register.
 
-## 7. Training + validation (the gate)
+## 7. Datasets (multi-source, each with a role)
+
+Chosen from the `suicide` dataset search, by what each is actually good for:
+- **`vibhorag101/suicide_prediction_dataset_phr`** (232K, binary, MIT, pre-split)
+  — the **training bulk** for the distress probability. Heavily pre-cleaned (§6).
+- **`av9ash/CSSR-S_labelled_suicidewatch_posts_reddit`** (1.2K, CC-BY) — carries a
+  **Columbia-scale `severity`** integer (+ per-LLM labels). Small, so it's the
+  **tier-calibration + validation gold**: it maps the model's probability onto our
+  severe/high/moderate/mild tiers and checks the mapping, rather than training.
+- **`babytreecc/Implicit-suicide-detection`** (1.6K, synthetic) — **implicit**
+  ideation (no keywords), a recall stress-test for the subtle cases a lexicon
+  misses.
+- **Precision hard-negatives** — mundane frustration / technical-helpless / "I
+  can't do this, nothing works" style text (from the non-suicide class + a small
+  curated set), the false-positives the ward reported. The MILD/MODERATE
+  precision tuning (§1.2) is validated against these.
+
+License note: MIT + CC-BY are both fine for deriving weights; the shipped
+artifact is a set of numbers, not the text. Attribution kept in the trainer +
+this spec.
+
+## 7.5 Training + validation (the gate)
 
 `scripts/train-crisis-classifier.py`:
 1. Load the dataset (column names configurable / auto-detected — not assumed).
