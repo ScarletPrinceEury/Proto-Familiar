@@ -85,7 +85,7 @@ const hoursSince = (iso, now) => (now - new Date(iso).getTime()) / 3_600_000;
  * bookkeeping failure.
  */
 export async function recordReachOut({
-  message, about = '', why = '', channel = 'ward',
+  message, about = '', why = '', channel = 'ward', source = null,
   tomesDir = DEFAULT_TOMES_DIR, now = Date.now(),
 } = {}) {
   const text = typeof message === 'string' ? message.trim() : '';
@@ -93,6 +93,16 @@ export async function recordReachOut({
   try {
     const items = await readAll(tomesDir);
     const id = `ro-${slugifyLabel(about || text) || 'knock'}-${shortSlug(2)}`;
+    // The receipt: which slice this knock reasoned from, stamped by the CALLER
+    // from the deliberation's `.session` metadata (never the model). When my
+    // human challenges a reach-out, this hands me a session id for
+    // search_conversation and tells me who was in the room — instead of guessing.
+    const src = (source && typeof source === 'object') ? {
+      sessionId:   typeof source.sessionId === 'string' ? source.sessionId : null,
+      kind:        typeof source.kind === 'string' ? source.kind : null,
+      roster:      Array.isArray(source.roster) ? source.roster.slice(0, 12) : [],
+      hasWardTurn: source.hasWardTurn === true ? true : (source.hasWardTurn === false ? false : null),
+    } : null;
     items.push({
       id,
       at: new Date(now).toISOString(),
@@ -100,6 +110,7 @@ export async function recordReachOut({
       message: text,
       about: typeof about === 'string' ? about.trim() : '',
       why: typeof why === 'string' ? why.trim() : '',
+      ...(src ? { source: src } : {}),
       shown: 0,
     });
     // Prune here rather than on read, so the file cannot grow without bound
@@ -173,6 +184,12 @@ export function formatReachOutBlock(items, { now = Date.now() } = {}) {
     lines.push(`- ${agoPhrase(i.at, now)} I said: "${i.message}"`);
     if (i.about) lines.push(`  what I was asking about: ${i.about}`);
     if (i.why) lines.push(`  why I asked: ${i.why}`);
+    if (i.source && typeof i.source === 'object' && (i.source.sessionId || i.source.kind)) {
+      const kind = i.source.kind || 'conversation';
+      const sid  = i.source.sessionId ? ` (session ${i.source.sessionId})` : '';
+      const ppl  = Array.isArray(i.source.roster) && i.source.roster.length ? `, speakers: ${i.source.roster.join(', ')}` : '';
+      lines.push(`  where this came from: ${kind}${sid}${ppl}`);
+    }
   }
   lines.push('If my human replies to something I did not just say, it is probably this. I already know I asked, and what I meant, so I answer from that rather than making them explain it back to me.');
   return lines.join('\n');

@@ -33,18 +33,38 @@ export function messageText(m) {
 }
 
 /**
+ * Classify a session log by WHOSE conversation it is — the one place that rule
+ * lives, so `isWardReadableLog` (below) and the deliberation-slice metadata
+ * (`getRecentSessionMessages` in cerebellum.js) can't drift apart. Pure.
+ *
+ *   'ward-private' — the ward's own chats (web, ward DM), private voice,
+ *                    proactive (audienceTag null or 'ward-private').
+ *   'group'        — a shared room the ward is part of (`location.kind==='group'`
+ *                    or a `discord:guild:` key). Ward-readable, but NOT the ward's
+ *                    alone — five people can wear the `user` role here.
+ *   'villager-dm'  — a villager's 1:1 DM (`location.kind==='villager-dm'` or a
+ *                    `discord:dm:` key). Private to THAT villager.
+ *   'unknown'      — a non-ward-private tag with no location we recognise.
+ */
+export function sessionLogKind(log) {
+  const tag = log?.audienceTag;
+  if (tag == null || tag === 'ward-private') return 'ward-private';
+  const loc = log?.location ?? {};
+  if (loc.kind === 'group' || (typeof loc.key === 'string' && loc.key.startsWith('discord:guild:'))) return 'group';
+  if (loc.kind === 'villager-dm' || (typeof loc.key === 'string' && loc.key.startsWith('discord:dm:'))) return 'villager-dm';
+  return 'unknown';
+}
+
+/**
  * What the ward's own private reasoning may read: their own chats (web + ward DM),
  * private voice (audienceTag null or 'ward-private'), AND the group rooms they're
- * part of (`location.kind === 'group'`, or a `discord:guild:` key). A villager's
- * 1:1 DM is held back — private to that villager. Pure.
+ * part of. A villager's 1:1 DM is held back — private to that villager. Pure.
+ * Expressed over `sessionLogKind` so the readability boundary and the kind
+ * classifier stay one rule (behaviour-identical to the prior inline form).
  */
 export function isWardReadableLog(log) {
-  const tag = log?.audienceTag;
-  if (tag == null || tag === 'ward-private') return true;
-  const loc = log?.location ?? {};
-  if (loc.kind === 'group') return true;
-  if (typeof loc.key === 'string' && loc.key.startsWith('discord:guild:')) return true;
-  return false;
+  const k = sessionLogKind(log);
+  return k === 'ward-private' || k === 'group';
 }
 
 /**

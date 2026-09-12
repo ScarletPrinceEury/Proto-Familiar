@@ -29,7 +29,7 @@
 import { resolveProviderUrl, connectionReady } from '../../providers.js';
 import { callProviderChat, familiarDeliberationMessages } from '../../llm-call.js';
 import { enrich, getRecentMemoryLines } from '../../thalamus.js';
-import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages, formatRecentMessagesForContext } from '../../cerebellum.js';
+import { readSettingsSync, primaryConnectionFrom, connectionForFeature, getRecentSessionMessages, formatRecentMessagesForContext, formatSliceProvenanceLines } from '../../cerebellum.js';
 import { buildTimeAnchorBlock, relativeTime } from '../../relative-time.js';
 import { substituteMacros } from '../../macros.js';
 import { stripLlmTimestamps } from '../../message-sanitize.mjs';
@@ -205,9 +205,12 @@ export async function decideReachoutViaLLM({
   const rhythmLine = buildRhythmLine(baseline, { lastContactMs, timeZone: s?.wardTimeZone || null });
 
   const sessionLines = formatRecentMessagesForContext(recentMessages, nowMs);
-  const sessionBlock = sessionLines
-    ? `\nThe last things my human and I talked about (so anything I reach out about connects to our actual life, not nothing):\n${sessionLines}`
-    : '';
+  // State where the slice came from when it isn't plainly my human's private
+  // chat — and, if no turn in it is theirs, say so before the lines. Otherwise
+  // keep the tuned private-chat framing byte-identical.
+  const provenance = formatSliceProvenanceLines(recentMessages.session, { wardLastSeenPhrase: wardSilencePhrase });
+  const sessionIntro = provenance || 'The last things my human and I talked about (so anything I reach out about connects to our actual life, not nothing):';
+  const sessionBlock = sessionLines ? `\n${sessionIntro}\n${sessionLines}` : '';
 
   const prompt = substituteMacros(buildReachoutPrompt({
     nowBlock,
@@ -234,7 +237,12 @@ export async function decideReachoutViaLLM({
     console.warn('[reachout] LLM call failed (staying quiet this tick):', err?.message ?? err);
     return { action: 'wait' };
   }
-  return parseReachoutDecision(raw);
+  // Stamp the slice the decision reasoned from onto the decision, so a ward knock
+  // can record WHERE it came from (the receipt the Familiar re-reads when my human
+  // challenges it — a session id for search_conversation, and who was in the room).
+  const sm = recentMessages.session || null;
+  const source = sm ? { sessionId: sm.sessionId, kind: sm.kind, roster: sm.roster, hasWardTurn: sm.hasWardTurn } : null;
+  return { ...parseReachoutDecision(raw), source };
 }
 
 // temperature 0.8 — warmth wants a little more life than triage's care. Cap is

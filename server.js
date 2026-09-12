@@ -112,13 +112,13 @@ import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js
 import { recordReachOut } from './src/warmth/reach-out-log.js';
 import { appendReflectionEvent, readReflectionEvents } from './src/pondering/reflection-events.js';
 import { recordUserActivity, getLastUserActivity } from './src/sessions/last-activity.js';
-import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval } from './relative-time.js';
+import { buildTimeAnchorBlock, wardLocalNowISO, plainInterval, relativeTime } from './relative-time.js';
 // Cerebellum is the motor module — the outbound counterpart to thalamus.
 // Triage deliberation, trusted-contact delivery, and escalation deadlines
 // live there; server.js keeps only route handling and loop boot.
 import {
   readSettingsSync, primaryConnectionFrom, connectionForFeature,
-  getRecentSessionMessages, formatRecentMessagesForContext,
+  getRecentSessionMessages, formatRecentMessagesForContext, formatSliceProvenanceLines,
   decideTriageViaLLM, deliverToTrustedContact, checkAndFirePendingContacts,
   appendTriageEventLog, readTriageEvents,
   appendReachoutEventLog, readReachoutEvents,
@@ -6569,7 +6569,7 @@ function startReachout() {
     decideReachout: decideReachoutViaLLM,
     // Ward knock → gentle banner + push. Dedup bucket so a hiccup can't
     // double-banner. If this knock finally says a flagged "tell", mark it.
-    deliverWardKnock: async ({ message, tell, about, why }) => {
+    deliverWardKnock: async ({ message, tell, about, why, source }) => {
       const enq = await enqueueAndDispatch({
         kind:     'reachout',
         originId: reachoutBucketOriginId(),
@@ -6578,9 +6578,10 @@ function startReachout() {
         ts:       new Date().toISOString(),
       });
       // Remember that I knocked, and what I meant by it — my human answers hours
-      // later and I otherwise meet the reply with no idea I ever spoke.
+      // later and I otherwise meet the reply with no idea I ever spoke. `source`
+      // is the deliberation's slice receipt (where it came from, who was in it).
       if (enq?.id && !enq?.deduped) {
-        recordReachOut({ message, about, why, channel: 'ward-banner' })
+        recordReachOut({ message, about, why, channel: 'ward-banner', source })
           .catch(err => console.error('[reachout] recordReachOut failed:', err?.message ?? err));
       }
       if (enq?.id && !enq?.deduped && tell?.uid && Number.isInteger(tell.index)) {
@@ -6806,11 +6807,22 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
     // ward's chosen unit.
     weatherLine: readWeatherNowLine({ unit: s?.weatherUnit }),
   });
+  // State where the recent slice came from, and flag it when none of it is my
+  // human's own words — so a villager's turn in a busy group room isn't read as
+  // theirs. `lastAct` is my human's last activity anywhere (the honest "last
+  // turn" the no-ward line references).
+  const noticingProvenance = formatSliceProvenanceLines(recentMessages.session, {
+    wardLastSeenPhrase: lastAct?.ts ? (relativeTime(lastAct.ts, nowMs) || null) : null,
+  });
+  const recentConversationLines = formatRecentMessagesForContext(recentMessages, nowMs);
+  const recentConversation = recentConversationLines
+    ? (noticingProvenance ? `${noticingProvenance}\n${recentConversationLines}` : recentConversationLines)
+    : recentConversationLines;
   const noticingBody = substituteMacros(buildNoticingPrompt({
     // flag_distress is in the noticing toolset now, so the prompt's
     // hand-to-triage clause names a lever the Familiar can actually pull.
     nowBlock, openEvents, otherItems: situationReport, spanText, threatTier, hasFlagDistress: true,
-    recentConversation: formatRecentMessagesForContext(recentMessages, nowMs),
+    recentConversation,
     recentMemories,
   }), s);
   // Role (ward decision): the Familiar's own reflection rides as SYSTEM, next to
@@ -6852,11 +6864,15 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
         title: 'a thought from me', body: msg, ts: new Date().toISOString(),
       }).catch(() => null);
       if (enq?.id && !enq?.deduped) {
+        const noticingSource = recentMessages.session
+          ? { sessionId: recentMessages.session.sessionId, kind: recentMessages.session.kind, roster: recentMessages.session.roster, hasWardTurn: recentMessages.session.hasWardTurn }
+          : null;
         recordReachOut({
           message: msg,
           about: String(a.about ?? '').trim(),
           why: String(a.why ?? '').trim(),
           channel: 'noticing',
+          source: noticingSource,
         }).catch(err => console.error('[noticing] recordReachOut failed:', err?.message ?? err));
         effectiveNames.push(name); return 'Sent — my human will see it.';
       }
