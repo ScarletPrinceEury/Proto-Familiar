@@ -70,7 +70,16 @@ Unknown formats return a loud, structured error (no silent best-effort). A parse
 
 The UI (`POST /api/import-log`) accepts raw text in the request body, calls a suitable parser in order, and returns `{ ok, messages?, format?, error? }` to the client [@log-import-js] [@server-js]. A successful import enqueues the messages for memorization as if they were a native session, day-bucketed and ready for the consent gate and consolidation pipeline [@app-js].
 
+## How it integrates with the memory pipeline
+
+Imported logs enter the same [session memorization](session-memorization) queue that native sessions feed into. They flow through the same extraction, consent-gating, and [content-based gating](content-gating) stages as any other session. The import modal in the web UI surfaces this: a user can import a historical conversation and immediately control how its facts are memorized — whether they're extracted into the [Session Memories](tomes-and-lore) Tome and with what content sensitivity tags. See [Memory and knowledge](memory-and-knowledge) for how imported facts travel through [Phylactery](phylactery)'s consolidation pipeline.
+
 ## Related
 
+- [Memory and knowledge](memory-and-knowledge) — the layered memory system and how imported facts become lasting memories.
 - [Session memorization](session-memorization) — the queue that consumes imported messages and turns them into Tome entries through the same pipeline as native sessions.
+- [Session lifecycle](session-lifecycle) — when sessions are created and how imported logs become part of the session record.
+- [Content-based memory gating](content-gating) — how consent and content sensitivity are applied to imported facts.
+- [Tomes and keyword lore](tomes-and-lore) — where imported facts land after extraction.
+- [Phylactery](phylactery) — the canonical store that consolidates and retrieves facts from imported sessions.
 - [Engineering conventions](../reference/engineering-conventions) — the repo-wide graceful-degradation and loud-error rules this subsystem follows.
