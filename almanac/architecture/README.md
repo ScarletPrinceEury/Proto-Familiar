@@ -177,6 +177,7 @@ If you're asking yourself... go to:
 - **What stops the Familiar from just agreeing to everything?** → [Armature](../concepts/armature) concept, then [Proactivity over caution](../decisions/proactivity-over-caution)
 - **How does the Familiar notice someone is in crisis?** → [Safety spine](safety-spine)
 - **What does the schedule graph do?** → [Unruh](unruh) and [Temporal assurance](../concepts/temporal-assurance)
+- **How does the whole session subsystem fit together?** → [Sessions](sessions) (the cluster hub)
 - **How do sessions turn into lasting memories?** → [Session memorization](session-memorization)
 - **How does keyword-triggered lore work, and what is the Familiar Manual tome?** → [Tomes and keyword lore](tomes-and-lore)
 - **What's the thalamus/cerebellum split about?** → Back to the lead section above, then [Naming Cerebellum](../decisions/cerebellum-naming) for the reasoning

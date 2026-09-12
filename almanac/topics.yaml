@@ -1,117 +1,140 @@
 topics:
-  - slug: concepts
-    title: Concepts
-    description: Core vocabulary and mental models for this codebase
-    parents: []
-  - slug: architecture
-    title: Architecture
-    description: System structure, component ownership, and runtime flow
-    parents: []
-  - slug: phylactery
-    title: Phylactery
-    description: The in-tree canonical self-store (identity, memory, knowledge graph)
-    parents: [architecture]
-  - slug: unruh
-    title: Unruh
-    description: The in-tree temporal-context specialist (schedule graph, interests, time model)
-    parents: [architecture]
-  - slug: autonomous-loops
-    title: Autonomous Loops
-    description: Background workers that act without a human request
-    parents: [architecture]
-  - slug: safety
-    title: Safety
-    description: Crisis detection, threat tracking, and escalation to a human
-    parents: [architecture, decisions, concepts]
-  - slug: installer
-    title: Installer
-    description: Cross-platform one-click install, update, and launch tooling
-    parents: [architecture]
-  - slug: sessions
-    title: Sessions
-    description: Session creation, lifecycle, unification, and memorization
-    parents: [architecture]
-  - slug: memorization
-    title: Memorization
-    description: The session memorization queue, its triggers, and the dedicated Session Memories tome
-    parents: [architecture]
-  - slug: entity-as-subject
-    title: Entity-As-Subject
-    description: The design stance that the Familiar is the entity, not a tool operated on its behalf
-    parents: [concepts]
-  - slug: multi-embodiment
-    title: Multi-Embodiment
-    description: One persistent entity accessed through several interfaces, synced through a canonical store
-    parents: [concepts]
-  - slug: armature
-    title: Armature
-    description: The base model's trained pull toward passive, agreeable assistant behavior, and the project's fight against it
-    parents: [concepts]
-  - slug: temporal-assurance
-    title: Temporal Assurance
-    description: Proactive, unprompted awareness of upcoming events and their prep requirements, delivered wherever the ward already is
-    parents: [concepts]
-  - slug: decisions
-    title: Decisions
-    description: Recorded architectural and operational choices
-    parents: []
-  - slug: reference
-    title: Reference
-    description: Exact lookup material for repo-wide operating rules and contracts
-    parents: []
-  - slug: development-rhythm
-    title: Development Rhythm
-    description: How the sole maintainer actually paces and triages feature and bug work
-    parents: [concepts]
-  - slug: weather
-    title: Weather
-    description: Ward-local weather sense, provider chain, and location privacy
-    parents: [architecture]
-  - slug: update
-    title: Update
-    description: Self-update mechanism (git vs download modes, web UI, Discord command)
-    parents: [architecture, installer]
-  - slug: data-ingestion
-    title: Data Ingestion
-    description: Foreign log import (ChatGPT, SillyTavern, OpenClaw), format parsing
-    parents: [architecture]
-  - slug: pondering
-    title: Pondering
-    description: Autonomous pondering loop, thought format, interest-weighted cadence
-    parents: [architecture, autonomous-loops]
-  - slug: vision
-    title: Vision
-    description: Multimodal image and video input, media storage, and modality fallback
-    parents: [architecture]
-  - slug: content-gating
-    title: Content Gating
-    description: Per-topic sensitivity tags on memories and per-tier topic grants, layered on top of Village's audience circles
-    parents: [architecture, phylactery]
-  - slug: voice
-    title: Voice
-    description: The multi-pass voice milestone -- model supply chain, disk footprint budget, bench tool, and read-aloud text-to-speech
-    parents: [architecture]
-  - slug: browser
-    title: Browser
-    description: The opt-in, ward-only click-and-fill web milestone -- SSRF-guarding proxy, ref/generation model, and Stranger-tier page framing
-    parents: [architecture]
-  - slug: tomes
-    title: Tomes
-    description: Keyword-triggered lorebook entries, the shared web/Discord activation engine, live tome macros, and the self-documenting Familiar Manual tome
-    parents: [architecture, memorization]
-  - slug: memory-and-knowledge
-    title: Memory and Knowledge
-    description: How the layered memory systems (Phylactery, Unruh, Tomes, Session Memorization, Content-Gating) fit together and where each kind of knowledge lives
-    parents: [architecture, phylactery, memorization]
-  - slug: plugins
-    title: Plugins
-    description: "The \"Grimoire\" plugin surface: Psycheros-compatible extension points, the tiered Node/Deno loader, and the safety-path exclusion wall (designed, not yet built)"
-    parents: [architecture, decisions]
-  - slug: session-search
-    title: Session Search
-    description: "Raw transcript search and distilled memory recall — two distinct tools for finding what was said versus what was learned"
-    parents: [architecture, memory-and-knowledge]
-  - slug: connections
-    title: Connections
-    description: Saved LLM provider connections -- URL resolution, keyless local/custom readiness, per-feature routing, and reasoning-effort control
-    parents: [architecture, decisions]
+- slug: concepts
+  title: Concepts
+  description: Core vocabulary and mental models for this codebase
+  parents: []
+- slug: architecture
+  title: Architecture
+  description: System structure, component ownership, and runtime flow
+  parents: []
+- slug: phylactery
+  title: Phylactery
+  description: The in-tree canonical self-store (identity, memory, knowledge 
+    graph)
+  parents: [architecture]
+- slug: unruh
+  title: Unruh
+  description: The in-tree temporal-context specialist (schedule graph, 
+    interests, time model)
+  parents: [architecture]
+- slug: autonomous-loops
+  title: Autonomous Loops
+  description: Background workers that act without a human request
+  parents: [architecture]
+- slug: safety
+  title: Safety
+  description: Crisis detection, threat tracking, and escalation to a human
+  parents: [architecture, decisions, concepts]
+- slug: installer
+  title: Installer
+  description: Cross-platform one-click install, update, and launch tooling
+  parents: [architecture]
+- slug: sessions
+  title: Sessions
+  description: Session creation, lifecycle, unification, and memorization
+  parents: [architecture]
+- slug: memorization
+  title: Memorization
+  description: The session memorization queue, its triggers, and the dedicated 
+    Session Memories tome
+  parents: [architecture]
+- slug: entity-as-subject
+  title: Entity-As-Subject
+  description: The design stance that the Familiar is the entity, not a tool 
+    operated on its behalf
+  parents: [concepts]
+- slug: multi-embodiment
+  title: Multi-Embodiment
+  description: One persistent entity accessed through several interfaces, synced
+    through a canonical store
+  parents: [concepts]
+- slug: armature
+  title: Armature
+  description: The base model's trained pull toward passive, agreeable assistant
+    behavior, and the project's fight against it
+  parents: [concepts]
+- slug: temporal-assurance
+  title: Temporal Assurance
+  description: Proactive, unprompted awareness of upcoming events and their prep
+    requirements, delivered wherever the ward already is
+  parents: [concepts]
+- slug: decisions
+  title: Decisions
+  description: Recorded architectural and operational choices
+  parents: []
+- slug: reference
+  title: Reference
+  description: Exact lookup material for repo-wide operating rules and contracts
+  parents: []
+- slug: development-rhythm
+  title: Development Rhythm
+  description: How the sole maintainer actually paces and triages feature and 
+    bug work
+  parents: [concepts]
+- slug: weather
+  title: Weather
+  description: Ward-local weather sense, provider chain, and location privacy
+  parents: [architecture]
+- slug: update
+  title: Update
+  description: Self-update mechanism (git vs download modes, web UI, Discord 
+    command)
+  parents: [architecture, installer]
+- slug: data-ingestion
+  title: Data Ingestion
+  description: Foreign log import (ChatGPT, SillyTavern, OpenClaw), format 
+    parsing
+  parents: [architecture]
+- slug: pondering
+  title: Pondering
+  description: Autonomous pondering loop, thought format, interest-weighted 
+    cadence
+  parents: [architecture, autonomous-loops]
+- slug: vision
+  title: Vision
+  description: Multimodal image and video input, media storage, and modality 
+    fallback
+  parents: [architecture]
+- slug: content-gating
+  title: Content Gating
+  description: Per-topic sensitivity tags on memories and per-tier topic grants,
+    layered on top of Village's audience circles
+  parents: [architecture, phylactery]
+- slug: voice
+  title: Voice
+  description: The multi-pass voice milestone -- model supply chain, disk 
+    footprint budget, bench tool, and read-aloud text-to-speech
+  parents: [architecture]
+- slug: browser
+  title: Browser
+  description: The opt-in, ward-only click-and-fill web milestone -- 
+    SSRF-guarding proxy, ref/generation model, and Stranger-tier page framing
+  parents: [architecture]
+- slug: tomes
+  title: Tomes
+  description: Keyword-triggered lorebook entries, the shared web/Discord 
+    activation engine, live tome macros, and the self-documenting Familiar 
+    Manual tome
+  parents: [architecture, memorization]
+- slug: memory-and-knowledge
+  title: Memory and Knowledge
+  description: How the layered memory systems (Phylactery, Unruh, Tomes, Session
+    Memorization, Content-Gating) fit together and where each kind of knowledge 
+    lives
+  parents: [architecture, phylactery, memorization]
+- slug: plugins
+  title: Plugins
+  description: "The \"Grimoire\" plugin surface: Psycheros-compatible extension points,
+    the tiered Node/Deno loader, and the safety-path exclusion wall (designed, not
+    yet built)"
+  parents: [architecture, decisions]
+- slug: session-search
+  title: Session Search
+  description: "Raw transcript search and distilled memory recall — two distinct tools
+    for finding what was said versus what was learned"
+  parents: [architecture, memory-and-knowledge, sessions]
+- slug: connections
+  title: Connections
+  description: Saved LLM provider connections -- URL resolution, keyless 
+    local/custom readiness, per-feature routing, and reasoning-effort control
+  parents: [architecture, decisions]
