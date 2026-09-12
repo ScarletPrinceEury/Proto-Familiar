@@ -188,7 +188,7 @@ export async function decideReachoutViaLLM({
 
   const [{ static: identityContext }, recentMessages, baseline, recentMemoryBlock] = await Promise.all([
     enrichFn({ staticOnly: true }).catch(() => ({ static: '' })),
-    getRecentMessagesFn({ limit: 6 }).catch(() => []),
+    getRecentMessagesFn({ limit: 6, prefer: 'ward' }).catch(() => []),
     Promise.resolve().then(() => getBaselineFn({ now: nowMs, settings: s })).catch(() => ({ hasBaseline: false })),
     Promise.resolve().then(() => getRecentMemoriesFn({ days: 2, limit: 8, now: nowMs })).catch(() => ''),
   ]);

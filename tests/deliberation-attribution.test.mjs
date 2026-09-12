@@ -13,6 +13,7 @@ import {
   formatRecentMessagesForContext,
   formatSliceProvenanceLines,
   getRecentSessionMessages,
+  logHasWardTurn,
 } from '../cerebellum.js';
 import { sessionLogKind, isWardReadableLog } from '../src/sessions/session-search.js';
 import { recordReachOut, recentReachOuts, formatReachOutBlock } from '../src/warmth/reach-out-log.js';
@@ -164,6 +165,55 @@ test('getRecentSessionMessages: a ward-private log → kind ward-private, hasWar
     assert.equal(turns.session.kind, 'ward-private');
     assert.equal(turns.session.hasWardTurn, true);
     assert.deepEqual(turns.session.roster, [], 'ward-private turns carry no speaker');
+  });
+});
+
+// ── slice-selection policy (follow-up): prefer:'ward' ───────────────────────
+
+test("getRecentSessionMessages prefer:'ward' → skips a more-recent group room for the ward's own session", async () => {
+  await withLogs([
+    { name: 'ward-own', log: { sessionId: 's-ward', audienceTag: 'ward-private', messages: [
+      { role: 'user', content: 'I had a rough morning', timestamp: iso(120) },
+      { role: 'assistant', content: 'tell me about it', timestamp: iso(119) },
+    ] } },
+    // Most-recently-touched is a group room with NONE of my human's turns.
+    { name: 'live-room', log: {
+      sessionId: 's-room', audienceTag: 'circle-friends',
+      location: { kind: 'guild', key: 'discord:guild:1:channel:2', label: 'the kitchen' },
+      messages: [ { role: 'user', content: 'pizza later?', speaker: 'Alice', timestamp: iso(4) } ],
+    } },
+  ], async (dir) => {
+    const recent = await getRecentSessionMessages({ logsDir: dir, prefer: 'recent' });
+    assert.equal(recent.session.kind, 'group', 'default still takes the most-recent log');
+
+    const ward = await getRecentSessionMessages({ logsDir: dir, prefer: 'ward' });
+    assert.equal(ward.session.kind, 'ward-private', 'ward-preferred reaches back to my human\'s own session');
+    assert.equal(ward.session.hasWardTurn, true);
+    assert.match(formatRecentMessagesForContext(ward, NOW), /rough morning/);
+  });
+});
+
+test('logHasWardTurn: a group room where my human speaks counts as theirs (ward detected by name slug)', () => {
+  // ward-private log with no speaker → theirs via kind.
+  assert.equal(logHasWardTurn({ audienceTag: 'ward-private', messages: [{ role: 'user', content: 'x' }] }, 'maus'), true);
+  // group room, my human speaks (speaker slugs to the ward name) → theirs.
+  assert.equal(logHasWardTurn({ audienceTag: 'circle', location: { kind: 'guild', key: 'discord:guild:1:channel:2' },
+    messages: [{ role: 'user', content: 'hi', speaker: 'Alice' }, { role: 'user', content: 'not great today', speaker: 'Maus' }] }, 'maus'), true);
+  // group room, only villagers → not theirs.
+  assert.equal(logHasWardTurn({ audienceTag: 'circle', location: { kind: 'guild', key: 'discord:guild:1:channel:2' },
+    messages: [{ role: 'user', content: 'hi', speaker: 'Alice' }] }, 'maus'), false);
+  // ward-private but no ward name configured → a no-speaker turn is still theirs (kind).
+  assert.equal(logHasWardTurn({ audienceTag: null, messages: [{ role: 'user', content: 'x' }] }, ''), true);
+});
+
+test("getRecentSessionMessages prefer:'ward' → falls back to the most-recent log when the ward has spoken in none", async () => {
+  await withLogs([
+    { name: 'room-a', log: { sessionId: 's-a', audienceTag: 'circle-x', location: { kind: 'guild', key: 'discord:guild:1:channel:2', label: 'a' }, messages: [ { role: 'user', content: 'x', speaker: 'Alice', timestamp: iso(30) } ] } },
+    { name: 'room-b', log: { sessionId: 's-b', audienceTag: 'circle-y', location: { kind: 'guild', key: 'discord:guild:3:channel:4', label: 'b' }, messages: [ { role: 'user', content: 'y', speaker: 'Bob', timestamp: iso(5) } ] } },
+  ], async (dir) => {
+    const ward = await getRecentSessionMessages({ logsDir: dir, prefer: 'ward' });
+    assert.equal(ward.session.sessionId, 's-b', 'no ward turn anywhere → most-recent log');
+    assert.equal(ward.session.hasWardTurn, false, 'and the slice is honestly flagged as not theirs');
   });
 });
 

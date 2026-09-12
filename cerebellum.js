@@ -282,7 +282,28 @@ export const readPageWatchEvents     = ()      => readEventLog(PAGE_WATCH_LOG_FI
  * otherwise bury the one exchange where my human said how something went). The
  * span read is still capped at `max` turns so a busy day can't blow the prompt.
  */
-export async function getRecentSessionMessages({ limit = 8, since = null, max = 60, logsDir = LOGS_DIR } = {}) {
+// A user turn is my human's when it has no speaker in a ward-private log, or its
+// speaker slugs to my human's configured name (a villager's name never does).
+// The ONE predicate behind both the slice's `hasWardTurn` and ward-preferred
+// selection, so the two can never drift.
+function isWardUserTurn(m, kind, wardSlug) {
+  if (!m || m.role !== 'user') return false;
+  const sp = String(m.speaker ?? '').trim();
+  return sp ? (!!wardSlug && slugifyLabel(sp) === wardSlug) : (kind === 'ward-private');
+}
+function wardSlugNow() {
+  try { const n = (readSettingsSync()?.userName || '').trim(); return n ? slugifyLabel(n) : ''; }
+  catch { return ''; }
+}
+/** Does this parsed log contain any of my human's OWN turns? (whole-log; pure —
+ *  exported so ward-preferred selection can be pinned without the env's name.) */
+export function logHasWardTurn(data, wardSlug) {
+  const kind = sessionLogKind(data);
+  const msgs = Array.isArray(data?.messages) ? data.messages : [];
+  return msgs.some(m => isWardUserTurn(m, kind, wardSlug));
+}
+
+export async function getRecentSessionMessages({ limit = 8, since = null, max = 60, logsDir = LOGS_DIR, prefer = 'recent' } = {}) {
   try {
     const files = (await fsp.readdir(logsDir)).filter(f => f.endsWith('.json'));
     if (!files.length) return [];
@@ -290,10 +311,37 @@ export async function getRecentSessionMessages({ limit = 8, since = null, max = 
       files.map(f => fsp.stat(path.join(logsDir, f)).then(s => ({ f, mtime: s.mtimeMs }))),
     );
     stats.sort((a, b) => b.mtime - a.mtime);
-    const file = stats[0].f;
-    const raw  = await fsp.readFile(path.join(logsDir, file), 'utf8');
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.messages)) return [];
+
+    const wardSlug = wardSlugNow();
+    const readLog = async (f) => {
+      try { const d = JSON.parse(await fsp.readFile(path.join(logsDir, f), 'utf8')); return Array.isArray(d?.messages) ? d : null; }
+      catch { return null; }
+    };
+
+    // Selection. 'recent' (default, unchanged) = the most-recently-touched log.
+    // 'ward' = the most recent log that actually contains my human's OWN turns,
+    // so a ward-directed deliberation reasons from what THEY said, not from a
+    // group room that merely happened to be touched last (the warm-reach-out
+    // incident). A group room where my human is actively speaking still wins —
+    // it has their turns. Falls back to the most-recent log when they've spoken
+    // in none (the honest `.session` metadata then flags the slice as not theirs).
+    let file = null, data = null;
+    if (prefer === 'ward') {
+      let firstReadable = null;
+      for (const st of stats) {
+        const d = await readLog(st.f);
+        if (!d) continue;
+        if (!firstReadable) firstReadable = { f: st.f, d };
+        if (logHasWardTurn(d, wardSlug)) { file = st.f; data = d; break; }
+      }
+      if (!data && firstReadable) { file = firstReadable.f; data = firstReadable.d; }
+    }
+    if (!data) {
+      file = stats[0].f;
+      data = await readLog(file);
+    }
+    if (!data) return [];
+
     const turns = data.messages.filter(m => m.role === 'user' || m.role === 'assistant');
     const cutoff = since == null ? null : (typeof since === 'number' ? since : Date.parse(since));
     let slice;
@@ -307,7 +355,7 @@ export async function getRecentSessionMessages({ limit = 8, since = null, max = 
     } else {
       slice = turns.slice(-limit);
     }
-    return attachSliceProvenance(slice, data, file);
+    return attachSliceProvenance(slice, data, file, wardSlug);
   } catch {
     return [];
   }
@@ -328,13 +376,11 @@ export async function getRecentSessionMessages({ limit = 8, since = null, max = 
  * log, or its speaker slugs to my human's configured name (a villager's name
  * never does). Pure over the parsed log; never throws.
  */
-function attachSliceProvenance(slice, data, file) {
+function attachSliceProvenance(slice, data, file, wardSlug = wardSlugNow()) {
   if (!Array.isArray(slice)) return slice;
   let session;
   try {
     const kind = sessionLogKind(data);
-    const wardName = (() => { try { return (readSettingsSync()?.userName || '').trim(); } catch { return ''; } })();
-    const wardSlug = wardName ? slugifyLabel(wardName) : '';
     const roster = new Set();
     let hasWardTurn = false;
     let wardLastTurnMs = null;
@@ -342,8 +388,7 @@ function attachSliceProvenance(slice, data, file) {
       if (m.role !== 'user') continue;
       const sp = String(m.speaker ?? '').trim();
       if (sp) roster.add(sp);
-      const isWard = sp ? (!!wardSlug && slugifyLabel(sp) === wardSlug) : (kind === 'ward-private');
-      if (isWard) {
+      if (isWardUserTurn(m, kind, wardSlug)) {
         hasWardTurn = true;
         const t = m.timestamp ? Date.parse(m.timestamp) : NaN;
         if (Number.isFinite(t) && (wardLastTurnMs == null || t > wardLastTurnMs)) wardLastTurnMs = t;
@@ -818,7 +863,7 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // recent conversation log in parallel. Both degrade gracefully to empty.
   const [{ static: identityContext }, recentMessages] = await Promise.all([
     enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
-    getRecentSessionMessages({ limit: 8 }),
+    getRecentSessionMessages({ limit: 8, prefer: 'ward' }),
   ]);
 
   // [Now] wall-clock anchor — same shape the chat-turn gets, so the

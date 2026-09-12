@@ -132,11 +132,14 @@ words as the ward's own. A challenged reach-out can be verified against a real s
 instead of the Familiar having to guess or deny.
 
 **Negative / deferred:** Slice *selection* was deliberately left unchanged — a ward-directed
-deliberation still reads the globally most-recently-touched log, not the ward's own most recent
-session. Whether ward-directed deliberations (triage in particular) should prefer the ward's
-own session over the global most-recent file is an open, ward-decided follow-up. The same
-speaker-stamping gap named here for deliberations was also named, separately, for the browser
-tome-writer surface (the PR #408 follow-up); that gap is not closed by this change.
+deliberation read the globally most-recently-touched log, not the ward's own most recent
+session. **Resolved (0.12.2-alpha):** ward-directed deliberations (reach-out, noticing, triage)
+now pass `prefer:'ward'` to `getRecentSessionMessages`, which selects the most recent log that
+actually contains the ward's OWN turns (a group room where the ward is speaking still wins; it
+falls back to the global most-recent log, honestly flagged, only when the ward has spoken in
+none). The separately-named "browser tome-writer speaker-stamping gap" turned out to be **already
+closed** — `generateTopicSummary` (app.js) threads `speaker` onto shared-room villager turns and
+prefixes `[Name]:`, landed in PR #409; the "still open" note here was stale.
 
 ## Related
 
