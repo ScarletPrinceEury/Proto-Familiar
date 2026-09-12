@@ -113,6 +113,19 @@ The job-brief group's prompts kept their existing first-person reflection bodies
 
 Vision-describe stays in `user` role because the image must ride in a user turn; the role cannot change without restructuring the multimodal carrier. It is the one deliberate exception to the cognition axis, since the constraint is the multimodal message shape, not the entity-as-subject framing.
 
+## A related gap this decision left open
+
+PR #408's name-field rollout, which stamps `user`-role turns with a code-minted speaker
+handle, deliberately skipped the deliberation call sites this decision governs — reach-out,
+noticing, and triage build their context through `callProviderChat`, not the live chat message
+path #408 targeted. That gap meant every `user` turn in a deliberation's recent-conversation
+slice rendered as the ward's own words regardless of who actually spoke, which surfaced as a
+real incident (a warm reach-out addressed to the ward that was actually about a villager's
+words). See [Slice provenance is captured at the read, never reconstructed on
+recall](slice-provenance-captured-at-read) for the incident and the fix that closes this gap
+for reach-out, noticing, and triage; the same gap on the browser tome-writer surface remains
+open.
+
 ## Related
 
 - [Entity-as-subject](../concepts/entity-as-subject) — the design stance this decision enforces at the message level
@@ -122,3 +135,4 @@ Vision-describe stays in `user` role because the image must ride in a user turn;
 - [Pondering](../architecture/pondering) — one of the autonomous loops using this pattern
 - [Session memory extraction](../architecture/session-memory-extraction) — the reference implementation of the spoken-output axis (role-faithful transcript assembly)
 - [Tomes and lore](../architecture/tomes-and-lore) — tome-graduation, where a quoted tome entry rides as reference text inside the system body rather than its own turn
+- [Slice provenance is captured at the read, never reconstructed on recall](slice-provenance-captured-at-read) — closes the speaker-rendering gap this decision's message-role scope left open for reach-out, noticing, and triage

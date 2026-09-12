@@ -210,6 +210,15 @@ escalation indefinitely [@architecture-doc]. `contactDeadlineFor()` and
 for behavioral changes [@claude-md]. Confirmed-delivery-over-enqueue-time was the answer settled
 on when this exact tradeoff was raised in review [@fable-review-conversation].
 
+**Slice provenance (0.12.1-alpha, PR #427):** the triage prompt's "recent conversation" block
+used to label every `user` turn with the ward's own name, even when the slice came from a
+group room where a villager had spoken. A warm reach-out incident surfaced the same bug one
+layer over — see [Slice provenance is captured at the read, never reconstructed on
+recall](../decisions/slice-provenance-captured-at-read) — and the fix applies to triage too:
+the session block now renders each turn's real speaker through the shared name-field resolver
+and states plainly, in a code-computed line, when none of the slice is the ward's own words.
+Without this fix, the distress read could be built from someone else's turns [@cerebellum].
+
 `cerebellum.decideTriageViaLLM` (the triage deliberation feeding this escalation path) gates on
 `connectionReady` and resolves its endpoint through `resolveProviderUrl`, both from
 `providers.js` — the same readiness check every other LLM call site uses (0.11.91-alpha). This
@@ -323,3 +332,6 @@ itself, which no ward setting can reach around [@voice-audio-tags] [@future-feat
   every scoring and deliberation input this page describes.
 - [Providers and connection readiness](providers) — the connection-readiness gate silence-triage
   now shares with every other LLM call site, and why that change needed its own ward sign-off.
+- [Slice provenance is captured at the read, never reconstructed on recall](../decisions/slice-provenance-captured-at-read)
+  — the fix that makes triage's recent-conversation block state who actually spoke, instead of
+  labelling every turn as the ward's own.
