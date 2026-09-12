@@ -217,6 +217,42 @@ test("getRecentSessionMessages prefer:'ward' → falls back to the most-recent l
   });
 });
 
+// ── prefer:'readable' (triage "both" second slice) ──────────────────────────
+
+test("getRecentSessionMessages prefer:'readable' → most-recent ward-readable room, villager DM skipped", async () => {
+  await withLogs([
+    { name: 'group', log: { sessionId: 's-group', audienceTag: 'circle', location: { kind: 'guild', key: 'discord:guild:1:channel:2', label: 'lounge' }, messages: [ { role: 'user', content: 'hey', speaker: 'Alice', timestamp: iso(40) } ] } },
+    // Most recently touched is a villager's 1:1 DM — must NOT be chosen.
+    { name: 'vdm', log: { sessionId: 's-vdm', audienceTag: 'villager-bob', location: { kind: 'villager-dm', key: 'discord:dm:9', label: 'Bob' }, messages: [ { role: 'user', content: 'private to bob', speaker: 'Bob', timestamp: iso(3) } ] } },
+  ], async (dir) => {
+    const live = await getRecentSessionMessages({ logsDir: dir, prefer: 'readable' });
+    assert.equal(live.session.sessionId, 's-group', "villager 1:1 DM is gated out of the readable view");
+    assert.equal(live.session.kind, 'group');
+  });
+});
+
+test("getRecentSessionMessages prefer:'readable' → [] when the only logs are villager DMs (no readable context)", async () => {
+  await withLogs([
+    { name: 'vdm', log: { sessionId: 's-vdm', audienceTag: 'villager-bob', location: { kind: 'villager-dm', key: 'discord:dm:9' }, messages: [ { role: 'user', content: 'x', speaker: 'Bob', timestamp: iso(3) } ] } },
+  ], async (dir) => {
+    const live = await getRecentSessionMessages({ logsDir: dir, prefer: 'readable' });
+    assert.deepEqual(live, [], 'no ward-readable log → empty, never a villager DM');
+    assert.equal(live.session, undefined);
+  });
+});
+
+test("getRecentSessionMessages prefer:'ward' → falls back to a ward-readable group, never a more-recent villager DM", async () => {
+  await withLogs([
+    { name: 'ward', log: { sessionId: 's-ward', audienceTag: 'ward-private', messages: [ { role: 'user', content: 'my words', timestamp: iso(90) } ] } },
+    { name: 'group', log: { sessionId: 's-group', audienceTag: 'circle', location: { kind: 'guild', key: 'discord:guild:1:channel:2' }, messages: [ { role: 'user', content: 'villager chatter', speaker: 'Alice', timestamp: iso(20) } ] } },
+    { name: 'vdm', log: { sessionId: 's-vdm', audienceTag: 'villager-bob', location: { kind: 'villager-dm', key: 'discord:dm:9' }, messages: [ { role: 'user', content: 'bob secret', speaker: 'Bob', timestamp: iso(2) } ] } },
+  ], async (dir) => {
+    // Ward has a turn → picks the ward-private session (never the villager DM).
+    const ward = await getRecentSessionMessages({ logsDir: dir, prefer: 'ward' });
+    assert.equal(ward.session.sessionId, 's-ward');
+  });
+});
+
 // ── §2.4 the receipt: source on the reach-out log ───────────────────────────
 
 test('recordReachOut + formatReachOutBlock: source is stored and rendered', async () => {

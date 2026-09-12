@@ -95,7 +95,7 @@ import {
 } from './src/gcal/gcal-google.js';
 import { getRecentOfferInfo, rekeySurfaceEventIds } from './src/pondering/surface-events.js';
 import { appendWardProactiveTurn, isWardConversationalKind, proactiveMessageId } from './src/sessions/proactive-session.js';
-import { searchSessionLogs, sessionLogKind } from './src/sessions/session-search.js';
+import { searchSessionLogs, sessionLogKind, isWardReadableLog } from './src/sessions/session-search.js';
 import { speakerNameField } from './name-field.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -318,25 +318,34 @@ export async function getRecentSessionMessages({ limit = 8, since = null, max = 
       catch { return null; }
     };
 
-    // Selection. 'recent' (default, unchanged) = the most-recently-touched log.
-    // 'ward' = the most recent log that actually contains my human's OWN turns,
-    // so a ward-directed deliberation reasons from what THEY said, not from a
-    // group room that merely happened to be touched last (the warm-reach-out
-    // incident). A group room where my human is actively speaking still wins —
-    // it has their turns. Falls back to the most-recent log when they've spoken
-    // in none (the honest `.session` metadata then flags the slice as not theirs).
+    // Selection:
+    //   'recent'   (default, unchanged) — the most-recently-touched log, any kind.
+    //   'ward'     — the most recent log that actually contains my human's OWN
+    //                turns, so a ward-directed deliberation reasons from what THEY
+    //                said, not a group room that merely happened to be touched last
+    //                (the warm-reach-out incident). A group room where my human is
+    //                actively speaking still wins (it has their turns). When they've
+    //                spoken in none, falls back to the most recent WARD-READABLE log
+    //                (honestly flagged not-theirs) — never a villager's 1:1 DM.
+    //   'readable' — the most recent ward-readable log (ward-private OR group),
+    //                skipping villager DMs entirely. Used for triage's "also live
+    //                right now" second slice, so a villager's private DM can never
+    //                be surfaced into my human's triage context (content gate).
     let file = null, data = null;
-    if (prefer === 'ward') {
-      let firstReadable = null;
+    if (prefer === 'ward' || prefer === 'readable') {
+      let firstWard = null, firstReadable = null;
       for (const st of stats) {
         const d = await readLog(st.f);
         if (!d) continue;
-        if (!firstReadable) firstReadable = { f: st.f, d };
-        if (logHasWardTurn(d, wardSlug)) { file = st.f; data = d; break; }
+        if (!firstReadable && isWardReadableLog(d)) firstReadable = { f: st.f, d };
+        if (!firstWard && logHasWardTurn(d, wardSlug)) firstWard = { f: st.f, d };
+        if (prefer === 'ward' && firstWard) break;
+        if (prefer === 'readable' && firstReadable) break;
       }
-      if (!data && firstReadable) { file = firstReadable.f; data = firstReadable.d; }
-    }
-    if (!data) {
+      const pick = prefer === 'ward' ? (firstWard || firstReadable) : firstReadable;
+      if (!pick) return [];   // no ward-readable context — never fall back to a villager DM
+      file = pick.f; data = pick.d;
+    } else {
       file = stats[0].f;
       data = await readLog(file);
     }
@@ -861,9 +870,14 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
 
   // Pull identity context (who the Familiar is, who the user is) and the
   // recent conversation log in parallel. Both degrade gracefully to empty.
-  const [{ static: identityContext }, recentMessages] = await Promise.all([
+  const [{ static: identityContext }, recentMessages, liveSlice] = await Promise.all([
     enrich('', { staticOnly: true }).catch(() => ({ static: '' })),
     getRecentSessionMessages({ limit: 8, prefer: 'ward' }),
+    // "Both" (ward decision): also the most recent ward-READABLE room right now,
+    // so a distressing group conversation my human is sitting in is in front of
+    // me too. prefer:'readable' gates out villager 1:1 DMs; it's rendered as a
+    // second, clearly-labelled block only when it's a DIFFERENT session.
+    getRecentSessionMessages({ limit: 8, prefer: 'readable' }).catch(() => []),
   ]);
 
   // [Now] wall-clock anchor — same shape the chat-turn gets, so the
@@ -899,10 +913,10 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // (ward-signed: fails toward a more accurate read, never a quieter one.)
   const humanLabel = (s?.userName || '').trim() || 'My human';
   const namesOff = process.env.PROTO_FAMILIAR_NAME_FIELDS_DISABLED === '1';
-  const triageProvenance = formatSliceProvenanceLines(recentMessages.session, {
-    wardLastSeenPhrase: relativeTime(lastUserAt, nowMs) || null,
-  });
-  const sessionBody = recentMessages.map(m => {
+  const wardLastSeenPhrase = relativeTime(lastUserAt, nowMs) || null;
+  // One body renderer for both the primary (my human's own words) and the
+  // secondary (the live room) slices — same label/speaker rules, no copy-paste.
+  const renderSliceBody = (slice) => slice.map(m => {
     const text = typeof m.content === 'string'
       ? m.content
       : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
@@ -913,9 +927,20 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
     const prefix = when ? `[${who} · ${when}]` : `[${who}]`;
     return `  ${prefix}: ${text.slice(0, 400)}`;
   }).join('\n');
-  const sessionBlock = recentMessages.length
-    ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):${triageProvenance ? `\n${triageProvenance}` : ''}\n${sessionBody}`
+
+  const triageProvenance = formatSliceProvenanceLines(recentMessages.session, { wardLastSeenPhrase });
+  let sessionBlock = recentMessages.length
+    ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):${triageProvenance ? `\n${triageProvenance}` : ''}\n${renderSliceBody(recentMessages)}`
     : '\nNo recent conversation on record.';
+  // "Both": append the live ward-readable room when it's a DIFFERENT session from
+  // my human's own slice. It carries its own provenance line (so a villager's
+  // words there are never read AS my human's crisis) — it's context for what
+  // they may be sitting in, not their own distress speech.
+  if (liveSlice?.length && liveSlice.session && recentMessages.session
+      && liveSlice.session.sessionId !== recentMessages.session.sessionId) {
+    const liveProvenance = formatSliceProvenanceLines(liveSlice.session, { wardLastSeenPhrase });
+    sessionBlock += `\n\nAlso live right now in a room my human can see — context for what they may be reading, NOT their own words:${liveProvenance ? `\n${liveProvenance}` : ''}\n${renderSliceBody(liveSlice)}`;
+  }
 
   const contactsBlock = contacts.length
     ? `\nTrusted contacts configured (people I could alert if the situation warrants human presence):\n${contacts.map(c => `  - ${c.name} (via ${c.channel ?? 'discord'})`).join('\n')}\n\nContacting one of these is a meaningful escalation — appropriate when I judge this needs more than I can provide alone. If I include contactHuman, that message will be delivered to that person AND shown in my human's chat. Nothing is covert.`
