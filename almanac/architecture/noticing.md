@@ -53,6 +53,14 @@ The ending swaps by state: when open outcomes exist, the prompt directs "update 
 
 ### Context window: look-back to the oldest open event
 
+`getRecentSessionMessages()` reads back over the ward's own private turns to check whether an
+outcome was already mentioned. Its slice is stamped with provenance metadata — which log it
+came from, who was in the room, whether any turn is the ward's own — and the noticing prompt
+renders a code-computed line naming the room when the slice is not an ordinary ward-private
+one; see [Slice provenance is captured at the read, never reconstructed on
+recall](../decisions/slice-provenance-captured-at-read) for the incident this closes and why
+selection itself stays unchanged [@server-js].
+
 `getRecentSessionMessages()` gained a `since` bound [@noticing-js]. When an outcome is open, the noticing turn reads back to the **oldest open event** (capped at `max`=60 messages) instead of the fixed 6-turn tail [@noticing-js]. This solves the "chicken flood" case: a day of unrelated chatter that would bury the exchange where the ward already said how it went [@noticing-outcomes-js]. The prompt now directs the model to check the conversation first, so it can close on sight without repeating the ask [@noticing-outcomes-js].
 
 ## Enforcement: the no-nag ledger (0.11.86)
@@ -131,3 +139,4 @@ Noticing runs on self-paced cadence via `set_next_check`, clamped to 5 minutes (
 - [Contact-rhythm baselines](../decisions/contact-rhythm-baselines) — the p90 contact gap signal noticing reads.
 - [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) — the decision behind the re-resolution sweep described above.
 - [Session Memory Extraction](session-memory-extraction) — where a fact first gets filed with fuzzy attribution.
+- [Slice provenance is captured at the read, never reconstructed on recall](../decisions/slice-provenance-captured-at-read) — the fix that stamps noticing's recent-conversation slice with who was actually in the room.

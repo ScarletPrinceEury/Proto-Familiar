@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Twenty-six decisions live here. Grouped by the question each one answers:
+Twenty-nine decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -46,6 +46,10 @@ reoccurring.
 - [Trust tiers gate reads, not writes](trust-tiers-gate-reads-not-writes) — why Village's
   category/grant system only ever controls what a session can be told, never what it can write
   into memory, and how that differs from `injection-guard.js`.
+- [Slice provenance is captured at the read, never reconstructed on recall](slice-provenance-captured-at-read)
+  — the incident where a warm reach-out reasoned from a villager's words as if they were the
+  ward's own, and the fix that stamps every deliberation slice with who was actually in the
+  room at the moment it is read.
 - [Voluntary and autonomic lanes in Cerebellum](cerebellum-consent-lanes) — a proposed,
   not-yet-built consent distinction for any future feature that continuously renders
   Familiar-side state outward.

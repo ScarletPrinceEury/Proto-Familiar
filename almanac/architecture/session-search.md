@@ -50,6 +50,8 @@ The two tools have different retention and scope profiles: `recall` is for reach
 
 The executor validates the turn is private, then calls `searchSessionLogs` from the session-search module [@cerebellum-search]. The search reads log files from the logs directory, filters by `isWardReadableLog`, and ranks results by query-term count (more matches first) and recency [@session-search-js]. The function is pure over the filesystem — it never throws (unreadable logs are skipped, a missing directory yields an empty result set) [@session-search-js].
 
+`isWardReadableLog` is expressed over `sessionLogKind(log)`, a shared classifier that also backs the provenance metadata `getRecentSessionMessages` (`cerebellum.js`) attaches to a deliberation's recent-conversation slice — one rule for "whose conversation is this," used both to decide what `search_conversation` may read and to state, in warm reach-out/noticing/triage prompts, which room a slice came from. See [Slice provenance is captured at the read, never reconstructed on recall](../decisions/slice-provenance-captured-at-read) for the incident that made the two call sites share this classifier [@session-search-js].
+
 Search results are returned as readable snippets, each including who said it (the ward or the Familiar), when it was said (in relative time like "3 days ago"), and the text (truncated to 240 characters) [@cerebellum-search].
 
 ## Testing
@@ -63,3 +65,4 @@ The tool is tested for keyword + time-window modes, group-in / villager-DM-out b
 - [Phylactery](phylactery) — the distilled memory store that `recall` searches, contrasted with the raw transcript search here.
 - [Session lifecycle](session-lifecycle) — where session logs are created and stored.
 - [Content-based memory gating](content-gating) — how audience and topic grants apply to `recall` (but not to `search_conversation` since it runs only on private turns).
+- [Slice provenance is captured at the read, never reconstructed on recall](../decisions/slice-provenance-captured-at-read) — the incident and fix that made `sessionLogKind` a shared classifier between this page's readability boundary and a deliberation's recent-conversation metadata.
