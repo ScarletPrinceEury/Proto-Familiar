@@ -33,7 +33,7 @@
  */
 
 import path from 'path';
-import { slugCore } from './slug-ids.js';
+import { slugCore, slugifyLabel } from './slug-ids.js';
 import { fileURLToPath } from 'url';
 import { promises as fsp, readFileSync, mkdirSync } from 'fs';
 
@@ -95,7 +95,8 @@ import {
 } from './src/gcal/gcal-google.js';
 import { getRecentOfferInfo, rekeySurfaceEventIds } from './src/pondering/surface-events.js';
 import { appendWardProactiveTurn, isWardConversationalKind, proactiveMessageId } from './src/sessions/proactive-session.js';
-import { searchSessionLogs } from './src/sessions/session-search.js';
+import { searchSessionLogs, sessionLogKind } from './src/sessions/session-search.js';
+import { speakerNameField } from './name-field.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -281,31 +282,87 @@ export const readPageWatchEvents     = ()      => readEventLog(PAGE_WATCH_LOG_FI
  * otherwise bury the one exchange where my human said how something went). The
  * span read is still capped at `max` turns so a busy day can't blow the prompt.
  */
-export async function getRecentSessionMessages({ limit = 8, since = null, max = 60 } = {}) {
+export async function getRecentSessionMessages({ limit = 8, since = null, max = 60, logsDir = LOGS_DIR } = {}) {
   try {
-    const files = (await fsp.readdir(LOGS_DIR)).filter(f => f.endsWith('.json'));
+    const files = (await fsp.readdir(logsDir)).filter(f => f.endsWith('.json'));
     if (!files.length) return [];
     const stats = await Promise.all(
-      files.map(f => fsp.stat(path.join(LOGS_DIR, f)).then(s => ({ f, mtime: s.mtimeMs }))),
+      files.map(f => fsp.stat(path.join(logsDir, f)).then(s => ({ f, mtime: s.mtimeMs }))),
     );
     stats.sort((a, b) => b.mtime - a.mtime);
-    const raw  = await fsp.readFile(path.join(LOGS_DIR, stats[0].f), 'utf8');
+    const file = stats[0].f;
+    const raw  = await fsp.readFile(path.join(logsDir, file), 'utf8');
     const data = JSON.parse(raw);
     if (!Array.isArray(data.messages)) return [];
     const turns = data.messages.filter(m => m.role === 'user' || m.role === 'assistant');
     const cutoff = since == null ? null : (typeof since === 'number' ? since : Date.parse(since));
+    let slice;
     if (Number.isFinite(cutoff)) {
       // Keep everything from the cutoff on (an undated legacy turn can't be
       // placed, so it's kept rather than silently dropped), capped at `max`.
-      return turns.filter(m => {
+      slice = turns.filter(m => {
         const t = m.timestamp ? Date.parse(m.timestamp) : NaN;
         return !Number.isFinite(t) || t >= cutoff;
       }).slice(-max);
+    } else {
+      slice = turns.slice(-limit);
     }
-    return turns.slice(-limit);
+    return attachSliceProvenance(slice, data, file);
   } catch {
     return [];
   }
+}
+
+/**
+ * Make a recent-message slice HONEST about what it is: a non-enumerable
+ * `.session` describing which log it came from and who was in it. Deliberations
+ * that tick while a busy GROUP room is the most-recently-touched log were
+ * reasoning about villagers' words as if my human had said them (the warm
+ * reach-out "I've been thinking about the question you asked" incident). The
+ * slice stays a plain array of turns for every caller; the metadata rides
+ * alongside for the ones that want to state the room and catch a no-ward slice.
+ *
+ * `kind` reuses `sessionLogKind` (session-search.js) so readability and this
+ * classifier never drift. `hasWardTurn` is the gate that would have caught the
+ * incident: a user turn is my human's when it has no speaker in a ward-private
+ * log, or its speaker slugs to my human's configured name (a villager's name
+ * never does). Pure over the parsed log; never throws.
+ */
+function attachSliceProvenance(slice, data, file) {
+  if (!Array.isArray(slice)) return slice;
+  let session;
+  try {
+    const kind = sessionLogKind(data);
+    const wardName = (() => { try { return (readSettingsSync()?.userName || '').trim(); } catch { return ''; } })();
+    const wardSlug = wardName ? slugifyLabel(wardName) : '';
+    const roster = new Set();
+    let hasWardTurn = false;
+    let wardLastTurnMs = null;
+    for (const m of slice) {
+      if (m.role !== 'user') continue;
+      const sp = String(m.speaker ?? '').trim();
+      if (sp) roster.add(sp);
+      const isWard = sp ? (!!wardSlug && slugifyLabel(sp) === wardSlug) : (kind === 'ward-private');
+      if (isWard) {
+        hasWardTurn = true;
+        const t = m.timestamp ? Date.parse(m.timestamp) : NaN;
+        if (Number.isFinite(t) && (wardLastTurnMs == null || t > wardLastTurnMs)) wardLastTurnMs = t;
+      }
+    }
+    session = {
+      sessionId:     data.sessionId ?? file.replace(/\.json$/, ''),
+      audienceTag:   data.audienceTag ?? null,
+      kind,
+      label:         data.location?.label ?? null,
+      roster:        [...roster],
+      hasWardTurn,
+      wardLastTurnAt: wardLastTurnMs != null ? new Date(wardLastTurnMs).toISOString() : null,
+    };
+  } catch { session = null; }
+  if (session) {
+    Object.defineProperty(slice, 'session', { value: session, enumerable: false, writable: true, configurable: true });
+  }
+  return slice;
 }
 
 /**
@@ -317,18 +374,65 @@ export async function getRecentSessionMessages({ limit = 8, since = null, max = 
  */
 export function formatRecentMessagesForContext(messages = [], now = Date.now()) {
   if (!Array.isArray(messages) || !messages.length) return '';
+  // When name-fields are off, render as before (Them/Me) — belt-and-suspenders
+  // with the master switch, no separate toggle for this line.
+  const namesOff = process.env.PROTO_FAMILIAR_NAME_FIELDS_DISABLED === '1';
   return messages
     .map(m => {
       const text = typeof m.content === 'string'
         ? m.content
         : (Array.isArray(m.content) ? (m.content.find(c => c?.type === 'text')?.text ?? '') : '');
       const when   = m.timestamp ? relativeTime(m.timestamp, now) : '';
-      const who    = m.role === 'user' ? 'Them' : 'Me';
+      // Render WHO actually spoke, not a blanket 'Them'. A villager's turn in a
+      // group room carries `m.speaker`; resolve it through the same name-field
+      // policy the chat surfaces use so the handle reads consistently. A legacy
+      // row with no speaker stays 'Them' (ward-private web sessions unchanged).
+      const who = m.role === 'user'
+        ? ((!namesOff && m.speaker) ? (speakerNameField({ role: 'user', speaker: m.speaker }) || 'Them') : 'Them')
+        : 'Me';
       const prefix = when ? `[${who} · ${when}]` : `[${who}]`;
       return text.trim() ? `  ${prefix}: ${text.slice(0, 300)}` : '';
     })
     .filter(Boolean)
     .join('\n');
+}
+
+/**
+ * One or two code-emitted lines stating WHERE a recent-message slice came from,
+ * built from the `.session` metadata `getRecentSessionMessages` attaches. The
+ * line that would have caught the warm-reach-out incident: when no turn in the
+ * slice is my human's, say so plainly before the turns, so a villager's question
+ * is never read as my human's.
+ *
+ * Returns '' for an ordinary ward-private slice where my human is present (the
+ * tuned private-chat framing at the call site is kept byte-identical), and ''
+ * when name-fields are off. First person; states facts the code computed — no
+ * "attribute carefully" wording.
+ */
+export function formatSliceProvenanceLines(session, { wardLastSeenPhrase = null } = {}) {
+  if (!session) return '';
+  if (process.env.PROTO_FAMILIAR_NAME_FIELDS_DISABLED === '1') return '';
+  const isPrivate = session.kind === 'ward-private';
+  // A clean private slice with my human present needs no provenance line — the
+  // call site's own framing already says it, and changing it churns a tuned prompt.
+  if (isPrivate && session.hasWardTurn !== false) return '';
+
+  const lines = [];
+  if (isPrivate) {
+    lines.push("[Recent conversation — my human's private chat]");
+  } else {
+    const kindWord = session.kind === 'group' ? 'group room'
+      : session.kind === 'villager-dm' ? 'villager DM' : 'conversation';
+    const label = session.label ? ` "${session.label}"` : '';
+    const speakers = Array.isArray(session.roster) && session.roster.length ? session.roster.join(', ') : 'unknown';
+    lines.push(`[Recent conversation — from the ${kindWord}${label}; speakers: ${speakers}]`);
+  }
+  if (session.hasWardTurn === false) {
+    lines.push(wardLastSeenPhrase
+      ? `None of the messages below are from my human — they are from other people in that room. My human's last turn anywhere was ${wardLastSeenPhrase}.`
+      : 'None of the messages below are from my human — they are from other people in that room.');
+  }
+  return lines.join('\n');
 }
 
 // ── Channel adapters (push delivery) ─────────────────────────────
@@ -741,18 +845,31 @@ export async function decideTriageViaLLM({ threat, silenceMs, signals }) {
   // would replace real distress with "[removed:...]" and risk the triage
   // LLM dismissing genuine crisis as a jailbreak attempt. The injection
   // guard is for third-party external data, not words my human has said.
+  // Who each turn is FROM. A villager's turn in a shared room carries `speaker`;
+  // a ward-private turn (no speaker) stays my human. Labelling EVERY user turn as
+  // my human meant the distress read could be built from whoever was loudest in a
+  // group room that happened to be the most-recently-touched log — someone else's
+  // words scored as my human's crisis. This renders the real speaker, and the
+  // provenance line says plainly when NONE of the slice is my human's own words.
+  // (ward-signed: fails toward a more accurate read, never a quieter one.)
+  const humanLabel = (s?.userName || '').trim() || 'My human';
+  const namesOff = process.env.PROTO_FAMILIAR_NAME_FIELDS_DISABLED === '1';
+  const triageProvenance = formatSliceProvenanceLines(recentMessages.session, {
+    wardLastSeenPhrase: relativeTime(lastUserAt, nowMs) || null,
+  });
+  const sessionBody = recentMessages.map(m => {
+    const text = typeof m.content === 'string'
+      ? m.content
+      : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
+    const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
+    const who = m.role === 'user'
+      ? ((!namesOff && m.speaker) ? (speakerNameField({ role: 'user', speaker: m.speaker }) || humanLabel) : humanLabel)
+      : 'Me';
+    const prefix = when ? `[${who} · ${when}]` : `[${who}]`;
+    return `  ${prefix}: ${text.slice(0, 400)}`;
+  }).join('\n');
   const sessionBlock = recentMessages.length
-    ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):\n${recentMessages.map(m => {
-        const text = typeof m.content === 'string'
-          ? m.content
-          : (Array.isArray(m.content) ? (m.content.find(c => c.type === 'text')?.text ?? '') : '');
-        const when = m.timestamp ? relativeTime(m.timestamp, nowMs) : '';
-        const humanLabel = (s?.userName || '').trim() || 'My human';
-        const prefix = when
-          ? `[${m.role === 'user' ? humanLabel : 'Me'} · ${when}]`
-          : `[${m.role === 'user' ? humanLabel : 'Me'}]`;
-        return `  ${prefix}: ${text.slice(0, 400)}`;
-      }).join('\n')}`
+    ? `\nRecent conversation (what we were discussing before the silence — relative times so I see how long ago each thing was said):${triageProvenance ? `\n${triageProvenance}` : ''}\n${sessionBody}`
     : '\nNo recent conversation on record.';
 
   const contactsBlock = contacts.length
