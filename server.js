@@ -6798,7 +6798,7 @@ async function noticingDeliberate({ situationReport, threatTier, quietHours, con
   // even said hours ago and buried under later chatter, is actually in front of
   // me to close on. Information only; never a stand-down cue.
   const recentMessages = await getRecentSessionMessages(
-    oldestAtMs != null ? { since: oldestAtMs, max: 60 } : { limit: 6 },
+    oldestAtMs != null ? { since: oldestAtMs, max: 60, prefer: 'ward' } : { limit: 6, prefer: 'ward' },
   ).catch(() => []);
 
   const nowBlock = buildTimeAnchorBlock({

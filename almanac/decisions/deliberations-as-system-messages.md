@@ -123,8 +123,9 @@ slice rendered as the ward's own words regardless of who actually spoke, which s
 real incident (a warm reach-out addressed to the ward that was actually about a villager's
 words). See [Slice provenance is captured at the read, never reconstructed on
 recall](slice-provenance-captured-at-read) for the incident and the fix that closes this gap
-for reach-out, noticing, and triage; the same gap on the browser tome-writer surface remains
-open.
+for reach-out, noticing, and triage. The browser tome-writer surface was never actually a gap —
+`generateTopicSummary` (app.js) already threads `speaker` onto shared-room villager turns (PR
+#409); the earlier "remains open" note was stale.
 
 ## Related
 
