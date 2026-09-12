@@ -1,25 +1,25 @@
 ---
 title: "Session Memory Extraction"
-topics: [architecture, memory, extraction, sessions, memorization]
+topics: [architecture, sessions, memorization]
 sources:
-  - id: memorization-js
-    type: file
-    path: src/memory/memorization.js
-  - id: name-field-js
-    type: file
-    path: name-field.js
-  - id: server-js
-    type: file
-    path: server.js
-  - id: discord-gateway-js
-    type: file
-    path: src/discord/discord-gateway.js
-  - id: voice-chat-turn-js
-    type: file
-    path: src/voice/voice-chat-turn.js
-  - id: app-js
-    type: file
-    path: public/app.js
+- id: memorization-js
+  type: file
+  path: src/memory/memorization.js
+- id: name-field-js
+  type: file
+  path: name-field.js
+- id: server-js
+  type: file
+  path: server.js
+- id: discord-gateway-js
+  type: file
+  path: src/discord/discord-gateway.js
+- id: voice-chat-turn-js
+  type: file
+  path: src/voice/voice-chat-turn.js
+- id: app-js
+  type: file
+  path: public/app.js
 ---
 
 # Session Memory Extraction
