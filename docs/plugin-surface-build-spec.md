@@ -149,8 +149,10 @@ these alone.
   the host lands.
 - Adapt the Psycheros vetting guide into `docs/plugin-authoring.md` (authoring) with Familiar's
   safety-wall notes made explicit for operators; link it from the design doc.
-- Milestone owns the next MINOR (0.12 = "Grimoire" per the one-milestone-one-minor rule); everything
-  inside it bumps PATCH until the milestone lands as `0.12.0`.
+- Milestone owns a MINOR (**`0.14`**) per the one-milestone-one-minor rule; everything inside it
+  bumps PATCH until the milestone lands as `0.14.0`. (Originally pencilled in as 0.12, but `0.12.0`
+  was spent on the crisis-classifier milestone and `0.13` is the trackers milestone, so the plugin
+  surface takes `0.14`. Working name "Grimoire" is not yet settled.)
 
 ## 8. Passes (each: off-switch + tests + docs + version, in the same commit)
 
@@ -169,7 +171,7 @@ these alone.
   Deno sidecar with stdio-RPC bridge and its own off-switch. (patch)
 - **P6 — Discord media + safety-wall regression pins + authoring guide.** attachmentHook + outbound
   send; the pipeline regression that plugin context can't move the tier; `docs/plugin-authoring.md`.
-  **Ward sign-off (regression pins).** Milestone lands → `0.12.0`.
+  **Ward sign-off (regression pins).** Milestone lands → `0.14.0`.
 
 ## 9. Explicitly deferred / out of scope for the milestone
 

@@ -283,8 +283,13 @@ constants, never on string matching in prompts.
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.
 
-Each session: `docs/architecture.md` same commit; version bumps as 0.8.x
-patches (the UI overhaul still owns the minor slot).
+Each session: `docs/architecture.md` same commit. **Trackers are the next
+milestone and own the `0.13` minor** — sub-work through the build order above
+bumps `0.13.x` patches, and the milestone lands as `0.13.0`. (The spec's
+original "0.8.x patches, UI overhaul owns the minor slot" note is obsolete: that
+UI overhaul is long landed, `0.12.0` went to the crisis-classifier milestone,
+and trackers take the next minor. The plugin-surface milestone after this takes
+`0.14`.)
 
 **Do-not-touch:** no changes to crisis-signals tiers/weights beyond adding
 the bounded mood-tag source; no triage/threat gates or clamps; no villager
