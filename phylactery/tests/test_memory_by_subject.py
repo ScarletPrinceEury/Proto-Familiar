@@ -78,3 +78,56 @@ def test_projection_is_thin():
     _seed(c)
     item = memory.list_by_subject("v-sam", conn=c)[0]
     assert set(item.keys()) == {"id", "category", "brief", "date"}
+
+
+# ── Content-gating on the proactive villager read (0.12.13, ward-signed) ──────
+# When topic_grants is passed (a villager-facing proactive read), a memory ABOUT
+# the villager still only surfaces if their circle is cleared for its content_tag.
+# Both None (consent menu / ward) stays ungated.
+
+def _distinct_embed(text):
+    # A constant fake vector makes every memory sim-1.00, so the deduper merges
+    # two same-subject rows into one. Vary the vector by text so both survive.
+    import math
+    s = sum(ord(ch) for ch in text)
+    return f"[{math.cos(s)}, {math.sin(s)}, {math.cos(s * 2)}, {math.sin(s * 2)}]"
+
+
+def _seed_tagged(c):
+    with patch("phylactery.embed.embed_text", _distinct_embed):
+        memory.create("Sam likes strong tea", "daily", date_key="2026-07-01",
+                      slug="sam-tea", standalone=True, subjects=["v-sam"],
+                      content_tag="general:open", conn=c)
+        memory.create("Sam is in therapy", "daily", date_key="2026-07-02",
+                      slug="sam-therapy", standalone=True, subjects=["v-sam"],
+                      content_tag="mental-health:sensitive", conn=c)
+
+
+def test_ungated_read_still_sees_everything_about_them():
+    c = _conn(); _seed_tagged(c)
+    briefs = [i["brief"] for i in memory.list_by_subject("v-sam", conn=c)]
+    assert any("tea" in b for b in briefs) and any("therapy" in b for b in briefs), \
+        "the consent-menu / ward read (no topic_grants) must stay ungated"
+
+
+def test_content_gate_hides_a_tag_the_circle_lacks():
+    c = _conn(); _seed_tagged(c)
+    # Circle sees everyday life but not mental health.
+    items = memory.list_by_subject("v-sam", topic_grants={"general": "open"}, conn=c)
+    briefs = [i["brief"] for i in items]
+    assert any("tea" in b for b in briefs), "an open everyday memory is visible"
+    assert not any("therapy" in b for b in briefs), "a mental-health memory must NOT leak to a circle without that grant"
+
+
+def test_content_gate_shows_a_tag_the_circle_has():
+    c = _conn(); _seed_tagged(c)
+    items = memory.list_by_subject(
+        "v-sam", topic_grants={"general": "open", "mental-health": "sensitive"}, conn=c)
+    briefs = [i["brief"] for i in items]
+    assert any("therapy" in b for b in briefs), "granted, the memory surfaces"
+
+
+def test_content_gate_empty_grants_is_fail_closed():
+    c = _conn(); _seed_tagged(c)
+    assert memory.list_by_subject("v-sam", topic_grants={}, conn=c) == [], \
+        "empty grants must surface nothing (fail-closed)"

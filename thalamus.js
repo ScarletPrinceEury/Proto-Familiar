@@ -3002,13 +3002,19 @@ export async function listContentGateCandidates({ limit = 40 } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
 }
 
-export async function getMemoriesBySubject({ villagerId, limit = 50 }) {
+export async function getMemoriesBySubject({ villagerId, limit = 50, audiences = undefined, topicGrants = undefined }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, items: [] };
   try {
     const r = await mcpClient.callTool({
       name: 'memory_list_by_subject',
-      arguments: { villager_id: villagerId, limit },
+      // audiences + topic_grants gate the read (villager-facing proactive use);
+      // omitted keeps the ungated consent-menu / ward behaviour. Passed together.
+      arguments: {
+        villager_id: villagerId, limit,
+        ...(audiences !== undefined ? { audiences } : {}),
+        ...(topicGrants !== undefined ? { topic_grants: topicGrants } : {}),
+      },
     });
     return parseToolText(r, { ok: true, items: [] });
   } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }

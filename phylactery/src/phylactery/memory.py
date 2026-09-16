@@ -1346,6 +1346,7 @@ def ids_to_slugs(conn: sqlite3.Connection | None = None) -> dict:
 
 
 def list_by_subject(villager_id: str, limit: int = 50,
+                    audiences=None, topic_grants=None,
                     conn: sqlite3.Connection | None = None) -> list[dict]:
     """Kept memories where the given villager is a SUBJECT — thin
     projections (id, category, brief, date), newest first.
@@ -1355,23 +1356,43 @@ def list_by_subject(villager_id: str, limit: int = 50,
     slugs — no quote characters), so a substring id can't false-match.
     Consent-pending rows are excluded here; they surface separately as
     "planned" items.
+
+    audiences / topic_grants: when BOTH are provided (a villager-facing proactive
+    read), the SAME two-axis gate memory.search applies runs here too — the coarse
+    audience floor (`audience_in_sql`) AND the fine content-tag gate
+    (`memory_visible_to_grants`), both fail-closed. So a memory ABOUT the villager
+    still only surfaces if their circle is cleared for it (belt-and-suspenders,
+    ward-signed). Both None (the consent menu, or ward "what do you know about X")
+    = ungated, unchanged behaviour.
     """
     own_conn = conn is None
     if own_conn:
         conn = get_conn()
+    gating = isinstance(topic_grants, dict)
     try:
+        aud_clause, aud_params = audience_in_sql(audiences)
+        # Over-fetch when content-gating so the per-row topic filter still leaves
+        # enough (mirrors search's overfetch).
+        k = int(limit) * 4 if gating else int(limit)
         rows = conn.execute(
-            "SELECT id, category, content, date_key, created_at FROM memories "
-            "WHERE kind='narrative' AND consent_pending=0 AND subjects_json LIKE ? "
+            "SELECT id, category, content, date_key, created_at, content_tag FROM memories "
+            f"WHERE kind='narrative' AND consent_pending=0 AND subjects_json LIKE ? AND {aud_clause} "
             "ORDER BY created_at DESC LIMIT ?",
-            (f'%"{villager_id}"%', int(limit)),
+            [f'%"{villager_id}"%'] + aud_params + [k],
         ).fetchall()
-        return [{
-            "id": r["id"],
-            "category": r["category"],
-            "brief": (r["content"] or "")[:160],
-            "date": r["date_key"],
-        } for r in rows]
+        out = []
+        for r in rows:
+            if gating and not memory_visible_to_grants(r["content_tag"], topic_grants):
+                continue  # content-tag gate: not shared with this villager's circle
+            out.append({
+                "id": r["id"],
+                "category": r["category"],
+                "brief": (r["content"] or "")[:160],
+                "date": r["date_key"],
+            })
+            if len(out) >= int(limit):
+                break
+        return out
     finally:
         if own_conn:
             conn.close()

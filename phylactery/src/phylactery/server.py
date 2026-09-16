@@ -465,15 +465,24 @@ def memory_list_consent_pending() -> dict[str, Any]:
 
 
 @mcp.tool()
-def memory_list_by_subject(villager_id: str, limit: int = 50) -> dict[str, Any]:
+def memory_list_by_subject(villager_id: str, limit: int = 50,
+                           audiences: Optional[list] = None,
+                           topic_grants: Optional[dict] = None) -> dict[str, Any]:
     """I use this to list the kept memories where a specific villager is a
     SUBJECT — what I actually hold about them. It backs the consent menu a
     villager can open about themselves (transparency: a person may see what
     I remember about them), and I can also reach for it when my human asks
     "what do you know about X?". Thin projections only.
+
+    `audiences` + `topic_grants` gate the read the same way memory_search does —
+    the coarse audience floor AND the fine content-tag gate, both fail-closed.
+    Passed together for a villager-facing proactive read (so a memory about them
+    only surfaces if their circle is cleared for it); omitted for the consent menu
+    and ward reads (ungated transparency).
     Returns { items: [{ id, category, brief, date }] }.
     """
-    items = mem.list_by_subject(villager_id, limit=limit, conn=_c())
+    items = mem.list_by_subject(villager_id, limit=limit, audiences=audiences,
+                                topic_grants=topic_grants, conn=_c())
     return {"items": items}
 
 
