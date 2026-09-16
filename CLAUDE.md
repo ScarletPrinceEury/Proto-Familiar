@@ -542,6 +542,12 @@ Chat history is injected with `[HH:MM]` prefixes (Discord) or `⫸HH:MM⫷` pref
 
 **If you add a new path that delivers LLM output to a human or a platform:** apply `stripLlmTimestamps` (server) or `stripDisplayTimestamps` (browser) before the message leaves the system. This includes new outbox kinds, new relay functions, new channel adapters, and any future LLM response forwarded to a UI. Do not only apply it at render time — the stored content must also be clean.
 
+## ⚠️ Tool-call scaffolding is turn-internal — collapse it before history re-enters the model (0.12.4)
+
+A turn that used tools is stored as several messages: an assistant **carrier** (often `content: null`, sometimes a mid-sentence preamble like *"Let me check—"*) carrying `tool_calls`, then the `role:'tool'` results, then the final reply. That whole run is scaffolding for ONE reply. Re-injected verbatim as history on a LATER turn, the model reads its own past turns as `null` (the null carrier) or as a sentence that stops mid-thought (the preamble carrier, split from the answer it belonged to) — even though the human got the reply whole. Reported on **both** web and Discord (a null carrier renders literal `[HH:MM] null` once a machine timestamp is prepended; unified sessions carry web-origin carriers onto the Discord side).
+
+**The rule:** before conversation history reaches the model, collapse each tool-scaffolding run into the single clean assistant turn it represents — `message-sanitize.mjs` exports **`collapseToolTurns(messages)`** (drops `role:'tool'`, drops the `tool_calls` field, MERGES a carrier with the reply it precedes so all visible text survives, drops empty assistant turns; never merges two genuinely independent assistant messages). Applied at **every provider-history boundary**: `server.js` `/api/chat` (covers web + voice) and both Discord history-assembly `.map` sites (`discord-gateway.js`). It strips `tool_calls` **and** the tool results *together*, so no dangling tool-call reference ever reaches a provider. The current turn's own tool loop is unaffected (it runs server-side from live results, not from re-injected history). Memorization and the deliberation readers already filtered carriers (`m.tool_calls?.length` skip + non-empty-string content), so they were never affected — but **any NEW path that feeds stored session history back to a model must run it through `collapseToolTurns` first.**
+
 ## ⚠️ Model-facing ids are readable slugs — mandatory for every new id
 
 Any identifier the Familiar can ever read — in a tool result, a stand-in, a

@@ -17,3 +17,57 @@ export function stripLlmTimestamps(text) {
   if (typeof text !== 'string') return text;
   return text.replace(_TS_CHEVRON, '').replace(_TS_BRACKET, '');
 }
+
+// ── Tool-call scaffolding is turn-internal, not conversational history ───────
+//
+// A turn that used tools is stored as several messages: an assistant "carrier"
+// (often `content: null`, sometimes a mid-sentence preamble like "Let me check—")
+// carrying `tool_calls`, then the `role:'tool'` results, then the final reply.
+// That whole run is scaffolding for ONE reply. When it is re-injected verbatim
+// as history on a LATER turn, the model reads its own past turns as `null`
+// (the null carrier) or as a sentence that stops mid-thought (the preamble
+// carrier, split from the answer it belonged to) — even though my human received
+// the reply whole. Reported on both web and Discord (a null carrier renders as
+// literal "[HH:MM] null" once a machine timestamp is prepended); unified sessions
+// carry web-origin carriers onto the Discord side too.
+//
+// So before history reaches the model, collapse each tool-scaffolding run into
+// the single clean assistant turn it represents: drop `role:'tool'` results,
+// drop the `tool_calls` field, and MERGE a carrier with the reply it precedes so
+// all the text my human actually saw survives as one coherent turn. Two
+// genuinely independent assistant messages (e.g. proactive banners, with no
+// tool_calls and no tool run between them) are never merged. Pure; tolerates a
+// vision-era array `content` (keeps its text part).
+export function collapseToolTurns(messages = []) {
+  if (!Array.isArray(messages)) return messages;
+  const textOf = (m) => {
+    const c = m?.content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) return c.find(p => p?.type === 'text')?.text ?? '';
+    return '';
+  };
+  const out = [];
+  for (const m of messages) {
+    if (!m || typeof m !== 'object') { out.push(m); continue; }
+    if (m.role === 'tool') continue;                    // tool results never re-enter history
+    if (m.role === 'assistant') {
+      const isCarrier = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
+      const text = textOf(m);
+      const prev = out[out.length - 1];
+      // Merge only within a tool-scaffolding run: the previous emitted turn was a
+      // carrier, or this message is one. Never fold two standalone replies together.
+      if (prev && prev.role === 'assistant' && (prev._carrier || isCarrier)) {
+        prev.content = [prev.content, text].map(s => String(s ?? '').trim()).filter(Boolean).join('\n\n');
+        prev._carrier = isCarrier;   // still mergeable mid-run; sealed once a plain final lands
+        continue;
+      }
+      const { tool_calls, ...rest } = m;               // drop tool_calls from history
+      out.push({ ...rest, content: text, _carrier: isCarrier });
+      continue;
+    }
+    out.push(m);                                        // user / system / anything else
+  }
+  return out
+    .map(m => { if (m && m.role === 'assistant') { const { _carrier, ...rest } = m; return rest; } return m; })
+    .filter(m => !(m && m.role === 'assistant' && !String(m.content ?? '').trim()));
+}

@@ -174,7 +174,7 @@ import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
 import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
-import { stripLlmTimestamps } from './message-sanitize.mjs';
+import { stripLlmTimestamps, collapseToolTurns } from './message-sanitize.mjs';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './src/village/knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -517,9 +517,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // (setting it would double them). Core segment leads (it becomes the system
   // message the static block then prepends to, matching the web order); the
   // post-history prompt trails the conversation, exactly as the client appends it.
+  // Collapse prior tool-call scaffolding before history reaches the model: a
+  // null/mid-sentence carrier turn re-injected verbatim reads as a "null" or
+  // truncated past turn (see collapseToolTurns). The current turn carries no
+  // carriers yet, so this only cleans earlier turns; user turns are untouched.
+  const historyMessages = collapseToolTurns(Array.isArray(messages) ? messages : []);
   let baseMessages = injectCorePrompts
-    ? withCorePrompts(messages, readSettingsSync() || {})
-    : (Array.isArray(messages) ? messages : []);
+    ? withCorePrompts(historyMessages, readSettingsSync() || {})
+    : historyMessages;
 
   let enrichedMessages = baseMessages;
 
