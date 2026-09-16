@@ -39,6 +39,7 @@ import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConse
 import { buildAvailabilityBlock } from '../schedule/schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from '../village/village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from '../village/audience.js';
+import { buildVillagePresenceBlock, villagePresenceOn } from '../village/village-presence.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
@@ -318,6 +319,22 @@ async function fireRevisit(item) {
 
   const enriched = await enrich('', { audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, liveTurn: false })
     .catch(() => ({ static: '', dynamic: '' }));
+
+  // [Village] presence — a revisit has no fresh inbound line, so the room's
+  // accumulated participants are the whole signal for who's here. privateNotes
+  // stay ward-only via the gate (a revisit is always a shared room).
+  if (villagePresenceOn(settings)) {
+    try {
+      const vBlock = buildVillagePresenceBlock({
+        registry,
+        text: '',
+        participants: session.participants,
+        wardPrivate: audienceTag === 'ward-private',
+        wardName: settings?.userName || '',
+      });
+      if (vBlock) enriched.dynamic = (enriched.dynamic || '') + (enriched.dynamic ? '\n\n' : '') + vBlock;
+    } catch { /* non-critical — a Village read never blocks the turn */ }
+  }
 
   const directedAt = carriedExchange(session.messages);
   const preamble   = presenceBlock({
@@ -2371,6 +2388,23 @@ async function handleTurn(gw, msg, decision) {
       console.error('[discord] enrich failed (degrading to bare turn):', err?.message ?? err);
       return { static: '', dynamic: '' };
     });
+
+  // [Village] presence — the people in play this turn get their pronouns and
+  // distinguishing facts in front of me now (see server.js /api/chat). Here the
+  // room's accumulated participants are the high-confidence "who's here" signal;
+  // the inbound text adds anyone named. privateNotes stay ward-only via the gate.
+  if (villagePresenceOn(settings)) {
+    try {
+      const vBlock = buildVillagePresenceBlock({
+        registry,
+        text: content,
+        participants: session.participants,
+        wardPrivate: audienceTag === 'ward-private',
+        wardName: settings?.userName || '',
+      });
+      if (vBlock) enriched.dynamic = (enriched.dynamic || '') + (enriched.dynamic ? '\n\n' : '') + vBlock;
+    } catch { /* non-critical — a Village read never blocks the turn */ }
+  }
 
   // Structured signals for who this message names — recorded on every
   // message so a later untagged line can still see the exchange it belongs

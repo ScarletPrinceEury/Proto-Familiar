@@ -68,6 +68,7 @@ import {
 } from './thalamus.js';
 import { formatOrganStatus } from './organs.js';
 import { audienceTagFor, deriveNodeAudience } from './src/village/audience.js';
+import { disclosableVillagerFields } from './src/village/village-card.js';
 import { getAssetMeta, addAssetLink, removeAssetLink, drainPendingImages } from './src/vision/media.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC, GRAPH_EDGE_RUBRIC } from './src/memory/graph-vocab.js';
 import { searchWeb, readWebpage, lookUp } from './src/search/websearch.js';
@@ -4440,14 +4441,15 @@ export const TOOL_EXECUTORS = {
           const parts = [`- ${v.name} (id: ${v.id})${discordReachable(v) ? ' — reachable on Discord' : ''}`];
           const cnames = (v.categoryIds ?? []).map(catName).join(', ');
           if (cnames) parts.push(`  Category: ${cnames}`);
-          if (v.pronouns) parts.push(`  Pronouns: ${v.pronouns}`);
-          if (v.relationToWard) parts.push(`  To {{user}}: ${v.relationToWard}`);
-          if (v.commStyleNotes) parts.push(`  Comm style: ${v.commStyleNotes}`);
-          if (v.notes) parts.push(`  Notes: ${v.notes}`);
-          if (v.privateNotes) {
-            if (wardPrivate) parts.push(`  Private (ward-only): ${v.privateNotes}`);
-            else parts.push('  (private notes withheld — someone else is present)');
-          }
+          // Field-gating (privateNotes → ward-only) lives in the shared helper,
+          // so this tool and the injected [Village] presence block can't drift.
+          const f = disclosableVillagerFields(v, { wardPrivate });
+          if (f.pronouns) parts.push(`  Pronouns: ${f.pronouns}`);
+          if (f.relationToWard) parts.push(`  To {{user}}: ${f.relationToWard}`);
+          if (f.commStyleNotes) parts.push(`  Comm style: ${f.commStyleNotes}`);
+          if (f.notes) parts.push(`  Notes: ${f.notes}`);
+          if (f.privateNotes) parts.push(`  Private (ward-only): ${f.privateNotes}`);
+          else if (f.privateNotesWithheld) parts.push('  (private notes withheld — someone else is present)');
           if (v.graphNodeId) parts.push(`  Linked graph node: ${v.graphNodeId}`);
           else parts.push('  Not linked to a graph node yet.');
           return parts.join('\n');
