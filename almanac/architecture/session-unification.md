@@ -215,6 +215,22 @@ pointer even by mistake, but there would be no way for the ward to deliberately 
 *older* one of their own sessions from Discord — the automatic path only ever tracks the most
 recently active one.
 
+## Continuity parity, not just log parity (0.12.9–0.12.10)
+
+A shared session log is not the same as a shared turn *experience*. A 2026-09-16 audit tracing one
+ward message through both surfaces found the Discord turn was still assembling context
+differently from web and, separately, was passing `liveTurn: false` to `thalamus.enrich()` on
+every turn — so a ward message landing in the unified session went shallower on Discord than the
+same conversation would have gone on web, even though both wrote to the same log
+[@discord-gateway-js]. The context-ordering half of that fix (Discord's dynamic block sat after
+all history instead of depth-injected, and Discord had no `[Now]` anchor) is recorded in
+[Prompt-Cache-Aware Context Ordering](../decisions/prompt-cache-aware-context-ordering). The
+`liveTurn` half — Discord now passes `liveTurn: decision.isWard`, restoring deferred-intent recall,
+reach-out follow-up, and ward-state reconciliation on the ward's own Discord turns — is recorded in
+[liveTurn is scoped to the ward's own turns](../decisions/live-turn-scoped-to-ward). Both fixes
+exist only because unification made the asymmetry visible as a discontinuity *inside one
+conversation*, not a difference between two separate logs.
+
 ## Session location labels
 
 Every session log carries a `location` object (`{ platform, label, kind }`, set once per the
@@ -243,3 +259,8 @@ sensible session picker.
   much simpler, already-shipped answer to the same class of problem for session logs.
 - [Ward Discord console](ward-console) — the other ward-only Discord-side machinery
   (`!queue`, `!connection`) that, like this feature, is intercepted only in the ward's own DM.
+- [liveTurn is scoped to the ward's own turns](../decisions/live-turn-scoped-to-ward) — the
+  0.12.10-alpha fix that gives Discord's ward turns the same continuity web turns have always had
+  in this unified session.
+- [Prompt-Cache-Aware Context Ordering](../decisions/prompt-cache-aware-context-ordering) — the
+  companion 0.12.9-alpha fix that made Discord assemble context in the same order as web.

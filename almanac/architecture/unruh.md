@@ -491,3 +491,7 @@ All of these are transformation-only; no events are deleted or modified in the u
 - [Engineering conventions](../reference/engineering-conventions) — the cross-language MCP
   contract bug class the bookmark-resurfacing gap above is the worked example of, and the
   permanent gate that now catches a missing or misnamed tool call before it ships.
+- [liveTurn is scoped to the ward's own turns](../decisions/live-turn-scoped-to-ward) — the
+  `thalamus.enrich()` flag whose reconciliation half writes to Unruh's ward-scoped state
+  (`session_mark_handoff_consumed`, `interest_demote_standing`), and why it must never fire on a
+  non-ward turn.

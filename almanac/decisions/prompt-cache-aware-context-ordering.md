@@ -16,6 +16,14 @@ sources:
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/9736413b-Temporal_core_engagementweighted_k.txt
     note: "Conversation where the maintainer, mid-testing session with Unruh, reports exhausting both ZAI and NanoGPT usage for the first time and diagnoses why: Phylactery/entity-core content sat first in the prompt and changed on most messages, so the provider's prefix cache could not preserve it."
+  - id: message-sanitize-mjs
+    type: file
+    path: message-sanitize.mjs
+    note: "0.12.9-alpha (commit 69dbed9): injectDynamicAtDepth and resolveDynamicDepth moved here from server.js so both surfaces share one implementation."
+  - id: discord-gateway-js
+    type: file
+    path: src/discord/discord-gateway.js
+    note: "assembleTurnMessages (0.12.9-alpha) is the Discord-side counterpart to server.js's inline static-prepend-then-depth-inject steps."
 ---
 
 # Prompt-Cache-Aware Context Ordering: Static Prefix, Dynamic Depth-Injection
@@ -88,6 +96,34 @@ fanned out and awaited together inside `enrich()` rather than injected independe
 specialist: one call site owns the static/dynamic split, so no future specialist can bypass it by
 writing its own content directly into the prompt.
 
+### Incident: the two surfaces drifted, then the functions moved (0.12.9-alpha)
+
+The "reintroduces the original failure mode invisibly" risk above was not hypothetical. A
+2026-09-16 web-vs-Discord turn-trace audit — tracing one ward message end-to-end through both
+surfaces and diffing the provider payloads — found that `discord-gateway.js` had never carried
+this ordering rule at all: it appended `enriched.dynamic` as a system message *after* the whole
+conversation, so it sat at the bottom of the prompt instead of riding just above the last few
+turns where it is most salient, and it carried no ward-zone `[Now]` time anchor beyond one
+server-zone clock line buried inside that bottom block [@discord-gateway-js]. `server.js` had the
+correct order from the start; Discord's turn assembly had simply been written independently and
+never made to match it.
+
+The fix folded `injectDynamicAtDepth(messages, dynamicContent, depth)` and
+`resolveDynamicDepth(settings)` out of `server.js` and into `message-sanitize.mjs` — the module
+both surfaces already imported for `collapseToolTurns` — so there is exactly one implementation of
+the depth-injection rule this page defines, not two that can independently drift
+[@message-sanitize-mjs]. `server.js`'s `getThalamusDynamicDepth()` now delegates to the shared
+resolver instead of inlining the clamp. A new pure `assembleTurnMessages({systemContent, convo,
+dynamic, depth})` in `discord-gateway.js` is Discord's counterpart to `server.js`'s inline
+prepend-then-inject steps: it builds the conversational tail, depth-injects the dynamic block via
+the shared helper, and prepends the static system block [@discord-gateway-js]. A ward-zone `[Now]`
+anchor (`buildTimeAnchorBlock`, vague-tier on gated rooms so it can't leak location) is appended
+last and re-appended every tool round, matching how `server.js` keeps its own `[Now]` anchor at
+maximum salience as tool traffic grows the tail [@discord-gateway-js]. The lesson this incident
+adds to the one above: sharing the *rule* is not enough if each surface reimplements the
+mechanism — the fix here is the same shared-function move the static/dynamic split itself already
+relied on for `enrich()`, applied one layer further out to the ordering step that consumes it.
+
 ## Related
 
 - [Architecture](../architecture) — where Thalamus's `enrich()` and the `{ static, dynamic }`
@@ -98,3 +134,6 @@ writing its own content directly into the prompt.
   files that make up the static block.
 - [Exact values are code's job](exact-values-in-code) — a different instance of the same broader
   pattern of keeping a specific, narrow contract rather than trusting ad hoc placement.
+- [liveTurn is scoped to the ward's own turns](live-turn-scoped-to-ward) — a companion
+  0.12.10-alpha fix from the same web-vs-Discord audit, addressing *which* dynamic content and
+  side effects render rather than where the dynamic block lands in the prompt.

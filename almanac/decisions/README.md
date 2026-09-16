@@ -14,7 +14,7 @@ implemented**, or **proposed**. A "proposed" or "not yet implemented" status is 
 the page's honest record of how far the decision has actually traveled from conversation into
 code.
 
-Twenty-nine decisions live here. Grouped by the question each one answers:
+Thirty decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -127,7 +127,13 @@ and of what is normal for its bond with the ward:
   the model, even through qualitative weather sense.
 - [Prompt-cache-aware context ordering](prompt-cache-aware-context-ordering) — the static-prefix
   / dynamic-depth-injection split in `thalamus.enrich()`, and the usage-exhaustion incident that
-  motivated it.
+  motivated it. Also records a 0.12.9-alpha incident where Discord had reimplemented the ordering
+  independently and drifted, fixed by moving the shared logic into `message-sanitize.mjs`.
+- [liveTurn is scoped to the ward's own turns](live-turn-scoped-to-ward) — the companion
+  0.12.10-alpha fix: Discord's turns were shallower than web's in the same unified session because
+  `liveTurn` was hardcoded `false`; passing `decision.isWard` restores parity, and the page records
+  the still-latent conflation (ward-state writes vs. ward-private content) a future permission
+  change would need to split.
 - [Local process over VM/Docker sandboxing](local-process-over-vm-sandboxing) — why every
   autonomous loop runs inside one continuously-running Node process instead of a sandboxed or
   lazily-woken alternative.
