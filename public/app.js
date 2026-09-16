@@ -336,6 +336,10 @@ const state = {
   // my human's people right without stopping to run village_lookup. Off via this
   // toggle or PROTO_FAMILIAR_VILLAGE_PRESENCE_DISABLED=1 on the server.
   villagePresenceEnabled:  true,
+  // Villager proactive context: when a villager's category grants it, a 1:1 DM
+  // recalls what the Familiar last said to them. The per-category grant is the
+  // real control; this is the global master (env: PROTO_FAMILIAR_VILLAGER_CONTEXT_DISABLED).
+  villagerContextEnabled:  true,
   sessionUnifyEnabled:     true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
@@ -586,7 +590,7 @@ const SERVER_SYNCED_KEYS = [
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'noticingAttributionResweepEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
-  'memorySweepEnabled', 'villagePresenceEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
+  'memorySweepEnabled', 'villagePresenceEnabled', 'villagerContextEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'cdpModeEnabled', 'videoFileApiEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
@@ -1100,6 +1104,7 @@ function loadPersisted() {
   if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
   if (typeof state.villagePresenceEnabled !== 'boolean') state.villagePresenceEnabled = true;
+  if (typeof state.villagerContextEnabled !== 'boolean') state.villagerContextEnabled = true;
   if (typeof state.sessionUnifyEnabled !== 'boolean') state.sessionUnifyEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
@@ -13958,6 +13963,8 @@ const VL_KNOWN_GRANTS = [
     hint: 'Identity sections about health become visible to this category.' },
   { key: 'location', label: 'Location context', bool: true,
     hint: 'Identity sections about where you are/live become visible to this category.' },
+  { key: 'proactiveContext', label: 'Proactive relationship context', bool: true,
+    hint: 'In a 1:1 DM, your Familiar walks in remembering what it last said to this person — so a reply days later lands as an answer, not a "who are you again?". Off by default; anything it recalls still passes your content-sharing rules. Best for people it actually keeps up with.' },
 ];
 
 // Content-gating topics (Phase 2b) — mirror content-tags.js CONTENT_TOPICS.
