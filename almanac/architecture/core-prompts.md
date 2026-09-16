@@ -83,4 +83,7 @@ The corollary for observability: an inspector fed by "what should be assembled" 
   generated review page for the Familiar's other in-code deliberation prompts (triage,
   pondering, memory extraction, and the rest) and every tool description. The four core prompts
   this page covers are ward-authored settings fields, not source-code literals, so the catalog
-  does not include them.
+  does not include them. Also see "Tool-call scaffolding is turn-internal" on that page:
+  `server.js`'s `/api/chat` runs `collapseToolTurns` on the incoming messages array before
+  `withCorePrompts` ever sees it, so the core-prompt assembly this page describes always
+  operates on already-cleaned history.

@@ -47,6 +47,18 @@ sources:
   - id: crisis-classifier-test
     type: file
     path: tests/crisis-classifier.test.mjs
+  - id: message-sanitize
+    type: file
+    path: message-sanitize.mjs
+  - id: server-js
+    type: file
+    path: server.js
+  - id: discord-gateway-js
+    type: file
+    path: src/discord/discord-gateway.js
+  - id: collapse-tool-turns-test
+    type: file
+    path: tests/collapse-tool-turns.test.mjs
 ---
 
 # Engineering Conventions
@@ -222,6 +234,49 @@ function from `macros.js`'s `substituteMacros`, not a client mirror of it, and i
 place either time macro is resolved. See
 [Elapsed-time macros read stored history, not Date.now()](../decisions/time-macros) for why
 `{{elapsedTime}}` and `{{timeSinceLastSession}}` each anchor their gap differently.
+
+## Tool-call scaffolding is turn-internal — collapse it before history re-enters the model
+
+A turn that used tools is stored on disk as several messages, not one: an assistant
+**carrier** — often `content: null`, sometimes a mid-sentence preamble like "Let me
+check—" — carrying `tool_calls`, then the `role: 'tool'` results, then the final reply
+[@message-sanitize]. That whole run is scaffolding for a single reply. Re-injecting it
+verbatim as history on a later turn broke both web and Discord (0.12.4-alpha): the model
+read its own past turn as `null` (the null carrier) or as a sentence that stops mid-thought
+(the preamble carrier, split from the answer it belonged to), even though the human received
+the reply whole. On Discord a null carrier rendered as the literal string `[HH:MM] null`
+once a machine timestamp was prepended. Unified sessions (see
+[Unified ward sessions](../architecture/session-unification)) carry web-origin carriers onto
+the Discord side too, so both surfaces hit the bug from either origin [@message-sanitize].
+
+**The rule:** before conversation history reaches the model, collapse each tool-scaffolding
+run into the single clean assistant turn it represents. `message-sanitize.mjs` exports
+`collapseToolTurns(messages)`: it drops `role: 'tool'` results, drops the `tool_calls` field,
+and MERGES a carrier with the reply it precedes so all the text the human actually saw
+survives as one coherent turn; it drops empty assistant turns, and it never merges two
+genuinely independent assistant messages (for example a proactive banner with no `tool_calls`
+and no tool run between it and the next reply) [@message-sanitize] [@collapse-tool-turns-test].
+`tool_calls` and the tool results are stripped **together**, so no dangling tool-call
+reference ever reaches a provider on a later call.
+
+`collapseToolTurns` is applied at every provider-history boundary that re-reads stored
+messages: `server.js`'s `/api/chat` handler (covering both web and voice, ahead of
+`withCorePrompts` — see [Core prompts and multi-surface assembly](../architecture/core-prompts))
+and both Discord history-assembly `.map()` sites in `discord-gateway.js` (the live-turn path
+and the cached-revisit path) [@server-js] [@discord-gateway-js]. The current turn's own tool
+loop is untouched — it runs server-side from live results, not from re-injected history, so
+only earlier turns are cleaned. Memorization (`filterReadable`/`buildExtractionMessages`) and
+the deliberation readers (`getRecentSessionMessages`/`formatRecentMessagesForContext`) already
+skipped carriers on their own (a `tool_calls`-length check plus a non-empty-string content
+filter), so they were never affected by the bug and did not need this helper [@message-sanitize].
+
+**Generalization:** this is the same family as the `stripLlmTimestamps` rule in
+[Exact values are code's job](../decisions/exact-values-in-code) — clean contaminated content
+at the boundary where stored history re-enters the model, not only at the point it is
+rendered or stored — applied here to message *shape* (scaffolding fields) rather than to a
+hallucinated value inside the text. Any new path that feeds stored session history back to a
+model must run it through `collapseToolTurns` first, the same way any new path that delivers
+LLM output outward must apply `stripLlmTimestamps`.
 
 ## A throw partway through `init()` silently disables every later listener
 
