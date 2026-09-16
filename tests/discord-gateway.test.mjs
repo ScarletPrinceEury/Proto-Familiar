@@ -31,6 +31,7 @@ import {
   attributeUserContent,
   availabilityBlockFor,
   ingestDiscordMedia,
+  assembleTurnMessages,
 } from '../src/discord/discord-gateway.js';
 import { deleteAsset } from '../src/vision/media.js';
 
@@ -1128,5 +1129,60 @@ describe('availabilityBlockFor (villager scheduling seam)', () => {
       { getWindow: async () => { throw new Error('unruh down'); } },
     );
     assert.equal(block, '');
+  });
+});
+
+// ── Turn assembly order (0.12.9) — Discord matches the web turn's shape ──────
+// The reported bug: Discord dropped the dynamic block AFTER all history, and had
+// no [Now] anchor. assembleTurnMessages composes the web order — static system
+// leads, dynamic is depth-injected above the last few turns — and the anchor is
+// appended separately by the caller (loop per-round on the live turn).
+describe('assembleTurnMessages — web-parity context order', () => {
+  const sys = 'STATIC identity + core';
+  // A realistic tail: history, then the turn, then the post-history prompt.
+  const convo = [
+    { role: 'user', content: 'u1' }, { role: 'assistant', content: 'a1' },
+    { role: 'user', content: 'u2' }, { role: 'assistant', content: 'a2' },
+    { role: 'user', content: 'u3 (this turn)' },
+    { role: 'system', content: 'POST-HISTORY' },
+  ];
+
+  it('static system block leads', () => {
+    const out = assembleTurnMessages({ systemContent: sys, convo, dynamic: 'DYN', depth: 4 });
+    assert.equal(out[0].role, 'system');
+    assert.equal(out[0].content, sys);
+  });
+
+  it('dynamic is depth-injected ABOVE the last `depth` turns, not after all history', () => {
+    const out = assembleTurnMessages({ systemContent: sys, convo, dynamic: 'DYN', depth: 4 });
+    const dynIdx = out.findIndex(m => m.content === 'DYN');
+    assert.ok(dynIdx > 0, 'dynamic exists and is not the system prefix');
+    // depth 4 from the end of a 6-item convo → dynamic sits before the last 4 of them.
+    assert.equal(out[dynIdx].role, 'system');
+    // everything after dynamic is the freshest tail incl. the turn + post-history
+    const tail = out.slice(dynIdx + 1).map(m => m.content);
+    assert.ok(tail.includes('u3 (this turn)'), 'this turn is below the dynamic block');
+    assert.ok(tail.includes('POST-HISTORY'), 'post-history is below the dynamic block');
+    assert.equal(tail[tail.length - 1], 'POST-HISTORY', 'post-history stays last of the assembled array');
+  });
+
+  it('the OLD bug shape is gone: dynamic is NOT the last system before the turn-tail dump', () => {
+    const out = assembleTurnMessages({ systemContent: sys, convo, dynamic: 'DYN', depth: 4 });
+    const dynIdx = out.findIndex(m => m.content === 'DYN');
+    // At least one real conversation turn sits ABOVE the dynamic block (the bulk
+    // "[Conversation]"), which is exactly what "after all history" violated.
+    const above = out.slice(1, dynIdx).map(m => m.content);
+    assert.ok(above.some(c => /^u\d|^a\d/.test(String(c))), 'bulk conversation sits above dynamic');
+  });
+
+  it('no dynamic → just system + convo, order preserved', () => {
+    const out = assembleTurnMessages({ systemContent: sys, convo, dynamic: '', depth: 4 });
+    assert.deepEqual(out, [{ role: 'system', content: sys }, ...convo]);
+  });
+
+  it('no system block → convo with dynamic injected, nothing prepended', () => {
+    const out = assembleTurnMessages({ systemContent: '', convo, dynamic: 'DYN', depth: 2 });
+    assert.notEqual(out[0].content, ''); // no empty system leader
+    assert.ok(out.some(m => m.content === 'DYN'));
   });
 });

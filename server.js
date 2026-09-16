@@ -175,7 +175,7 @@ import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
 import { recordOutgoingPrompt, lastOutgoingPrompts } from './src/sessions/prompt-capture.js';
-import { stripLlmTimestamps, collapseToolTurns } from './message-sanitize.mjs';
+import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth } from './message-sanitize.mjs';
 import { listKnocks, dismissKnock, listLocationKnocks, dismissLocationKnock, listServers, dismissServer } from './src/village/knocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4452,47 +4452,15 @@ app.get('/api/settings', async (_req, res) => {
 // constant declares itself further down. Module-level execution is
 // complete by the time HTTP requests arrive, so the SETTINGS_FILE
 // const it reads is initialised at call time.
+// Reads the ward's configured dynamic depth from settings on disk; the pure
+// clamp/default lives in resolveDynamicDepth (message-sanitize.mjs), shared with
+// the Discord turn so both surfaces place the dynamic block identically.
 function getThalamusDynamicDepth() {
   try {
-    const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
-    const d = parseInt(s.thalamusDynamicDepth, 10);
-    if (Number.isFinite(d) && d >= 1 && d <= 50) return d;
-  } catch { /* fall through to default */ }
-  return 4;
-}
-
-// Pure helper. Insert `dynamicContent` as a system message `depth`
-// positions from the end of `messages`, leaving the array stable
-// above that point for the upstream LLM's prefix cache. Returns the
-// new array plus the actual position used so the inspector can show
-// where it landed.
-//
-// Two clamps:
-//   - lower bound `1` if there's a system message at index 0 — keeps
-//     the dynamic injection below the static prefix so the cache stays
-//     valid. `0` when there's no system message anyway (no cache to
-//     protect).
-//   - upper bound `messages.length` — appended at the end when the
-//     conversation is so short that `len - depth` would otherwise put
-//     the dynamic block AFTER what would be the position-clamped index
-//     (i.e. an empty messages array).
-//
-// No-op (returns messages unchanged + injectedAt=null) when
-// dynamicContent is empty.
-function injectDynamicAtDepth(messages, dynamicContent, depth) {
-  if (!dynamicContent) return { messages, injectedAt: null };
-  const hasSystemAtStart = messages.length > 0 && messages[0]?.role === 'system';
-  const minIdx = hasSystemAtStart ? 1 : 0;
-  const injectedAt = Math.max(minIdx, messages.length - depth);
-  const dynamicMsg = { role: 'system', content: dynamicContent };
-  return {
-    messages: [
-      ...messages.slice(0, injectedAt),
-      dynamicMsg,
-      ...messages.slice(injectedAt),
-    ],
-    injectedAt,
-  };
+    return resolveDynamicDepth(JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')));
+  } catch {
+    return resolveDynamicDepth(null);
+  }
 }
 
 // Resolve the fields Phylactery cares about from a settings snapshot,

@@ -90,7 +90,9 @@ function sessionUnifyEnabled() {
 import { substituteMacros } from '../../macros.js';
 import { coreSystemSegment, postHistoryMessage } from '../../core-prompts.js';
 import { recordOutgoingPrompt } from '../sessions/prompt-capture.js';
-import { stripLlmTimestamps, collapseToolTurns } from '../../message-sanitize.mjs';
+import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDynamicDepth } from '../../message-sanitize.mjs';
+import { buildTimeAnchorBlock } from '../../relative-time.js';
+import { readWeatherNowLine, readWeatherVagueLine } from '../weather/weather-mirror.js';
 import { sanitizeExternal } from '../../injection-guard.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from '../../updater.js';
 
@@ -368,12 +370,25 @@ async function fireRevisit(item) {
     });
 
   const phMsg = postHistoryMessage(settings);
-  const apiMessages = [
-    ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
+  // Same web-parity order as the live turn: dynamic is depth-injected above the
+  // last few turns, not dropped after all history; the [Now] anchor sits last.
+  // A revisit is a single (no-tool) call, so the anchor is appended directly.
+  const convo = [
     ...history,
-    ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     { role: 'user', content: '[— quiet moment, checking back —]' },
     ...(phMsg ? [phMsg] : []),
+  ];
+  const revisitAnchor = buildTimeAnchorBlock({
+    now: Date.now(),
+    lastUserMessageAt: null,
+    timeZone: settings?.wardTimeZone || null,
+    weatherLine: audienceTag === 'ward-private'
+      ? readWeatherNowLine({ unit: settings?.weatherUnit })
+      : readWeatherVagueLine(),
+  }) || '';
+  const apiMessages = [
+    ...assembleTurnMessages({ systemContent, convo, dynamic: enriched.dynamic, depth: resolveDynamicDepth(settings) }),
+    ...(revisitAnchor ? [{ role: 'system', content: revisitAnchor }] : []),
   ];
   recordOutgoingPrompt('discord-revisit', { messages: apiMessages, model: conn?.model, provider: conn?.provider });
 
@@ -1019,6 +1034,22 @@ export function wardClosingReplayMessages(baseMessages, toolRounds = []) {
   }
   replay.push({ role: 'system', content: "[I've finished using my tools for this turn. Now I answer my human directly in words — what I found, what I did, or what I couldn't get to — rather than ending in silence.]" });
   return replay;
+}
+
+// Compose a Discord turn's provider messages in the SAME order the web turn uses
+// (server.js): the static system block leads, then the conversation with the
+// dynamic block DEPTH-INJECTED so it sits just above the last few turns (most
+// salient), not after all history. `convo` is the already-ordered tail —
+// [...history, at-depth lore, the turn, post-history]. The [Now] anchor is NOT
+// here: it rides separately, re-appended last on every tool round (web parity).
+// Pure — depth resolution and injection come from message-sanitize.mjs, shared
+// with the web path so the two surfaces can't drift.
+export function assembleTurnMessages({ systemContent, convo, dynamic, depth }) {
+  const injected = injectDynamicAtDepth(Array.isArray(convo) ? convo : [], dynamic, depth).messages;
+  return [
+    ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
+    ...injected,
+  ];
 }
 
 // Strip any LEADING silence/defer tokens off a reply. Used at delivery as
@@ -2521,14 +2552,39 @@ async function handleTurn(gw, msg, decision) {
   const emoteText = (t) => rewriteEmotes(t, emoteCache);
 
   const phMsg = postHistoryMessage(settings);
-  let apiMessages = [
-    ...(systemContent ? [{ role: 'system', content: systemContent }] : []),
+  // Assemble in the same order the web turn uses (server.js) so both surfaces
+  // read the same shape: the conversation (history + this turn + post-history)
+  // is built first, then the dynamic block is DEPTH-INJECTED so it sits just
+  // above the last few turns — where it's most salient — instead of after all of
+  // history (the reported Discord ordering bug). The static system block leads;
+  // the [Now] anchor rides separately, re-appended last on every tool round by
+  // runToolCallLoop (matching web), so "now" stays at maximum salience as tool
+  // traffic grows the tail. at-depth lore stays near the turn.
+  const convo = [
     ...history.map(h => ({ ...h, content: emoteText(h.content) })),
-    ...(enriched.dynamic ? [{ role: 'system', content: enriched.dynamic }] : []),
     ...(lore.atDepth ? [{ role: 'system', content: lore.atDepth }] : []),
     { role: 'user', content: emoteText(userContent), ...(!decision.isWard && turnSpeaker ? { speaker: turnSpeaker } : {}), ...turnAttField },
     ...(phMsg ? [phMsg] : []),
   ];
+  let apiMessages = assembleTurnMessages({
+    systemContent, convo, dynamic: enriched.dynamic, depth: resolveDynamicDepth(settings),
+  });
+  // [Now] anchor — ward-zone clock + weather, kept separate and appended last
+  // every tool round. Discord had no anchor at all before this; the Familiar's
+  // sense of "now" was one server-zone line buried in the dynamic block. Weather
+  // detail is ward-private only (vague tier on any gated room, so a precise value
+  // can't leak a location). Empty string when it can't be built — never blocks.
+  const discordTimeAnchor = buildTimeAnchorBlock({
+    now: Date.now(),
+    lastUserMessageAt: null,  // Discord doesn't track the client-side gap clock web has
+    timeZone: settings?.wardTimeZone || null,
+    weatherLine: audienceTag === 'ward-private'
+      ? readWeatherNowLine({ unit: settings?.weatherUnit })
+      : readWeatherVagueLine(),
+  }) || '';
+  // The tool loop re-appends the anchor per round on its own; the direct
+  // (non-loop) fallback calls below use this to keep [Now] last there too.
+  const withAnchor = (msgs) => discordTimeAnchor ? [...msgs, { role: 'system', content: discordTimeAnchor }] : msgs;
 
   // Vision materialization (§3) — the same seam as the web path, applied once
   // to the assembled array so it rides every tool round. Gated turn → the
@@ -2644,6 +2700,7 @@ async function handleTurn(gw, msg, decision) {
           tools: opts?.forceText ? undefined : (roundTools ?? discordTools),
         }),
         baseMessages: apiMessages,
+        timeAnchor:   discordTimeAnchor,   // re-appended last every round (web parity)
         getTools:     () => discordTools,
         executeTool,
         toolCtx,
@@ -2658,7 +2715,7 @@ async function handleTurn(gw, msg, decision) {
       // A whole-loop failure (e.g. provider error) must never cost the person a
       // reply — fall back to a plain no-tools call.
       console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
-      rawReply = await callChat({ conn, messages: apiMessages, settings }).catch(() => '');
+      rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(() => '');
     }
     // A tool chain can end with no closing text. For a villager/ambient turn
     // that's a fine "abstain" — stay quiet. But for MY HUMAN's own direct turn,
@@ -2670,7 +2727,7 @@ async function handleTurn(gw, msg, decision) {
     if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient && turnRounds.length) {
       try {
         const replay = wardClosingReplayMessages(apiMessages, turnRounds);
-        rawReply = await callChat({ conn, messages: replay, settings }).catch(() => '');
+        rawReply = await callChat({ conn, messages: withAnchor(replay), settings }).catch(() => '');
         if (rawReply && rawReply.trim()) console.log(`[discord] ward tool turn had no closing text — forced a closing text round in ${decision.locationKey}`);
       } catch (err) {
         console.warn('[discord] ward closing-text round failed:', err?.message ?? err);
@@ -2697,7 +2754,7 @@ async function handleTurn(gw, msg, decision) {
     // callChat throws. Never let that drop the turn: catch to empty and let the
     // shared empty-handling below decide (honest note for my human, quiet flow
     // otherwise). The user's message is already persisted.
-    rawReply = await callChat({ conn, messages: apiMessages, settings }).catch(err => {
+    rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(err => {
       console.warn('[discord] plain reply failed/empty:', err?.message ?? err);
       return '';
     });
