@@ -1024,8 +1024,15 @@ location is a session in `logs/` (rotated after 6h idle; map in
 `tomes/.discord-map.json`), participants accumulate, and the audience is
 re-resolved per turn from the accumulated list. Ward messages also run
 crisis-signal scoring + threat recording (`source: 'discord'`) on the
-reply path. Discord turns never consume handoffs (`liveTurn: false`).
-Memorization of Discord sessions is deferred until
+reply path. The Familiar's OWN turns pass `liveTurn: decision.isWard`
+(0.12.10) — so a ward turn (DM or a guild they speak in) reconciles ward
+state (consume a session handoff, demote a vanished standing value) exactly
+like the web chat, and a ward-PRIVATE turn additionally surfaces the
+`!gated` proactive/continuity blocks; a villager/ambient turn stays
+`liveTurn: false` and never touches the ward's continuity. Reconciliation
+writes are idempotent and file writes are serialized (`withLock`), so a ward
+turn on the unified web+Discord session can't collide with a simultaneous
+web turn. Memorization of Discord sessions is deferred until
 memories carry audience tags (see village-support-design.md).
 
 *Villager consent self-service (0.8.106, `villager-consent.js`).*
@@ -2416,11 +2423,15 @@ on the live turn (matching web's `timeAnchor`), appended once on the single-shot
 revisit. So the order on both surfaces is: static identity/Phylactery → bulk
 conversation → dynamic (identity/Phylactery/Unruh) → last ~`depth` turns →
 post-history prompt → `[Now]`. `tests/discord-gateway.test.mjs`
-(`assembleTurnMessages` block) pins the ordering. `enrich(content,
-{liveTurn:false})` on Discord still omits the liveTurn-gated dynamic sections
-(deferred intents, knock-recall, recent-memory cross-check, gcal cue, spine
-sync) — that is a *content* difference, orthogonal to this *ordering* fix, and
-unchanged here.
+(`assembleTurnMessages` block) pins the ordering. **Dynamic-block *content* on
+Discord (0.12.10):** `handleTurn` passes `liveTurn: decision.isWard`, so the
+ward's own turns get the liveTurn-gated sections the web chat has (deferred
+intents, knock-recall, recent-memory cross-check, gcal cue, spine sync — those
+five are additionally `!gated`, so they render on a ward-PRIVATE turn and stay
+hidden when the ward speaks in a shared guild), plus the two un-gated ward-state
+reconciliations (handoff consume, standing demotion). A villager/ambient turn
+keeps `liveTurn: false`. This is a *content*/side-effect axis, orthogonal to the
+*ordering* fix above.
 
 ## Id scheme (0.8.x overhaul) — readable slugs, opaque everywhere
 

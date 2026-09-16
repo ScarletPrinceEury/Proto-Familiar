@@ -2414,7 +2414,20 @@ async function handleTurn(gw, msg, decision) {
   const audienceInput = audienceInputFor(decision, session.participants);
   const { audienceGrants, audienceTag, audienceVisible, audienceTopics } = resolveLocationGate(audienceInput, registry);
 
-  const enriched = await enrich(content, { audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, liveTurn: false })
+  // liveTurn on the ward's OWN turns (DM or a guild they're speaking in), so the
+  // Familiar reconciles ward state (consume a session handoff, demote a vanished
+  // standing value) and — in a ward-PRIVATE turn only, via enrich's own `!gated`
+  // guards — surfaces the ward-private proactive/continuity blocks (deferred
+  // intents, "what I said when I knocked", the today+yesterday cross-check, the
+  // calendar cue, spine sync). This is the same continuity the web chat has always
+  // had; a unified ward session shouldn't go shallower just because my human
+  // switched to Discord. Never true on a villager/ambient turn — those must never
+  // move the ward's continuity state. Reconciliation writes are idempotent + file
+  // writes are serialized (thalamus withLock), so it can't collide with a
+  // simultaneous web turn on the same unified session.
+  // lastUserMessageAt stays null: Discord doesn't track the web client's gap
+  // clock, so idle-mode bookmark surfacing (which needs it) stays a web feature.
+  const enriched = await enrich(content, { audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, liveTurn: decision.isWard })
     .catch(err => {
       console.error('[discord] enrich failed (degrading to bare turn):', err?.message ?? err);
       return { static: '', dynamic: '' };
