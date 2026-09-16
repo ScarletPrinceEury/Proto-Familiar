@@ -89,7 +89,7 @@ function sessionUnifyEnabled() {
 import { substituteMacros } from '../../macros.js';
 import { coreSystemSegment, postHistoryMessage } from '../../core-prompts.js';
 import { recordOutgoingPrompt } from '../sessions/prompt-capture.js';
-import { stripLlmTimestamps } from '../../message-sanitize.mjs';
+import { stripLlmTimestamps, collapseToolTurns } from '../../message-sanitize.mjs';
 import { sanitizeExternal } from '../../injection-guard.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from '../../updater.js';
 
@@ -332,7 +332,7 @@ async function fireRevisit(item) {
   // Familiar being itself in this room, so it carries its identity too.
   const coreSeg = coreSystemSegment(settings);
   const systemContent = [enriched.static, coreSeg, preamble].filter(Boolean).join('\n\n---\n\n');
-  const history = (session.messages ?? [])
+  const history = collapseToolTurns(session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
     .map(m => {
@@ -2418,7 +2418,7 @@ async function handleTurn(gw, msg, decision) {
   // the current message (`content`) is scanned as the live input, not yet in it.
   const lore = await activeDiscordLore({ content, session, settings, locationKey: decision.locationKey });
   const systemContent = [lore.lead, enriched.static, coreSeg, preamble, availability, lore.tail].filter(Boolean).join('\n\n---\n\n');
-  const history = (session.messages ?? [])
+  const history = collapseToolTurns(session.messages ?? [])
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .slice(-HISTORY_LIMIT)
     .map(m => {
