@@ -258,6 +258,24 @@ function filterReadable(messages) {
   });
 }
 
+// A message whose whole content is a single bracketed marker — "[OpenClaw
+// heartbeat poll]", "[image failed to load]" — is automated noise, not
+// conversation. A slice with no genuinely conversational turn has nothing to
+// remember, so extracting from it only wastes a provider call (and, for a big
+// noise slice, would trip the "should have facts" failure below). Generic on
+// purpose — no install-specific marker is hard-coded. Exported for the test.
+const _PURE_MARKER = /^\s*\[[^\]]*\]\s*$/;
+export function genuineTurns(messages) {
+  return filterReadable(messages).filter(m => !_PURE_MARKER.test(String(m.content ?? '')));
+}
+
+// A slice with at most this many readable turns can legitimately hold nothing
+// worth remembering — an empty extraction there is a SUCCESS (0 facts). A larger
+// slice coming back empty is a genuine failure worth retrying: a substantial
+// conversation should yield something (ward decision). Drives parseFacts's
+// `allowEmpty`.
+export const EMPTY_FACTS_MAX_READABLE = 5;
+
 // Present the conversation to the extractor as FAITHFUL ROLES, not a flattened
 // "Name: text" blob: the Familiar's own lines are `assistant`, everyone else is
 // `user`. The model then natively knows which lines are its own — exactly where
@@ -301,9 +319,20 @@ const EXTRACTION_CLOSING_CUE = 'End of the logs. Now output only the memories JS
 // macro-resolved by the caller. Exported so the pipeline shape (system-first,
 // role-faithful middle, cue-last) is testable without stubbing all of processJob.
 export function buildExtractionMessages({ instructions, messages, sharedRoom = false, wardLabel = 'My human', withNames = false }) {
+  const convo = conversationMessages(messages, { sharedRoom, wardLabel, withNames });
+  // A slice where only the Familiar spoke — proactive reach-outs, room answers my
+  // human never replied to — is all `assistant`, and some providers (z.ai, code
+  // 1214) reject a completion with zero user turns. Insert ONE marked placeholder
+  // user turn so the payload is valid while the ROLES stay faithful (the
+  // Familiar's lines remain `assistant`, never folded into a fake user turn —
+  // ward's choice). The marker also tells the extractor my human didn't reply.
+  const lead = convo.some(m => m.role === 'user')
+    ? []
+    : [{ role: 'user', content: `[no reply from ${wardLabel}]` }];
   return [
     { role: 'system', content: instructions },
-    ...conversationMessages(messages, { sharedRoom, wardLabel, withNames }),
+    ...lead,
+    ...convo,
     { role: 'system', content: EXTRACTION_CLOSING_CUE },
   ];
 }
@@ -646,14 +675,23 @@ export function parseTopics(raw, finishReason = null) {
   throw new Error('Could not parse JSON from LLM response.');
 }
 
-function parseFacts(raw, finishReason = null) {
+export function parseFacts(raw, finishReason = null, { allowEmpty = false } = {}) {
   const cleaned = String(raw).replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
   const match = cleaned.match(/\{[\s\S]+\}/);
   if (match) {
     try {
       const parsed = JSON.parse(match[0]);
       const facts = parsed.facts;
-      if (Array.isArray(facts) && facts.length) return facts;
+      if (Array.isArray(facts)) {
+        if (facts.length) return facts;
+        // Valid JSON with an empty `facts` array is a clean "nothing here worth
+        // remembering" extraction — a SUCCESS for a small slice. Only a
+        // substantial slice (allowEmpty === false) treats empty as a failure.
+        if (allowEmpty) return [];
+        throw new Error('LLM returned no facts.');
+      }
+      // A parsed object with no `facts` array means the model ignored the format
+      // — a genuine failure regardless of slice size.
       throw new Error('LLM returned no facts.');
     } catch (err) {
       if (err.message === 'LLM returned no facts.') throw err;
@@ -861,7 +899,11 @@ async function processJob(job) {
     callProviderFn: (messages) => callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages }),
     onLearn: (result) => recordNameFieldResult(job, result),
   });
-  const facts = parseFacts(raw, finishReason);
+  // A small slice may legitimately hold nothing worth remembering → an empty
+  // extraction is success, not a failure that burns 5 retries. A larger slice
+  // coming back empty stays a genuine failure (ward decision, EMPTY_FACTS_MAX_READABLE).
+  const allowEmpty = filterReadable(visionMessages).length <= EMPTY_FACTS_MAX_READABLE;
+  const facts = parseFacts(raw, finishReason, { allowEmpty });
   // Relations ride the SAME LLM response — no extra request (CLAUDE.md
   // "ride existing requests"). They're enrichment, so parseRelations never
   // throws; the worst case is an empty graph update, never a lost fact.
@@ -1023,7 +1065,12 @@ async function processJob(job) {
         // consent: a group room, or a third person's private life.
         date: factDate ?? new Date().toISOString().slice(0, 10),
         reason: !direct ? 'shared-room' : (hasNamedSubjects ? 'third-party' : 'ask'),
-        standing,
+        // Whether this is a STANDING fact (vs episodic) — the consent queue reads
+        // it to phrase the ask ("…, a standing fact"). Was the bare shorthand
+        // `standing,` referencing an out-of-scope name → ReferenceError that
+        // crashed the job AFTER the memory was already written, so the retry
+        // re-created it (only near-dup merging contained the duplication).
+        standing: fact?.temporality === 'standing',
       });
     }
     created++;
@@ -1247,6 +1294,14 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
   const existing = _queue.find(j => j.dupKey === dupKey && (j.status === 'pending' || j.status === 'processing'));
   if (existing) return { jobId: existing.id, deduped: true };
 
+  // Noise gate: a slice with no genuinely conversational turn (only heartbeat /
+  // system markers) has nothing to remember. Don't spend a provider call on it,
+  // and don't let a big noise slice trip the "should have facts" failure. Gate
+  // in cheap code before the LLM ever sees it (house rule: gate in code).
+  if (genuineTurns(messages).length === 0) {
+    return { jobId: null, deduped: false, skipped: true, reason: 'no-conversation' };
+  }
+
   const job = {
     id:            randomUUID(),
     dupKey,
@@ -1297,7 +1352,7 @@ export async function enqueueSessionByDay({ sessionId, messages, provider, apiKe
         messageRange: { start: seg.startIdx, end: seg.endIdx },
         messages: seg.messages, provider, apiKey, model, baseUrl, audienceTag,
       });
-      if (r.deduped) skipped++; else enqueued++;
+      if (r.jobId) enqueued++; else skipped++;   // deduped OR noise-skipped → not newly enqueued
     } catch (err) {
       console.warn(`[memorization] enqueueSessionByDay ${seg.date} failed:`, err?.message ?? err);
     }
