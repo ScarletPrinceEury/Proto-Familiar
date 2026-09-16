@@ -129,6 +129,22 @@ const MAX_ATTEMPTS    = 5;
 const BACKOFF_MS      = [5_000, 30_000, 120_000, 600_000, 1_800_000]; // 5s, 30s, 2m, 10m, 30m
 const TICK_MS         = 5_000;
 const ACK_TTL_MS      = 24 * 60 * 60 * 1000; // prune acknowledged terminal jobs after a day
+// A hung extraction fetch must not wedge the single-slot worker forever (the
+// live incident: one job claimed 21:31 never returned; nothing ran after). With
+// a timeout the call fails, the job takes its backoff, and the worker rotates to
+// the next log — coming back to this one later, exactly the cycling behaviour we
+// want. 2 min is generous for a big slice yet bounded.
+const EXTRACTION_TIMEOUT_MS = 120_000;
+// The coverage sweep re-enqueues any slice not marked memorized every ~10 min.
+// A slice that just exhausted its retries would otherwise be re-added forever
+// (~40 jobs/hr of quota burn). Hold a failed dupKey for this long before a fresh
+// attempt is allowed — transients still get another try later, just not on a
+// 10-minute loop.
+const FAILED_REENQUEUE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+// A slice bigger than this (bytes of transcript) is extracted in coherent chunks
+// split at turn boundaries, so an oversized day can't truncate the JSON mid-object
+// against the token cap. Chosen so each chunk comfortably fits an 8000-token reply.
+const EXTRACTION_CHUNK_BYTES = 64 * 1024;
 const SESSION_MEMORIES_TOME_NAME = 'Session Memories';
 const SESSION_MEMORIES_TOME_DESC = 'Auto-generated entries from past conversations. Created on first session memorization.';
 // Aliases kept for the module-local code below.
@@ -275,6 +291,27 @@ export function genuineTurns(messages) {
 // conversation should yield something (ward decision). Drives parseFacts's
 // `allowEmpty`.
 export const EMPTY_FACTS_MAX_READABLE = 5;
+
+// Split a transcript into chunks whose serialized size each stays under
+// `maxBytes`, never breaking a single turn across chunks. A slice that already
+// fits (or is a single message) is returned as one chunk, so the common path is
+// unchanged. A lone turn larger than `maxBytes` gets its own chunk — the best we
+// can do without splitting mid-turn. Pure; exported for the test.
+export function chunkMessagesBySize(messages, maxBytes) {
+  const list = Array.isArray(messages) ? messages : [];
+  const sizeOf = (m) => Buffer.byteLength(JSON.stringify(m ?? ''), 'utf8');
+  const total = list.reduce((n, m) => n + sizeOf(m), 0);
+  if (list.length <= 1 || total <= maxBytes) return [list];
+  const chunks = [];
+  let cur = [], curBytes = 0;
+  for (const m of list) {
+    const b = sizeOf(m);
+    if (cur.length && curBytes + b > maxBytes) { chunks.push(cur); cur = []; curBytes = 0; }
+    cur.push(m); curBytes += b;
+  }
+  if (cur.length) chunks.push(cur);
+  return chunks;
+}
 
 // Present the conversation to the extractor as FAITHFUL ROLES, not a flattened
 // "Name: text" blob: the Familiar's own lines are `assistant`, everyone else is
@@ -564,24 +601,35 @@ async function callProvider({ provider, apiKey, model, baseUrl, messages }) {
   const url = resolveProviderUrl({ provider, baseUrl });
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      ...authHeader(apiKey),
-    },
-    body: JSON.stringify({
-      model:       model.trim(),
-      messages,
-      stream:      false,
-      temperature: 0.2,
-      // Long sessions produce several topics with substantial content;
-      // 2000 used to truncate the JSON mid-object and every retry hit
-      // the same deterministic wall. Truncation is now also DETECTED
-      // (finish_reason) instead of surfacing as a confusing parse error.
-      max_tokens:  8000,
-    }),
-  });
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        ...authHeader(apiKey),
+      },
+      body: JSON.stringify({
+        model:       model.trim(),
+        messages,
+        stream:      false,
+        temperature: 0.2,
+        // Long sessions produce several topics with substantial content;
+        // 2000 used to truncate the JSON mid-object and every retry hit
+        // the same deterministic wall. Truncation is now also DETECTED
+        // (finish_reason) instead of surfacing as a confusing parse error.
+        max_tokens:  8000,
+      }),
+      // Bounded so a hung provider can't freeze the single-slot worker — it
+      // fails, backs off, and the worker rotates to the next job.
+      signal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new Error(`Extraction timed out after ${Math.round(EXTRACTION_TIMEOUT_MS / 1000)}s`);
+    }
+    throw err;
+  }
   const text = await resp.text();
   if (!resp.ok) throw new Error(`Provider ${provider} returned ${resp.status}: ${text.slice(0, 200)}`);
   let data;
@@ -887,30 +935,35 @@ async function processJob(job) {
   // the extraction task. Only the notes carry macros; the transcript is literal.
   const sharedRoom = promptFn !== buildPrompt;
   const withNames = nameFieldEnabledFor(job, settings);
-  const buildMsgs = (names) => buildExtractionMessages({
-    instructions, messages: visionMessages, sharedRoom, wardLabel: wardName, withNames: names,
-  });
-
-  // Attempt with `name` fields (optimistic auto-detect); if the provider 400s on
-  // the field, retry once WITHOUT names and remember not to try again this run.
-  const { content: raw, finishReason } = await withNameFieldFallback({
+  // One extraction (with the optimistic `name`-field + 400 fallback) over a
+  // given message subset. Factored out so an oversized slice can run it per chunk.
+  const extractOne = (msgs) => withNameFieldFallback({
     withNames,
-    buildMessages: buildMsgs,
-    callProviderFn: (messages) => callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages }),
+    buildMessages: (names) => buildExtractionMessages({ instructions, messages: msgs, sharedRoom, wardLabel: wardName, withNames: names }),
+    callProviderFn: (m) => callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages: m }),
     onLearn: (result) => recordNameFieldResult(job, result),
   });
-  // A small slice may legitimately hold nothing worth remembering → an empty
-  // extraction is success, not a failure that burns 5 retries. A larger slice
-  // coming back empty stays a genuine failure (ward decision, EMPTY_FACTS_MAX_READABLE).
-  const allowEmpty = filterReadable(visionMessages).length <= EMPTY_FACTS_MAX_READABLE;
-  const facts = parseFacts(raw, finishReason, { allowEmpty });
-  // Relations ride the SAME LLM response — no extra request (CLAUDE.md
-  // "ride existing requests"). They're enrichment, so parseRelations never
-  // throws; the worst case is an empty graph update, never a lost fact.
-  const relations = parseRelations(raw, finishReason);
-  // Follow-ups ride the same response too. Never throws; a parse failure
-  // degrades to no follow-up, same as relations.
-  const followups = followupsOn ? parseFollowups(raw, finishReason) : [];
+
+  // Capacity (Pass C): an oversized transcript can't fit one 8000-token reply, so
+  // the JSON truncates mid-object and every retry hits the same wall. Split it at
+  // turn boundaries into chunks that each fit, extract each, and combine. A normal
+  // slice is a single chunk → unchanged behaviour and one call.
+  const chunks = chunkMessagesBySize(visionMessages, EXTRACTION_CHUNK_BYTES);
+  const multiChunk = chunks.length > 1;
+  const facts = [], relations = [], followups = [];
+  for (const chunk of chunks) {
+    const { content: raw, finishReason } = await extractOne(chunk);
+    // Empty is a success for a small slice, or for any single chunk of a
+    // chunked extraction (truncation — the reason a big slice used to fail — is
+    // gone once we chunk, so an empty chunk is genuine). A big UN-chunked slice
+    // coming back empty stays a failure (ward decision).
+    const allowEmpty = multiChunk || filterReadable(chunk).length <= EMPTY_FACTS_MAX_READABLE;
+    for (const f of parseFacts(raw, finishReason, { allowEmpty })) facts.push(f);
+    // Relations + follow-ups ride the SAME response (no extra request); both
+    // never throw and are deduped downstream, so concatenating across chunks is safe.
+    for (const r of parseRelations(raw, finishReason)) relations.push(r);
+    if (followupsOn) for (const fu of parseFollowups(raw, finishReason)) followups.push(fu);
+  }
   if (followups.length) {
     for (const summary of followups) {
       try { await createSessionFollowup({ summary }); }
@@ -1293,6 +1346,14 @@ export async function enqueueMemorization({ sessionId, scope, topicId, topicLabe
   const dupKey   = `${sessionId}|${normScope}|${topicId ?? ''}|${rangeKey}|${priorThrough}`;
   const existing = _queue.find(j => j.dupKey === dupKey && (j.status === 'pending' || j.status === 'processing'));
   if (existing) return { jobId: existing.id, deduped: true };
+
+  // Don't let the coverage sweep (10-min tick) re-add a slice that just exhausted
+  // its retries — hold a failed dupKey for a cooldown so a repeatedly-failing
+  // slice can't burn quota every ten minutes. After the cooldown a fresh attempt
+  // is allowed, so a transient failure still gets another chance later.
+  const recentlyFailed = _queue.find(j => j.dupKey === dupKey && j.status === 'failed'
+    && j.finishedAt && (Date.now() - Date.parse(j.finishedAt)) < FAILED_REENQUEUE_COOLDOWN_MS);
+  if (recentlyFailed) return { jobId: recentlyFailed.id, deduped: true, cooldown: true };
 
   // Noise gate: a slice with no genuinely conversational turn (only heartbeat /
   // system markers) has nothing to remember. Don't spend a provider call on it,
