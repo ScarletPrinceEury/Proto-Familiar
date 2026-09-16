@@ -164,6 +164,7 @@ import {
   pendingCategoryAudienceRemap,
 } from './src/village/village.js';
 import { parseRegistryJson } from './src/village/village-registry-json.js';
+import { buildVillagePresenceBlock, villagePresenceOn } from './src/village/village-presence.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './src/village/audience.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
@@ -505,6 +506,26 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         enrichedResult = { ...enrichedResult, dynamic: (enrichedResult.dynamic || '') + block };
       }
     } catch { /* non-critical */ }
+  }
+
+  // [Village] presence — the registered people this turn is about (my human
+  // naming a villager) get their pronouns and distinguishing facts in front of
+  // me now, so I refer to them right without stopping to run village_lookup.
+  // Rides the turn already happening (no new LLM call); empty unless someone
+  // registered is in play. privateNotes stay ward-only via the shared gate.
+  const _vpSettings = readSettingsSync() || {};
+  if (enrichMode === 'full' && villagePresenceOn(_vpSettings)) {
+    try {
+      const registry = await getVillageRegistry();
+      const block = buildVillagePresenceBlock({
+        registry,
+        text: userText,
+        participants: Array.isArray(sessionAudience?.participants) ? sessionAudience.participants : [],
+        wardPrivate: audienceTag === 'ward-private',
+        wardName: _vpSettings.userName || '',
+      });
+      if (block) enrichedResult = { ...enrichedResult, dynamic: (enrichedResult.dynamic || '') + '\n\n' + block };
+    } catch { /* non-critical — a Village read never blocks the turn */ }
   }
 
   const depth = getThalamusDynamicDepth();

@@ -329,6 +329,11 @@ const state = {
   // memorizes past days that never ingested. Off via this toggle or the
   // PROTO_FAMILIAR_MEMORY_SWEEP_DISABLED=1 env var on the server.
   memorySweepEnabled:      true,
+  // When a registered villager is present or named, put their pronouns and
+  // distinguishing facts in the Familiar's context that turn — so it refers to
+  // my human's people right without stopping to run village_lookup. Off via this
+  // toggle or PROTO_FAMILIAR_VILLAGE_PRESENCE_DISABLED=1 on the server.
+  villagePresenceEnabled:  true,
   sessionUnifyEnabled:     true,
   tomeGraduationEnabled:   false,   // opt-in: writes to the canonical self
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
@@ -579,7 +584,7 @@ const SERVER_SYNCED_KEYS = [
   'warmthEnabled', 'warmthQuietHoursStart', 'warmthQuietHoursEnd',
   'contactBaselinesEnabled', 'waitStreakEnabled', 'noticingEnabled', 'noticingAttributionResweepEnabled', 'weatherEnabled', 'weatherUnit',
   'intentionStandingPerPhase', 'intentionOpenOneShots',
-  'memorySweepEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
+  'memorySweepEnabled', 'villagePresenceEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'cdpModeEnabled', 'videoFileApiEnabled',
   'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
@@ -1092,6 +1097,7 @@ function loadPersisted() {
   if (typeof state.waitStreakEnabled !== 'boolean') state.waitStreakEnabled = true;
   if (typeof state.noticingEnabled !== 'boolean') state.noticingEnabled = true;
   if (typeof state.memorySweepEnabled !== 'boolean') state.memorySweepEnabled = true;
+  if (typeof state.villagePresenceEnabled !== 'boolean') state.villagePresenceEnabled = true;
   if (typeof state.sessionUnifyEnabled !== 'boolean') state.sessionUnifyEnabled = true;
   if (!Number.isInteger(state.warmthQuietHoursStart)
       || state.warmthQuietHoursStart < 0 || state.warmthQuietHoursStart > 23) {
@@ -4327,6 +4333,7 @@ function readSettingsFromUI() {
   if ($('cdp-mode-enabled'))      state.cdpModeEnabled    = $('cdp-mode-enabled').checked;
   if ($('video-fileapi-enabled')) state.videoFileApiEnabled = $('video-fileapi-enabled').checked;
   if ($('memory-sweep-toggle')) state.memorySweepEnabled = $('memory-sweep-toggle').checked;
+  if ($('village-presence-toggle')) state.villagePresenceEnabled = $('village-presence-toggle').checked;
   if ($('session-unify-toggle')) state.sessionUnifyEnabled = $('session-unify-toggle').checked;
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
@@ -4537,6 +4544,7 @@ function writeSettingsToUI() {
     if ($('browse-site-list')) $('browse-site-list').style.display = show ? '' : 'none';
     if ($('browse-site-list-hint')) $('browse-site-list-hint').style.display = show ? '' : 'none'; }
   if ($('memory-sweep-toggle')) setIfNotFocused($('memory-sweep-toggle'), 'checked', state.memorySweepEnabled !== false);
+  if ($('village-presence-toggle')) setIfNotFocused($('village-presence-toggle'), 'checked', state.villagePresenceEnabled !== false);
   if ($('session-unify-toggle')) setIfNotFocused($('session-unify-toggle'), 'checked', state.sessionUnifyEnabled !== false);
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
