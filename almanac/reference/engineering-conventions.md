@@ -38,6 +38,9 @@ sources:
   - id: build-prompt-catalog
     type: file
     path: scripts/build-prompt-catalog.mjs
+  - id: consolidate-module
+    type: file
+    path: phylactery/src/phylactery/consolidate.py
   - id: prompt-catalog-test
     type: file
     path: tests/prompt-catalog.test.mjs
@@ -318,7 +321,14 @@ the same cap) and `extractContent` at the reply boundary, which falls back to
 new raw provider fetch is a review flag; grep for `max_tokens` when touching one. This was paid
 for twice: triage (0.8.82), then the Discord turn path (0.9.7, empty turns and tool calls cut
 mid-JSON), because the first fix lived in `llm-call.js` alone and Discord's own raw fetch never
-got the memo [@claude-md].
+got the memo [@claude-md]. It was paid a third time across the JS/Python boundary: Phylactery's
+`consolidate.py` funnels all four of its LLM consumers through one `_call_llm` helper that
+hardcoded `max_tokens: 4000` and `timeout: 60.0` and read only `content`, so a large tier-rollup
+fold on an always-thinking connection either timed out or came back with an empty summary
+(fixed 0.12.8-alpha) [@consolidate-module]. The rule is about the guarantee, not the language —
+`_extract_message_content` is the Python mirror of `extractContent`'s `reasoning_content`
+fallback. See [Phylactery](../architecture/phylactery) for the fix and why the reasoning-content
+fallback is safe there specifically.
 
 **RULE B — budget exhaustion is never silence.** Every cap, limit, timeout, or retry ceiling
 must define, before it is built: what the ward sees, what the Familiar is told (its own tool

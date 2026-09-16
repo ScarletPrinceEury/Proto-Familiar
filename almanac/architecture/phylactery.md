@@ -30,6 +30,9 @@ sources:
   - id: memory-module
     type: file
     path: phylactery/src/phylactery/memory.py
+  - id: thalamus-js
+    type: file
+    path: thalamus.js
 ---
 
 # Phylactery
@@ -88,6 +91,57 @@ from chat sessions is a separate subsystem; see
 ## Consolidation: mechanism and scope
 
 Tiered consolidation rolls memories from daily granularity up through weekly, monthly, and significant tiers [@consolidate-module]. The process runs on a schedule (5-minute volume-gated baseline) and sweeps **every past week/month/year holding un-consolidated entries**, oldest-first [@claude-md]. This is important: before 0.8.89, each consolidation pass targeted only a single reference period (e.g., today − 7d), which meant bulk imports of historical memories never fell into that window and stayed at daily granularity forever [@claude-md]. The fix ensures that re-runs catch up on the next scheduled pass (≤6 hours) or via force (`POST /api/entity/lifecycle {force:true}`) [@claude-md]. Consolidation is idempotent: weekly consolidation prunes its daily sources after roll-up; monthly/yearly skip periods that already have a higher-tier row, so they never re-append [@consolidate-module]. Three hardenings landed after a 2026-08-14 store audit of pre-0.8.89 damage: the once-only guards compare **normalized** date_keys (a migrated monthly keyed `YYYY-MM` or weekly keyed `YYYY-Wnn` now counts as rolled — the raw-key comparison is what let the 0.8.89 sweep duplicate Feb–May 2026); an **empty** rollup row no longer marks its period as rolled (a zero-length July 2026 stub had blocked that month forever) and an empty LLM summary is refused rather than stored; and a re-rolled period now **replaces** its summary instead of appending through `memory_create`'s dedup-merge path, which is how one June 2026 monthly accreted ~24 generations of itself into a 160 KB row.
+
+## RULE A's Python mirror: `_call_llm` limits and lossless chunking
+
+All four LLM consumers inside `consolidate.py` (weekly, monthly, and yearly roll-up, plus
+distillation) funnel through one helper, `_call_llm`. Before 0.12.8-alpha it hardcoded
+`max_tokens: 4000` and `timeout: 60.0` with no override, and read only `choices[0].message.content`
+[@consolidate-module]. This is the Python-side recurrence of the Node
+[RULE A](../reference/engineering-conventions) bug already paid for twice on the JS side (silence
+triage 0.8.82, the Discord turn path 0.9.7): on an always-thinking connection the reasoning bills
+against the same token cap, so a large fold either timed out or returned an empty `content` with
+the real answer sitting in `reasoning_content` [@consolidate-module]. Because `_write_rollup`
+correctly refuses to store an empty summary — a guard added after an earlier accretion bug, see
+above — the source rows were never pruned, so the same oversized period was re-attempted on every
+subsequent pass: a self-sustaining failure loop, the same family the [session memorization
+queue](session-memorization) hit before its durable-queue rebuild
+[@consolidate-module]. `_get_entries_in_range` / `_get_entries_for_period` had no `ORDER BY` and
+no limit, so once the daily backlog drained, one week could hold hundreds of daily rows joined
+into a single oversized prompt (one observed case: 264 source rows) [@consolidate-module].
+
+The fix brings `_call_llm` up to the same standard as `callProviderChat`, adapted for where the
+output goes: `_extract_message_content(message)` tries `content`, then `reasoning_content`, then
+`reasoning` — the Python mirror of `extractContent` — and this is safe here specifically because
+consolidation output is the Familiar's own private notes, not a user-facing reply, so the
+RULE B corollary against dumping raw chain-of-thought at the ward does not apply. The rule of
+thumb: use the reasoning-content fallback for internal artifacts, use the length-aware turn-reply
+shape for anything ward-facing [@consolidate-module]. `_call_llm` also retries once, but only on
+`httpx.TimeoutException` (an HTTP error status is not blindly re-sent), and reads
+`max_tokens`/`timeout_s` from `cfg` with defaults of `8000` / `240.0` seconds so an old-shaped or
+test `cfg` still works [@consolidate-module]. For periods still too large at that cap,
+`_chunk_entries(entries, max_chars)` splits at entry boundaries (never mid-entry, and lossless —
+concatenating the chunks reproduces the input, pinned by a test) with a default `chunk_chars` of
+`60000`; `_summarize_entries` folds each date-sorted chunk into the running summary through the
+existing `prior_summary` primitive already used for period-to-period folding, so a period that
+fits keeps the single-call path unchanged, and one empty chunk result cannot discard a running
+summary already gathered from earlier chunks [@consolidate-module]. Both range queries gained
+`ORDER BY date_key ASC` so chunking is deterministic [@consolidate-module]. `run_distillation`
+inherits all of this automatically, since the scheduler injects the same `_call_llm` [@consolidate-module].
+
+Two ward-facing settings, `phylacteryLlmMaxTokens` and `phylacteryLlmTimeoutS`, let a ward raise
+these limits further; `loadPhylacteryEnv` in `thalamus.js` — the single JS-to-Python env bridge
+for this service — forwards them as `PHYLACTERY_LLM_MAX_TOKENS` / `_TIMEOUT_S` only when the value
+is a finite positive number, and the Python side's own `_int_env`/`_float_env` readers enforce a
+floor (500 tokens, 10 seconds) [@thalamus-js] [@consolidate-module]. A blank or too-small setting
+is therefore never forwarded and can never shrink the limits back into the failure they exist to
+fix — the ward gets the knob, but not a way to reintroduce the bug through it.
+
+Consolidation's failure accounting differs from the memorization queue's: nothing here ever
+reaches a terminal `failed` state, because source rows are pruned only on success. A jammed period
+simply retries on the next lifecycle pass (`POST /api/entity/lifecycle`, or the scheduled
+volume-gated sweep) and self-heals once a fix like this one is deployed, with no manual requeue
+needed [@consolidate-module].
 
 ## Episodic versus standing: temporality and consolidation strategy
 
@@ -183,7 +237,8 @@ toggle [@phylactery-design].
 - [Unruh](unruh) — the sibling specialist that stays outside Phylactery by design (temporal
   context, mostly per-embodiment ponderings).
 - [Engineering conventions](../reference/engineering-conventions) — the model-facing slug-id
-  scheme that Phylactery and Unruh both follow for every other kind of identifier.
+  scheme that Phylactery and Unruh both follow for every other kind of identifier, and RULE A,
+  whose Python mirror inside `_call_llm` is described above.
 - [Trust tiers gate reads, not writes](../decisions/trust-tiers-gate-reads-not-writes) — why the
   audience field above governs only what a session may be told, and why protecting Phylactery
   from a socially-engineered false write is a separate, behavioral defense rather than an
