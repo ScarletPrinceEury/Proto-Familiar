@@ -171,3 +171,6 @@ instead of a model file-lookup; see [Voice](voice) for the earlier occurrence [@
   shape.
 - [Voice](voice) — the earlier occurrence of the "a test can assert a bug and defend it for
   weeks" lesson this feature's verification win repeats.
+- [Villager proactive context](villager-proactive-context) — the other gated, code-assembled
+  block appended to `enriched.dynamic` at the same Discord turn-assembly seam, built later for a
+  villager's own reach-out and memory continuity rather than identity facts.

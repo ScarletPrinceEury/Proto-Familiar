@@ -99,9 +99,18 @@ flag flip on the same boolean: the content half is ward-scoped (there is nothing
 show a villager) and the reconciliation half must never fire on a villager turn regardless of any
 permission granted to them. Making that real means splitting the flag into a ward-only,
 never-grantable `reconcileWardState` and a separately grantable `proactiveContext` — and building a
-villager-scoped proactive surface for the grant to actually reveal. That split is deferred, not
-built; it is recorded here so the next requirement that needs the two halves apart does not have to
-rediscover that they were always two concepts sharing one name.
+villager-scoped proactive surface for the grant to actually reveal. That split was deferred here,
+not built, so the next requirement that needs the two halves apart would not have to rediscover
+that they were always two concepts sharing one name.
+
+**Update (0.12.12–0.12.13-alpha):** that requirement arrived. A `proactiveContext` boolean grant
+now exists on Village categories, and
+[Villager proactive context](../architecture/villager-proactive-context) is the villager-scoped
+surface built for it — a separate module (`src/warmth/villager-context.js`) that reads its own
+reach-out and gated-memory sources and never touches `liveTurn` or Unruh reconciliation state.
+`reconcileWardState` was never split out as a named flag because it did not need to be: the
+reconciliation calls stayed exactly where they were, gated on `decision.isWard`, and the new
+surface simply never calls them.
 
 ## Related
 
@@ -113,3 +122,5 @@ rediscover that they were always two concepts sharing one name.
   the prompt rather than *which* dynamic content renders.
 - [Unruh](../architecture/unruh) — the ward-scoped specialist whose state the reconciliation half
   of `liveTurn` writes to.
+- [Villager proactive context](../architecture/villager-proactive-context) — the villager-scoped
+  proactive surface that this decision's deferred split motivated.
