@@ -1918,6 +1918,17 @@
           <div class="field-hint">Off by default. When on, your Familiar occasionally looks back over its older, settled memories and — where a one-off moment actually revealed a <em>lasting pattern</em> about you ("doing dreaded paperwork right away works well for me") — writes that pattern out as its own standing memory it'll recall when it matters. It only ever <strong>adds</strong>: nothing you wanted is ever demoted, faded, or deleted by this, and the original memory stays exactly as it was. Takes effect after the app restarts. (Requires a memory connection.)</div>
 
           <div class="field-row" style="margin-top:12px">
+            <label for="phylactery-llm-max-tokens">Memory summary length cap</label>
+            <input type="number" id="phylactery-llm-max-tokens" min="500" step="500" placeholder="8000" style="width:8em">
+          </div>
+          <div class="field-hint">How much room your Familiar's memory summaries (weekly → monthly → yearly roll-ups) get to write. Leave blank for the default (8000), which suits the thinking models that spend part of this budget reasoning. Only raise it if summaries come out cut short. Takes effect after the app restarts.</div>
+          <div class="field-row">
+            <label for="phylactery-llm-timeout">Memory summary timeout (seconds)</label>
+            <input type="number" id="phylactery-llm-timeout" min="10" step="10" placeholder="240" style="width:8em">
+          </div>
+          <div class="field-hint">How long to wait for one memory summary before giving up and trying again next pass. Leave blank for the default (240s). A slow model folding a busy week needs the room; too low and consolidation quietly stalls. Blank or a too-small value falls back to the safe default. Takes effect after the app restarts.</div>
+
+          <div class="field-row" style="margin-top:12px">
             <label for="stewardship-toggle">Stewardship</label>
             <input type="checkbox" id="stewardship-toggle" checked>
           </div>

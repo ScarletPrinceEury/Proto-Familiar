@@ -338,6 +338,17 @@ function loadPhylacteryEnv() {
     env.ZAI_BASE_URL = baseUrl;
     env.ZAI_MODEL    = model;
   }
+  // Consolidation LLM tunables (0.12.8): the ward may raise the output cap and
+  // per-call timeout for always-thinking models. Only forwarded when set to a
+  // positive number — otherwise consolidate.py's own robust defaults (8000 /
+  // 240s) stand, so a blank or garbage field can never shrink them into the
+  // timeout/empty-summary failures these knobs exist to fix. Takes effect on the
+  // next Phylactery (re)spawn.
+  const posNum = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+  const maxTok = posNum(settings.phylacteryLlmMaxTokens);
+  if (maxTok) env.PHYLACTERY_LLM_MAX_TOKENS = String(Math.round(maxTok));
+  const timeoutS = posNum(settings.phylacteryLlmTimeoutS);
+  if (timeoutS) env.PHYLACTERY_LLM_TIMEOUT_S = String(timeoutS);
   return env;
 }
 

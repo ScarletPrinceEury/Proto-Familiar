@@ -250,6 +250,8 @@ const state = {
   fallbackConnectionIds:   [],   // ordered ids tried when primary fails/returns empty
   maxEmptyRetries:         2,    // retries per connection when response is empty
   phylacteryConnectionId:  null, // id of the connection whose API key Phylactery uses
+  phylacteryLlmMaxTokens:  null, // memory consolidation output cap; null → engine default (8000)
+  phylacteryLlmTimeoutS:   null, // memory consolidation per-call timeout (s); null → engine default (240)
   // ── Prompt-cache tuning ──────────────────────────────────
   // How many messages from the end of the conversation the dynamic
   // thalamus block gets injected at. Static identity stays at the
@@ -577,7 +579,7 @@ const SERVER_SYNCED_KEYS = [
   'providerApiKeys',
   'browseEnabled', 'browseIdleMin', 'browseMaxTabs', 'webReadBackend', 'pageWatchEnabled',
   'browseSiteMode', 'browseSiteList', 'browseConfirmDomains', 'browseConfirmMode',
-  'phylacteryConnectionId',
+  'phylacteryConnectionId', 'phylacteryLlmMaxTokens', 'phylacteryLlmTimeoutS',
   'thalamusDynamicDepth', 'handoffEnabled',
   'ponderingEnabled', 'ponderingIntervalScale', 'ponderThreadChance', 'followupsEnabled',
   'ponderWebEnabled', 'ponderWebRoundsPerTick', 'ponderWebReadsPerDay',
@@ -4313,6 +4315,18 @@ function readSettingsFromUI() {
     const n = parseInt($('ponder-web-reads').value, 10);
     state.ponderWebReadsPerDay = Number.isFinite(n) && n >= 0 && n <= 200 ? n : 12;
   }
+  // Memory consolidation knobs: blank → null (the engine's own default stands);
+  // a too-small value also falls back to null, so it can't re-break consolidation.
+  if ($('phylactery-llm-max-tokens')) {
+    const raw = String($('phylactery-llm-max-tokens').value ?? '').trim();
+    const n = parseInt(raw, 10);
+    state.phylacteryLlmMaxTokens = raw === '' ? null : (Number.isFinite(n) && n >= 500 ? n : null);
+  }
+  if ($('phylactery-llm-timeout')) {
+    const raw = String($('phylactery-llm-timeout').value ?? '').trim();
+    const n = parseInt(raw, 10);
+    state.phylacteryLlmTimeoutS = raw === '' ? null : (Number.isFinite(n) && n >= 10 ? n : null);
+  }
   if ($('warmth-toggle')) state.warmthEnabled = $('warmth-toggle').checked;
   if ($('baselines-toggle')) state.contactBaselinesEnabled = $('baselines-toggle').checked;
   if ($('wait-streak-toggle')) state.waitStreakEnabled = $('wait-streak-toggle').checked;
@@ -4521,6 +4535,8 @@ function writeSettingsToUI() {
   }
   if ($('ponder-web-toggle')) setIfNotFocused($('ponder-web-toggle'), 'checked', state.ponderWebEnabled !== false);
   if ($('ponder-web-reads'))  setIfNotFocused($('ponder-web-reads'),  'value',   state.ponderWebReadsPerDay ?? 12);
+  if ($('phylactery-llm-max-tokens')) setIfNotFocused($('phylactery-llm-max-tokens'), 'value', state.phylacteryLlmMaxTokens ?? '');
+  if ($('phylactery-llm-timeout'))    setIfNotFocused($('phylactery-llm-timeout'),    'value', state.phylacteryLlmTimeoutS ?? '');
   if ($('warmth-toggle'))      setIfNotFocused($('warmth-toggle'),      'checked', state.warmthEnabled !== false);
   if ($('baselines-toggle'))   setIfNotFocused($('baselines-toggle'),   'checked', state.contactBaselinesEnabled !== false);
   if ($('wait-streak-toggle')) setIfNotFocused($('wait-streak-toggle'), 'checked', state.waitStreakEnabled !== false);
