@@ -20,6 +20,12 @@ sources:
 - id: app-js
   type: file
   path: public/app.js
+- id: village-card-js
+  type: file
+  path: src/village/village-card.js
+- id: village-js
+  type: file
+  path: src/village/village.js
 ---
 
 # Session Memory Extraction
@@ -148,6 +154,33 @@ The `name` field cannot "split roles" in a way that would let multiple humans ap
 
 The message `speaker` field already carries the same information that the inline `[Name]:` label is generated from (in `discord-gateway` by `attributeUserContent`). Stamping the OpenAI `name` field with a pseudonym handle is what makes the field useful: the model gets a separate identifier namespace that does not depend on the content string. [@memorization-js]
 
+## The villager legend block (0.12.16)
+
+Extraction used to resolve "she"/"they"/"Sam" purely from the transcript, blind to who the
+ward's actual Village people are — which could mis-pronoun someone, mis-attribute a fact to the
+wrong person, or re-note a standing fact the Familiar already holds about them. `buildVillagerLegendBlock(messages, registry, { wardPrivate, wardName })` closes that gap by building a compact
+"People here" card for each Village member who shows up in the slice, injected into the
+extraction prompt right before the model reads the transcript [@memorization-js].
+
+A villager "shows up" one of two ways: they spoke (a name-prefixed turn, the reliable signal), or
+they are merely *named* in the transcript — someone the ward talked about rather than to. The
+mention scan is whole-word (`\bSam\b`, so "Sam" cannot match "same") against the villager's name
+or any alias handle [@memorization-js]. The card's fields — pronouns, relation to the ward,
+communication-style notes, and public notes — come from `disclosableVillagerFields`, the one
+shared disclosure policy also used by [Village presence block](village-presence) and the
+`village_lookup` tool: those fields are always fair game, but `privateNotes` rides a ward-private
+card only [@village-card-js]. `wardPrivate` follows the same branch the two extraction prompts
+already split on: `buildPrompt` (ward-private) gets the full card, `buildSharedRoomPrompt`
+(shared room) withholds private notes — no new gating invented for this feature
+[@memorization-js].
+
+The Village registry (`getRegistry()` from `village.js`) is loaded once per memorization job,
+ahead of the prompt build, and reused by the remember gate that runs later in the same job,
+instead of being loaded twice [@memorization-js] [@village-js]. The block returns `''` when no villager appears in the slice — the common
+case — so most extraction prompts stay byte-identical to before this feature shipped; a registry
+load failure degrades the same way, to no block, rather than blocking memorization
+[@memorization-js].
+
 ## Empty extractions and oversized transcripts
 
 Two 0.12.5/0.12.6 fixes changed how extraction interprets an empty result and how much input it
@@ -184,3 +217,5 @@ itself is bounded [@memorization-js].
 - [Attribution confidence: degrade the attribution, not the fact](../decisions/attribution-confidence-degrades-not-drops) — the follow-on decision for a referent the three-layer fix above still can't resolve: mark it unresolved rather than guess or drop it, and let [Phylactery](phylactery) recall and [Noticing](noticing) carry the correction.
 - [Deliberations delivered as system messages](../decisions/deliberations-as-system-messages) — the role-faithful transcript assembly on this page is the reference implementation of that decision's "Familiar spoken output rides as `assistant`" axis.
 - [Vision capability defaults to BLIND; prove capability via allowlist](../decisions/vision-capability-defaults) — the earlier capability-cache decision that the name-field persistence design above mirrors.
+- [Village presence block](village-presence) — the `disclosableVillagerFields` disclosure policy the villager legend block above reuses rather than duplicating.
+- [Villager proactive context](villager-proactive-context) — a related but distinct 0.12.14–0.12.15 extension of the Village surface: villager tells, built around the same registry the legend block reads.

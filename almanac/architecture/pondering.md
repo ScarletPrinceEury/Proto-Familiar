@@ -29,6 +29,9 @@ sources:
   - id: unruh-server-py
     type: file
     path: unruh/src/unruh/server.py
+  - id: server-js
+    type: file
+    path: server.js
 ---
 
 # Pondering
@@ -114,6 +117,25 @@ context, and it runs read-only and code-bounded for that reason — see
 Pass 4 section for why the loop hands the model no tool surface at all, only the ability to name
 what it wants looked up.
 
+## A second creation path for villager tells (0.12.15)
+
+`ponderOnce()`'s intent-parsing pass already turns a ponder's `wants_to_save` and `drawn_to`
+fields into memory writes and new standing curiosities; 0.12.15 gave a `tell` intent an optional
+`recipient` field so a free pondering cycle can also form a "meaning to bring up with them" tell
+for someone in the ward's Village, not only for the ward [@pondering-js]. `runPonder`
+(`server.js`) injects a small roster — up to 8 villagers whose category grants
+`proactiveContext` — into `grounding.villagers` before the call, and only when villager context
+is on at all; the common ponder gets no roster and renders unchanged [@server-js].
+`ponderOnce()` validates any `recipient` against that injected roster: a matching id is
+partitioned out of the ward-facing result into `result.villager_tells`, and a non-matching id is
+downgraded to an ordinary ward tell rather than trusted or dropped [@pondering-js]. `runPonder`
+then routes each `villager_tells` entry to the villager's own tell store, fire-and-forget, the
+same way it records a `drawn_to` curiosity [@server-js]. See
+[Villager proactive context](villager-proactive-context)'s Stage 3 section for the full villager
+tell lifecycle (storage, gating, and the show-once surfacing this creates the writes for) and for
+`getUnactedIntents`'s defense-in-depth skip of any tell still carrying a `recipient`
+[@recent-ponderings-js].
+
 ## Why ponderings stay per-embodiment
 
 Ponderings are not written to Phylactery, the canonical store, because they are thoughts in progress rather than conclusions about the ward or the world [@pondering-loop-js]. A pondering is context-sensitive to the current embodiment's conversation history, interruptions, current mood, and recent focus. The thought "I wonder if Chen is overcommitting again" makes sense in a particular chat session or embodiment flow, not as a fact to inject into every future conversation [@autonomous-loops-doc]. Ponderings are meant to be read in the moment or on-demand via `read_pondering`, not accumulated into standing identity.
@@ -131,3 +153,5 @@ Ponderings are not written to Phylactery, the canonical store, because they are 
   why Pass 4's research loop hands the model no tool surface, only the ability to name a lookup.
 - [Self-originated interest and the `me` register](../decisions/self-originated-interest-and-me-register) —
   why `drawn_to` curiosities exist, and the `related_to` threading behavior detailed above.
+- [Villager proactive context](villager-proactive-context) — Stage 3's full villager-tell
+  lifecycle and its other creation path, the `note_to_tell_villager` chat tool.

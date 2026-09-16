@@ -174,3 +174,6 @@ instead of a model file-lookup; see [Voice](voice) for the earlier occurrence [@
 - [Villager proactive context](villager-proactive-context) — the other gated, code-assembled
   block appended to `enriched.dynamic` at the same Discord turn-assembly seam, built later for a
   villager's own reach-out and memory continuity rather than identity facts.
+- [Session Memory Extraction](session-memory-extraction) — the villager legend block (0.12.16)
+  that reuses `disclosableVillagerFields` a third time, this time inside the memorization prompt
+  rather than a live chat turn.
