@@ -2150,7 +2150,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let reachOutBlock = '';
     if (liveTurn && !staticOnly && !gated) {
       try {
-        const knocks = await recentReachOuts({ markSurfaced: true });
+        // recipientId:null → only knocks to my human; villager reaches (now
+        // logged with a recipientId) belong to that villager's own recall, not
+        // the ward's "I reached out first" block.
+        const knocks = await recentReachOuts({ markSurfaced: true, recipientId: null });
         reachOutBlock = formatReachOutBlock(knocks);
       } catch (err) {
         console.error('[thalamus] recentReachOuts failed:', err?.message ?? err);

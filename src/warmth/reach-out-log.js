@@ -86,6 +86,7 @@ const hoursSince = (iso, now) => (now - new Date(iso).getTime()) / 3_600_000;
  */
 export async function recordReachOut({
   message, about = '', why = '', channel = 'ward', source = null,
+  recipientId = null,
   tomesDir = DEFAULT_TOMES_DIR, now = Date.now(),
 } = {}) {
   const text = typeof message === 'string' ? message.trim() : '';
@@ -110,6 +111,11 @@ export async function recordReachOut({
       message: text,
       about: typeof about === 'string' ? about.trim() : '',
       why: typeof why === 'string' ? why.trim() : '',
+      // recipientId names WHO the knock was to: null/absent = my human, a
+      // villager id = a warm reach to that person. It keys the per-recipient
+      // reader so a villager turn recalls what I said to THAT villager, and the
+      // ward block (recipientId:null) doesn't pick up villager reaches.
+      ...(typeof recipientId === 'string' && recipientId.trim() ? { recipientId: recipientId.trim() } : {}),
       ...(src ? { source: src } : {}),
       shown: 0,
     });
@@ -133,13 +139,22 @@ export async function recordReachOut({
  */
 export async function recentReachOuts({
   withinHours = WINDOW_HOURS, limit = MAX_IN_BLOCK, markSurfaced = false,
+  recipientId = undefined,
   tomesDir = DEFAULT_TOMES_DIR, now = Date.now(),
 } = {}) {
   let items;
   try { items = await readAll(tomesDir); } catch { return []; }
 
+  // recipientId: omitted → every knock (back-compat); null → only my human's
+  // (no recipientId stored); a string → only knocks to that villager.
+  const matchesRecipient = (i) =>
+    recipientId === undefined ? true
+      : recipientId === null ? !i.recipientId
+      : i.recipientId === recipientId;
+
   const live = items.filter((i) =>
     i && typeof i.message === 'string'
+    && matchesRecipient(i)
     && hoursSince(i.at, now) <= withinHours
     && (Number(i.shown) || 0) < MAX_SHOWN);
 

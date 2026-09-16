@@ -6595,6 +6595,11 @@ function startReachout() {
         title:    `I reached out to ${villager.name}`,
         body:     `To ${villager.name}: "${message}"`,
       }).catch(() => { /* the send happened; a mirror hiccup must not fail it */ });
+      // Log the knock keyed to this villager so my next turn with them recalls
+      // what I last said — the villager-side of the ward's "I reached out first"
+      // continuity (gated behind proactiveContext). Never fails the send.
+      recordReachOut({ message, channel: 'villager-dm', recipientId: villager.id })
+        .catch(err => console.error('[reachout] villager recordReachOut failed:', err?.message ?? err));
       return { ok: true };
     },
     onTick: (r) => {

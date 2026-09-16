@@ -40,6 +40,7 @@ import { buildAvailabilityBlock } from '../schedule/schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from '../village/village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from '../village/audience.js';
 import { buildVillagePresenceBlock, villagePresenceOn } from '../village/village-presence.js';
+import { buildVillagerContextBlock } from '../warmth/villager-context.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
@@ -2448,6 +2449,19 @@ async function handleTurn(gw, msg, decision) {
       });
       if (vBlock) enriched.dynamic = (enriched.dynamic || '') + (enriched.dynamic ? '\n\n' : '') + vBlock;
     } catch { /* non-critical — a Village read never blocks the turn */ }
+  }
+
+  // Villager proactive context — in a 1:1 DM with a villager whose category
+  // grants proactiveContext, I walk in knowing what I last said to them, so a
+  // reply days later lands as an answer. v1 = DMs only (a group room has no
+  // single focal person); gated by the grant; empty otherwise.
+  {
+    const vc = await buildVillagerContextBlock({
+      focalVillager: decision.kind === 'villager-dm' ? decision.villager : null,
+      grants: audienceGrants,
+      settings,
+    });
+    if (vc) enriched.dynamic = (enriched.dynamic || '') + (enriched.dynamic ? '\n\n' : '') + vc;
   }
 
   // Structured signals for who this message names — recorded on every

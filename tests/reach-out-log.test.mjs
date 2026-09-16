@@ -123,3 +123,22 @@ test('minutes and days both read like a person said them', async () => {
   assert.match(formatReachOutBlock(at(26 * HOUR), { now }), /yesterday/);
   assert.match(formatReachOutBlock(at(72 * HOUR), { now }), /3 days ago/);
 });
+
+test('recipientId keys a knock to a villager and filters the reader (0.12.12)', async () => {
+  const dir = await tmp();
+  try {
+    await recordReachOut({ message: 'to my human', tomesDir: dir });                       // ward (no recipientId)
+    await recordReachOut({ message: 'hey Chen', recipientId: 'chen-x1', channel: 'villager-dm', tomesDir: dir });
+    await recordReachOut({ message: 'hi Mara', recipientId: 'mara-z2', channel: 'villager-dm', tomesDir: dir });
+
+    // Omitted → every knock (back-compat).
+    assert.equal((await recentReachOuts({ tomesDir: dir })).length, 3);
+    // null → only my human's (no recipientId stored).
+    const wardOnly = await recentReachOuts({ tomesDir: dir, recipientId: null });
+    assert.deepEqual(wardOnly.map(i => i.message), ['to my human']);
+    // a villager id → only that villager's knocks.
+    const chen = await recentReachOuts({ tomesDir: dir, recipientId: 'chen-x1' });
+    assert.deepEqual(chen.map(i => i.message), ['hey Chen']);
+    assert.equal(chen[0].recipientId, 'chen-x1', 'recipientId is stored on the item');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
