@@ -102,7 +102,7 @@ export function buildGroundingBlock(grounding) {
     const lines = villagers
       .map(v => `  - ${v.name} (id: ${v.id})${v.note ? ` — ${String(v.note).trim()}` : ''}`)
       .join('\n');
-    parts.push(`People I know, in case a thought here is really for one of them:\n${lines}`);
+    parts.push(`People I know, in case one of them comes to mind while I'm thinking:\n${lines}`);
   }
 
   return parts.length ? `\n\n${parts.join('\n\n')}` : '';
