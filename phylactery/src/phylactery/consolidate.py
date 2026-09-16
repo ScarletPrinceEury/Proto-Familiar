@@ -35,7 +35,36 @@ from phylactery.memory import create as memory_create
 from phylactery.memory import update_memory_by_id
 
 
-def _llm_config() -> dict[str, str] | None:
+# Defaults tuned for always-thinking models (GLM/DeepSeek): they bill their
+# reasoning against max_tokens and are slow on large folds, so the pre-thinking
+# 4000-token / 60s values timed out or came back empty on a drained backlog.
+# All three are overridable via PHYLACTERY_LLM_* env (forwarded from the ward's
+# connection settings by loadPhylacteryEnv), and every consumer reads them through
+# cfg with these same defaults — so a blank or invalid setting falls back here
+# rather than quietly breaking a pass.
+_DEFAULT_MAX_TOKENS = 8000
+_DEFAULT_TIMEOUT_S = 240.0
+_DEFAULT_CHUNK_CHARS = 60000
+_ENTRY_SEP = "\n\n---\n\n"  # how _consolidation_prompt joins entries
+
+
+def _int_env(name: str, default: int, *, minimum: int) -> int:
+    try:
+        v = int(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        return default
+    return v if v >= minimum else default
+
+
+def _float_env(name: str, default: float, *, minimum: float) -> float:
+    try:
+        v = float(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        return default
+    return v if v >= minimum else default
+
+
+def _llm_config() -> dict[str, Any] | None:
     api_key = (
         os.environ.get("PHYLACTERY_LLM_API_KEY") or
         os.environ.get("ENTITY_CORE_LLM_API_KEY") or ""
@@ -50,7 +79,28 @@ def _llm_config() -> dict[str, str] | None:
     ).strip()
     if not api_key or not base_url or not model:
         return None
-    return {"api_key": api_key, "base_url": base_url, "model": model}
+    return {
+        "api_key": api_key, "base_url": base_url, "model": model,
+        "max_tokens": _int_env("PHYLACTERY_LLM_MAX_TOKENS", _DEFAULT_MAX_TOKENS, minimum=500),
+        "timeout_s": _float_env("PHYLACTERY_LLM_TIMEOUT_S", _DEFAULT_TIMEOUT_S, minimum=10.0),
+        "chunk_chars": _int_env("PHYLACTERY_LLM_CHUNK_CHARS", _DEFAULT_CHUNK_CHARS, minimum=4000),
+    }
+
+
+def _extract_message_content(message: dict) -> str:
+    """The reply text, tolerating a thinking model that parks its answer in
+    reasoning_content with an empty content field — the Python mirror of the Node
+    extractContent (CLAUDE.md RULE A). This is what dissolves the "produced an
+    empty summary" failures on GLM/DeepSeek. Safe here because consolidation output
+    is the Familiar's own private notes, not a user-facing reply — the note it wrote
+    while thinking, never a chain-of-thought leaked at my human."""
+    if not isinstance(message, dict):
+        return ""
+    for key in ("content", "reasoning_content", "reasoning"):
+        val = message.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
 
 
 def _call_llm(cfg: dict, prompt: str) -> str:
@@ -68,15 +118,80 @@ def _call_llm(cfg: dict, prompt: str) -> str:
         {"role": "system", "content": prompt},
         {"role": "user", "content": "(a quiet moment to consolidate my notes)"},
     ]
-    resp = httpx.post(
-        cfg["base_url"],
-        headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
-        json={"model": cfg["model"], "messages": messages,
-              "temperature": 0.2, "max_tokens": 4000},
-        timeout=60.0,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    max_tokens = cfg.get("max_tokens", _DEFAULT_MAX_TOKENS)
+    timeout_s = cfg.get("timeout_s", _DEFAULT_TIMEOUT_S)
+    # Retry once on a transient timeout. Chunking keeps each prompt bounded, so a
+    # timeout here is far more likely a hiccup than a size wall; the sweep's
+    # per-period guard contains the blast radius either way. Only timeouts retry —
+    # an HTTP error status is not blindly re-sent.
+    last_exc: Exception | None = None
+    for _ in range(2):
+        try:
+            resp = httpx.post(
+                cfg["base_url"],
+                headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
+                json={"model": cfg["model"], "messages": messages,
+                      "temperature": 0.2, "max_tokens": max_tokens},
+                timeout=timeout_s,
+            )
+            resp.raise_for_status()
+            choice = (resp.json().get("choices") or [{}])[0]
+            return _extract_message_content(choice.get("message") or {})
+        except httpx.TimeoutException as e:
+            last_exc = e
+            continue
+    if last_exc is not None:
+        raise last_exc
+    return ""
+
+
+def _chunk_entries(entries: list[str], max_chars: int) -> list[list[str]]:
+    """Split entry strings into chunks whose joined length stays under max_chars,
+    never splitting an individual entry. Lossless: concatenating the chunks in
+    order yields the input unchanged. A lone entry larger than the cap becomes its
+    own chunk (best effort — never dropped). The common case (a period that fits)
+    returns a single chunk, so the ordinary one-call path is unchanged."""
+    if not entries:
+        return []
+    sep = len(_ENTRY_SEP)
+    total = sum(len(e) for e in entries) + sep * max(0, len(entries) - 1)
+    if len(entries) <= 1 or total <= max_chars:
+        return [list(entries)]
+    chunks: list[list[str]] = []
+    cur: list[str] = []
+    cur_len = 0
+    for e in entries:
+        add = len(e) + (sep if cur else 0)
+        if cur and cur_len + add > max_chars:
+            chunks.append(cur)
+            cur, cur_len = [], 0
+            add = len(e)
+        cur.append(e)
+        cur_len += add
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _summarize_entries(
+    cfg: dict, tier_from: str, tier_to: str, entries: list[str],
+    prior_summary: str | None = None,
+) -> str:
+    """One tier's summary. A period that fits → a single call (the common path,
+    unchanged). An oversized period → summarize in date-sorted chunks, folding each
+    chunk into the running summary via the existing prior_summary path, so a huge
+    week never truncates mid-JSON and nothing is dropped. Entries arrive date-sorted
+    from the query. A chunk that comes back empty leaves the running summary intact,
+    so one empty fold can't discard everything already gathered."""
+    chunks = _chunk_entries(entries, cfg.get("chunk_chars", _DEFAULT_CHUNK_CHARS))
+    if len(chunks) <= 1:
+        return _call_llm(cfg, _consolidation_prompt(tier_from, tier_to, entries, prior_summary))
+    running = prior_summary
+    for chunk in chunks:
+        folded = _call_llm(cfg, _consolidation_prompt(tier_from, tier_to, chunk, running))
+        if folded and folded.strip():
+            running = folded
+    return running or ""
 
 
 def _consolidation_prompt(
@@ -226,7 +341,8 @@ def _get_entries_in_range(
     rows = conn.execute(
         f"SELECT id, date_key, content FROM memories "
         f"WHERE granularity=? AND kind='narrative'{pending_clause} "
-        f"AND substr(date_key,1,10) >= ? AND substr(date_key,1,10) <= ?",
+        f"AND substr(date_key,1,10) >= ? AND substr(date_key,1,10) <= ? "
+        f"ORDER BY substr(date_key,1,10) ASC",
         (granularity, start_iso, end_iso),
     ).fetchall()
     return [{"id": r["id"], "date_key": r["date_key"], "content": r["content"] or ""} for r in rows]
@@ -241,7 +357,8 @@ def _get_entries_for_period(
     # consent, so daily→weekly passes exclude_pending=True.
     pending_clause = " AND consent_pending=0" if exclude_pending else ""
     rows = conn.execute(
-        f"SELECT id, date_key, content FROM memories WHERE granularity=? AND date_key LIKE ? AND kind='narrative'{pending_clause}",
+        f"SELECT id, date_key, content FROM memories WHERE granularity=? AND date_key LIKE ? AND kind='narrative'{pending_clause} "
+        f"ORDER BY date_key ASC",
         (granularity, f"{period_prefix}%"),
     ).fetchall()
     return [{"id": r["id"], "date_key": r["date_key"], "content": r["content"] or ""} for r in rows]
@@ -359,9 +476,9 @@ def consolidate_to_weekly(
     if len(entries) < 2 and not existing:
         return {"ok": True, "skipped": True, "reason": "too few daily entries"}
 
-    summary = _call_llm(cfg, _consolidation_prompt(
-        "daily", "weekly", [e["content"] for e in entries],
-        prior_summary=existing["content"] if existing else None))
+    summary = _summarize_entries(
+        cfg, "daily", "weekly", [e["content"] for e in entries],
+        prior_summary=existing["content"] if existing else None)
     result = _write_rollup(conn, "weekly", week_start.isoformat(), summary)
     # Prune the daily sources now captured in this weekly rollup, so daily rows
     # don't pile up forever after they've been summarised. Only the rows we
@@ -385,7 +502,7 @@ def consolidate_to_monthly(
     entries = _get_entries_for_period(conn, "weekly", month)
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few weekly entries"}
-    summary = _call_llm(cfg, _consolidation_prompt("weekly", "monthly", [e["content"] for e in entries]))
+    summary = _summarize_entries(cfg, "weekly", "monthly", [e["content"] for e in entries])
     result = _write_rollup(conn, "monthly", f"{month}-01", summary)
     return {**result, "sourceWeeks": len(entries)}
 
@@ -402,7 +519,7 @@ def consolidate_to_yearly(
     entries = _get_entries_for_period(conn, "monthly", year)
     if len(entries) < 2:
         return {"ok": True, "skipped": True, "reason": "too few monthly entries"}
-    summary = _call_llm(cfg, _consolidation_prompt("monthly", "yearly", [e["content"] for e in entries]))
+    summary = _summarize_entries(cfg, "monthly", "yearly", [e["content"] for e in entries])
     result = _write_rollup(conn, "yearly", f"{year}-01-01", summary)
     return {**result, "sourceMonths": len(entries)}
 
