@@ -216,3 +216,40 @@ test('update_graph_node: an unknown audience circle is a hard stop before any wr
     assert.match(out, /don't have a circle called/i, 'named a real circle or ward-private, nothing else');
   });
 });
+
+// ── note_to_tell_villager (0.12.14) ──────────────────────────────────
+test('note_to_tell_villager: passes villagerId + content to the dep, confirms', async () => {
+  const calls = [];
+  initCerebellumTools({ addVillagerTell: async (a) => { calls.push(a); return { ok: true, id: 'tell-x' }; } });
+  const out = await executeToolCall('note_to_tell_villager', JSON.stringify({ villagerId: 'chen-x1', what: 'ask about the gig' }));
+  assert.deepEqual(calls, [{ villagerId: 'chen-x1', content: 'ask about the gig', contentTag: undefined }]);
+  assert.match(out, /Noted/);
+});
+
+test('note_to_tell_villager: a named sensitive topic tightens the content tag', async () => {
+  let got = null;
+  initCerebellumTools({ addVillagerTell: async (a) => { got = a; return { ok: true, id: 't' }; } });
+  await executeToolCall('note_to_tell_villager', JSON.stringify({ villagerId: 'chen-x1', what: 'their therapy', topic: 'mental-health' }));
+  assert.equal(got.contentTag, 'mental-health:sensitive');
+});
+
+test('note_to_tell_villager: an unknown/blank topic stays open (undefined tag)', async () => {
+  let got = null;
+  initCerebellumTools({ addVillagerTell: async (a) => { got = a; return { ok: true, id: 't' }; } });
+  await executeToolCall('note_to_tell_villager', JSON.stringify({ villagerId: 'chen-x1', what: 'x', topic: 'nonsense' }));
+  assert.equal(got.contentTag, undefined, 'a non-sensitive topic defaults the tag to open');
+});
+
+test('note_to_tell_villager: missing args → asks, never calls the dep', async () => {
+  let ran = false;
+  initCerebellumTools({ addVillagerTell: async () => { ran = true; return { ok: true }; } });
+  const out = await executeToolCall('note_to_tell_villager', JSON.stringify({ villagerId: 'chen-x1' }));
+  assert.equal(ran, false);
+  assert.match(out, /I need who it's for/);
+});
+
+test('note_to_tell_villager: a dedup result says so', async () => {
+  initCerebellumTools({ addVillagerTell: async () => ({ ok: true, deduped: true, id: 't' }) });
+  const out = await executeToolCall('note_to_tell_villager', JSON.stringify({ villagerId: 'chen-x1', what: 'x' }));
+  assert.match(out, /already got that/i);
+});

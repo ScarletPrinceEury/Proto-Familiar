@@ -487,6 +487,35 @@ def memory_list_by_subject(villager_id: str, limit: int = 50,
 
 
 @mcp.tool()
+def memory_add_villager_tell(villager_id: str, content: str,
+                             content_tag: Optional[str] = None) -> dict[str, Any]:
+    """I use this to note something I want to bring up with a specific villager
+    next time I'm talking with them — a warm thing I thought of, or something my
+    human said that this person would want to know. It's held with what I know
+    about them, and it surfaces to me the next time we're in a DM (gated by their
+    circle's content rules, same as everything else). I pass their villagerId
+    (from village_lookup) and what I want to say. Deduped so the same urge doesn't
+    stack. Returns { ok, id }.
+    """
+    return mem.create_villager_tell(villager_id, content, content_tag=content_tag, conn=_c())
+
+
+@mcp.tool()
+def memory_list_villager_tells(villager_id: str, audiences: Optional[list] = None,
+                               topic_grants: Optional[dict] = None,
+                               mark_surfaced: bool = False) -> dict[str, Any]:
+    """List the things I've been meaning to bring up with this villager (my own
+    villager_tell notes), gated by their circle's content rules the same two-axis
+    way as memory_list_by_subject. mark_surfaced runs the show-once lifecycle: a
+    tell shown on a prior turn is cleared, and each one returned now is stamped so
+    it doesn't re-surface. Returns { items: [{ id, content }] }.
+    """
+    items = mem.list_villager_tells(villager_id, audiences=audiences,
+                                    topic_grants=topic_grants, mark_surfaced=mark_surfaced, conn=_c())
+    return {"items": items}
+
+
+@mcp.tool()
 def memory_list_content_gate_candidates(limit: int = 40) -> dict[str, Any]:
     """List my ward-about-self memories still tagged coarse 'ward-private' — the
     input to my content-gating re-tag pass, where I decide (with full context)

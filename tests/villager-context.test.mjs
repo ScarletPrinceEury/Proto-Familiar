@@ -158,3 +158,58 @@ test('buildVillagerContextBlock: no grant → neither reader runs', async () => 
   });
   assert.equal(ranMem, false);
 });
+
+// ── Stage 3: the "meaning to bring up" tells sub-block ───────────────────────
+import { formatVillagerTells } from '../src/warmth/villager-context.js';
+
+const tellItems = [
+  { id: 't1', content: 'ask how the gig went' },
+  { id: 't2', content: 'tell them about the tea place' },
+];
+
+test('formatVillagerTells: names the villager, lists the tells, plain and hedge-free', () => {
+  const block = formatVillagerTells('Chen', tellItems);
+  assert.match(block, /\[What I've been meaning to bring up with Chen\]/);
+  assert.match(block, /ask how the gig went/);
+  assert.match(block, /tell them about the tea place/);
+  assert.doesNotMatch(block, /when it fits|if the moment|say it when/i);
+});
+
+test('formatVillagerTells: empty → empty string', () => {
+  assert.equal(formatVillagerTells('Chen', []), '');
+  assert.equal(formatVillagerTells('Chen', null), '');
+});
+
+test('buildVillagerContextBlock: tells lead, then reach recall, then memory', async () => {
+  const block = await buildVillagerContextBlock({
+    focalVillager: { id: 'chen-x1', name: 'Chen' },
+    grants: { proactiveContext: true }, settings: {},
+    tellsReader: async () => ({ items: tellItems }),
+    reader: async () => knocks,
+    memoryReader: async () => ({ items: memItems }),
+  });
+  const iTell = block.indexOf('meaning to bring up');
+  const iReach = block.indexOf('What I last said');
+  const iMem = block.indexOf('been talking about');
+  assert.ok(iTell >= 0 && iReach >= 0 && iMem >= 0, 'all three present');
+  assert.ok(iTell < iReach && iReach < iMem, 'tells → reach → memory order');
+});
+
+test('buildVillagerContextBlock: a throwing tellsReader still yields the other blocks', async () => {
+  const block = await buildVillagerContextBlock({
+    focalVillager: { id: 'chen-x1', name: 'Chen' },
+    grants: { proactiveContext: true }, settings: {},
+    tellsReader: async () => { throw new Error('phylactery down'); },
+    reader: async () => knocks,
+  });
+  assert.match(block, /What I last said to Chen/, 'a tells read failing never blocks the turn');
+});
+
+test('buildVillagerContextBlock: no grant → tellsReader never runs', async () => {
+  let ran = false;
+  await buildVillagerContextBlock({
+    focalVillager: { id: 'chen-x1', name: 'Chen' }, grants: {}, settings: {},
+    tellsReader: async () => { ran = true; return { items: tellItems }; },
+  });
+  assert.equal(ran, false);
+});

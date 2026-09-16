@@ -3020,6 +3020,35 @@ export async function getMemoriesBySubject({ villagerId, limit = 50, audiences =
   } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
 }
 
+// Villager tells (0.12.14): the Familiar's "meaning to bring up with them" notes.
+export async function addVillagerTell({ villagerId, content, contentTag = undefined }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery unavailable' };
+  try {
+    const r = await mcpClient.callTool({
+      name: 'memory_add_villager_tell',
+      arguments: { villager_id: villagerId, content, ...(contentTag !== undefined ? { content_tag: contentTag } : {}) },
+    });
+    return parseToolText(r, { ok: true });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function listVillagerTells({ villagerId, audiences = undefined, topicGrants = undefined, markSurfaced = false }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, items: [] };
+  try {
+    const r = await mcpClient.callTool({
+      name: 'memory_list_villager_tells',
+      arguments: {
+        villager_id: villagerId, mark_surfaced: markSurfaced,
+        ...(audiences !== undefined ? { audiences } : {}),
+        ...(topicGrants !== undefined ? { topic_grants: topicGrants } : {}),
+      },
+    });
+    return parseToolText(r, { ok: true, items: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
+}
+
 export async function setStandingConsent(category, until, window) {
   return callTool('remember_standing_set', { category, until, window: window ?? '' }).catch(err => {
     console.warn('[thalamus] setStandingConsent failed:', err?.message ?? err);

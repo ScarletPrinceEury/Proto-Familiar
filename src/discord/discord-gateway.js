@@ -35,7 +35,7 @@ import { promises as fsp } from 'fs';
 import { randomUUID } from 'crypto';
 import { sessionSlugId } from '../../slug-ids.js';
 
-import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, confirmConsentMemories, dropPendingMemories } from '../../thalamus.js';
+import { enrich, withLock, getScheduleWindow, getMemoriesBySubject, listVillagerTells, confirmConsentMemories, dropPendingMemories } from '../../thalamus.js';
 import { buildAvailabilityBlock } from '../schedule/schedule-availability.js';
 import { getRegistry, DEFAULT_LOCATION_MODE, DEFAULT_ACTIVE_STRATEGY, DEFAULT_ACTIVE_COOLDOWN_SEC, locationCallMode, DEFAULT_CALL_MODE, upsertLocation } from '../village/village.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom } from '../village/audience.js';
@@ -2465,6 +2465,13 @@ async function handleTurn(gw, msg, decision) {
       // villager DM, where these are the villager's own room gate.
       memoryReader: ({ villagerId }) => getMemoriesBySubject({
         villagerId, limit: 6,
+        audiences: audienceVisible ?? [],
+        topicGrants: audienceTopics ?? {},
+      }),
+      // Stage 3: the show-once "meaning to bring up" tells, gated fail-closed the
+      // same way. markSurfaced runs the two-step consume so a tell appears once.
+      tellsReader: ({ villagerId }) => listVillagerTells({
+        villagerId, markSurfaced: true,
         audiences: audienceVisible ?? [],
         topicGrants: audienceTopics ?? {},
       }),
