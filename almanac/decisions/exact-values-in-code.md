@@ -110,6 +110,14 @@ credentials-vault entry, but only code reads and types the value, so a password 
 prompt, tool result, session log, or audit trail — see
 [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code).
 
+A related but distinct rule lives one boundary earlier in the pipeline: cleaning stored
+history's *shape*, not a hallucinated value inside it, before it re-enters the model. See
+[Engineering conventions: tool-call scaffolding is turn-internal](../reference/engineering-conventions)
+for `collapseToolTurns`, which collapses a tool-call carrier and its results into one clean
+assistant turn before history reaches `server.js`'s `/api/chat` or either Discord
+history-assembly site, so the model never reads its own past turn as a literal `null` or as a
+sentence cut off mid-thought.
+
 `providers.js`'s `normalizeBaseUrl` (0.11.91-alpha) is a narrower, non-model-facing application
 of the same rule to a value the *ward* types by hand rather than the model: a connection's
 base URL (a bare host, a versioned base, or a full endpoint) is canonicalised into a full
