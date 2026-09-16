@@ -7,18 +7,14 @@
  * keep the static identity prefix stable and let only the
  * depth-injected slot churn.
  *
- * server.js isn't importable as an ES module (it has side effects at
- * module load — Express server boot, MCP connect, etc.) so we
- * vm-extract the function via the shared tests/_vm-extract helper.
- * Single source of truth stays in server.js.
+ * As of 0.12.9 the helper lives in message-sanitize.mjs (shared by the web turn
+ * in server.js AND the Discord turn in discord-gateway.js, so both surfaces
+ * place the dynamic block identically), and is imported directly.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadFunction } from './_vm-extract.mjs';
-
-const SERVER_JS = new URL('../server.js', import.meta.url);
-const injectDynamicAtDepth = loadFunction(SERVER_JS, 'injectDynamicAtDepth');
+import { injectDynamicAtDepth, resolveDynamicDepth } from '../message-sanitize.mjs';
 
 const SYS = (c) => ({ role: 'system', content: c });
 const USR = (c) => ({ role: 'user',   content: c });
@@ -126,4 +122,19 @@ test('no-system + short conversation: dynamic lands BEFORE the user message', ()
   assert.equal(out.injectedAt, 0);
   assert.equal(out.messages[0].content, 'DYN');
   assert.equal(out.messages[1].content, 'first message');
+});
+
+test('non-array messages is treated as empty, never throws', () => {
+  assert.deepEqual(injectDynamicAtDepth(null, 'DYN', 4), { messages: [{ role: 'system', content: 'DYN' }], injectedAt: 0 });
+});
+
+// ── resolveDynamicDepth: the shared depth resolver ───────────────────
+test('resolveDynamicDepth: default 4 when unset/invalid; clamps [1,50]', () => {
+  assert.equal(resolveDynamicDepth(null), 4);
+  assert.equal(resolveDynamicDepth({}), 4);
+  assert.equal(resolveDynamicDepth({ thalamusDynamicDepth: 'x' }), 4);
+  assert.equal(resolveDynamicDepth({ thalamusDynamicDepth: 8 }), 8);
+  assert.equal(resolveDynamicDepth({ thalamusDynamicDepth: '6' }), 6);
+  assert.equal(resolveDynamicDepth({ thalamusDynamicDepth: 0 }), 4, 'below floor → default');
+  assert.equal(resolveDynamicDepth({ thalamusDynamicDepth: 999 }), 4, 'above ceiling → default');
 });

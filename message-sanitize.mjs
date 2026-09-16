@@ -71,3 +71,41 @@ export function collapseToolTurns(messages = []) {
     .map(m => { if (m && m.role === 'assistant') { const { _carrier, ...rest } = m; return rest; } return m; })
     .filter(m => !(m && m.role === 'assistant' && !String(m.content ?? '').trim()));
 }
+
+// The dynamic-context depth: how many turns from the END the dynamic block sits,
+// so it rides just above the freshest exchange (where it's most salient) while
+// the stable prefix above it stays byte-identical for the provider's prefix
+// cache. Pure — reads a settings object, clamps [1,50], defaults 4. Shared by
+// the web turn (server.js) and the Discord turn (discord-gateway.js) so both
+// surfaces place the block identically.
+export function resolveDynamicDepth(settings) {
+  const d = parseInt(settings?.thalamusDynamicDepth, 10);
+  if (Number.isFinite(d) && d >= 1 && d <= 50) return d;
+  return 4;
+}
+
+// Insert `dynamicContent` as a system message `depth` positions from the end of
+// `messages`, leaving the array stable above that point for the provider's
+// prefix cache. Returns the new array plus the actual index used (so an inspector
+// can show where it landed). Pure.
+//
+// Two clamps:
+//   - lower bound `1` when there's a system message at index 0 — keeps the
+//     dynamic injection BELOW the static prefix so the cache stays valid; `0`
+//     otherwise (no leading system → no prefix to protect).
+//   - upper bound is the array length — on a very short conversation `len - depth`
+//     would go negative, so it's floored to the lower bound.
+//
+// No-op (messages unchanged, injectedAt=null) when dynamicContent is empty.
+export function injectDynamicAtDepth(messages, dynamicContent, depth) {
+  if (!dynamicContent) return { messages, injectedAt: null };
+  const list = Array.isArray(messages) ? messages : [];
+  const hasSystemAtStart = list.length > 0 && list[0]?.role === 'system';
+  const minIdx = hasSystemAtStart ? 1 : 0;
+  const injectedAt = Math.max(minIdx, list.length - depth);
+  const dynamicMsg = { role: 'system', content: dynamicContent };
+  return {
+    messages: [...list.slice(0, injectedAt), dynamicMsg, ...list.slice(injectedAt)],
+    injectedAt,
+  };
+}

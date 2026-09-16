@@ -2395,11 +2395,32 @@ The pattern is forward-compatible: any module that produces `wants_to_save` inte
 
 **A fourth kind, `followup`, is minted straight into the tome (not via a pondering call) — `memorization.js`'s session extraction, via `createSessionFollowup()`.** It's the "I'll do that later" catch: a commitment the Familiar voiced in chat but never backed with a tool call. Unlike `tell` (auto-consumed after one live turn — the whole action IS the saying) it behaves like the filing kinds: it needs the real tool call before `acknowledge_deferred_intent`, because saying it again isn't doing it. It additionally ages out (dropped, `disposition:'aged-out'`) after `followupMaxAgeDays` so it doesn't nag forever. See the "Deferred follow-ups" note under `recent-ponderings.js` above and `docs/deferred-followups-build-spec.md`.
 
-`injectDynamicAtDepth(messages, dynamicContent, depth)` in `server.js`
-is a pure helper; `tests/depth-inject.test.mjs` guards the
-load-bearing invariant *"messages[0..injectedAt-1] is the same
-reference as the input"* — without it, the prefix-cache claim is
-hollow.
+`injectDynamicAtDepth(messages, dynamicContent, depth)` +
+`resolveDynamicDepth(settings)` live in `message-sanitize.mjs` (moved out of
+`server.js` in 0.12.9 so both surfaces share one implementation); pure helpers,
+`tests/depth-inject.test.mjs` guards the load-bearing invariant
+*"messages[0..injectedAt-1] is the same reference as the input"* — without it,
+the prefix-cache claim is hollow.
+
+**Discord assembles in the SAME order as web (0.12.9).** Before this, the
+`discord-gateway.js` turn dropped `enriched.dynamic` as a system message *after
+all history* and carried **no `[Now]` anchor at all** — so on Discord the
+Familiar's sense of "now" was one server-zone line buried mid-block, and the
+dynamic context sat at the very bottom instead of riding just above the freshest
+exchange. Both `handleTurn` (the live turn) and the ambient revisit path now
+build the conversational tail first (`[…history, at-depth lore, the turn,
+post-history]`), depth-inject `enriched.dynamic` into it via the shared
+`assembleTurnMessages({systemContent, convo, dynamic, depth})` helper, and append
+a ward-zone `[Now]` anchor last — re-appended per tool round by `runToolCallLoop`
+on the live turn (matching web's `timeAnchor`), appended once on the single-shot
+revisit. So the order on both surfaces is: static identity/Phylactery → bulk
+conversation → dynamic (identity/Phylactery/Unruh) → last ~`depth` turns →
+post-history prompt → `[Now]`. `tests/discord-gateway.test.mjs`
+(`assembleTurnMessages` block) pins the ordering. `enrich(content,
+{liveTurn:false})` on Discord still omits the liveTurn-gated dynamic sections
+(deferred intents, knock-recall, recent-memory cross-check, gcal cue, spine
+sync) — that is a *content* difference, orthogonal to this *ordering* fix, and
+unchanged here.
 
 ## Id scheme (0.8.x overhaul) — readable slugs, opaque everywhere
 
