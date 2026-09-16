@@ -100,6 +100,12 @@ topics:
   description: Per-topic sensitivity tags on memories and per-tier topic grants,
     layered on top of Village's audience circles
   parents: [architecture, phylactery]
+- slug: village
+  title: Village
+  description: Audience-gated presence with people other than the ward --
+    categories, per-category grants, and the villager-facing turn-assembly
+    blocks built on them
+  parents: [architecture]
 - slug: voice
   title: Voice
   description: The multi-pass voice milestone -- model supply chain, disk 

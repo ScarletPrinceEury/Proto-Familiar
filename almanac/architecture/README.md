@@ -133,7 +133,10 @@ and how it differs from `injection-guard.js`, a pattern-scanner/sanitizer wired 
 web-read and Village inbound boundaries — see
 [Injection guard: wiring history](injection-guard-gap) for how it got wired and
 what is still deliberately excluded (Phylactery/Unruh recall, the ward's own words, and gcal
-event titles) [@architecture-doc].
+event titles) [@architecture-doc]. Two turn-assembly blocks ride this same audience gate into a
+villager's own chat turn: [Village presence](village-presence) injects a known villager's
+pronouns and distinguishing facts, and [Villager proactive context](villager-proactive-context)
+gives a warm villager the same knock-and-memory continuity the ward's own turns get.
 
 `knocks.js` tracks contact attempts from people who are not yet registered villagers — a DM or
 an @-mention in a guild the Familiar has not been told to treat as a known Location. A knock
@@ -201,6 +204,11 @@ If you're asking yourself... go to:
 - [Content-based memory gating](content-gating) — the per-topic sensitivity axis layered on top
   of Village's audience circles, so an overlapping-tier villager can be granted some topics and
   not others.
+- [Village presence block](village-presence) — the code-assembled `[Village]` block that injects
+  a known villager's pronouns and distinguishing facts into a turn without a new LLM call.
+- [Villager proactive context](villager-proactive-context) — the villager-side mirror of the
+  ward's own turn continuity: reach-out recall and gated recent-memory recall in a warm 1:1
+  villager DM.
 - [Session memorization](session-memorization) — the durable job queue that turns a session or
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
 - [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
