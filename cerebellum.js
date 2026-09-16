@@ -75,6 +75,7 @@ import { searchWeb, readWebpage, lookUp } from './src/search/websearch.js';
 import { stripLlmTimestamps } from './message-sanitize.mjs';
 import { markIntentActedOn, snoozeIntent, dropIntent, getUnactedIntents, readPonderingByUid } from './src/memory/recent-ponderings.js';
 import { buildWaitStreakLine, recordWait, recordProactive } from './src/safety/wait-streak.js';
+import { tellContentTag } from './src/warmth/villager-context.js';
 import { readWeatherNowLine, weatherEnabled } from './src/weather/weather-mirror.js';
 import { resolveLocation, getForecast, dayDatesFor } from './src/weather/weather-service.js';
 import { weatherArc, formatWeatherVague } from './src/weather/weather-format.js';
@@ -4419,9 +4420,7 @@ export const TOOL_EXECUTORS = {
     const id = typeof villagerId === 'string' ? villagerId.trim() : '';
     const text = typeof what === 'string' ? what.trim() : '';
     if (!id || !text) return "To note that, I need who it's for (their villagerId from village_lookup) and what I want to say.";
-    const SENSITIVE = new Set(['medical', 'mental-health', 'sexuality', 'gender', 'family', 'relationships', 'finances', 'legal']);
-    const t = typeof topic === 'string' ? topic.trim().toLowerCase() : '';
-    const contentTag = SENSITIVE.has(t) ? `${t}:sensitive` : undefined;
+    const contentTag = tellContentTag(topic);
     try {
       const res = await _toolDeps.addVillagerTell({ villagerId: id, content: text, contentTag });
       if (!res?.ok) return `I couldn't hold onto that: ${res?.error ?? 'my memory is unavailable'}.`;

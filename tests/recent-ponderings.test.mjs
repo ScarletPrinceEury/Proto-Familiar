@@ -268,3 +268,24 @@ test('readPonderingByUid returns the full text by id, and errors cleanly on a mi
     assert.equal(bad.ok, false);
   } finally { cleanup(); }
 });
+
+test('a villager-directed tell (recipient set) never surfaces on the ward deferred surface', async () => {
+  const { dir, cleanup } = tempDir();
+  try {
+    const file = await seedIntentsTome(dir, [
+      { uid: 'e1', created_at: '2026-05-30T10:00:00Z',
+        wants_to_save: [
+          { kind: 'tell', summary: 'ask Chen how the gig went', recipient: 'v-chen' },
+          { kind: 'tell', summary: 'ask my human how they slept' },
+        ] },
+    ]);
+    const got = await getUnactedIntents({ tomesDir: dir, markSurfaced: true });
+    assert.deepEqual(got.map(i => i.summary), ['ask my human how they slept'],
+      'only the ward tell surfaces; the recipient-bearing one is held back');
+    // The villager tell is left untouched — not stamped, not consumed.
+    const tome = await readTome(file);
+    const villagerTell = tome.entries.e1.wants_to_save.find(w => w.recipient === 'v-chen');
+    assert.equal(villagerTell.acted_on, false);
+    assert.equal(villagerTell.surfaced_at, undefined);
+  } finally { cleanup(); }
+});

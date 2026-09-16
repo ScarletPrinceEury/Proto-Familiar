@@ -365,6 +365,11 @@ export async function getUnactedIntents({
         // anywhere (that repetition was the bug). On the live surface it is
         // auto-acked below; elsewhere it is simply hidden.
         if (intent.kind === 'tell' && intent.surfaced_at) { spentTells.push(intent); continue; }
+        // Defense-in-depth: a tell directed at a Village person (creation path #2)
+        // belongs in THEIR tell store, never on my human's surface. ponderOnce
+        // already routes these away, so one shouldn't land here — but if a future
+        // path persists one, it must not surface to the ward.
+        if (intent.kind === 'tell' && intent.recipient) continue;
         // A follow-up I never acted on for too long stops nagging — an honest
         // "aged-out" record, never a claim I did it (CLAUDE.md: no infinite nag).
         if (intent.kind === 'followup' && created_ms && (now - created_ms) > followupMaxAgeMs) {

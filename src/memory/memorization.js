@@ -201,6 +201,7 @@ async function persistQueue() {
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow } from '../../thalamus.js';
 import { getRegistry, standingConsentActive } from '../village/village.js';
+import { disclosableVillagerFields } from '../village/village-card.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../village/audience.js';
 import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { CONTENT_TOPICS, normalizeTag, categoryToTag } from './content-tags.js';
@@ -395,7 +396,58 @@ content_tag — what this fact is ABOUT and how private it feels, as "topic:leve
   level — "open" or "sensitive". "sensitive" is anything my human would only want shared with people they really trust on that subject; "open" is the everyday version. Unsure → "sensitive".
   It's separate from category: category is how I file the fact, content_tag is who gets to see it. E.g. "my human came out to me" → "sexuality:sensitive"; "my human works at a bakery" → "work:open"; "we talked about their new medication" → "medical:sensitive"; "they like oat milk" → "general:open".`;
 
-export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true) {
+function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Who from my human's Village shows up in this slice — so the extraction reads
+// their names and PRONOUNS right, and doesn't re-note standing facts I already
+// hold about them. Built from the transcript (speakers + anyone named in it),
+// resolved to the registry, and gated by `disclosableVillagerFields` — the SAME
+// policy the presence block and village_lookup use, so a shared-room slice never
+// carries a private note. `wardPrivate` follows the branch (ward-private slice →
+// full card; shared room → privateNotes withheld). Returns '' when nobody from
+// the Village appears (the common case) → the prompt is exactly as before.
+export function buildVillagerLegendBlock(messages, registry, { wardPrivate = true, wardName = 'My human' } = {}) {
+  const villagers = registry?.villagers ?? [];
+  if (!villagers.length) return '';
+  const readable = filterReadable(messages);
+  if (!readable.length) return '';
+
+  // Distinct speakers (reliable — a name-prefixed turn) plus anyone NAMED in the
+  // text (a villager the ward talked ABOUT but who didn't speak). A villager
+  // matches on their name or an alias handle, word-boundaried so "Sam" doesn't
+  // catch "same".
+  const speakers = new Set(
+    readable.map(m => String(m?.speaker ?? '').trim().toLowerCase()).filter(Boolean),
+  );
+  const transcript = readable.map(m => String(m?.content ?? '')).join('\n');
+  const wardLower = String(wardName ?? '').trim().toLowerCase();
+  const present = [];
+  for (const v of villagers) {
+    const names = [v.name, ...(v.aliases ?? []).map(a => a?.handle)].filter(Boolean);
+    const nameLowers = names.map(n => String(n).trim().toLowerCase()).filter(Boolean);
+    if (!nameLowers.length || nameLowers.includes(wardLower)) continue; // the ward is never a villager card
+    const spoke = nameLowers.some(n => speakers.has(n));
+    const mentioned = !spoke && names.some(n => new RegExp(`\\b${escapeRegExp(String(n).trim())}\\b`, 'i').test(transcript));
+    if (spoke || mentioned) present.push(v);
+    if (present.length >= 12) break; // bound the block
+  }
+  if (!present.length) return '';
+
+  const lines = present.map(v => {
+    const f = disclosableVillagerFields(v, { wardPrivate });
+    const bits = [];
+    if (f.relationToWard) bits.push(f.relationToWard);
+    if (f.notes)          bits.push(f.notes);
+    if (f.privateNotes)   bits.push(f.privateNotes);
+    const pron = f.pronouns ? ` (${f.pronouns})` : '';
+    const tail = bits.length ? ` — ${bits.join('; ')}` : '';
+    return `  - ${v.name}${pron}${tail}`;
+  });
+
+  return `\n\n### People here — who they are\nSo I get their names and pronouns right, and only note what's NEW about them, not what I already hold:\n${lines.join('\n')}\nI use these pronouns when a fact is about them.`;
+}
+
+export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true, villagerLegendBlock = '') {
   const readable = filterReadable(messages);
   if (readable.length < 2) return null;
 
@@ -431,7 +483,7 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but didn't do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
     : '';
 
-  return `Ah, some unprocessed session logs. Time to turn the relevant stuff into memories — facts about my human, about me (what I think, like, dislike, want), about the people and things in their life. New facts, changes to old ones, things that happened, things someone told me. One clear fact per entry, written plainly enough that I'll read it correctly later with no context. Plus connections and updates to my Phylactery graph so I can relate things and actually find them again.${focusBlock}
+  return `Ah, some unprocessed session logs. Time to turn the relevant stuff into memories — facts about my human, about me (what I think, like, dislike, want), about the people and things in their life. New facts, changes to old ones, things that happened, things someone told me. One clear fact per entry, written plainly enough that I'll read it correctly later with no context. Plus connections and updates to my Phylactery graph so I can relate things and actually find them again.${focusBlock}${villagerLegendBlock}
 
 This is a form of tool call: the memorization only works if the syntax is flawless, so I focus and follow my notes closely.
 
@@ -520,7 +572,7 @@ ${followupsFieldRules}
 // Exported for tests.
 // Focus: what my human said and experienced. Skip: personal detail about
 // unregistered third parties who haven't consented to AI note-taking.
-export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'My human') {
+export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'My human', villagerLegendBlock = '') {
   const readable = filterReadable(messages);
   if (readable.length < 2) return null;
 
@@ -528,7 +580,7 @@ export function buildSharedRoomPrompt(messages, topicLabel = null, wardName = 'M
     ? `\n\n### Focus\nMy human named this segment "${topicLabel}". I centre my extraction on that topic.`
     : '';
 
-  return `Ah, some unprocessed session logs — and this was a shared room, with other people around besides my human and me. Time to note what went on around me: what happened, what people did or said, new facts and changes to old ones. One clear fact per entry, written plainly enough that I'll read it correctly later with no context. Plus connections and updates to my Phylactery graph so I can relate things and find them again. I don't decide here what's kept about whom — a separate consent step does that afterwards, weighing each person by where they sit in my human's Village and asking my human about anyone who isn't in it. So I don't pre-censor; I get it down and let that step do its job.${focusBlock}
+  return `Ah, some unprocessed session logs — and this was a shared room, with other people around besides my human and me. Time to note what went on around me: what happened, what people did or said, new facts and changes to old ones. One clear fact per entry, written plainly enough that I'll read it correctly later with no context. Plus connections and updates to my Phylactery graph so I can relate things and find them again. I don't decide here what's kept about whom — a separate consent step does that afterwards, weighing each person by where they sit in my human's Village and asking my human about anyone who isn't in it. So I don't pre-censor; I get it down and let that step do its job.${focusBlock}${villagerLegendBlock}
 
 This is a form of tool call: the memorization only works if the syntax is flawless, so I focus and follow my notes closely.
 
@@ -918,9 +970,20 @@ async function processJob(job) {
 
   // Fold image stand-ins into the slice so image-carrying turns are memorable.
   const visionMessages = await foldImageStandins(job.messages, settings);
+
+  // Who from the Village appears in this slice — injected so the extraction gets
+  // their names and PRONOUNS right and doesn't re-note standing facts. Loaded
+  // once here and reused for the remember gate below. Gated by the branch:
+  // ward-private slice → full card; a shared room → privateNotes withheld (the
+  // disclosableVillagerFields policy). Best-effort: registry down → no block.
+  const registry = await getRegistry().catch(() => ({ villagers: [] }));
+  const villagerLegendBlock = buildVillagerLegendBlock(visionMessages, registry, {
+    wardPrivate: promptFn === buildPrompt, wardName,
+  });
+
   const builtPrompt = promptFn === buildPrompt
-    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn)
-    : promptFn(visionMessages, job.topicLabel ?? null, wardName);
+    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn, villagerLegendBlock)
+    : promptFn(visionMessages, job.topicLabel ?? null, wardName, villagerLegendBlock);
   // {{char}}/{{user}} in the extraction templates resolve to the configured
   // names here (boundary #1) — the same place every other standalone Familiar-
   // voice prompt substitutes. This is why the Familiar's name is never
@@ -971,8 +1034,8 @@ async function processJob(job) {
     }
   }
 
-  // Build name → villager lookup for the remember gate
-  const registry = await getRegistry().catch(() => ({ villagers: [] }));
+  // Build name → villager lookup for the remember gate (registry already loaded
+  // above for the villager legend — reused here so the job reads it once).
   const byName = new Map();
   for (const v of registry.villagers ?? []) {
     byName.set(v.name.toLowerCase(), v);

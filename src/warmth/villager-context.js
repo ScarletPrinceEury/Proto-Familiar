@@ -1,8 +1,13 @@
 // Villager proactive context — the villager-side mirror of the continuity the
-// ward's own turns get. When the Familiar is in a DM with a warm villager whose
+// ward's own turns get. When the Familiar is in a DM with a villager whose
 // category grants `proactiveContext`, it walks in already knowing what it last
 // said to THEM, so a reply days later lands as an answer instead of a
 // non-sequitur — the same reason the ward gets "[I reached out first]".
+//
+// The gate is the `proactiveContext` grant, NOT the warm-relationship tag: the
+// ward chose grant-driven scope so continuity follows any circle they grant it
+// to, warm or not. (A *proactive reach-out* is warm-only — reachout.js:54 — but
+// this is reactive continuity, a different thing. A tell rides the same grant.)
 //
 // v1 surfaces reach-out recall only (what I last said to this person). The gated
 // recent-memory reader ("what we've been talking about") is a later stage.
@@ -62,6 +67,22 @@ export function formatVillagerMemoryRecall(villagerName, items) {
     if (brief) lines.push(`- ${brief}`);
   }
   return lines.length > 1 ? lines.join('\n') : '';
+}
+
+// The sensitive topics a tell can be flagged with. A named one tightens the
+// content gate to `<topic>:sensitive` (so a tell about someone's therapy stays
+// in a circle that's granted mental-health); anything else leaves the tag unset,
+// which the store defaults to `general:open`. Shared by both creation paths —
+// the `note_to_tell_villager` chat tool and the pondering route — so the mapping
+// lives in exactly one place.
+const TELL_SENSITIVE_TOPICS = new Set([
+  'medical', 'mental-health', 'sexuality', 'gender',
+  'family', 'relationships', 'finances', 'legal',
+]);
+
+export function tellContentTag(topic) {
+  const t = typeof topic === 'string' ? topic.trim().toLowerCase() : '';
+  return TELL_SENSITIVE_TOPICS.has(t) ? `${t}:sensitive` : undefined;
 }
 
 // What I've been meaning to bring up with them (Stage 3) — the gated,

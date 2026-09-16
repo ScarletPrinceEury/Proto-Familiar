@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   villagerContextOn, villagerContextEligible,
   formatVillagerReachRecall, buildVillagerContextBlock,
+  tellContentTag,
 } from '../src/warmth/villager-context.js';
 
 // ── off-switch ───────────────────────────────────────────────────────────────
@@ -212,4 +213,19 @@ test('buildVillagerContextBlock: no grant → tellsReader never runs', async () 
     tellsReader: async () => { ran = true; return { items: tellItems }; },
   });
   assert.equal(ran, false);
+});
+
+// ── tellContentTag — shared by both tell-creation paths ──────────────────────
+test('tellContentTag: a named sensitive topic tightens the gate to <topic>:sensitive', () => {
+  assert.equal(tellContentTag('mental-health'), 'mental-health:sensitive');
+  assert.equal(tellContentTag('Family'), 'family:sensitive');       // case-insensitive
+  assert.equal(tellContentTag('  legal  '), 'legal:sensitive');     // trimmed
+});
+
+test('tellContentTag: anything else is undefined (store defaults it to general:open)', () => {
+  assert.equal(tellContentTag('hobbies'), undefined);   // not a sensitive topic
+  assert.equal(tellContentTag(''), undefined);
+  assert.equal(tellContentTag(undefined), undefined);
+  assert.equal(tellContentTag(null), undefined);
+  assert.equal(tellContentTag(42), undefined);
 });
