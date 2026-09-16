@@ -512,6 +512,34 @@ export function isGranted(grantKey, grants) {
   return false;
 }
 
+/**
+ * The villagers whose effective grants include `proactiveContext` — the roster
+ * of people the Familiar may form a proactive tell for while pondering (creation
+ * path #2). Grant-driven, matching villagerContextEligible: a villager is in iff
+ * the union of their categories grants proactiveContext. Warm-relationship is NOT
+ * the gate (the ward chose grant-driven scope).
+ *
+ * Each entry carries the id (so the Familiar repeats it, never invents one — the
+ * exact-values rule) and a short public note for grounding. privateNotes are left
+ * out even though pondering is ward-private, to keep the roster to the minimum a
+ * tell needs. Pure.
+ *
+ * @returns {Array<{id:string, name:string, note:string|null}>}
+ */
+export function proactiveContextVillagers(registry) {
+  const cats = registry?.categories ?? [];
+  const categoryMap = new Map(cats.map(c => [c.id, c]));
+  const out = [];
+  for (const v of (registry?.villagers ?? [])) {
+    if (!v?.id) continue;
+    const grants = villagersEffectiveGrants(v, categoryMap);
+    if (!isGranted('proactiveContext', grants)) continue;
+    const note = (typeof v.notes === 'string' && v.notes.trim()) ? v.notes.trim() : null;
+    out.push({ id: v.id, name: v.name ?? v.id, note });
+  }
+  return out;
+}
+
 // ── Fetch eligibility (gate-before-fetch) ─────────────────────────
 
 /**

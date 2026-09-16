@@ -166,7 +166,8 @@ import {
 } from './src/village/village.js';
 import { parseRegistryJson } from './src/village/village-registry-json.js';
 import { buildVillagePresenceBlock, villagePresenceOn } from './src/village/village-presence.js';
-import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE } from './src/village/audience.js';
+import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE, proactiveContextVillagers } from './src/village/audience.js';
+import { villagerContextOn, tellContentTag } from './src/warmth/villager-context.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
@@ -5860,6 +5861,18 @@ function startAutonomousPondering() {
               }))
           : [];
         grounding = { memories, recent, threadFrom: opts?.threadFrom ?? null };
+
+        // Creation path #2: give the ponder a roster of Village people it may
+        // form a tell for — only those whose circle grants proactiveContext, and
+        // only when villager context is on. Empty roster (the common case) → the
+        // block never renders and the ponder stays ward-only. Best-effort: a
+        // registry miss just means no roster this tick.
+        if (villagerContextOn(s)) {
+          try {
+            const roster = proactiveContextVillagers(await getVillageRegistry()).slice(0, 8);
+            if (roster.length) grounding.villagers = roster;
+          } catch { /* no roster this tick — the ponder proceeds ward-only */ }
+        }
       }
 
       const result = await ponderOnce({
@@ -5880,6 +5893,17 @@ function startAutonomousPondering() {
           recordInterest({ topic: label, delta: 1.0, source: 'pondering', relatedTo: typeof topic === 'string' ? topic : null })
             .then(ok => console.log(`[pondering] drawn to "${label}" → ${ok ? 'recorded' : 'not recorded'}`))
             .catch(err => console.error('[pondering] drawn_to record failed:', err?.message ?? err));
+        }
+        // Creation path #2: a tell the Familiar formed for a Village person this
+        // ponder goes to THAT person's tell store, not my human's surface.
+        // ponderOnce already validated each recipient against the injected roster,
+        // so these ids are real. The content_tag mapping is shared with the chat
+        // tool (tellContentTag). Fire-and-forget per tell — one failing never
+        // blocks the others or the ponder write that already succeeded.
+        for (const t of (result.villager_tells ?? [])) {
+          addVillagerTell({ villagerId: t.recipient, content: t.summary, contentTag: tellContentTag(t.topic) })
+            .then(r => console.log(`[pondering] tell for ${t.recipient} → ${r?.ok ? (r.deduped ? 'already held' : 'noted') : 'failed to note'}`))
+            .catch(err => console.error('[pondering] villager tell note failed:', err?.message ?? err));
         }
       }
       // Reflection follow-through: if the LLM proposed an

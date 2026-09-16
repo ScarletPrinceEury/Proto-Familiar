@@ -871,3 +871,97 @@ test('grounding says where a threaded ponder came from', () => {
   const b = buildGroundingBlock({ threadFrom: 'tea', memories: [], recent: [] });
   assert.match(b, /I got here from thinking about tea/);
 });
+
+// ── Stage 3 creation path #2: villager-directed tells from pondering ──────────
+
+test('buildGroundingBlock: renders the villager roster (with ids) when present', () => {
+  const b = buildGroundingBlock({
+    memories: [], recent: [],
+    villagers: [
+      { id: 'v-chen', name: 'Chen', note: 'into telescopes' },
+      { id: 'v-kim',  name: 'Kim',  note: null },
+    ],
+  });
+  assert.match(b, /People I know/);
+  assert.match(b, /Chen \(id: v-chen\) — into telescopes/);
+  assert.match(b, /Kim \(id: v-kim\)/);
+});
+
+test('buildGroundingBlock: no villagers → no roster block', () => {
+  const b = buildGroundingBlock({ memories: [], recent: [] });
+  assert.doesNotMatch(b, /People I know/);
+});
+
+test('parsePondering: a tell carries recipient + topic; non-tells never do', () => {
+  const r = parsePondering(JSON.stringify({
+    title: 't', content: 'c',
+    wants_to_save: [
+      { kind: 'tell', summary: 'ask Chen about the telescope', recipient: 'v-chen', topic: 'hobbies' },
+      { kind: 'tell', summary: 'ask my human how they slept' },
+      { kind: 'memory', summary: 'x', recipient: 'v-chen' },   // recipient ignored on a non-tell
+    ],
+  }));
+  assert.deepEqual(r.wants_to_save[0], { kind: 'tell', summary: 'ask Chen about the telescope', recipient: 'v-chen', topic: 'hobbies' });
+  assert.deepEqual(r.wants_to_save[1], { kind: 'tell', summary: 'ask my human how they slept' });
+  assert.deepEqual(r.wants_to_save[2], { kind: 'memory', summary: 'x' });
+});
+
+// callLLM that emits a full pondering with the given wants_to_save.
+function ponderLLM(wants) {
+  return async () => JSON.stringify({ title: 'thinking', content: 'thoughts', wants_to_save: wants });
+}
+
+async function readWants(tomeFile) {
+  const tome = JSON.parse(await fsp.readFile(tomeFile, 'utf8'));
+  return Object.values(tome.entries)[0].wants_to_save;
+}
+
+test('ponderOnce: a tell for a roster villager routes OUT of the ward surface', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: 'telescopes', provider: 'nanogpt', apiKey: 'k', model: 'm', tomesDir: dir,
+      grounding: { villagers: [{ id: 'v-chen', name: 'Chen' }] },
+      callLLM: ponderLLM([
+        { kind: 'tell', summary: 'ask Chen how the star party went', recipient: 'v-chen' },
+        { kind: 'tell', summary: 'ask my human how they slept' },
+      ]),
+    });
+    // The villager tell is returned for the caller to route, NOT persisted to the ward surface.
+    assert.deepEqual(result.villager_tells, [
+      { kind: 'tell', summary: 'ask Chen how the star party went', recipient: 'v-chen' },
+    ]);
+    const persisted = await readWants(result.tomeFile);
+    assert.deepEqual(persisted, [{ kind: 'tell', summary: 'ask my human how they slept', acted_on: false }]);
+  } finally { cleanup(); }
+});
+
+test('ponderOnce: a tell naming an id NOT in the roster is downgraded to a ward tell (not dropped, not routed)', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: 'telescopes', provider: 'nanogpt', apiKey: 'k', model: 'm', tomesDir: dir,
+      grounding: { villagers: [{ id: 'v-chen', name: 'Chen' }] },
+      callLLM: ponderLLM([
+        { kind: 'tell', summary: 'ask them about the thing', recipient: 'v-ghost', topic: 'family' },
+      ]),
+    });
+    assert.deepEqual(result.villager_tells, [], 'a made-up id is never honoured as a villager tell');
+    const persisted = await readWants(result.tomeFile);
+    // Kept as a ward tell: summary + topic survive, the bad recipient is stripped.
+    assert.deepEqual(persisted, [{ kind: 'tell', summary: 'ask them about the thing', topic: 'family', acted_on: false }]);
+  } finally { cleanup(); }
+});
+
+test('ponderOnce: with no roster, a recipient-bearing tell degrades to a ward tell', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const result = await ponderOnce({
+      topic: 'telescopes', provider: 'nanogpt', apiKey: 'k', model: 'm', tomesDir: dir,
+      callLLM: ponderLLM([{ kind: 'tell', summary: 'ask Chen something', recipient: 'v-chen' }]),
+    });
+    assert.deepEqual(result.villager_tells, []);
+    const persisted = await readWants(result.tomeFile);
+    assert.deepEqual(persisted, [{ kind: 'tell', summary: 'ask Chen something', acted_on: false }]);
+  } finally { cleanup(); }
+});

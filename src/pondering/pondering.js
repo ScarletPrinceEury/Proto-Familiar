@@ -91,6 +91,20 @@ export function buildGroundingBlock(grounding) {
     parts.push(`Where I got to last time I thought about this:\n${lines}\nSo I pick up from there — go further, or somewhere new — instead of starting over. And if I keep landing on wanting my human's take, I just ask them next time we talk, once. I don't keep sending them the same question.`);
   }
 
+  // People from the Village I can carry a thought toward — the roster is
+  // already gated to those whose circle grants proactiveContext, so anyone here
+  // is fair game for a tell. Their id rides along because that's how I name the
+  // recipient (I don't invent one).
+  const villagers = Array.isArray(grounding.villagers)
+    ? grounding.villagers.filter(v => v && v.id && v.name)
+    : [];
+  if (villagers.length) {
+    const lines = villagers
+      .map(v => `  - ${v.name} (id: ${v.id})${v.note ? ` — ${String(v.note).trim()}` : ''}`)
+      .join('\n');
+    parts.push(`People I know, in case a thought here is really for one of them:\n${lines}`);
+  }
+
   return parts.length ? `\n\n${parts.join('\n\n')}` : '';
 }
 
@@ -119,6 +133,8 @@ If one of those wants out while I'm thinking, I don't write it here — I note i
 
 There's a fourth kind, "tell", for conversational intent: something I want to bring up with my human — a question, a worry, something I noticed. I'm not filing it anywhere; I'm flagging that I want to say it. Next time we talk I bring it up, unless they're in a real crisis.
 
+A tell can be for one of the people listed above instead of my human. If while I'm thinking I land on a real thing I want to raise with one of them — a question for them, something that made me think of them — I add their id as "recipient" and it waits for the next time I'm talking with THEM. Only their exact id from that list, and only when it's genuine — no recipient means it's for my human. If it touches something private about them (their health, their family, that kind of thing) I add a "topic" so it stays in the right circle.
+
 And if something new catches me while I think — a thread I'd like to keep chasing, for me, not for them — I put it in drawn_to as a short tag-like label (1–5 words). That's how my own curiosities take root.
 
 If I don't really know the thing — how a song sounds, what happens in a story, what someone's like — I say I'm not sure instead of making it up, and the honest thought is what pulls at me and what I'd want to ask my human. However that comes out: blunt, wry, soft. A few short paragraphs, whatever fits.
@@ -130,7 +146,9 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
   "wants_to_save": [
     {
       "kind":    "tome" | "memory" | "identity" | "tell",
-      "summary": "Brief note of what I noticed I wanted to save or say — the actual filing/mention happens next chat"
+      "summary": "Brief note of what I noticed I wanted to save or say — the actual filing/mention happens next chat",
+      "recipient": "(tell only, optional) the exact id of the person from my list this is for; omit for my human",
+      "topic": "(tell only, optional) a private topic like mental-health or family, if this touches one"
     }
   ],
   "drawn_to": ["a new thread I want to keep thinking about"]
@@ -340,7 +358,18 @@ export function parsePondering(raw) {
       const kind    = String(raw.kind ?? '').trim().toLowerCase();
       const summary = String(raw.summary ?? '').trim();
       if (!VALID_SAVE_KINDS.has(kind) || !summary) continue;
-      intents.push({ kind, summary });
+      const intent = { kind, summary };
+      // A tell may be directed at a Village person (creation path #2). Carry the
+      // recipient id + optional sensitivity topic through so ponderOnce can route
+      // it; ponderOnce validates the id against the roster it injected (a made-up
+      // id is not honoured — the exact-values rule). Non-tells never carry these.
+      if (kind === 'tell') {
+        const recipient = String(raw.recipient ?? '').trim();
+        if (recipient) intent.recipient = recipient;
+        const topic = String(raw.topic ?? '').trim();
+        if (topic) intent.topic = topic;
+      }
+      intents.push(intent);
     }
     if (intents.length) result.wants_to_save = intents;
   }
@@ -455,7 +484,33 @@ export async function ponderOnce({
   const raw    = await callLLM({ provider, apiKey, model, baseUrl, prompt });
   const parsed = parsePondering(raw);
   const { title, content } = parsed;
-  const wantsToSave = parsed.wants_to_save ?? [];
+  const allWants = parsed.wants_to_save ?? [];
+
+  // Partition villager-directed tells (creation path #2) out of the ward's
+  // deferred-intents surface. A tell whose `recipient` matches an id from the
+  // roster I injected is for THAT person — it goes to their own tell store (the
+  // caller routes it via addVillagerTell), never to my human's [Deferred intents]
+  // block. A `recipient` that ISN'T in the roster is a mis-named id: I don't
+  // honour it as a villager tell (exact-values — I never invent/guess an id), but
+  // I also don't drop the thought — I strip the bad recipient and keep it as a
+  // tell for my human. No recipient → a plain ward tell, unchanged.
+  const rosterIds = new Set(
+    (Array.isArray(grounding?.villagers) ? grounding.villagers : [])
+      .map(v => v?.id).filter(Boolean),
+  );
+  const villagerTells = [];
+  const wantsToSave = [];
+  for (const intent of allWants) {
+    if (intent.kind === 'tell' && intent.recipient) {
+      if (rosterIds.has(intent.recipient)) { villagerTells.push(intent); continue; }
+      // Mis-named id → downgrade to a ward tell (keep summary/topic, drop recipient).
+      const wardTell = { kind: 'tell', summary: intent.summary };
+      if (intent.topic) wardTell.topic = intent.topic;
+      wantsToSave.push(wardTell);
+      continue;
+    }
+    wantsToSave.push(intent);
+  }
 
   const { file } = await findOrCreatePonderingsTome(tomesDir);
 
@@ -527,6 +582,10 @@ export async function ponderOnce({
     promotions:              parsed.promotions ?? null,
     routine_review:          parsed.routine_review ?? null,
     wants_to_save:           wantsToSave,
+    // Tells I formed for a Village person this ponder (creation path #2). Not
+    // persisted to the ward surface above; the caller routes each to that
+    // person's own tell store. Empty on the common (ward-only) ponder.
+    villager_tells:          villagerTells,
     drawn_to:                parsed.drawn_to ?? [],
   };
 }

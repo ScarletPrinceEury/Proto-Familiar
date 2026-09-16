@@ -13,6 +13,7 @@ import {
   fetchEligibility,
   audienceTagFor,
   AUDIENCE_TAG_WARD_PRIVATE,
+  proactiveContextVillagers,
 } from '../src/village/audience.js';
 
 // ── resolveAudience helpers ───────────────────────────────────────
@@ -520,5 +521,44 @@ describe('audienceTagFor', () => {
       locations: [{ key: 'loc:orphan', label: 'Orphan', assignedCategoryId: 'cat-deleted' }],
     });
     assert.equal(audienceTagFor({ location: 'loc:orphan', participants: [] }, r), 'strangers');
+  });
+});
+
+// ── proactiveContextVillagers (Stage 3 creation path #2 roster) ─────
+describe('proactiveContextVillagers', () => {
+  function makePcReg() {
+    return {
+      categories: [
+        { id: 'strangers',   name: 'Strangers',   grants: {} },
+        { id: 'cat-warm',    name: 'Warm',        grants: { memories: true, proactiveContext: true } },
+        { id: 'cat-plain',   name: 'Plain',       grants: { memories: 'shared' } },
+      ],
+      villagers: [
+        { id: 'v-chen', name: 'Chen', categoryIds: ['cat-warm'],  notes: 'into telescopes', aliases: [] },
+        { id: 'v-kim',  name: 'Kim',  categoryIds: ['cat-plain'], notes: 'neighbour',       aliases: [] },
+        { id: 'v-mix',  name: 'Mix',  categoryIds: ['cat-plain', 'cat-warm'], aliases: [] },
+      ],
+      locations: [],
+    };
+  }
+
+  it('returns only villagers whose union of categories grants proactiveContext', () => {
+    const got = proactiveContextVillagers(makePcReg()).map(v => v.id).sort();
+    assert.deepEqual(got, ['v-chen', 'v-mix'], 'granted via union counts; ungranted excluded');
+  });
+
+  it('carries the id + a short public note, nothing more', () => {
+    const chen = proactiveContextVillagers(makePcReg()).find(v => v.id === 'v-chen');
+    assert.deepEqual(chen, { id: 'v-chen', name: 'Chen', note: 'into telescopes' });
+  });
+
+  it('a granted villager with no notes gets note:null', () => {
+    const mix = proactiveContextVillagers(makePcReg()).find(v => v.id === 'v-mix');
+    assert.equal(mix.note, null);
+  });
+
+  it('empty / malformed registry → []', () => {
+    assert.deepEqual(proactiveContextVillagers({ categories: [], villagers: [] }), []);
+    assert.deepEqual(proactiveContextVillagers(null), []);
   });
 });
