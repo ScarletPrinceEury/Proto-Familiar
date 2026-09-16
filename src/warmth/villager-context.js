@@ -64,17 +64,41 @@ export function formatVillagerMemoryRecall(villagerName, items) {
   return lines.length > 1 ? lines.join('\n') : '';
 }
 
-// Fetch + build the block for a villager DM turn. Async; both readers are
+// What I've been meaning to bring up with them (Stage 3) — the gated,
+// show-once villager tells. Plain, no hedge. Pure (takes the fetched items).
+export function formatVillagerTells(villagerName, tells) {
+  if (!Array.isArray(tells) || tells.length === 0) return '';
+  const who = (villagerName || '').trim() || 'them';
+  const lines = [`[What I've been meaning to bring up with ${who}]`];
+  for (const t of tells) {
+    const c = String(t?.content ?? '').trim();
+    if (c) lines.push(`- ${c}`);
+  }
+  return lines.length > 1 ? lines.join('\n') : '';
+}
+
+// Fetch + build the block for a villager DM turn. Async; the readers are
 // injectable for tests. Returns '' on any miss so it never blocks the turn.
-// `memoryReader` is optional (Stage 2): when given, it must already be gated —
-// the caller bakes the villager's audience + topic grants into it, fail-closed.
+// `memoryReader` (Stage 2) and `tellsReader` (Stage 3) are optional; when given
+// they must already be gated — the caller bakes the villager's audience + topic
+// grants into them, fail-closed.
 export async function buildVillagerContextBlock({
   focalVillager, grants, settings = {},
-  reader = recentReachOuts, memoryReader = null, tomesDir = undefined,
+  reader = recentReachOuts, memoryReader = null, tellsReader = null, tomesDir = undefined,
 } = {}) {
   if (!villagerContextOn(settings)) return '';
   if (!villagerContextEligible({ focalVillager, grants })) return '';
   const parts = [];
+  // What I've been meaning to bring up (Stage 3) — leads, because it's the thing
+  // I actively want to DO this turn, not just background continuity.
+  if (tellsReader) {
+    try {
+      const res = await tellsReader({ villagerId: focalVillager.id });
+      const tells = res && Array.isArray(res.items) ? res.items : [];
+      const tellBlock = formatVillagerTells(focalVillager.name, tells);
+      if (tellBlock) parts.push(tellBlock);
+    } catch { /* skip — a tells read never blocks the turn */ }
+  }
   // What I last said to them (Stage 1) — reach-out recall.
   try {
     const knocks = await reader({

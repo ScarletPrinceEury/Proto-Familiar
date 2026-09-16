@@ -1398,6 +1398,115 @@ def list_by_subject(villager_id: str, limit: int = 50,
             conn.close()
 
 
+# ── Villager tells (0.12.14): "what I've been meaning to bring up with them" ───
+# A villager-directed tell lives in the per-villager memory store as a row of a
+# DISTINCT kind ('villager_tell') — so it sits with the villager's facts but is
+# invisible to every narrative-only path (search, list_by_subject, consolidation,
+# dedup, decay): a pending intent is not a fact. It carries the ward-content-gated
+# audience sentinel so it clears a gated room's coarse floor and the content-tag
+# gate is the real decider (belt-and-suspenders, same as the Stage-2 memory read).
+# Lifecycle rides source_json: pending → surfaced (shown on a turn) → consumed
+# (deleted on the NEXT turn) — the two-step from the ward-tell lesson, so a tell
+# shown-but-not-said isn't lost.
+
+def create_villager_tell(villager_id: str, content: str, content_tag: str | None = None,
+                         conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Store a 'want to bring up with this villager' intent. Deduped lexically
+    against this villager's existing pending tells so a repeated urge doesn't
+    stack. Returns {ok, id} or {ok, deduped:true, id}."""
+    text = (content or "").strip()
+    if not villager_id or not text:
+        return {"ok": False, "error": "villager_id and content required"}
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        # Lexical dedup against this villager's OPEN tells (kind is narrative-free,
+        # so the vector deduper never sees these — a cheap normalized-contain check).
+        norm = " ".join(text.lower().split())
+        for r in conn.execute(
+            "SELECT id, content FROM memories WHERE kind='villager_tell' AND subjects_json LIKE ?",
+            (f'%"{villager_id}"%',),
+        ).fetchall():
+            other = " ".join((r["content"] or "").lower().split())
+            if other and (other in norm or norm in other):
+                return {"ok": True, "deduped": True, "id": r["id"]}
+        now = now_iso()
+        # A tell is a DELIBERATE intent to say something to this person, so it
+        # defaults to the everyday baseline (general:open) — not the fail-closed
+        # general:sensitive, which a proactive-context circle often wouldn't grant,
+        # so casual tells would never surface. A caller that knows a tell touches a
+        # sensitive topic passes that content_tag explicitly and the gate tightens.
+        tag = (content_tag or "").strip() or "general:open"
+        insert_sql = """
+            INSERT INTO memories(id,kind,register,granularity,date_key,slug,content,
+                audience,subjects_json,care_weight,category,content_tag,consent_pending,
+                confidence,attribution_confidence,source_json,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """
+        rec_id = insert_with_slug_retry(
+            conn, insert_sql,
+            lambda cid: (cid, "villager_tell", "episodic", "daily", now[:10], None,
+                         text, "ward-content-gated", json.dumps([villager_id]), None, None, tag,
+                         0, 1.0, None, json.dumps({"tell": {"state": "pending"}}), now, now),
+            label=text, kind="tell",
+        )
+        conn.commit()
+        return {"ok": True, "id": rec_id}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def list_villager_tells(villager_id: str, audiences=None, topic_grants=None,
+                        mark_surfaced: bool = False,
+                        conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Un-delivered villager tells for a DM turn, gated the same two-axis way as
+    list_by_subject (coarse audience floor + fine content-tag gate, fail-closed).
+    With mark_surfaced, runs the two-step: a tell shown on a PRIOR turn (state
+    'surfaced') is consumed (deleted) now, and each tell returned this turn is
+    stamped 'surfaced' — so a tell appears in exactly one turn's context and a
+    turn that failed to voice it gets another chance."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    gating = isinstance(topic_grants, dict)
+    try:
+        aud_clause, aud_params = audience_in_sql(audiences)
+        rows = conn.execute(
+            "SELECT id, content, content_tag, source_json FROM memories "
+            f"WHERE kind='villager_tell' AND subjects_json LIKE ? AND {aud_clause} "
+            "ORDER BY created_at ASC",
+            [f'%"{villager_id}"%'] + aud_params,
+        ).fetchall()
+        out, to_surface, to_consume = [], [], []
+        for r in rows:
+            if gating and not memory_visible_to_grants(r["content_tag"], topic_grants):
+                continue  # content-tag gate: not shareable with this villager's circle
+            try:
+                state = (json.loads(r["source_json"] or "{}").get("tell") or {}).get("state", "pending")
+            except Exception:
+                state = "pending"
+            if state == "surfaced":
+                to_consume.append(r["id"])   # shown last turn → done
+                continue
+            out.append({"id": r["id"], "content": r["content"]})
+            to_surface.append(r["id"])
+        if mark_surfaced and (to_consume or to_surface):
+            now = now_iso()
+            for cid in to_consume:
+                conn.execute("DELETE FROM memories WHERE id=?", (cid,))
+            surfaced = json.dumps({"tell": {"state": "surfaced", "surfaced_at": now}})
+            for sid in to_surface:
+                conn.execute("UPDATE memories SET source_json=?, updated_at=? WHERE id=?",
+                             (surfaced, now, sid))
+            conn.commit()
+        return out
+    finally:
+        if own_conn:
+            conn.close()
+
+
 # ── Consent flow (Pillar C) ───────────────────────────────────────────────────
 
 def list_consent_pending(conn: sqlite3.Connection | None = None) -> list[dict]:

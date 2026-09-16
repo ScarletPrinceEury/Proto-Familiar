@@ -63,7 +63,7 @@ export const TOOL_MODULES = {
   update_graph_edge: 'graph', delete_graph_edge: 'graph',
 
   village_lookup: 'village', village_upsert: 'village',
-  relay_message: 'village',
+  relay_message: 'village', note_to_tell_villager: 'village',
 
   web_search: 'web', read_webpage: 'web', look_up: 'web',
 

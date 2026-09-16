@@ -1274,8 +1274,10 @@ const _toolDeps = {
   mirrorToWard: enqueueAndDispatch,
   // Warm the current place's forecast after a location switch (set by server).
   refreshWeatherNow: null,
+  // Note a "meaning to bring up with this villager" tell (backs note_to_tell_villager).
+  addVillagerTell: null,
 };
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
@@ -1284,6 +1286,7 @@ export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, u
   if (typeof searchRestricted === 'function')    _toolDeps.searchRestricted    = searchRestricted;
   if (typeof mirrorToWard === 'function')        _toolDeps.mirrorToWard        = mirrorToWard;
   if (typeof refreshWeatherNow === 'function')   _toolDeps.refreshWeatherNow   = refreshWeatherNow;
+  if (typeof addVillagerTell === 'function')     _toolDeps.addVillagerTell     = addVillagerTell;
 }
 
 /**
@@ -2605,6 +2608,22 @@ export const BUILTIN_TOOLS = [
           disclosure: { type: 'object', description: 'Where facts about this person may surface, per kind of fact. A map from fact-kind (one of: basics, emotional_content, health_info, relationships, whereabouts) to a circle — a category name (e.g. "Family", "Close friends") meaning "memories of this kind about them may surface in that circle\'s rooms", or "ward-private" meaning "only ever when {{user}} and I are alone". I set this when someone tells me how widely they\'re comfortable being discussed (e.g. "you can mention my health to my family but no one else"). A kind I leave out keeps its default: bounded to the room a memory was made in. I only change this when {{user}} and I are alone, since it edits their record.' },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'note_to_tell_villager',
+      description: "I note something I want to bring up with a specific person from {{user}}'s Village next time we talk — a warm thing I thought of, or something {{user}} just mentioned that this person would want to know. I hold it with what I know about them, and it comes back to me the next time we're in a DM (kept within what their circle is allowed to know). This is for a real thing to raise later, not a fact I already know about them (that's save_memory) and not something to send right now (that's relay_message). If it's about a sensitive topic I say so, so it stays within their circle.",
+      parameters: {
+        type: 'object',
+        properties: {
+          villagerId: { type: 'string', description: 'The villager id from village_lookup — who I want to bring this up with.' },
+          what:       { type: 'string', description: 'What I want to bring up with them, in a few words.' },
+          topic:      { type: 'string', description: 'Optional. The topic this touches, if it is sensitive — one of: medical, mental-health, sexuality, gender, family, relationships, finances, legal. I set this ONLY when the thing is genuinely sensitive, so it stays within a circle allowed that topic; everyday things I leave blank.' },
+        },
+        required: ['villagerId', 'what'],
       },
     },
   },
@@ -4389,6 +4408,27 @@ export const TOOL_EXECUTORS = {
     });
     const more = r.truncated ? `\n(there were more — I showed the ${r.hits.length} most recent. I can read any of these in full with read_file.)` : '\n(I can open any of these in full with read_file.)';
     return `Here's where "${query.trim()}" came up, most recent first:\n${lines.join('\n')}${more}`;
+  },
+
+  // I note a "meaning to bring up with them" tell — held in the per-villager
+  // memory store (kind villager_tell), surfaced once on my next DM with them,
+  // gated by their circle's content rules. A named sensitive topic tightens that
+  // gate; everyday tells default to open so they actually surface.
+  note_to_tell_villager: async ({ villagerId, what, topic } = {}) => {
+    if (!_toolDeps.addVillagerTell) return "I can't reach my memory right now to hold onto that.";
+    const id = typeof villagerId === 'string' ? villagerId.trim() : '';
+    const text = typeof what === 'string' ? what.trim() : '';
+    if (!id || !text) return "To note that, I need who it's for (their villagerId from village_lookup) and what I want to say.";
+    const SENSITIVE = new Set(['medical', 'mental-health', 'sexuality', 'gender', 'family', 'relationships', 'finances', 'legal']);
+    const t = typeof topic === 'string' ? topic.trim().toLowerCase() : '';
+    const contentTag = SENSITIVE.has(t) ? `${t}:sensitive` : undefined;
+    try {
+      const res = await _toolDeps.addVillagerTell({ villagerId: id, content: text, contentTag });
+      if (!res?.ok) return `I couldn't hold onto that: ${res?.error ?? 'my memory is unavailable'}.`;
+      return res.deduped
+        ? "I've already got that noted to bring up with them."
+        : 'Noted — I\'ll bring that up with them next time we talk.';
+    } catch (err) { return `I couldn't hold onto that: ${err.message}.`; }
   },
 
   // ── Village ───────────────────────────────────────────────────────

@@ -48,6 +48,7 @@ import {
   reportSurfacingOutcomes, listBookmarks,
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
+  addVillagerTell,
 } from './thalamus.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -3680,6 +3681,7 @@ initCerebellumTools({
   upsertVillager,
   relayToDiscord,
   memorizeSessionNow,
+  addVillagerTell,
   // set_current_location warms the new place's sky right away (fire-and-forget).
   refreshWeatherNow: () => { refreshWeatherIfDue({ force: true }).catch(() => {}); },
 });
