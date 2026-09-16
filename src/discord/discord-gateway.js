@@ -2460,6 +2460,14 @@ async function handleTurn(gw, msg, decision) {
       focalVillager: decision.kind === 'villager-dm' ? decision.villager : null,
       grants: audienceGrants,
       settings,
+      // Stage 2 memory reader, gated fail-closed: a missing audience/topic set
+      // becomes [] / {} (nothing visible), never ungated. Only reaches here on a
+      // villager DM, where these are the villager's own room gate.
+      memoryReader: ({ villagerId }) => getMemoriesBySubject({
+        villagerId, limit: 6,
+        audiences: audienceVisible ?? [],
+        topicGrants: audienceTopics ?? {},
+      }),
     });
     if (vc) enriched.dynamic = (enriched.dynamic || '') + (enriched.dynamic ? '\n\n' : '') + vc;
   }

@@ -98,3 +98,63 @@ test('buildVillagerContextBlock: a throwing reader degrades to empty, never bloc
   });
   assert.equal(block, '');
 });
+
+// ── Stage 2: the gated recent-memory sub-block ───────────────────────────────
+import { formatVillagerMemoryRecall } from '../src/warmth/villager-context.js';
+
+const memItems = [
+  { id: 'sam-tea-1', category: 'daily', brief: 'Sam likes strong tea', date: '2026-07-01' },
+  { id: 'sam-gig-2', category: 'daily', brief: 'Sam had a gig Friday', date: '2026-07-03' },
+];
+
+test('formatVillagerMemoryRecall: names the villager, lists the briefs, plain', () => {
+  const block = formatVillagerMemoryRecall('Chen', memItems);
+  assert.match(block, /\[What Chen and I have been talking about lately\]/);
+  assert.match(block, /Sam likes strong tea/);
+  assert.match(block, /Sam had a gig Friday/);
+  assert.doesNotMatch(block, /when it fits|if the moment/i);
+});
+
+test('formatVillagerMemoryRecall: empty items → empty string', () => {
+  assert.equal(formatVillagerMemoryRecall('Chen', []), '');
+  assert.equal(formatVillagerMemoryRecall('Chen', null), '');
+});
+
+test('buildVillagerContextBlock: combines reach recall AND gated memory when both present', async () => {
+  const reader = async () => knocks;                               // reach-out recall (Stage 1)
+  const memoryReader = async ({ villagerId }) => ({ ok: true, items: villagerId === 'chen-x1' ? memItems : [] });
+  const block = await buildVillagerContextBlock({
+    focalVillager: { id: 'chen-x1', name: 'Chen' },
+    grants: { proactiveContext: true }, settings: {}, reader, memoryReader,
+  });
+  assert.match(block, /What I last said to Chen/);                 // Stage 1
+  assert.match(block, /What Chen and I have been talking about/);  // Stage 2
+});
+
+test('buildVillagerContextBlock: no memoryReader → just Stage 1 (back-compat)', async () => {
+  const block = await buildVillagerContextBlock({
+    focalVillager: { id: 'chen-x1', name: 'Chen' },
+    grants: { proactiveContext: true }, settings: {}, reader: async () => knocks,
+  });
+  assert.match(block, /What I last said to Chen/);
+  assert.doesNotMatch(block, /been talking about/);
+});
+
+test('buildVillagerContextBlock: a throwing memoryReader still yields Stage 1, never blocks', async () => {
+  const block = await buildVillagerContextBlock({
+    focalVillager: { id: 'chen-x1', name: 'Chen' },
+    grants: { proactiveContext: true }, settings: {},
+    reader: async () => knocks,
+    memoryReader: async () => { throw new Error('phylactery down'); },
+  });
+  assert.match(block, /What I last said to Chen/, 'the memory read failing must not lose the reach recall');
+});
+
+test('buildVillagerContextBlock: no grant → neither reader runs', async () => {
+  let ranMem = false;
+  await buildVillagerContextBlock({
+    focalVillager: { id: 'chen-x1', name: 'Chen' }, grants: {}, settings: {},
+    reader: async () => knocks, memoryReader: async () => { ranMem = true; return { items: memItems }; },
+  });
+  assert.equal(ranMem, false);
+});

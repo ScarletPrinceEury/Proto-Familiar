@@ -49,21 +49,49 @@ export function formatVillagerReachRecall(villagerName, knocks) {
   ].join('\n');
 }
 
-// Fetch + build the block for a villager DM turn. Async; the reader is injectable
-// for tests. Returns '' on any miss so it never blocks the turn.
+// What this villager and I have been talking about lately — thin recent memories
+// where they're a subject. The memoryReader is expected to have ALREADY gated the
+// read (subject + audience floor + content-tag), so anything reaching here is
+// clear to surface to them. Pure (takes the fetched items). '' when empty.
+export function formatVillagerMemoryRecall(villagerName, items) {
+  if (!Array.isArray(items) || items.length === 0) return '';
+  const who = (villagerName || '').trim() || 'them';
+  const lines = [`[What ${who} and I have been talking about lately]`];
+  for (const it of items) {
+    const brief = String(it?.brief ?? '').trim();
+    if (brief) lines.push(`- ${brief}`);
+  }
+  return lines.length > 1 ? lines.join('\n') : '';
+}
+
+// Fetch + build the block for a villager DM turn. Async; both readers are
+// injectable for tests. Returns '' on any miss so it never blocks the turn.
+// `memoryReader` is optional (Stage 2): when given, it must already be gated —
+// the caller bakes the villager's audience + topic grants into it, fail-closed.
 export async function buildVillagerContextBlock({
   focalVillager, grants, settings = {},
-  reader = recentReachOuts, tomesDir = undefined,
+  reader = recentReachOuts, memoryReader = null, tomesDir = undefined,
 } = {}) {
   if (!villagerContextOn(settings)) return '';
   if (!villagerContextEligible({ focalVillager, grants })) return '';
+  const parts = [];
+  // What I last said to them (Stage 1) — reach-out recall.
   try {
     const knocks = await reader({
       recipientId: focalVillager.id, markSurfaced: true,
       ...(tomesDir ? { tomesDir } : {}),
     });
-    return formatVillagerReachRecall(focalVillager.name, knocks);
-  } catch {
-    return ''; // a Village-context read never blocks the turn
+    const recall = formatVillagerReachRecall(focalVillager.name, knocks);
+    if (recall) parts.push(recall);
+  } catch { /* skip — never blocks the turn */ }
+  // What we've been talking about (Stage 2) — gated recent memory.
+  if (memoryReader) {
+    try {
+      const res = await memoryReader({ villagerId: focalVillager.id });
+      const items = res && Array.isArray(res.items) ? res.items : [];
+      const memBlock = formatVillagerMemoryRecall(focalVillager.name, items);
+      if (memBlock) parts.push(memBlock);
+    } catch { /* skip — a memory read never blocks the turn */ }
   }
+  return parts.join('\n\n');
 }
