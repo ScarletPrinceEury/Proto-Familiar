@@ -50,6 +50,16 @@ Why this matters: giving the model real roles lets it natively read which lines 
 
 Dating is unaffected: a memory's day comes from the job's calendar day (via `segmentByDay` and `date_key`), never from parsing the transcript itself. [@memorization-js]
 
+A slice where only the Familiar spoke — a proactive reach-out, or a room turn the ward never
+answered — assembles as `[system, assistant…, system]` with no `user` role at all, and some
+providers reject that shape outright (z.ai returns error code 1214 for zero user turns).
+`buildExtractionMessages` inserts exactly one marked placeholder user turn,
+`[no reply from <wardLabel>]`, only when the assembled conversation has no `user`-role message
+[@memorization-js]. The placeholder is an *insertion*, not a role reassignment: the Familiar's
+own lines stay `assistant`, and the fix does not fold them into a fake `user` turn — preserving
+the faithful-roles design above while still giving providers that require a user turn a valid
+payload. The marker also doubles as a signal to the extractor that the ward did not reply.
+
 ## Voice reframe
 
 Both extraction prompts (`buildPrompt` and `buildSharedRoomPrompt`) [@memorization-js] are framed as the Familiar's own notes, with careful attention to timing:
@@ -137,6 +147,33 @@ This is deliberate, not an oversight: the live chat path has two constraints the
 The `name` field cannot "split roles" in a way that would let multiple humans appear as distinct role types. Chat has only three roles: `system`, `user`, `assistant`. Multiple humans all become `user` no matter what. [@memorization-js]
 
 The message `speaker` field already carries the same information that the inline `[Name]:` label is generated from (in `discord-gateway` by `attributeUserContent`). Stamping the OpenAI `name` field with a pseudonym handle is what makes the field useful: the model gets a separate identifier namespace that does not depend on the content string. [@memorization-js]
+
+## Empty extractions and oversized transcripts
+
+Two 0.12.5/0.12.6 fixes changed how extraction interprets an empty result and how much input it
+can accept, both correcting outcomes the queue had been counting as failures for the wrong
+reason (see the reliability audit described in [Session Memorization](session-memorization)).
+
+`parseFacts(raw, finishReason, { allowEmpty })` used to throw `'LLM returned no facts.'`
+whenever the model returned valid JSON with an empty `facts` array — but "nothing here worth
+remembering" is a legitimate extraction outcome, not an error [@memorization-js]. `allowEmpty`
+now lets a slice with at most `EMPTY_FACTS_MAX_READABLE` (5) readable turns resolve `done` with
+zero facts; a larger slice coming back empty still fails, on the reasoning that a substantial
+conversation should yield something, and a parsed response with no `facts` array at all (as
+opposed to an empty array) is always a failure regardless of slice size [@memorization-js].
+
+Before this pass, an oversized transcript could not even reach that empty-is-fine path:
+`max_tokens: 8000` bounds the model's JSON reply, but nothing bounded the input, so a 326 KB
+slice produced a reply that truncated mid-object on every retry — the same deterministic wall
+each time [@memorization-js]. `chunkMessagesBySize(messages, EXTRACTION_CHUNK_BYTES)` (64 KB)
+now splits an oversized transcript at turn boundaries — never mid-turn — before it reaches the
+provider; each chunk is extracted with its own call, and the resulting facts, relations, and
+follow-ups are combined into the job's result [@memorization-js]. A slice that already fits is
+returned as a single chunk, so the common single-call path is unchanged; a lone turn bigger than
+the cap gets its own chunk as a best effort. When a job produces more than one chunk, an
+individual chunk is allowed to come back empty regardless of its turn count, because truncation
+— the failure `EMPTY_FACTS_MAX_READABLE` exists to still catch — cannot happen once the input
+itself is bounded [@memorization-js].
 
 ## Related
 

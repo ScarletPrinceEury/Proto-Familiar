@@ -169,6 +169,54 @@ a sensitivity level that later controls per-villager disclosure independently of
 that never trusts the model's tag directly, and how the tag composes with `resolveRememberGate`
 and the audience floor at recall time.
 
+## Reliability and capacity hardening (0.12.5–0.12.6)
+
+A 2026-09-16 audit found the queue completing only about 0.7% of memorization jobs (993 of
+1016 failed), heaviest against the z.ai provider, with the 10-minute coverage sweep
+re-enqueuing the same failing slices roughly 40 times an hour. Five bugs in the shared
+extraction path plus three systemic gaps in the queue itself had turned isolated failures
+into a self-sustaining loop; the fix landed as three passes across 0.12.5-alpha and
+0.12.6-alpha [@memorization-js].
+
+**Enqueue-time gates.** Two checks now run before a job is created, on top of the
+pending/processing dedup described above. A failed `dupKey` is held for
+`FAILED_REENQUEUE_COOLDOWN_MS` (6 hours) after its `finishedAt` before a fresh attempt is
+allowed, so the periodic coverage sweep cannot burn a provider call on the same failing slice
+every ten minutes — a transient failure still gets retried, just not on every tick
+[@memorization-js]. And `genuineTurns()` — `filterReadable` minus any turn whose entire
+content is a single bracketed marker such as `[OpenClaw heartbeat poll]` — lets
+`enqueueMemorization` skip a slice with no genuinely conversational turn before it ever reaches
+the provider, following the repo's "gate cheap cases in code before the LLM" rule (see
+[Engineering conventions](../reference/engineering-conventions)) [@memorization-js].
+
+**Worker timeout.** `callProvider` had no timeout, so one hung `fetch` could freeze the single
+in-process worker slot indefinitely — the incident's actual mid-run gap was one job claimed
+that never returned, with nothing else processed afterward. Every call is now bounded by
+`AbortSignal.timeout(EXTRACTION_TIMEOUT_MS)` (120s); a timeout surfaces as an ordinary job
+failure, which the existing backoff schedule and job-rotation already know how to handle, so
+the worker cycles to the next job and returns to the timed-out one later [@memorization-js].
+The boot-time recovery that requeues jobs still `processing` after a restart, and the
+backoff/rotation logic itself, already existed — the missing piece was specifically the
+per-call bound, since a single-slot worker with no timeout can wedge on one hung call no
+matter how good its restart and rotation logic is.
+
+**Crash-after-write duplication.** A `ReferenceError` in the consent-pending item's `standing`
+field — it referenced an out-of-scope variable — threw *after* `createMemoryFull` had already
+written the memory, so the job failed and its retry re-extracted and re-created the same fact;
+only near-duplicate merging kept this from compounding further. The fix assigns the boolean the
+consent queue actually reads (`ward-consent-queue.js` renders "…, a standing fact" from it):
+`standing: fact?.temporality === 'standing'` [@memorization-js] [@ward-consent-queue-js]. A
+different fix that the original bug report suggested — assigning `wardStanding` itself — would
+have been wrong: `wardStanding` is the whole per-category standing-consent map, not a per-item
+boolean, so assigning it would have made every consent ask read "a standing fact." The correct
+fix only became visible by checking what the *consumer* in `ward-consent-queue.js` actually
+reads, not by trusting the suggested patch [@memorization-js] [@ward-consent-queue-js].
+
+The remaining two fixes from this hardening pass change extraction-side behavior rather than
+queue mechanics — treating a genuinely empty extraction as success instead of failure, and
+bounding provider input size by chunking an oversized transcript — and are described in
+[Session Memory Extraction](session-memory-extraction).
+
 ## Related
 
 - [Session Memory Extraction](session-memory-extraction) — how transcripts are assembled,
