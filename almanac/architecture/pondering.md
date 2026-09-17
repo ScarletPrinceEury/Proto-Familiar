@@ -196,17 +196,80 @@ large backlog drains one month per tick rather than all at once (the same oldest
 shape as the 0.8.89 memory-sweep fix) [@pondering-consolidate-js]. The feature is on by default
 (`ponderConsolidationEnabled`) with a hard off-switch, `PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`,
 following the same settings-toggle-plus-env-off-switch contract every [autonomous loop](autonomous-loops)
-ships with, even though this rides an existing tick rather than owning one.
+ships with, even though this rides an existing tick rather than owning one. Both this monthly tier
+and the yearly tier described below share that single gate — there is no separate toggle per tier
+[@server-js].
+
+## A second tier: yearbooks fold a year of digests (0.12.26)
+
+0.12.26-alpha added a tier on top of the monthly digest: a whole COMPLETED past year of
+month-digests folds into one `scope:'pondering-yearbook'` entry, and the digests it drew from are
+pruned the same way raw ponderings are pruned into a digest [@pondering-consolidate-js]:
+
+```text
+raw ponderings ──monthly──▶ pondering-digest ──yearly──▶ pondering-yearbook
+```
+
+`consolidateYearlyPonderings()` is the yearly counterpart to `consolidatePonderings()`, and both
+are now thin wrappers over one shared, tier-parameterized engine — `selectTierTarget` picks the
+oldest eligible past period, `consolidateTier` runs the fold — rather than two independent
+functions [@pondering-consolidate-js]. A small tier descriptor object supplies the parts that
+differ (`sourceScope`, `foldScope`, `periodKeyOf`, `currentPeriod`, `periodLabel`, `minPerPeriod`,
+`periodField`, `buildPrompt`, `requireDrainedRaw`); every existing monthly export keeps its exact
+prior public contract (`selectConsolidationTarget` still returns `{ monthPrefix, ... }`,
+`consolidatePonderings` still returns `{ monthPrefix, count, digestUid }`) so no caller needed to
+change [@pondering-consolidate-js]. This is a worked instance of
+[Engineering conventions](../reference/engineering-conventions)' "no copy-paste of substantial
+logic" rule: a second tier built by copying the first tier's fold logic would have been the exact
+structural mistake that rule exists to prevent.
+
+Three robustness decisions shape the yearly tier, each caught by reasoning through edge cases
+before the guard could fail silently in production:
+
+- **A year is keyed by its content, not its fold time.** A month-digest's year comes from
+  `consolidated_month` (the month it summarizes), never `created_at` (when the fold happened) — a
+  2024 digest folded late in 2026 by a bulk import still yearbooks into 2024
+  [@pondering-consolidate-js].
+- **The drained-raw guard blocks on real work, not on stragglers.** A year is not yearbooked while
+  it still holds a month the monthly tier would still fold (a month at or above
+  `MIN_PONDERINGS_PER_MONTH`), so a yearbook always covers the whole year rather than half of it.
+  The guard deliberately does *not* block on a sub-threshold straggler month — one or two stray
+  notes that can never reach the monthly minimum. An earlier draft keyed the guard on "any raw
+  pondering exists in the year," which would have starved the yearbook forever for any sparse year;
+  those stragglers simply ride on, un-pruned [@pondering-consolidate-js].
+- **The current period is never folded**, for years the same as for months.
+
+The yearly tier extends
+[Archive before destructive autonomous writes](../decisions/archive-before-destructive-autonomous-writes)'s
+three-part shape rather than reimplementing it: archive-before-prune, STRICT `parseDigest` (a
+truncated yearbook prunes nothing), and restore. The archive record now carries a unified `tier` +
+`periodKey` pair, with the legacy `monthPrefix`/`digestUid` fields still populated for the monthly
+tier so pre-yearly archive records and readers keep working unchanged [@pondering-consolidate-js].
+`restorePonderingConsolidation()` is LIFO **across both tiers**: undoing the most recent fold
+restores a yearbook's month-digests, and undoing again restores that month's raw ponderings
+[@pondering-consolidate-js].
+
+A guard test for the drained-raw guard exposed a general testing pitfall during the build: it used
+a callLLM stub that threw, and asserted the fold result was `null` — but `consolidateTier` also
+catches a thrown `callLLM` and returns `null`, so the same assertion passed whether the guard
+blocked the fold before the model was ever asked, or the guard failed to block and the swallowed
+throw produced the same `null` by a different path. Flip-verifying (disabling the guard) did not
+turn the test red until it was rewritten to track, with a spy flag, whether the model was reached
+at all — `null` alone cannot distinguish "blocked" from "called and failed."
 
 ## On-demand consolidation: Discord and UI triggers (0.12.19)
 
-The tick-based digest above is opportunistic: it drains one past month per pondering tick, so a
-large backlog empties slowly. 0.12.19-alpha added a "run it now" path. `runPonderingConsolidationNow()`
-(`server.js`) calls `consolidatePonderings()` in a loop, capped at 24 months per manual run, so a
-whole backlog can clear in one request instead of waiting out the tick's one-month-at-a-time pace
+The tick-based digest above is opportunistic: it drains one past period per pondering tick, so a
+large backlog empties slowly. 0.12.19-alpha added a "run it now" path; 0.12.26-alpha extended it to
+cover the yearly tier. `runPonderingConsolidationNow()` (`server.js`) first calls
+`consolidatePonderings()` in a loop, capped at 60 months per manual run, then calls
+`consolidateYearlyPonderings()` in a loop, capped at 20 years — months before years, because a year
+only becomes yearbook-eligible once the drained-raw guard sees its months already folded — so a
+whole backlog can clear in one request instead of waiting out the tick's one-period-at-a-time pace
 [@server-js]. The same function backs two surfaces: `POST /api/pondering/consolidate`, wired to a
 "Fold ponderings" button in the web UI's Automation pane, and the ward's Discord `!consolidate
-ponderings` DM command [@server-js] [@discord-gateway-js]. Its memory-side twin — the "Roll up
+ponderings` DM command — both cover both tiers, keeping console↔UI parity for the new tier without
+a separate command or button [@server-js] [@discord-gateway-js]. Its memory-side twin — the "Roll up
 memories" button and the `!consolidate memory` command — reuses the existing
 `runLifecyclePass({ force: true })` rather than adding a second memory-consolidation code path
 [@server-js].

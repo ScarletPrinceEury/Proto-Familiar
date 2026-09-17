@@ -759,18 +759,33 @@ in-flight ticks.
 
 **`pondering-consolidate.js`** — the ponderings tome's rollup (2026-09, the
 memory-consolidation analog ponderings never had; before it, ponderings
-accumulated forever). `consolidatePonderings()` folds one PAST month of
-`scope:'pondering'` entries into a single `scope:'pondering-digest'` entry (an
-LLM distils "what I was thinking about in <month>", originals pruned), so the
-tome stays bounded. It stays LOCAL to the ponderings tome — a digest of
+accumulated forever). **Two tiers share one tier-parameterized engine**
+(`selectTierTarget` → `consolidateTier`, one descriptor per tier — a copy-pasted
+second tier would be the exact structural mistake the no-copy-paste rule names):
+`raw ponderings ──monthly──▶ pondering-digest ──yearly──▶ pondering-yearbook`.
+`consolidatePonderings()` folds one PAST month of `scope:'pondering'` entries into
+a single `scope:'pondering-digest'` (an LLM distils "what I was thinking about in
+<month>", originals pruned); `consolidateYearlyPonderings()` (0.12.26) folds one
+COMPLETED past year of those month-digests into a single `scope:'pondering-yearbook'`
+("what <year> was about for me"), keyed by each digest's **content** year
+(`consolidated_month`), NOT its fold time — a 2024 digest folded late in 2026 still
+yearbooks into 2024. A year needs ≥`MIN_DIGESTS_PER_YEAR` (2) digests and must be
+DRAINED: the yearly **drained-raw guard** skips a year while it still holds a month
+the monthly tier will fold (a month ≥3 eligible raw ponderings), so a yearbook always
+covers the whole year — but a sub-threshold straggler month (1–2 stray notes that can
+never reach the monthly min) does NOT block it forever; those notes simply ride on
+un-deleted. The current period (this month / this year) is never folded. Both tiers
+keep the tome bounded and stay LOCAL to the ponderings tome — a digest or yearbook of
 per-embodiment thinking is still per-embodiment, never a recallable Phylactery
 fact. Pure `selectConsolidationTarget` picks the OLDEST past month with ≥3
 eligible entries (the 0.8.89 sweep-all-past shape; one month per call, backlog
 drains over ticks); **eligibility excludes any pondering still holding an UNACTED
 `wants_to_save` intent** so a pending tell/follow-up is never pruned away, and
 re-validates the same uids under the write lock. Rides the pondering tick —
-`runPonder` (server.js) calls it best-effort before pondering; the "any
-un-consolidated past month?" gate is its own rate limit (no new loop, no timer).
+`runPonder` (server.js) calls the monthly then the yearly fold best-effort before
+pondering (one period per tier per tick; a month freshly folded this tick just lets
+its year become eligible on a later tick — no need to chain); the "any
+un-consolidated past period?" gate is its own rate limit (no new loop, no timer).
 The consolidation call is given the **identity block** (`enrich('',{staticOnly})`
 → `.static`) so the fold reads its own month AS the Familiar — without it a
 capable model breaks frame and interrogates the "roleplay a digest" request
@@ -782,19 +797,26 @@ truncation-safe (below); the archive is what makes default-ON acceptable.
 **Reversibility (the data-loss fix):** the fold ARCHIVES the originals to
 `tomes/.pondering-consolidation-archive.json` (append-only, keyed by digest uid)
 *before* deleting them, and only deletes what it archived — losing a fold is
-cheap, losing the notes is not. `restorePonderingConsolidation()` puts a month's
-archived entries back and drops the digest (undo). Earlier folds hard-deleted
+cheap, losing the notes is not. One unified archive holds both tiers' folds (each
+record carries its `tier`/`periodKey`; the legacy `monthPrefix`/`digestUid` fields
+stay set so pre-yearly records and readers keep working). `restorePonderingConsolidation()`
+undoes the most recent un-restored fold of EITHER tier — a LIFO unwind: undoing a
+yearbook restores its month-digests, undoing again restores the most recent month's
+raw ponderings — and drops the fold artifact it replaced (digest or yearbook). Earlier folds hard-deleted
 with no backup and the Phylactery snapshot/backup covers only the canonical
 store, not local tomes — so pre-archive folds are unrecoverable from inside the
 app (a filesystem copy of `tomes/` is the only route). **`parseDigest` is STRICT:**
 only a complete parseable `{digest}` object counts; a truncated
 (finish_reason='length') or bare reply → null → the fold is refused and the
 originals kept, so a cut-off digest can never both store a partial AND delete the
-sources. On-demand `POST /api/pondering/consolidate` (drains all eligible months,
-cap 24) + `POST /api/pondering/consolidate/restore`; UI "Fold ponderings" / "Undo
+sources (shared by both tiers — both return the same `{digest}` envelope). On-demand
+`POST /api/pondering/consolidate` (drains all eligible months, then all completed
+years) + `POST /api/pondering/consolidate/restore`; UI "Fold ponderings" / "Undo
 the last fold" buttons; Discord `!consolidate ponderings` / `!consolidate restore`.
 **On-demand triggers (2026-09):** `runPonderingConsolidationNow()` drains ALL
-currently-eligible past months in one go (capped 24/run) — exposed as `POST
+currently-eligible past months (cap 60/run) and THEN all completed past years
+(cap 20/run) in one go — months first, because a year only becomes yearbook-eligible
+once its months drain — returning `{months, entries, years, digests}`; exposed as `POST
 /api/pondering/consolidate` (the UI's "Fold ponderings" button in the Automation
 pane) and as the ward's Discord `!consolidate ponderings` DM command
 (`setConsolidationRunners` injects it into the gateway, no cycle). Its memory

@@ -62,6 +62,9 @@ sources:
   - id: collapse-tool-turns-test
     type: file
     path: tests/collapse-tool-turns.test.mjs
+  - id: pondering-consolidate-js
+    type: file
+    path: src/pondering/pondering-consolidate.js
 ---
 
 # Engineering Conventions
@@ -132,7 +135,13 @@ real duplication exists is the correction of a structural mistake, not premature
 inventing the abstraction *before* the duplication exists is the anti-pattern to avoid
 [@claude-md]. See [Installer and launcher](../architecture/installer-and-launcher) for a
 worked example: stale-instance port recycling lives once in
-`scripts/ensure-port-free.mjs` rather than being copy-pasted across the shell launchers.
+`scripts/ensure-port-free.mjs` rather than being copy-pasted across the shell launchers. See
+[Pondering](../architecture/pondering)'s yearly-tier section (0.12.26) for a second worked
+example on the other side of the same rule: adding a yearly consolidation tier alongside the
+existing monthly one was built as one tier-parameterized engine (`selectTierTarget` /
+`consolidateTier`, driven by a small tier-descriptor object) rather than a second copy-pasted
+fold function, with the monthly tier's own exports rewritten as thin wrappers over the shared
+engine so its public contract did not change [@pondering-consolidate-js].
 
 ## Modular by default; orchestration files are the exception
 

@@ -60,7 +60,7 @@ import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } 
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
-import { consolidatePonderings, restorePonderingConsolidation } from './src/pondering/pondering-consolidate.js';
+import { consolidatePonderings, consolidateYearlyPonderings, restorePonderingConsolidation } from './src/pondering/pondering-consolidate.js';
 import { createHolisticBackup, extractBackup, layDownFileStores } from './src/backup/holistic-backup.js';
 import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
@@ -4455,29 +4455,34 @@ app.post('/api/entity/lifecycle', async (req, res) => {
   res.json(result);
 });
 
-// Drain ALL currently-eligible past months of ponderings into digests in one go
-// — the on-demand "catch up now" that the pondering tick does one-month-at-a-time.
-// Shared by POST /api/pondering/consolidate (UI) and the Discord `!consolidate
-// ponderings` command (setConsolidationRunners). Bounded so a huge backlog can't
-// spin forever. Returns { ok, months, entries } or { ok:false, error }.
+// Drain ALL currently-eligible past periods of ponderings in one go — the
+// on-demand "catch up now" that the pondering tick does one-period-at-a-time.
+// First folds every backlogged past MONTH into a digest, then folds every
+// COMPLETED past YEAR of those digests into a yearbook (months first, because a
+// year only becomes yearbook-eligible once its months are drained). Shared by
+// POST /api/pondering/consolidate (UI) and the Discord `!consolidate ponderings`
+// command (setConsolidationRunners). Bounded so a huge backlog can't spin
+// forever. Returns { ok, months, entries, years, digests } or { ok:false, error }.
 async function runPonderingConsolidationNow() {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'pondering');
   if (!conn?.apiKey) return { ok: false, error: 'no connection is configured for pondering' };
-  // The identity/persona block so the fold reads its own month AS the Familiar
+  // The identity/persona block so the fold reads its own period AS the Familiar
   // (the frame-break fix). Best-effort — no identity just means a weaker anchor.
   const identity = await enrich('', { staticOnly: true }).then(r => r?.static ?? '').catch(() => '');
-  let months = 0, entries = 0;
-  for (let i = 0; i < 24; i++) {   // hard cap: at most 24 months per manual run
-    const c = await consolidatePonderings({
-      tomesDir: TOMES_DIR,
-      provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-      identity, settings: s,
-    });
+  const llm = { provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl };
+  let months = 0, entries = 0, years = 0, digests = 0;
+  for (let i = 0; i < 60; i++) {   // hard cap: at most 60 months per manual run
+    const c = await consolidatePonderings({ tomesDir: TOMES_DIR, ...llm, identity, settings: s });
     if (!c) break;
     months += 1; entries += c.count;
   }
-  return { ok: true, months, entries };
+  for (let i = 0; i < 20; i++) {   // then the completed years the months just freed up
+    const y = await consolidateYearlyPonderings({ tomesDir: TOMES_DIR, ...llm, identity, settings: s });
+    if (!y) break;
+    years += 1; digests += y.count;
+  }
+  return { ok: true, months, entries, years, digests };
 }
 app.post('/api/pondering/consolidate', async (_req, res) => {
   try { res.json(await runPonderingConsolidationNow()); }
@@ -5994,12 +5999,14 @@ function startAutonomousPondering() {
       if (s?.ponderConsolidationEnabled !== false && process.env.PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED !== '1') {
         try {
           const identity = await enrich('', { staticOnly: true }).then(r => r?.static ?? '').catch(() => '');
-          const c = await consolidatePonderings({
-            tomesDir: TOMES_DIR,
-            provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-            identity, settings: s,
-          });
+          const llm = { provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl };
+          // One fold per tick, monthly first: a past year only becomes yearbook-
+          // eligible once its months are digested, so a fresh month-fold this tick
+          // just lets the year fold on a later tick — no need to chain them here.
+          const c = await consolidatePonderings({ tomesDir: TOMES_DIR, ...llm, identity, settings: s });
           if (c) console.log(`[pondering] consolidated ${c.count} pondering(s) from ${c.monthPrefix} into a digest`);
+          const y = await consolidateYearlyPonderings({ tomesDir: TOMES_DIR, ...llm, identity, settings: s });
+          if (y) console.log(`[pondering] folded ${y.count} month-digest(s) from ${y.year} into a yearbook`);
         } catch (err) { console.error('[pondering] consolidation failed (skipping):', err?.message ?? err); }
       }
 

@@ -12910,12 +12910,18 @@ async function runConsolidationNow(which) {
     const d = await res.json().catch(() => ({}));
     let msg;
     if (which === 'ponderings') {
-      msg = (d && d.ok === false) ? `Couldn't fold ponderings: ${d.error || 'unknown error'}.`
-          : d && d.months ? `Done — folded ${d.entries} pondering${d.entries === 1 ? '' : 's'} across ${d.months} month${d.months === 1 ? '' : 's'} into digests.`
-          : 'Nothing to fold yet — no past month has enough un-consolidated ponderings.';
+      if (d && d.ok === false) {
+        msg = `Couldn't fold ponderings: ${d.error || 'unknown error'}.`;
+      } else {
+        const parts = [];
+        if (d && d.months) parts.push(`folded ${d.entries} pondering${d.entries === 1 ? '' : 's'} across ${d.months} month${d.months === 1 ? '' : 's'} into digests`);
+        if (d && d.years)  parts.push(`folded ${d.digests} month-digest${d.digests === 1 ? '' : 's'} across ${d.years} year${d.years === 1 ? '' : 's'} into yearbooks`);
+        msg = parts.length ? `Done — ${parts.join(', and ')}.`
+                           : 'Nothing to fold yet — no past month or completed year has enough to consolidate.';
+      }
     } else if (which === 'restore') {
       msg = (d && d.ok === false) ? `Couldn't restore: ${d.error || 'unknown error'}.`
-          : d && d.restored ? `Done — put ${d.restored} pondering${d.restored === 1 ? '' : 's'} from ${d.monthPrefix} back, and dropped that digest.`
+          : d && d.restored ? `Done — put ${d.restored} entr${d.restored === 1 ? 'y' : 'ies'} from ${d.monthPrefix} back, and dropped that fold.`
           : 'Nothing to restore — no archived fold to put back.';
     } else {
       msg = (d && d.ok === false) ? `Couldn't run the memory lifecycle: ${d.error || 'the memory store didn\'t respond'}.`
