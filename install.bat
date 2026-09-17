@@ -15,8 +15,8 @@ REM   available, runs npm install, syncs Phylactery's Python venv from
 REM   phylactery\uv.lock, syncs Unruh's Python venv from unruh\uv.lock,
 REM   and creates Desktop + Start Menu shortcuts.
 REM Update mode: triggered when node_modules\ already exists. Takes a
-REM   defensive backup of tomes\, logs\, phylactery\data\, and the
-REM   Tailscale toggle config into .pf-backups\<timestamp>\ BEFORE any
+REM   defensive backup of tomes\, logs\, phylactery\data\, unruh\data\, and
+REM   the Tailscale toggle config into .pf-backups\<timestamp>\ BEFORE any
 REM   git op, then pulls latest Proto-Familiar via `git pull --ff-only`,
 REM   re-runs idempotent npm install / uv sync. Auto-install checks
 REM   rerun in both modes so the system catches up to new requirements.
@@ -99,11 +99,12 @@ if "!MODE!"=="update" (
   call :backupIfExists      "%SCRIPT_DIR%\tomes"           "tomes"
   call :backupIfExists      "%SCRIPT_DIR%\logs"            "logs"
   call :backupIfExists      "%SCRIPT_DIR%\phylactery\data" "phylactery\data"
+  call :backupIfExists      "%SCRIPT_DIR%\unruh\data"      "unruh\data"
   call :backupFileIfExists  "%SCRIPT_DIR%\.proto-familiar-config.json"     ".proto-familiar-config.json"
   call :backupFileIfExists  "%SCRIPT_DIR%\settings.json"                   "settings.json"
   if "!ANYTHING_BACKED_UP!"=="1" (
     echo User data backed up to !BACKUP_DIR!\
-    echo   ^(tomes\, logs\, phylactery\data\, .proto-familiar-config.json, settings.json — restore by copying back if needed^)
+    echo   ^(tomes\, logs\, phylactery\data\, unruh\data\, .proto-familiar-config.json, settings.json — restore by copying back if needed^)
   )
 )
 
