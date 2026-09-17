@@ -119,6 +119,10 @@ settings file:
 
 ## Related
 
+- [Pondering](pondering) — `!consolidate ponderings`/`!consolidate memory`, a simpler,
+  menu-free ward-only DM command pair gated by the same `isWard`-DM-only boundary as `!queue`
+  and `!connection`, but built on plain command-and-reply rather than this page's shared
+  component-menu kit.
 - [Session memorization](session-memorization) — the consent-pending queue
   `!queue` settles, and the file both surfaces share.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — the

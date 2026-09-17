@@ -1,6 +1,6 @@
 ---
 title: Session Search
-topics: [architecture, memory-and-knowledge, session-search]
+topics: [architecture, memory-and-knowledge, sessions, session-search]
 sources:
   - id: session-search-js
     type: file

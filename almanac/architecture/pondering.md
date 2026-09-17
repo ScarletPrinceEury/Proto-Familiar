@@ -35,6 +35,12 @@ sources:
   - id: pondering-consolidate-js
     type: file
     path: src/pondering/pondering-consolidate.js
+  - id: discord-gateway-js
+    type: file
+    path: src/discord/discord-gateway.js
+  - id: claude-md
+    type: file
+    path: CLAUDE.md
 ---
 
 # Pondering
@@ -171,6 +177,37 @@ shape as the 0.8.89 memory-sweep fix) [@pondering-consolidate-js]. The feature i
 following the same settings-toggle-plus-env-off-switch contract every [autonomous loop](autonomous-loops)
 ships with, even though this rides an existing tick rather than owning one.
 
+## On-demand consolidation: Discord and UI triggers (0.12.19)
+
+The tick-based digest above is opportunistic: it drains one past month per pondering tick, so a
+large backlog empties slowly. 0.12.19-alpha added a "run it now" path. `runPonderingConsolidationNow()`
+(`server.js`) calls `consolidatePonderings()` in a loop, capped at 24 months per manual run, so a
+whole backlog can clear in one request instead of waiting out the tick's one-month-at-a-time pace
+[@server-js]. The same function backs two surfaces: `POST /api/pondering/consolidate`, wired to a
+"Fold ponderings" button in the web UI's Automation pane, and the ward's Discord `!consolidate
+ponderings` DM command [@server-js] [@discord-gateway-js]. Its memory-side twin — the "Roll up
+memories" button and the `!consolidate memory` command — reuses the existing
+`runLifecyclePass({ force: true })` rather than adding a second memory-consolidation code path
+[@server-js].
+
+`parseConsolidateCommand` (`discord-gateway.js`) is a pure matcher: bare `!consolidate` prints
+both subcommands as help text, `ponderings`/`pondering`/`ponder` and `memory`/`memories`/`mem`
+route to the two runners, and any other argument falls back to help rather than silently running
+the wrong pass [@discord-gateway-js]. The command is mechanical — no LLM turn — and is intercepted
+only in the ward's own DM, the same `isWard`-gated boundary [Ward Discord console](ward-console)'s
+`!queue`/`!connection` commands use, though `!consolidate` is a plain command-and-reply exchange
+rather than a component menu built on the shared menu kit those two share.
+`setConsolidationRunners()` hands the gateway both runners from `server.js` once at boot as a
+module-level singleton, so the wiring survives a Discord supervisor reconnect without a
+server→gateway import cycle [@discord-gateway-js] [@server-js].
+
+Shipping this pair of triggers established a standing convention CLAUDE.md now records:
+console↔UI parity — a ward-facing console command is never the only way to reach a capability, it
+ships with a UI control for the same action in the same change, and an existing command found with
+no UI twin is a gap to close, not a pattern to copy [@claude-md]. See
+[Engineering conventions](../reference/engineering-conventions) for this rule stated as a
+repo-wide contract.
+
 ## Why ponderings stay per-embodiment
 
 Ponderings are not written to Phylactery, the canonical store, because they are thoughts in progress rather than conclusions about the ward or the world [@pondering-loop-js]. A pondering is context-sensitive to the current embodiment's conversation history, interruptions, current mood, and recent focus. The thought "I wonder if Chen is overcommitting again" makes sense in a particular chat session or embodiment flow, not as a fact to inject into every future conversation [@autonomous-loops-doc]. Ponderings are meant to be read in the moment or on-demand via `read_pondering`, not accumulated into standing identity.
@@ -193,3 +230,7 @@ Ponderings are not written to Phylactery, the canonical store, because they are 
   why `drawn_to` curiosities exist, and the `related_to` threading behavior detailed above.
 - [Villager proactive context](villager-proactive-context) — Stage 3's full villager-tell
   lifecycle and its other creation path, the `note_to_tell_villager` chat tool.
+- [Ward Discord console](ward-console) — the `!queue`/`!connection` menu-driven ward commands;
+  `!consolidate` above is a simpler, menu-free sibling gated by the same ward-DM-only boundary.
+- [Engineering conventions](../reference/engineering-conventions) — the console↔UI parity rule
+  the on-demand consolidation triggers established.
