@@ -127,6 +127,16 @@ another tome) should be checked against this same three-part shape — archive f
 surfaced everywhere the action is triggerable, strict parsing on the delete path — before it is
 allowed to default on.
 
+The first test of that generalization arrived from inside the same feature: 0.12.26-alpha added a
+second, yearly consolidation tier that folds a completed past year of month-digests into one
+`pondering-yearbook` entry (see [Pondering](../architecture/pondering)'s yearly-tier section). It
+extends this decision's archive/restore/strict-parse shape rather than reimplementing it — the
+archive record gained a `tier` field alongside `periodKey`, the legacy `monthPrefix`/`digestUid`
+fields stayed populated for the monthly tier so old records and readers keep working, and restore
+became LIFO across both tiers (undo a yearbook, get its month-digests back; undo again, get the
+raw ponderings back) [@pondering-consolidate-js]. It shipped on the existing `ponderConsolidationEnabled`
+gate with no separate toggle, on the strength of the archive already being in place.
+
 ## Related
 
 - [Pondering](../architecture/pondering) — the feature this decision hardened; see its "Digesting
