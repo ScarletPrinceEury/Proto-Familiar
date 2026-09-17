@@ -944,6 +944,24 @@ def backup_restore(filePath: str, passphrase: str) -> dict[str, Any]:
     return backup.restore_encrypted(filePath, passphrase)
 
 
+@mcp.tool()
+def db_snapshot(destPath: str) -> dict[str, Any]:
+    """I write a clean, consistent copy of my whole store to a file my human's
+    holistic-backup tool hands me — the plaintext snapshot it then bundles and
+    encrypts alongside my tomes, temporal store and settings. VACUUM INTO gives a
+    compacted single-file copy even while I'm running (WAL-safe). The caller owns
+    destPath (a private temp file) and the encryption of the finished bundle.
+    Returns the path and its size."""
+    import os
+    try:
+        if os.path.exists(destPath):
+            os.remove(destPath)  # VACUUM INTO requires the target not to exist
+        _c().execute(f"VACUUM INTO '{destPath}'")
+        return {"ok": True, "filePath": destPath, "sizeBytes": os.path.getsize(destPath)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Ward consent map (Pillar I) ───────────────────────────────────────────────
 
 

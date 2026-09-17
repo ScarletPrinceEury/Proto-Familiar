@@ -152,8 +152,8 @@ ever folded them back down — the [memory system](memory-and-knowledge) has a c
 ladder for daily-to-yearly rollup, but ponderings had no equivalent [@pondering-consolidate-js].
 `consolidatePonderings()` (`pondering-consolidate.js`) closes that gap: it finds the OLDEST past
 calendar month that still holds at least three eligible `scope:'pondering'` entries, has an LLM
-distill them into one first-person `scope:'pondering-digest'` entry ("what I was turning over in
-<month>"), and prunes the originals once the digest is written [@pondering-consolidate-js]. A
+distill them into one first-person `scope:'pondering-digest'` entry ("what I was thinking about
+in <month>"), archives the originals, and only then prunes them [@pondering-consolidate-js]. A
 digest entry ships `enabled: false` — it is an artifact for the Familiar or ward to read back,
 never something that re-injects itself into a future prompt by keyword match the way an ordinary
 Tome entry would.
@@ -166,6 +166,27 @@ still-filling month is never a candidate. Consolidation stays LOCAL to the ponde
 than writing anything to [Phylactery](phylactery) — a digest of per-embodiment thinking is still
 per-embodiment, not a canonical fact about the ward, the same reasoning that keeps ordinary
 ponderings out of Phylactery in the first place (see below).
+
+**A fold is archived and reversible, never a one-way delete (0.12.20–0.12.22).** A live run
+hard-deleted 3-4 months of the Familiar's actual ponderings in one manual fold, with no backup —
+[Phylactery](phylactery)'s snapshot covers only the canonical store, never local tome files — and
+a digest truncated by `finish_reason='length'` was stored while its sources were deleted anyway
+[Archive before destructive autonomous writes](../decisions/archive-before-destructive-autonomous-writes).
+`consolidatePonderings()` now writes every entry it is about to prune to the append-only dotfile
+`tomes/.pondering-consolidation-archive.json` *before* deleting, and deletes only what it
+archived; if that archive write throws, it prunes nothing [@pondering-consolidate-js].
+`restorePonderingConsolidation()` undoes a fold — re-inserting the archived originals and
+dropping the digest — surfaced as `POST /api/pondering/consolidate/restore`, the web UI's "Undo
+the last fold" button, and Discord's `!consolidate restore` [@server-js] [@discord-gateway-js].
+`parseDigest` is strict: only a complete, parseable `{digest}` object counts, so a truncated or
+bare reply refuses the fold rather than storing a partial digest and deleting its sources
+[@pondering-consolidate-js]. The consolidation call also now carries an identity block (`enrich('',
+{staticOnly:true}).static`, threaded through `defaultCallLLM`'s `identity` parameter) and the
+prompt frames the month's notes as the Familiar's own journal pages, fixing a frame-break where a
+model with no identity anchor read the notes as handed-in material to roleplay a summary for
+[@pondering-consolidate-js]. `ponderConsolidationEnabled` defaults to true again only because this
+archive exists — see the linked decision for the full incident and the default-off-then-on
+sequence.
 
 There is no new loop or timer: `runPonder` (`server.js`) calls `consolidatePonderings()`
 best-effort immediately before each pondering tick, and the "is there an un-consolidated past
@@ -191,9 +212,10 @@ memories" button and the `!consolidate memory` command — reuses the existing
 [@server-js].
 
 `parseConsolidateCommand` (`discord-gateway.js`) is a pure matcher: bare `!consolidate` prints
-both subcommands as help text, `ponderings`/`pondering`/`ponder` and `memory`/`memories`/`mem`
-route to the two runners, and any other argument falls back to help rather than silently running
-the wrong pass [@discord-gateway-js]. The command is mechanical — no LLM turn — and is intercepted
+all three subcommands as help text; `ponderings`/`pondering`/`ponder`, `memory`/`memories`/`mem`,
+and `restore`/`undo` route to the two consolidation runners and the archive-restore runner
+described below, and any other argument falls back to help rather than silently running the
+wrong pass [@discord-gateway-js]. The command is mechanical — no LLM turn — and is intercepted
 only in the ward's own DM, the same `isWard`-gated boundary [Ward Discord console](ward-console)'s
 `!queue`/`!connection` commands use, though `!consolidate` is a plain command-and-reply exchange
 rather than a component menu built on the shared menu kit those two share.
@@ -233,4 +255,9 @@ Ponderings are not written to Phylactery, the canonical store, because they are 
 - [Ward Discord console](ward-console) — the `!queue`/`!connection` menu-driven ward commands;
   `!consolidate` above is a simpler, menu-free sibling gated by the same ward-DM-only boundary.
 - [Engineering conventions](../reference/engineering-conventions) — the console↔UI parity rule
-  the on-demand consolidation triggers established.
+  the on-demand consolidation triggers established, and RULE B / "Robust over cheap," the general
+  rules the consolidation-safety incident below is a concrete instance of.
+- [Archive before destructive autonomous writes](../decisions/archive-before-destructive-autonomous-writes) —
+  the data-loss incident and the archive/restore/strict-parsing/identity fix behind the
+  0.12.20–0.12.22 section above, and the generalizable rule it established for any future feature
+  that deletes or overwrites the Familiar's own content.

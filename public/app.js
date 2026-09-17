@@ -6656,6 +6656,7 @@ function init() {
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
   $('ke-backup-export').addEventListener('click', keExportBackup);
   $('ke-backup-restore').addEventListener('click', keRestoreBackup);
+  $('full-backup-export')?.addEventListener('click', fullBackupExport);
 
   // Tomes modal
   $('tomes-btn').addEventListener('click', openTomesModal);
@@ -11147,6 +11148,46 @@ async function keCreateSnapshot() {
   const r = await fetch('/api/entity/snapshots', { method: 'POST' });
   if (!r.ok) { alert(`Snapshot failed: ${(await r.json()).error ?? r.status}`); return; }
   keLoadSnapshots();
+}
+
+// ── Full holistic backup (everything, one encrypted file) ────────────────
+async function fullBackupExport() {
+  const pass = $('full-backup-pass').value;
+  const out  = $('full-backup-result');
+  const btn  = $('full-backup-export');
+  if (!pass || pass.length < 4) { out.textContent = 'Choose a passphrase of at least 4 characters first.'; return; }
+  out.textContent = 'Building your backup — snapshotting everything, this can take a moment…';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/backup/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        passphrase: pass,
+        includeLogs:  $('full-backup-logs')?.checked === true,
+        includeMedia: $('full-backup-media')?.checked === true,
+      }),
+    });
+    if (!res.ok) {
+      let msg = 'backup failed';
+      try { msg = (await res.json()).error || msg; } catch { /* non-JSON error */ }
+      out.textContent = `Couldn't build the backup: ${msg}`;
+      return;
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    const name = m ? m[1] : 'familiar-backup.pfbackup';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    out.textContent = `Backup downloaded (${(blob.size / 1048576).toFixed(1)} MB). Keep it somewhere safe — and remember the passphrase; it can't be opened without it.`;
+    $('full-backup-pass').value = '';
+  } catch (err) {
+    out.textContent = `Couldn't build the backup: ${err.message}`;
+  } finally { if (btn) btn.disabled = false; }
 }
 
 // ── Backup / restore (Pillar H) ──────────────────────────────────────────

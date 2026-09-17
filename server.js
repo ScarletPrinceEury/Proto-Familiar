@@ -8,6 +8,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, readFileSync, promises as fsp } from 'fs';
+import os from 'os';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'crypto';
 import { sessionSlugId } from './slug-ids.js';
@@ -28,7 +29,7 @@ import {
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
-  exportBackup, restoreBackup, runLifecyclePass,
+  exportBackup, restoreBackup, runLifecyclePass, snapshotPhylacteryDb, snapshotUnruhDb,
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
   getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
@@ -59,6 +60,7 @@ import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
 import { consolidatePonderings, restorePonderingConsolidation } from './src/pondering/pondering-consolidate.js';
+import { createHolisticBackup } from './src/backup/holistic-backup.js';
 import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
 import { buildNoticingPrompt, noticingMessages, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
@@ -4347,6 +4349,35 @@ app.post('/api/entity/backup/restore', async (req, res) => {
   const result = await restoreBackup({ filePath, passphrase });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result);
+});
+
+// Holistic backup (export) — the WHOLE Familiar (Phylactery + Unruh + tomes +
+// settings, optionally media/logs) in one passphrase-encrypted .pfbackup the
+// ward can keep or carry to new hardware. Built to a temp file, streamed as a
+// download, then cleaned up. The passphrase never leaves this process.
+app.post('/api/backup/export', async (req, res) => {
+  const passphrase = typeof req.body?.passphrase === 'string' ? req.body.passphrase : '';
+  if (!passphrase) return badRequest(res, 'a passphrase is required');
+  const includeMedia = req.body?.includeMedia === true;
+  const includeLogs  = req.body?.includeLogs === true;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const outPath = path.join(os.tmpdir(), `familiar-backup-${stamp}-${Math.random().toString(36).slice(2, 8)}.pfbackup`);
+  try {
+    const r = await createHolisticBackup({
+      rootDir: __dirname, outPath, passphrase, includeMedia, includeLogs,
+      appVersion: PKG_VERSION,
+      snapshotPhylactery: (dest) => snapshotPhylacteryDb(dest),
+      snapshotUnruh: (dest) => snapshotUnruhDb(dest),
+    });
+    if (!r?.ok) { await fsp.rm(outPath, { force: true }).catch(() => {}); return res.status(500).json({ ok: false, error: r?.error ?? 'backup failed' }); }
+    res.download(outPath, `familiar-backup-${stamp}.pfbackup`, (err) => {
+      fsp.rm(outPath, { force: true }).catch(() => {});
+      if (err && !res.headersSent) res.status(500).end();
+    });
+  } catch (err) {
+    await fsp.rm(outPath, { force: true }).catch(() => {});
+    if (!res.headersSent) res.status(500).json({ ok: false, error: err?.message ?? 'backup failed' });
+  }
 });
 
 // Run one lifecycle pass on demand (hygiene + consolidation + graduation).

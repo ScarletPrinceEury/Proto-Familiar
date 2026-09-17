@@ -1197,8 +1197,27 @@
           <div class="ke-list ke-list-full" id="ke-snap-list"></div>
 
           <div class="ke-backup-card">
-            <h3>Back up / restore my Familiar</h3>
-            <p class="field-hint">A single encrypted file holding the whole self — identity, memory, graph, trackers. It's locked with a passphrase you choose; keep it somewhere safe. <strong>The passphrase is never stored — if you lose it, the backup can't be opened.</strong></p>
+            <h3>Full backup — the whole Familiar</h3>
+            <p class="field-hint">One encrypted file with <strong>everything</strong> — identity &amp; memory (Phylactery), the temporal store (Unruh), all tomes (ponderings, lore, the manual), and your settings (connections and chosen voice). This is the one to keep for disaster recovery or moving to new hardware. It's locked with a passphrase you choose. <strong>The passphrase is never stored — lose it and the file can't be opened.</strong> (Voice model files aren't included — they re-download; the backup keeps your <em>choice</em>.)</p>
+            <div class="ke-backup-row">
+              <input type="password" id="full-backup-pass" placeholder="Passphrase (min 4 chars)" autocomplete="new-password" spellcheck="false">
+              <button id="full-backup-export" class="btn-secondary">Download full backup</button>
+            </div>
+            <div class="field-row" style="margin-top:8px">
+              <label for="full-backup-logs">Include session logs</label>
+              <input type="checkbox" id="full-backup-logs">
+            </div>
+            <div class="field-row">
+              <label for="full-backup-media">Include media (images, voice clips)</label>
+              <input type="checkbox" id="full-backup-media">
+            </div>
+            <div class="field-hint">Both are off by default to keep the file small; turn them on for a complete archive. (Restoring a backup — importing it over an install — is coming next; for now this is the safe half: making the file.)</div>
+            <div id="full-backup-result" class="field-hint"></div>
+          </div>
+
+          <div class="ke-backup-card">
+            <h3>Identity &amp; memory only (Phylactery)</h3>
+            <p class="field-hint">The older, narrower backup — just the Phylactery store (identity, memory, graph, trackers), and it can restore in place. It does <strong>not</strong> include tomes, the temporal store, or settings; prefer the full backup above. Passphrase-locked, never stored.</p>
             <div class="ke-backup-row">
               <input type="password" id="ke-backup-pass" placeholder="Passphrase (min 4 chars)" autocomplete="new-password" spellcheck="false">
               <button id="ke-backup-export" class="btn-secondary">Back up now</button>

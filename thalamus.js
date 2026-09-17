@@ -2886,6 +2886,25 @@ export async function exportBackup({ passphrase }) {
 }
 
 /**
+ * Write a clean VACUUM'd snapshot of each canonical store to a caller-owned temp
+ * path, for the holistic backup to bundle + encrypt. Plaintext single files
+ * (the holistic bundle owns the encryption). { ok, filePath, sizeBytes }.
+ */
+export async function snapshotPhylacteryDb(destPath) {
+  return callTool('db_snapshot', { destPath }).catch(err => ({ ok: false, error: err?.message ?? String(err) }));
+}
+export async function snapshotUnruhDb(destPath) {
+  try {
+    await startThalamus();
+    if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+    const r = await unruhClient.callTool({ name: 'db_snapshot', arguments: { destPath } });
+    const err = mcpToolError(r);
+    if (err) return { ok: false, error: err };
+    return parseToolText(r, { ok: false, error: 'no result' });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+/**
  * Restore the whole Familiar from a passphrase-encrypted backup, then reconnect.
  * @returns {Promise<{ ok: boolean, restoredFrom?: string, error?: string }>}
  */
