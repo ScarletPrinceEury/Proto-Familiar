@@ -16,7 +16,7 @@ should not rediscover from scratch.
 
 ## Start here
 
-Read [Getting Started](getting-started) for a guided path through the five core pages that build a working model of the system: architecture, entity-as-subject, multi-embodiment, core prompts, and proactivity over caution.
+Read [Getting Started](getting-started) for a guided path through the core pages that build a working model of the system: architecture, entity-as-subject and multi-embodiment, core prompts, proactivity over caution, and engineering conventions.
 
 Then use [Concepts](concepts) to look up repo-specific vocabulary by cluster, and [Decisions](decisions) to find the recorded decisions that constrain the architecture.
 

@@ -21,7 +21,16 @@ sources:
 
 # Core Prompts and Multi-Surface Assembly
 
-**Status: implemented v0.11.0-alpha (PR #274).** The ward's four core prompts — System Prompt, Character Profile, User (Human) Profile, and Post-History Prompt — define who the Familiar is and who their human is. They are the standing instructions that must be present on every surface. Prior to v0.11.0-alpha, they were assembled only by the browser and invisible to server-initiated surfaces (Discord, voice, background loops), causing the Familiar to answer those surfaces with no configured identity. This page documents the bug, the fix, and the lesson for any future cross-surface capability.
+The ward's four core prompts — System Prompt, Character Profile, User (Human) Profile, and
+Post-History Prompt — are ward-authored configuration fields that define how the Familiar
+should behave and who their bonded human is. `core-prompts.js` is the single server-side module
+that assembles these four prompts into a messages array, and every surface — web, Discord,
+voice, and any server-initiated turn — routes through it, so the Familiar's configured
+personality and stance are present no matter which surface a conversation started on
+[@core-prompts-js]. This module exists because an earlier version of the system assembled the
+four prompts only in the browser, which meant every server-initiated surface answered with no
+configured identity at all; that incident, and the lesson it left for any future cross-surface
+capability, is recorded below.
 
 ## The Four Core Prompts
 
@@ -34,31 +43,29 @@ The four core prompts are ward-authored configuration fields, not the identity b
 
 These are separate from the `enriched.static` block (the Phylactery identity layer: base instructions, self, ward, relationship, and custom files). That layer covers *what the system knows*; the core prompts are *how the Familiar should behave* — they are personality and stance, authored by the ward in settings [@core-prompts-js].
 
-## The Bug: Client-Side Assembly Only
+## How assembly works today
 
-Before v0.11.0-alpha, these four prompts were assembled solely in the browser. The web client's `_buildApiMessagesInner` function in `public/app.js` constructed them and POSTed them inside the messages array [@app-js]. This worked fine for web chat, but every server-initiated turn — Discord text via `handleTurn + revisit`, voice calls via `voice-chat-turn.js → /api/chat` — used a bare messages array with no browser to assemble them [@core-prompts-js]. The Familiar answered Discord and voice with none of its configured identity. The reported symptom was: "my Familiar doesn't see the user prompt at all on Discord."
+**`core-prompts.js`** is the one server-side assembly path, and it exports three functions [@core-prompts-js]:
 
-The bug was architectural, not a typo. There was one path that assembled the prompts, and it lived in the browser. Server surfaces had no mirror.
-
-## The Fix: Server-Side Assembly Path
-
-Three changes restored the four prompts to all surfaces [@core-prompts-js]:
-
-**`core-prompts.js`** is the ONE server-side assembly mirror. It exports three functions [@core-prompts-js]:
-
-- `coreSystemSegment(settings)` — builds the three system-level prompts (System Prompt, Character Profile, User Profile) in the same order, with the same headers (`[Character Profile]` and `[Human Profile]`), and the same separator (`---`) the web client uses. It resolves `{{user}}/{{char}}` macros the same way `applyNameVars` does on the client, so a configured name appears in place of a literal token. It returns a string, or an empty string when no prompts are configured (so `.filter(Boolean)` drops it cleanly).
+- `coreSystemSegment(settings)` — builds the three system-level prompts (System Prompt, Character Profile, User Profile) in a fixed order, with fixed headers (`[Character Profile]` and `[Human Profile]`) and a fixed separator (`---`), matching the order the web client itself renders. It resolves `{{user}}/{{char}}` macros the same way `applyNameVars` does on the client, so a configured name appears in place of a literal token. It returns a string, or an empty string when no prompts are configured (so `.filter(Boolean)` drops it cleanly).
 - `postHistoryMessage(settings)` — builds the post-history prompt as its own message (role is ward-configurable, defaults to 'system'). Returns a complete message object `{role, content}`, or null when unconfigured.
 - `withCorePrompts(messages, settings)` — folds the core prompts into a bare messages array: the core system segment LEADS (prepended before the conversation), and the post-history message TRAILS (appended after). This is the function called by the `/api/chat` endpoint when `injectCorePrompts` is set [@core-prompts-js].
 
-**`/api/chat` gained the `injectCorePrompts` flag** [@architecture-doc]. When set (voice sets it; the web client still builds prompts itself so they don't double), the endpoint calls `withCorePrompts` to inject them before sending to the model. The order matters: core segment leads, so a static prepend via [Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) lands in front of it (static → persona, matching the web order), and post-history trails the conversation [@core-prompts-js] [@architecture-doc].
+`/api/chat` carries an `injectCorePrompts` flag [@architecture-doc]. When set (voice sets it; the web client still builds prompts itself, on its own established path, so they don't double), the endpoint calls `withCorePrompts` to inject them before sending to the model. The order matters: the core segment leads, so a static prepend via [Prompt-cache-aware context ordering](../decisions/prompt-cache-aware-context-ordering) lands in front of it (static → persona, matching the web order), and the post-history message trails the conversation [@core-prompts-js] [@architecture-doc].
 
-**`discord-gateway.js` folds core prompts into both live and revisit paths** [@discord-gateway-js]. The Discord adapter now resolves settings and calls `withCorePrompts`, so Discord text (whether a live `handleTurn` or a cached `revisit`) assembles them the same way voice and the web do [@discord-gateway-js].
+`discord-gateway.js` folds core prompts into both its live and revisit paths [@discord-gateway-js]. The Discord adapter resolves settings and calls `withCorePrompts`, so Discord text (whether a live `handleTurn` or a cached `revisit`) assembles them the same way voice and the web do [@discord-gateway-js].
+
+## Why a server-side path exists: the client-only assembly incident
+
+Before v0.11.0-alpha (PR #274), the four prompts were assembled solely in the browser. The web client's `_buildApiMessagesInner` function in `public/app.js` constructed them and POSTed them inside the messages array [@app-js]. This worked for web chat, but every server-initiated turn — Discord text via `handleTurn + revisit`, voice calls via `voice-chat-turn.js → /api/chat` — used a bare messages array with no browser to assemble them [@core-prompts-js]. The Familiar answered Discord and voice with none of its configured identity. The reported symptom was: "my Familiar doesn't see the user prompt at all on Discord."
+
+The bug was architectural, not a typo: there was exactly one path that assembled the prompts, and it lived in the browser. Server surfaces had no mirror. The fix was the three changes described above — `core-prompts.js` as the server-side mirror, the `injectCorePrompts` flag on `/api/chat`, and `discord-gateway.js` calling into the same function — landing together as v0.11.0-alpha.
 
 ## Ground Truth, Not Reconstruction: Prompt Capture
 
-The prompt inspector revealed a deeper problem: it was a client-side reconstruction, showing what *should* have been assembled based on the web client's state. It could never show server surfaces' payloads, and it showed intent, not reality [@prompt-capture-js].
+The prompt inspector revealed a deeper problem during the same incident: it was a client-side reconstruction, showing what *should* have been assembled based on the web client's state. It could never show server surfaces' payloads, and it showed intent, not reality [@prompt-capture-js].
 
-**`prompt-capture.js` records the actual message array sent to the model, per surface, at the send boundary** [@prompt-capture-js]. Instead of the inspector reconstructing "what should be in the prompt," it now captures "what actually left the building":
+**`prompt-capture.js` records the actual message array sent to the model, per surface, at the send boundary** [@prompt-capture-js]. Instead of the inspector reconstructing "what should be in the prompt," it captures "what actually left the building":
 
 - `recordOutgoingPrompt(surface, {messages, model, provider})` — records the exact payload for a surface (web, voice, discord, discord-revisit, etc.), overwriting the previous capture. It is best-effort: capture must never throw into a turn, even if the inspector is broken.
 - `lastOutgoingPrompt(surface)` — retrieves one surface's latest capture (or null), so the inspector can show ground truth for every surface, not just the web path [@prompt-capture-js].

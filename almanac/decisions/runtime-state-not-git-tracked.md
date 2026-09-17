@@ -20,6 +20,10 @@ sources:
 
 An application must never write a git-tracked file at runtime.
 
+**Status: decided and shipped.** The voice subsystem's pin-overlay split
+[@voice-pin-incident] [@voice-models-overlay] is the shipped instance; the rule itself is
+general and applies to any future runtime-discovered state.
+
 ## Context
 
 State that the application discovers or the user generates at runtime belongs in a git-ignored location, never in a file the repo also ships and updates through deliberate commits. If both the repo and the application modify the same file, they collide at `git pull`: the user encounters "Your local changes to [file] would be overwritten by merge" — a file they never knowingly edited. The user is blocked, often on a file they have no idea how it changed. The blockage appears random to them and is dangerous to unblock without understanding it.

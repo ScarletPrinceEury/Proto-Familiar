@@ -115,7 +115,7 @@ nothing, not the "bias toward staying quiet" pattern that caused real harm when 
 into the *safety* decision itself.
 
 Noticing is the deliberate exception: it is ward-signed to **not** stand down at elevated
-threat, on the reasoning that an aging [intention or round](../architecture/unruh) or a widening
+threat, on the reasoning that an aging [intention or round](unruh) or a widening
 contact gap is "especially useful" to surface exactly when things are hard, not something to
 suppress [@claude-md]. Threat
 still shifts its *register* — moderate-or-higher renders a tier line in the deliberation prompt,
