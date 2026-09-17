@@ -1871,7 +1871,24 @@ file. Restore decrypts, sanity-checks it's a real Phylactery DB, swaps it over
 the live DB, and `thalamus.restoreBackup` reconnects the MCP child. The
 passphrase is never stored — a lost passphrase means an unrecoverable backup,
 which the UI states plainly. Surfaced in the Knowledge editor → Snapshots tab
-and via `POST /api/entity/backup/{export,restore}`.
+and via `POST /api/entity/backup/{export,restore}`. **This covers Phylactery
+ONLY** — not tomes, Unruh, or settings; that gap is exactly what let the
+pondering data-loss happen with a "backup" in hand.
+
+**Holistic backup** (`src/backup/holistic-backup.js`, 2026-09) — the WHOLE
+Familiar in one importable file, the structural answer to that gap. `createHolisticBackup`
+gathers clean `VACUUM INTO` snapshots of **both** dbs (new `db_snapshot` MCP
+tools on Phylactery AND Unruh → `snapshotPhylacteryDb`/`snapshotUnruhDb` in
+thalamus) plus `tomes/` and `settings.json` (connections + chosen voice),
+optionally `media/` and `logs/` (opt-in, bulky), into a staging tree with a
+`manifest.json`, gzip-tars it, and AES-256-GCM encrypts the tar under a
+scrypt-derived key from the ward's passphrase (container: `PFBKP1\n` magic +
+version + salt + iv + authTag + ciphertext; GCM detects a wrong passphrase or a
+tampered file). Voice MODEL files are excluded (re-downloadable; the backup keeps
+the *choice*). `POST /api/backup/export` builds to a temp file and streams the
+`.pfbackup` download; UI is the "Full backup" card. **Export is Stage 1;**
+import/restore (which overwrites a live install) is a deliberately separate,
+careful pass. `encryptBundle`/`decryptBundle` are the pure crypto seam.
 
 ### `public/graph-map.js` — shared graph-map engine
 

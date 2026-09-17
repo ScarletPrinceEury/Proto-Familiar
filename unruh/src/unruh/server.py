@@ -1349,6 +1349,25 @@ def temporal_context(now: str | None = None, mode: str | None = None) -> dict[st
     }
 
 
+@mcp.tool()
+def db_snapshot(destPath: str) -> dict[str, Any]:
+    """I write a clean, consistent copy of my temporal store (schedule, interests,
+    handoff, threat) to a file my human's holistic-backup tool hands me — the
+    plaintext snapshot it bundles and encrypts alongside the rest of me. VACUUM
+    INTO gives a compacted single-file copy even while I'm running (WAL-safe). The
+    caller owns destPath (a private temp file) and the encryption of the bundle.
+    Returns the path and its size."""
+    import os
+    try:
+        if os.path.exists(destPath):
+            os.remove(destPath)  # VACUUM INTO requires the target not to exist
+        with get_conn() as conn:
+            conn.execute(f"VACUUM INTO '{destPath}'")
+        return {"ok": True, "filePath": destPath, "sizeBytes": os.path.getsize(destPath)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Entry point ───────────────────────────────────────────────────────
 
 
