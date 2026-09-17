@@ -1886,9 +1886,25 @@ scrypt-derived key from the ward's passphrase (container: `PFBKP1\n` magic +
 version + salt + iv + authTag + ciphertext; GCM detects a wrong passphrase or a
 tampered file). Voice MODEL files are excluded (re-downloadable; the backup keeps
 the *choice*). `POST /api/backup/export` builds to a temp file and streams the
-`.pfbackup` download; UI is the "Full backup" card. **Export is Stage 1;**
-import/restore (which overwrites a live install) is a deliberately separate,
-careful pass. `encryptBundle`/`decryptBundle` are the pure crypto seam.
+`.pfbackup` download; UI is the "Full backup" card. `encryptBundle`/`decryptBundle`
+are the pure crypto seam.
+**Stage 2 (import/restore) — the dangerous half, overwrites a live install.**
+`extractBackup(file, passphrase)` decrypts + untars + validates the manifest
+BEFORE anything live is touched (a wrong passphrase / tamper / bad manifest
+aborts clean). `layDownFileStores({rootDir, stagingDir})` copies `tomes/` /
+`settings.json` / opt-in `media,logs` into place, renaming each current one aside
+as `<name>.pre-restore-<ts>` (so the file-swap is itself reversible); it never
+touches the dbs. The dbs swap via new `db_restore_plain` MCP tools on Phylactery
+AND Unruh (sanity-check the snapshot carries the service's signature table —
+`memories` / `nodes` — then unlink live db+wal+shm and copy in), with
+`restorePhylacteryDb`/`restoreUnruhDb` in thalamus reconnecting each child
+(`reconnectUnruh` added to mirror `reconnectPhylactery`). `POST /api/backup/import`
+(raw octet-stream + `X-Backup-Passphrase` header) orchestrates the safety spine:
+**validate → make a pre-restore safety backup of the CURRENT state to `.pf-backups/`
+(same passphrase; abort if it fails) → lay down files → swap dbs**, per-db results
+returned. A restart is recommended after (boot-time reads re-read settings). The
+UI's "Restore from a full backup" row confirms before running and surfaces the
+pre-restore backup path.
 
 ### `public/graph-map.js` — shared graph-map engine
 
