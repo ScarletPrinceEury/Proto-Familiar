@@ -212,6 +212,9 @@ If you're asking yourself... go to:
   villager DM.
 - [Session memorization](session-memorization) — the durable job queue that turns a session or
   topic into Tome entries, and the dedicated Session Memories tome it writes to.
+- [Memory integrity: the memorization-to-Phylactery gate](memory-integrity) — the scan and
+  reversible quarantine that screens every extracted fact for corruption or adversarial
+  phrasing before it reaches Phylactery.
 - [Session lifecycle](session-lifecycle) — when sessions begin, how they normally end, and the
   manual close-out mechanism for sessions that never received an `endedAt` timestamp.
 - [Data ingestion](data-ingestion) — importing conversation logs from other platforms and

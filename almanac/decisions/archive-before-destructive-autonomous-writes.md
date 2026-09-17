@@ -153,3 +153,7 @@ gate with no separate toggle, on the strength of the archive already being in pl
 - [Engineering conventions](../reference/engineering-conventions) — the "Robust over cheap"
   priority order this decision is a concrete instance of, and RULE B (budget exhaustion is never
   silence), the general form of the truncated-digest failure above.
+- [Memory integrity: the memorization-to-Phylactery gate](../architecture/memory-integrity) —
+  a later application of the same set-aside-not-destroyed shape one step earlier in a write's
+  life: a suspect fact is held before it is ever written, rather than archived before an
+  existing record is deleted.

@@ -330,6 +330,9 @@ itself, which no ward setting can reach around [@voice-audio-tags] [@future-feat
 - [Plugin surface ("Grimoire")](../decisions/plugin-surface-safety-wall) — a designed-but-not-yet-built
   extension surface that commits, in advance, to excluding plugin-contributed prompt context from
   every scoring and deliberation input this page describes.
+- [Memory integrity: the memorization-to-Phylactery gate](memory-integrity) — a separate
+  regex-floor-plus-future-ML-second-opinion defense modeled on this page's crisis-detection
+  shape, but for adversarial input into memory rather than ward distress.
 - [Providers and connection readiness](providers) — the connection-readiness gate silence-triage
   now shares with every other LLM call site, and why that change needed its own ward sign-off.
 - [Slice provenance is captured at the read, never reconstructed on recall](../decisions/slice-provenance-captured-at-read)
