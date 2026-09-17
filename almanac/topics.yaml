@@ -141,6 +141,11 @@ topics:
   parents: [architecture, memory-and-knowledge, sessions]
 - slug: connections
   title: Connections
-  description: Saved LLM provider connections -- URL resolution, keyless 
+  description: Saved LLM provider connections -- URL resolution, keyless
     local/custom readiness, per-feature routing, and reasoning-effort control
   parents: [architecture, decisions]
+- slug: backup
+  title: Backup
+  description: Encrypted export/restore of the Familiar's state -- Phylactery's
+    own single-store backup and the later whole-install holistic backup
+  parents: [architecture]

@@ -193,6 +193,7 @@ If you're asking yourself... go to:
 - **How does a saved connection turn into an actual LLM request, and can a local model with no API key be used?** → [Providers and connection readiness](providers)
 - **When do sessions end, and how can the ward manually close an open session?** → [Session lifecycle](session-lifecycle)
 - **How does the ward's web chat and Discord DM stay one conversation?** → [Unified Ward Sessions](session-unification)
+- **How does a ward back up or restore the whole Familiar, not just Phylactery?** → [Holistic backup](holistic-backup)
 
 ## Where to go next
 
@@ -257,6 +258,9 @@ If you're asking yourself... go to:
 - [Unified Ward Sessions](session-unification) — the shared session-binding pointer that
   makes the ward's web private chat and Discord DM one continuous conversation, the
   multi-writer log merge that makes that safe, and the composer-safe live-sync poller.
+- [Holistic backup](holistic-backup) — the passphrase-encrypted `.pfbackup` file that bundles
+  Phylactery, Unruh, tomes, and settings together, the safety spine a restore runs before it
+  overwrites a live install, and how it differs from Phylactery's own narrower backup.
 - [Installer and launcher](installer-and-launcher) — the per-platform one-click install,
   update, and launch tooling, and the invariants it must preserve.
 - [Update](update) — the self-update mechanism, detection, and the design choice to never
