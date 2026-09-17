@@ -1,6 +1,6 @@
 ---
 title: "Archive Before Destructive Autonomous Writes"
-topics: [decisions, memorization, pondering]
+topics: [decisions, memorization, pondering, backup]
 sources:
   - id: pondering-consolidate-js
     type: file
@@ -108,10 +108,15 @@ digests + prune originals (destructive, but archived + restorable)` [@app-js].
 ## Consequences
 
 Folds made before this fix remain unrecoverable from inside the app — the archive only protects
-folds run after it shipped, and Phylactery's snapshot still does not cover `tomes/` at all
-[@safety-commit]. Any future feature that touches tome files carries its own recovery
-responsibility; it cannot lean on the Phylactery snapshot/backup the way canonical-store features
-can.
+folds run after it shipped. At the time of the incident, Phylactery's own snapshot/backup did not
+cover `tomes/` at all, so a future feature that touched tome files carried its own recovery
+responsibility and could not lean on the Phylactery snapshot/backup the way canonical-store
+features could. [Holistic backup](../architecture/holistic-backup) (0.12.23/0.12.24-alpha) later
+closed that specific gap at the whole-install level — it bundles Phylactery, Unruh, tomes, and
+settings into one encrypted file — but it is a separate, ward-triggered mechanism, not a
+substitute for this decision's per-operation archive-before-delete discipline: a ward without a
+recent holistic backup in hand still has no recourse from a destructive fold that predates this
+fix or from a future feature that skips the archive step.
 
 The generalizable rule this incident produced is broader than pondering: **any autonomous
 operation that deletes or overwrites the Familiar's own content must archive-or-snapshot before
@@ -128,6 +133,9 @@ allowed to default on.
   a month of ponderings" section for the full consolidation mechanism the archive sits inside.
 - [Phylactery](../architecture/phylactery) — the canonical-store snapshot/backup that this
   incident showed does not extend to local tome files.
+- [Holistic backup](../architecture/holistic-backup) — the later, whole-install backup mechanism
+  that bundles tomes alongside Phylactery and Unruh, motivated by the same gap this incident
+  exposed.
 - [Session memorization: durable server-side queue](session-memorization-queue) — a sibling
   decision produced by a different data-loss incident in the same Tomes area, hardened into a
   durable queue rather than an archive-and-restore pair because the failure mode there was a lost

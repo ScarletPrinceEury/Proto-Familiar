@@ -9,7 +9,7 @@ REM
 REM Your data is preserved. settings.json, logs\, saved tomes, and the
 REM Unruh + Phylactery databases are NOT part of the download, so copying
 REM the new files over the old ones can't touch them. install.bat also
-REM auto-backs up tomes\, logs\, settings, and phylactery\data\ into
+REM auto-backs up tomes\, logs\, settings, phylactery\data\, and unruh\data\ into
 REM .pf-backups\ before doing anything.
 REM
 REM If you installed with `git clone`, you don't need this - just re-run

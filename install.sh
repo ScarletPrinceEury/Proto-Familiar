@@ -19,7 +19,7 @@
 # shortcut.
 #
 # User-data safety: BEFORE any git operation in update mode the installer
-# takes a defensive copy of tomes/, logs/, and phylactery/data/ into
+# takes a defensive copy of tomes/, logs/, phylactery/data/, and unruh/data/ into
 # .pf-backups/<timestamp>/ inside the project root. Independent of git's
 # own protections (untracked files left alone, --ff-only refusing
 # dirty-conflict merges, phylactery/data/ being gitignored), this gives
@@ -63,7 +63,8 @@ if [ "$MODE" = "update" ]; then
   for src in \
     "$SCRIPT_DIR/tomes" \
     "$SCRIPT_DIR/logs" \
-    "$SCRIPT_DIR/phylactery/data"; do
+    "$SCRIPT_DIR/phylactery/data" \
+    "$SCRIPT_DIR/unruh/data"; do
     if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
       mkdir -p "$BACKUP_DIR"
       rel="$(echo "$src" | sed "s|^$PARENT_DIR/||")"
@@ -88,7 +89,7 @@ if [ "$MODE" = "update" ]; then
   done
   if [ "$ANYTHING_BACKED_UP" = "1" ]; then
     say "User data backed up to $BACKUP_DIR/"
-    say "  (tomes/, logs/, phylactery/data/, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
+    say "  (tomes/, logs/, phylactery/data/, unruh/data/, .proto-familiar-config.json, settings.json — restore by copying back if needed)"
   fi
 fi
 

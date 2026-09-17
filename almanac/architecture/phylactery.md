@@ -1,6 +1,6 @@
 ---
 title: Phylactery
-topics: [architecture, phylactery]
+topics: [architecture, phylactery, backup]
 sources:
   - id: claude-md
     type: file
@@ -221,6 +221,21 @@ requires that token [@phylactery-design]. Single-record deletion (`mem_delete(id
 need this because the id itself is the confirmation the Familiar already holds a specific
 target, not a wildcard match.
 
+## Encrypted backup
+
+`backup.py` gives a ward a way to say "back up my Familiar" and get one file back: it runs
+`VACUUM INTO` for a consistent copy of the live database, encrypts it with a key derived from a
+ward-chosen passphrase (PBKDF2-HMAC-SHA256 into Fernet/AES), and writes a single `.phylactery`
+file [@architecture-doc]. Restoring decrypts, sanity-checks that the result is actually a
+Phylactery database, swaps it over the live one, and `thalamus.js`'s `reconnectPhylactery`
+reconnects the MCP child so the running process reads the restored file [@architecture-doc]
+[@thalamus-js]. The passphrase is never stored anywhere — a lost passphrase means an
+unrecoverable backup, which the UI states plainly rather than implying any recovery path exists
+[@architecture-doc]. This mechanism covers Phylactery **only**: it does not reach tomes, Unruh,
+or `settings.json`. [Holistic backup](holistic-backup) is a later, separate mechanism built to
+close exactly that gap by bundling all four into one encrypted file; both mechanisms are exposed
+side by side in the Knowledge editor's Snapshots tab today.
+
 ## Failure mode
 
 `enrich()` degrades to an absent Phylactery context if the client is null, and the service
@@ -233,6 +248,8 @@ toggle [@phylactery-design].
 
 ## Related
 
+- [Holistic backup](holistic-backup) — the whole-install backup mechanism built to cover what
+  Phylactery's own `backup.py` above does not: tomes, Unruh, and settings.
 - [Multi-embodiment](../concepts/multi-embodiment) — why a canonical store exists at all.
 - [Unruh](unruh) — the sibling specialist that stays outside Phylactery by design (temporal
   context, mostly per-embodiment ponderings).

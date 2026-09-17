@@ -9,7 +9,7 @@
 # Your data is preserved. settings.json, logs/, saved tomes, and the
 # Unruh + Phylactery databases are NOT part of the download, so copying
 # the new files over the old ones can't touch them. The installer also
-# auto-backs up tomes/, logs/, settings, and phylactery/data/ into
+# auto-backs up tomes/, logs/, settings, phylactery/data/, and unruh/data/ into
 # .pf-backups/ before doing anything.
 #
 # If you installed with `git clone`, you don't need this — just re-run
