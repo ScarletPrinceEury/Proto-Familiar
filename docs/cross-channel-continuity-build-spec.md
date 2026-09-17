@@ -104,6 +104,18 @@ different gate (see below). This spec adds the one gate it doesn't cover.
 
 ## Stage 1 — the scan + quarantine at the memorization boundary (regex)
 
+> **Status: SHIPPED (0.12.27-alpha).** `src/safety/memory-integrity.js`
+> (`scanFact` + `applyMemoryIntegrityGate`) and `src/safety/memory-quarantine.js`
+> (the reversible store), wired into `processJob` beside the consent gate;
+> `GET/POST /api/memory-quarantine…` endpoints; the Automation-pane toggle +
+> "Review held memories" UI; off-switch `memoryIntegrityEnabled` /
+> `PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED=1`. The one deferral: the optional
+> `!quarantine` Discord twin (the UI already satisfies console↔UI parity, which
+> only requires a UI where a console command exists — none does yet). A full
+> `processJob`-level pipeline test is also deferred until `processJob` is
+> injectable; the gate's risky logic is covered by executing
+> `applyMemoryIntegrityGate` for real against a temp quarantine store.
+
 **Goal.** Close the memory-poisoning hole with proven code, and build the
 quarantine infrastructure the model plugs into. No ML, no buffer yet.
 

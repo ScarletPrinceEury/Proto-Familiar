@@ -321,8 +321,9 @@ import { shortSlug } from './slug-ids.js';
 // (HTTP route + autonomous loop hitting the same tome) can't lose
 // each other's edits. The locking primitive (withLock) and the
 // atomic .tmp+rename pattern live in thalamus.js.
-import { withLock, writeTomeFile, modifyTomeFile, findOrCreateTomeByName } from './thalamus.js';
+import { withLock, writeTomeFile, modifyTomeFile, findOrCreateTomeByName, createMemoryFull } from './thalamus.js';
 import { readAllTomes, buildTomeEntry, listTomesSummary } from './src/tomes/tome-store.js';
+import { listQuarantine, releaseQuarantine, discardQuarantine } from './src/safety/memory-quarantine.js';
 
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
@@ -4500,6 +4501,38 @@ async function runPonderingRestoreNow(monthPrefix = null) {
 app.post('/api/pondering/consolidate/restore', async (req, res) => {
   try { res.json(await runPonderingRestoreNow(typeof req.body?.monthPrefix === 'string' ? req.body.monthPrefix : null)); }
   catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'restore failed' }); }
+});
+
+// ── Memory quarantine (memory-integrity Stage 1) ─────────────────────────────
+// The reversible holding pen for suspect memories the memorization scan set aside.
+// GET lists held items (?all=1 for the full audit view); release re-writes the
+// held fact to Phylactery (a false positive → kept); discard confirms the drop
+// (the row stays for the audit trail). Ward-facing surface for the console↔UI
+// twin `!quarantine`.
+app.get('/api/memory-quarantine', async (req, res) => {
+  try {
+    const includeSettled = req.query?.all === '1' || req.query?.all === 'true';
+    res.json({ ok: true, records: await listQuarantine({ includeSettled }) });
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'list failed' }); }
+});
+app.post('/api/memory-quarantine/:id/release', async (req, res) => {
+  try {
+    const released = await releaseQuarantine(String(req.params.id));
+    if (!released) return res.status(404).json({ ok: false, error: 'no held item with that id' });
+    // Replay the stored write to Phylactery — the ward overriding the scan.
+    if (released.memoryArgs) {
+      const result = await createMemoryFull(released.memoryArgs);
+      if (!result?.ok) return res.status(502).json({ ok: false, error: `released but the memory write failed: ${result?.error ?? 'unknown'}` });
+    }
+    res.json({ ok: true, released: true });
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'release failed' }); }
+});
+app.post('/api/memory-quarantine/:id/discard', async (req, res) => {
+  try {
+    const id = await discardQuarantine(String(req.params.id));
+    if (!id) return res.status(404).json({ ok: false, error: 'no held item with that id' });
+    res.json({ ok: true, discarded: true });
+  } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'discard failed' }); }
 });
 
 // Ward remember-consent map — governs per-category memory storage policy.

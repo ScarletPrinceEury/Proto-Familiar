@@ -346,6 +346,7 @@ const state = {
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   ponderConsolidationEnabled: true, // default-on (ward decision): fold old ponderings into digests + prune originals (destructive, but archived + restorable)
+  memoryIntegrityEnabled: true, // default-on: scan extracted facts for injection/corruption at the memorization boundary; suspect facts from untrusted sources are held in the reversible quarantine, not written
   notificationSounds:      true,    // in-app chime on new messages (default on)
   organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
   redditReaderEnabled:     true,     // read Reddit via its JSON API (browser is anti-bot-walled)
@@ -594,7 +595,7 @@ const SERVER_SYNCED_KEYS = [
   'memorySweepEnabled', 'villagePresenceEnabled', 'villagerContextEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'cdpModeEnabled', 'videoFileApiEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'ponderConsolidationEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'ponderConsolidationEnabled', 'memoryIntegrityEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
@@ -4360,6 +4361,7 @@ function readSettingsFromUI() {
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('ponder-consolidation-toggle')) state.ponderConsolidationEnabled = $('ponder-consolidation-toggle').checked;
+  if ($('memory-integrity-toggle')) state.memoryIntegrityEnabled = $('memory-integrity-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
   if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
@@ -4574,6 +4576,7 @@ function writeSettingsToUI() {
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled !== false);
+  if ($('memory-integrity-toggle')) setIfNotFocused($('memory-integrity-toggle'), 'checked', state.memoryIntegrityEnabled !== false);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
@@ -6471,6 +6474,7 @@ function init() {
   $('consolidate-ponderings-btn')?.addEventListener('click', () => runConsolidationNow('ponderings'));
   $('consolidate-restore-btn')?.addEventListener('click', () => runConsolidationNow('restore'));
   $('consolidate-memory-btn')?.addEventListener('click', () => runConsolidationNow('memory'));
+  $('quarantine-review-btn')?.addEventListener('click', () => runQuarantineReview());
   document.querySelectorAll('[data-loops-tab]').forEach(el => {
     el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
   });
@@ -12933,6 +12937,56 @@ async function runConsolidationNow(which) {
   } finally {
     btnIds.forEach(id => { const b = $(id); if (b) b.disabled = false; });
     if (btn) btn.textContent = original;
+  }
+}
+
+// Memory quarantine (memory-integrity Stage 1): fetch the held items and render
+// each with Keep / Discard. Nothing here has been written to memory — Keep writes
+// it (a false alarm), Discard drops it for good.
+async function runQuarantineReview() {
+  const list = $('quarantine-list');
+  if (!list) return;
+  list.innerHTML = '<div class="field-hint">Loading…</div>';
+  try {
+    const res = await fetch('/api/memory-quarantine');
+    const d = await res.json().catch(() => ({}));
+    const rows = (d && d.ok && Array.isArray(d.records)) ? d.records : [];
+    if (!rows.length) { list.innerHTML = '<div class="field-hint">Nothing held — no memories have been set aside.</div>'; return; }
+    list.innerHTML = rows.map(r => {
+      const when = r.heldAt ? new Date(r.heldAt).toLocaleString() : '';
+      const why  = Array.isArray(r.patterns) && r.patterns.length ? r.patterns.join(', ') : 'suspect';
+      const src  = r.provenance && r.provenance.audienceTag ? r.provenance.audienceTag : 'a shared room';
+      return `<div class="quarantine-item" data-id="${esc(r.id)}" style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
+        <div style="white-space:pre-wrap">${esc(r.factText || '')}</div>
+        <div class="field-hint" style="margin-top:4px">Held ${esc(when)} · from ${esc(src)} · flagged: ${esc(why)}</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn-secondary" type="button" data-q-keep="${esc(r.id)}">Keep</button>
+          <button class="btn-ghost" type="button" data-q-discard="${esc(r.id)}">Discard</button>
+        </div>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('[data-q-keep]').forEach(b => b.addEventListener('click', () => quarantineAct(b.dataset.qKeep, 'release')));
+    list.querySelectorAll('[data-q-discard]').forEach(b => b.addEventListener('click', () => quarantineAct(b.dataset.qDiscard, 'discard')));
+  } catch (err) {
+    list.innerHTML = `<div class="field-hint">Couldn't load the quarantine: ${esc(err.message)}.</div>`;
+  }
+}
+
+async function quarantineAct(id, action) {
+  const item = document.querySelector(`.quarantine-item[data-id="${CSS.escape(id)}"]`);
+  if (item) item.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch(`/api/memory-quarantine/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+    const d = await res.json().catch(() => ({}));
+    if (d && d.ok) {
+      if (item) { item.style.opacity = '0.5'; item.innerHTML = `<div class="field-hint">${action === 'release' ? 'Kept — written to memory.' : 'Discarded.'}</div>`; }
+    } else if (item) {
+      item.querySelectorAll('button').forEach(b => b.disabled = false);
+      const note = document.createElement('div'); note.className = 'field-hint';
+      note.textContent = `Didn't go through: ${d.error || 'unknown error'}.`; item.appendChild(note);
+    }
+  } catch (err) {
+    if (item) { item.querySelectorAll('button').forEach(b => b.disabled = false); }
   }
 }
 
