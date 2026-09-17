@@ -322,6 +322,48 @@ boundary all surfaces already share). The buffer is the only per-surface wiring;
 each cell above is a build-time checklist item (RULE C — a capability lands in the
 shared path, or the spec carries a matrix).
 
+## Resource posture on the X380 — and the invariant that governs it
+
+The target machine (Lenovo ThinkPad X380, 4C/8T Kaby Lake-R, no ML-capable GPU,
+8–16 GB) runs every heavy component as **ONNX-on-CPU**; the LLM is **remote**, so
+generation never touches the laptop. RAM is not the constraint (~1.7 GB peak
+concurrent). The only real contention is a **voice call (STT + TTS) overlapping
+retrospective batch ML** on 4 cores → the audible symptom is choppy/laggy TTS
+mid-conversation. Two measures address it:
+
+1. **Cap ONNX intra-op threads** per engine (sherpa-onnx STT, fastembed, the
+   injection classifier) to 1–2, so no single engine monopolizes all cores.
+2. **Defer heavy *retrospective batch* ML during a live call** — extends the
+   existing "defer during a live call" gate already used by media-retention and
+   needs-tracking. Applies to: memorization's embedding step, the boot-time
+   embedding backfill, the injection classifier, media-retention.
+
+### ⚠️ Invariant: the defer gate NEVER touches care or real-time continuity
+
+The defer gate applies **only** to retrospective batch ONNX work. It may **never**
+gate, slow, or silence:
+
+- the live conversation context;
+- the **Hippocampus buffer's real-time appends** (trivial, non-ML, and persisted
+  on write — a mid-call crash loses nothing, the memory-sweep loop drains it after
+  restart);
+- **Unruh scheduled reminders** (eat/hydrate/meds — the body-doubling case), which
+  are a lightweight sqlite scan with no ML;
+- the **noticing / silence-triage / warm-reach-out** loops, which are code-gated
+  then fire a *remote* LLM call (near-zero local CPU).
+
+Reminders and proactive care during a call must never be softened by a performance
+optimization — that is the 1.5-hour-silence failure (CLAUDE.md) in a new costume. A
+deferred memorization pass consolidates a few minutes after the call ends; nothing
+the ward experiences in the moment depends on it. If body-doubling is active, the
+buffer and noticing loops are *more* important awake, not less — the buffer is what
+makes an in-call "hey, water?" possible at all.
+
+(Numbers here are reasoned from component footprints, not measured on the X380 —
+a cloud container can't benchmark that hardware, and its proxy blocks the model
+downloads. Real real-time-factor numbers need an on-device probe run on the X380
+itself; that's a separate, offered step.)
+
 ## Non-goals
 
 - The crisis/threat pipeline is untouched.
