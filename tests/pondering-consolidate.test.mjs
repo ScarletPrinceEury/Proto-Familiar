@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync, promises as fsp } from 'fs';
 import {
   selectConsolidationTarget, parseDigest, consolidatePonderings, restorePonderingConsolidation,
   buildConsolidationPrompt, MIN_PONDERINGS_PER_MONTH,
+  consolidateYearlyPonderings, buildYearbookPrompt, MIN_DIGESTS_PER_YEAR,
 } from '../src/pondering/pondering-consolidate.js';
 import { findOrCreatePonderingsTome } from '../src/pondering/pondering.js';
 import { modifyTomeFile } from '../thalamus.js';
@@ -230,5 +231,235 @@ test('a fold whose digest came back TRUNCATED prunes nothing (originals survive)
     const after = await readEntries(file);
     assert.ok(after.a && after.b && after.c, 'originals untouched');
     assert.equal(Object.values(after).some(e => e.scope === 'pondering-digest'), false, 'no digest stored');
+  } finally { cleanup(); }
+});
+
+// ── YEARLY tier: fold a completed past year of month-digests into a yearbook ──
+// A month-digest as the monthly tier writes it: enabled:false, scope
+// 'pondering-digest', carrying the month it summarises in `consolidated_month`.
+function monthDigest(consolidated_month, extra = {}) {
+  return {
+    uid: extra.uid, scope: 'pondering-digest',
+    comment: `What I was thinking about in ${consolidated_month}`,
+    content: `my digest of ${consolidated_month}`,
+    created_at: `${consolidated_month}-28T00:00:00.000Z`,
+    consolidated_month, consolidated_count: 3, enabled: false,
+    ...extra,
+  };
+}
+
+test('buildYearbookPrompt: opens in the Familiar\'s own voice over its own already-distilled digests', () => {
+  const p = buildYearbookPrompt('2025', [
+    monthDigest('2025-03'), monthDigest('2025-08'),
+  ]);
+  assert.match(p, /^I'm \{\{char\}\}/, 'first-person self-anchor, not a handed-in task (frame-break guard)');
+  assert.match(p, /already folded each month/, 'frames the notes as its own prior digests');
+  assert.match(p, /"digest":/, 'reuses the same JSON envelope parseDigest expects');
+  assert.doesNotMatch(p, /turning over/i, 'no stilted "turning over" phrasing');
+});
+
+test('MIN_DIGESTS_PER_YEAR is 2 (a sparse past year still folds, a single digest does not)', () => {
+  assert.equal(MIN_DIGESTS_PER_YEAR, 2);
+});
+
+test('consolidateYearlyPonderings: folds a completed past year of month-digests into a yearbook, leaves the current year', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const file = await seed(dir, entriesFrom([
+      monthDigest('2025-03', { uid: 'd1' }),
+      monthDigest('2025-07', { uid: 'd2' }),
+      monthDigest('2025-11', { uid: 'd3' }),
+      monthDigest('2026-01', { uid: 'cur' }),   // current year — never folded (2026 not yet complete)
+    ]));
+    const res = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => JSON.stringify({ digest: '2025 was the year I kept circling the same few questions.' }),
+    });
+    assert.equal(res.year, '2025');
+    assert.equal(res.count, 3);
+
+    const after = await readEntries(file);
+    assert.equal(after.d1, undefined);
+    assert.equal(after.d2, undefined);
+    assert.equal(after.d3, undefined);
+    assert.ok(after.cur, 'the current year’s digest is untouched');
+    const yb = Object.values(after).find(e => e.scope === 'pondering-yearbook');
+    assert.ok(yb, 'yearbook written');
+    assert.equal(yb.enabled, false, 'a yearbook is an artifact, never auto-injected');
+    assert.equal(yb.consolidated_year, '2025');
+    assert.equal(yb.consolidated_count, 3);
+    assert.match(yb.comment, /2025/);
+    assert.match(yb.content, /circling/);
+  } finally { cleanup(); }
+});
+
+test('consolidateYearlyPonderings: a digest folded LATE (created_at a later year) still yearbooks by its content year', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    // Both digests summarise 2024 months but were folded in mid-2026 (bulk import).
+    const file = await seed(dir, entriesFrom([
+      monthDigest('2024-04', { uid: 'a', created_at: '2026-05-01T00:00:00.000Z' }),
+      monthDigest('2024-09', { uid: 'b', created_at: '2026-05-01T00:00:00.000Z' }),
+    ]));
+    const res = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => JSON.stringify({ digest: '2024, looking back.' }),
+    });
+    assert.equal(res.year, '2024', 'the fold-time year (2026) is ignored; content year 2024 wins');
+    const yb = Object.values(await readEntries(file)).find(e => e.scope === 'pondering-yearbook');
+    assert.equal(yb.consolidated_year, '2024');
+  } finally { cleanup(); }
+});
+
+test('consolidateYearlyPonderings: a year with a still-FOLDABLE month is not yearbooked yet (drained-raw guard)', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const file = await seed(dir, entriesFrom([
+      monthDigest('2025-03', { uid: 'd1' }),
+      monthDigest('2025-07', { uid: 'd2' }),
+      // A whole foldable month of raw 2025 ponderings the monthly tier hasn't reached.
+      pondering('2025-09-01', { uid: 'r1' }),
+      pondering('2025-09-02', { uid: 'r2' }),
+      pondering('2025-09-03', { uid: 'r3' }),
+    ]));
+    // Blocked: 2025 still has a month the monthly tier will fold. Track whether the
+    // LLM is reached at all — a swallowed throw would ALSO return null, so `res ===
+    // null` alone can't prove the guard fired. The guard means the model is never
+    // even asked to fold, and no yearbook is written.
+    let called = false;
+    let res = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => { called = true; return JSON.stringify({ digest: 'should not happen' }); },
+    });
+    assert.equal(res, null, 'not ready while a foldable month remains');
+    assert.equal(called, false, 'the guard blocks before the model is even asked to fold');
+    assert.equal(Object.values(await readEntries(file)).some(e => e.scope === 'pondering-yearbook'), false, 'no yearbook written while blocked');
+
+    // Drain that month (as the monthly tier eventually would).
+    await modifyTomeFile(file, (fresh) => {
+      delete fresh.entries.r1; delete fresh.entries.r2; delete fresh.entries.r3; return fresh;
+    });
+    res = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => JSON.stringify({ digest: '2025, now whole.' }),
+    });
+    assert.equal(res.year, '2025', 'folds once the year is drained');
+    assert.equal(res.count, 2);
+  } finally { cleanup(); }
+});
+
+test('consolidateYearlyPonderings: a sub-threshold straggler month does NOT block the yearbook (never-drainable)', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const file = await seed(dir, entriesFrom([
+      monthDigest('2025-03', { uid: 'd1' }),
+      monthDigest('2025-07', { uid: 'd2' }),
+      // Only two raw notes in a 2025 month — can never reach the monthly min of 3,
+      // so they must not starve the yearbook forever.
+      pondering('2025-12-01', { uid: 's1' }),
+      pondering('2025-12-02', { uid: 's2' }),
+    ]));
+    const res = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => JSON.stringify({ digest: '2025, the year in brief.' }),
+    });
+    assert.equal(res.year, '2025', 'a stray straggler month does not block the fold');
+    assert.equal(res.count, 2, 'only the two digests fold');
+    const after = await readEntries(file);
+    assert.ok(after.s1 && after.s2, 'the sub-threshold raw notes simply ride on, un-deleted');
+  } finally { cleanup(); }
+});
+
+test('consolidateYearlyPonderings: below MIN_DIGESTS_PER_YEAR → null, nothing folded', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const file = await seed(dir, entriesFrom([ monthDigest('2025-03', { uid: 'only' }) ]));   // just one
+    const res = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => { throw new Error('should not be called'); },
+    });
+    assert.equal(res, null);
+    assert.ok((await readEntries(file)).only, 'the lone digest is untouched');
+  } finally { cleanup(); }
+});
+
+test('consolidateYearlyPonderings: a TRUNCATED yearbook prunes nothing (digests survive)', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const file = await seed(dir, entriesFrom([
+      monthDigest('2025-03', { uid: 'd1' }), monthDigest('2025-07', { uid: 'd2' }),
+    ]));
+    const res = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => '{"digest": "2025 was cut off mid-sen',
+    });
+    assert.equal(res, null, 'truncated yearbook → refuse the fold');
+    const after = await readEntries(file);
+    assert.ok(after.d1 && after.d2, 'digests untouched');
+    assert.equal(Object.values(after).some(e => e.scope === 'pondering-yearbook'), false, 'no yearbook stored');
+  } finally { cleanup(); }
+});
+
+test('yearbook archives its digests, and restore puts them back and drops the yearbook (LIFO across tiers)', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    // A completed 2025 with two month-digests, folded to a yearbook.
+    const file = await seed(dir, entriesFrom([
+      monthDigest('2025-03', { uid: 'd1', content: 'the spring thread' }),
+      monthDigest('2025-09', { uid: 'd2', content: 'the autumn thread' }),
+    ]));
+    const y = await consolidateYearlyPonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => JSON.stringify({ digest: '2025 in one page.' }),
+    });
+    assert.equal(y.count, 2);
+    let after = await readEntries(file);
+    assert.equal(after.d1, undefined, 'digests pruned after the yearbook fold');
+    const ybUid = Object.keys(after).find(u => after[u].scope === 'pondering-yearbook');
+    assert.ok(ybUid);
+
+    // Undo the yearbook: the two month-digests come back, verbatim, yearbook gone.
+    const r = await restorePonderingConsolidation({ tomesDir: dir });
+    assert.equal(r.restored, 2);
+    assert.equal(r.monthPrefix, '2025', 'restore reports the folded period key (the year)');
+    after = await readEntries(file);
+    assert.ok(after.d1 && after.d2, 'both month-digests restored');
+    assert.equal(after.d1.content, 'the spring thread');
+    assert.equal(after.d1.scope, 'pondering-digest', 'restored as digests, not raw ponderings');
+    assert.equal(after[ybUid], undefined, 'the yearbook is gone — the fold is undone');
+  } finally { cleanup(); }
+});
+
+test('monthly then yearly fold, restored newest-first: undo the yearbook, then undo the month', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    // Year 2025: three raw July ponderings, plus a pre-existing Feb digest.
+    const file = await seed(dir, entriesFrom([
+      monthDigest('2025-02', { uid: 'feb' }),
+      pondering('2025-07-01', { uid: 'j1' }),
+      pondering('2025-07-02', { uid: 'j2' }),
+      pondering('2025-07-03', { uid: 'j3' }),
+    ]));
+    const llm = { tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW };
+    // Monthly fold July → a digest. Now 2025 has two digests and no foldable month.
+    const m = await consolidatePonderings({ ...llm, callLLM: async () => JSON.stringify({ digest: 'July 2025.' }) });
+    assert.equal(m.monthPrefix, '2025-07');
+    // Yearly fold 2025 → a yearbook over both digests.
+    const y = await consolidateYearlyPonderings({ ...llm, callLLM: async () => JSON.stringify({ digest: 'All of 2025.' }) });
+    assert.equal(y.year, '2025');
+    assert.equal(y.count, 2);
+
+    // Undo #1 → the yearbook is undone (both digests back).
+    let r = await restorePonderingConsolidation({ tomesDir: dir });
+    assert.equal(r.monthPrefix, '2025');
+    let after = await readEntries(file);
+    assert.equal(Object.values(after).filter(e => e.scope === 'pondering-digest').length, 2, 'both digests restored');
+    assert.equal(Object.values(after).some(e => e.scope === 'pondering-yearbook'), false);
+
+    // Undo #2 → the July monthly fold is undone (the three raw ponderings back).
+    r = await restorePonderingConsolidation({ tomesDir: dir });
+    assert.equal(r.monthPrefix, '2025-07');
+    after = await readEntries(file);
+    assert.ok(after.j1 && after.j2 && after.j3, 'raw July ponderings restored');
   } finally { cleanup(); }
 });

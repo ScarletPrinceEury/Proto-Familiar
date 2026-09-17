@@ -1949,7 +1949,7 @@
             <label for="ponder-consolidation-toggle">Consolidate old ponderings</label>
             <input type="checkbox" id="ponder-consolidation-toggle" checked>
           </div>
-          <div class="field-hint">On by default. Your Familiar occasionally folds a whole past month of its private ponderings into one short "what I was thinking about back then" digest and <em>removes the individual notes</em> to keep the tome lean. <strong>The originals are archived first</strong> — a fold is fully reversible with <strong>Undo the last fold</strong> below (or <code>!consolidate restore</code>), which puts that month's notes back and drops the digest. Rides normal pondering, so it only runs while pondering is on. (Turn off if you'd rather keep every individual note in the live tome.)</div>
+          <div class="field-hint">On by default. Your Familiar occasionally folds a whole past month of its private ponderings into one short "what I was thinking about back then" digest and <em>removes the individual notes</em> to keep the tome lean. Once a whole past year of those month-digests has built up, it folds <em>that</em> down too — into one "what the year was about" yearbook. <strong>The originals are archived first</strong> at every step — a fold is fully reversible with <strong>Undo the last fold</strong> below (or <code>!consolidate restore</code>), which puts that period's notes back and drops the digest or yearbook. Rides normal pondering, so it only runs while pondering is on. (Turn off if you'd rather keep every individual note in the live tome.)</div>
 
           <div class="field-row" style="margin-top:12px">
             <label>Run / undo a pass now</label>
@@ -1959,7 +1959,7 @@
               <button id="consolidate-memory-btn" class="btn-secondary" type="button">Roll up memories</button>
             </span>
           </div>
-          <div class="field-hint" id="consolidate-now-status"><strong>Fold ponderings</strong> catches up any backlog of old ponderings into digests (archiving the originals first). <strong>Undo the last fold</strong> puts the most recent folded month's notes back and drops that digest. <strong>Roll up memories</strong> runs the memory lifecycle (the daily→weekly→monthly roll-up, plus hygiene). Same as <code>!consolidate ponderings</code> / <code>!consolidate restore</code> / <code>!consolidate memory</code> on Discord.</div>
+          <div class="field-hint" id="consolidate-now-status"><strong>Fold ponderings</strong> catches up any backlog of old ponderings into monthly digests, then completed past years of those digests into yearbooks (archiving the originals first). <strong>Undo the last fold</strong> puts the most recent fold's notes back and drops that digest or yearbook. <strong>Roll up memories</strong> runs the memory lifecycle (the daily→weekly→monthly roll-up, plus hygiene). Same as <code>!consolidate ponderings</code> / <code>!consolidate restore</code> / <code>!consolidate memory</code> on Discord.</div>
 
           <div class="field-row" style="margin-top:12px">
             <label for="phylactery-llm-max-tokens">Memory summary length cap</label>
