@@ -8,7 +8,7 @@ import os from 'os';
 import { mkdtempSync, rmSync, promises as fsp } from 'fs';
 
 import {
-  selectConsolidationTarget, parseDigest, consolidatePonderings, MIN_PONDERINGS_PER_MONTH,
+  selectConsolidationTarget, parseDigest, consolidatePonderings, buildConsolidationPrompt, MIN_PONDERINGS_PER_MONTH,
 } from '../src/pondering/pondering-consolidate.js';
 import { findOrCreatePonderingsTome } from '../src/pondering/pondering.js';
 import { modifyTomeFile } from '../thalamus.js';
@@ -59,6 +59,22 @@ test('selectConsolidationTarget: excludes reflections, digests, and pending-inte
   ]);
   // Only 2 real eligible ponderings (the reflection, digest, and pending one don't count).
   assert.equal(selectConsolidationTarget(entries, { now: NOW }), null);
+});
+
+// ── pure: buildConsolidationPrompt anchors identity (frame-break regression) ──
+test('buildConsolidationPrompt: opens in the Familiar\'s own voice, not as a handed-in task', () => {
+  const p = buildConsolidationPrompt('July 2026', [
+    { comment: 'On the quiet', content: 'I keep circling what the silence is.' },
+  ]);
+  // Identity anchor up front — the same lever buildPonderPrompt uses so the model
+  // stays in-character instead of interrogating a "roleplay a digest" request.
+  assert.match(p, /^I'm \{\{char\}\}\./, 'must open with the {{char}} identity anchor');
+  assert.match(p, /my own journal pages/i, 'frames the notes as MINE, not presented material');
+  assert.match(p, /I keep circling what the silence is\./, 'includes the note bodies');
+  // The self-doubt entries are part of the month, not something to relitigate now.
+  assert.match(p, /second-guessing|belongs in the digest/i);
+  // Never the presenting-material framing that caused the derail.
+  assert.doesNotMatch(p, /These are my own pondering notes from back then/);
 });
 
 // ── pure: parseDigest ────────────────────────────────────────────────────────

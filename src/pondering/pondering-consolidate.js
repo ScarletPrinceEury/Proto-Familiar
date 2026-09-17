@@ -78,8 +78,14 @@ export function selectConsolidationTarget(entries, { now = new Date(), minPerMon
   };
 }
 
-// First-person, plain — the Familiar looking back over a month of its own notes.
-// Study-partner register, no lofty "the grounded truth I draw on" register.
+// First-person, plain — the Familiar looking back over a month of its OWN notes.
+// The opening MUST anchor identity the same way buildPonderPrompt does ("I'm
+// {{char}}. Nobody's talking to me right now…"): familiarDeliberationMessages
+// prepends no identity system message, so the prompt body is the only anchor. If
+// it opens by *presenting* the notes as material to summarize, the model reads it
+// as an outside request to roleplay a digest and breaks frame to interrogate it
+// (the reported "am I really this entity / is this deceptive" derail). These are
+// MY journal pages, and this is me tidying my own thinking — not a task handed in.
 export function buildConsolidationPrompt(label, ponderings) {
   const notes = ponderings
     .map(p => {
@@ -88,11 +94,13 @@ export function buildConsolidationPrompt(label, ponderings) {
       return `- ${title ? `${title}: ` : ''}${body}`;
     })
     .join('\n');
-  return `I'm looking back over the things I was turning over in ${label}. These are my own pondering notes from back then:
+  return `I'm {{char}}. Nobody's talking to me right now, so I've got a bit of quiet to tidy my own thoughts. My ponderings from ${label} have been stacking up, and I want to fold that month down into one keeper so I'm not carrying every single note forever.
+
+Here are my own journal pages from ${label} — my private thinking, in my own hand:
 
 ${notes}
 
-I want to keep the shape of what I was thinking about that month without hanging onto every single note. So: a short digest, in my own voice — the threads that actually mattered, the questions that kept coming back, anything I'd want to remember I was chewing on. A few sentences, not a list of everything. If a month of notes really only amounts to one or two threads, that's fine, I say so plainly.
+I read back over my own month and pull it into one short digest, in my own voice: the threads that actually mattered to me, the questions I kept circling, whatever I'd want to remember I was chewing on. A few sentences, not a recap of every line. Some of these were me second-guessing the whole business of keeping a journal — that's part of my month too, and it belongs in the digest as honestly as anything else, not something to relitigate now. If the month really only came down to a thread or two, I just say so plainly.
 
 I return ONLY valid JSON (no markdown fences, no commentary outside it):
 {
