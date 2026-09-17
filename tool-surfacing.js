@@ -24,6 +24,7 @@ export const TOOL_MODULES = {
   // interests (human's call: they're character, not task), safety, the lid)
   get_datetime: 'core', get_session_info: 'core', organ_status: 'core', reader_doctor: 'core',
   recall: 'core', recall_timeframe: 'core', search_conversation: 'core', save_memory: 'core', save_to_tome: 'core',
+  list_tomes: 'core', create_tome: 'core',   // the Familiar keeps its own themed tomes (reuse via list_tomes before create)
   update_identity: 'core', schedule_find: 'core',
   interest_bump: 'core', interest_set_standing: 'core',
   bookmark_for_later: 'core',   // the Familiar's own initiative (nothing in a user msg triggers it) — always reachable, like the other interest-layer tools

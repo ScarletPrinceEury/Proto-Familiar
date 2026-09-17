@@ -514,6 +514,19 @@ Currently owns:
   `relay_message` work without cerebellum ever importing server.js (the
   last would be a cycle — discord-gateway imports settings helpers from
   cerebellum).
+- **Familiar-kept tomes (2026-09)** — beyond the single default tome,
+  the Familiar keeps its own THEMED tomes. `create_tome` starts a named
+  collection; `list_tomes` shows what it already has (so it reuses a
+  collection instead of coining a near-duplicate — the discoverability half);
+  `save_to_tome` gained an optional `tome` name that files into that collection,
+  creating it if new. Backed by `createNamedTome` / `addTomeEntryByName` /
+  `listTomesSummary` in server.js over the existing `findOrCreateTomeByName` +
+  `readAllTomes` plumbing (one shared `buildTomeEntry` builds the ST-shaped entry
+  for both the default and named paths — no 16-field copy-paste). A Familiar-made
+  tome is `enabled` + `graduationExempt` (the runtime-tome convention: a tome it
+  deliberately keeps isn't drained by tome graduation). All three are `'core'`
+  tools (always advertised). Bounded by the prompt (reuse before create), never a
+  hard cap.
 - **Village tools (0.6.x)** — `village_lookup` / `village_upsert` let the
   Familiar see and edit the Village and link villagers to graph nodes
   (`graphNodeId`). Gated via `ctx.wardPrivate` (threaded into `toolCtx`
@@ -743,6 +756,22 @@ high=30min / mid=60min / low=2h / idle=6h. Threat multiplies (severe
 getIntervalScale})` is the pure-ish surface; `startPonderingLoop`
 wraps it with setInterval + lifecycle. Reentrancy-guarded; stop awaits
 in-flight ticks.
+
+**`pondering-consolidate.js`** — the ponderings tome's rollup (2026-09, the
+memory-consolidation analog ponderings never had; before it, ponderings
+accumulated forever). `consolidatePonderings()` folds one PAST month of
+`scope:'pondering'` entries into a single `scope:'pondering-digest'` entry (an
+LLM distils "what I was turning over in <month>", originals pruned), so the tome
+stays bounded. It stays LOCAL to the ponderings tome — a digest of per-embodiment
+thinking is still per-embodiment, never a recallable Phylactery fact. Pure
+`selectConsolidationTarget` picks the OLDEST past month with ≥3 eligible entries
+(the 0.8.89 sweep-all-past shape; one month per call, backlog drains over ticks);
+**eligibility excludes any pondering still holding an UNACTED `wants_to_save`
+intent** so a pending tell/follow-up is never pruned away, and re-validates the
+same uids under the write lock. Rides the pondering tick — `runPonder` (server.js)
+calls it best-effort before pondering; the "any un-consolidated past month?" gate
+is its own rate limit (no new loop, no timer). Off: `ponderConsolidationEnabled`
+(default ON) + `PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`.
 
 **`reminders-loop.js`** — autonomous singleton. Every 30s, calls
 Unruh's `reminders_due` MCP tool, enqueues each into the outbox

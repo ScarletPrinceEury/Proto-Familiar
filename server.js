@@ -58,6 +58,7 @@ import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } 
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
+import { consolidatePonderings } from './src/pondering/pondering-consolidate.js';
 import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
 import { buildNoticingPrompt, noticingMessages, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
@@ -317,7 +318,8 @@ import { shortSlug } from './slug-ids.js';
 // (HTTP route + autonomous loop hitting the same tome) can't lose
 // each other's edits. The locking primitive (withLock) and the
 // atomic .tmp+rename pattern live in thalamus.js.
-import { withLock, writeTomeFile, modifyTomeFile } from './thalamus.js';
+import { withLock, writeTomeFile, modifyTomeFile, findOrCreateTomeByName } from './thalamus.js';
+import { readAllTomes, buildTomeEntry, listTomesSummary } from './src/tomes/tome-store.js';
 
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
@@ -3587,15 +3589,39 @@ app.delete('/api/tomes/:id/entries/:uid', async (req, res) => {
 // POST /api/tomes/default/entries route and the save_to_tome tool executor
 // (handed to cerebellum via initCerebellumTools at boot — cerebellum never
 // imports server.js).
-async function addDefaultTomeEntry({ comment, content, keys, learnedAt }) {
-  // Accept keys as string[] or comma-separated string
-  let normKeys = [];
-  if (Array.isArray(keys)) {
-    normKeys = keys.map(k => String(k).trim()).filter(Boolean);
-  } else if (typeof keys === 'string') {
-    normKeys = keys.split(',').map(k => k.trim()).filter(Boolean);
-  }
+// Create-or-find a tome BY NAME and add one entry to it. This is the "let the
+// Familiar keep its own named tomes" path (create_tome / targeted save_to_tome).
+// Familiar-made tomes are enabled + graduationExempt (the runtime-tome
+// convention: a tome it deliberately keeps shouldn't be drained by tome
+// graduation). Returns { tomeId, uid, created }.
+async function addTomeEntryByName({ name, description = '', comment, content, keys, learnedAt }) {
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) throw new Error('a tome name is required');
+  const before = await readAllTomes(TOMES_DIR).catch(() => []);
+  const existed = before.some(t => t?.name === trimmed);
+  const { tome, file } = await findOrCreateTomeByName(TOMES_DIR, trimmed, {
+    name: trimmed, description: String(description ?? ''), enabled: true,
+    graduationExempt: true, entries: {},
+  });
+  const { uid, entry } = buildTomeEntry({ comment, content, keys, learnedAt });
+  await modifyTomeFile(file, (fresh) => { fresh.entries = fresh.entries || {}; fresh.entries[uid] = entry; return fresh; });
+  return { tomeId: tome.id, uid, created: !existed };
+}
 
+// Create an empty named tome (no entry yet). Returns { tomeId, created }.
+async function createNamedTome({ name, description = '' }) {
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) throw new Error('a tome name is required');
+  const before = await readAllTomes(TOMES_DIR).catch(() => []);
+  const existed = before.some(t => t?.name === trimmed);
+  const { tome } = await findOrCreateTomeByName(TOMES_DIR, trimmed, {
+    name: trimmed, description: String(description ?? ''), enabled: true,
+    graduationExempt: true, entries: {},
+  });
+  return { tomeId: tome.id, created: !existed };
+}
+
+async function addDefaultTomeEntry({ comment, content, keys, learnedAt }) {
   // Find first enabled tome — directory scan is read-only so doesn't
   // need a lock. The actual entry insert happens through modifyTome
   // below, which holds the per-file lock across read-modify-write so
@@ -3623,41 +3649,8 @@ async function addDefaultTomeEntry({ comment, content, keys, learnedAt }) {
     targetTomeId = newId;
   }
 
-  const uid = randomUUID();
-  const now = new Date().toISOString();
-  await modifyTome(targetTomeId, (tome) => {
-    tome.entries[uid] = {
-      uid,
-        comment:             typeof comment === 'string' ? comment.trim() || 'Auto-saved entry' : 'Auto-saved entry',
-        keys:                normKeys,
-        keysecondary:        [],
-        content:             content.trim(),
-        constant:            false,
-        selective:           false,
-        selectiveLogic:      0,
-        enabled:             true,
-        // At-depth, not a system-message position — these keyword-triggered
-        // entries would invalidate the prompt prefix cache if injected into
-        // it. See the same rationale in memorization.js.
-        position:            4,
-        depth:               4,
-        role:                0,
-        scanDepth:           null,
-        caseSensitive:       null,
-        matchWholeWords:     null,
-        probability:         100,
-        sticky:              null,
-        cooldown:            null,
-        preventRecursion:    false,
-        delayUntilRecursion: false,
-        excludeRecursion:    false,
-        group:               '',
-        groupWeight:         null,
-        insertion_order:     100,
-        created_at:          now,
-        learnedAt:           (typeof learnedAt === 'string' && learnedAt) ? learnedAt : now,
-      };
-  });
+  const { uid, entry } = buildTomeEntry({ comment, content, keys, learnedAt });
+  await modifyTome(targetTomeId, (tome) => { tome.entries[uid] = entry; });
   return { tomeId: targetTomeId, uid };
 }
 
@@ -3684,6 +3677,9 @@ app.post('/api/tomes/default/entries', async (req, res) => {
 // write-through sync wired in startVillageSync() (mirror → Phylactery).
 initCerebellumTools({
   addDefaultTomeEntry,
+  addTomeEntryByName,
+  createNamedTome,
+  listTomes: () => listTomesSummary(TOMES_DIR),
   getVillageRegistry,
   upsertVillager,
   relayToDiscord,
@@ -5837,6 +5833,23 @@ function startAutonomousPondering() {
       const s    = readSettingsSync();
       const conn = connectionForFeature(s, 'pondering');
       if (!conn?.apiKey) throw new Error('no connection configured for pondering');
+
+      // Rides the pondering tick (no new loop): fold a past month of old
+      // ponderings into one digest and prune the originals, so the tome doesn't
+      // grow without bound. Best-effort — a failure never blocks the ponder, and
+      // the eligibility check (any un-consolidated past month?) is its own rate
+      // limit, so this no-ops on almost every tick. Off: setting +
+      // PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1.
+      if (s?.ponderConsolidationEnabled !== false && process.env.PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED !== '1') {
+        try {
+          const c = await consolidatePonderings({
+            tomesDir: TOMES_DIR,
+            provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
+            settings: s,
+          });
+          if (c) console.log(`[pondering] consolidated ${c.count} pondering(s) from ${c.monthPrefix} into a digest`);
+        } catch (err) { console.error('[pondering] consolidation failed (skipping):', err?.message ?? err); }
+      }
 
       // Grounded pondering: for an interest ponder, recall what the Familiar
       // actually KNOWS about the topic (so it doesn't muse "from the outside"
