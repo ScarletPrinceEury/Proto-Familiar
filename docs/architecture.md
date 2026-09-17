@@ -1396,6 +1396,37 @@ item's `date` and a `reason` (`shared-room` / `third-party`) so the ask is
 explained and time-anchored, and the block states up front that directly-told
 self-facts are already kept.
 
+**Memory-integrity gate (0.12.27, cross-channel-continuity Stage 1).** A SECOND
+gate sits in the same per-fact loop, beside consent: consent asks "may I keep
+this about this person?", the integrity gate asks "is this fact corrupted /
+adversarial?". It defends against **memory poisoning** — a crafted message that
+survives the live-turn injection guard but gets distilled by extraction into a
+stored "fact" shaped like a standing instruction, which then re-injects on every
+recall (persistent and silent, worse than a live injection). `scanFact`
+(`src/safety/memory-integrity.js`) is pure detection: it reuses
+`injection-guard.js`'s `scanForInjection` plus a few patterns that only read as
+adversarial in a durable fact (a "fact" phrased as a standing order to me).
+`applyMemoryIntegrityGate` applies the provenance policy and the side-effect:
+a suspect fact from an UNTRUSTED source (a shared room, `direct=false`) is HELD
+in the reversible quarantine (`src/safety/memory-quarantine.js`,
+`tomes/.memory-quarantine.json`) and never written; a suspect fact from my
+human's OWN words (`direct=true`) is written but FLAGGED for review — their
+memories are theirs, and a false positive that hides what they said is the grief
+problem, not the security one (the same reason `injection-guard` exempts their
+words). Fails OPEN on a scan bug (a scan error must never silently stop memory
+forming — that would sever continuity); fails CLOSED on a hold's quarantine-write
+error (a known-suspect untrusted fact we can't quarantine is dropped, never
+written). The store is ward-visible and reversible — `GET /api/memory-quarantine`
+lists held items, `POST /api/memory-quarantine/:id/release` re-writes a false
+positive via `createMemoryFull`, `POST …/discard` confirms the drop (row kept for
+audit) — surfaced in the Automation pane ("Review held memories") with a
+`logs/memory-quarantine-events.jsonl` audit trail. Off:
+`memoryIntegrityEnabled` / `PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED=1`. This is
+the archive-before-destructive-writes rule applied to memory intake: a suspect
+fact is set aside, never silently destroyed. (Stage 2 slots an off-the-shelf
+classifier behind `scanFact`'s signature; Stage 3 adds the Hippocampus buffer —
+see `docs/cross-channel-continuity-build-spec.md`.)
+
 **Temporality → storage tier.** `episodic` facts land at `daily` (standalone,
 dated — the memory of a day, consolidates + decays). `standing` facts are
 "generally true now", not a memory of a day: a standing fact about my human goes

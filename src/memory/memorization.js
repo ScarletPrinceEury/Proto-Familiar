@@ -200,6 +200,7 @@ async function persistQueue() {
 // per-path key, which they couldn't before.
 
 import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow } from '../../thalamus.js';
+import { applyMemoryIntegrityGate } from '../safety/memory-integrity.js';
 import { getRegistry, standingConsentActive } from '../village/village.js';
 import { disclosableVillagerFields } from '../village/village-card.js';
 import { deriveMemoryAudience, deriveNodeAudience, mostRestrictiveAudience } from '../village/audience.js';
@@ -1145,7 +1146,10 @@ async function processJob(job) {
     // repeats ids, it never mints them; a hallucinated ref dies here.
     const rawRefs = Array.isArray(fact.schedule_refs) ? fact.schedule_refs : [];
     const scheduleRefs = [...new Set(rawRefs.map(String).filter(id => validScheduleIds.has(id)))];
-    const result = await createMemoryFull({
+
+    // The exact args, built once so the memory-integrity gate can either write them
+    // or stash them verbatim in quarantine for a later release (replay).
+    const memoryArgs = {
       content,
       ...storage,
       audience: factAudience,
@@ -1157,7 +1161,24 @@ async function processJob(job) {
       ...(attributionConfidence !== undefined ? { attributionConfidence } : {}),
       slug,
       ...(scheduleRefs.length ? { sourceMeta: { schedule_refs: scheduleRefs } } : {}),
+    };
+
+    // ── Memory-integrity gate (Stage 1) — a NEW gate beside consent ──────────────
+    // consent asks "may I keep this about this person?"; this asks "is this fact
+    // corrupted / adversarial?". A suspect fact from an untrusted source (a shared
+    // room) is HELD in the reversible quarantine, not written; a suspect fact from
+    // my human's own words (ward-private, direct) is written but FLAGGED for review.
+    // The scan, the provenance policy, and the quarantine side-effect all live in
+    // applyMemoryIntegrityGate (tested there); here we just honour its verdict. Off:
+    // memoryIntegrityEnabled=false / PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED=1.
+    const integrity = await applyMemoryIntegrityGate({
+      content, direct, memoryArgs,
+      audienceTag: audience, sessionRef: job.topicId ?? job.topicLabel ?? null,
+      enabled: settings?.memoryIntegrityEnabled !== false && process.env.PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED !== '1',
     });
+    if (!integrity.write) continue;   // held: never reaches Phylactery
+
+    const result = await createMemoryFull(memoryArgs);
     if (!result?.ok) throw new Error(`Phylactery memory_create failed: ${result?.error ?? 'unknown'}`);
 
     // Only queue for consent when this actually created a NEW pending memory.
