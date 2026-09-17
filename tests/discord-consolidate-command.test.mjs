@@ -15,6 +15,9 @@ test('parseConsolidateCommand: subcommands, aliases, help, and non-matches', () 
   assert.equal(parseConsolidateCommand('!consolidate mem'), 'memory');
   // case-insensitive + trailing/leading space
   assert.equal(parseConsolidateCommand('  !CONSOLIDATE Memory  '), 'memory');
+  // restore + alias
+  assert.equal(parseConsolidateCommand('!consolidate restore'), 'restore');
+  assert.equal(parseConsolidateCommand('!consolidate undo'), 'restore');
   // bare → help
   assert.equal(parseConsolidateCommand('!consolidate'), 'help');
   // unknown arg → help (don't silently do the wrong pass)

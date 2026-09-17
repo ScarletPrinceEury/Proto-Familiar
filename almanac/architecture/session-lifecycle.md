@@ -15,7 +15,7 @@ sources:
 
 # Session Lifecycle
 
-A session is the ward's continuous chat thread on one surface. The ward has one active session at a time per surface (web chat, Discord DM, voice call), and that session remains active until explicitly ended. Sessions are logged to disk, can be resumed, and are the unit of memory extraction. This page explains when sessions begin, how they end, and the manual close-out mechanism for sessions that never received an `endedAt` timestamp.
+A session is the ward's continuous chat thread on one surface. The ward has one active session at a time per surface (web chat, Discord DM, voice call), and that session remains active until explicitly ended — except that, by default, [unification](session-unification) merges the ward's web chat and Discord DM into one shared session, so "per surface" only describes the un-unified case. Sessions are logged to disk, can be resumed, and are the unit of memory extraction. This page explains when sessions begin, how they end, and the manual close-out mechanism for sessions that never received an `endedAt` timestamp.
 
 ## Session creation and active state
 
@@ -52,9 +52,7 @@ The server endpoint `POST /api/logs/:id/close` (in `server.js`) reads the sessio
 1. Returns immediately if `endedAt` is already set (a no-op for already-closed sessions) [@server-js].
 2. Otherwise, stamps `endedAt` at the **LAST message's real timestamp** — when the conversation actually stopped — not the current time [@server-js]. This preserves the timeline: a session last active in April should read as ending in April, not today.
 3. Falls back to `log.updatedAt` or current time if there are no messages [@server-js].
-4. Writes the updated log through the shared merge writer (`persistSessionLog` with `merge: true`) so a concurrent turn from another surface cannot race and drop a message [@server-js] [@session-log-js].
-
-The merge-writer safety is important because an open session on the web could theoretically receive a late Discord message at the same moment the ward is closing it via the UI. The merge ensures every message from both sides is preserved in timestamp order, `location` and `startedAt` remain set-once owned by whoever created the file, and only `endedAt` is overwritten [@session-log-js].
+4. Writes the updated log through the shared merge writer (`persistSessionLog` with `merge: true`) so a concurrent turn from another surface — relevant when [unification](session-unification) is on and an open web session could receive a late Discord message at the same moment the ward closes it via the UI — cannot race and drop a message [@server-js] [@session-log-js]. See [Unified Ward Sessions](session-unification)'s "Multi-writer safety" section for how the merge itself works (`mergeMessages`, the set-once `location`/`startedAt` fields, and the shared lock).
 
 ## Why endedAt timestamp matters
 

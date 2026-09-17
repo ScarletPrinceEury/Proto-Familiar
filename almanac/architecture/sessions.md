@@ -16,7 +16,10 @@ sources:
 # Sessions
 
 A **session** is the ward's continuous conversation on one surface — web chat, a
-Discord DM, a voice call. It is the unit the rest of the system reasons about: it
+Discord DM, a voice call — except that for the ward's own web chat and Discord DM
+specifically, [unification](session-unification) (on by default) merges the two
+into one shared session rather than leaving them as two independently-logged
+conversations. A session is the unit the rest of the system reasons about: it
 is logged to disk, it can be resumed, it is what memory is extracted *from*, and
 its audience tag is what decides who may later read it. This page is the map of
 the session cluster — start here, then follow the link that matches what you need

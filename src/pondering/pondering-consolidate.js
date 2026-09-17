@@ -2,7 +2,7 @@
 //
 // Ponderings accumulate forever otherwise: the loop writes one every tick and
 // nothing ever folds them down. This distils a whole PAST month of musings into
-// a single digest entry — "what I was turning over back then" — and prunes the
+// a single digest entry — "what I was thinking about back then" — and prunes the
 // originals, so the shape of that month's thinking survives without the bulk.
 //
 // It deliberately mirrors memory consolidation's shape (roll up, prune sources)
@@ -16,6 +16,8 @@
 // call, so a big backlog drains over successive ticks (the 0.8.89 sweep-all-past
 // lesson, applied here).
 
+import { promises as fsp } from 'fs';
+import path from 'path';
 import { findOrCreatePonderingsTome, shortPonderUid, defaultCallLLM } from './pondering.js';
 import { modifyTomeFile } from '../../thalamus.js';
 import { substituteMacros } from '../../macros.js';
@@ -25,6 +27,34 @@ import { substituteMacros } from '../../macros.js';
 export const MIN_PONDERINGS_PER_MONTH = 3;
 
 const DIGEST_SCOPE = 'pondering-digest';
+
+// Consolidation ARCHIVES the originals before pruning them — a fold must never be
+// a one-way delete (the reported data loss: a month of real ponderings gone with
+// no undo, because the Phylactery snapshot/backup only covers the canonical store,
+// not local tome files). This append-only sidecar holds every pruned entry keyed
+// by the digest that replaced it, so `restorePonderingConsolidation` can put them
+// back. It's a dotfile, never a tome (isTomeFile skips it) and never injected.
+const ARCHIVE_NAME = '.pondering-consolidation-archive.json';
+const archivePath = (tomesDir) => path.join(tomesDir, ARCHIVE_NAME);
+
+async function readArchive(tomesDir) {
+  try {
+    const raw = await fsp.readFile(archivePath(tomesDir), 'utf8');
+    const data = JSON.parse(raw);
+    return Array.isArray(data?.records) ? data : { records: [] };
+  } catch { return { records: [] }; }
+}
+
+// Append one fold's pruned entries. Atomic tmp+rename. THROWS on failure so the
+// caller can refuse to delete anything it couldn't first back up.
+async function appendArchiveRecord(tomesDir, record) {
+  const data = await readArchive(tomesDir);
+  data.records.push(record);
+  const file = archivePath(tomesDir);
+  const tmp = file + '.tmp';
+  await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+  await fsp.rename(tmp, file);
+}
 
 function monthPrefixOf(iso) {
   const s = String(iso ?? '');
@@ -78,8 +108,14 @@ export function selectConsolidationTarget(entries, { now = new Date(), minPerMon
   };
 }
 
-// First-person, plain — the Familiar looking back over a month of its own notes.
-// Study-partner register, no lofty "the grounded truth I draw on" register.
+// First-person, plain — the Familiar looking back over a month of its OWN notes.
+// The opening MUST anchor identity the same way buildPonderPrompt does ("I'm
+// {{char}}. Nobody's talking to me right now…"): familiarDeliberationMessages
+// prepends no identity system message, so the prompt body is the only anchor. If
+// it opens by *presenting* the notes as material to summarize, the model reads it
+// as an outside request to roleplay a digest and breaks frame to interrogate it
+// (the reported "am I really this entity / is this deceptive" derail). These are
+// MY journal pages, and this is me tidying my own thinking — not a task handed in.
 export function buildConsolidationPrompt(label, ponderings) {
   const notes = ponderings
     .map(p => {
@@ -88,34 +124,39 @@ export function buildConsolidationPrompt(label, ponderings) {
       return `- ${title ? `${title}: ` : ''}${body}`;
     })
     .join('\n');
-  return `I'm looking back over the things I was turning over in ${label}. These are my own pondering notes from back then:
+  return `I'm {{char}}. Nobody's talking to me right now, so I've got a bit of quiet to tidy my own thoughts. My ponderings from ${label} have been stacking up, and I want to fold that month down into one keeper so I'm not carrying every single note forever.
+
+Here are my own journal pages from ${label} — my private thinking, in my own hand:
 
 ${notes}
 
-I want to keep the shape of what I was thinking about that month without hanging onto every single note. So: a short digest, in my own voice — the threads that actually mattered, the questions that kept coming back, anything I'd want to remember I was chewing on. A few sentences, not a list of everything. If a month of notes really only amounts to one or two threads, that's fine, I say so plainly.
+I read back over my own month and pull it into one short digest, in my own voice: the stuff that actually mattered to me, the questions I kept coming back to, anything I'd want to remember I was thinking about. A few sentences, not a recap of every line. Some of these were me second-guessing the whole business of keeping a journal — that's part of my month too, and it belongs in the digest as honestly as anything else, not something to relitigate now. If the month really only came down to a thread or two, I just say so plainly.
 
 I return ONLY valid JSON (no markdown fences, no commentary outside it):
 {
-  "digest": "My short first-person digest of what I was turning over in ${label}."
+  "digest": "My short first-person digest of what I was thinking about in ${label}."
 }`;
 }
 
-// Parse the digest text out of the model's reply. Tolerant: JSON first, then a
-// bare-string fallback so a model that skipped the envelope isn't a total loss.
+// Parse the digest out of the model's reply. STRICT — this gates a destructive
+// prune, so it only accepts a COMPLETE, parseable JSON object with a non-empty
+// `digest`. A reply cut off mid-sentence (finish_reason='length') leaves the JSON
+// unterminated, JSON.parse throws, and we return null → the fold is refused and
+// the originals are kept (the reported truncated-digest-that-also-deleted bug).
+// There is deliberately NO bare-text fallback here: a delete must never ride on
+// an ambiguous or partial response.
 export function parseDigest(raw) {
   const text = String(raw ?? '').trim();
   if (!text) return null;
   try {
     const m = text.match(/\{[\s\S]*\}/);
     if (m) {
-      const obj = JSON.parse(m[0]);
+      const obj = JSON.parse(m[0]);   // throws on a truncated/unterminated object → null
       const d = String(obj?.digest ?? '').trim();
       if (d) return d;
     }
-  } catch { /* fall through to the bare-text fallback */ }
-  // No parseable envelope, but there IS text — use it (stripped of any fence).
-  const bare = text.replace(/^```(?:json)?/i, '').replace(/```$/,'').trim();
-  return bare || null;
+  } catch { /* malformed/truncated → refuse (no prune), never a partial store */ }
+  return null;
 }
 
 /**
@@ -126,7 +167,7 @@ export function parseDigest(raw) {
  *
  * `callLLM` matches ponderOnce's contract: ({provider,apiKey,model,baseUrl,prompt}) → string.
  */
-export async function consolidatePonderings({ tomesDir, provider, apiKey, model, baseUrl = null, callLLM = defaultCallLLM, settings = {}, now = new Date() }) {
+export async function consolidatePonderings({ tomesDir, provider, apiKey, model, baseUrl = null, callLLM = defaultCallLLM, identity = '', settings = {}, now = new Date() }) {
   const { file } = await findOrCreatePonderingsTome(tomesDir);
   // Read-only peek for the target (the write below re-reads under the lock).
   let target = null;
@@ -138,28 +179,51 @@ export async function consolidatePonderings({ tomesDir, provider, apiKey, model,
 
   const prompt = substituteMacros(buildConsolidationPrompt(target.label, target.entries), settings);
   let raw;
-  try { raw = await callLLM({ provider, apiKey, model, baseUrl, prompt }); }
+  // `identity` rides in so the fold reads its own month AS the Familiar, not as a
+  // handed-in roleplay request (the frame-break). Empty string → unchanged call.
+  try { raw = await callLLM({ provider, apiKey, model, baseUrl, prompt, identity }); }
   catch { return null; }   // transient — month stays eligible, retried next tick
   const digest = parseDigest(raw);
   if (!digest) return null;
 
-  let digestUid = shortPonderUid();
+  const digestUid0 = shortPonderUid();
   const nowIso = now.toISOString();
-  let count = 0;
+
+  // Collect the entries we intend to prune (re-validated under the lock) WITHOUT
+  // deleting yet, so we can archive them first — a fold never deletes what it
+  // hasn't backed up.
+  let digestUid = digestUid0;
+  let toArchive = null;
   await modifyTomeFile(file, (fresh) => {
     fresh.entries = fresh.entries || {};
-    // Re-validate the SAME uids under the lock (an entry may have gained a
-    // pending intent, or been edited, since the peek). Only prune ones still
-    // eligible and still in this month.
     const stillThere = target.uids.filter(uid => {
       const e = fresh.entries[uid];
       return e && isEligible(e) && monthPrefixOf(e.created_at) === target.monthPrefix;
     });
-    if (stillThere.length < MIN_PONDERINGS_PER_MONTH) return fresh;   // raced away — skip this pass
+    if (stillThere.length < MIN_PONDERINGS_PER_MONTH) return fresh;   // raced away — skip
     while (fresh.entries[digestUid]) digestUid = shortPonderUid();
+    toArchive = {};
+    for (const uid of stillThere) toArchive[uid] = { ...fresh.entries[uid] };
+    return fresh;   // no mutation yet — this pass only captures
+  });
+  if (!toArchive || Object.keys(toArchive).length < MIN_PONDERINGS_PER_MONTH) return null;
+
+  // Archive FIRST. If this throws, we prune nothing (the month stays eligible and
+  // retries next tick) — losing a fold is cheap, losing the notes is not.
+  try {
+    await appendArchiveRecord(tomesDir, {
+      digestUid, monthPrefix: target.monthPrefix, label: target.label,
+      archivedAt: nowIso, restoredAt: null, entries: toArchive,
+    });
+  } catch { return null; }
+
+  // Now it's safe to add the digest and delete the archived originals.
+  let count = 0;
+  await modifyTomeFile(file, (fresh) => {
+    fresh.entries = fresh.entries || {};
     fresh.entries[digestUid] = {
       uid: digestUid,
-      comment: `What I was turning over in ${target.label}`,
+      comment: `What I was thinking about in ${target.label}`,
       keys: [], keysecondary: [],
       content: digest,
       constant: false, selective: false, selectiveLogic: 0,
@@ -172,12 +236,59 @@ export async function consolidatePonderings({ tomesDir, provider, apiKey, model,
       created_at: nowIso, learnedAt: nowIso,
       scope: DIGEST_SCOPE,
       consolidated_month: target.monthPrefix,
-      consolidated_count: stillThere.length,
+      consolidated_count: Object.keys(toArchive).length,
     };
-    for (const uid of stillThere) delete fresh.entries[uid];
-    count = stillThere.length;
+    // Delete only the uids we actually archived AND that are still eligible.
+    for (const uid of Object.keys(toArchive)) {
+      const e = fresh.entries[uid];
+      if (e && isEligible(e) && monthPrefixOf(e.created_at) === target.monthPrefix) {
+        delete fresh.entries[uid];
+        count += 1;
+      }
+    }
     return fresh;
   });
   if (!count) return null;
   return { monthPrefix: target.monthPrefix, count, digestUid };
+}
+
+/**
+ * Undo a fold: put a month's archived ponderings back into the tome and remove
+ * the digest that replaced them. With no `monthPrefix`, restores the most recent
+ * un-restored fold. Idempotent-ish: an entry already present is not duplicated;
+ * an already-restored record is skipped. Returns { restored, monthPrefix } or
+ * null when there's nothing to restore.
+ */
+export async function restorePonderingConsolidation({ tomesDir, monthPrefix = null } = {}) {
+  const data = await readArchive(tomesDir);
+  const live = data.records.filter(r => r && !r.restoredAt && r.entries && Object.keys(r.entries).length);
+  if (!live.length) return null;
+  const record = monthPrefix
+    ? [...live].reverse().find(r => r.monthPrefix === monthPrefix)   // most recent for that month
+    : live[live.length - 1];                                         // most recent overall
+  if (!record) return null;
+
+  const { file } = await findOrCreatePonderingsTome(tomesDir);
+  let restored = 0;
+  await modifyTomeFile(file, (fresh) => {
+    fresh.entries = fresh.entries || {};
+    for (const [uid, entry] of Object.entries(record.entries)) {
+      if (!fresh.entries[uid]) { fresh.entries[uid] = entry; restored += 1; }
+    }
+    if (record.digestUid && fresh.entries[record.digestUid]?.scope === DIGEST_SCOPE) {
+      delete fresh.entries[record.digestUid];   // the fold is undone — its digest goes too
+    }
+    return fresh;
+  });
+
+  // Mark the record restored (stamp, don't drop — keeps the audit trail).
+  record.restoredAt = new Date().toISOString();
+  const af = archivePath(tomesDir);
+  const tmp = af + '.tmp';
+  try {
+    await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+    await fsp.rename(tmp, af);
+  } catch { /* the entries are already back in the tome; a failed stamp only risks a re-restore no-op */ }
+
+  return { restored, monthPrefix: record.monthPrefix };
 }

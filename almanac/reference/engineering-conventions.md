@@ -178,6 +178,19 @@ tool, background action, or power requires both halves, in the same commit:
    prior `recall`/search result, never something the Familiar has to invent or memorize
    [@claude-md].
 
+## Console↔UI parity for ward commands
+
+A ward-facing Discord/console command is never the only way to reach a capability — it ships
+with a UI control for the same action, in the same commit, and vice versa [@claude-md]. The
+convention was named in 0.12.19-alpha, with the on-demand consolidation triggers as the
+reference case: `!consolidate ponderings`/`!consolidate memory` each have a matching "Fold
+ponderings"/"Roll up memories" button in the web UI's Automation pane, both routed through the
+same server function so there is one source of truth, not three drifting copies [@server-js]
+[@discord-gateway-js]. See [Pondering](../architecture/pondering)'s on-demand consolidation
+section for the worked example. When adding a new ward console command, add its UI twin in the
+same change; an existing command found with no UI counterpart is a gap to close, not a pattern
+to copy [@claude-md].
+
 ## Graceful degradation
 
 No module may be able to take down the chat path — a peer being down, a loop crashing, or a
