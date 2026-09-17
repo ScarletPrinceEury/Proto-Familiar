@@ -8,7 +8,8 @@ import os from 'os';
 import { mkdtempSync, rmSync, promises as fsp } from 'fs';
 
 import {
-  selectConsolidationTarget, parseDigest, consolidatePonderings, buildConsolidationPrompt, MIN_PONDERINGS_PER_MONTH,
+  selectConsolidationTarget, parseDigest, consolidatePonderings, restorePonderingConsolidation,
+  buildConsolidationPrompt, MIN_PONDERINGS_PER_MONTH,
 } from '../src/pondering/pondering-consolidate.js';
 import { findOrCreatePonderingsTome } from '../src/pondering/pondering.js';
 import { modifyTomeFile } from '../thalamus.js';
@@ -75,15 +76,25 @@ test('buildConsolidationPrompt: opens in the Familiar\'s own voice, not as a han
   assert.match(p, /second-guessing|belongs in the digest/i);
   // Never the presenting-material framing that caused the derail.
   assert.doesNotMatch(p, /These are my own pondering notes from back then/);
+  // The stilted "turning over" wording is purged (ward-directed, x3).
+  assert.doesNotMatch(p, /turning over/i);
 });
 
-// ── pure: parseDigest ────────────────────────────────────────────────────────
-test('parseDigest: JSON envelope, bare text, and empty', () => {
+// ── pure: parseDigest — STRICT (gates a destructive prune) ───────────────────
+test('parseDigest: accepts only a complete JSON object with a digest', () => {
   assert.equal(parseDigest('{"digest": "the gist"}'), 'the gist');
   assert.equal(parseDigest('```json\n{"digest":"x"}\n```'), 'x');
-  assert.equal(parseDigest('just prose, no envelope'), 'just prose, no envelope');
   assert.equal(parseDigest(''), null);
   assert.equal(parseDigest('   '), null);
+});
+
+test('parseDigest: a TRUNCATED digest returns null — never a partial store (the data-loss guard)', () => {
+  // finish_reason='length' cuts the JSON mid-string: unterminated → refuse.
+  assert.equal(parseDigest('{"digest": "June was mostly about the Unruh effect and Eur'), null);
+  assert.equal(parseDigest('{"digest": "half a thought'), null);
+  // Bare prose with no envelope is no longer accepted for this destructive path.
+  assert.equal(parseDigest('just prose, no envelope'), null);
+  assert.equal(parseDigest('{"digest": ""}'), null, 'empty digest → null');
 });
 
 // ── orchestration: consolidatePonderings over a temp tome ────────────────────
@@ -163,5 +174,61 @@ test('consolidatePonderings: an LLM failure prunes nothing (month stays eligible
     const after = await readEntries(file);
     assert.ok(after.a && after.b && after.c, 'sources survive a failed digest');
     assert.equal(Object.values(after).some(e => e.scope === 'pondering-digest'), false, 'no digest written');
+  } finally { cleanup(); }
+});
+
+// ── archive-before-delete + restore (the reversibility the data loss demanded) ─
+test('a fold archives the originals, and restore puts them back and drops the digest', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const file = await seed(dir, entriesFrom([
+      pondering('2026-07-01', { uid: 'jul1', content: 'the Unruh thought' }),
+      pondering('2026-07-10', { uid: 'jul2', content: 'about Eury' }),
+      pondering('2026-07-20', { uid: 'jul3', content: 'the cheese one' }),
+    ]));
+    const res = await consolidatePonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => JSON.stringify({ digest: 'July digest.' }),
+    });
+    assert.equal(res.count, 3);
+    let after = await readEntries(file);
+    assert.equal(after.jul1, undefined, 'originals pruned after fold');
+    const digestUid = Object.keys(after).find(u => after[u].scope === 'pondering-digest');
+    assert.ok(digestUid);
+
+    // Undo it.
+    const r = await restorePonderingConsolidation({ tomesDir: dir });
+    assert.equal(r.restored, 3);
+    assert.equal(r.monthPrefix, '2026-07');
+    after = await readEntries(file);
+    assert.ok(after.jul1 && after.jul2 && after.jul3, 'all three originals restored, verbatim');
+    assert.equal(after.jul1.content, 'the Unruh thought');
+    assert.equal(after[digestUid], undefined, 'the digest is gone — the fold is undone');
+  } finally { cleanup(); }
+});
+
+test('restore with nothing archived → {restored:0}, never throws', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    await seed(dir, entriesFrom([pondering('2026-09-01')]));
+    const r = await restorePonderingConsolidation({ tomesDir: dir });
+    assert.equal(r, null);
+  } finally { cleanup(); }
+});
+
+test('a fold whose digest came back TRUNCATED prunes nothing (originals survive)', async () => {
+  const { dir, cleanup } = tempTomesDir();
+  try {
+    const file = await seed(dir, entriesFrom([
+      pondering('2026-07-01', { uid: 'a' }), pondering('2026-07-02', { uid: 'b' }), pondering('2026-07-03', { uid: 'c' }),
+    ]));
+    const res = await consolidatePonderings({
+      tomesDir: dir, provider: 'x', apiKey: 'k', model: 'm', now: NOW,
+      callLLM: async () => '{"digest": "cut off mid-sen',   // finish_reason=length shape
+    });
+    assert.equal(res, null, 'truncated digest → refuse the fold');
+    const after = await readEntries(file);
+    assert.ok(after.a && after.b && after.c, 'originals untouched');
+    assert.equal(Object.values(after).some(e => e.scope === 'pondering-digest'), false, 'no digest stored');
   } finally { cleanup(); }
 });

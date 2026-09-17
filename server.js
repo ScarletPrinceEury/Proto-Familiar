@@ -58,7 +58,7 @@ import { startPageWatchLoop, stopPageWatchLoop, isRunning as pageWatchRunning } 
 import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page-watch.js';
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
-import { consolidatePonderings } from './src/pondering/pondering-consolidate.js';
+import { consolidatePonderings, restorePonderingConsolidation } from './src/pondering/pondering-consolidate.js';
 import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
 import { buildNoticingPrompt, noticingMessages, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
@@ -4365,12 +4365,15 @@ async function runPonderingConsolidationNow() {
   const s = readSettingsSync();
   const conn = connectionForFeature(s, 'pondering');
   if (!conn?.apiKey) return { ok: false, error: 'no connection is configured for pondering' };
+  // The identity/persona block so the fold reads its own month AS the Familiar
+  // (the frame-break fix). Best-effort — no identity just means a weaker anchor.
+  const identity = await enrich('', { staticOnly: true }).then(r => r?.static ?? '').catch(() => '');
   let months = 0, entries = 0;
   for (let i = 0; i < 24; i++) {   // hard cap: at most 24 months per manual run
     const c = await consolidatePonderings({
       tomesDir: TOMES_DIR,
       provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-      settings: s,
+      identity, settings: s,
     });
     if (!c) break;
     months += 1; entries += c.count;
@@ -4380,6 +4383,19 @@ async function runPonderingConsolidationNow() {
 app.post('/api/pondering/consolidate', async (_req, res) => {
   try { res.json(await runPonderingConsolidationNow()); }
   catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'consolidation failed' }); }
+});
+
+// Undo the most recent fold (optionally a named month): put the archived
+// ponderings back and drop the digest. Backs the UI "Undo the last fold" button
+// and the ward's `!consolidate restore` command.
+async function runPonderingRestoreNow(monthPrefix = null) {
+  const r = await restorePonderingConsolidation({ tomesDir: TOMES_DIR, monthPrefix: monthPrefix || null });
+  if (!r) return { ok: true, restored: 0 };
+  return { ok: true, restored: r.restored, monthPrefix: r.monthPrefix };
+}
+app.post('/api/pondering/consolidate/restore', async (req, res) => {
+  try { res.json(await runPonderingRestoreNow(typeof req.body?.monthPrefix === 'string' ? req.body.monthPrefix : null)); }
+  catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'restore failed' }); }
 });
 
 // Ward remember-consent map — governs per-category memory storage policy.
@@ -5636,6 +5652,7 @@ const httpServer = app.listen(PORT, HOST, async () => {
   setConsolidationRunners({
     ponderings: () => runPonderingConsolidationNow(),
     memory:     () => runLifecyclePass({ force: true }),
+    restore:    (monthPrefix) => runPonderingRestoreNow(monthPrefix),
   });
   // Bot-DM push channel: when the gateway can DM my human (token + ward's
   // Discord user id configured), every outbox item — reminders, event
@@ -5875,12 +5892,13 @@ function startAutonomousPondering() {
       // the eligibility check (any un-consolidated past month?) is its own rate
       // limit, so this no-ops on almost every tick. Off: setting +
       // PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1.
-      if (s?.ponderConsolidationEnabled !== false && process.env.PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED !== '1') {
+      if (s?.ponderConsolidationEnabled === true && process.env.PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED !== '1') {
         try {
+          const identity = await enrich('', { staticOnly: true }).then(r => r?.static ?? '').catch(() => '');
           const c = await consolidatePonderings({
             tomesDir: TOMES_DIR,
             provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-            settings: s,
+            identity, settings: s,
           });
           if (c) console.log(`[pondering] consolidated ${c.count} pondering(s) from ${c.monthPrefix} into a digest`);
         } catch (err) { console.error('[pondering] consolidation failed (skipping):', err?.message ?? err); }

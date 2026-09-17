@@ -761,17 +761,37 @@ in-flight ticks.
 memory-consolidation analog ponderings never had; before it, ponderings
 accumulated forever). `consolidatePonderings()` folds one PAST month of
 `scope:'pondering'` entries into a single `scope:'pondering-digest'` entry (an
-LLM distils "what I was turning over in <month>", originals pruned), so the tome
-stays bounded. It stays LOCAL to the ponderings tome — a digest of per-embodiment
-thinking is still per-embodiment, never a recallable Phylactery fact. Pure
-`selectConsolidationTarget` picks the OLDEST past month with ≥3 eligible entries
-(the 0.8.89 sweep-all-past shape; one month per call, backlog drains over ticks);
-**eligibility excludes any pondering still holding an UNACTED `wants_to_save`
-intent** so a pending tell/follow-up is never pruned away, and re-validates the
-same uids under the write lock. Rides the pondering tick — `runPonder` (server.js)
-calls it best-effort before pondering; the "any un-consolidated past month?" gate
-is its own rate limit (no new loop, no timer). Off: `ponderConsolidationEnabled`
-(default ON) + `PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`.
+LLM distils "what I was thinking about in <month>", originals pruned), so the
+tome stays bounded. It stays LOCAL to the ponderings tome — a digest of
+per-embodiment thinking is still per-embodiment, never a recallable Phylactery
+fact. Pure `selectConsolidationTarget` picks the OLDEST past month with ≥3
+eligible entries (the 0.8.89 sweep-all-past shape; one month per call, backlog
+drains over ticks); **eligibility excludes any pondering still holding an UNACTED
+`wants_to_save` intent** so a pending tell/follow-up is never pruned away, and
+re-validates the same uids under the write lock. Rides the pondering tick —
+`runPonder` (server.js) calls it best-effort before pondering; the "any
+un-consolidated past month?" gate is its own rate limit (no new loop, no timer).
+The consolidation call is given the **identity block** (`enrich('',{staticOnly})`
+→ `.static`) so the fold reads its own month AS the Familiar — without it a
+capable model breaks frame and interrogates the "roleplay a digest" request
+(the reported derail). **DEFAULT-OFF / opt-in** (`ponderConsolidationEnabled`,
+was default-ON) + `PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`: it DELETES the
+Familiar's private writing, so it earns the same opt-in posture as
+tome-graduation / content-regate.
+**Reversibility (the data-loss fix):** the fold ARCHIVES the originals to
+`tomes/.pondering-consolidation-archive.json` (append-only, keyed by digest uid)
+*before* deleting them, and only deletes what it archived — losing a fold is
+cheap, losing the notes is not. `restorePonderingConsolidation()` puts a month's
+archived entries back and drops the digest (undo). Earlier folds hard-deleted
+with no backup and the Phylactery snapshot/backup covers only the canonical
+store, not local tomes — so pre-archive folds are unrecoverable from inside the
+app (a filesystem copy of `tomes/` is the only route). **`parseDigest` is STRICT:**
+only a complete parseable `{digest}` object counts; a truncated
+(finish_reason='length') or bare reply → null → the fold is refused and the
+originals kept, so a cut-off digest can never both store a partial AND delete the
+sources. On-demand `POST /api/pondering/consolidate` (drains all eligible months,
+cap 24) + `POST /api/pondering/consolidate/restore`; UI "Fold ponderings" / "Undo
+the last fold" buttons; Discord `!consolidate ponderings` / `!consolidate restore`.
 **On-demand triggers (2026-09):** `runPonderingConsolidationNow()` drains ALL
 currently-eligible past months in one go (capped 24/run) — exposed as `POST
 /api/pondering/consolidate` (the UI's "Fold ponderings" button in the Automation

@@ -345,7 +345,7 @@ const state = {
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
-  ponderConsolidationEnabled: true, // default-on: fold old ponderings into monthly digests (rides the pondering tick)
+  ponderConsolidationEnabled: false, // OPT-IN: fold old ponderings into monthly digests + prune originals (destructive; archived + restorable)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
   redditReaderEnabled:     true,     // read Reddit via its JSON API (browser is anti-bot-walled)
@@ -4573,7 +4573,7 @@ function writeSettingsToUI() {
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
-  if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled !== false);
+  if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled === true);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
@@ -6469,6 +6469,7 @@ function init() {
   // Run-a-consolidation-pass-now buttons (the UI twins of the Discord
   // !consolidate commands). Disable both while one runs; report inline.
   $('consolidate-ponderings-btn')?.addEventListener('click', () => runConsolidationNow('ponderings'));
+  $('consolidate-restore-btn')?.addEventListener('click', () => runConsolidationNow('restore'));
   $('consolidate-memory-btn')?.addEventListener('click', () => runConsolidationNow('memory'));
   document.querySelectorAll('[data-loops-tab]').forEach(el => {
     el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
@@ -12817,12 +12818,17 @@ let _loopsLogCache = {};
 // = the daily→weekly→monthly roll-up + hygiene). Disables both buttons while one
 // runs and reports the outcome in the shared status hint.
 async function runConsolidationNow(which) {
-  const btnIds = ['consolidate-ponderings-btn', 'consolidate-memory-btn'];
-  const btn = $(which === 'ponderings' ? 'consolidate-ponderings-btn' : 'consolidate-memory-btn');
+  const btnIds = ['consolidate-ponderings-btn', 'consolidate-restore-btn', 'consolidate-memory-btn'];
+  const btnId = which === 'ponderings' ? 'consolidate-ponderings-btn'
+              : which === 'restore'    ? 'consolidate-restore-btn'
+              : 'consolidate-memory-btn';
+  const btn = $(btnId);
   const status = $('consolidate-now-status');
   const original = btn ? btn.textContent : '';
-  const url  = which === 'ponderings' ? '/api/pondering/consolidate' : '/api/entity/lifecycle';
-  const body = which === 'ponderings' ? null : JSON.stringify({ force: true });
+  const url  = which === 'ponderings' ? '/api/pondering/consolidate'
+             : which === 'restore'    ? '/api/pondering/consolidate/restore'
+             : '/api/entity/lifecycle';
+  const body = which === 'memory' ? JSON.stringify({ force: true }) : null;
   btnIds.forEach(id => { const b = $(id); if (b) b.disabled = true; });
   if (btn) btn.textContent = 'Working…';
   try {
@@ -12837,6 +12843,10 @@ async function runConsolidationNow(which) {
       msg = (d && d.ok === false) ? `Couldn't fold ponderings: ${d.error || 'unknown error'}.`
           : d && d.months ? `Done — folded ${d.entries} pondering${d.entries === 1 ? '' : 's'} across ${d.months} month${d.months === 1 ? '' : 's'} into digests.`
           : 'Nothing to fold yet — no past month has enough un-consolidated ponderings.';
+    } else if (which === 'restore') {
+      msg = (d && d.ok === false) ? `Couldn't restore: ${d.error || 'unknown error'}.`
+          : d && d.restored ? `Done — put ${d.restored} pondering${d.restored === 1 ? '' : 's'} from ${d.monthPrefix} back, and dropped that digest.`
+          : 'Nothing to restore — no archived fold to put back.';
     } else {
       msg = (d && d.ok === false) ? `Couldn't run the memory lifecycle: ${d.error || 'the memory store didn\'t respond'}.`
           : 'Done — the memory lifecycle pass has run.';

@@ -1352,18 +1352,22 @@ export function parseConsolidateCommand(content) {
   if (!arg) return 'help';
   if (/^ponder/.test(arg))            return 'ponderings';   // ponder / pondering / ponderings
   if (/^mem/.test(arg))               return 'memory';       // mem / memory / memories
+  if (/^(restore|undo)/.test(arg))    return 'restore';      // restore / undo — put a folded month back
   return 'help';
 }
 
 async function handleConsolidateCommand(gw, { msg, which }) {
   const say = (text) => sendChannelMessage(gw.config.token, msg.channel_id, text).catch(() => {});
   if (which === 'help') {
-    return say('Consolidation passes I can run right now:\n• `!consolidate ponderings` — fold a backlog of old ponderings into monthly digests.\n• `!consolidate memory` — run my memory lifecycle (roll memories up their daily→weekly→monthly ladder, plus hygiene).');
+    return say('Consolidation passes I can run right now:\n• `!consolidate ponderings` — fold a backlog of old ponderings into monthly digests.\n• `!consolidate memory` — run my memory lifecycle (roll memories up their daily→weekly→monthly ladder, plus hygiene).\n• `!consolidate restore` — undo my most recent pondering fold: put that month\'s notes back and drop the digest.');
   }
   if (!gw.consolidationRunners) {
     return say('I can\'t reach my consolidation passes right now — that wiring isn\'t available.');
   }
-  await say(which === 'ponderings' ? 'Folding down old ponderings — one moment…' : 'Running my memory lifecycle — one moment…');
+  await say(
+    which === 'ponderings' ? 'Folding down old ponderings — one moment…'
+    : which === 'restore'  ? 'Putting my last folded month back — one moment…'
+    : 'Running my memory lifecycle — one moment…');
   try {
     if (which === 'ponderings') {
       const r = await gw.consolidationRunners.ponderings();
@@ -1371,6 +1375,14 @@ async function handleConsolidateCommand(gw, { msg, which }) {
       return say(r.months
         ? `Done — folded ${r.entries} pondering${r.entries === 1 ? '' : 's'} across ${r.months} month${r.months === 1 ? '' : 's'} into digests.`
         : 'Nothing to fold — no past month has enough un-consolidated ponderings yet.');
+    }
+    if (which === 'restore') {
+      if (typeof gw.consolidationRunners.restore !== 'function') return say('I don\'t have a restore path wired right now.');
+      const r = await gw.consolidationRunners.restore(null);
+      if (r && r.ok === false) return say(`I couldn't restore: ${r.error ?? 'something went wrong'}.`);
+      return say(r?.restored
+        ? `Done — put ${r.restored} pondering${r.restored === 1 ? '' : 's'} from ${r.monthPrefix} back, and dropped that digest.`
+        : 'Nothing to restore — I have no archived fold to put back.');
     }
     const r = await gw.consolidationRunners.memory();
     if (r && r.ok === false) return say(`I couldn't do that: ${r.error ?? 'my memory store didn\'t respond'}.`);
