@@ -29,6 +29,12 @@ sources:
   - id: engineering-conventions
     type: file
     path: almanac/reference/engineering-conventions.md
+  - id: cerebellum-js
+    type: file
+    path: cerebellum.js
+  - id: tool-surfacing-js
+    type: file
+    path: tool-surfacing.js
 ---
 
 # Tomes And Keyword Lore
@@ -41,8 +47,9 @@ kept deliberately separate: a Tome entry fires because a keyword matched, not be
 Familiar decided the fact was relevant [@tomes-doc]. [Session memorization](session-memorization)
 is the automated writer that populates one particular Tome (`Session Memories`) with this
 shape of entry; this page covers the activation engine and entry format that every Tome, hand-authored
-or auto-written, is scanned and injected through, plus the two features built directly on top
-of it: live tome macros and the self-documenting Familiar Manual tome (0.11.22-alpha).
+or auto-written, is scanned and injected through, plus the three features built directly on top
+of it: live tome macros, the self-documenting Familiar Manual tome (0.11.22-alpha), and the
+Familiar's own named tomes (0.12.18-alpha).
 
 ## Storage and the activation engine
 
@@ -144,10 +151,47 @@ that promotes Tome facts into Phylactery — the manual is reference material th
 and relays, not a fact about the ward that should ever be graduated into canonical memory
 [@manual-tome-js].
 
+## Familiar-kept tomes: named collections beyond the default (0.12.18)
+
+Before 0.12.18-alpha, `save_to_tome` only ever wrote into one place: `addDefaultTomeEntry` in
+`server.js` scans `tomes/` for the first tome with `enabled: true` (creating a `General` tome if
+none exists yet) and files the entry there [@server-js]. That default lane is still the ordinary
+path, but the Familiar can now also keep its own themed collections on top of it: `create_tome(name,
+description?)` starts a named tome, `list_tomes` summarizes every tome it already keeps — name,
+description, entry count, and whether it is enabled or `[protected]` — so it reuses a collection
+instead of coining a near-duplicate, and `save_to_tome` gained an optional `tome` field that files
+the entry into that named collection, creating it first if it does not already exist
+[@cerebellum-js].
+
+`createNamedTome` and `addTomeEntryByName` (`server.js`) both build on `findOrCreateTomeByName`,
+the same by-name lookup [Session memorization](session-memorization) and the rest of the tome
+storage layer already relies on. A Familiar-made tome is written `enabled: true`,
+`graduationExempt: true` — the same runtime-tome convention the Familiar Manual above uses — so a
+themed collection the Familiar deliberately started is never drained into Phylactery by
+`tome-graduation-loop.js` the way an ordinary hand-authored Tome can be [@server-js]. `buildTomeEntry`,
+the function that assembles the sixteen-field SillyTavern-shaped entry object, moved into
+`tome-store.js` so the default-tome and named-tome save paths share one implementation instead of
+risking the two field lists drifting apart by copy-paste [@tome-store-js]. `listTomesSummary`, also
+in `tome-store.js`, is the read side behind `list_tomes`: it reads every tome file on disk and
+flags the Familiar Manual specifically as `protected` (`graduationExempt` plus a name match), so
+the Familiar sees at a glance which of its tomes is reference material rather than its own scratch
+collection [@tome-store-js].
+
+`save_to_tome`, `list_tomes`, and `create_tome` are all surfaced as `'core'` tools — always
+advertised in every embodiment rather than gated behind a feature toggle — and there is no hard cap
+on how many named tomes the Familiar can keep; the tool descriptions themselves are what is
+expected to keep it checking `list_tomes` and reusing a collection before starting another one
+[@tool-surfacing-js] [@cerebellum-js].
+
 ## Where this fits
 
 - [Session memorization](session-memorization) — the automated writer that populates the
   `Session Memories` tome using this same activation engine and entry format.
+- [Pondering](pondering) — a second automated writer that reuses this same tome-file storage and
+  locking (`findOrCreateTomeByName` / `modifyTomeFile`) for `Familiar's Ponderings`, but ships
+  every entry `enabled: false` so it is never scanned into chat context by keyword the way an
+  ordinary Tome is; see its monthly digest/consolidation section for the one place that tome gets
+  pruned.
 - [Phylactery](phylactery) — the canonical, autonomously-retrieved memory store that Tomes
   (keyword-triggered, not relevance-triggered) are deliberately kept separate from.
 - [Autonomous loops](autonomous-loops) — `tome-graduation-loop.js`, the opt-in loop that

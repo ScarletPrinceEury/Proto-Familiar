@@ -18,7 +18,7 @@ place instead ([Slice provenance is captured at the read](slice-provenance-captu
 keeps an inline "Update (version):" note rather than a separate superseded page, because the
 original decision still holds and only its scope narrowed.
 
-Thirty-one decisions live here. Grouped by the question each one answers:
+Thirty decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -122,6 +122,12 @@ and of what is normal for its bond with the ward:
 
 ## Operating rules applied across components
 
+- [Deliberations delivered as system messages](deliberations-as-system-messages) — why every
+  autonomous loop's inner-voice deliberation (triage, pondering, warm reach-out, voice-call
+  greeting, and the job-brief group: memorization, content-regate, tome-graduation, media
+  retention, page-watch, research-plan) rides to the LLM as a `system` message rather than a
+  `user` turn, and the two-axis rule (cognition vs. spoken output) that keeps this distinct from
+  role-faithful transcript replay.
 - [Exact values are code's job](exact-values-in-code) — the rule that any machine-correct value
   (a timestamp, a UID, an RRULE) is computed by code and only ever referenced by the model, never
   produced by it.
@@ -168,7 +174,9 @@ advance to a not-yet-built extension surface.
 **The entity stance** — Why the Familiar is not a tool the user operates, but an entity the
 code helps serve: [Entity-as-subject](../concepts/entity-as-subject) concept → [Eury as the
 agent's identity](eury-as-agent-identity) → [Single-user before platform](single-user-before-platform) scoping
-→ [Multi-embodiment](../concepts/multi-embodiment).
+→ [Multi-embodiment](../concepts/multi-embodiment) → [Deliberations delivered as system
+messages](deliberations-as-system-messages), the same stance enforced at the LLM message-role
+level.
 
 See [Architecture](../architecture) for the system these decisions constrain, and
 [Concepts](../concepts) for the design stances several of them are built to serve.
