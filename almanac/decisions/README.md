@@ -18,7 +18,7 @@ place instead ([Slice provenance is captured at the read](slice-provenance-captu
 keeps an inline "Update (version):" note rather than a separate superseded page, because the
 original decision still holds and only its scope narrowed.
 
-Thirty decisions live here. Grouped by the question each one answers:
+Thirty-one decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -87,6 +87,10 @@ and of what is normal for its bond with the ward:
 - [Session memorization: durable server-side queue](session-memorization-queue) — why session
   memorization was rebuilt from a fire-and-forget client call into a durable, resumable
   server-side queue.
+- [Archive before destructive autonomous writes](archive-before-destructive-autonomous-writes) —
+  the pondering-consolidation data-loss incident (a fold hard-deleted months of real ponderings
+  with no backup) and the archive-before-delete-plus-restore shape any future feature that deletes
+  or overwrites the Familiar's own content must follow before it can default on.
 - [Tome multi-writer merge policy](tome-multi-writer-merge-policy) — a proposed, not-yet-built
   reconciliation policy for a Tome receiving writes from more than one source.
 - [Per-feature model routing](per-feature-model-routing) — letting the ward bind each background
