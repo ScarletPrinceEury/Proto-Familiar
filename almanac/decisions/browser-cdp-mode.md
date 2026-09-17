@@ -116,3 +116,11 @@ The general lesson worth carrying: a capability whose safety depends on a guaran
 architecture can't provide (here, the owned proxy) should either not ship, or ship only behind
 human gates strong enough to stand in for the missing guarantee — and that trade is the ward's
 to make, not the implementer's.
+
+## Related
+
+- [Browser milestone: guardrails in code, not prompts](browser-guardrails-in-code) — the parent
+  decision this page's Horizon #2 backing extends; that page's SSRF proxy is exactly the
+  guarantee CDP mode cannot have, which is why this page exists as its own sign-off.
+- [Browser: click-and-fill web access](../architecture/browser) — the built subsystem this
+  engine backing swaps into.

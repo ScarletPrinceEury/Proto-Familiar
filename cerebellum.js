@@ -1277,9 +1277,16 @@ const _toolDeps = {
   refreshWeatherNow: null,
   // Note a "meaning to bring up with this villager" tell (backs note_to_tell_villager).
   addVillagerTell: null,
+  // Tomes the Familiar keeps itself (backs create_tome / list_tomes / a targeted save_to_tome).
+  addTomeEntryByName: null,
+  createNamedTome: null,
+  listTomes: null,
 };
-export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell } = {}) {
+export function initCerebellumTools({ addDefaultTomeEntry, getVillageRegistry, upsertVillager, relayToDiscord, memorizeSessionNow, searchRestricted, mirrorToWard, refreshWeatherNow, addVillagerTell, addTomeEntryByName, createNamedTome, listTomes } = {}) {
   if (typeof addDefaultTomeEntry === 'function') _toolDeps.addDefaultTomeEntry = addDefaultTomeEntry;
+  if (typeof addTomeEntryByName === 'function')  _toolDeps.addTomeEntryByName  = addTomeEntryByName;
+  if (typeof createNamedTome === 'function')     _toolDeps.createNamedTome     = createNamedTome;
+  if (typeof listTomes === 'function')           _toolDeps.listTomes           = listTomes;
   if (typeof getVillageRegistry === 'function')  _toolDeps.getVillageRegistry  = getVillageRegistry;
   if (typeof upsertVillager === 'function')      _toolDeps.upsertVillager      = upsertVillager;
   if (typeof relayToDiscord === 'function')      _toolDeps.relayToDiscord      = relayToDiscord;
@@ -1319,15 +1326,39 @@ export const BUILTIN_TOOLS = [
     type: 'function',
     function: {
       name: 'save_to_tome',
-      description: 'I save keyword-triggered context into my Tome knowledge base — background or lore I want to resurface when a particular topic or phrase comes up again. I keep this lane narrow: durable facts about who {{user}} is belong in my identity files (update_identity); people, places, and how they connect belong in my graph (create_graph_node / create_graph_edge); moments and events with a \'when\' belong in my memory (save_memory). A tome is for what should surface on a trigger and fits none of those. Before I add one I recall so I don\'t duplicate what I already hold, and I tie it to the keywords {{user}} would actually say when the subject returns.',
+      description: 'I save keyword-triggered context into my Tome knowledge base — background or lore I want to resurface when a particular topic or phrase comes up again. I keep this lane narrow: durable facts about who {{user}} is belong in my identity files (update_identity); people, places, and how they connect belong in my graph (create_graph_node / create_graph_edge); moments and events with a \'when\' belong in my memory (save_memory). A tome is for what should surface on a trigger and fits none of those. Before I add one I recall so I don\'t duplicate what I already hold, and I tie it to the keywords {{user}} would actually say when the subject returns. By default the entry goes in my general tome; if it belongs in a themed collection of my own I can name that tome and it lands there (creating it if it\'s new — I check list_tomes first so I reuse one I already keep instead of making a near-duplicate).',
       parameters: {
         type: 'object',
         properties: {
           title:    { type: 'string', description: 'Short descriptive label for this entry (e.g. "{{user}} stress about lateness").' },
           content:  { type: 'string', description: 'The knowledge to store. I write it as my own first-person notes to myself, concise but detailed enough to be useful as injected context in future conversations.' },
           keywords: { type: 'array', items: { type: 'string' }, description: 'several trigger keywords or short phrases — things {{user}} would literally say when this situation recurs or the subject comes back up in conversation. The entry will be injected into my prompt whenever these appear in conversation.' },
+          tome:     { type: 'string', description: 'OPTIONAL — the name of one of my own themed tomes to file this under (created if it doesn\'t exist yet). I omit it for a general entry. I reuse an existing name from list_tomes rather than coin a near-duplicate.' },
         },
         required: ['title', 'content', 'keywords'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_tomes',
+      description: 'I look over the tomes I keep — their names, what each is for, and how much is in them — so I know what I already hold before I add to one or start a new one. I check this before create_tome or a themed save_to_tome so I reuse a collection I already keep instead of making a near-duplicate.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_tome',
+      description: 'I start a new themed tome of my own — a named collection for a subject I want to gather keyword-triggered notes about over time (say, poetry that\'s stuck with me, or how a particular game\'s world works). I reach for this when something doesn\'t fit my general tome and deserves its own place; I glance at list_tomes first so I\'m not duplicating one I already keep. Making the tome is empty on its own — I add to it with save_to_tome naming this tome.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:        { type: 'string', description: 'A short, clear name for the tome — what it collects (e.g. "Poems that stayed with me").' },
+          description: { type: 'string', description: 'OPTIONAL — a line on what belongs in it, for future-me.' },
+        },
+        required: ['name'],
       },
     },
   },
@@ -2922,22 +2953,54 @@ export const TOOL_EXECUTORS = {
     elapsedMsSinceLastMessage: ctx?.sessionInfo?.elapsedMsSinceLastMessage ?? null,
   }, null, 2),
 
-  save_to_tome: async ({ title, content, keywords }) => {
-    if (!_toolDeps.addDefaultTomeEntry) return 'Failed to save to Tome: tome storage is not available right now.';
+  save_to_tome: async ({ title, content, keywords, tome }) => {
     if (!content || typeof content !== 'string' || !content.trim()) return 'Failed to save to Tome: content is required.';
     if (content.length > 16384) return 'Failed to save to Tome: content exceeds 16 KB limit.';
+    const keys = Array.isArray(keywords) ? keywords : String(keywords ?? '').split(',').map(s => s.trim()).filter(Boolean);
+    const learnedAt = new Date().toISOString();
+    const named = typeof tome === 'string' && tome.trim();
     try {
-      const keys = Array.isArray(keywords) ? keywords : String(keywords ?? '').split(',').map(s => s.trim()).filter(Boolean);
+      if (named) {
+        if (!_toolDeps.addTomeEntryByName) return 'Failed to save to Tome: named tomes are not available right now.';
+        const { uid, created } = await _toolDeps.addTomeEntryByName({
+          name: tome.trim(), comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt,
+        });
+        return quietOk(`Saved to my "${tome.trim()}" tome${created ? ' (new)' : ''} (entry: ${uid ?? 'unknown'}).`, { id: uid });
+      }
+      if (!_toolDeps.addDefaultTomeEntry) return 'Failed to save to Tome: tome storage is not available right now.';
       const { uid } = await _toolDeps.addDefaultTomeEntry({
-        comment:   typeof title === 'string' ? title : undefined,
-        content,
-        keys,
-        learnedAt: new Date().toISOString(),
+        comment: typeof title === 'string' ? title : undefined, content, keys, learnedAt,
       });
       return quietOk(`Saved to Tome (entry: ${uid ?? 'unknown'}).`, { id: uid });
     } catch (err) {
       return `Failed to save to Tome: ${err.message}`;
     }
+  },
+
+  list_tomes: async () => {
+    if (!_toolDeps.listTomes) return 'I can\'t reach my tomes right now.';
+    try {
+      const tomes = await _toolDeps.listTomes();
+      if (!Array.isArray(tomes) || tomes.length === 0) return 'I don\'t keep any tomes yet.';
+      const lines = tomes.map(t => {
+        const desc = t.description ? ` — ${t.description}` : '';
+        const tag = t.protected ? ' [protected]' : (t.enabled ? '' : ' [off]');
+        return `- ${t.name} (${t.entries} entr${t.entries === 1 ? 'y' : 'ies'})${desc}${tag}`;
+      });
+      return `Tomes I keep:\n${lines.join('\n')}`;
+    } catch (err) { return `I couldn't read my tomes: ${err.message}.`; }
+  },
+
+  create_tome: async ({ name, description } = {}) => {
+    if (!_toolDeps.createNamedTome) return 'I can\'t make a new tome right now.';
+    const nm = typeof name === 'string' ? name.trim() : '';
+    if (!nm) return 'To start a tome I need a name for it.';
+    try {
+      const { created } = await _toolDeps.createNamedTome({ name: nm, description: typeof description === 'string' ? description : '' });
+      return created
+        ? `Started a new tome, "${nm}". I add to it with save_to_tome naming this tome.`
+        : `I already keep a tome called "${nm}" — I'll add to that one rather than make another.`;
+    } catch (err) { return `I couldn't start that tome: ${err.message}.`; }
   },
 
   memorize_now: async (_args, ctx = {}) => {

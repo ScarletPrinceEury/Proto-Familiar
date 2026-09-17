@@ -35,6 +35,12 @@ sources:
   - id: start-bat
     type: file
     path: start.bat
+  - id: pid-file
+    type: file
+    path: src/server/pid-file.js
+  - id: server-js
+    type: file
+    path: server.js
 ---
 
 # Installer And Launcher
@@ -151,11 +157,48 @@ The fix unified process detection across all platforms:
 
 The lesson generalizes: **every launch path must leave the same canonical marker
 that every stopper reads.** Use port-owner detection as the first choice — it works
-regardless of launch method and doesn't depend on fragile argv matching. The PID
-file is a secondary signal; an exec-in-foreground launcher can still write it before
-exec. Detection logic is triplicated by necessity (bash / PowerShell-in-batch / Node),
-so keep the approach identical across launchers and note where paths mirror each other
-in code comments; divergence is how detection logic rots.
+regardless of launch method and doesn't depend on fragile argv matching. Detection
+logic is triplicated by necessity (bash / PowerShell-in-batch / Node), so keep the
+approach identical across launchers and note where paths mirror each other in code
+comments; divergence is how detection logic rots.
+
+### The server, not the launcher, now owns the authoritative PID write
+
+The per-launcher PID writes above were still each a shell/PowerShell *guess* at
+node's pid, and one of them was wrong in a way none of the manual testing above
+caught: `start.sh` backgrounded a `( cd "$SCRIPT_DIR" && … nohup node server.js … & )`
+compound and captured `$!`, which is the pid of the backgrounded compound/subshell
+(or of `nohup`), not of node — whether that collapses to node's real pid depends on
+the shell's last-command exec optimisation, so it varied by shell and platform. When
+the recorded pid was wrong, `stop.sh` killed the wrapper, node was reparented to
+`init` and kept holding the port, and stopping looked like a no-op — intermittently,
+per platform, which is why it read as "unreliable" rather than cleanly broken.
+
+0.12.17 fixed this at the root instead of adding another shell heuristic: the new
+`src/server/pid-file.js` module (`writePidFile` / `clearPidFile`) lets the server
+write its **own** `process.pid` into `.proto-familiar.pid`, inside the `app.listen()`
+success callback — so a failed bind never leaves a bogus pid — and clear it (only if
+the file still names that same pid, so a fast stop-then-start never deletes a
+successor instance's file) from the graceful-shutdown handler, `handleSignal`
+[@pid-file] [@server-js]. This overwrites whatever placeholder pid the launcher wrote,
+on every launch path (`start.sh`, `start.bat`, `Proto-Familiar.command`, the tray,
+`npm start`, docker) and every OS — the server's own write is the one signal that
+cannot be a wrapper/subshell/parent-process mismatch. `start.sh` was also fixed to
+background `node` directly (no subshell), so its `echo $!` is now just the pre-boot
+placeholder the server immediately overwrites once it is actually listening
+[@pid-file].
+
+Windows was never on the broken write path: `start.bat` already captured node's real
+pid via `Start-Process -PassThru; $p.Id`, and `Proto-Familiar.command` already used
+`exec node` so `$$` is node's own pid. `start.sh`'s backgrounded compound was the lone
+broken launcher-write path [@start-bat] [@macos-launcher]. `stop.sh` / `stop.bat` keep
+their cwd- and port-owner-based fallbacks described above unchanged — the server-owned
+pid file strengthens the primary detection signal without removing that belt-and-suspenders.
+
+The general lesson: a launcher's `echo $!` (or platform equivalent) taken after a
+backgrounded compound or subshell can capture the wrong pid, and the fix is not a
+better shell guess — it is having the process record its own pid, since that is the
+one source that is authoritative by construction.
 
 ## Stale-instance recycling is shared, not copy-pasted per platform
 

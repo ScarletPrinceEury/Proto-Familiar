@@ -62,7 +62,7 @@ The one-line summary is what appears in the briefing; the full text is available
 The pondering loop runs on a tiered cadence, NOT a fixed interval [@autonomous-loops-doc]. The cadence is computed from two inputs:
 
 1. **Interest weight** — how much attention is currently oriented toward this topic [@pondering-loop-js]. Topics accrue weight from token volume, persistence across consecutive messages, and surviving session boundaries; weight decays over time.
-2. **Threat level** — the scalar from [Unruh](../architecture/unruh) that drives urgency [@autonomous-loops-doc]. When threat reaches moderate or higher, pondering stands down entirely (along with warmth and needs-tracking) to defer to [silence triage](../architecture/safety-spine).
+2. **Threat level** — the scalar from [Unruh](unruh) that drives urgency [@autonomous-loops-doc]. When threat reaches moderate or higher, pondering stands down entirely (along with warmth and needs-tracking) to defer to [silence triage](safety-spine).
 
 The cadence tiers are: 30 minutes (high interest), 1 hour, 2 hours, and 6 hours (low interest, background noise). A topic with very low interest still ponders, but only every 6 hours [@autonomous-loops-doc].
 
@@ -79,7 +79,7 @@ interest, and ponders that neighbour instead of the original pick, carrying the 
 label through as `threadFrom` so the resulting thought can ground itself — "I got here from
 thinking about X" — instead of appearing to change subject at random [@pondering-loop-js].
 
-The edges a hop can follow are the `related_to` edges [Unruh](../architecture/unruh) writes: `interest_record`
+The edges a hop can follow are the `related_to` edges [Unruh](unruh) writes: `interest_record`
 accepts a `related_to` label naming the topic a new curiosity grew out of, and when that label
 resolves to an existing node the two are linked with an idempotent `related_to` edge (either
 direction already counts as linked, so re-recording the same pair is a no-op); `interest_related`
@@ -143,8 +143,8 @@ Ponderings are not written to Phylactery, the canonical store, because they are 
 ## Related
 
 - [Autonomous loops](autonomous-loops) — the full list of loops, their cadences, and off-switches.
-- [Safety spine](../architecture/safety-spine) — how pondering, warmth, and needs-tracking stand down during crisis.
-- [Unruh](../architecture/unruh) — the interest and threat scoring systems that shape pondering cadence.
+- [Safety spine](safety-spine) — how pondering, warmth, and needs-tracking stand down during crisis.
+- [Unruh](unruh) — the interest and threat scoring systems that shape pondering cadence.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the design principle that ponderings embody.
 - [Browser: click-and-fill web access](browser) — the `ponder-research.js`/`ponder-web-budget.js`
   modules the research gate above calls, and the rest of the browser subsystem they share code

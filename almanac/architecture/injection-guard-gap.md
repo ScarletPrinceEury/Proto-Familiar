@@ -1,6 +1,6 @@
 ---
-title: "Injection Guard: From Documented-but-Unwired to Two Wired Boundaries"
-topics: [architecture, safety]
+title: "Injection Guard: From Documented-but-Unwired to Wired Boundaries"
+topics: [architecture, safety, vision]
 sources:
   - id: injection-guard
     type: file
@@ -17,16 +17,20 @@ sources:
   - id: reddit-reader-js
     type: file
     path: src/browser/reddit-reader.js
+  - id: vision-js
+    type: file
+    path: src/vision/vision.js
 ---
 
-# Injection Guard: From Documented-but-Unwired to Two Wired Boundaries
+# Injection Guard: From Documented-but-Unwired to Wired Boundaries
 
 **Status: RESOLVED (0.8.57).** `injection-guard.js` was built, tested, and documented as a
 running defense for two audits before anyone checked whether any runtime code actually called
 it — none did. After reviewing this finding, the maintainer directed wiring at
 two boundaries — web reading (the guard's original intent) and Village communications — with
 two hard constraints: it must never block the relay system, and it must never block threat
-triage in a group setting. What shipped:
+triage in a group setting. A third boundary, image-description text, was wired later when
+[Vision](vision-and-media) shipped. What shipped:
 
 - **Web:** `websearch.js` sanitizes search titles/snippets, `look_up` reference text, and
   `read_webpage` extractions at the module's return boundaries (URLs deliberately untouched so
@@ -47,6 +51,15 @@ triage in a group setting. What shipped:
   triage), no outbound path (replies, `relay_message`, `relay_to_ward`, trusted-contact
   delivery) passes through it, and the guard's span-surgical redaction means a villager
   genuinely relaying distress passes byte-identical. Each constraint is pinned by a test.
+- **Vision:** `vision.js`'s `describeImage()` runs every model-generated image description
+  through `sanitizeExternal(text, { source: 'image', context: 'image-description' })` before
+  it is cached on the asset and graduated onto linked memory nodes, so a description that
+  itself was talked into echoing an instruction cannot carry that instruction into a prompt or
+  into stored memory [@vision-js]. Unlike the web and Village boundaries, this one was wired
+  directly into the feature's initial build rather than retrofitted, because the original
+  finding below had already established the rule that external-derived text needs sanitizing at
+  its return boundary — see [Vision and media](vision-and-media) for the describe pipeline this
+  sits inside.
 
 Still deliberately unwired: Phylactery/Unruh recall (first-party stores; villager-written
 memories carry provenance labels instead) and gcal event titles (the ward's own calendar).
@@ -116,3 +129,5 @@ scoping, provenance labels, code-gated actions) rather than on text sanitization
   proxy, a Stranger-tier default for page content), layered on top of this now-wired injection
   guard rather than relying on prompt framing alone; see [Browser](browser) for the shipped
   subsystem itself.
+- [Vision and media](vision-and-media) — the describe pipeline whose image-description text is
+  the third wired boundary above.

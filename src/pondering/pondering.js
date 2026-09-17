@@ -251,7 +251,7 @@ The heading must be a single markdown heading line starting with "## ". In edge_
 // model spends tokens on chain-of-thought first, so the cap is generous (a cap
 // is free for non-thinking models — they stop when done). Shared helper owns
 // the reasoning-model handling + empty-content diagnostics.
-async function defaultCallLLM({ provider, apiKey, model, baseUrl, prompt }) {
+export async function defaultCallLLM({ provider, apiKey, model, baseUrl, prompt }) {
   // The pondering prompt is the Familiar's own first-person thinking, so it
   // rides as a system message with a bare user cue (see familiarDeliberationMessages),
   // not as a `user` turn framing the thought as spoken TO them.

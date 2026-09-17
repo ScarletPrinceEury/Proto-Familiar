@@ -12,9 +12,13 @@ this way, what alternatives were rejected, and what a future change has to respe
 deliberately reverse. Each page states a status: **decided and shipped**, **decided but not yet
 implemented**, or **proposed**. A "proposed" or "not yet implemented" status is not stale — it is
 the page's honest record of how far the decision has actually traveled from conversation into
-code.
+code. None of the decisions below have been reversed outright; where later work amended one in
+place instead ([Slice provenance is captured at the read](slice-provenance-captured-at-read) and
+[liveTurn is scoped to the ward's own turns](live-turn-scoped-to-ward) both do this), the page
+keeps an inline "Update (version):" note rather than a separate superseded page, because the
+original decision still holds and only its scope narrowed.
 
-Thirty decisions live here. Grouped by the question each one answers:
+Thirty-one decisions live here. Grouped by the question each one answers:
 
 ## Naming and module identity
 
@@ -140,6 +144,10 @@ and of what is normal for its bond with the ward:
 - [Domain folder layout](domain-folder-layout) — why domain-specific modules moved from a flat
   repository root into `src/<domain>/` folders one domain at a time, and which cross-cutting
   files were deliberately left at the root.
+- [Runtime state must not write git-tracked files](runtime-state-not-git-tracked) — why
+  application-discovered or ward-generated state always lands in a git-ignored overlay file,
+  merged with the shipped file at load time, instead of writing into a file the repo also
+  commits.
 
 ## How the decisions connect
 

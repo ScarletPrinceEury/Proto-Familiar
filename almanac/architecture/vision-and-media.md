@@ -280,7 +280,7 @@ The gifs people actually pick on Discord — from the Tenor/Giphy picker, or a p
 
 Starting in 0.9.2-alpha (PR #219), image descriptions are also consumed by the safety spine: `scoreImageDescriptionThreat()` scores the description using the same crisis-signals pattern matcher that scores typed text, then feeds any positive delta through `recordThreat()` with `source:'vision'` [@vision-js]. The mechanism is orchestration around existing `crisis-signals.js` and `threat-tracker.js`; neither scorer nor tracker changed [@vision-js]. Three constraints are ward-signed: full weighting (image signals count the same as typed distress, no damping), raise-only (images can only increase threat, never lower it), and ward-images-only (only images marked `audienceTag === 'ward-private'` move threat, so villagers' shared bytes never alter the ward's safety state) [@vision-js].
 
-The feature is known to false-positive on fictional violence (horror film stills, dark artwork) until interpretation can be context-aware. De-escalation from positive images is also deferred until descriptions are confident enough to trust [@vision-js]. Full details of the ward-signed design decisions and deferred work are in [Safety spine](../architecture/safety-spine).
+The feature is known to false-positive on fictional violence (horror film stills, dark artwork) until interpretation can be context-aware. De-escalation from positive images is also deferred until descriptions are confident enough to trust [@vision-js]. Full details of the ward-signed design decisions and deferred work are in [Safety spine](safety-spine).
 
 ## Vision milestone status
 
@@ -325,12 +325,12 @@ milestone rather than this one; see [Voice](voice) for those.
 Two ward-flagged threat-scoring refinements remain (out of the main spec):
 
 1. **Horror/fiction context exception**: Currently, the system can false-positive on fictional violence (horror film stills, dark artwork). Full weight applies to all image descriptions equally. Future work would allow context-aware interpretation to weight fictional vs. real scenarios differently.
-2. **Context-aware de-escalation**: Images can only raise threat (raise-only), never lower it. De-escalation from positive images is deferred until descriptions are confident enough to trust. Full details in [Safety spine](../architecture/safety-spine).
+2. **Context-aware de-escalation**: Images can only raise threat (raise-only), never lower it. De-escalation from positive images is deferred until descriptions are confident enough to trust. Full details in [Safety spine](safety-spine).
 
 ## Related
 
 - [Vision capability defaults](../decisions/vision-capability-defaults) — the design decision to default unknown models to BLIND and require allowlist proof before sending images live; video's tighter allowlist and one-live-clip budget extend the same asymmetry principle
 - [Message format and attachments](../decisions/message-attachments-format) — the design decision to keep `message.content` as a plain string and ride media beside it; video is the modality expansion that decision predicted
 - [Graceful degradation](../reference/engineering-conventions) — the repo-wide principle this subsystem follows
-- [Safety spine](../architecture/safety-spine) — threat detection, tracking, and escalation; now includes image-derived signals
+- [Safety spine](safety-spine) — threat detection, tracking, and escalation; now includes image-derived signals
 - [CDP mode](../decisions/browser-cdp-mode) — the same code-is-shipped-but-live-path-unverified posture the Gemini File-API path is in, both needing a ward desktop shakeout before the untested piece can be trusted
