@@ -5892,7 +5892,7 @@ function startAutonomousPondering() {
       // the eligibility check (any un-consolidated past month?) is its own rate
       // limit, so this no-ops on almost every tick. Off: setting +
       // PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1.
-      if (s?.ponderConsolidationEnabled === true && process.env.PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED !== '1') {
+      if (s?.ponderConsolidationEnabled !== false && process.env.PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED !== '1') {
         try {
           const identity = await enrich('', { staticOnly: true }).then(r => r?.static ?? '').catch(() => '');
           const c = await consolidatePonderings({

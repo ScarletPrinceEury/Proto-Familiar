@@ -774,10 +774,11 @@ un-consolidated past month?" gate is its own rate limit (no new loop, no timer).
 The consolidation call is given the **identity block** (`enrich('',{staticOnly})`
 → `.static`) so the fold reads its own month AS the Familiar — without it a
 capable model breaks frame and interrogates the "roleplay a digest" request
-(the reported derail). **DEFAULT-OFF / opt-in** (`ponderConsolidationEnabled`,
-was default-ON) + `PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`: it DELETES the
-Familiar's private writing, so it earns the same opt-in posture as
-tome-graduation / content-regate.
+(the reported derail). **Default-ON** (`ponderConsolidationEnabled` !== false) +
+`PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`. It DELETES the Familiar's private
+writing, so it was briefly flipped opt-in after the data-loss incident — the ward
+returned it to default-ON once the fold became reversible (archive + restore) and
+truncation-safe (below); the archive is what makes default-ON acceptable.
 **Reversibility (the data-loss fix):** the fold ARCHIVES the originals to
 `tomes/.pondering-consolidation-archive.json` (append-only, keyed by digest uid)
 *before* deleting them, and only deletes what it archived — losing a fold is

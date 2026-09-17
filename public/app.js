@@ -345,7 +345,7 @@ const state = {
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
-  ponderConsolidationEnabled: false, // OPT-IN: fold old ponderings into monthly digests + prune originals (destructive; archived + restorable)
+  ponderConsolidationEnabled: true, // default-on (ward decision): fold old ponderings into digests + prune originals (destructive, but archived + restorable)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
   redditReaderEnabled:     true,     // read Reddit via its JSON API (browser is anti-bot-walled)
@@ -4573,7 +4573,7 @@ function writeSettingsToUI() {
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
-  if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled === true);
+  if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled !== false);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
