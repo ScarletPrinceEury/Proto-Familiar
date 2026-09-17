@@ -30,6 +30,7 @@ import {
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
   exportBackup, restoreBackup, runLifecyclePass, snapshotPhylacteryDb, snapshotUnruhDb,
+  restorePhylacteryDb, restoreUnruhDb,
   getRememberMap, setRememberMap,
   getStandingConsent, setStandingConsent,
   getMemoryHealth, backfillMemoryEmbeddings, getMemoryGranularityAudit,
@@ -60,7 +61,7 @@ import { buildPageWatchPrompt, parsePageWatchDecision } from './src/browser/page
 import { recordThreat, resetThreat, getThreat, getThreatHistory } from './src/safety/threat-tracker.js';
 import { ponderOnce } from './src/pondering/pondering.js';
 import { consolidatePonderings, restorePonderingConsolidation } from './src/pondering/pondering-consolidate.js';
-import { createHolisticBackup } from './src/backup/holistic-backup.js';
+import { createHolisticBackup, extractBackup, layDownFileStores } from './src/backup/holistic-backup.js';
 import { startPonderingLoop, stopPonderingLoop, isRunning as ponderingRunning, clampChance } from './src/pondering/pondering-loop.js';
 import { startNoticingLoop, stopNoticingLoop, resetNoticingCooldown, isRunning as noticingRunning } from './src/safety/noticing-loop.js';
 import { buildNoticingPrompt, noticingMessages, AGING_INTENT_MS, AGING_TASK_MS, OVERDUE_EVENT_GRACE_MS } from './src/safety/noticing.js';
@@ -4377,6 +4378,73 @@ app.post('/api/backup/export', async (req, res) => {
   } catch (err) {
     await fsp.rm(outPath, { force: true }).catch(() => {});
     if (!res.headersSent) res.status(500).json({ ok: false, error: err?.message ?? 'backup failed' });
+  }
+});
+
+// Holistic backup (import/restore) — Stage 2, the DANGEROUS half: it overwrites
+// the live install with the contents of a .pfbackup. Safety spine, in order:
+//   1. Decrypt + validate the uploaded file FIRST — a wrong passphrase or a bad
+//      file aborts before anything live is touched.
+//   2. Make a pre-restore safety backup of the CURRENT state (same passphrase),
+//      saved to backups/ — so a bad restore is itself undoable. Abort if it fails.
+//   3. Lay down the file stores (each current one renamed aside first).
+//   4. Swap each db via db_restore_plain (sanity-checked) + reconnect the child.
+// The passphrase rides a header (not the URL/body) so it doesn't land in logs.
+// A restart is recommended afterward so every boot-time read re-reads settings.
+app.post('/api/backup/import', express.raw({ type: 'application/octet-stream', limit: '512mb' }), async (req, res) => {
+  const passphrase = typeof req.headers['x-backup-passphrase'] === 'string' ? req.headers['x-backup-passphrase'] : '';
+  if (!passphrase) return badRequest(res, 'a passphrase is required (X-Backup-Passphrase header)');
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return badRequest(res, 'no backup file uploaded');
+  const uploadPath = path.join(os.tmpdir(), `pf-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pfbackup`);
+  let extracted = null;
+  try {
+    await fsp.writeFile(uploadPath, req.body);
+    // 1. Validate FIRST — throws on wrong pass / tamper / bad manifest, nothing touched.
+    try { extracted = await extractBackup(uploadPath, passphrase); }
+    catch (err) { return res.status(400).json({ ok: false, error: err?.message ?? 'could not open the backup' }); }
+    const { stagingDir, manifest } = extracted;
+
+    // 2. Pre-restore safety backup of the CURRENT state — the restore's own undo.
+    const backupsDir = path.join(__dirname, '.pf-backups');
+    await fsp.mkdir(backupsDir, { recursive: true });
+    const preStamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const prePath = path.join(backupsDir, `pre-restore-${preStamp}.pfbackup`);
+    const pre = await createHolisticBackup({
+      rootDir: __dirname, outPath: prePath, passphrase,
+      includeMedia: manifest.includedMedia === true, includeLogs: manifest.includedLogs === true,
+      appVersion: PKG_VERSION,
+      snapshotPhylactery: (dest) => snapshotPhylacteryDb(dest),
+      snapshotUnruh: (dest) => snapshotUnruhDb(dest),
+    }).catch(err => ({ ok: false, error: err?.message ?? String(err) }));
+    if (!pre?.ok) return res.status(500).json({ ok: false, error: `refused to restore — could not make a pre-restore safety backup first: ${pre?.error ?? 'unknown'}` });
+
+    // 3. File stores (tomes/settings/media/logs) — each current one moved aside.
+    const laid = await layDownFileStores({ rootDir: __dirname, stagingDir });
+
+    // 4. Databases — swap + reconnect each child. Report per-db so a partial
+    //    failure is visible (the pre-restore backup is the recovery path).
+    const dbResults = {};
+    if (manifest.includes?.includes('phylactery.db')) dbResults.phylactery = await restorePhylacteryDb(path.join(stagingDir, 'phylactery.db'));
+    if (manifest.includes?.includes('unruh.db'))      dbResults.unruh      = await restoreUnruhDb(path.join(stagingDir, 'unruh.db'));
+
+    const dbOk = Object.values(dbResults).every(r => r?.ok !== false);
+    res.json({
+      ok: dbOk,
+      manifest,
+      restoredFileStores: laid.restored,
+      movedAside: laid.backedUp,
+      databases: dbResults,
+      preRestoreBackup: prePath,
+      restartRecommended: true,
+      note: dbOk
+        ? 'Restore complete. Restart the app so every boot-time read picks up the restored settings.'
+        : 'Restore partially failed on a database — your previous state is in the pre-restore backup listed. Restart and check.',
+    });
+  } catch (err) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: err?.message ?? 'restore failed' });
+  } finally {
+    if (extracted?.cleanup) await extracted.cleanup();
+    await fsp.rm(uploadPath, { force: true }).catch(() => {});
   }
 });
 

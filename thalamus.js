@@ -514,6 +514,23 @@ export async function reconnectPhylactery() {
   }
 }
 
+// Reconnect the Unruh child after its db was swapped underneath it (holistic
+// restore). Mirrors reconnectPhylactery: close the client, respawn via
+// connectUnruh so it reads the new file.
+export async function reconnectUnruh() {
+  unruhShuttingDown = true;
+  try {
+    if (unruhClient) {
+      try { await unruhClient.close?.(); } catch { /* best-effort */ }
+      unruhClient = null;
+    }
+  } finally {
+    unruhShuttingDown = false;
+  }
+  try { await connectUnruh(); }
+  catch (err) { console.error('[thalamus] Unruh reconnect failed:', err?.message ?? err); }
+}
+
 // Unruh runs as an independent stdio child. Its failures must not affect
 // Phylactery's enrichment path — connectUnruh() is best-effort and the
 // rest of enrich() degrades gracefully when unruhClient is null.
@@ -2901,6 +2918,27 @@ export async function snapshotUnruhDb(destPath) {
     const err = mcpToolError(r);
     if (err) return { ok: false, error: err };
     return parseToolText(r, { ok: false, error: 'no result' });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+// Swap a plaintext db snapshot (from a holistic backup being restored) over the
+// live store, then reconnect the child so it reads the new file. The service's
+// db_restore_plain sanity-checks the snapshot before clobbering. { ok, error? }.
+export async function restorePhylacteryDb(srcPath) {
+  const res = await callTool('db_restore_plain', { srcPath }).catch(err => ({ ok: false, error: err?.message ?? String(err) }));
+  if (res?.ok) await reconnectPhylactery().catch(err => console.warn('[thalamus] Phylactery reconnect after db restore failed:', err?.message ?? err));
+  return res;
+}
+export async function restoreUnruhDb(srcPath) {
+  try {
+    await startThalamus();
+    if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+    const r = await unruhClient.callTool({ name: 'db_restore_plain', arguments: { srcPath } });
+    const err = mcpToolError(r);
+    if (err) return { ok: false, error: err };
+    const res = parseToolText(r, { ok: false, error: 'no result' });
+    if (res?.ok) await reconnectUnruh().catch(e => console.warn('[thalamus] Unruh reconnect after db restore failed:', e?.message ?? e));
+    return res;
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 

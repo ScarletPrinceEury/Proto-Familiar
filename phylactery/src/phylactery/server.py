@@ -962,6 +962,38 @@ def db_snapshot(destPath: str) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+@mcp.tool()
+def db_restore_plain(srcPath: str) -> dict[str, Any]:
+    """I swap a plaintext db snapshot (from a holistic backup my human is
+    restoring) over my live store. I sanity-check it's a real Phylactery db
+    (my `memories` table is present) BEFORE clobbering anything, then remove the
+    live db + its WAL/SHM and copy the snapshot in. Thalamus reconnects me after.
+    The caller owns srcPath and has already made a pre-restore safety backup."""
+    import os, shutil, sqlite3
+    from phylactery.db import default_db_path
+    try:
+        if not os.path.exists(srcPath):
+            return {"ok": False, "error": f"snapshot not found: {srcPath}"}
+        # Verify it opens AND carries my signature table, before touching the live db.
+        try:
+            chk = sqlite3.connect(srcPath)
+            row = chk.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'").fetchone()
+            chk.close()
+        except sqlite3.DatabaseError:
+            row = None
+        if not row:
+            return {"ok": False, "error": "snapshot is not a valid Phylactery database"}
+        live = str(default_db_path())
+        for suffix in ("", "-shm", "-wal"):
+            victim = live + suffix
+            if os.path.exists(victim):
+                os.remove(victim)
+        shutil.copy2(srcPath, live)
+        return {"ok": True, "restoredTo": live}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Ward consent map (Pillar I) ───────────────────────────────────────────────
 
 

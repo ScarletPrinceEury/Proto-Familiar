@@ -1211,8 +1211,17 @@
               <label for="full-backup-media">Include media (images, voice clips)</label>
               <input type="checkbox" id="full-backup-media">
             </div>
-            <div class="field-hint">Both are off by default to keep the file small; turn them on for a complete archive. (Restoring a backup — importing it over an install — is coming next; for now this is the safe half: making the file.)</div>
+            <div class="field-hint">Both are off by default to keep the file small; turn them on for a complete archive.</div>
             <div id="full-backup-result" class="field-hint"></div>
+
+            <h4 style="margin:16px 0 4px">Restore from a full backup</h4>
+            <p class="field-hint"><strong>This overwrites everything with the backup's contents.</strong> Before it does, it makes a safety backup of the current state (using the same passphrase) so a bad restore is itself undoable. A restart is recommended afterward. Best on a fresh install or after data loss.</p>
+            <div class="ke-backup-row">
+              <input type="file" id="full-restore-file" accept=".pfbackup">
+              <input type="password" id="full-restore-pass" placeholder="Passphrase" autocomplete="off" spellcheck="false">
+              <button id="full-restore-run" class="btn-ghost">Restore…</button>
+            </div>
+            <div id="full-restore-result" class="field-hint"></div>
           </div>
 
           <div class="ke-backup-card">

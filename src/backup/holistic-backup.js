@@ -148,3 +148,60 @@ export async function createHolisticBackup({
     await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+/**
+ * Decrypt + untar a .pfbackup into a fresh staging dir and read its manifest.
+ * Throws on a wrong passphrase, tamper, bad header, or a missing/invalid
+ * manifest — so a bad file is rejected BEFORE the caller touches any live data.
+ * Returns { stagingDir, manifest, cleanup } — the caller MUST call cleanup().
+ */
+export async function extractBackup(filePath, passphrase) {
+  const container = await fsp.readFile(filePath);
+  const plaintext = decryptBundle(container, passphrase);   // throws on wrong pass / tamper / bad header
+  const staging = await fsp.mkdtemp(path.join(os.tmpdir(), 'pf-restore-'));
+  const cleanup = () => fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
+  try {
+    const tgz = path.join(staging, '.bundle.tgz');
+    await fsp.writeFile(tgz, plaintext);
+    await tar.x({ file: tgz, cwd: staging });
+    await fsp.rm(tgz, { force: true }).catch(() => {});
+    let manifest;
+    try { manifest = JSON.parse(await fsp.readFile(path.join(staging, 'manifest.json'), 'utf8')); }
+    catch { throw new Error('backup is missing or has an unreadable manifest'); }
+    if (manifest?.format !== 'proto-familiar-holistic-backup') throw new Error('not a Proto-Familiar holistic backup');
+    return { stagingDir: staging, manifest, cleanup };
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
+}
+
+/**
+ * Lay the file stores (tomes/, settings.json, and optional media/, logs/) from an
+ * extracted staging dir over the live install — after backing each current one
+ * aside as `<name>.pre-restore-<ts>` so this step is itself reversible. Does NOT
+ * touch the databases: those are swapped via each service's db_restore_plain so
+ * the running child can be reconnected. Returns { restored, backedUp }.
+ */
+export async function layDownFileStores({ rootDir, stagingDir, now = new Date() }) {
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
+  const restored = [], backedUp = [];
+  const swap = async (name) => {
+    const staged = path.join(stagingDir, name);
+    if (!await exists(staged)) return;
+    const live = path.join(rootDir, name);
+    if (await exists(live)) {
+      const aside = path.join(rootDir, `${name}.pre-restore-${stamp}`);
+      await fsp.rename(live, aside);
+      backedUp.push(path.basename(aside));
+    }
+    await fsp.cp(staged, live, { recursive: true });
+    restored.push(name);
+  };
+  // tomes + settings always; media/logs only if the bundle carried them.
+  await swap('tomes');
+  await swap('settings.json');
+  await swap('media');
+  await swap('logs');
+  return { restored, backedUp };
+}

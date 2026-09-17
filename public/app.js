@@ -6657,6 +6657,7 @@ function init() {
   $('ke-backup-export').addEventListener('click', keExportBackup);
   $('ke-backup-restore').addEventListener('click', keRestoreBackup);
   $('full-backup-export')?.addEventListener('click', fullBackupExport);
+  $('full-restore-run')?.addEventListener('click', fullBackupRestore);
 
   // Tomes modal
   $('tomes-btn').addEventListener('click', openTomesModal);
@@ -11187,6 +11188,34 @@ async function fullBackupExport() {
     $('full-backup-pass').value = '';
   } catch (err) {
     out.textContent = `Couldn't build the backup: ${err.message}`;
+  } finally { if (btn) btn.disabled = false; }
+}
+
+async function fullBackupRestore() {
+  const file = $('full-restore-file')?.files?.[0];
+  const pass = $('full-restore-pass').value;
+  const out  = $('full-restore-result');
+  const btn  = $('full-restore-run');
+  if (!file) { out.textContent = 'Choose a .pfbackup file first.'; return; }
+  if (!pass) { out.textContent = 'Enter the passphrase the backup was made with.'; return; }
+  if (!confirm('Restore will OVERWRITE the current Familiar (memory, tomes, settings) with this backup. A safety backup of the current state is made first. Continue?')) return;
+  out.textContent = 'Restoring — validating, making a safety backup of the current state, then swapping everything in…';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/backup/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Backup-Passphrase': pass },
+      body: file,
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || d.ok === false) {
+      out.textContent = `Restore did not complete: ${d.error || d.note || 'unknown error'}${d.preRestoreBackup ? ` — your prior state is safe in ${d.preRestoreBackup}.` : ''}`;
+      return;
+    }
+    out.textContent = `Restored. ${d.note || ''} A safety backup of your previous state is at ${d.preRestoreBackup}.`;
+    $('full-restore-pass').value = '';
+  } catch (err) {
+    out.textContent = `Restore failed: ${err.message}`;
   } finally { if (btn) btn.disabled = false; }
 }
 
