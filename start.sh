@@ -124,7 +124,13 @@ else
   # what drifted. Never blocks boot (exits 0 even on failure).
   node "$SCRIPT_DIR/scripts/ensure-node-deps.mjs" || true
   say "Starting Proto-Familiar on $URL (logs: $LOG_FILE) ..."
-  ( cd "$SCRIPT_DIR" && PORT="$PORT" TAILSCALE="$TAILSCALE" nohup node server.js >"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
+  # Background node DIRECTLY so `$!` is its pid — not a `( cd && … & )` subshell's
+  # (the old form: `$!` was the subshell/nohup, so stop.sh could kill a wrapper
+  # while node kept holding the port). This is only the pre-boot placeholder now
+  # — server.js overwrites the file with its own authoritative pid once it binds.
+  cd "$SCRIPT_DIR"
+  PORT="$PORT" TAILSCALE="$TAILSCALE" nohup node server.js >"$LOG_FILE" 2>&1 &
+  echo $! >"$PID_FILE"
 
   # Wait up to ~15s for the port to come up
   for i in $(seq 1 30); do

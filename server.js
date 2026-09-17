@@ -168,6 +168,7 @@ import { parseRegistryJson } from './src/village/village-registry-json.js';
 import { buildVillagePresenceBlock, villagePresenceOn } from './src/village/village-presence.js';
 import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom, WARD_PRIVATE, proactiveContextVillagers } from './src/village/audience.js';
 import { villagerContextOn, tellContentTag } from './src/warmth/villager-context.js';
+import { writePidFile, clearPidFile } from './src/server/pid-file.js';
 import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
@@ -229,6 +230,11 @@ app.set('trust proxy', 'loopback');
 // its body buffered (would otherwise eat memory on a 4 MB upload before
 // we even decide it's unauthorised).
 const TAILSCALE_CONFIG_FILE = path.join(__dirname, '.proto-familiar-config.json');
+// The server owns its own PID file (see src/server/pid-file.js): authoritative
+// where a launcher's `echo $!` can capture a wrapper/subshell PID and leave
+// stop.sh killing the wrong process. Written once we're actually listening,
+// removed on clean shutdown.
+const PID_FILE = path.join(__dirname, '.proto-familiar.pid');
 
 function loadTailscaleConfig() {
   try {
@@ -5478,6 +5484,10 @@ async function runPhylacteryMaintenance() {
 }
 
 const httpServer = app.listen(PORT, HOST, async () => {
+  // Claim the PID file with my OWN pid now that the bind succeeded — this
+  // overwrites whatever placeholder the launcher wrote, so stop.sh/stop.bat
+  // always kill the real node process regardless of how I was launched.
+  writePidFile(PID_FILE);
   const lines = ['', `Proto-Familiar ${PKG_VERSION} running at:`];
   lines.push(`  http://localhost:${PORT}`);
   if (tailscaleState.enabled) {
@@ -7029,6 +7039,9 @@ async function handleSignal(signal) {
   // handlers schedule reconnects mid-shutdown and spawn replacements while we
   // are trying to exit.
   try { markPeersShuttingDown(); } catch { /* thalamus never started */ }
+  // Drop my PID file so a stale pid can't linger and confuse the next launch —
+  // but only if it still names ME (never delete a successor's file mid-restart).
+  try { clearPidFile(PID_FILE); } catch { /* nothing to clean */ }
   // Hard-exit safety net: never let a stuck handle keep the process
   // alive past this window. SIGKILL-equivalent if anything misbehaves.
   setTimeout(() => {
