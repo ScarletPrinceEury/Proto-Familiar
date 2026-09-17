@@ -31,21 +31,30 @@ orientation only (a root `ARCHITECTURE.md` tour, a "Repository layout" legend in
 Stage 1 is the structural fix and is recorded here as complete: root modules were moved into
 `src/<domain>/` folders, one self-contained domain per pull request, each shipped only after the
 full test suite and `npm run audit:wiring` passed green with zero stale references
-[@repo-organization-plan]. All 16 domains are done — `voice`, `browser`, `schedule`, `safety`,
-`pondering`, `memory`, `gcal`, `tomes`, `vision`, `sessions`, `village`, `weather` (the pilot),
-`discord`, `warmth`, `ward`, and `search` — taking the repository root from about 151 `.js`/
-`.mjs` files down to about 21 [@repo-organization-plan].
+[@repo-organization-plan]. The original 16 domains from that plan are done — `voice`, `browser`,
+`schedule`, `safety`, `pondering`, `memory`, `gcal`, `tomes`, `vision`, `sessions`, `village`,
+`weather` (the pilot), `discord`, `warmth`, `ward`, and `search` — taking the repository root
+from about 151 `.js`/`.mjs` files down to about 21 [@repo-organization-plan]. A 17th folder,
+`src/server/`, was added later (0.12.17-alpha) for `pid-file.js`, the module that lets the
+server write its own authoritative PID file; it is a single-file addition rather than a
+plan-tracked domain move, but it follows the same `src/<domain>/` convention.
 
-The roughly 21 files still at the root are there **by design**, not as leftover unmigrated
-work: the entry point `server.js` (pinned by `package.json`'s `main` field and by the
-`start`/`stop`/`update` launcher scripts), the thalamus/cerebellum inward-outward split
-described in [Architecture](../architecture), `organs.js`, and cross-cutting helpers such as
-`macros.js`, `providers.js`, `provider-models.js`, `llm-call.js`, `injection-guard.js`,
-`tool-surfacing.js`, `core-prompts.js`, `slug-ids.js`, `relative-time.js`, `settings-merge.js`,
-`entity-ref.js`, `phylactery-result.js`, `message-sanitize.mjs`, and `updater.js`
-[@repo-organization-plan]. These stay next to `server.js` rather than forcing every importer of
-core, repo-wide code to churn for a marginal readability gain; the plan notes a future
-`src/core/` is possible with the same recipe but is not required.
+The root files that remain are there **by design**, not as leftover unmigrated work: the entry
+point `server.js` (pinned by `package.json`'s `main` field and by the `start`/`stop`/`update`
+launcher scripts), the thalamus/cerebellum inward-outward split described in
+[Architecture](../architecture), `organs.js`, and cross-cutting helpers such as `macros.js`,
+`providers.js`, `provider-models.js`, `llm-call.js`, `injection-guard.js`, `tool-surfacing.js`,
+`core-prompts.js`, `slug-ids.js`, `relative-time.js`, `settings-merge.js`, `entity-ref.js`,
+`phylactery-result.js`, `message-sanitize.mjs`, `updater.js`, `repo-root.js`, `name-field.js`,
+`guide-chat.js`, and `own-files.js` [@repo-organization-plan]. The last four postdate this
+decision's original count and are not leftover sprawl either: each is a repo-wide helper (or, for
+`guide-chat.js`, a small self-contained feature) added after Stage 1 shipped, following the same
+"cross-cutting code stays at root" logic rather than reopening a domain move. `repo-root.js` in
+particular is misleadingly named after the domain it first shipped alongside — it is `REPO_ROOT`,
+the call-depth-independent path helper the hazards paragraph below describes, and by now every
+migrated domain imports it, not just voice. These stay next to `server.js` rather than forcing
+every importer of core, repo-wide code to churn for a marginal readability gain; the plan notes a
+future `src/core/` is possible with the same recipe but is not required.
 
 Each domain move is a **pure relocation**: `scripts/migrate-domain.mjs` resolves every relative
 specifier (`from`, dynamic `import()`, `export … from`, and `new URL(…, import.meta.url)`)
@@ -60,15 +69,17 @@ the `src/safety/` move could ship without a ward sign-off even though it touched
 Two hazards recur across the domain moves and are worth keeping in mind when reading code in a
 newly-moved folder: a file that builds a `path.join(__dirname, …)` repo-root path (for example
 into `tomes/` or a model directory) silently breaks after the move unless the depth hop is
-added or the code switches to the voice domain's shared `repo-root.js` helper
-(`REPO_ROOT`, computed independent of call depth); and source-scanning tests that reference a
+added or the code switches to the shared `repo-root.js` helper (`REPO_ROOT`, computed
+independent of call depth) — first introduced during the voice move but now imported from
+folders across most migrated domains, not only voice; and source-scanning tests that reference a
 moved file as a **literal path string** (`read('voice-transcribe.js')`) need surgical updates,
 distinct from a blanket string replace that would also corrupt unrelated substring assertions
 [@repo-organization-plan].
 
 ## Status
 
-Stage 1 is complete for all 16 listed domains. Stage 2 — consolidating the overlapping
+Stage 1 is complete for all 16 plan-tracked domains, plus the later, single-file `src/server/`
+addition described above. Stage 2 — consolidating the overlapping
 knowledge stores (`docs/`, `almanac/`, `wiki/`, `Research/`) behind one labeled, authoritative
 home — is documented as optional and low-urgency, and has not started [@repo-organization-plan].
 A separate root-doc naming cleanup (renaming the space-in-name `User Tenets.md` and retiring the
@@ -81,7 +92,7 @@ Every architecture, decision, and reference page in this wiki that cites a moved
 path now points at `src/<domain>/<file>.js` instead of the old bare root filename. A page whose
 `sources:` entry still names a bare filename for one of the 16 migrated domains is stale and
 should be corrected to the `src/<domain>/` path before the citation is trusted. Bare root
-filenames are still correct for the roughly 21 core files enumerated above (`server.js`,
+filenames are still correct for the two-dozen or so core files enumerated above (`server.js`,
 `thalamus.js`, `cerebellum.js`, `organs.js`, `llm-call.js`, `injection-guard.js`,
 `phylactery-result.js`, and the others in that list) — do not "fix" those paths into a `src/`
 form they do not have.
@@ -90,6 +101,6 @@ Prose that names a file by its bare basename (`` `discord-gateway.js` ``, `` `vi
 remains accurate regardless of which folder it lives in, since the basename itself did not
 change during the move; only the `path:` field in a page's frontmatter `sources:` list needs the
 `src/<domain>/` prefix. If a future domain move happens (a `src/core/` split, or a further split
-of the ~21 remaining root files), the same recipe applies: one domain per pull request, driven
+of the remaining root files), the same recipe applies: one domain per pull request, driven
 by `scripts/migrate-domain.mjs`, verified by the full test suite and `npm run audit:wiring`, and
 followed by another wiki gardening pass to correct any `sources:` paths the move invalidates.

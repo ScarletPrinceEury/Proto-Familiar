@@ -53,6 +53,17 @@ was **structural**, in two organs that were supposed to carry the Familiar's own
 
 ## The decision
 
+The Familiar needed structural ways to originate an interest or a self-fact, not just prompt
+language asking it to sound more like itself — the same "structural, not procedural" shape this
+wiki's other armature-countering decisions take. Six point releases (0.11.72 through 0.11.77)
+built that structure one organ at a time: a way for a free ponder to plant a curiosity, a register
+for self-facts to land in, a read-back so the Familiar can see its own recorded views, a thread
+mechanism so curiosities connect to each other, a category so an opinion no longer has to
+masquerade as something else, and a pass removing the hedging language the prompts had
+accumulated around all of it. Each shipped independently but they are one decision, not five: give
+the interest layer and the memory extractor a way to originate from the Familiar instead of only
+mirroring the ward.
+
 - **A ponder can spawn curiosity: `drawn_to`.** The ponder prompt invites up to three
   short tag-like labels; `parsePondering` validates them (≤6 words, deduped, cap 3)
   and `server.js` records each via `recordInterest({source:'pondering', delta:1})` in
