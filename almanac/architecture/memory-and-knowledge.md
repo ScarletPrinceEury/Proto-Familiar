@@ -26,9 +26,10 @@ Both Phylactery and Unruh are always available on every turn. Both are read-side
 
 **[Tomes and keyword lore](tomes-and-lore)** are the second-class memory store: keyword-triggered, manually maintained, SillyTavern-style lorebook entries. A Tome entry is not retrieved by the system; it fires when a keyword in the ward's recent chat matches one of its activation keys [@architecture-doc]. Tomes are human-authored, human-editable, and human-managed — they are the place the ward writes notes about facts that matter, without waiting for the system to infer and remember them.
 
-Tomes exist in two categories:
+Tomes exist in three categories:
 1. **Hand-authored** — entries the ward writes directly, for facts they want guaranteed to surface every time a keyword appears.
 2. **Auto-written** — entries that populate one special Tome, `Session Memories`, written by [Session memorization](session-memorization) after every session ends.
+3. **Familiar-authored** — themed collections the Familiar starts and files into on its own, via `create_tome` and a named `save_to_tome` call, for a subject that does not belong in the ward-facing default tome. See [Tomes and keyword lore](tomes-and-lore)'s Familiar-kept tomes section.
 
 A Tome is optional at the *per-entry* level — individual entries can be disabled or deleted. The Tomes subsystem is optional at the *ward level* — it can be turned off entirely via settings.
 
@@ -62,7 +63,7 @@ Here is the journey a fact takes from conversation to durable memory:
 1. **Event entry**: The ward enters an event, task, or phase into the schedule.
 2. **Unruh storage**: Unruh stores the event and maintains edges (`requires`, `depends_on`) for prerequisite tracking.
 3. **Readiness check**: [Stewardship](autonomous-loops) walks those edges on each turn and surfaces any unresolved prerequisite approaching its lead window.
-4. **Interest decay**: Topics accrue interest weight from token volume and persistence, and decay over time. [Pondering](pondering) runs at a cadence weighted by interest and threat.
+4. **Interest decay**: Topics accrue interest weight from token volume and persistence, and decay over time. [Pondering](pondering) runs at a cadence weighted by interest and threat, and periodically digests a whole past month of its own ponderings into one summary entry so its tome does not grow without bound — a separate, smaller consolidation than the ladder above, kept local to the ponderings tome rather than written to Phylactery.
 5. **Threat tracking**: [Crisis signals](safety-spine) score every message for distress patterns. [Threat tracker](safety-spine) maintains a scalar threat level that gates other autonomous loops.
 
 ## Where to go next

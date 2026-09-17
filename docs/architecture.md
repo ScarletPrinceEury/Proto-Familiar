@@ -772,6 +772,14 @@ same uids under the write lock. Rides the pondering tick — `runPonder` (server
 calls it best-effort before pondering; the "any un-consolidated past month?" gate
 is its own rate limit (no new loop, no timer). Off: `ponderConsolidationEnabled`
 (default ON) + `PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`.
+**On-demand triggers (2026-09):** `runPonderingConsolidationNow()` drains ALL
+currently-eligible past months in one go (capped 24/run) — exposed as `POST
+/api/pondering/consolidate` (the UI's "Fold ponderings" button in the Automation
+pane) and as the ward's Discord `!consolidate ponderings` DM command
+(`setConsolidationRunners` injects it into the gateway, no cycle). Its memory
+twin, `!consolidate memory` / the "Roll up memories" button, calls the existing
+`runLifecyclePass({force:true})` (`POST /api/entity/lifecycle`). This is the
+console↔UI parity rule in practice: every ward console command has a UI control.
 
 **`reminders-loop.js`** — autonomous singleton. Every 30s, calls
 Unruh's `reminders_due` MCP tool, enqueues each into the outbox

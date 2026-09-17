@@ -345,6 +345,7 @@ const state = {
   contentRegateEnabled:    false,   // opt-in: Familiar re-tags existing ward-private facts for content-sharing
   needsTrackingEnabled:    false,   // opt-in: autonomously marks missed need-windows
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
+  ponderConsolidationEnabled: true, // default-on: fold old ponderings into monthly digests (rides the pondering tick)
   notificationSounds:      true,    // in-app chime on new messages (default on)
   organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
   redditReaderEnabled:     true,     // read Reddit via its JSON API (browser is anti-bot-walled)
@@ -593,7 +594,7 @@ const SERVER_SYNCED_KEYS = [
   'memorySweepEnabled', 'villagePresenceEnabled', 'villagerContextEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'cdpModeEnabled', 'videoFileApiEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'ponderConsolidationEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
@@ -4358,6 +4359,7 @@ function readSettingsFromUI() {
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
   if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
+  if ($('ponder-consolidation-toggle')) state.ponderConsolidationEnabled = $('ponder-consolidation-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
   if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
@@ -4571,6 +4573,7 @@ function writeSettingsToUI() {
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
+  if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled !== false);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
@@ -6043,6 +6046,7 @@ function init() {
     'provider-select', 'api-key', 'model-input', 'streaming-toggle',
     'temperature', 'max-tokens', 'thalamus-dynamic-depth', 'handoff-toggle',
     'pondering-toggle', 'pondering-scale', 'pondering-thread-chance', 'ponder-web-toggle', 'ponder-web-reads',
+    'ponder-consolidation-toggle',
     'warmth-toggle', 'warmth-quiet-start', 'warmth-quiet-end',
     'baselines-toggle', 'wait-streak-toggle', 'noticing-toggle', 'browse-toggle', 'page-watch-toggle',
     'browse-site-mode', 'browse-site-list', 'browse-confirm-domains', 'browse-confirm-mode',
@@ -6461,6 +6465,11 @@ function init() {
     if (e.target === $('loops-health-modal')) closeLoopsHealthModal();
   });
   $('loops-health-refresh')?.addEventListener('click', () => loadLoopsHealth({ force: true }));
+
+  // Run-a-consolidation-pass-now buttons (the UI twins of the Discord
+  // !consolidate commands). Disable both while one runs; report inline.
+  $('consolidate-ponderings-btn')?.addEventListener('click', () => runConsolidationNow('ponderings'));
+  $('consolidate-memory-btn')?.addEventListener('click', () => runConsolidationNow('memory'));
   document.querySelectorAll('[data-loops-tab]').forEach(el => {
     el.addEventListener('click', () => loopsSwitchTab(el.dataset.loopsTab));
   });
@@ -12802,6 +12811,44 @@ const LOOPS_LOG_ENDPOINTS = {
 };
 // kind -> array (loaded) | null (failed — distinct from "loaded, empty") | undefined (not yet loaded)
 let _loopsLogCache = {};
+
+// Run a consolidation pass on demand from the Automation pane. `which` is
+// 'ponderings' (fold old ponderings into digests) or 'memory' (memory lifecycle
+// = the daily→weekly→monthly roll-up + hygiene). Disables both buttons while one
+// runs and reports the outcome in the shared status hint.
+async function runConsolidationNow(which) {
+  const btnIds = ['consolidate-ponderings-btn', 'consolidate-memory-btn'];
+  const btn = $(which === 'ponderings' ? 'consolidate-ponderings-btn' : 'consolidate-memory-btn');
+  const status = $('consolidate-now-status');
+  const original = btn ? btn.textContent : '';
+  const url  = which === 'ponderings' ? '/api/pondering/consolidate' : '/api/entity/lifecycle';
+  const body = which === 'ponderings' ? null : JSON.stringify({ force: true });
+  btnIds.forEach(id => { const b = $(id); if (b) b.disabled = true; });
+  if (btn) btn.textContent = 'Working…';
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ?? undefined,
+    });
+    const d = await res.json().catch(() => ({}));
+    let msg;
+    if (which === 'ponderings') {
+      msg = (d && d.ok === false) ? `Couldn't fold ponderings: ${d.error || 'unknown error'}.`
+          : d && d.months ? `Done — folded ${d.entries} pondering${d.entries === 1 ? '' : 's'} across ${d.months} month${d.months === 1 ? '' : 's'} into digests.`
+          : 'Nothing to fold yet — no past month has enough un-consolidated ponderings.';
+    } else {
+      msg = (d && d.ok === false) ? `Couldn't run the memory lifecycle: ${d.error || 'the memory store didn\'t respond'}.`
+          : 'Done — the memory lifecycle pass has run.';
+    }
+    if (status) status.textContent = msg;
+  } catch (err) {
+    if (status) status.textContent = `That didn't go through: ${err.message}.`;
+  } finally {
+    btnIds.forEach(id => { const b = $(id); if (b) b.disabled = false; });
+    if (btn) btn.textContent = original;
+  }
+}
 
 function openLoopsHealthModal() {
   $('loops-health-modal')?.classList.remove('hidden');

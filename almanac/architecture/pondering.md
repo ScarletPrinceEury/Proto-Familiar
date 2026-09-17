@@ -32,6 +32,9 @@ sources:
   - id: server-js
     type: file
     path: server.js
+  - id: pondering-consolidate-js
+    type: file
+    path: src/pondering/pondering-consolidate.js
 ---
 
 # Pondering
@@ -136,6 +139,38 @@ tell lifecycle (storage, gating, and the show-once surfacing this creates the wr
 `getUnactedIntents`'s defense-in-depth skip of any tell still carrying a `recipient`
 [@recent-ponderings-js].
 
+## Digesting a month of ponderings so they don't pile up forever (0.12.18)
+
+Every tick writes one more entry into the ponderings tome, and before 0.12.18-alpha nothing
+ever folded them back down — the [memory system](memory-and-knowledge) has a consolidation
+ladder for daily-to-yearly rollup, but ponderings had no equivalent [@pondering-consolidate-js].
+`consolidatePonderings()` (`pondering-consolidate.js`) closes that gap: it finds the OLDEST past
+calendar month that still holds at least three eligible `scope:'pondering'` entries, has an LLM
+distill them into one first-person `scope:'pondering-digest'` entry ("what I was turning over in
+<month>"), and prunes the originals once the digest is written [@pondering-consolidate-js]. A
+digest entry ships `enabled: false` — it is an artifact for the Familiar or ward to read back,
+never something that re-injects itself into a future prompt by keyword match the way an ordinary
+Tome entry would.
+
+The eligibility check is the load-bearing guard: a pondering that still carries an UNACTED
+`wants_to_save` intent (a pending tell or follow-up nothing has filed yet) is never eligible and
+is re-validated under `modifyTomeFile`'s write lock immediately before the prune, so a tell that
+became pending between the read and the write survives [@pondering-consolidate-js]. The current,
+still-filling month is never a candidate. Consolidation stays LOCAL to the ponderings tome rather
+than writing anything to [Phylactery](phylactery) — a digest of per-embodiment thinking is still
+per-embodiment, not a canonical fact about the ward, the same reasoning that keeps ordinary
+ponderings out of Phylactery in the first place (see below).
+
+There is no new loop or timer: `runPonder` (`server.js`) calls `consolidatePonderings()`
+best-effort immediately before each pondering tick, and the "is there an un-consolidated past
+month?" check inside `selectConsolidationTarget` is its own rate limit — once a month is digested
+it will not be picked again, so the call is cheap on every tick that has nothing to do, and a
+large backlog drains one month per tick rather than all at once (the same oldest-first, one-per-call
+shape as the 0.8.89 memory-sweep fix) [@pondering-consolidate-js]. The feature is on by default
+(`ponderConsolidationEnabled`) with a hard off-switch, `PROTO_FAMILIAR_PONDER_CONSOLIDATE_DISABLED=1`,
+following the same settings-toggle-plus-env-off-switch contract every [autonomous loop](autonomous-loops)
+ships with, even though this rides an existing tick rather than owning one.
+
 ## Why ponderings stay per-embodiment
 
 Ponderings are not written to Phylactery, the canonical store, because they are thoughts in progress rather than conclusions about the ward or the world [@pondering-loop-js]. A pondering is context-sensitive to the current embodiment's conversation history, interruptions, current mood, and recent focus. The thought "I wonder if Chen is overcommitting again" makes sense in a particular chat session or embodiment flow, not as a fact to inject into every future conversation [@autonomous-loops-doc]. Ponderings are meant to be read in the moment or on-demand via `read_pondering`, not accumulated into standing identity.
@@ -143,6 +178,9 @@ Ponderings are not written to Phylactery, the canonical store, because they are 
 ## Related
 
 - [Autonomous loops](autonomous-loops) — the full list of loops, their cadences, and off-switches.
+- [Memory and knowledge](memory-and-knowledge) — Phylactery's daily-to-yearly consolidation
+  ladder that the pondering-tome digest above deliberately mirrors in shape but keeps separate
+  from, since a digest of ponderings is still per-embodiment thinking, not a canonical fact.
 - [Safety spine](safety-spine) — how pondering, warmth, and needs-tracking stand down during crisis.
 - [Unruh](unruh) — the interest and threat scoring systems that shape pondering cadence.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the design principle that ponderings embody.

@@ -174,7 +174,7 @@ import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
 import { filterOutgoingReply } from './src/safety/outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw } from './src/discord/discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw, setConsolidationRunners } from './src/discord/discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
@@ -4356,6 +4356,32 @@ app.post('/api/entity/lifecycle', async (req, res) => {
   res.json(result);
 });
 
+// Drain ALL currently-eligible past months of ponderings into digests in one go
+// — the on-demand "catch up now" that the pondering tick does one-month-at-a-time.
+// Shared by POST /api/pondering/consolidate (UI) and the Discord `!consolidate
+// ponderings` command (setConsolidationRunners). Bounded so a huge backlog can't
+// spin forever. Returns { ok, months, entries } or { ok:false, error }.
+async function runPonderingConsolidationNow() {
+  const s = readSettingsSync();
+  const conn = connectionForFeature(s, 'pondering');
+  if (!conn?.apiKey) return { ok: false, error: 'no connection is configured for pondering' };
+  let months = 0, entries = 0;
+  for (let i = 0; i < 24; i++) {   // hard cap: at most 24 months per manual run
+    const c = await consolidatePonderings({
+      tomesDir: TOMES_DIR,
+      provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
+      settings: s,
+    });
+    if (!c) break;
+    months += 1; entries += c.count;
+  }
+  return { ok: true, months, entries };
+}
+app.post('/api/pondering/consolidate', async (_req, res) => {
+  try { res.json(await runPonderingConsolidationNow()); }
+  catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'consolidation failed' }); }
+});
+
 // Ward remember-consent map — governs per-category memory storage policy.
 // The GET carries the active standing-consent windows alongside the map so the
 // settings panel renders both in one fetch.
@@ -5602,6 +5628,15 @@ const httpServer = app.listen(PORT, HOST, async () => {
   // a bot token + enables the toggle in Settings; follows settings
   // changes within 30s. Hard off-switch: PROTO_FAMILIAR_DISCORD_DISABLED=1.
   startDiscordGateway();
+  // Hand the gateway the two on-demand consolidation runners so the ward's
+  // `!consolidate ponderings` / `!consolidate memory` DM commands can drive the
+  // same passes the UI buttons and the autonomous schedules do. Set once on the
+  // module-level gw singleton (survives supervisor reconnects), like the voice
+  // controller. No cycle: the gateway never imports server.js.
+  setConsolidationRunners({
+    ponderings: () => runPonderingConsolidationNow(),
+    memory:     () => runLifecyclePass({ force: true }),
+  });
   // Bot-DM push channel: when the gateway can DM my human (token + ward's
   // Discord user id configured), every outbox item — reminders, event
   // alerts, warm reach-outs, triage check-ins — reaches them as a real

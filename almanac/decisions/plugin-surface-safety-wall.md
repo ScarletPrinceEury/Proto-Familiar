@@ -16,7 +16,9 @@ sources:
 # Plugin surface ("Grimoire"): Psycheros-compatible, walled off from the safety paths
 
 **Status: decided, not yet implemented (design approved, build spec written, no code shipped as
-of 0.11.29).** Proto-Familiar will grow a first-class plugin surface, source-compatible with
+of 0.12.18-alpha).** The build spec assigns the milestone its own minor, `0.14` — 0.12 was spent
+on an unrelated crisis-classifier milestone and 0.13 belongs to a trackers milestone, so Grimoire
+was pushed back a slot rather than sharing either one [@plugin-surface-build-spec]. Proto-Familiar will grow a first-class plugin surface, source-compatible with
 plugins written for [Psycheros](https://github.com/PsycherosAI/Psycheros) — a sibling harness
 descending from the same entity-as-subject philosophy — under the working milestone name
 **Grimoire** [@plugin-surface-design]. The decision itself, the compatibility model it commits
