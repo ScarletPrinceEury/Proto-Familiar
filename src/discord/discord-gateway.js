@@ -1340,6 +1340,46 @@ function isUpdateCommand(content) {
   return /^\/update(\s+now)?\s*$/i.test(String(content ?? '').trim());
 }
 
+// Ward-only `!consolidate [ponderings|memory]` — the DM twin of the UI's
+// "run a pass now" buttons. `ponderings` folds old ponderings into digests;
+// `memory` runs the memory lifecycle (consolidation + hygiene + graduation).
+// Bare `!consolidate` prints the two subcommands. Mechanical (no LLM turn);
+// villagers never reach it (gated by isWard at the call site).
+export function parseConsolidateCommand(content) {
+  const m = /^!consolidate(?:\s+(\S+))?\s*$/i.exec(String(content ?? '').trim());
+  if (!m) return null;
+  const arg = (m[1] ?? '').toLowerCase();
+  if (!arg) return 'help';
+  if (/^ponder/.test(arg))            return 'ponderings';   // ponder / pondering / ponderings
+  if (/^mem/.test(arg))               return 'memory';       // mem / memory / memories
+  return 'help';
+}
+
+async function handleConsolidateCommand(gw, { msg, which }) {
+  const say = (text) => sendChannelMessage(gw.config.token, msg.channel_id, text).catch(() => {});
+  if (which === 'help') {
+    return say('Consolidation passes I can run right now:\n• `!consolidate ponderings` — fold a backlog of old ponderings into monthly digests.\n• `!consolidate memory` — run my memory lifecycle (roll memories up their daily→weekly→monthly ladder, plus hygiene).');
+  }
+  if (!gw.consolidationRunners) {
+    return say('I can\'t reach my consolidation passes right now — that wiring isn\'t available.');
+  }
+  await say(which === 'ponderings' ? 'Folding down old ponderings — one moment…' : 'Running my memory lifecycle — one moment…');
+  try {
+    if (which === 'ponderings') {
+      const r = await gw.consolidationRunners.ponderings();
+      if (!r?.ok) return say(`I couldn't do that: ${r?.error ?? 'something went wrong'}.`);
+      return say(r.months
+        ? `Done — folded ${r.entries} pondering${r.entries === 1 ? '' : 's'} across ${r.months} month${r.months === 1 ? '' : 's'} into digests.`
+        : 'Nothing to fold — no past month has enough un-consolidated ponderings yet.');
+    }
+    const r = await gw.consolidationRunners.memory();
+    if (r && r.ok === false) return say(`I couldn't do that: ${r.error ?? 'my memory store didn\'t respond'}.`);
+    return say('Done — my memory lifecycle pass has run.');
+  } catch (err) {
+    return say(`I couldn't do that: ${err?.message ?? 'something went wrong'}.`);
+  }
+}
+
 /**
  * Parse a voice-call command (Pass 3). `!call` / `!join` → 'join' (join the
  * ward's current VC), `!leave` / `!hangup` → 'leave'. Anything else → null.
@@ -2880,6 +2920,7 @@ const gw = {
   voiceController: null,        // { joinVoiceCall, leaveVoiceCall } from voice-discord-server (Pass 3)
   guildNames: new Map(),        // guildId → server name, from GUILD_CREATE — names the server list + knock groups
   userInfo: new Map(),          // userId → { id, username, global_name } — so a voice speaker reads as a NAME, not a raw snowflake the LLM can't tell apart
+  consolidationRunners: null,   // { ponderings, memory } from server.js — backs the ward's !consolidate commands
 };
 
 /** Cache what Discord tells us about a user (from GUILD_CREATE members, seeded
@@ -2941,6 +2982,14 @@ export function setVoiceRosterListener(fn) { gw.voiceRosterListener = typeof fn 
 
 /** server.js hands the voice-discord-server's join/leave here so `!call` can drive it. */
 export function setDiscordVoiceController(ctl) { gw.voiceController = ctl && typeof ctl.joinVoiceCall === 'function' ? ctl : null; }
+
+/** server.js hands the on-demand consolidation runners here so the ward's
+ *  `!consolidate ponderings` / `!consolidate memory` DM commands can drive the
+ *  same passes as the UI buttons. Each runner is async → a result object. */
+export function setConsolidationRunners(runners) {
+  gw.consolidationRunners = (runners && typeof runners.ponderings === 'function' && typeof runners.memory === 'function')
+    ? runners : null;
+}
 
 /** Track who is in which voice channel from VOICE_STATE_UPDATE, so `!call` can
  *  find the ward's current VC. `channel_id: null` means they left voice. Returns
@@ -3216,6 +3265,8 @@ function onDispatch(t, d) {
         if (decision.isWard && decision.kind === 'ward-dm') {
           if (isQueueCommand(d.content))      { await handleQueueCommand(gw, { msg: d }); return; }
           if (isConnectionCommand(d.content)) { await handleConnectionCommand(gw, { msg: d }); return; }
+          const consolidate = parseConsolidateCommand(d.content);
+          if (consolidate) { await handleConsolidateCommand(gw, { msg: d, which: consolidate }); return; }
         }
 
         // Text-in-voice interleave (Pass 4): if a voice call is live in THIS
