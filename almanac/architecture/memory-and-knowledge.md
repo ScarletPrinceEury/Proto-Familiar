@@ -16,7 +16,7 @@ Proto-Familiar's memory is not one thing — it is a layered system where differ
 
 ## The two canonical stores
 
-**[Phylactery](phylactery)** owns the Familiar's persistent, autonomously-retrieved identity and memory. It is the canonical self-store: identity, the relational knowledge graph, every memory tier (daily through significant), and situational facts [@claude-md]. Phylactery is always injected on every turn — the Familiar reads its own identity and the knowledge graph to ground context. This is first-party, structured, and system-retrieved: the Familiar does not have to remember to look anything up; Phylactery is wired into the prompt assembly so the identity surface and the knowledge graph are just *there* [@architecture-doc].
+**[Phylactery](phylactery)** owns the Familiar's persistent, autonomously-retrieved identity and memory. It is the canonical self-store: identity, the relational knowledge graph, every memory tier (daily through significant), and situational facts — including [trackers](trackers) (the ward's habit logs, inventory lists, gauges, and state machines) [@claude-md]. Phylactery is always injected on every turn — the Familiar reads its own identity and the knowledge graph to ground context. This is first-party, structured, and system-retrieved: the Familiar does not have to remember to look anything up; Phylactery is wired into the prompt assembly so the identity surface and the knowledge graph are just *there* [@architecture-doc].
 
 **[Unruh](unruh)** owns temporal context, schedule, interests, and threat state — everything about *when* and the Familiar's engagement with time. It is the second pillar of canonical knowledge but is narrowly scoped: temporal facts that live outside Phylactery because ponderings are per-embodiment (a thought the Familiar has in Proto-Familiar doesn't necessarily travel to other embodiments), and because Unruh's threat mechanics are local to the current interaction [@claude-md].
 
@@ -68,7 +68,7 @@ Here is the journey a fact takes from conversation to durable memory:
 
 ## Where to go next
 
-- **If you're asking "where does a fact live?"** → Start with Phylactery for identity, Unruh for schedule, Tomes for hand-authored facts. Then [Content-gating](content-gating) if you're controlling who sees what.
+- **If you're asking "where does a fact live?"** → Start with Phylactery for identity, Unruh for schedule, Tomes for hand-authored facts, and [Trackers](trackers) for habit logs and state machines. Then [Content-gating](content-gating) if you're controlling who sees what.
 - **If you're asking "how does a session turn into a lasting memory?"** → [Session memorization](session-memorization) for the job queue, then [Phylactery](phylactery) for consolidation.
 - **If you're asking "how does the Familiar find something that was said?"** → [Session search](session-search) for raw transcript search (what was literally said) versus Phylactery `recall` for distilled memory retrieval.
 - **If you're asking "how does the Familiar know it needs to reach out?"** → [Unruh](unruh) for the schedule and interests, [Autonomous loops](autonomous-loops) for the reminders and triage.

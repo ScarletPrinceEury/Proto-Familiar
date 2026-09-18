@@ -77,7 +77,8 @@ child at boot, the same in-tree specialist pattern used for [Unruh](unruh) [@arc
   profile entity-core's `memory_search` had [@phylactery-design].
 - **All memory tiers**, daily through significant, under one consolidation pipeline
   [@phylactery-design] [@claude-md].
-- **Situational facts and trackers** — state entity-core's schema could not represent
+- **Situational facts and [trackers](trackers)** — state entity-core's schema could not represent.
+  [Trackers](trackers) are the ward's habit logs, inventory lists, gauges, and state machines
   [@phylactery-design].
 
 Retrieval embeddings are computed locally (no API key required); only consolidation and
