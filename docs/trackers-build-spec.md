@@ -92,6 +92,13 @@ The spec's anchors were all verified still present (`villagerNameRegex`,
 - **Migration number is concrete:** the next free Unruh migration is **`0007`** →
   `0007_trackers.sql` (highest current is `0006_locations.sql`).
 
+- **A 4th archetype is coming: `gauge`.** A ward idea (2026-09) — decaying *upkeep*
+  (eating, hydration, meds): full after the event, drains as neglected, refills on
+  logging, with a check-first → crisis safety ladder at genuinely-medical extremes.
+  Specified in the companion **[`gauge-trackers-build-spec.md`](gauge-trackers-build-spec.md)**;
+  it builds on this spec's store/tools/cues and rides the same `0.14` milestone. It
+  is safety-critical (threat + emergency-contact paths, ward sign-off).
+
 ---
 
 ## 1. Unruh store (migration `0007_trackers.sql`)
