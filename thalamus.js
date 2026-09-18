@@ -1702,6 +1702,20 @@ function sortFiles(files, order) {
  * Convert an array of identity file objects to a string.
  * Each non-empty file is XML-wrapped and joined with --- separators.
  */
+// Strip the Village registry from every identity bucket. It is machine
+// routing/gating JSON that lives in Phylactery's meta store now, never
+// identity — but a legacy custom/village-registry.md row can linger until the
+// first sync heals it (or be mis-filed under another category). Removing it
+// here keeps machine JSON out of BOTH the always-injected identity block and
+// the Knowledge editor's Identity tab. Mutates and returns `id`.
+export function stripVillageRegistry(id) {
+  if (!id || typeof id !== 'object') return id;
+  for (const cat of ['self', 'ward', 'relationship', 'custom']) {
+    if (Array.isArray(id[cat])) id[cat] = id[cat].filter(f => f?.filename !== 'village-registry.md');
+  }
+  return id;
+}
+
 function identitySection(files, order) {
   if (!files?.length) return '';
   const sorted = sortFiles(files.filter(f => f.content?.trim()), order);
@@ -1900,7 +1914,10 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     let relContent  = '';
     let custContent = '';
     try {
-      id = parseToolText(idResult, {});
+      // Belt-and-suspenders: keep the Village registry (machine state in
+      // Phylactery's meta store now, healed off identity on first sync) out of
+      // every identity bucket, so it can never render into the identity block.
+      id = stripVillageRegistry(parseToolText(idResult, {}));
       const baseFile = (id.self ?? []).find(f => f.filename === 'base_instructions.md');
       baseContent = baseFile?.content?.trim()
         ? wrapFile(baseFile.filename, baseFile.content, baseFile.promptLabel)
@@ -1918,10 +1935,9 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         }));
         userContent = identitySection(applyMarkers(id.ward ?? []), WARD_ORDER);
         relContent  = identitySection(applyMarkers(id.relationship ?? []), RELATIONSHIP_ORDER);
-        // village-registry.md is the canonical Village registry (routing +
-        // gating data synced from village.js) — machine state, not identity
-        // prose. It must never render into the prompt.
-        custContent = identitySection(applyMarkers((id.custom ?? []).filter(f => f.filename !== 'village-registry.md')), []);
+        // (village-registry.md is already stripped from every bucket above — it
+        // is machine state in Phylactery's meta store, never identity prose.)
+        custContent = identitySection(applyMarkers(id.custom ?? []), []);
       }
     } catch (err) {
       console.error('[thalamus] identity assembly failed (defaulting to empty):', err?.message ?? err);
@@ -3451,6 +3467,18 @@ export async function deleteMemoryById({ id }) {
 
 export async function getIdentityAll({ softTimeout } = {}) {
   return callTool('identity_get_all', {}, softTimeout ? { softTimeout } : {});
+}
+
+// Village registry canonical store (routing/gating JSON — NOT identity). Lives
+// in Phylactery's meta KV table, so it never appears in identity_get_all / the
+// identity block / the Knowledge editor's Identity tab. get returns
+// { ok, registry: <json string|null> }; set takes the opaque JSON string.
+export async function villageRegistryGet({ softTimeout } = {}) {
+  return callTool('village_registry_get', {}, softTimeout ? { softTimeout } : {});
+}
+
+export async function villageRegistrySet(registry) {
+  return callTool('village_registry_set', { registry });
 }
 
 export async function listGraphNodes({ type, limit = 200, offset = 0 } = {}) {

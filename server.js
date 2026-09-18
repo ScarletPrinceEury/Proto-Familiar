@@ -21,7 +21,7 @@ import {
   startThalamus,
   enrich, createMemory, appendIdentity, updateIdentitySection,
   // Reads for the Knowledge editor UI
-  listMemories, readMemory, readMemoryById, getIdentityAll, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
+  listMemories, readMemory, readMemoryById, getIdentityAll, villageRegistryGet, villageRegistrySet, stripVillageRegistry, listGraphNodes, searchGraphNodes, getGraphSubgraph, getFullGraph,
   listUnresolvedAttributions,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
@@ -4218,8 +4218,12 @@ app.post('/api/entity/memories/supersede', async (req, res) => {
 
 // ── Identity ──────────────────────────────────────────────────────────────
 app.get('/api/entity/identity', async (_req, res) => {
-  try { res.json(await getIdentityAll()); }
-  catch (err) { gatewayDown(res, err.message); }
+  try {
+    // Strip the Village registry (machine state in Phylactery's meta store, not
+    // identity) so the Knowledge editor's Identity tab never shows machine JSON
+    // as an editable identity file — mirrors the enrich() guard.
+    res.json(stripVillageRegistry(await getIdentityAll()));
+  } catch (err) { gatewayDown(res, err.message); }
 });
 
 app.put('/api/entity/identity/:category/:filename/sections/:section', async (req, res) => {
@@ -5548,26 +5552,21 @@ async function startVillageSync() {
   let pullReached = false;
 
   initVillageSync({
+    // The registry is routing/gating machine state, NOT identity — it lives in
+    // Phylactery's meta KV store (village_registry_*), never in identity_files.
+    // (It used to piggyback on custom/village-registry.md; the Phylactery tools
+    // self-heal that legacy row on first get/set — see village_registry.py.)
     push: async (json) => {
-      const content = '```json\n' + json + '\n```';
-      const result = await rewriteIdentitySection({
-        category: 'custom', filename: 'village-registry.md', section: 'Registry', content,
-      });
-      if (result.ok) return result;
-      // Section may not exist yet (first sync) — create file + section.
-      return appendIdentity({
-        category: 'custom', filename: 'village-registry.md',
-        content: `## Registry\n\n${content}`,
-      });
+      const result = await villageRegistrySet(json);
+      return result?.ok ? result : { ok: false, error: result?.error ?? 'village_registry_set failed' };
     },
     pull: async () => {
       try {
-        const id = await getIdentityAll({ softTimeout: VILLAGE_PULL_TIMEOUT_MS });
+        const res = await villageRegistryGet({ softTimeout: VILLAGE_PULL_TIMEOUT_MS });
         pullReached = true;
-        const file = (id?.custom ?? []).find(f => f.filename === 'village-registry.md');
-        const m = file?.content?.match(/```json\s*\n([\s\S]*?)\n```/);
-        if (!m) return null;
-        const { value, repaired } = parseRegistryJson(m[1]);
+        const raw = res?.registry;
+        if (!raw || typeof raw !== 'string') return null;
+        const { value, repaired } = parseRegistryJson(raw);
         if (repaired) {
           console.warn('[village] canonical registry carried stray control characters — repaired on read; it will be rewritten cleanly on the next registry change');
         }
