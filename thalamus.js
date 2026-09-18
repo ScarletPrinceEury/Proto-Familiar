@@ -1605,6 +1605,7 @@ import {
   tagOutcomes,
 } from './src/pondering/surface-events.js';
 import { WARD_PRIVATE, isGranted, stripGatedSections, fetchEligibility } from './src/village/audience.js';
+import { recentElsewhere, buildRecentElsewhereBlock } from './src/memory/hippocampus.js';
 import { syncSpineState, stripSensitiveScheduleNodes } from './src/safety/spine-states.js';
 
 /** Sort identity files by a predefined order, alphabetical for unknowns. */
@@ -1677,7 +1678,7 @@ function identitySection(files, order) {
  * @param {string} userMessage
  * @returns {Promise<{ static: string, dynamic: string, surfacedBookmarks: any[] }>}
  */
-export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null, topicGrants = null } = {}) {
+export async function enrich(userMessage, { liveTurn = false, staticOnly = false, lastUserMessageAt = null, audience = WARD_PRIVATE, audiences = null, topicGrants = null, recentKey = null, recentEnabled = false } = {}) {
   const EMPTY = { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
   await startThalamus();
   if (!mcpClient && !unruhClient) return EMPTY;
@@ -2406,6 +2407,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       console.error('[thalamus] time anchor assembly failed:', err?.message ?? err);
     }
 
+    // ── Recently, elsewhere (Hippocampus — cross-channel short-term buffer) ─────
+    // A few lines of what's happened across my OTHER conversations lately, so the
+    // Familiar isn't starting blank on this surface. Audience-gated (my human sees
+    // all; a villager sees only their shared circles, never ward-private) and the
+    // CURRENT location is excluded (it's already in the live history). Enabled by
+    // the caller (they read settings + the env off-switch); never breaks enrich.
+    let recentElsewhereBlock = '';
+    if (recentEnabled && !staticOnly) {
+      try {
+        const evs = await recentElsewhere({
+          wardView: !gated,
+          visibleAudiences: Array.isArray(audiences) ? audiences : [],
+          excludeKey: recentKey,
+        });
+        recentElsewhereBlock = buildRecentElsewhereBlock(evs);
+      } catch (err) { console.warn('[thalamus] recent-elsewhere block failed:', err?.message ?? err); }
+    }
+
     // ── Consent-pending block (Pillar C ask-gate) ─────────────────────────
     // Read the local file — cheap, no MCP round-trip — and inject a block
     // so I know to ask my human before the session ends. Only for ward-private
@@ -2525,6 +2544,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     const dynamicSections = [];
     if (organStatusBlock)       dynamicSections.push(organStatusBlock);
     if (timeAnchorBlock)        dynamicSections.push(timeAnchorBlock);
+    if (recentElsewhereBlock)   dynamicSections.push(recentElsewhereBlock);
     if (memLines)               dynamicSections.push(`Relevant Memories via RAG:\n\n${memLines}`);
     if (graphLines)             dynamicSections.push(`Relevant Knowledge from Graph:\n${graphLines}`);
     if (myViewsBlock)           dynamicSections.push(myViewsBlock);

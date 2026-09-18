@@ -257,6 +257,25 @@ route). Verify the fallback: model unavailable → regex path still gates.
 
 ## Stage 3 — the Hippocampus (short-term cross-channel buffer)
 
+> **Status: SHIPPED (0.13.0-alpha).** `src/memory/hippocampus.js` (store + block),
+> injected through `enrich()`'s dynamic block (the one seam web + Discord share).
+> Writes: web inbound (`/api/chat`), Discord inbound + the Familiar's reply
+> (`deliverReply`). Off-switch `hippocampusEnabled` / `PROTO_FAMILIAR_HIPPOCAMPUS_DISABLED=1`,
+> UI toggle, tests over a temp store.
+>
+> **Design refinement discovered in the build (vs the drain described below):** the
+> buffer does NOT drain to memorization. Every surface's messages already memorize
+> through their own session (now guarded by Stage 1), so draining the buffer too
+> would double-count. It is therefore a pure short-term READ overlay — append,
+> inject "recently, elsewhere", self-prune — with no memorization coupling and no
+> new loop. This is simpler and strictly safer; the "drain into memorization" design
+> in the section below is superseded.
+>
+> **Deferred to a follow-up (surface matrix):** web assistant-reply capture (the
+> streaming seam), observed/ambient Discord messages, and voice-surface writes. The
+> inbound-everywhere + Discord-reply writes already deliver the core cross-channel
+> continuity.
+
 **Goal.** The recent-past window that makes the Familiar feel continuous — what
 just happened in *every* channel, available in the current turn, before
 memorization has caught up.

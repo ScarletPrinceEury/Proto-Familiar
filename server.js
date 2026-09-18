@@ -324,6 +324,7 @@ import { shortSlug } from './slug-ids.js';
 import { withLock, writeTomeFile, modifyTomeFile, findOrCreateTomeByName, createMemoryFull } from './thalamus.js';
 import { readAllTomes, buildTomeEntry, listTomesSummary } from './src/tomes/tome-store.js';
 import { listQuarantine, releaseQuarantine, discardQuarantine } from './src/safety/memory-quarantine.js';
+import { recordEvent as hippoRecord } from './src/memory/hippocampus.js';
 
 // Simple in-memory rate limiter for /api/chat: max 20 requests per minute per IP.
 // Protects against accidental public exposure and runaway tool-call loops.
@@ -485,10 +486,22 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   // anchor vanished). 'static' fetches persona only (handoff summariser);
   // 'none' skips enrichment entirely. debug-prompt calls enrich() with no
   // options, so it stays read-only.
+  // Hippocampus (Stage 3): the cross-channel short-term buffer. `recentEnabled`
+  // gates the "recently, elsewhere" block (settings + env off-switch); `recentKey`
+  // is THIS web session, excluded from its own elsewhere-block (already in history).
+  const hippoOn = (readSettingsSync()?.hippocampusEnabled !== false) && process.env.PROTO_FAMILIAR_HIPPOCAMPUS_DISABLED !== '1';
+  const webRecentKey = sessionInfo?.sessionId ? `web:${sessionInfo.sessionId}` : 'web';
   const enriched =
-      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics })
+      enrichMode === 'full'   ? await enrich(userText, { liveTurn: true, lastUserMessageAt: lastUserMessageAt ?? null, audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, recentKey: webRecentKey, recentEnabled: hippoOn })
     : enrichMode === 'static' ? await enrich(userText, { staticOnly: true })
     : { static: '', dynamic: '', surfacedBookmarks: [], surfacedTasks: [] };
+
+  // Record my human's inbound line into the cross-channel buffer so it's there as
+  // "recently, elsewhere" on my Familiar's OTHER surfaces. Fire-and-forget — the
+  // buffer never blocks or breaks a turn. Web is the ward's own private surface.
+  if (hippoOn && enrichMode === 'full' && userText && userText.trim()) {
+    hippoRecord({ surface: 'web', locationKey: webRecentKey, speaker: 'my human', audienceTag: 'ward-private', text: userText, isWard: true }).catch(() => {});
+  }
 
   // Inject awareness of any pending (unacknowledged) triage outreaches
   // into the dynamic block so the Familiar knows it reached out while

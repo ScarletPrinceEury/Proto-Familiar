@@ -347,6 +347,7 @@ const state = {
   memoryLifecycleEnabled:  false,   // opt-in: distill-only memory lifecycle (adds patterns, never demotes)
   ponderConsolidationEnabled: true, // default-on (ward decision): fold old ponderings into digests + prune originals (destructive, but archived + restorable)
   memoryIntegrityEnabled: true, // default-on: scan extracted facts for injection/corruption at the memorization boundary; suspect facts from untrusted sources are held in the reversible quarantine, not written
+  hippocampusEnabled: true, // default-on: short-term cross-channel buffer — a "recently, elsewhere" block so the Familiar carries the recent past across web/Discord/voice
   notificationSounds:      true,    // in-app chime on new messages (default on)
   organStatusBlock:        'degraded', // organ-status readout in the context: 'degraded' (show only when one is down) | 'always' | 'off'
   redditReaderEnabled:     true,     // read Reddit via its JSON API (browser is anti-bot-walled)
@@ -595,7 +596,7 @@ const SERVER_SYNCED_KEYS = [
   'memorySweepEnabled', 'villagePresenceEnabled', 'villagerContextEnabled', 'sessionUnifyEnabled', 'uiShowAdvanced', 'organStatusBlock',
   'redditReaderEnabled', 'redditUserAgent', 'redditClientId', 'redditClientSecret', 'redditUsername', 'redditPassword',
   'cdpModeEnabled', 'videoFileApiEnabled',
-  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'ponderConsolidationEnabled', 'memoryIntegrityEnabled', 'notificationSounds',
+  'tomeGraduationEnabled', 'tomeGraduationTidy', 'contentRegateEnabled', 'needsTrackingEnabled', 'memoryLifecycleEnabled', 'ponderConsolidationEnabled', 'memoryIntegrityEnabled', 'hippocampusEnabled', 'notificationSounds',
   'wardTimeZone',
   'gcalEnabled', 'gcalIcalUrl', 'gcalSyncIntervalMinutes', 'gcalLookaheadDays',
   'eventAlertsEnabled', 'eventAlertLeadMinutes', 'elapsedStampHours',
@@ -4362,6 +4363,7 @@ function readSettingsFromUI() {
   if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('ponder-consolidation-toggle')) state.ponderConsolidationEnabled = $('ponder-consolidation-toggle').checked;
   if ($('memory-integrity-toggle')) state.memoryIntegrityEnabled = $('memory-integrity-toggle').checked;
+  if ($('hippocampus-toggle')) state.hippocampusEnabled = $('hippocampus-toggle').checked;
   if ($('notif-sound-toggle')) state.notificationSounds = $('notif-sound-toggle').checked;
   if ($('gcal-toggle')) state.gcalEnabled = $('gcal-toggle').checked;
   if ($('gcal-ical-url')) state.gcalIcalUrl = $('gcal-ical-url').value.trim();
@@ -4577,6 +4579,7 @@ function writeSettingsToUI() {
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled !== false);
   if ($('memory-integrity-toggle')) setIfNotFocused($('memory-integrity-toggle'), 'checked', state.memoryIntegrityEnabled !== false);
+  if ($('hippocampus-toggle')) setIfNotFocused($('hippocampus-toggle'), 'checked', state.hippocampusEnabled !== false);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
   if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
