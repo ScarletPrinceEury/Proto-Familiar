@@ -1190,7 +1190,7 @@ const DISCORD_MAX_TOKENS = 8000;
 // budget my human sets in the web UI (settings.maxTokens, a synced setting). A
 // verbose thinking model (GLM via Nano-GPT, which sends no reasoning_effort so it
 // thinks at `max`) can spend more than 8000 tokens reasoning and reach EMPTY
-// content — finish_reason=length → the THINKING_BUDGET_NOTE on almost every DM,
+// content — finish_reason=length → the empty-reply note on almost every DM,
 // while the same model on web (honouring a higher configured budget) answered
 // fine. So Discord now honours my human's budget too — but never DROPS below the
 // 8000 floor a thinking model needs, so a ward on the low default (2048) can't
@@ -1200,11 +1200,29 @@ export function discordReplyMaxTokens(settings) {
   return Math.max(Number.isFinite(configured) ? configured : 0, DISCORD_MAX_TOKENS);
 }
 
-// Honest fallback when a thinking model spends its whole budget reasoning and
-// reaches no answer (empty content). Better than dead air (RULE B) or dumping
-// raw chain-of-thought. Kept plain and short — an error-path note, not a
-// personality surface. Only used on my human's own direct turn.
-const THINKING_BUDGET_NOTE = "(I ran out of room mid-thought on that one and didn't land a reply — nudge me and I'll pick it back up.)";
+// Honest fallback when a turn produces no reply — better than dead air (RULE B)
+// or dumping raw chain-of-thought. The OLD single note ("I ran out of room
+// mid-thought…") read like the Familiar personally ran dry and confused people;
+// these say plainly what happened. Two cases, told apart by the underlying error:
+//   • empty content / any generic failure → the LLM simply returned nothing;
+//   • a quota / balance / payment signal   → the PROVIDER refused, which the human
+//     can actually act on (top up, switch connection).
+// Kept plain and short — an error-path note, not a personality surface. Only used
+// on my human's own direct turn.
+const LLM_EMPTY_NOTE = "(The LLM didn't return anything this time. Nudge me and I'll try again.)";
+const LLM_USAGE_NOTE = "(The provider says your usage ran out, so nothing came back — worth checking your account or switching connection.)";
+
+// Pick the honest note from the failure. Conservative: only a CLEAR quota/balance/
+// payment signal (or HTTP 402) gets the usage note; a transient 429 or anything
+// vague falls to the plain "returned nothing" so we never mislead about billing.
+// `err` is null when the reply was simply empty (no throw).
+export function providerFailureNote(err) {
+  const msg = String(err?.message ?? err ?? '').toLowerCase();
+  if (/\b402\b|quota|insufficient|\bbalance\b|billing|payment required|\bcredits?\b|out of (credits|tokens)|usage limit/.test(msg)) {
+    return LLM_USAGE_NOTE;
+  }
+  return LLM_EMPTY_NOTE;
+}
 
 export async function callChatRaw({ conn, messages, settings, tools }) {
   const url = resolveProviderUrl(conn);
@@ -2875,6 +2893,7 @@ async function handleTurn(gw, msg, decision) {
         }
       : executeToolCall;
     let turnRounds = [];
+    let closingErr = null;   // last provider failure on the tool/closing path → honest note
     try {
       const { data, toolRounds } = await runToolCallLoop({
         // opts.forceText (round-cap closing round): call WITHOUT tools so the
@@ -2899,7 +2918,8 @@ async function handleTurn(gw, msg, decision) {
       // A whole-loop failure (e.g. provider error) must never cost the person a
       // reply — fall back to a plain no-tools call.
       console.warn('[discord] tool loop failed, falling back to plain reply:', err?.message ?? err);
-      rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(() => '');
+      closingErr = err;
+      rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(e => { closingErr = e; return ''; });
     }
     // A tool chain can end with no closing text. For a villager/ambient turn
     // that's a fine "abstain" — stay quiet. But for MY HUMAN's own direct turn,
@@ -2911,9 +2931,10 @@ async function handleTurn(gw, msg, decision) {
     if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient && turnRounds.length) {
       try {
         const replay = wardClosingReplayMessages(apiMessages, turnRounds);
-        rawReply = await callChat({ conn, messages: withAnchor(replay), settings }).catch(() => '');
+        rawReply = await callChat({ conn, messages: withAnchor(replay), settings }).catch(err => { closingErr = err; return ''; });
         if (rawReply && rawReply.trim()) console.log(`[discord] ward tool turn had no closing text — forced a closing text round in ${decision.locationKey}`);
       } catch (err) {
+        closingErr = err;
         console.warn('[discord] ward closing-text round failed:', err?.message ?? err);
       }
     }
@@ -2925,7 +2946,7 @@ async function handleTurn(gw, msg, decision) {
     // is a fine abstain — stay quiet.
     if (!rawReply || !rawReply.trim()) {
       if (decision.isWard && !decision.ambient) {
-        rawReply = THINKING_BUDGET_NOTE;
+        rawReply = providerFailureNote(closingErr);
       } else {
         session.updatedAt = new Date().toISOString();
         await writeSessionLog(session);
@@ -2938,12 +2959,14 @@ async function handleTurn(gw, msg, decision) {
     // callChat throws. Never let that drop the turn: catch to empty and let the
     // shared empty-handling below decide (honest note for my human, quiet flow
     // otherwise). The user's message is already persisted.
+    let plainErr = null;
     rawReply = await callChat({ conn, messages: withAnchor(apiMessages), settings }).catch(err => {
+      plainErr = err;
       console.warn('[discord] plain reply failed/empty:', err?.message ?? err);
       return '';
     });
     if ((!rawReply || !rawReply.trim()) && decision.isWard && !decision.ambient) {
-      rawReply = THINKING_BUDGET_NOTE;
+      rawReply = providerFailureNote(plainErr);
     }
   }
 
