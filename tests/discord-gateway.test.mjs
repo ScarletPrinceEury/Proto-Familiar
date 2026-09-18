@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   discordLocationKey,
   discordReplyMaxTokens,
+  providerFailureNote,
   classifyMessage,
   chunkReply,
   mergeParticipant,
@@ -1205,5 +1206,27 @@ describe('discordReplyMaxTokens — honour the ward budget, floor at 8000', () =
     assert.equal(discordReplyMaxTokens(undefined), 8000);
     assert.equal(discordReplyMaxTokens({ maxTokens: 'lots' }), 8000);
     assert.equal(discordReplyMaxTokens({ maxTokens: -5 }), 8000);
+  });
+});
+
+describe('providerFailureNote — honest empty-reply message', () => {
+  // Replaces the confusing "I ran out of room mid-thought" note. Empty content or a
+  // vague failure → "didn't return anything"; a clear quota/balance signal → "usage
+  // ran out" (which the human can act on). Conservative: a transient 429 stays vague.
+  const usage = (s) => providerFailureNote(new Error(s));
+  it('empty content (thinking budget) → the plain "returned nothing" note', () => {
+    assert.match(providerFailureNote(new Error('provider returned empty content (finish_reason=length)')), /didn't return anything/);
+    assert.match(providerFailureNote(null), /didn't return anything/, 'no error at all (just empty) → plain note');
+  });
+  it('clear quota / balance / payment signals → the "usage ran out" note', () => {
+    assert.match(usage('provider zai returned 402: insufficient balance'), /usage ran out/);
+    assert.match(usage('You have run out of credits'), /usage ran out/);
+    assert.match(usage('quota exceeded for this month'), /usage ran out/);
+    assert.match(usage('billing: payment required'), /usage ran out/);
+  });
+  it('a transient 429 / vague error stays the plain note (never misleads about billing)', () => {
+    assert.match(usage('provider nanogpt returned 429: too many requests'), /didn't return anything/);
+    assert.match(usage('provider returned 500: internal error'), /didn't return anything/);
+    assert.match(usage('context length exceeded'), /didn't return anything/, '"exceeded" alone is not a quota signal');
   });
 });
