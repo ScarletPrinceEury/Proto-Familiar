@@ -1,10 +1,14 @@
 # Trackers — build spec
 
-**Status: SPEC.** Rationale and evidence live in
+**Status: SPEC — reviewed against the live architecture 2026-09 (at `0.13.1-alpha`).**
+Rationale and evidence live in
 [`trackers-design.md`](trackers-design.md) + [`trackers-research.md`](trackers-research.md);
 this document is the implementation contract. All design/ward decisions are
-RESOLVED there — a builder changes none of them. Queued after weather (and
-before/alongside vision at the ward's discretion).
+RESOLVED there — a builder changes none of them. Weather and vision (the features
+this was originally queued behind) are long shipped; trackers are now the active
+next feature. **See "Architecture reconciliation" below for the systems that landed
+since this spec was first written and how they touch trackers — including a
+version-slot change and an extension to invariant T1.**
 
 Conventions binding this spec: first-person prompts & tool descriptions;
 slug ids (`insert_with_slug_retry`); local-naive time; exact machine values
@@ -35,7 +39,62 @@ tracker's fields, choosing which tracker a message means), so —
 
 ---
 
-## 1. Unruh store (migration `000N_trackers.sql`, next free number)
+## 0. Architecture reconciliation (reviewed 2026-09)
+
+Systems that landed AFTER this spec was first written and how they touch trackers.
+The spec's anchors were all verified still present (`villagerNameRegex`,
+`villagerToolNames`, `quietOk`, `stripSensitiveScheduleNodes`, `windowMemories`/
+`recentMissedNeeds` in the reflection payload, `scoreThreatMessage`/`recordThreat`,
+`gcal-projection` cue machinery, Unruh `db.slug_id`/`insert_with_slug_retry`,
+`interest.py`). The adjustments:
+
+- **Version slot moved. ⚠️ ward-confirm.** This spec claimed the `0.13` minor.
+  Cross-channel continuity (Hippocampus, Stage 3) shipped there instead
+  (`0.13.0`/`0.13.1` are on main). So trackers now take **`0.14`** and the
+  plugin-surface milestone after it **`0.15`** (see §9). Nothing else changes; this
+  is a renumber, flagged for the ward because they set the original assignment.
+
+- **Memory-integrity gate (Stage 1, `0.12.27`).** `processJob` now runs
+  `applyMemoryIntegrityGate` on each extracted **fact** before the Phylactery write.
+  §5.2 `tracker_observations` are a SEPARATE structured array (routed to Unruh, not
+  Phylactery) with their own code gate (`validate_entry`) — they are NOT free-text
+  facts and do NOT pass through `scanFact`, which is correct: keep the two gates
+  distinct. A malformed/adversarial observation is dropped by `validate_entry` (id
+  not in legend, bad type), not by the injection scan.
+
+- **Hippocampus buffer (Stage 3, `0.13.0`) is a NEW live-prompt surface.** It
+  injects a `[Recently, elsewhere]` block into every turn. Two consequences:
+  (a) **Invariant T1 now extends to it** — a `moodTag` must never enter the
+  Hippocampus buffer either (the buffer records message *text*, never metadata; a
+  builder must not pass `moodTag` into `recordEvent`). (b) Tracker data is
+  ward-private wholesale and does NOT ride the buffer; the buffer is audience-gated
+  and trackers simply never write to it.
+
+- **Content-gating (two-axis, `0.9.17`–`0.9.24`).** Governs MEMORIES, not trackers.
+  Trackers stay **ward-private wholesale** (§3, §7) and deliberately do NOT
+  participate in the per-topic content gate. Confirmed compatible; per-tracker
+  audience opt-in remains out of scope for v1.
+
+- **Threat seams have grown.** Chat-path scoring routes through `scoreThreatMessage`
+  (`0.12.0`) and the model's own read rides `flagDistress` (`threat-tracker.js`).
+  §6's mood-tag link stays a DISTINCT bounded source — a direct
+  `recordThreat({delta, source:'mood-tag'})`, not message scoring — and its
+  constants join the ward safety sign-off set. The guarded files are
+  `crisis-signals.js` / `crisis-classifier.js` / `threat-tracker.js`; the mood-tag
+  constants live adjacent and ship only with the T-D ward review.
+
+- **Schedule-node space is now shared** by needs (`payload.need`), consequence
+  edges (`on_lapse`), and elapsed stamps (`payload.elapsed_at`). §4 tracker
+  projection nodes (expiry reminders, menses windows) must carry their own
+  `payload.tracker_ref`/`entry_ref` and stay distinguishable from those — never
+  reuse a need/consequence payload shape.
+
+- **Migration number is concrete:** the next free Unruh migration is **`0007`** →
+  `0007_trackers.sql` (highest current is `0006_locations.sql`).
+
+---
+
+## 1. Unruh store (migration `0007_trackers.sql`)
 
 ```sql
 CREATE TABLE IF NOT EXISTS trackers (
@@ -181,15 +240,19 @@ constants, never on string matching in prompts.
 ## 5. Capture
 
 - **5.1 Live:** `tracker_log` in-turn (§3).
-- **5.2 Passive — memorization.** `buildPrompt` gains (exactly like
-  `schedule_refs`): a compact tracker legend (id · label · field names; NO
-  sensitive entry contents, just schemas) + an optional
-  `tracker_observations` array on each fact:
+- **5.2 Passive — memorization.** **`buildPrompt` ONLY** (the ward-private
+  extraction path) gains — exactly like `schedule_refs`, riding alongside the
+  existing `relations`/`follow_ups` in the SAME response, no extra call: a compact
+  tracker legend (id · label · field names; NO sensitive entry contents, just
+  schemas) + an optional `tracker_observations` array on each fact:
   `{"tracker": "<id from legend>", "ts": "<local ISO, the moment it was
-  ABOUT>", "payload": {...}}`. Code gate on ingest: id must be in the
+  ABOUT>", "payload": {...}}`. **`buildSharedRoomPrompt` (gated) never gets the
+  legend or the array** (T2 fail-closed). Code gate on ingest: id must be in the
   legend, payload passes `validate_entry`, else dropped. Stored
-  `source:'inferred'`. The memorization prompt DOES see mood-send tags
-  (§8) — that is the calibration corpus.
+  `source:'inferred'`. Note (§0): `tracker_observations` are structured and routed
+  to Unruh — they are NOT Phylactery facts, so they do NOT pass through the
+  memory-integrity `scanFact` gate; `validate_entry` is their gate. The
+  memorization prompt DOES see mood-send tags (§8) — that is the calibration corpus.
 - **5.3 Cues.** `trackerCues()` renders `[Tracker cues]` (marker travels
   with the module): stale trackers past `staleness_hours` + incomplete
   recent entries — capped at 2 lines, each cue re-offered at most once per
@@ -218,7 +281,9 @@ constants, never on string matching in prompts.
   `moodTag` into the stored session-log message metadata.
 - **LEARNING-ONLY (INVARIANT T1):** `moodTag` NEVER enters any live prompt —
   not the chat turn, not history re-injection, not triage/warmth/noticing
-  context. Enforcement is structural: the field lives in message metadata
+  context, **and not the Hippocampus `[Recently, elsewhere]` buffer (Stage 3):
+  its `recordEvent` takes message TEXT only, and `moodTag` must never be passed
+  in.** Enforcement is structural: the field lives in message metadata
   that no prompt assembler reads; the ONLY consumers are the memorization
   prompt (calibration corpus) and the tracker entry. A snapshot test pins
   the assembled chat payload byte-free of `moodTag` for a tagged message.
@@ -250,7 +315,8 @@ constants, never on string matching in prompts.
 ## 8. Invariants (each pinned by a test)
 
 - **T1 — learning-only:** a mood-tagged message's live chat payload is
-  byte-identical to the untagged payload (snapshot).
+  byte-identical to the untagged payload (snapshot); the same message's
+  Hippocampus buffer write carries the text but no `moodTag` (Stage 3 surface).
 - **T2 — fail-closed gating:** gated (villager) turns contain zero tracker
   tools, zero tracker context lines, zero tracker legend in any prompt.
 - **T3 — validation gate:** `log_entry` / 5.2 ingest drop unknown fields,
@@ -284,12 +350,12 @@ constants, never on string matching in prompts.
    final text happens in this session's review**) + T6/T9 tests + docs.
 
 Each session: `docs/architecture.md` same commit. **Trackers are the next
-milestone and own the `0.13` minor** — sub-work through the build order above
-bumps `0.13.x` patches, and the milestone lands as `0.13.0`. (The spec's
-original "0.8.x patches, UI overhaul owns the minor slot" note is obsolete: that
-UI overhaul is long landed, `0.12.0` went to the crisis-classifier milestone,
-and trackers take the next minor. The plugin-surface milestone after this takes
-`0.14`.)
+milestone and own the `0.14` minor** — sub-work through the build order above
+bumps `0.14.x` patches, and the milestone lands as `0.14.0`. (⚠️ **Renumbered from
+`0.13` — ward-confirm.** `0.13` was reassigned to trackers in an earlier pass, but
+cross-channel continuity / Hippocampus shipped there instead — `0.13.0`/`0.13.1`
+are on main — so trackers move to `0.14` and the plugin-surface milestone after
+this takes **`0.15`**. The `0.12.0` = crisis-classifier note still holds.)
 
 **Do-not-touch:** no changes to crisis-signals tiers/weights beyond adding
 the bounded mood-tag source; no triage/threat gates or clamps; no villager
