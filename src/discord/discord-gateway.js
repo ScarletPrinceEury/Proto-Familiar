@@ -1409,6 +1409,60 @@ async function handleConsolidateCommand(gw, { msg, which }) {
   }
 }
 
+// Ward-only `!quarantine [release <id>|discard <id>]` — the DM twin of the UI's
+// "Review held memories". Bare `!quarantine` lists what the memory-integrity gate
+// set aside as possible tampering; `release <id>` writes a false positive to memory
+// after all; `discard <id>` drops one for good. Mechanical (no LLM turn).
+function parseQuarantineCommand(content) {
+  const m = /^!quarantine(?:\s+(\S+))?(?:\s+(\S+))?\s*$/i.exec(String(content ?? '').trim());
+  if (!m) return null;
+  const sub = (m[1] || '').toLowerCase();
+  const id = m[2] || null;
+  if (!sub || sub === 'list')                     return { action: 'list' };
+  if (/^(release|keep|restore)$/.test(sub))       return { action: 'release', id };
+  if (/^(discard|drop|delete|reject)$/.test(sub)) return { action: 'discard', id };
+  return { action: 'help' };
+}
+export { parseQuarantineCommand };
+
+async function handleQuarantineCommand(gw, { msg, which }) {
+  const say = (text) => sendChannelMessage(gw.config.token, msg.channel_id, text).catch(() => {});
+  if (which.action === 'help') {
+    return say('My memory quarantine — facts I set aside because they looked like tampering:\n• `!quarantine` — list what\'s held.\n• `!quarantine release <id>` — keep one after all (write it to my memory).\n• `!quarantine discard <id>` — drop one for good.');
+  }
+  if (!gw.quarantineRunners) {
+    return say('I can\'t reach my quarantine right now — that wiring isn\'t available.');
+  }
+  try {
+    if (which.action === 'list') {
+      const r = await gw.quarantineRunners.list();
+      if (!r?.ok) return say(`I couldn't check: ${r?.error ?? 'something went wrong'}.`);
+      const rows = Array.isArray(r.records) ? r.records : [];
+      if (!rows.length) return say('Nothing held — I haven\'t set any memories aside.');
+      const lines = rows.slice(0, 15).map(rec => {
+        const why = Array.isArray(rec.patterns) && rec.patterns.length ? rec.patterns.join(', ') : 'suspect';
+        const src = rec.provenance?.audienceTag ?? 'a shared room';
+        return `• \`${rec.id}\` — ${String(rec.factText || '').slice(0, 140)} _(from ${src}; ${why})_`;
+      });
+      const more = rows.length > 15 ? `\n…and ${rows.length - 15} more.` : '';
+      return say(`Held memories — \`!quarantine release <id>\` to keep, \`discard <id>\` to drop:\n${lines.join('\n')}${more}`);
+    }
+    if (!which.id) {
+      return say(`Which one? Give me the id: \`!quarantine ${which.action} <id>\` (\`!quarantine\` lists them).`);
+    }
+    if (which.action === 'release') {
+      const r = await gw.quarantineRunners.release(which.id);
+      if (r && r.ok === false) return say(r.notFound ? `I don't have a held memory with the id \`${which.id}\`.` : `I couldn't keep that one: ${r.error ?? 'something went wrong'}.`);
+      return say(`Kept \`${which.id}\` — I've written it into my memory.`);
+    }
+    const r = await gw.quarantineRunners.discard(which.id);
+    if (r && r.ok === false) return say(`I couldn't drop that one: ${r.error ?? 'something went wrong'}.`);
+    return say(r?.discarded ? `Dropped \`${which.id}\` for good.` : `I don't have a held memory with the id \`${which.id}\`.`);
+  } catch (err) {
+    return say(`I couldn't do that: ${err?.message ?? 'something went wrong'}.`);
+  }
+}
+
 /**
  * Parse a voice-call command (Pass 3). `!call` / `!join` → 'join' (join the
  * ward's current VC), `!leave` / `!hangup` → 'leave'. Anything else → null.
@@ -2950,6 +3004,7 @@ const gw = {
   guildNames: new Map(),        // guildId → server name, from GUILD_CREATE — names the server list + knock groups
   userInfo: new Map(),          // userId → { id, username, global_name } — so a voice speaker reads as a NAME, not a raw snowflake the LLM can't tell apart
   consolidationRunners: null,   // { ponderings, memory } from server.js — backs the ward's !consolidate commands
+  quarantineRunners: null,      // { list, release, discard } from server.js — backs the ward's !quarantine command
 };
 
 /** Cache what Discord tells us about a user (from GUILD_CREATE members, seeded
@@ -3017,6 +3072,14 @@ export function setDiscordVoiceController(ctl) { gw.voiceController = ctl && typ
  *  same passes as the UI buttons. Each runner is async → a result object. */
 export function setConsolidationRunners(runners) {
   gw.consolidationRunners = (runners && typeof runners.ponderings === 'function' && typeof runners.memory === 'function')
+    ? runners : null;
+}
+
+/** server.js hands the memory-quarantine runners here so the ward's `!quarantine`
+ *  DM command can list / release / discard held memories — the same actions as the
+ *  UI's "Review held memories". Each runner is async → a result object. */
+export function setQuarantineRunners(runners) {
+  gw.quarantineRunners = (runners && typeof runners.list === 'function' && typeof runners.release === 'function' && typeof runners.discard === 'function')
     ? runners : null;
 }
 
@@ -3296,6 +3359,8 @@ function onDispatch(t, d) {
           if (isConnectionCommand(d.content)) { await handleConnectionCommand(gw, { msg: d }); return; }
           const consolidate = parseConsolidateCommand(d.content);
           if (consolidate) { await handleConsolidateCommand(gw, { msg: d, which: consolidate }); return; }
+          const quarantine = parseQuarantineCommand(d.content);
+          if (quarantine) { await handleQuarantineCommand(gw, { msg: d, which: quarantine }); return; }
         }
 
         // Text-in-voice interleave (Pass 4): if a voice call is live in THIS

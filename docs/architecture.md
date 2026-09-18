@@ -1419,7 +1419,9 @@ error (a known-suspect untrusted fact we can't quarantine is dropped, never
 written). The store is ward-visible and reversible — `GET /api/memory-quarantine`
 lists held items, `POST /api/memory-quarantine/:id/release` re-writes a false
 positive via `createMemoryFull`, `POST …/discard` confirms the drop (row kept for
-audit) — surfaced in the Automation pane ("Review held memories") with a
+audit) — surfaced in the Automation pane ("Review held memories") and the ward's
+`!quarantine` Discord command (list / `release <id>` / `discard <id>`, the console
+twin routed through the same server functions), with a
 `logs/memory-quarantine-events.jsonl` audit trail. Off:
 `memoryIntegrityEnabled` / `PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED=1`. This is
 the archive-before-destructive-writes rule applied to memory intake: a suspect
