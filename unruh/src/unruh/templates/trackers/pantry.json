@@ -1,0 +1,12 @@
+{
+  "label": "Pantry",
+  "archetype": "inventory",
+  "sensitive": false,
+  "schema": [
+    { "name": "name", "type": "text", "required": true },
+    { "name": "qty", "type": "quantity" },
+    { "name": "expires", "type": "date" },
+    { "name": "category", "type": "text" }
+  ],
+  "config": { "project_dates": true, "ask_cap_per_day": 1 }
+}

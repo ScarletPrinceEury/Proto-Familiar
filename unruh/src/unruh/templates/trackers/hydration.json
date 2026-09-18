@@ -1,0 +1,7 @@
+{
+  "label": "Hydration",
+  "archetype": "gauge",
+  "sensitive": false,
+  "schema": [],
+  "config": { "gauge": { "grace_hours": 3, "low_hours": 6, "overdue_hours": 12, "extreme_hours": 48 } }
+}

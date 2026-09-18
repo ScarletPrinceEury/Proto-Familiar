@@ -1,0 +1,11 @@
+{
+  "label": "Mood",
+  "archetype": "series",
+  "sensitive": true,
+  "schema": [
+    { "name": "mood", "type": "enum", "required": true, "values": ["good", "calm", "tired", "stressed", "low", "irritable", "numb", "wired"] },
+    { "name": "note", "type": "text" },
+    { "name": "activity", "type": "text" }
+  ],
+  "config": { "staleness_hours": 36, "ask_cap_per_day": 1 }
+}

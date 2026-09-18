@@ -1,0 +1,9 @@
+{
+  "label": "Laundry",
+  "archetype": "state",
+  "sensitive": false,
+  "schema": [
+    { "name": "state", "type": "enum", "required": true, "values": ["clean", "in-progress", "dirty"] }
+  ],
+  "config": { "staleness_hours": 168, "ask_cap_per_day": 1 }
+}
