@@ -92,12 +92,12 @@ The spec's anchors were all verified still present (`villagerNameRegex`,
 - **Migration number is concrete:** the next free Unruh migration is **`0007`** →
   `0007_trackers.sql` (highest current is `0006_locations.sql`).
 
-- **A 4th archetype is coming: `gauge`.** A ward idea (2026-09) — decaying *upkeep*
+- **A 4th archetype: `gauge` (§10).** A ward idea (2026-09) — decaying *upkeep*
   (eating, hydration, meds): full after the event, drains as neglected, refills on
   logging, with a check-first → crisis safety ladder at genuinely-medical extremes.
-  Specified in the companion **[`gauge-trackers-build-spec.md`](gauge-trackers-build-spec.md)**;
-  it builds on this spec's store/tools/cues and rides the same `0.14` milestone. It
-  is safety-critical (threat + emergency-contact paths, ward sign-off).
+  Specified in **§10** below; it builds on this spec's store/tools/cues and rides
+  the same `0.14` milestone (build passes G-A/G-B/G-C, §9). Safety-critical (threat +
+  emergency-contact paths, ward sign-off).
 
 ---
 
@@ -107,7 +107,7 @@ The spec's anchors were all verified still present (`villagerNameRegex`,
 CREATE TABLE IF NOT EXISTS trackers (
   id          TEXT PRIMARY KEY,          -- slug from label ("mood-x7")
   label       TEXT NOT NULL,
-  archetype   TEXT NOT NULL,             -- 'state' | 'inventory' | 'series'
+  archetype   TEXT NOT NULL,             -- 'state' | 'inventory' | 'series' | 'gauge'
   schema_json TEXT NOT NULL DEFAULT '[]',-- ordered field specs (see §1.1)
   config_json TEXT NOT NULL DEFAULT '{}',-- per-tracker knobs (see §1.2)
   sensitive   INTEGER NOT NULL DEFAULT 0,
@@ -137,7 +137,8 @@ with `type` ∈ **`enum`** (needs `values: []`), **`number`** (optional
 `required` fields reported (feeds the §5 cue), type mismatches rejected with
 a readable error. Inventory archetype: `schema_json` describes ONE ITEM's
 fields (each entry = one item upsert, keyed by a required `name` field).
-State archetype: exactly one field, enforced at create.
+State archetype: exactly one field, enforced at create. **Gauge archetype:
+decaying upkeep with a check-first safety ladder — its own section, §10.**
 
 ### 1.2 `config_json` knobs (all optional; defaults in parens)
 
@@ -355,6 +356,9 @@ constants, never on string matching in prompts.
 4. **T-D:** mood-send UI + soft lock + T1 learning-only enforcement +
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.
+5. **G-A / G-B / G-C:** the `gauge` archetype (§10) — G-A store+derivation, G-B
+   cues+UI+capture, **G-C the safety ladder (ward sign-off, §10.6/§10.7)**. These
+   extend the milestone after the core archetypes; see §10.11 for the pass detail.
 
 Each session: `docs/architecture.md` same commit. **Trackers are the next
 milestone and own the `0.14` minor** — sub-work through the build order above
@@ -372,3 +376,184 @@ explicit ward review in T-D.
 **Ward-review-at-merge checklist (T-D):** palette wording (incl. `wired` as
 the elevated pole) · offer-cue final text · `MOOD_TAG_DELTA`/daily cap ·
 laundry state enum wording.
+
+---
+
+## 10. The `gauge` archetype — decaying upkeep (SAFETY-CRITICAL)
+
+A ward idea (2026-09). Some things aren't events you log — they're **upkeep that
+decays when neglected**. Eating, hydration, meds, going outside, a break. A `gauge`
+starts full right after you tend it, sits in "fine" for a normal interval, then
+**drains over time**, and the draining *is* the rising importance — "it's been six
+hours, this is getting important." Logging the event **refills** it. Unlike `series`
+(a list of dated entries) or the existing **needs** system (a fixed `[when,end]`
+window with a pass/fail verdict), a gauge is a **continuous level** with no fixed
+clock — more honest for things people don't do on a timetable. This section adds the
+archetype on top of §1–§9; everything there (RULE A/B/C, the pipeline test, the
+conventions, ward-private wholesale, off-switch discipline) binds here too.
+
+### 10.1 ⚠️ The load-bearing safety truth: logged ≠ actual
+
+**A gauge measures time since the ward last LOGGED the thing, not since they last
+did it.** They eat at a friend's, don't mention it, and the gauge drains toward
+"critical" while they're fine. So the extreme path may **never** auto-escalate on
+the gauge alone. Crossing the extreme threshold is a **prompt to CHECK**, and a
+human-confirmable check stands between "my data looks alarming" and "I raised the
+alarm." This is the inverse of the 1.5-hour-silence failure: there we under-acted on
+a real signal; here the risk is over-acting on a fake one, and the check prevents it.
+**This gate is invariant G1, pinned by a test.**
+
+### 10.2 The archetype (extends §1)
+
+`archetype = 'gauge'`. A gauge stores its refills as `tracker_entries` exactly like
+`series` (each logged event = one entry; `ts` = when it was ABOUT). What makes it
+distinct: its **read semantics** (a derived level + band, not a list), its **decay
+config**, and the **safety ladder** below — a first-class archetype on shared
+plumbing (the ward's call: a real gauge system, not a bolt-on view). `schema_json`
+is the refill event's optional fields (most gauges need none — the entry's
+*existence* is the signal). **The level is pure derivation, never stored, never
+model-authored** (exact-values §, mirroring the schedule/menses rule):
+`gaugeLevel(lastRefillTs, config, now)` → `{ level: 0..1, band, hoursSince }`.
+
+### 10.3 `config.gauge` (all hours; ward-set per gauge, template defaults)
+
+```
+{
+  grace_hours,     // stays "fine" this long after a refill (normal interval)
+  low_hours,       // enters "getting low" (a gentle cue)
+  overdue_hours,   // enters "overdue" (a firmer cue)
+  extreme_hours,   // medical-danger threshold → opens a CHECK (never auto-escalate)
+  escalation: {    // OPT-IN, per gauge, ward-only. Absent = check only, never crisis.
+    enabled: false,
+    checkin_deadline_hours,  // after the check opens, how long unresolved before crisis
+    contact: false,          // ring an emergency contact on unresolved crisis (further opt-in)
+    contact_id,              // which trusted contact (village.js), ward-chosen
+  }
+}
+```
+
+`grace ≤ low ≤ overdue ≤ extreme`, validated at create. Bands (pure code):
+
+| band | when | surface |
+|---|---|---|
+| `fine` | `hoursSince < grace` | nothing |
+| `fading` | `grace..low` | nothing (headroom) |
+| `low` | `low..overdue` | a **gentle** cue (§5.3) |
+| `overdue` | `overdue..extreme` | a **firmer** cue |
+| `extreme` | `≥ extreme` | **opens a check** (§10.6) — NOT a cue, NOT an escalation |
+
+`gaugeLevel` maps hoursSince to a 0..1 level (1.0 through `grace`, linearly to 0.0
+at `extreme`) plus the band. Pure, fixtured, tested. `read_tracker` for a gauge
+returns `{ band, level, hoursSince, lastRefillAt, config }` (code summary, no LLM);
+recent refills ride along for the §4 reflection input.
+
+### 10.4 Refill sources (extends §5)
+
+A gauge refills through the SAME capture paths — no new mechanism: the live
+`tracker_log` tool ("just ate"), passive memorization (§5.2 `tracker_observations`,
+same `validate_entry` gate), and a **one-tap refill button** in the Trackers UI (a
+gauge's most common interaction). There is deliberately **no way for the model to
+set the level** — it only logs a refill; code derives the level.
+
+### 10.5 Cues (extends §5.3)
+
+`low`/`overdue` bands render through the existing `[Tracker cues]` machinery — gentle
+then firmer. `extreme` does NOT cue; it opens a check (§10.6).
+
+### 10.6 ⚠️ The safety ladder — check-first, then crisis (SAFETY SIGN-OFF)
+
+A gauge with `escalation.enabled` runs a bounded check on the existing upkeep tick
+(`needs-tracking-loop` — reuse it, don't add a loop). Per gauge, per decay cycle
+(one open check at a time; a refill closes it):
+
+**Step 1 — CHECK (care, not crisis).** When band first reaches `extreme` and no check
+is open: open one (`checkOpenedAt` stamped) and hand the Familiar a **care reach-out**
+through the existing warm channel (`reach_out_to_ward` / noticing), worded to ask
+directly, in the Familiar's own voice: *"I haven't seen you [eat] in [3 days] —
+that's long enough I need to actually ask: are you okay? Have you been [eating]?"*
+**No threat raised here. No contact rung here.**
+
+**Step 2a — resolved.** The ward logs a refill or says they're fine → refill, close
+the check, done. The check *was* the action. (Most real firings end here.)
+
+**Step 2b — unresolved.** No response within `escalation.checkin_deadline_hours`, OR
+the ward confirms they genuinely haven't → **now it's a real signal**, and only now
+does it enter the crisis apparatus that already exists:
+- a **bounded** threat raise via the model's own-read channel (`flag_distress` /
+  `threat-tracker.js`), `source:'gauge-critical'`. A CONFIRMED multi-day
+  no-food/no-water is a genuine emergency, so it may reach a high tier — but ONLY on
+  the confirmed/unresponsive branch, never on the gauge alone.
+- if `escalation.contact`, the trusted-contact path via the EXISTING machinery
+  (`contactDeadlineFor` / `CONTACT_ESCALATION_DELAY_MS`, the **no-covert-contact
+  mirror** — every reach mirrored to the ward), to the ward-chosen `contact_id`
+  (village.js). Deadline-gated, so the ward still gets a final window.
+
+The gauge **bridges** two existing systems (care-check → crisis) with a mandatory
+confirm gate between; it reimplements neither. All crisis/contact safety rules (no
+covert contact, deadline windows, mirroring, `PROTO_FAMILIAR_THREAT_DISABLED`
+stand-down) apply unchanged.
+
+### 10.7 ⚠️ Extreme thresholds (ward-reviewed medical values — sign-off at G-C)
+
+`extreme_hours` must be genuinely health-threatening, not "late for lunch." DRAFT
+starting values, ward-reviewed before merge:
+
+| gauge | grace | low | overdue | extreme | escalation default |
+|---|---|---|---|---|---|
+| hydration | 3h | 6h | 12h | **~48h** (no water logged) | opt-in |
+| meals | 5h | 10h | 24h | **~72h** (no food logged) | opt-in |
+| meds (life-critical) | per-med | — | — | ward-set per med | opt-in |
+
+Non-medical gauges (going outside, a break) get NO escalation block — they cue and
+stop. Escalation is opt-in per gauge, off by default; `extreme_hours`,
+`checkin_deadline_hours`, and the contact are all ward-set.
+
+### 10.8 Off-switches, privacy, UI (extends §7)
+
+Governed by `trackersEnabled` / `PROTO_FAMILIAR_TRACKERS_DISABLED`, plus
+`PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED=1` — a hard kill for the WHOLE check→crisis
+ladder (gauges still decay + cue, never escalate); escalation also stands down under
+`PROTO_FAMILIAR_THREAT_DISABLED`. Gauges are ward-private wholesale (§7); their data
+and check-ins never reach a gated/villager surface, never the Hippocampus buffer
+(§0), and carry no live-prompt metadata (T1 discipline). The only outward reach is
+the ward-chosen contact on the confirmed-crisis branch, mirrored to the ward. UI: a
+calm band + fill meter (not alarmist), the one-tap refill, and — for escalation-eligible
+gauges — the escalation editor (thresholds, deadline, contact picker, all default
+off). Console↔UI parity holds.
+
+### 10.9 Invariants (each pinned by a test)
+
+- **G1 — check-first is mandatory (THE safety invariant).** No code path raises
+  threat or contacts anyone from a gauge without FIRST opening a check AND that check
+  going unresolved past the deadline. Fixture: `extreme` band, no check opened →
+  zero `recordThreat`, zero contact calls.
+- **G2 — a refill closes everything.** Logging a refill while a check is open (or a
+  crisis is escalating, pre-contact) resolves it: full, closed, no further escalation.
+- **G3 — level is pure + model-free.** `gaugeLevel` is a pure function of
+  `(lastRefillTs, config, now)`; the model only logs refills. Fixtured across bands
+  incl. exact boundaries.
+- **G4 — escalation opt-in + bounded.** No `escalation.enabled` → never escalates
+  however low; `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED` / `_THREAT_DISABLED` →
+  no-op; the threat raise fires only on the confirmed/unresponsive branch.
+- **G5 — no covert contact.** A contact reach is always mirrored to the ward (reuse
+  + regression-pin the mirror for the gauge source).
+- **G6 — PIPELINE.** One full run: decay to `extreme` → check opens (real
+  `reach_out_to_ward`, stubbed provider) → (a) a refill closes it with no escalation,
+  (b) a simulated deadline-pass drives the bounded threat raise + (opted-in) the
+  mirrored contact path — through the real assembly, not caller stubs.
+
+### 10.10 Build passes (extend §9; each: off-switch + tests + docs + version, same commit)
+
+1. **G-A:** `gauge` archetype in the store + `gaugeLevel`/bands (pure) + gauge
+   `read_tracker` + refill via `tracker_log` + G3 fixtures.
+2. **G-B:** cues (§10.5) + the UI meter + one-tap refill + memorization refill (§10.4)
+   + reflection input (recent refills) + G-fixtures.
+3. **G-C (SAFETY — ward sign-off in this pass):** the check→crisis ladder — check via
+   `reach_out_to_ward`, the confirm gate, the bounded `flag_distress` raise, the
+   opt-in `contactDeadlineFor` contact path + mirror. G1/G2/G4/G5/G6 tests. **Ward
+   reviews: `extreme_hours` per template, `checkin_deadline` defaults, the reach-out
+   wording, and that G1 (check-first) holds.**
+
+**Do-not-touch (gauge):** no crisis-signals tier/weight changes beyond the bounded
+`gauge-critical` source on the CONFIRMED branch; the check-first gate and all
+§10.6/§10.7 constants ship only with explicit ward review in G-C.
