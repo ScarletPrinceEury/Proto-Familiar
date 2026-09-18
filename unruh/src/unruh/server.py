@@ -43,6 +43,7 @@ from unruh.db import get_conn, ids_to_slugs, now_iso
 from unruh import schedule as sched
 from unruh import templates as tmpl
 from unruh import interest as interests
+from unruh import tracker as trk
 from unruh import handoff as handoffs
 from unruh import intention as intentions_mod
 from unruh import location as location_mod
@@ -1397,6 +1398,110 @@ def db_restore_plain(srcPath: str) -> dict[str, Any]:
         return {"ok": True, "restoredTo": live}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ── Trackers (build spec docs/trackers-build-spec.md) ─────────────────
+
+
+@mcp.tool()
+def tracker_create(label: str, archetype: str, schema: list | None = None,
+                   config: dict | None = None, sensitive: bool = False) -> dict[str, Any]:
+    """I use this to start a new private ledger for my human — something they want
+    to keep track of. Four shapes: `state` (one current value, like laundry
+    clean/dirty), `inventory` (items, like a pantry), `series` (dated entries over
+    time, like mood or sleep), `gauge` (upkeep that decays when neglected, like
+    eating or hydration — logging it refills it). `schema` is the field list
+    (`[{name, type, required?, values?, min?, max?, unit?}]`, types: enum/number/
+    scale/quantity/date/text/text[]/boolean). I mark it `sensitive` for anything
+    private like mood, sleep, meds. Returns {ok, id}."""
+    try:
+        with get_conn() as conn:
+            return trk.create_tracker(conn, label=label, archetype=archetype,
+                                      schema=schema, config=config, sensitive=sensitive)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_create_from_template(template_id: str) -> dict[str, Any]:
+    """I use this to start a ledger from one of my ready-made templates instead of
+    describing every field. Templates: `mood`, `sleep`, `laundry`, `pantry`,
+    `hydration`, `meals` (and the sensitive `menses`/`erp` I only set up if my human
+    asks for them directly). Returns {ok, id}."""
+    try:
+        with get_conn() as conn:
+            return trk.create_from_template(conn, template_id=template_id)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_log(tracker_id: str, payload: dict | None = None, ts: str | None = None,
+                supersedes: str | None = None) -> dict[str, Any]:
+    """I use this to record one entry in a tracker — my human just told me something
+    worth logging (they ate, their mood, a pantry item). For a `gauge`, logging IS
+    the refill. `ts` is the local time the thing was ABOUT (YYYY-MM-DDTHH:MM:SS, no
+    offset) — I read it from my [Now]/[Temporal Context], never invent one; omitted =
+    now. `supersedes` corrects an earlier entry (the old one is kept for history).
+    Unknown fields are dropped and bad values refused with a readable reason — I never
+    store a malformed entry. Returns {ok, id} or {ok:false, code, error}."""
+    try:
+        with get_conn() as conn:
+            return trk.log_entry(conn, tracker_id=tracker_id, payload=payload, ts=ts, supersedes=supersedes)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_read(tracker_id: str, days: int = 14) -> dict[str, Any]:
+    """I use this to see where a tracker stands: a `state`'s current value, an
+    `inventory`'s items, a `series`'s recent entries (last `days`), or a `gauge`'s
+    current level and band. Everything is summarised in code, so the numbers are
+    exact. Returns the archetype-shaped summary."""
+    try:
+        with get_conn() as conn:
+            return trk.read_tracker(conn, id=tracker_id, days=days)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_list() -> dict[str, Any]:
+    """I use this to see all the ledgers I keep for my human — their ids, labels,
+    shapes, and field names. This is how I know which tracker a message means, and
+    which already exist before I offer a new one. Returns {ok, trackers: [...]}."""
+    try:
+        with get_conn() as conn:
+            return {"ok": True, "trackers": trk.list_trackers(conn)}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_adjust(id: str, label: str | None = None, schema: list | None = None,
+                   config: dict | None = None, sensitive: bool | None = None) -> dict[str, Any]:
+    """I use this to tweak a tracker — rename it, add a field, adjust its knobs, or
+    change whether it's sensitive. Schema changes are ADD-ONLY: I can add a field but
+    never remove or retype one, so the history stays valid. Returns {ok}."""
+    try:
+        with get_conn() as conn:
+            return trk.adjust_tracker(conn, id=id, label=label, schema=schema,
+                                      config=config, sensitive=sensitive)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_supersede(id: str) -> dict[str, Any]:
+    """I use this to retire a single entry that turned out wrong — it's marked
+    superseded (kept for the record, no longer counted). To replace it with a
+    corrected value, I log the new one with `supersedes` set instead. Returns
+    {ok, superseded}. (I never delete a whole ledger — that's my human's to do.)"""
+    try:
+        with get_conn() as conn:
+            return trk.supersede_entry(conn, id=id)
+    except ValueError as e:
+        return _err(str(e))
 
 
 # ── Entry point ───────────────────────────────────────────────────────

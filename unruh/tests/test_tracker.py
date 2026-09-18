@@ -1,0 +1,214 @@
+"""Unit tests for the tracker layer (T-A).
+
+    cd unruh && uv run pytest tests/test_tracker.py
+
+Fresh in-memory DB per test (migrations applied, so 0007_trackers is live).
+Deterministic timestamps so decay/gauge maths never flakes on real elapsing.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timedelta
+
+import pytest
+
+from unruh import tracker
+from unruh.db import run_migrations
+
+NOW = datetime(2026, 9, 18, 12, 0, 0)
+
+
+@pytest.fixture
+def conn():
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys = ON")
+    run_migrations(c)
+    yield c
+    c.close()
+
+
+# ── validate_schema ──────────────────────────────────────────────────────────
+
+def test_validate_schema_archetype_rules():
+    # state needs exactly one field
+    with pytest.raises(ValueError):
+        tracker.validate_schema([], "state")
+    with pytest.raises(ValueError):
+        tracker.validate_schema([{"name": "a", "type": "text"}, {"name": "b", "type": "text"}], "state")
+    tracker.validate_schema([{"name": "state", "type": "enum", "required": True, "values": ["clean", "dirty"]}], "state")
+    # inventory needs a required `name`
+    with pytest.raises(ValueError):
+        tracker.validate_schema([{"name": "qty", "type": "number"}], "inventory")
+    tracker.validate_schema([{"name": "name", "type": "text", "required": True}], "inventory")
+    # enum needs values; unknown type rejected; duplicate names rejected
+    with pytest.raises(ValueError):
+        tracker.validate_schema([{"name": "m", "type": "enum"}], "series")
+    with pytest.raises(ValueError):
+        tracker.validate_schema([{"name": "m", "type": "weird"}], "series")
+    with pytest.raises(ValueError):
+        tracker.validate_schema([{"name": "m", "type": "text"}, {"name": "m", "type": "text"}], "series")
+
+
+# ── validate_entry (the §5.2 ingest / log gate) ──────────────────────────────
+
+def test_validate_entry_drops_unknown_checks_types_reports_missing():
+    schema = [
+        {"name": "mood", "type": "enum", "required": True, "values": ["good", "low"]},
+        {"name": "note", "type": "text"},
+        {"name": "score", "type": "scale", "min": 0, "max": 10},
+    ]
+    # unknown field dropped; good is valid; note kept
+    v = tracker.validate_entry(schema, {"mood": "good", "note": "fine", "junk": "x"})
+    assert v["ok"] is True
+    assert v["cleaned"] == {"mood": "good", "note": "fine"}
+    # missing required
+    v = tracker.validate_entry(schema, {"note": "x"})
+    assert v["ok"] is False and v["missing"] == ["mood"]
+    # bad enum + out-of-range scale → errors, not stored
+    v = tracker.validate_entry(schema, {"mood": "purple", "score": 99})
+    assert v["ok"] is False and len(v["errors"]) == 2
+    # boolean/number strictness (a string is not a number)
+    assert tracker.validate_entry([{"name": "h", "type": "number"}], {"h": "8"})["ok"] is False
+    assert tracker.validate_entry([{"name": "b", "type": "boolean"}], {"b": True})["ok"] is True
+
+
+# ── create / log / read per archetype ────────────────────────────────────────
+
+def test_series_create_log_read(conn):
+    tid = tracker.create_tracker(conn, label="Mood", archetype="series", sensitive=True, schema=[
+        {"name": "mood", "type": "enum", "required": True, "values": ["good", "low"]},
+    ])["id"]
+    assert tracker.log_entry(conn, tracker_id=tid, payload={"mood": "good"}, ts="2026-09-18T09:00:00")["ok"]
+    assert tracker.log_entry(conn, tracker_id=tid, payload={"mood": "low"}, ts="2026-09-18T18:00:00")["ok"]
+    r = tracker.read_tracker(conn, id=tid, now=NOW)
+    assert r["archetype"] == "series" and r["count"] == 2
+    assert [e["mood"] for e in r["entries"]] == ["good", "low"]  # oldest-first
+
+
+def test_state_read_is_current_value(conn):
+    tid = tracker.create_tracker(conn, label="Laundry", archetype="state", schema=[
+        {"name": "state", "type": "enum", "required": True, "values": ["clean", "dirty"]},
+    ])["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={"state": "dirty"}, ts="2026-09-17T10:00:00")
+    tracker.log_entry(conn, tracker_id=tid, payload={"state": "clean"}, ts="2026-09-18T10:00:00")
+    r = tracker.read_tracker(conn, id=tid, now=NOW)
+    assert r["current"] == {"state": "clean"}
+
+
+def test_inventory_read_latest_per_name(conn):
+    tid = tracker.create_tracker(conn, label="Pantry", archetype="inventory", schema=[
+        {"name": "name", "type": "text", "required": True}, {"name": "qty", "type": "quantity"},
+    ])["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "spinach", "qty": 1}, ts="2026-09-17T10:00:00")
+    tracker.log_entry(conn, tracker_id=tid, payload={"name": "spinach", "qty": 2}, ts="2026-09-18T10:00:00")
+    r = tracker.read_tracker(conn, id=tid, now=NOW)
+    assert len(r["items"]) == 1 and r["items"][0]["qty"] == {"value": 2}
+
+
+def test_log_missing_required_and_invalid_never_stored(conn):
+    tid = tracker.create_tracker(conn, label="Sleep", archetype="series", schema=[
+        {"name": "hours", "type": "number", "required": True, "min": 0, "max": 24},
+    ])["id"]
+    assert tracker.log_entry(conn, tracker_id=tid, payload={})["code"] == "missing_required"
+    assert tracker.log_entry(conn, tracker_id=tid, payload={"hours": 99})["code"] == "invalid"
+    assert tracker.read_tracker(conn, id=tid, now=NOW)["count"] == 0
+
+
+def test_entry_cap_per_day_refuses_not_drops(conn):
+    tid = tracker.create_tracker(conn, label="X", archetype="series",
+                                 schema=[{"name": "n", "type": "text"}], config={"entry_cap_per_day": 2})["id"]
+    for i in range(2):
+        assert tracker.log_entry(conn, tracker_id=tid, payload={"n": str(i)}, ts=f"2026-09-18T0{i}:00:00")["ok"]
+    over = tracker.log_entry(conn, tracker_id=tid, payload={"n": "3"}, ts="2026-09-18T05:00:00")
+    assert over["ok"] is False and over["code"] == "entry_cap"
+
+
+def test_supersede_and_adjust_additive_only(conn):
+    tid = tracker.create_tracker(conn, label="X", archetype="series",
+                                 schema=[{"name": "a", "type": "text"}])["id"]
+    e = tracker.log_entry(conn, tracker_id=tid, payload={"a": "1"}, ts="2026-09-18T01:00:00")["id"]
+    tracker.supersede_entry(conn, id=e)
+    assert tracker.read_tracker(conn, id=tid, now=NOW)["count"] == 0
+    # additive edit OK
+    assert tracker.adjust_tracker(conn, id=tid, schema=[{"name": "a", "type": "text"}, {"name": "b", "type": "text"}])["ok"]
+    # removing/retyping a field is refused
+    with pytest.raises(ValueError):
+        tracker.adjust_tracker(conn, id=tid, schema=[{"name": "a", "type": "number"}, {"name": "b", "type": "text"}])
+    with pytest.raises(ValueError):
+        tracker.adjust_tracker(conn, id=tid, schema=[{"name": "a", "type": "text"}])
+
+
+# ── gauge (§10) ──────────────────────────────────────────────────────────────
+
+GCFG = {"gauge": {"grace_hours": 3, "low_hours": 6, "overdue_hours": 12, "extreme_hours": 48}}
+
+def test_gauge_level_bands_and_boundaries():
+    assert tracker.gauge_level(None, GCFG)["band"] == "extreme"  # never tended
+    at = lambda h: tracker.gauge_level((NOW - timedelta(hours=h)).isoformat(), GCFG, now=NOW)
+    assert at(1)["band"] == "fine" and at(1)["level"] == 1.0
+    assert at(4)["band"] == "fading"
+    assert at(8)["band"] == "low"
+    assert at(20)["band"] == "overdue"
+    assert at(50)["band"] == "extreme" and at(50)["level"] == 0.0
+    # monotonic decay between grace and extreme
+    assert at(10)["level"] < at(4)["level"] < 1.0
+
+def test_gauge_config_ordering_validated():
+    with pytest.raises(ValueError):
+        tracker.create_tracker(conn=sqlite3.connect(":memory:"), label="bad", archetype="gauge",
+                               config={"gauge": {"grace_hours": 10, "low_hours": 5, "overdue_hours": 12, "extreme_hours": 48}})
+
+def test_gauge_refill_read(conn):
+    tid = tracker.create_tracker(conn, label="Hydration", archetype="gauge", config=GCFG)["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={}, ts=(NOW - timedelta(hours=4)).isoformat())
+    r = tracker.read_tracker(conn, id=tid, now=NOW)
+    assert r["archetype"] == "gauge" and r["band"] == "fading" and 0.0 < r["level"] < 1.0
+
+
+# ── templates + derived signals ──────────────────────────────────────────────
+
+def test_create_from_template(conn):
+    for tpl in ("laundry", "pantry", "mood", "sleep", "hydration", "meals"):
+        out = tracker.create_from_template(conn, template_id=tpl)
+        assert out["ok"]
+    names = {t["label"] for t in tracker.list_trackers(conn)}
+    assert {"Laundry", "Pantry", "Mood", "Sleep", "Hydration", "Meals"} <= names
+    with pytest.raises(ValueError):
+        tracker.create_from_template(conn, template_id="nope")
+
+def test_stale_trackers(conn):
+    tid = tracker.create_tracker(conn, label="Mood", archetype="series",
+                                 schema=[{"name": "m", "type": "text"}], config={"staleness_hours": 24})["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={"m": "x"}, ts=(NOW - timedelta(hours=40)).isoformat())
+    stale = tracker.stale_trackers(conn, now=NOW)
+    assert any(s["id"] == tid for s in stale)
+    # a fresh entry clears it
+    tracker.log_entry(conn, tracker_id=tid, payload={"m": "y"}, ts=(NOW - timedelta(hours=1)).isoformat())
+    assert not any(s["id"] == tid for s in tracker.stale_trackers(conn, now=NOW))
+
+def test_watchdog_rate_flag(conn):
+    tid = tracker.create_tracker(conn, label="Erp", archetype="series",
+                                 schema=[{"name": "t", "type": "text"}], config={"entry_cap_per_day": 50})["id"]
+    # a calm baseline in the 8-28d window, then a genuine burst this week
+    for d in range(8, 20):
+        tracker.log_entry(conn, tracker_id=tid, payload={"t": "x"}, ts=(NOW - timedelta(days=d)).isoformat())
+    for i in range(30):
+        tracker.log_entry(conn, tracker_id=tid, payload={"t": "x"}, ts=(NOW - timedelta(days=1, hours=i)).isoformat())
+    flag = tracker.entry_rate_flag(conn, id=tid, now=NOW)
+    assert flag["flagged"] is True and flag["week_count"] >= 10
+
+def test_predict_windows_honesty_gate(conn):
+    tid = tracker.create_tracker(conn, label="Menses", archetype="series", sensitive=True, schema=[
+        {"name": "flow", "type": "enum", "required": True, "values": ["none", "spotting", "light", "medium", "heavy"]},
+    ], config={"predict": True})["id"]
+    # under 2 completed cycles → no window
+    tracker.log_entry(conn, tracker_id=tid, payload={"flow": "medium"}, ts="2026-06-01T09:00:00")
+    assert tracker.predict_windows(conn, id=tid, now=NOW)["window"] is None
+    # three cycle starts ~28d apart → a window appears, ±3 days
+    tracker.log_entry(conn, tracker_id=tid, payload={"flow": "medium"}, ts="2026-06-29T09:00:00")
+    tracker.log_entry(conn, tracker_id=tid, payload={"flow": "medium"}, ts="2026-07-27T09:00:00")
+    p = tracker.predict_windows(conn, id=tid, now=NOW)
+    assert p["window"] is not None and p["cycles_seen"] == 2
+    assert p["window"]["start"] < p["window"]["end"]

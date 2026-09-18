@@ -1,0 +1,7 @@
+{
+  "label": "Meals",
+  "archetype": "gauge",
+  "sensitive": false,
+  "schema": [],
+  "config": { "gauge": { "grace_hours": 5, "low_hours": 10, "overdue_hours": 24, "extreme_hours": 72 } }
+}

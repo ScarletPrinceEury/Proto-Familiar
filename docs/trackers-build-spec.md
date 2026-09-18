@@ -347,7 +347,11 @@ constants, never on string matching in prompts.
 ## 9. Build order (Opus sessions) & versioning
 
 1. **T-A:** migration + `tracker.py` + templates + MCP tools + Python tests
-   (validation, caps, staleness, watchdog, predict fixtures).
+   (validation, caps, staleness, watchdog, predict fixtures). **✓ SHIPPED
+   (0.14.0-alpha):** `0007_trackers.sql`, `unruh/src/unruh/tracker.py` (all four
+   archetypes incl. `gauge`'s `gauge_level`), `templates/trackers/*.json` (laundry /
+   pantry / mood / sleep / hydration / meals), the seven `tracker_*` MCP tools
+   (`tracker_drop` UI/HTTP-only), 15 `test_tracker.py` cases.
 2. **T-B:** thalamus wrappers + cerebellum tools + surfacing module (static
    + registry regex) + 5.2 memorization capture + 5.3 cues + T2/T3 tests.
 3. **T-C:** projections (expiry nodes, eat-first, menses windows) +

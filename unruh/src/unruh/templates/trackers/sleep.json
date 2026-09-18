@@ -1,0 +1,11 @@
+{
+  "label": "Sleep",
+  "archetype": "series",
+  "sensitive": true,
+  "schema": [
+    { "name": "hours", "type": "number", "required": true, "min": 0, "max": 24 },
+    { "name": "quality", "type": "enum", "values": ["good", "ok", "poor"] },
+    { "name": "needed_less", "type": "boolean" }
+  ],
+  "config": { "staleness_hours": 48, "ask_cap_per_day": 1 }
+}
