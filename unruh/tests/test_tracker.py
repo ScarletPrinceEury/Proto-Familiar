@@ -188,6 +188,30 @@ def test_stale_trackers(conn):
     tracker.log_entry(conn, tracker_id=tid, payload={"m": "y"}, ts=(NOW - timedelta(hours=1)).isoformat())
     assert not any(s["id"] == tid for s in tracker.stale_trackers(conn, now=NOW))
 
+def test_cue_candidates_attach_ask_cap_and_exclude_gauges(conn):
+    # A stale series carries its ask_cap_per_day for the Node cue renderer.
+    mid = tracker.create_tracker(conn, label="Mood", archetype="series",
+                                 schema=[{"name": "m", "type": "text"}],
+                                 config={"staleness_hours": 24, "ask_cap_per_day": 1})["id"]
+    tracker.log_entry(conn, tracker_id=mid, payload={"m": "x"}, ts=(NOW - timedelta(hours=40)).isoformat())
+    # An ERP-style ledger opts out of cues (ask_cap 0) but is still reported so
+    # the renderer — not this layer — is the single place that decides.
+    eid = tracker.create_tracker(conn, label="Erp", archetype="series",
+                                 schema=[{"name": "t", "type": "text"}],
+                                 config={"staleness_hours": 24, "ask_cap_per_day": 0})["id"]
+    tracker.log_entry(conn, tracker_id=eid, payload={"t": "x"}, ts=(NOW - timedelta(hours=40)).isoformat())
+    # A gauge is never a staleness cue candidate (its neglect is the band).
+    gid = tracker.create_tracker(conn, label="Water", archetype="gauge",
+                                 config={"gauge": {"grace_hours": 3, "low_hours": 6, "overdue_hours": 12, "extreme_hours": 48}})["id"]
+
+    out = tracker.cue_candidates(conn, now=NOW)
+    by_id = {s["id"]: s for s in out["stale"]}
+    assert mid in by_id and by_id[mid]["ask_cap_per_day"] == 1
+    assert eid in by_id and by_id[eid]["ask_cap_per_day"] == 0
+    assert gid not in by_id, "gauges are excluded from staleness cues"
+    assert "hours_since" in by_id[mid]
+
+
 def test_watchdog_rate_flag(conn):
     tid = tracker.create_tracker(conn, label="Erp", archetype="series",
                                  schema=[{"name": "t", "type": "text"}], config={"entry_cap_per_day": 50})["id"]

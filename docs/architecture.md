@@ -609,8 +609,17 @@ Currently owns:
   no extra call, like `schedule_refs`/`follow_ups`); `parseTrackerObservations`
   code-gates each observation against the legend (off-legend id or non-object
   payload dropped) and `processJob` logs the survivors as `source:'inferred'`.
-  `buildSharedRoomPrompt` never sees the legend (T2, fail-closed). The
-  `[Tracker cues]` renderer (§5.3) is still a follow-up pass. See
+  `buildSharedRoomPrompt` never sees the legend (T2, fail-closed). **Cues
+  (§5.3, T-B.3):** Unruh `cue_candidates` (stale trackers + each one's
+  `ask_cap_per_day`, gauges excluded) → the `tracker_cues` tool → `trackerCues`
+  wrapper; `src/tracker/tracker-cues.js` (`nextTrackerCue`) paces the
+  `[Tracker cues]` block by the gcal-projection aging shape (per-id state,
+  prune-on-arrival, `MAX_RENDERS`=3, `MAX_PER_TURN`=2) plus the per-tracker
+  per-day ask-cap (`ask_cap 0` = never, e.g. erp). Wired into `enrich()`'s
+  dynamic sections (ward-private, live turns only, `trackersEnabled`-gated),
+  travelling with the `trackers` surfacing module. The gcal + tracker cue
+  stores share `src/util/json-state.js`. The "incomplete-entries" half of §5.3
+  is deliberately deferred (nag risk — see the build spec). See
   docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
