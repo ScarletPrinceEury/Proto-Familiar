@@ -388,11 +388,29 @@ constants, never on string matching in prompts.
      `parseTrackerObservations` gate, + a PIPELINE run through real `processJob`:
      ward-private logs inferred / off-legend dropped, shared-room never fetches
      the legend, off-switch stops capture).
-   - **T-B.3 (next):** §5.3 cues — the `[Tracker cues]` renderer via the
-     gcal-cue machinery. Needs the Unruh `incomplete_entries` function +
-     `stale`/`incomplete`/`cues` MCP exposure (not yet built) + the
-     `trackerCues`/`trackerPredictions` thalamus wrappers. Split out because
-     the cue path needs new Unruh MCP surface and deserves its own tested pass.
+   - **T-B.3 ✓ SHIPPED (0.14.4-alpha):** §5.3 cues — the `[Tracker cues]`
+     block. Unruh `cue_candidates` (currently-stale trackers with each one's
+     `ask_cap_per_day`, gauges excluded) behind the `tracker_cues` MCP tool +
+     the `trackerCues` thalamus wrapper. `src/tracker/tracker-cues.js` mirrors
+     the gcal-projection aging shape (per-id state, prune-on-arrival, a hard
+     `MAX_RENDERS`=3 age-out, `MAX_PER_TURN`=2) with one tracker-specific gate:
+     each tracker's `ask_cap_per_day` paces re-offers per ward-local day, and
+     `ask_cap 0` (erp) is never cued — structurally. The block is wired into
+     `enrich()`'s dynamic sections (ward-private, live turns only, gated by
+     `trackersEnabled`) and travels with the `trackers` surfacing module (its
+     `[Tracker cues]` marker, registered in T-B.1). The gcal + tracker cue
+     stores now share `src/util/json-state.js` (extracted, not duplicated).
+     Tests: `cue_candidates` (Python), `tests/tracker-cues.test.mjs` (aging /
+     ask-cap / erp-opt-out / age-out / prune / cap / block text).
+     - **Deferred (with rationale):** the "incomplete recent entries" half of
+       §5.3 (`incomplete_entries`) is intentionally NOT shipped. Every crisp
+       definition of "incomplete" (a stored entry missing an *optional* field)
+       fires on entries my human omitted a field from on purpose → a naggy,
+       low-value cue that cuts against the anti-nag stance. Staleness ("this
+       ledger's gone quiet") is the high-value, well-defined signal; revisit
+       incomplete-entries only with a ward-agreed notion of what makes an entry
+       worth re-touching. `trackerPredictions` (menses windows, §4) belongs to
+       T-C (projections), not the cue pass.
 3. **T-C:** projections (expiry nodes, eat-first, menses windows) +
    `windowSeries` reflection input + watchdog line + 5.4 offer cue +
    T4/T5/T7/T8 tests.

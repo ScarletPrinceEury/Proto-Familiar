@@ -22,9 +22,9 @@
  */
 
 import path from 'path';
-import { promises as fsp } from 'fs';
 import { fileURLToPath } from 'url';
 import { relativeTime } from '../../relative-time.js';
+import { readJsonState, writeJsonState } from '../util/json-state.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -155,24 +155,11 @@ export function buildCueBlock(items, { now = Date.now(), weatherOn = false } = {
 function file(tomesDir) { return path.join(tomesDir, FILENAME); }
 
 export async function readCueState({ tomesDir = DEFAULT_TOMES_DIR } = {}) {
-  try {
-    const raw = await fsp.readFile(file(tomesDir), 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {}; // missing/corrupt → start fresh (best-effort, never throws)
-  }
+  return readJsonState(file(tomesDir), {});
 }
 
 export async function writeCueState(state, { tomesDir = DEFAULT_TOMES_DIR } = {}) {
-  try {
-    await fsp.mkdir(tomesDir, { recursive: true });
-    const tmp = file(tomesDir) + '.tmp';
-    await fsp.writeFile(tmp, JSON.stringify(state ?? {}, null, 2), 'utf8');
-    await fsp.rename(tmp, file(tomesDir)); // atomic replace
-  } catch (err) {
-    console.error('[gcal-cue] failed to persist aging state:', err?.message ?? err);
-  }
+  return writeJsonState(file(tomesDir), state);
 }
 
 /**

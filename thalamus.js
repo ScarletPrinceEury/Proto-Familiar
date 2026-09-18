@@ -1150,6 +1150,17 @@ export async function supersedeTrackerEntry({ id } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// §5.3 cue candidates: stale trackers (with each one's ask_cap_per_day) the
+// [Tracker cues] renderer paces. Shaped fallback so a down peer renders absence.
+export async function trackerCues() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', stale: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_cues', arguments: {} });
+    return parseToolText(r, { ok: false, stale: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), stale: [] }; }
+}
+
 export async function setRoundsVisibility({ value }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
@@ -1659,6 +1670,7 @@ function wrapFile(filename, content, promptLabel) {
 import { formatTemporalContext } from './src/schedule/temporal-format.js';
 import { buildStewardshipBlock } from './src/schedule/stewardship.js';
 import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
+import { nextTrackerCue } from './src/tracker/tracker-cues.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './src/schedule/recurrence.js';
@@ -2309,6 +2321,32 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Tracker cues (trackers build spec §5.3) ─────────────────────────
+    // A ledger my human keeps that's gone quiet past its staleness_hours gets
+    // a gentle "want to log where it stands?" line, paced by the tracker's own
+    // ask_cap_per_day and capped at 2 lines. Ward-private, live turns only (so
+    // previews don't burn a cue's budget). The block travels with the `trackers`
+    // surfacing module (its [Tracker cues] marker). Off = no cues.
+    let trackerCueBlock = '';
+    const trackersOn = (() => {
+      if (process.env.PROTO_FAMILIAR_TRACKERS_DISABLED === '1') return false;
+      try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')).trackersEnabled !== false; }
+      catch { return true; }
+    })();
+    if (liveTurn && !staticOnly && !gated && trackersOn) {
+      try {
+        const cues = await trackerCues();
+        const candidates = Array.isArray(cues?.stale) ? cues.stale : [];
+        if (candidates.length) {
+          const todayKey = wardLocalNowISO(wardTimeZoneSetting()).slice(0, 10);
+          trackerCueBlock = await nextTrackerCue({ candidates, todayKey, advance: true });
+          if (trackerCueBlock) console.log('[thalamus] tracker cues: surfacing quiet ledger(s)');
+        }
+      } catch (err) {
+        console.error('[thalamus] tracker cues failed:', err?.message ?? err);
+      }
+    }
+
     // ── Care check / break-through framing (step 4b) ──────────────────────
     // Read current threat; if elevated, prepend a [CARE CHECK] block that
     // tells the Familiar to consider checking in proactively. Never forces
@@ -2647,6 +2685,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (reachOutBlock)          dynamicSections.push(reachOutBlock);
     if (recentMemBlock)         dynamicSections.push(recentMemBlock);
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
+    if (trackerCueBlock)        dynamicSections.push(trackerCueBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);

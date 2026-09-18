@@ -1507,6 +1507,20 @@ def tracker_supersede(id: str) -> dict[str, Any]:
         return _err(str(e))
 
 
+@mcp.tool()
+def tracker_cues() -> dict[str, Any]:
+    """I use this to see which of my human's ledgers have gone quiet a while — the
+    ones past their `staleness_hours` that I might gently re-raise. Each carries its
+    own `ask_cap_per_day` so I pace how often I bring it up (0 = I never nudge it,
+    e.g. an ERP log). Gauges aren't here — their neglect shows as the gauge band.
+    Returns {ok, stale:[{id, label, hours_since, ask_cap_per_day}]}."""
+    try:
+        with get_conn() as conn:
+            return {"ok": True, **trk.cue_candidates(conn)}
+    except ValueError as e:
+        return _err(str(e))
+
+
 # ── Entry point ───────────────────────────────────────────────────────
 
 

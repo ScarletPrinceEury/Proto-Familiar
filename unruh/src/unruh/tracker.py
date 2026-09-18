@@ -470,6 +470,23 @@ def stale_trackers(conn: sqlite3.Connection, *, now: datetime | None = None) -> 
     return out
 
 
+def cue_candidates(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict[str, Any]:
+    """§5.3 cue candidates: currently-stale trackers, each carrying its
+    per-tracker `ask_cap_per_day` so the Node-side cue renderer can pace re-offers
+    (0 = never cued, e.g. erp). Gauges are excluded here — their staleness is the
+    gauge band, surfaced through the gauge cue path, not this one. The renderer
+    owns the aging/dedup; this is just the honest 'what's gone quiet' snapshot."""
+    stale = stale_trackers(conn, now=now)
+    out = []
+    for s in stale:
+        r = _get_tracker(conn, s["id"])
+        cfg = json.loads(r["config_json"] or "{}") if r is not None else {}
+        cap = cfg.get("ask_cap_per_day", 1)
+        cap = cap if isinstance(cap, (int, float)) else 1
+        out.append({**s, "ask_cap_per_day": cap})
+    return {"stale": out}
+
+
 def entry_rate_flag(conn: sqlite3.Connection, *, id: str, now: datetime | None = None) -> dict[str, Any]:
     """Watchdog (§6): a 7-day entry rate > 3× the trailing 28-day median AND ≥10
     entries in the week → flagged. A private reflection signal, never an accusation.
