@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   discordLocationKey,
+  discordReplyMaxTokens,
   classifyMessage,
   chunkReply,
   mergeParticipant,
@@ -1184,5 +1185,25 @@ describe('assembleTurnMessages — web-parity context order', () => {
     const out = assembleTurnMessages({ systemContent: '', convo, dynamic: 'DYN', depth: 2 });
     assert.notEqual(out[0].content, ''); // no empty system leader
     assert.ok(out.some(m => m.content === 'DYN'));
+  });
+});
+
+describe('discordReplyMaxTokens — honour the ward budget, floor at 8000', () => {
+  // The reported bug: Discord hardcoded 8000 and ignored settings.maxTokens, so a
+  // verbose thinking model (GLM via Nano-GPT, no reasoning_effort) hit finish_reason=
+  // length with empty content on almost every DM, while web honoured a higher budget.
+  it('honours a budget ABOVE the floor', () => {
+    assert.equal(discordReplyMaxTokens({ maxTokens: 16000 }), 16000);
+    assert.equal(discordReplyMaxTokens({ maxTokens: 32000 }), 32000);
+  });
+  it('never drops BELOW the 8000 floor (a low/default budget cannot regress Discord)', () => {
+    assert.equal(discordReplyMaxTokens({ maxTokens: 2048 }), 8000);
+    assert.equal(discordReplyMaxTokens({ maxTokens: 8000 }), 8000);
+  });
+  it('tolerates an unset / invalid budget → the floor', () => {
+    assert.equal(discordReplyMaxTokens({}), 8000);
+    assert.equal(discordReplyMaxTokens(undefined), 8000);
+    assert.equal(discordReplyMaxTokens({ maxTokens: 'lots' }), 8000);
+    assert.equal(discordReplyMaxTokens({ maxTokens: -5 }), 8000);
   });
 });

@@ -63,7 +63,11 @@ triage in a group setting. A third boundary, image-description text, was wired l
 
 Still deliberately unwired: Phylactery/Unruh recall (first-party stores; villager-written
 memories carry provenance labels instead) and gcal event titles (the ward's own calendar).
-The history below is preserved as the record of how the gap happened.
+The history below is preserved as the record of how the gap happened. A related but distinct
+gap — extracted fact text being *written* into Phylactery for the first time, rather than
+first-party stores being *read* back out — was closed separately by
+[Memory integrity: the memorization-to-Phylactery gate](memory-integrity) (0.12.27-alpha),
+which reuses this module's `scanForInjection()` at the memorization boundary.
 
 ## The original finding (0.8.55 audit)
 
@@ -131,3 +135,6 @@ scoping, provenance labels, code-gated actions) rather than on text sanitization
   subsystem itself.
 - [Vision and media](vision-and-media) — the describe pipeline whose image-description text is
   the third wired boundary above.
+- [Memory integrity: the memorization-to-Phylactery gate](memory-integrity) — the separate,
+  later fix for a fact being poisoned during extraction rather than during a read this page's
+  guard would have covered.

@@ -217,6 +217,17 @@ queue mechanics — treating a genuinely empty extraction as success instead of 
 bounding provider input size by chunking an oversized transcript — and are described in
 [Session Memory Extraction](session-memory-extraction).
 
+## The memory-integrity gate (0.12.27-alpha)
+
+`processJob` now runs one more check per extracted fact, immediately before the
+`createMemoryFull` call: a new gate, separate from the consent gate above, that asks whether
+the fact itself looks corrupted or adversarial rather than whether the ward has consented to
+keep it. A suspect fact from a shared room is held in a reversible quarantine instead of being
+written; a suspect fact in the ward's own direct words is written but flagged for review. See
+[Memory integrity: the memorization-to-Phylactery gate](memory-integrity) for the detection
+patterns, the provenance policy, the quarantine store, and the ward-facing review surface
+[@memorization-js].
+
 ## Related
 
 - [Session Memory Extraction](session-memory-extraction) — how transcripts are assembled,
@@ -229,6 +240,9 @@ bounding provider input size by chunking an oversized transcript — and are des
   deliberately kept separate from.
 - [Content-based memory gating](content-gating) — how the `content_tag` this pipeline extracts
   is validated, stored, and used to gate recall per villager tier.
+- [Memory integrity: the memorization-to-Phylactery gate](memory-integrity) — the scan and
+  reversible quarantine that now runs on every extracted fact, right before this pipeline's
+  `createMemoryFull` write.
 - [Engineering conventions](../reference/engineering-conventions) — the repo-wide "robust over
   cheap" and graceful-degradation rules this subsystem's shape follows.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how the memorization
