@@ -1429,6 +1429,31 @@ fact is set aside, never silently destroyed. (Stage 2 slots an off-the-shelf
 classifier behind `scanFact`'s signature; Stage 3 adds the Hippocampus buffer —
 see `docs/cross-channel-continuity-build-spec.md`.)
 
+**Hippocampus — short-term cross-channel buffer (0.13.0, continuity Stage 3).**
+`src/memory/hippocampus.js` is a rolling buffer (`tomes/.hippocampus.json`, a
+dotfile, never a tome, never memorized) that every surface writes to as things
+happen, so the Familiar carries the recent past across web / Discord / voice
+instead of starting blank on each. `recordEvent` appends `{id, ts (machine),
+surface, locationKey, speaker, audienceTag, text}` — non-ward text injection-guarded
+(`sanitizeExternal`), the ward's own words and the Familiar's own lines (`'me'`)
+kept verbatim; it self-prunes (retention window + count cap) and NEVER throws into
+a turn. `recentElsewhere` filters to the recent, audience-visible, other-location
+events and `buildRecentElsewhereBlock` renders the `[Recently, elsewhere]` block —
+injected through the ONE shared seam, `enrich()`'s dynamic block (both web `/api/chat`
+and Discord `handleTurn` pass `recentKey`/`recentEnabled`), so it reaches every
+surface at once. **It is a pure read overlay, NOT a memory store:** it never drains
+to Phylactery (each surface's messages already memorize through their own session,
+now guarded by the memory-integrity gate — draining would double-count), never
+feeds identity (ward decision: identity graduates from established memory +
+ponderings, never raw recent input), and is audience-gated + location-excluded
+(my human sees all; a villager sees only their shared circles, never ward-private;
+the current location is left out — it's already in the live history). Exact-values:
+relative phrasing ("12 min ago") is computed in code from `ts`, never authored by
+the model. Off: `hippocampusEnabled` / `PROTO_FAMILIAR_HIPPOCAMPUS_DISABLED=1`.
+Wired writes: web inbound (`/api/chat`), Discord inbound + the Familiar's reply
+(`deliverReply`); deferred to a follow-up: web assistant-reply capture (streaming
+seam) and observed/ambient Discord messages + voice writes.
+
 **Temporality → storage tier.** `episodic` facts land at `daily` (standalone,
 dated — the memory of a day, consolidates + decays). `standing` facts are
 "generally true now", not a memory of a day: a standing fact about my human goes

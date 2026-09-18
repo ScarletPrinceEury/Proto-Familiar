@@ -95,6 +95,7 @@ import { stripLlmTimestamps, collapseToolTurns, injectDynamicAtDepth, resolveDyn
 import { buildTimeAnchorBlock } from '../../relative-time.js';
 import { readWeatherNowLine, readWeatherVagueLine } from '../weather/weather-mirror.js';
 import { sanitizeExternal } from '../../injection-guard.js';
+import { recordEvent as hippoRecord } from '../memory/hippocampus.js';
 import { checkForUpdate, applyUpdate, updateDisabled } from '../../updater.js';
 
 import { REPO_ROOT } from '../../repo-root.js';
@@ -2044,6 +2045,13 @@ async function deliverReply(gw, { rawReply, audienceTag, apiMessages, conn, sett
   }
   await sendChannelMessage(gw.config.token, channelId, reply);
 
+  // Record my Familiar's own reply into the cross-channel buffer so "recently,
+  // elsewhere" carries both sides of a Discord exchange onto its other surfaces.
+  // Fire-and-forget; 'me' is trusted (not injection-guarded).
+  if (settings?.hippocampusEnabled !== false && process.env.PROTO_FAMILIAR_HIPPOCAMPUS_DISABLED !== '1') {
+    hippoRecord({ surface: 'discord', locationKey, speaker: 'me', audienceTag: audienceTag || 'ward-private', text: reply }).catch(() => {});
+  }
+
   // Persist the turn. Sessions land in logs/ exactly like web sessions
   // and stay listable by the ward in the UI — no hidden conversations.
   const now = new Date().toISOString();
@@ -2551,11 +2559,22 @@ async function handleTurn(gw, msg, decision) {
   // simultaneous web turn on the same unified session.
   // lastUserMessageAt stays null: Discord doesn't track the web client's gap
   // clock, so idle-mode bookmark surfacing (which needs it) stays a web feature.
-  const enriched = await enrich(content, { audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, liveTurn: decision.isWard })
+  // Hippocampus (Stage 3): pass THIS location as the exclude-key (its own recent
+  // lines are already in the live history) + the enable gate (settings + env).
+  const hippoOn = settings?.hippocampusEnabled !== false && process.env.PROTO_FAMILIAR_HIPPOCAMPUS_DISABLED !== '1';
+  const enriched = await enrich(content, { audience: audienceGrants, audiences: audienceVisible, topicGrants: audienceTopics, liveTurn: decision.isWard, recentKey: decision.locationKey, recentEnabled: hippoOn })
     .catch(err => {
       console.error('[discord] enrich failed (degrading to bare turn):', err?.message ?? err);
       return { static: '', dynamic: '' };
     });
+
+  // Record my human's / the villager's inbound line into the cross-channel buffer
+  // (fire-and-forget; never blocks the turn). A villager's text is injection-guarded
+  // inside recordEvent; the ward's own words are kept verbatim.
+  if (hippoOn && content && content.trim()) {
+    const speaker = decision.isWard ? 'my human' : (decision.villager?.name || decision.speakerName || 'someone');
+    hippoRecord({ surface: 'discord', locationKey: decision.locationKey, speaker, audienceTag: audienceTag || 'ward-private', text: content, isWard: decision.isWard }).catch(() => {});
+  }
 
   // [Village] presence — the people in play this turn get their pronouns and
   // distinguishing facts in front of me now (see server.js /api/chat). Here the

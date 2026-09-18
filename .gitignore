@@ -84,6 +84,11 @@ packagebackup.json
 data/
 lorebook/
 memory/
+# ...but `memory/` above is un-anchored and also matched the SOURCE dir src/memory/,
+# silently ignoring new source files there (e.g. hippocampus.js was dropped from a
+# commit). src/memory/ is code, always tracked — re-include it.
+!src/memory/
+!src/memory/**
 # Windows shell metadata.
 desktop.ini
 **/desktop.ini
