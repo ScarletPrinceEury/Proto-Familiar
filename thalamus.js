@@ -1072,6 +1072,83 @@ export async function markIntentionFired({ id, now } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+// ── Trackers (build spec §3) — thin wrappers over the Unruh tracker_* MCP tools.
+// Degrade to { ok:false } and NEVER throw into the chat path (graceful degradation).
+// Ward-private wholesale; the cerebellum tools + surfacing that expose these are
+// gated ward-only (T2). Reads carry a shaped fallback so a down peer renders absence.
+
+export async function createTracker({ label, archetype, schema, config, sensitive } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_create', arguments: { label, archetype, schema, config, sensitive } });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function createTrackerFromTemplate({ template_id } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_create_from_template', arguments: { template_id } });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function logTrackerEntry({ tracker_id, payload, ts, supersedes } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { tracker_id };
+  if (payload    !== undefined) args.payload    = payload;
+  if (ts         !== undefined) args.ts         = ts;
+  if (supersedes !== undefined) args.supersedes = supersedes;
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_log', arguments: args });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function readTracker({ tracker_id, days = 14 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_read', arguments: { tracker_id, days } });
+    return parseToolText(r, { ok: false });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function listTrackers() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', trackers: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_list', arguments: {} });
+    return parseToolText(r, { ok: false, trackers: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), trackers: [] }; }
+}
+
+export async function adjustTracker({ id, label, schema, config, sensitive } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  const args = { id };
+  if (label     !== undefined) args.label     = label;
+  if (schema    !== undefined) args.schema    = schema;
+  if (config    !== undefined) args.config    = config;
+  if (sensitive !== undefined) args.sensitive = sensitive;
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_adjust', arguments: args });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function supersedeTrackerEntry({ id } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_supersede', arguments: { id } });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 export async function setRoundsVisibility({ value }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };

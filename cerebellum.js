@@ -59,6 +59,7 @@ import {
   convertUnruhIds, convertGraphIds, convertMemoryIds,
   bumpInterest, setStandingInterest, saveBookmark,
   setIntention, listIntentions, dropIntention, completeIntention, markIntentionFired, setRoundsVisibility,
+  createTracker, createTrackerFromTemplate, logTrackerEntry, readTracker, listTrackers, adjustTracker,
   confirmConsentMemories, dropPendingMemories,
   acknowledgeGraduations,
   searchMemoryRestricted, searchMemory, memByTimerange,
@@ -1952,6 +1953,104 @@ export const BUILTIN_TOOLS = [
       },
     },
   },
+  // ── Trackers (my human's private ledgers) ────────────────────────────
+  // Ward-only: these hold {{user}}'s own patterns (mood, sleep, what's in the
+  // pantry, whether the laundry's done). They never appear on a villager turn
+  // and their contents never reach a gated context. Four archetypes: a `state`
+  // (one current value, like laundry: clean/dirty), an `inventory` (items kept
+  // by name, like the pantry), a `series` (dated entries I look back over, like
+  // mood or sleep), and a `gauge` (upkeep that drains as it's neglected and
+  // refills when tended, like eating or hydration).
+  {
+    type: 'function',
+    function: {
+      name: 'tracker_list',
+      description: 'I look over the ledgers I keep for {{user}} — their ids, labels, archetype, and when each was last touched. I check here first before I start a new tracker (so I reuse the one that already exists) or before I log to one (so I use the right id).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tracker_create_from_template',
+      description: 'I start one of {{user}}\'s ledgers from a ready-made template instead of hand-defining the fields. The templates I have: "mood" (how they\'re feeling — private), "sleep" (hours + quality — private), "pantry" (what food is in, with quantities and expiry), "laundry" (clean / in-progress / dirty), "hydration" (a gauge that drains between drinks), and "meals" (a gauge that drains between meals). I reach for a template when it fits; for anything else I use tracker_create. I check tracker_list first so I don\'t make a duplicate.',
+      parameters: {
+        type: 'object',
+        properties: {
+          template_id: { type: 'string', enum: ['mood', 'sleep', 'pantry', 'laundry', 'hydration', 'meals'], description: 'Which template to start from.' },
+        },
+        required: ['template_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tracker_create',
+      description: 'I set up a custom ledger for {{user}} when no template fits — I choose its archetype and the fields it holds. I use this deliberately, once I understand a pattern of theirs worth keeping; a tracker is a commitment to keep it current, not a scratch note. If a template covers it, I use tracker_create_from_template instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Short human-readable name (e.g. "water intake", "spoons today").' },
+          archetype: { type: 'string', enum: ['state', 'inventory', 'series', 'gauge'], description: 'state = one current value; inventory = items kept by a required "name" field; series = dated entries I look back over; gauge = upkeep that drains when neglected and refills when logged.' },
+          schema: { type: 'array', description: 'The fields an entry holds, in order. Each is {name, type, required?, values?, min?, max?, unit?}. type is one of: "enum" (needs values:[...]), "number" (optional min/max/unit), "scale" (needs integer min & max), "quantity" (a number plus a free "unit" string), "date" (local ISO), "text", "text[]", "boolean". A state tracker has exactly one field; an inventory\'s schema describes ONE item and must include a required "name".', items: { type: 'object' } },
+          config: { type: 'object', description: 'Optional per-tracker knobs: staleness_hours, ask_cap_per_day, entry_cap_per_day, and for a gauge a "gauge" object {grace_hours, low_hours, overdue_hours, extreme_hours}. Sensible defaults apply if omitted.' },
+          sensitive: { type: 'boolean', description: 'True for anything private about {{user}} (mood, sleep, health). Sensitive trackers stay off my incidental surfaces. Default false.' },
+        },
+        required: ['label', 'archetype'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tracker_log',
+      description: 'I record an entry on one of {{user}}\'s trackers — a mood, a night\'s sleep, an item into the pantry, "just ate" for a meal gauge. For a gauge, logging is what refills it. If I got an earlier entry wrong, I pass "supersedes" with its id to replace it (the old one stays for the record, marked corrected). I never invent a value {{user}} didn\'t give me — if I\'m unsure, I ask.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tracker_id: { type: 'string', description: 'The tracker\'s id (from tracker_list or tracker_read).' },
+          payload: { type: 'object', description: 'The entry\'s fields, matching the tracker\'s schema (e.g. {"mood":"tired","note":"long day"}). A gauge refill often needs no payload — logging it IS the signal.' },
+          ts: { type: 'string', description: 'Optional. When the entry is ABOUT, local ISO (YYYY-MM-DDTHH:MM:SS) as my [Now] block shows — no UTC offset. Omit for now.' },
+          supersedes: { type: 'string', description: 'Optional. The id of an earlier entry this corrects/replaces.' },
+        },
+        required: ['tracker_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tracker_read',
+      description: 'I see where one of {{user}}\'s trackers stands: a state\'s current value, an inventory\'s items, a series over the recent window, or a gauge\'s current level and band. I read before I log, or when {{user}} asks how something\'s been going.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tracker_id: { type: 'string', description: 'The tracker\'s id (from tracker_list).' },
+          days: { type: 'number', description: 'For a series, how many days back to summarize (default 14).' },
+        },
+        required: ['tracker_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tracker_adjust',
+      description: 'I refine an existing tracker — rename it, add a new field, tweak its config or its sensitivity. Edits are additive: I can add a field but never remove or retype one, so the history stays valid. To retire a tracker entirely {{user}} does that themselves in the Trackers editor — I don\'t destroy a ledger.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The tracker\'s id.' },
+          label: { type: 'string', description: 'Optional new label.' },
+          schema: { type: 'array', description: 'Optional. The full field list including any NEW fields (existing fields must stay — additive only).', items: { type: 'object' } },
+          config: { type: 'object', description: 'Optional config changes (merged over the current config).' },
+          sensitive: { type: 'boolean', description: 'Optional. Change whether the tracker is treated as private.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -2938,6 +3037,48 @@ function resolveCircleInList(cats, name) {
  * Executors receive (args, ctx). ctx carries per-request context the
  * server hands in: { sessionInfo } today.
  */
+
+// Render a tracker_read payload as a plain, neutral line (code only, no LLM).
+// Deliberately gap-neutral (invariant T4): never "streak", "broke", or
+// "missed day" — a quiet stretch is just an older timestamp, not a failure.
+function renderTrackerRead(data) {
+  const label = data?.label ?? data?.id ?? 'tracker';
+  const arch = data?.archetype;
+  if (arch === 'gauge') {
+    const band = data.band ?? 'unknown';
+    const hrs = Number.isFinite(data.hours_since) ? `${Math.round(data.hours_since)}h since the last one` : 'nothing logged yet';
+    const last = data.last_refill_at ? ` (last: ${data.last_refill_at})` : '';
+    return `${label}: ${band} — ${hrs}${last}.`;
+  }
+  if (arch === 'state') {
+    if (!data.current) return `${label}: nothing recorded yet.`;
+    const val = Object.entries(data.current).map(([k, v]) => `${k}: ${v}`).join(', ');
+    return `${label}: ${val}${data.as_of ? ` (as of ${data.as_of})` : ''}.`;
+  }
+  if (arch === 'inventory') {
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length) return `${label}: empty.`;
+    const lines = items.map(it => {
+      const extras = Object.entries(it)
+        .filter(([k]) => k !== 'name' && k !== 'as_of')
+        .map(([k, v]) => `${k}: ${v}`).join(', ');
+      return `· ${it.name}${extras ? ` — ${extras}` : ''}`;
+    });
+    return [`${label} (${items.length} item${items.length === 1 ? '' : 's'}):`, ...lines].join('\n');
+  }
+  // series
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  if (!entries.length) return `${label}: no entries in the window.`;
+  const lines = entries.slice(-10).map(e => {
+    const fields = Object.entries(e)
+      .filter(([k]) => k !== 'id' && k !== 'ts')
+      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join('/') : v}`).join(', ');
+    return `· ${e.ts}${fields ? ` — ${fields}` : ''}`;
+  });
+  const head = `${label} — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}${entries.length > 10 ? ' (showing the last 10)' : ''}:`;
+  return [head, ...lines].join('\n');
+}
+
 export const TOOL_EXECUTORS = {
   get_datetime: () => new Date().toLocaleString([], {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -3832,6 +3973,89 @@ export const TOOL_EXECUTORS = {
         ? 'My rounds are private now — my human still knows I keep some, but their contents are mine.'
         : 'My rounds are shared now — my human can see the routine I keep.');
     } catch (err) { return `Failed to set rounds visibility: ${err.message}`; }
+  },
+
+  // ── Trackers (my human's private ledgers — ward-only) ────────────────
+  // Each degrades to a readable "I couldn't" rather than throwing into the
+  // chat path. Reads return the shaped payload from Unruh; writes report the
+  // id back via quietOk so I can act on it next.
+  tracker_list: async () => {
+    try {
+      const data = await listTrackers();
+      if (data?.ok === false) return `I couldn't read my trackers: ${data.error ?? 'Unruh unavailable'}.`;
+      const arr = Array.isArray(data?.trackers) ? data.trackers : [];
+      if (!arr.length) return quietOk('I\'m not keeping any trackers for my human yet.');
+      const lines = arr.map(t => `· ${t.label} (${t.id}) — ${t.archetype}${t.sensitive ? ', private' : ''}`);
+      return [`Trackers I keep for ${'{{user}}'} (${arr.length}):`, ...lines].join('\n');
+    } catch (err) { return `I couldn't read my trackers: ${err.message}`; }
+  },
+
+  tracker_create_from_template: async ({ template_id } = {}) => {
+    if (!template_id || typeof template_id !== 'string') return 'Failed to start a tracker: template_id (string) is required.';
+    try {
+      const data = await createTrackerFromTemplate({ template_id: template_id.trim() });
+      if (data?.ok === false) return `Failed to start a tracker from "${template_id}": ${data.error ?? 'unknown error'}`;
+      return quietOk(`Started a "${template_id.trim()}" tracker (id: ${data.id}). I'll keep it current for my human.`, { id: data.id });
+    } catch (err) { return `Failed to start a tracker from "${template_id}": ${err.message}`; }
+  },
+
+  tracker_create: async ({ label, archetype, schema, config, sensitive } = {}) => {
+    if (!label || typeof label !== 'string' || !label.trim()) return 'Failed to create a tracker: label (string) is required.';
+    if (!archetype || typeof archetype !== 'string') return 'Failed to create a tracker: archetype is required (state | inventory | series | gauge).';
+    try {
+      const data = await createTracker({
+        label: label.trim(), archetype: archetype.trim(),
+        ...(Array.isArray(schema) ? { schema } : {}),
+        ...(config && typeof config === 'object' ? { config } : {}),
+        ...(typeof sensitive === 'boolean' ? { sensitive } : {}),
+      });
+      if (data?.ok === false) return `Failed to create the tracker: ${data.error ?? 'unknown error'}`;
+      return quietOk(`Created the "${label.trim()}" tracker (id: ${data.id}, ${archetype.trim()}). I'll keep it current.`, { id: data.id });
+    } catch (err) { return `Failed to create the tracker: ${err.message}`; }
+  },
+
+  tracker_log: async ({ tracker_id, payload, ts, supersedes } = {}) => {
+    if (!tracker_id || typeof tracker_id !== 'string') return 'Failed to log: tracker_id (string) is required.';
+    try {
+      const data = await logTrackerEntry({
+        tracker_id: tracker_id.trim(),
+        ...(payload && typeof payload === 'object' ? { payload } : {}),
+        ...(ts && typeof ts === 'string' ? { ts: ts.trim() } : {}),
+        ...(supersedes && typeof supersedes === 'string' ? { supersedes: supersedes.trim() } : {}),
+      });
+      if (data?.ok === false) {
+        // A cap or validation refusal is a VISIBLE "I couldn't", never a silent
+        // drop the model later claims it saved (RULE B).
+        if (data?.code === 'entry_cap') return `I didn't log that — this tracker has hit its entries-per-day cap. Nothing was recorded.`;
+        return `I couldn't log that entry: ${data.error ?? 'it didn\'t validate'}. Nothing was recorded.`;
+      }
+      return quietOk(`Logged (entry: ${data.id ?? 'unknown'}).`, { id: data.id });
+    } catch (err) { return `I couldn't log that entry: ${err.message}. Nothing was recorded.`; }
+  },
+
+  tracker_read: async ({ tracker_id, days } = {}) => {
+    if (!tracker_id || typeof tracker_id !== 'string') return 'Failed to read: tracker_id (string) is required.';
+    const d = Number.isFinite(Number(days)) ? Math.max(1, Math.min(365, Math.round(Number(days)))) : 14;
+    try {
+      const data = await readTracker({ tracker_id: tracker_id.trim(), days: d });
+      if (data?.ok === false) return `I couldn't read that tracker: ${data.error ?? 'Unruh unavailable'}.`;
+      return renderTrackerRead(data);
+    } catch (err) { return `I couldn't read that tracker: ${err.message}`; }
+  },
+
+  tracker_adjust: async ({ id, label, schema, config, sensitive } = {}) => {
+    if (!id || typeof id !== 'string') return 'Failed to adjust: id (string) is required.';
+    try {
+      const data = await adjustTracker({
+        id: id.trim(),
+        ...(label && typeof label === 'string' ? { label: label.trim() } : {}),
+        ...(Array.isArray(schema) ? { schema } : {}),
+        ...(config && typeof config === 'object' ? { config } : {}),
+        ...(typeof sensitive === 'boolean' ? { sensitive } : {}),
+      });
+      if (data?.ok === false) return `Failed to adjust the tracker: ${data.error ?? 'unknown error'}`;
+      return quietOk(`Updated that tracker.`, { id: id.trim() });
+    } catch (err) { return `Failed to adjust the tracker: ${err.message}`; }
   },
 
   schedule_availability: async ({ days } = {}) => {
@@ -4958,6 +5182,18 @@ const WEB_TOOL_NAMES = new Set(['look_up', 'web_search', 'read_webpage']);
 // them, and weather_today tells it kindly there's nowhere to check yet.
 const WEATHER_TOOL_NAMES = new Set(['weather_today', 'set_current_location', 'delete_location']);
 const PAGE_WATCH_TOOL_NAMES = new Set(['watch_page', 'list_page_watches', 'unwatch_page']);
+// Tracker tools (trackers build spec §7) — a Familiar can't use a ledger tool
+// when trackers are off, so the whole family is hidden then. Ward-only always
+// (never in villagerToolNames), so a gated turn never reaches them regardless.
+const TRACKER_TOOL_NAMES = new Set([
+  'tracker_create', 'tracker_create_from_template', 'tracker_log',
+  'tracker_read', 'tracker_list', 'tracker_adjust',
+]);
+
+export function trackersEnabled(settings = readSettingsSync()) {
+  if (process.env.PROTO_FAMILIAR_TRACKERS_DISABLED === '1') return false;
+  return settings?.trackersEnabled !== false;   // default ON
+}
 // Vision link tools (vision build spec §6.5) — need vision enabled but not a
 // capable turn (linking is by-id metadata); view_image is gated separately on
 // capability. Villager turns never see these (not in villagerToolNames).
@@ -5088,11 +5324,13 @@ export function composeActiveTools(customTools, settings = readSettingsSync(), o
   const visionOn = settings?.visionEnabled !== false && process.env.PROTO_FAMILIAR_VISION_DISABLED !== '1';
   const visionCapableTurn = visionOn && opts.visionCapable === true;
   const pageWatchOn = settings?.pageWatchEnabled !== false && process.env.PROTO_FAMILIAR_PAGE_WATCH_DISABLED !== '1';
+  const trackersOn = trackersEnabled(settings);
   const tools = BUILTIN_TOOLS.filter(t =>
     inScope(t.function?.name) &&
     (webOn || !WEB_TOOL_NAMES.has(t.function?.name)) &&
     (weatherOn || !WEATHER_TOOL_NAMES.has(t.function?.name)) &&
     (pageWatchOn || !PAGE_WATCH_TOOL_NAMES.has(t.function?.name)) &&
+    (trackersOn || !TRACKER_TOOL_NAMES.has(t.function?.name)) &&
     (gcalWriteOn || t.function?.name !== GCAL_WRITE_TOOL) &&
     (visionCapableTurn || t.function?.name !== 'view_image') &&
     // browse_screenshot only makes sense when I can actually see: on a text-only

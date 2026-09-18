@@ -484,6 +484,10 @@ const state = {
   // ride live per request (older ones degrade to text stand-ins server-side).
   visionEnabled: true,
   visionMaxLiveImages: 4,
+  // Trackers (docs/trackers-build-spec.md) — my human's private ledgers (mood,
+  // sleep, pantry, laundry, upkeep gauges). Default ON but inert until a tracker
+  // exists; off = no tracker tools surfaced, no cues, no capture.
+  trackersEnabled: true,
   // Crisis ML classifier (docs/crisis-classifier-build-spec.md) — a raise-only
   // second opinion on distress + a pro-suicide-register warning. Default ON, but
   // INERT until a trained model artifact exists and the seam is wired (gated on
@@ -608,6 +612,7 @@ const SERVER_SYNCED_KEYS = [
   'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
+  'trackersEnabled',
   'crisisClassifierEnabled', 'crisisNormalizationEnabled',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
