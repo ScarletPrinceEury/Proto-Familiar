@@ -932,7 +932,25 @@ export function factStorage(fact, { factDate, hasNamedSubjects = false } = {}) {
   };
 }
 
-async function processJob(job) {
+export async function processJob(job, deps = {}) {
+  // Injectable seams — default to the real imports so production is byte-identical;
+  // a pipeline test overrides them to drive the whole job (parse → per-fact loop →
+  // consent gate → integrity gate → write) with a stubbed provider + a capturing
+  // createMemoryFull, so orchestration bugs (a mis-wired continue, a ReferenceError,
+  // a swallowed throw) are caught by EXECUTING this path, not just unit-testing its
+  // parts (the vision post-mortem's pipeline-test rule).
+  const {
+    callProvider: callProviderDep = callProvider,
+    getRegistry: getRegistryDep = getRegistry,
+    getRememberMap: getRememberMapDep = getRememberMap,
+    getStandingConsent: getStandingConsentDep = getStandingConsent,
+    getScheduleWindow: getScheduleWindowDep = getScheduleWindow,
+    createMemoryFull: createMemoryFullDep = createMemoryFull,
+    graphRelate: graphRelateDep = graphRelate,
+    createSessionFollowup: createSessionFollowupDep = createSessionFollowup,
+    applyMemoryIntegrityGate: applyGateDep = applyMemoryIntegrityGate,
+  } = deps;
+
   // V7: use reduced-detail prompt for sessions where strangers were present.
   const promptFn = job.audienceTag && job.audienceTag !== 'ward-private'
     ? buildSharedRoomPrompt
@@ -950,7 +968,7 @@ async function processJob(job) {
   let validScheduleIds = new Set();
   if (!job.audienceTag || job.audienceTag === 'ward-private') {
     try {
-      const win = await getScheduleWindow({});
+      const win = await getScheduleWindowDep({});
       const nodes = [
         ...(Array.isArray(win?.nodes) ? win.nodes : []),
         ...(Array.isArray(win?.linked) ? win.linked : []),
@@ -977,7 +995,7 @@ async function processJob(job) {
   // once here and reused for the remember gate below. Gated by the branch:
   // ward-private slice → full card; a shared room → privateNotes withheld (the
   // disclosableVillagerFields policy). Best-effort: registry down → no block.
-  const registry = await getRegistry().catch(() => ({ villagers: [] }));
+  const registry = await getRegistryDep().catch(() => ({ villagers: [] }));
   const villagerLegendBlock = buildVillagerLegendBlock(visionMessages, registry, {
     wardPrivate: promptFn === buildPrompt, wardName,
   });
@@ -1004,7 +1022,7 @@ async function processJob(job) {
   const extractOne = (msgs) => withNameFieldFallback({
     withNames,
     buildMessages: (names) => buildExtractionMessages({ instructions, messages: msgs, sharedRoom, wardLabel: wardName, withNames: names }),
-    callProviderFn: (m) => callProvider({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages: m }),
+    callProviderFn: (m) => callProviderDep({ provider: job.provider, apiKey: job.apiKey, model: job.model, baseUrl: job.baseUrl, messages: m }),
     onLearn: (result) => recordNameFieldResult(job, result),
   });
 
@@ -1030,7 +1048,7 @@ async function processJob(job) {
   }
   if (followups.length) {
     for (const summary of followups) {
-      try { await createSessionFollowup({ summary }); }
+      try { await createSessionFollowupDep({ summary }); }
       catch (err) { console.warn('[memorization] createSessionFollowup failed:', err?.message ?? err); }
     }
   }
@@ -1050,12 +1068,12 @@ async function processJob(job) {
   // not a villager, so without this the human's own sensitive facts would
   // bypass the gate entirely. Fetched once per job; degrades to null (→ shared
   // defaults: basics=true, rest=ask) if Phylactery is unreachable.
-  const wardRemember = await getRememberMap().catch(() => null);
+  const wardRemember = await getRememberMapDep().catch(() => null);
 
   // Active standing-consent windows (ward said "trust your judgment for a
   // while" on some categories). Fetched once per job; degrades to {} → the gate
   // simply falls back to per-fact asking. Only affects ward-self facts.
-  const wardStanding = await getStandingConsent().catch(() => ({}));
+  const wardStanding = await getStandingConsentDep().catch(() => ({}));
 
   const audience = job.audienceTag ?? 'ward-private';
   // Did my human tell me this DIRECTLY — a DM or the web chat, just the two of
@@ -1171,14 +1189,14 @@ async function processJob(job) {
     // The scan, the provenance policy, and the quarantine side-effect all live in
     // applyMemoryIntegrityGate (tested there); here we just honour its verdict. Off:
     // memoryIntegrityEnabled=false / PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED=1.
-    const integrity = await applyMemoryIntegrityGate({
+    const integrity = await applyGateDep({
       content, direct, memoryArgs,
       audienceTag: audience, sessionRef: job.topicId ?? job.topicLabel ?? null,
       enabled: settings?.memoryIntegrityEnabled !== false && process.env.PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED !== '1',
     });
     if (!integrity.write) continue;   // held: never reaches Phylactery
 
-    const result = await createMemoryFull(memoryArgs);
+    const result = await createMemoryFullDep(memoryArgs);
     if (!result?.ok) throw new Error(`Phylactery memory_create failed: ${result?.error ?? 'unknown'}`);
 
     // Only queue for consent when this actually created a NEW pending memory.
@@ -1239,7 +1257,7 @@ async function processJob(job) {
         const fromAudience = deriveNodeAudience({ label: rel.from, registry });
         const toAudience   = deriveNodeAudience({ label: rel.to,   registry });
         const edgeAudience = mostRestrictiveAudience([fromAudience, toAudience], registry);
-        return graphRelate({
+        return graphRelateDep({
           fromLabel: rel.from,
           fromType:  rel.fromType,
           toLabel:   rel.to,

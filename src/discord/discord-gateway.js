@@ -1185,6 +1185,20 @@ async function touchLocation(locationKey, sessionId, { bindKey = null } = {}) {
 // a heavier effort setting still lands.
 const DISCORD_MAX_TOKENS = 8000;
 
+// Discord used to hardcode the cap at DISCORD_MAX_TOKENS, ignoring the token
+// budget my human sets in the web UI (settings.maxTokens, a synced setting). A
+// verbose thinking model (GLM via Nano-GPT, which sends no reasoning_effort so it
+// thinks at `max`) can spend more than 8000 tokens reasoning and reach EMPTY
+// content — finish_reason=length → the THINKING_BUDGET_NOTE on almost every DM,
+// while the same model on web (honouring a higher configured budget) answered
+// fine. So Discord now honours my human's budget too — but never DROPS below the
+// 8000 floor a thinking model needs, so a ward on the low default (2048) can't
+// regress Discord into the very empty-turn bug this floor was raised to fix.
+export function discordReplyMaxTokens(settings) {
+  const configured = Number(settings?.maxTokens);
+  return Math.max(Number.isFinite(configured) ? configured : 0, DISCORD_MAX_TOKENS);
+}
+
 // Honest fallback when a thinking model spends its whole budget reasoning and
 // reaches no answer (empty content). Better than dead air (RULE B) or dumping
 // raw chain-of-thought. Kept plain and short — an error-path note, not a
@@ -1216,7 +1230,7 @@ export async function callChatRaw({ conn, messages, settings, tools }) {
         messages:    msgs,
         stream:      false,
         temperature: Number.isFinite(settings?.temperature) ? settings.temperature : 0.8,
-        max_tokens:  DISCORD_MAX_TOKENS,
+        max_tokens:  discordReplyMaxTokens(settings),
         ...(effort ? { reasoning_effort: effort } : {}),
         ...(Array.isArray(tools) && tools.length ? { tools, tool_choice: 'auto' } : {}),
       }),
