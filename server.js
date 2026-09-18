@@ -177,7 +177,7 @@ import { normalizeTag } from './src/memory/content-tags.js';
 import { saveAsset, getAsset, getAssetMeta, listAssets, deleteAsset, addAssetLink, removeAssetLink, assetsForNode, drainPendingImages, MEDIA_MAX_BYTES, AUDIO_MAX_BYTES, IMAGE_MIME_EXT, MEDIA_KINDS, mediaKindFor, MAX_IMAGES_PER_MESSAGE } from './src/vision/media.js';
 import { materializeAttachments, resolveVisionCapable, findConnection, isModalityError, cacheVisionCapability, describeAsset, ensureDescribed, scoreImageDescriptionThreat, graduateImageDescriptionToNode } from './src/vision/vision.js';
 import { filterOutgoingReply } from './src/safety/outgoing-filter.js';
-import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw, setConsolidationRunners } from './src/discord/discord-gateway.js';
+import { startDiscordGateway, stopDiscordGateway, getDiscordStatus, relayToDiscord, applyDiscordSettings, callChatRaw, setConsolidationRunners, setQuarantineRunners } from './src/discord/discord-gateway.js';
 import { buildGuideSystem, guideChatDisabled } from './guide-chat.js';
 import { substituteMacros } from './macros.js';
 import { withCorePrompts } from './core-prompts.js';
@@ -4515,16 +4515,25 @@ app.get('/api/memory-quarantine', async (req, res) => {
     res.json({ ok: true, records: await listQuarantine({ includeSettled }) });
   } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'list failed' }); }
 });
+// Release a held memory: mark it released and replay its stashed write to
+// Phylactery — my human overriding the scan (a false positive → kept). Shared by
+// the endpoint and the Discord `!quarantine release` runner. Returns a result with
+// `notFound` set when the id isn't a currently-held item.
+async function runQuarantineReleaseNow(id) {
+  const released = await releaseQuarantine(String(id));
+  if (!released) return { ok: false, notFound: true, error: 'no held item with that id' };
+  if (released.memoryArgs) {
+    const result = await createMemoryFull(released.memoryArgs);
+    if (!result?.ok) return { ok: false, error: `released but the memory write failed: ${result?.error ?? 'unknown'}` };
+  }
+  return { ok: true, released: true };
+}
 app.post('/api/memory-quarantine/:id/release', async (req, res) => {
   try {
-    const released = await releaseQuarantine(String(req.params.id));
-    if (!released) return res.status(404).json({ ok: false, error: 'no held item with that id' });
-    // Replay the stored write to Phylactery — the ward overriding the scan.
-    if (released.memoryArgs) {
-      const result = await createMemoryFull(released.memoryArgs);
-      if (!result?.ok) return res.status(502).json({ ok: false, error: `released but the memory write failed: ${result?.error ?? 'unknown'}` });
-    }
-    res.json({ ok: true, released: true });
+    const r = await runQuarantineReleaseNow(req.params.id);
+    if (r.notFound) return res.status(404).json(r);
+    if (!r.ok) return res.status(502).json(r);
+    res.json(r);
   } catch (err) { res.status(500).json({ ok: false, error: err?.message ?? 'release failed' }); }
 });
 app.post('/api/memory-quarantine/:id/discard', async (req, res) => {
@@ -5790,6 +5799,14 @@ const httpServer = app.listen(PORT, HOST, async () => {
     ponderings: () => runPonderingConsolidationNow(),
     memory:     () => runLifecyclePass({ force: true }),
     restore:    (monthPrefix) => runPonderingRestoreNow(monthPrefix),
+  });
+  // The memory-quarantine runners back the ward's `!quarantine` DM command — the
+  // console twin of the UI's "Review held memories". Same server functions the
+  // endpoints use (list / release-and-replay / discard).
+  setQuarantineRunners({
+    list:    async () => ({ ok: true, records: await listQuarantine() }),
+    release: (id) => runQuarantineReleaseNow(id),
+    discard: async (id) => ({ ok: true, discarded: !!(await discardQuarantine(String(id))) }),
   });
   // Bot-DM push channel: when the gateway can DM my human (token + ward's
   // Discord user id configured), every outbox item — reminders, event

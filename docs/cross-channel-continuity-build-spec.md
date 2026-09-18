@@ -109,12 +109,11 @@ different gate (see below). This spec adds the one gate it doesn't cover.
 > (the reversible store), wired into `processJob` beside the consent gate;
 > `GET/POST /api/memory-quarantine…` endpoints; the Automation-pane toggle +
 > "Review held memories" UI; off-switch `memoryIntegrityEnabled` /
-> `PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED=1`. The one deferral: the optional
-> `!quarantine` Discord twin (the UI already satisfies console↔UI parity, which
-> only requires a UI where a console command exists — none does yet). A full
-> `processJob`-level pipeline test is also deferred until `processJob` is
-> injectable; the gate's risky logic is covered by executing
-> `applyMemoryIntegrityGate` for real against a temp quarantine store.
+> `PROTO_FAMILIAR_MEMORY_INTEGRITY_DISABLED=1`. Both deferrals are now closed
+> (0.12.28–0.12.29): the `processJob`-level pipeline test landed once `processJob`
+> was made injectable, and the `!quarantine` Discord twin (`list` / `release <id>`
+> / `discard <id>`) now mirrors the "Review held memories" UI through the same
+> server functions.
 
 **Goal.** Close the memory-poisoning hole with proven code, and build the
 quarantine infrastructure the model plugs into. No ML, no buffer yet.
