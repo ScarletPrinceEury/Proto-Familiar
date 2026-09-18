@@ -98,6 +98,14 @@ export const TOOL_MODULES = {
   intention_mark_fired: 'intentions',
   intention_visibility: 'intentions',
 
+  // trackers (trackers build spec §3) — my human's private ledgers (mood,
+  // sleep, pantry, laundry, upkeep gauges). WARD-ONLY (never in
+  // villagerToolNames); surfaced by tracking language, by any existing
+  // tracker's own label (trackerTermsRegex), and by the [Tracker cues] block.
+  tracker_create: 'trackers', tracker_create_from_template: 'trackers',
+  tracker_log: 'trackers', tracker_read: 'trackers',
+  tracker_list: 'trackers', tracker_adjust: 'trackers',
+
   // vision (vision build spec §6.5/§10) — looking again at an image + tying it
   // to a graph node. Surfaced whenever an image stand-in is in context.
   view_image: 'media', link_image_to_node: 'media', unlink_image_from_node: 'media',
@@ -130,6 +138,7 @@ export const MODULE_INDEX =
   'stewardship (set the day-start time I open my human\'s day on), ' +
   'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private), ' +
   'media (look again at an image shared earlier, tie an image to someone/something in my graph), ' +
+  'trackers (my human\'s private ledgers: mood, sleep, the pantry, laundry, upkeep gauges — list/create/log/read/adjust), ' +
   'browser (open a web page in my own browser and use it — click, fill, scroll, follow a flow — when reading isn\'t enough)';
 
 // ── Triggers ───────────────────────────────────────────────────────────
@@ -217,6 +226,15 @@ const TRIGGERS = {
     // on what's come due (mark fired / complete / adjust).
     blocks: ['[Intentions coming due]'],
   },
+  trackers: {
+    // Tracking language + the ledger vocabulary (mood, sleep, pantry, laundry,
+    // meds, cycle, going out). Generous by design (the "somewhat generous"
+    // rule): a false surface costs a few hundred tokens once; a miss costs one
+    // request_tools round. A registered tracker's OWN label also surfaces the
+    // module (trackerTermsRegex, wired in selectModules like villager names).
+    text: /\b(track(er|ing)?|log (it|this|that)|inventory|pantry|groceries|grocery|laundry|slept|sleep(ing)?|meds?|medication|took my|period|menses|cycle|cramps|went out(side)?|left the house|mood|hydrat\w*|drank|drink water|ate\b|eaten|meal)\b/i,
+    blocks: ['[Tracker cues]'],
+  },
   media: {
     // Surfaced by look-again / recognition language, OR whenever an image
     // stand-in is in context (the `[image <id>: …]` marker) — that's exactly
@@ -239,12 +257,26 @@ export function villagerNameRegex(names = []) {
 }
 
 /**
+ * Extra dynamic pattern (trackers build spec §3): any EXISTING tracker's own
+ * label in the turn text surfaces the `trackers` module — the villagerNameRegex
+ * precedent applied to the ledger registry. Labels are escaped; 1–2 char labels
+ * skipped (too collision-prone). So "how's my Spoons doing?" reaches the tracker
+ * tools even though "spoons" isn't in the static vocabulary.
+ */
+export function trackerTermsRegex(labels = []) {
+  const safe = labels
+    .filter(l => typeof l === 'string' && l.trim().length >= 3)
+    .map(l => l.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return safe.length ? new RegExp(`\\b(${safe.join('|')})\\b`, 'i') : null;
+}
+
+/**
  * Diagnostic: explain WHY each module would surface for a turn — which regex
  * matched which substrings, which block markers were present, which villager
  * names hit. Pure; drives the ward-facing regex tracer (no effect on live
  * selection). Returns [{ module, textMatches:[...], blockMatches:[...], via }].
  */
-export function explainSelection({ turnText = '', dynamicBlock = '', villagerNames = [] } = {}) {
+export function explainSelection({ turnText = '', dynamicBlock = '', villagerNames = [], trackerLabels = [] } = {}) {
   const collect = (re, hay) => {
     if (!re) return [];
     const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
@@ -259,6 +291,9 @@ export function explainSelection({ turnText = '', dynamicBlock = '', villagerNam
   const nameRe = villagerNameRegex(villagerNames);
   const nameMatches = collect(nameRe, turnText);
   if (nameMatches.length) out.push({ module: 'village', textMatches: nameMatches, blockMatches: [], via: 'villager-name' });
+  const trkRe = trackerTermsRegex(trackerLabels);
+  const trkMatches = collect(trkRe, turnText);
+  if (trkMatches.length) out.push({ module: 'trackers', textMatches: trkMatches, blockMatches: [], via: 'tracker-label' });
   return out;
 }
 
@@ -269,11 +304,12 @@ export function explainSelection({ turnText = '', dynamicBlock = '', villagerNam
  * @param {string} p.turnText      user message + previous assistant reply
  * @param {string} p.dynamicBlock  the assembled injected context (markers)
  * @param {string[]} [p.villagerNames]
+ * @param {string[]} [p.trackerLabels] existing tracker labels → surface `trackers`
  * @param {Set<string>} [p.sticky] modules still inside their sticky TTL
  * @returns {Set<string>} modules to advertise (core NOT included — it's
  *          implicit and unconditional at the compose layer)
  */
-export function selectModules({ turnText = '', dynamicBlock = '', villagerNames = [], sticky = new Set() } = {}) {
+export function selectModules({ turnText = '', dynamicBlock = '', villagerNames = [], trackerLabels = [], sticky = new Set() } = {}) {
   const out = new Set(sticky);
   for (const [mod, trig] of Object.entries(TRIGGERS)) {
     if (trig.text && trig.text.test(turnText)) { out.add(mod); continue; }
@@ -281,6 +317,8 @@ export function selectModules({ turnText = '', dynamicBlock = '', villagerNames 
   }
   const nameRe = villagerNameRegex(villagerNames);
   if (nameRe && nameRe.test(turnText)) out.add('village');
+  const trkRe = trackerTermsRegex(trackerLabels);
+  if (trkRe && trkRe.test(turnText)) out.add('trackers');
   return out;
 }
 

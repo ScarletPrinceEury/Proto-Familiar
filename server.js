@@ -51,6 +51,7 @@ import {
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
   addVillagerTell,
+  listTrackers,
 } from './thalamus.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -133,6 +134,7 @@ import {
   // Tool dispatch — the registry + executors live in cerebellum; the
   // multi-round loop runs inside /api/chat below.
   composeActiveTools, executeToolCall, MAX_TOOL_ROUNDS, toolRoundsPerTurn,
+  trackersEnabled,
   initCerebellumTools, enqueueCrisisResources, runToolCallLoop,
   VALID_MEMORY_GRANULARITIES, VALID_IDENTITY_CATEGORIES, VALID_FILENAME_RE,
   deriveMemorySlug, parseMemoryKey,
@@ -793,10 +795,19 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       let villagerNames = [];
       try { villagerNames = ((await getVillageRegistry())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
       catch { /* registry unreadable → name-trigger degrades to keywords */ }
+      // A custom tracker's own label ("spoons", "water") surfaces the module even
+      // when it's outside the static vocabulary — only worth the Unruh read when
+      // trackers are on (off ⇒ no tracker tools would compose anyway).
+      let trackerLabels = [];
+      if (trackersEnabled(sset)) {
+        try { trackerLabels = ((await listTrackers())?.trackers ?? []).map(t => t?.label).filter(Boolean); }
+        catch { /* registry unreadable → label-trigger degrades to keywords */ }
+      }
       const selection = selectModules({
         turnText,
         dynamicBlock: enriched?.dynamic ?? '',
         villagerNames,
+        trackerLabels,
         sticky: stickyModulesFor(sessionInfo?.sessionId),
       });
       surfacing = { selection, used: new Set() };
@@ -1493,13 +1504,18 @@ app.post('/api/diagnostics/session-trace', async (req, res) => {
   let villagerNames = [];
   try { villagerNames = ((await getVillageRegistry())?.villagers ?? []).map(v => v?.name).filter(Boolean); }
   catch { /* registry unreadable → name triggers just won't show */ }
+  let trackerLabels = [];
+  if (trackersEnabled(readSettingsSync())) {
+    try { trackerLabels = ((await listTrackers())?.trackers ?? []).map(t => t?.label).filter(Boolean); }
+    catch { /* registry unreadable → label triggers just won't show */ }
+  }
   const out = turns.slice(0, 500).map((t, i) => {
     const user = typeof t?.user === 'string' ? t.user : '';
     const assistant = typeof t?.assistant === 'string' ? t.assistant : '';
     const turnText = `${user}\n${assistant}`;
     const entry = { i, user };
     if (want.has('surfacing')) {
-      entry.surfacing = explainSelection({ turnText, dynamicBlock: typeof t?.dynamicBlock === 'string' ? t.dynamicBlock : '', villagerNames });
+      entry.surfacing = explainSelection({ turnText, dynamicBlock: typeof t?.dynamicBlock === 'string' ? t.dynamicBlock : '', villagerNames, trackerLabels });
     }
     if (want.has('threat')) {
       entry.threat = scoreThreatMessage(user, { settings: readSettingsSync() || {} });   // regex floor + ML, as live

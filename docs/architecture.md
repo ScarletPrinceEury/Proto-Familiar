@@ -587,6 +587,25 @@ Currently owns:
   to carry it across sessions the Familiar keeps the gist via the existing
   `save_to_tome` (the read return is provenance-stamped so the source
   rides along). See docs/websearch-setup.md and docs/websearch-build-spec.md.
+- **Tracker tools (ward-only, 0.14.x; trackers build spec §3)** —
+  `tracker_list` / `tracker_create` / `tracker_create_from_template` /
+  `tracker_log` / `tracker_read` / `tracker_adjust`, thin executors over
+  the `thalamus.js` wrappers (`createTracker`, `logTrackerEntry`,
+  `readTracker`, …) that bridge to Unruh's `tracker_*` MCP tools (the store
+  + `tracker.py` derivation shipped in T-A). Trackers are the ward's private
+  ledgers — four archetypes (`state` / `inventory` / `series` / `gauge`) —
+  so they are **conditionally advertised** (`composeActiveTools` filters
+  them out via `trackersEnabled(settings)` /
+  `PROTO_FAMILIAR_TRACKERS_DISABLED=1`, default ON) **and ward-only**: never
+  in `villagerToolNames`, so a gated Discord turn can never reach them (T2,
+  fail-closed). They surface via the `trackers` tool-surfacing module
+  (tracking vocabulary, the `[Tracker cues]` block, or any existing
+  tracker's own label through `trackerTermsRegex` — the `villagerNameRegex`
+  precedent). A failed/refused log is a visible "nothing was recorded", never
+  a silent drop (RULE B); the entry-validation gate itself runs in Unruh
+  (`validate_entry`). Passive memorization capture (§5.2) and the
+  `[Tracker cues]` renderer (§5.3) are a follow-up pass (T-B.2). See
+  docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted

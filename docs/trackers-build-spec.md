@@ -354,6 +354,31 @@ constants, never on string matching in prompts.
    (`tracker_drop` UI/HTTP-only), 15 `test_tracker.py` cases.
 2. **T-B:** thalamus wrappers + cerebellum tools + surfacing module (static
    + registry regex) + 5.2 memorization capture + 5.3 cues + T2/T3 tests.
+   - **T-B.1 ✓ SHIPPED (0.14.1-alpha):** the live chat path — the seven
+     `thalamus.js` tracker wrappers (`createTracker`,
+     `createTrackerFromTemplate`, `logTrackerEntry`, `readTracker`,
+     `listTrackers`, `adjustTracker`, `supersedeTrackerEntry`); the six
+     ward-only cerebellum tools (`tracker_list`/`_create`/
+     `_create_from_template`/`_log`/`_read`/`_adjust`, first-person, via
+     `quietOk`, with `renderTrackerRead` gap-neutral summaries — T4 tokens
+     banned); the `trackers` tool-surfacing module (static vocabulary +
+     `[Tracker cues]` block + `trackerTermsRegex(labels)` registry regex
+     wired into `selectModules`/`explainSelection` and threaded from
+     `server.js` as `trackerLabels`); the `trackersEnabled` /
+     `PROTO_FAMILIAR_TRACKERS_DISABLED` gate in `composeActiveTools`; and
+     `tests/trackers-tb.test.mjs` (T2 fail-closed gating + off-switch +
+     surfacing + T3 boundary guards). The `tracker_supersede` wrapper stays
+     HTTP/UI-only (the Familiar corrects via `tracker_log`'s `supersedes`
+     arg). `tracker_create_from_template` names the six real shipped
+     templates (`mood`/`sleep`/`pantry`/`laundry`/`hydration`/`meals`).
+   - **T-B.2 (next):** §5.2 passive memorization capture (`buildPrompt`
+     tracker legend + `tracker_observations`, `validate_entry`-gated ingest,
+     `source:'inferred'`) + §5.3 cues (`[Tracker cues]` renderer via the
+     gcal-cue machinery — needs the Unruh `incomplete_entries` function +
+     `stale`/`incomplete`/`cues` MCP exposure, not yet built) + the
+     `trackerCues`/`trackerPredictions` thalamus wrappers. Split out because
+     the cue path needs new Unruh MCP surface and deserves its own tested
+     pass; the live chat path is complete and useful without it.
 3. **T-C:** projections (expiry nodes, eat-first, menses windows) +
    `windowSeries` reflection input + watchdog line + 5.4 offer cue +
    T4/T5/T7/T8 tests.

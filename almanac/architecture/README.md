@@ -175,7 +175,7 @@ what each one owns.
 
 If you're asking yourself... go to:
 
-- **Where does the Familiar's identity and memory live?** → [Phylactery](phylactery)
+- **Where does the Familiar's identity and memory live?** → [Phylactery](phylactery); see also [Trackers](trackers) for habit logs and state machines
 - **How does the Familiar reach out on its own?** → [Autonomous loops](autonomous-loops) and [Pondering](pondering)
 - **What stops the Familiar from just agreeing to everything?** → [Armature](../concepts/armature) concept, then [Proactivity over caution](../decisions/proactivity-over-caution)
 - **How does the Familiar notice someone is in crisis?** → [Safety spine](safety-spine)

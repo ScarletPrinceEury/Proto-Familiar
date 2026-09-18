@@ -9,9 +9,15 @@ topics:
   parents: []
 - slug: phylactery
   title: Phylactery
-  description: The in-tree canonical self-store (identity, memory, knowledge 
+  description: The in-tree canonical self-store (identity, memory, knowledge
     graph)
   parents: [architecture]
+- slug: trackers
+  title: Trackers
+  description: The ward's private ledgers -- habit logs, inventory lists, gauges,
+    and state machines; stored in Phylactery and accessed through the live chat
+    path
+  parents: [architecture, phylactery]
 - slug: unruh
   title: Unruh
   description: The in-tree temporal-context specialist (schedule graph, 
