@@ -371,14 +371,28 @@ constants, never on string matching in prompts.
      HTTP/UI-only (the Familiar corrects via `tracker_log`'s `supersedes`
      arg). `tracker_create_from_template` names the six real shipped
      templates (`mood`/`sleep`/`pantry`/`laundry`/`hydration`/`meals`).
-   - **T-B.2 (next):** §5.2 passive memorization capture (`buildPrompt`
-     tracker legend + `tracker_observations`, `validate_entry`-gated ingest,
-     `source:'inferred'`) + §5.3 cues (`[Tracker cues]` renderer via the
-     gcal-cue machinery — needs the Unruh `incomplete_entries` function +
-     `stale`/`incomplete`/`cues` MCP exposure, not yet built) + the
+   - **T-B.2 ✓ SHIPPED (0.14.2-alpha):** §5.2 passive memorization capture.
+     `buildPrompt` (ward-private ONLY — `buildSharedRoomPrompt` never gets it,
+     T2 fail-closed) offers a compact tracker legend (id · label · archetype ·
+     field names — no entry contents) + an optional per-fact
+     `tracker_observations` array, riding the SAME extraction response as
+     `schedule_refs`/`relations`/`follow_ups` (no extra call).
+     `parseTrackerObservations(facts, validIds)` code-gates each observation
+     against the legend (off-legend id or non-object payload dropped, deduped,
+     capped); `processJob` logs the survivors via `logTrackerEntry` as
+     `source:'inferred'` — a refusal (bad payload / entry cap) is Unruh's own
+     visible verdict (`validate_entry`), logged, never fabricated as success.
+     The `tracker_log` MCP tool + `logTrackerEntry` wrapper gained a `source`
+     param (default `chat`; passive path passes `inferred`).
+     `tests/memorization-tracker-obs.test.mjs` (prompt-side, the
+     `parseTrackerObservations` gate, + a PIPELINE run through real `processJob`:
+     ward-private logs inferred / off-legend dropped, shared-room never fetches
+     the legend, off-switch stops capture).
+   - **T-B.3 (next):** §5.3 cues — the `[Tracker cues]` renderer via the
+     gcal-cue machinery. Needs the Unruh `incomplete_entries` function +
+     `stale`/`incomplete`/`cues` MCP exposure (not yet built) + the
      `trackerCues`/`trackerPredictions` thalamus wrappers. Split out because
-     the cue path needs new Unruh MCP surface and deserves its own tested
-     pass; the live chat path is complete and useful without it.
+     the cue path needs new Unruh MCP surface and deserves its own tested pass.
 3. **T-C:** projections (expiry nodes, eat-first, menses windows) +
    `windowSeries` reflection input + watchdog line + 5.4 offer cue +
    T4/T5/T7/T8 tests.

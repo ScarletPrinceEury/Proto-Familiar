@@ -11,6 +11,10 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     identity_update_section — rewrite one section of an identity file (alias)
     identity_rewrite_section — rewrite one section of an identity file
 
+  Village registry (routing/gating state — NOT identity):
+    village_registry_get    — read the canonical Village registry JSON
+    village_registry_set    — write the canonical Village registry JSON
+
   Memory (RAG-tiered):
     memory_create           — store a new memory (appends on same-date tiers)
     memory_list             — browse memories at a tier, most-recent first
@@ -75,6 +79,7 @@ import phylactery.graduation as grad
 import phylactery.scheduler as scheduler
 import phylactery.backup as backup
 import phylactery.remember as remember
+import phylactery.village_registry as village_registry
 
 mcp = FastMCP("phylactery")
 
@@ -165,6 +170,27 @@ def identity_rewrite_section(
     if not result["ok"]:
         return f"Failed: {result['error']}"
     return f"Section '{section}' of {category}/{filename} rewritten."
+
+
+# ── Village registry (routing/gating state — NOT identity) ─────────────────────
+
+
+@mcp.tool()
+def village_registry_get() -> dict[str, Any]:
+    """Read the canonical Village registry — the machine-readable routing + gating
+    state (categories, villagers, locations) my embodiments sync through me. It is
+    NOT part of my identity and never appears in it. Returns {ok, registry} where
+    registry is the stored JSON string, or null if none is stored yet. (First read
+    also heals any legacy copy that used to sit in my identity files.)"""
+    return {"ok": True, "registry": village_registry.get(_c())}
+
+
+@mcp.tool()
+def village_registry_set(registry: str) -> dict[str, Any]:
+    """Write the canonical Village registry — an opaque JSON string, used by the
+    sync path only. Persists it to my canonical store (outside identity) and retires
+    any legacy identity-file copy. Returns {ok} or {ok:false, error}."""
+    return village_registry.set_registry(_c(), registry)
 
 
 # ── Memory ────────────────────────────────────────────────────────────────────

@@ -199,7 +199,7 @@ async function persistQueue() {
 // memorization tick serialise against each other through the same
 // per-path key, which they couldn't before.
 
-import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow } from '../../thalamus.js';
+import { findOrCreateTomeByName, modifyTomeFile, createMemoryFull, getRememberMap, getStandingConsent, graphRelate, getScheduleWindow, listTrackers, logTrackerEntry } from '../../thalamus.js';
 import { applyMemoryIntegrityGate } from '../safety/memory-integrity.js';
 import { getRegistry, standingConsentActive } from '../village/village.js';
 import { disclosableVillagerFields } from '../village/village-card.js';
@@ -208,7 +208,7 @@ import { GRAPH_ENTITY_TYPES_STR, GRAPH_NODE_RUBRIC } from './graph-vocab.js';
 import { CONTENT_TOPICS, normalizeTag, categoryToTag } from './content-tags.js';
 import { segmentByDay, dayDelta } from '../schedule/day-segments.js';
 import { recordSegmentRun, isSegmentMemorized, segmentMemorizedThrough } from './memory-coverage.js';
-import { readSettingsSync } from '../../cerebellum.js';
+import { readSettingsSync, trackersEnabled } from '../../cerebellum.js';
 import { substituteMacros } from '../../macros.js';
 import { contentWithStandins, getAssetMeta } from '../vision/media.js';
 import { createSessionFollowup } from './recent-ponderings.js';
@@ -448,7 +448,7 @@ export function buildVillagerLegendBlock(messages, registry, { wardPrivate = tru
   return `\n\n### People here — who they are\nSo I get their names and pronouns right, and only note what's NEW about them, not what I already hold:\n${lines.join('\n')}\nI use these pronouns when a fact is about them.`;
 }
 
-export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true, villagerLegendBlock = '') {
+export function buildPrompt(messages, topicLabel = null, wardName = 'My human', scheduleLegend = [], followupsEnabled = true, villagerLegendBlock = '', trackerLegend = []) {
   const readable = filterReadable(messages);
   if (readable.length < 2) return null;
 
@@ -484,6 +484,24 @@ export function buildPrompt(messages, topicLabel = null, wardName = 'My human', 
     ? `\n### Field rules — follow_ups\n\nThings I told my human I would do but didn't do this session — I said "I'll do that later" / "I'll remind you" / "I'll set that up" and never used a tool to make it real. I list each as a short summary so future-me follows through. If I DID use the right tool for it, it is not a follow-up. If nothing qualifies, [].\n`
     : '';
 
+  // Passive tracker capture (trackers build spec §5.2). Ward-private only —
+  // this whole apparatus rides the buildPrompt (ward-private) branch and is
+  // NEVER offered on a shared-room slice (buildSharedRoomPrompt), so a
+  // villager's words can't seed the ward's private ledgers. I only ever cite
+  // tracker ids from the legend below; code drops any I invent, and Unruh
+  // validates the payload against each tracker's schema. Absent legend → the
+  // whole thing vanishes and the prompt is exactly as before.
+  const tLegend = Array.isArray(trackerLegend) ? trackerLegend.filter(t => t?.id && t?.label) : [];
+  const trackerFieldLine = tLegend.length
+    ? `,\n      "tracker_observations": [{ "tracker": "sleep-x7", "ts": "2026-06-18T08:00:00", "payload": { "hours": 5 } }]`
+    : '';
+  const trackerFieldRules = tLegend.length
+    ? `\n### Field rules — tracker_observations\n\ntracker_observations — OPTIONAL. When a fact records something I actively keep a ledger on for my human — a mood, a night's sleep, a pantry item, an upkeep like eating or drinking — I add a structured reading so it lands in that ledger too, not just as prose. Each entry:\n  tracker  — an id from the legend below, and ONLY those (never one I invent).\n  ts       — when the reading was ABOUT, local ISO (YYYY-MM-DDTHH:MM:SS, no offset) as my [Now] block shows; omit for now.\n  payload  — the fields matching that tracker's schema (see the legend).\nMost facts track nothing — for those I omit this field entirely. I only record what was genuinely said; I never infer a value my human didn't actually give me.\n`
+    : '';
+  const trackerLegendBlock = tLegend.length
+    ? `\n### Tracker legend (my human's ledgers — for tracker_observations only)\n${tLegend.slice(0, 20).map(t => `  ${t.label} [${t.archetype ?? 'tracker'}] = ${t.id}${Array.isArray(t.fields) && t.fields.length ? ` · fields: ${t.fields.join(', ')}` : ''}`).join('\n')}\n`
+    : '';
+
   return `Ah, some unprocessed session logs. Time to turn the relevant stuff into memories — facts about my human, about me (what I think, like, dislike, want), about the people and things in their life. New facts, changes to old ones, things that happened, things someone told me. One clear fact per entry, written plainly enough that I'll read it correctly later with no context. Plus connections and updates to my Phylactery graph so I can relate things and actually find them again.${focusBlock}${villagerLegendBlock}
 
 This is a form of tool call: the memorization only works if the syntax is flawless, so I focus and follow my notes closely.
@@ -500,7 +518,7 @@ My notes read —
       "temporality": "episodic",
       "fictional":  false,
       "about_me":   false,
-      "confidence": 0.85${CONTENT_TAG_JSON_LINE}${scheduleFieldLine}
+      "confidence": 0.85${CONTENT_TAG_JSON_LINE}${scheduleFieldLine}${trackerFieldLine}
     }
   ],
   "relations": [
@@ -546,7 +564,7 @@ temporality — did this HAPPEN, or is it just TRUE now?
 confidence — 0.0 to 1.0, how sure I am I've got it right. I drop anything below 0.4. This is about whether the thing happened, not who it's about — a fuzzy referent doesn't lower it (I mark that unresolved in the note instead).
 
 attribution_confidence — OPTIONAL, 0.0 to 1.0: how sure I am WHO the fact is about. I add it (low, around 0.3) only when I've marked a referent unresolved above; I omit it when I'm sure. It never drops the fact — it just tells my recall to lean on it gently until a later pass resolves who.
-${scheduleRules}${scheduleLegendBlock}
+${scheduleRules}${scheduleLegendBlock}${trackerFieldRules}${trackerLegendBlock}
 ### Field rules — relations
 
 A relation is one plain edge in my graph: two real, nameable things and how they're linked. It's the index I navigate by, so I only record edges I'm sure of.
@@ -883,6 +901,39 @@ export function followupsFeatureEnabled(settings) {
   return settings?.followupsEnabled !== false;
 }
 
+// Passive tracker observations (trackers build spec §5.2). Pull every
+// per-fact `tracker_observations` entry out of the parsed facts and CODE-GATE
+// it against the legend the model was shown: an id must be one of `validIds`
+// (a hallucinated tracker dies here — the model repeats ids, never mints
+// them), and the payload must be an object. Unruh's `validate_entry` is the
+// SECOND gate (unknown fields dropped, bad types refused, missing-required
+// reported) at log time — this one only stops an off-legend/ malformed-shape
+// observation from ever being sent. Enrichment, never load-bearing: a bad
+// array degrades to [] and never costs a memorized fact. Deduped within the
+// job on (tracker, ts, payload).
+const MAX_TRACKER_OBS_PER_JOB = 20;
+
+export function parseTrackerObservations(facts, validIds = new Set()) {
+  if (!Array.isArray(facts) || !(validIds instanceof Set) || validIds.size === 0) return [];
+  const out = [];
+  const seen = new Set();
+  for (const f of facts) {
+    const obs = Array.isArray(f?.tracker_observations) ? f.tracker_observations : [];
+    for (const o of obs) {
+      const tracker = String(o?.tracker ?? '').trim();
+      if (!validIds.has(tracker)) continue;               // off-legend / invented id → drop
+      if (!o?.payload || typeof o.payload !== 'object' || Array.isArray(o.payload)) continue; // shape gate
+      const ts = typeof o?.ts === 'string' && o.ts.trim() ? o.ts.trim() : undefined;
+      const key = `${tracker}|${ts ?? ''}|${JSON.stringify(o.payload)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ tracker, ...(ts ? { ts } : {}), payload: o.payload });
+      if (out.length >= MAX_TRACKER_OBS_PER_JOB) return out;
+    }
+  }
+  return out;
+}
+
 // ── Consent-pending helpers ───────────────────────────────────────
 
 export async function readConsentPending() {
@@ -949,6 +1000,8 @@ export async function processJob(job, deps = {}) {
     graphRelate: graphRelateDep = graphRelate,
     createSessionFollowup: createSessionFollowupDep = createSessionFollowup,
     applyMemoryIntegrityGate: applyGateDep = applyMemoryIntegrityGate,
+    listTrackers: listTrackersDep = listTrackers,
+    logTrackerEntry: logTrackerEntryDep = logTrackerEntry,
   } = deps;
 
   // V7: use reduced-detail prompt for sessions where strangers were present.
@@ -987,6 +1040,26 @@ export async function processJob(job, deps = {}) {
   // step read.
   const followupsOn = promptFn === buildPrompt && followupsFeatureEnabled(settings);
 
+  // Passive tracker capture (§5.2): on a ward-private slice, offer the model a
+  // compact tracker legend so a fact carrying a mood / sleep / pantry / upkeep
+  // reading can log it into the right ledger — riding this same extraction, no
+  // extra call. WARD-PRIVATE ONLY (the `buildPrompt` branch; a shared room
+  // never sees the legend — T2 fail-closed) and only when trackers are on.
+  // `validTrackerIds` is the code gate: only these ids may seed an observation.
+  // Best-effort: Unruh down → empty legend → the prompt is exactly as before.
+  const trackersOn = promptFn === buildPrompt && trackersEnabled(settings);
+  let trackerLegend = [];
+  let validTrackerIds = new Set();
+  if (trackersOn) {
+    try {
+      const tl = await listTrackersDep();
+      trackerLegend = (Array.isArray(tl?.trackers) ? tl.trackers : [])
+        .filter(t => t?.id && t?.label)
+        .map(t => ({ id: t.id, label: t.label, archetype: t.archetype, fields: t.fields }));
+      validTrackerIds = new Set(trackerLegend.map(t => t.id));
+    } catch { /* no tracker legend this job */ }
+  }
+
   // Fold image stand-ins into the slice so image-carrying turns are memorable.
   const visionMessages = await foldImageStandins(job.messages, settings);
 
@@ -1001,7 +1074,7 @@ export async function processJob(job, deps = {}) {
   });
 
   const builtPrompt = promptFn === buildPrompt
-    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn, villagerLegendBlock)
+    ? buildPrompt(visionMessages, job.topicLabel ?? null, wardName, scheduleLegend, followupsOn, villagerLegendBlock, trackerLegend)
     : promptFn(visionMessages, job.topicLabel ?? null, wardName, villagerLegendBlock);
   // {{char}}/{{user}} in the extraction templates resolve to the configured
   // names here (boundary #1) — the same place every other standalone Familiar-
@@ -1051,6 +1124,25 @@ export async function processJob(job, deps = {}) {
       try { await createSessionFollowupDep({ summary }); }
       catch (err) { console.warn('[memorization] createSessionFollowup failed:', err?.message ?? err); }
     }
+  }
+
+  // Passive tracker observations (§5.2). Collected from ALL parsed facts —
+  // independent of the per-fact consent/integrity decisions below, because a
+  // structured reading is ward-private ledger data with no third-party privacy
+  // to gate (the legend was only ever offered on this ward-private slice). Each
+  // logs as `source:'inferred'`; a refusal (off-schema payload, entry cap) is
+  // Unruh's own visible verdict, logged and never fabricated as a success.
+  if (trackersOn && validTrackerIds.size) {
+    const observations = parseTrackerObservations(facts, validTrackerIds);
+    let logged = 0;
+    for (const obs of observations) {
+      try {
+        const r = await logTrackerEntryDep({ tracker_id: obs.tracker, payload: obs.payload, ts: obs.ts, source: 'inferred' });
+        if (r?.ok) logged++;
+        else console.warn(`[memorization] tracker observation not logged (${obs.tracker}): ${r?.code ?? r?.error ?? 'refused'}`);
+      } catch (err) { console.warn('[memorization] logTrackerEntry failed:', err?.message ?? err); }
+    }
+    if (observations.length) console.log(`[memorization] tracker observations: ${logged}/${observations.length} logged (inferred)`);
   }
 
   // Build name → villager lookup for the remember gate (registry already loaded

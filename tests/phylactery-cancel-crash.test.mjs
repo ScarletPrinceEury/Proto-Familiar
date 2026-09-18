@@ -53,10 +53,12 @@ test('the village boot pull gives up locally instead of cancelling', async () =>
   const srv = await read('server.js');
   const thal = await read('thalamus.js');
 
-  // This is the exact call site that was doing it.
-  assert.match(srv, /getIdentityAll\(\{ softTimeout: VILLAGE_PULL_TIMEOUT_MS \}\)/,
+  // This is the exact call site that was doing it. (The registry pull moved off
+  // identity storage to its own meta-backed tool, but the same soft-give-up rule
+  // binds it — a hard timeout on this boot call still kills the Phylactery child.)
+  assert.match(srv, /villageRegistryGet\(\{ softTimeout: VILLAGE_PULL_TIMEOUT_MS \}\)/,
     'the village pull is back on a cancelling timeout');
-  assert.doesNotMatch(srv, /getIdentityAll\(\{ timeout:/, 'the hard timeout returned');
+  assert.doesNotMatch(srv, /villageRegistryGet\(\{ timeout:/, 'the hard timeout returned');
 
   // Fail-fast is still a real behaviour — this must not have been "fixed" by
   // simply waiting forever, which would hang boot behind a slow child.
