@@ -55,6 +55,8 @@ function deps(dir, facts, writes) {
     getRememberMap: async () => null,
     getStandingConsent: async () => ({}),
     getScheduleWindow: async () => ({ nodes: [], linked: [] }),
+    listTrackers: async () => ({ ok: true, trackers: [] }),
+    logTrackerEntry: async () => ({ ok: true, id: 'tke-x' }),
     graphRelate: async () => ({ ok: true }),
     createSessionFollowup: async () => {},
     createMemoryFull: async (args) => { writes.push(args); return { ok: true, id: `mem-${writes.length}` }; },

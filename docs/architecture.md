@@ -603,8 +603,14 @@ Currently owns:
   tracker's own label through `trackerTermsRegex` — the `villagerNameRegex`
   precedent). A failed/refused log is a visible "nothing was recorded", never
   a silent drop (RULE B); the entry-validation gate itself runs in Unruh
-  (`validate_entry`). Passive memorization capture (§5.2) and the
-  `[Tracker cues]` renderer (§5.3) are a follow-up pass (T-B.2). See
+  (`validate_entry`). **Passive capture (§5.2, T-B.2):** on a ward-private
+  memorization slice, `buildPrompt` offers a compact tracker legend and an
+  optional per-fact `tracker_observations` array (riding the same extraction —
+  no extra call, like `schedule_refs`/`follow_ups`); `parseTrackerObservations`
+  code-gates each observation against the legend (off-legend id or non-object
+  payload dropped) and `processJob` logs the survivors as `source:'inferred'`.
+  `buildSharedRoomPrompt` never sees the legend (T2, fail-closed). The
+  `[Tracker cues]` renderer (§5.3) is still a follow-up pass. See
   docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,

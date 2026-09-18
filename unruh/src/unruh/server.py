@@ -1437,17 +1437,20 @@ def tracker_create_from_template(template_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def tracker_log(tracker_id: str, payload: dict | None = None, ts: str | None = None,
-                supersedes: str | None = None) -> dict[str, Any]:
+                supersedes: str | None = None, source: str = "chat") -> dict[str, Any]:
     """I use this to record one entry in a tracker — my human just told me something
     worth logging (they ate, their mood, a pantry item). For a `gauge`, logging IS
     the refill. `ts` is the local time the thing was ABOUT (YYYY-MM-DDTHH:MM:SS, no
     offset) — I read it from my [Now]/[Temporal Context], never invent one; omitted =
     now. `supersedes` corrects an earlier entry (the old one is kept for history).
-    Unknown fields are dropped and bad values refused with a readable reason — I never
-    store a malformed entry. Returns {ok, id} or {ok:false, code, error}."""
+    `source` marks where the entry came from ('chat' when my human told me directly —
+    the default; 'inferred' when a memorization pass overheard it). Unknown fields are
+    dropped and bad values refused with a readable reason — I never store a malformed
+    entry. Returns {ok, id} or {ok:false, code, error}."""
     try:
         with get_conn() as conn:
-            return trk.log_entry(conn, tracker_id=tracker_id, payload=payload, ts=ts, supersedes=supersedes)
+            return trk.log_entry(conn, tracker_id=tracker_id, payload=payload, ts=ts,
+                                 supersedes=supersedes, source=source)
     except ValueError as e:
         return _err(str(e))
 

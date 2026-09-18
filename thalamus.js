@@ -1095,13 +1095,14 @@ export async function createTrackerFromTemplate({ template_id } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
-export async function logTrackerEntry({ tracker_id, payload, ts, supersedes } = {}) {
+export async function logTrackerEntry({ tracker_id, payload, ts, supersedes, source } = {}) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
   const args = { tracker_id };
   if (payload    !== undefined) args.payload    = payload;
   if (ts         !== undefined) args.ts         = ts;
   if (supersedes !== undefined) args.supersedes = supersedes;
+  if (source     !== undefined) args.source     = source;
   try {
     const r = await unruhClient.callTool({ name: 'tracker_log', arguments: args });
     return unruhResult(r);
