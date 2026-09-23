@@ -520,6 +520,11 @@ Currently owns:
   surfacing + ceiling (`composeDiscordTools` takes a `modules` Set), with
   `request_tools` recovery wired through `getTools` (`recomposeDiscordTools`);
   villager turns keep their grant allowlist and only get the ceiling guard.
+  **Intentions are CORE (0.14.9, ward directive):** the six `intention_*` tools
+  always ride every turn (self-maintenance, like interests) — no longer a
+  surfacing module — so closing one out never costs a `request_tools` round.
+  The Discord `toolCtx` also carries `sessionInfo` now (it was omitted, so
+  `get_session_info` returned all-nulls on Discord).
   `initCerebellumTools()` receives the tome-storage capability, **the
   Village read/upsert functions, and `relayToDiscord`** from server.js at
   boot so `save_to_tome`, `village_lookup` / `village_upsert`, and
@@ -636,8 +641,12 @@ Currently owns:
   tool → `trackerExpiring` wrapper → `buildEatFirstBlock`
   (`src/tracker/tracker-projections.js`) renders the `[Pantry — use first]`
   block in `enrich()` (ward-private, live turns, pure derivation — no loop).
-  The expiry reminder *nodes* + menses window + reflection inputs are later
-  passes. See docs/trackers-build-spec.md.
+  **Menses window (§4, T-C.2):** Unruh `predictions` (scans `config.predict`
+  trackers through `predict_windows`, honesty gate ≥2 cycles) → `tracker_predictions`
+  → `trackerPredictions` → `buildMensesWindowBlock` renders a hedged
+  `[Likely period window]` line (code owns the dates). The persistent expiry
+  reminder *nodes* + menses hold-node + reflection inputs are later passes.
+  See docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted

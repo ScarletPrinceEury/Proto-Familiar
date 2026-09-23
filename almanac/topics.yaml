@@ -150,6 +150,11 @@ topics:
   description: Saved LLM provider connections -- URL resolution, keyless
     local/custom readiness, per-feature routing, and reasoning-effort control
   parents: [architecture, decisions]
+- slug: tools
+  title: Tools
+  description: Context-sensitive tool surfacing, provider-safe ceilings, and the
+    module system that keeps the 110-tool registry manageable per-turn
+  parents: [architecture, connections]
 - slug: backup
   title: Backup
   description: Encrypted export/restore of the Familiar's state -- Phylactery's

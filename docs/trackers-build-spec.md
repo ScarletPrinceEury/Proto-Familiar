@@ -427,11 +427,23 @@ constants, never on string matching in prompts.
      derivation — no loop, no stored state; it clears the moment the item is
      used/superseded. Tests: `expiring_items` (Python, project_dates gating +
      within-lead + soonest-first + no-date skip), `tests/tracker-projections.test.mjs`.
-   - **T-C.2 (next):** the heavier §4 pieces — the expiry **reminder nodes**
-     (mint/update/resolve ward-private schedule nodes via a projection tick) and
-     the **menses window** hold-node (`predict_windows` is built; needs MCP
-     exposure + node projection). **T-C.3:** `windowSeries` reflection input +
-     the watchdog line + the §5.4 offer-a-tracker cue.
+   - **T-C.2 ✓ SHIPPED (0.14.8-alpha):** the **likely period window** as a
+     derived line (§4 menses prediction). Unruh `predictions(conn, now)` scans
+     `config.predict` trackers, runs the already-built `predict_windows` (honesty
+     gate: ≥2 completed cycles), keeps real windows — behind the
+     `tracker_predictions` MCP tool + the `trackerPredictions` thalamus wrapper.
+     `buildMensesWindowBlock` (`tracker-projections.js`) renders a hedged,
+     locale-free `[Likely period window]\ncycle: around Oct 3 – Oct 9 (predicted
+     from 4 cycles)` in `enrich()` (ward-private, live turns, pure derivation —
+     code owns the dates). Consistent with T-C.1: a derived line, no loop.
+     Travels with the `trackers` surfacing module (`[Likely period window]`
+     marker). Tests: `predictions` (Python, honesty gate + non-predict excluded),
+     `tests/tracker-projections.test.mjs` (hedged wording, date range, cycle
+     count).
+   - **T-C.3 (next):** the persistent NODE projections — the pantry expiry
+     **reminder nodes** and the menses **hold-node** (both need a projection tick
+     that mints/updates/resolves ward-private schedule nodes), plus the
+     reflection inputs (`windowSeries` + the watchdog line + the §5.4 offer cue).
 4. **T-D:** mood-send UI + soft lock + T1 learning-only enforcement +
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.

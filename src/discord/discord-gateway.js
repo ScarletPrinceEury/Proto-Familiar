@@ -2883,6 +2883,22 @@ async function handleTurn(gw, msg, decision) {
       grants:      audienceGrants ?? {},
       apiKey:      conn.apiKey,
       baseUrl:     conn.baseUrl,
+      // get_session_info reads this — the web path sets it, the Discord path used
+      // to omit it, so every field came back null on Discord. Build it from the
+      // live session + connection. elapsedMs is best-effort off the prior turn.
+      sessionInfo: {
+        sessionId:    session.sessionId ?? null,
+        startedAt:    session.startedAt ?? null,
+        messageCount: Array.isArray(session.messages) ? session.messages.length : null,
+        provider:     conn?.provider ?? null,
+        model:        conn?.model ?? null,
+        elapsedMsSinceLastMessage: (() => {
+          const msgs = Array.isArray(session.messages) ? session.messages : [];
+          const prevTs = msgs.length >= 2 ? msgs[msgs.length - 2]?.timestamp : null;
+          const t = prevTs ? new Date(prevTs).getTime() : NaN;
+          return Number.isFinite(t) ? Date.now() - t : null;
+        })(),
+      },
       viaVillager: isVillager
         ? { id: decision.villager?.id ?? null, name: decision.speakerName ?? decision.villager?.name ?? null }
         : null,

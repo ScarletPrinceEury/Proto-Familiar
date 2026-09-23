@@ -165,6 +165,7 @@ of the provider work [@readiness-commit].
 
 ## Related
 
+- [Tool Surfacing and Provider-Safe Ceiling](tool-surfacing) — the complementary mechanism that ensures tool schemas never exceed provider limits; a keyless local connection is usable here, and large tool registries are managed there.
 - [Per-feature model routing](../decisions/per-feature-model-routing) — how a saved connection
   gets bound to a specific background job in the first place; this page covers what happens once
   a call site has that connection in hand.

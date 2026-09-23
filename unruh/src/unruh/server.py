@@ -1535,6 +1535,20 @@ def tracker_expiring(within_days: int = 3) -> dict[str, Any]:
         return _err(str(e))
 
 
+@mcp.tool()
+def tracker_predictions() -> dict[str, Any]:
+    """I use this to see the forward windows my prediction-enabled ledgers project —
+    chiefly a likely period window from a menses log. Only windows that clear the
+    honesty gate (≥2 completed cycles of history) come back; code owns every date,
+    I never compute one. Returns {ok, predictions:[{tracker_id, tracker_label,
+    window:{start,end,cycle_index}, cycles_seen}]}."""
+    try:
+        with get_conn() as conn:
+            return {"ok": True, **trk.predictions(conn)}
+    except ValueError as e:
+        return _err(str(e))
+
+
 # ── Entry point ───────────────────────────────────────────────────────
 
 

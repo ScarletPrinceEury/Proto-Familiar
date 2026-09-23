@@ -263,3 +263,23 @@ def test_predict_windows_honesty_gate(conn):
     p = tracker.predict_windows(conn, id=tid, now=NOW)
     assert p["window"] is not None and p["cycles_seen"] == 2
     assert p["window"]["start"] < p["window"]["end"]
+
+
+def test_predictions_scans_predict_enabled_and_honours_the_gate(conn):
+    # A predict-enabled menses log with only ONE start → no prediction yet.
+    mid = tracker.create_tracker(conn, label="Menses", archetype="series", sensitive=True, schema=[
+        {"name": "flow", "type": "enum", "required": True, "values": ["none", "spotting", "light", "medium", "heavy"]},
+    ], config={"predict": True})["id"]
+    tracker.log_entry(conn, tracker_id=mid, payload={"flow": "medium"}, ts="2026-06-01T09:00:00")
+    # A non-predict tracker is never scanned.
+    tracker.create_tracker(conn, label="Mood", archetype="series",
+                           schema=[{"name": "m", "type": "text"}], config={})
+    assert tracker.predictions(conn, now=NOW)["predictions"] == [], "gate not cleared → nothing projected"
+
+    # Add two more cycle starts → the window clears the gate and appears once.
+    tracker.log_entry(conn, tracker_id=mid, payload={"flow": "medium"}, ts="2026-06-29T09:00:00")
+    tracker.log_entry(conn, tracker_id=mid, payload={"flow": "medium"}, ts="2026-07-27T09:00:00")
+    out = tracker.predictions(conn, now=NOW)["predictions"]
+    assert len(out) == 1
+    assert out[0]["tracker_id"] == mid and out[0]["window"]["start"] < out[0]["window"]["end"]
+    assert out[0]["cycles_seen"] == 2

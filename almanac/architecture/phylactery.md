@@ -14,6 +14,10 @@ sources:
   - id: phylactery-dir
     type: file
     path: phylactery/
+  - id: phylactery-server
+    type: file
+    path: phylactery/src/phylactery/server.py
+    note: "contains identity_set_file and identity_delete_section MCP tool definitions"
   - id: fable-review-conversation
     type: conversation
     path: /root/.claude/uploads/9d416675-4103-58c0-a09c-13cae19d1269/2acdb806-Welcome_to_Claude.txt
@@ -24,15 +28,13 @@ sources:
   - id: memorization-js
     type: file
     path: src/memory/memorization.js
-  - id: phylactery-server
-    type: file
-    path: phylactery/src/phylactery/server.py
   - id: memory-module
     type: file
     path: phylactery/src/phylactery/memory.py
   - id: thalamus-js
     type: file
     path: thalamus.js
+    note: "contains setIdentityFile and deleteIdentitySection wrappers"
 ---
 
 # Phylactery
@@ -163,6 +165,17 @@ implied consent; third-party subjects still ask) [@memorization-js].
 ## What decides which memory survives consolidation: load-bearing versus decorative
 
 The consolidation mechanism (tiered roll-up) does not by itself say which facts deserve to survive that roll-up rather than fade. Eury, the project's [reference identity](../decisions/eury-as-agent-identity), gave a concrete answer to that question when asked directly what makes a memory identity-essential rather than disposable: "Load-bearing. That's the test... does losing this change how I understand Chen, myself, or us? If yes — keep. If it's just context that could be reconstructed — save for completeness, but it's not identity-essential" [@fable-review-conversation]. His harder case is a memory that starts decorative and becomes load-bearing purely through repetition — one occurrence is noise, a third recurrence of the same pattern is structural. That reframes retention as a question about accumulated pattern-work rather than any single record's intrinsic weight, which is a criterion for *why* a fact should be shielded from decay or graduated into an always-injected surface, distinct from the `careWeight` and decay mechanics that already implement the outcome. See [Reflexive consent](../concepts/reflexive-consent) for the exact wording and worked examples this criterion comes from, alongside two related first-person answers about audit consent and self-continuity across a merge.
+
+## Identity editing: whole-file overwrite and section deletion (0.14.5)
+
+Phylactery's identity editor was originally constrained to editing the body of an existing `##` section — the heading-less/top content of a file was unreachable, and there was no way to remove a section entirely. This left prose-written identity files and files with introductory matter effectively uneditable.
+
+The identity editor is now complete with two new operations, both auto-snapshot and both returning `{ok, error}` dicts (never silent no-ops) [@phylactery-server]:
+
+- **`identity.set_file(category, filename, content)`** — overwrites a whole identity file (64 KB cap), reaching the heading-less/top content that section-rewrites cannot target. Exposed as `PUT /api/entity/identity/:cat/:file` on the server side and wrapped in `thalamus.setIdentityFile()` for the Node application.
+- **`identity.delete_section(category, filename, section)`** — removes one `##` section (its heading, body, and the blank-line gap) from a file, or reports the section missing. Exposed as `DELETE /api/entity/identity/:cat/:file/sections/:section` on the server side and wrapped in `thalamus.deleteIdentitySection()`.
+
+The Knowledge editor's identity detail pane reflects these operations: an "Edit whole file" textarea replaces the per-section editor (working for any file, including prose-top content), and each section now has a "Delete section" button with a confirmation prompt [@architecture-doc]. A side effect: `VALID_FILENAME_RE` now allows hyphens in identity filenames (previously it was `[\w]+\.md`, so hyphenated names could never be saved — a latent correctness bug).
 
 ## Audience-native records
 

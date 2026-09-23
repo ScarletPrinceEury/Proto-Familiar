@@ -41,38 +41,24 @@ test('describeIntentionTrigger: renders each trigger kind', () => {
   assert.equal(describeIntentionTrigger({}), '');
 });
 
-// ── surfacing: the intentions module ─────────────────────────────────
+// ── intentions are CORE / always exposed (ward directive 2026-09) ────────────
 
-test('intentions module surfaces on intent-setting / round language', () => {
-  for (const text of [
-    'every morning I want to check the calendar',
-    'remind myself to follow up with Chen',
-    'from now on I check in on them',
-    'that\'s one of my rounds',
-    'make a habit of it',
-  ]) {
-    assert.ok(selectModules({ turnText: text }).has('intentions'), `should surface for: ${text}`);
-  }
-});
-
-test('intentions module surfaces when the due-intentions block is injected', () => {
-  const mods = selectModules({ turnText: 'anything', dynamicBlock: 'foo\n[Intentions coming due]\n  - ...' });
-  assert.ok(mods.has('intentions'));
-});
-
-test('intentions module does NOT surface on unrelated chatter', () => {
-  assert.ok(!selectModules({ turnText: 'the weather is nice today' }).has('intentions'));
-});
-
-test('all six intention tools map to the intentions module and have executors', () => {
+test('all six intention tools map to CORE (always exposed, never behind a module)', () => {
   const names = BUILTIN_TOOLS.map(t => t.function?.name).filter(n => n?.startsWith('intention_'));
   assert.equal(names.length, 6);
   for (const n of names) {
-    assert.equal(TOOL_MODULES[n], 'intentions', `${n} → intentions module`);
+    assert.equal(TOOL_MODULES[n], 'core', `${n} → core`);
     assert.equal(typeof TOOL_EXECUTORS[n], 'function', `${n} has an executor`);
   }
 });
 
-test('MODULE_INDEX names the intentions module (request_tools discoverability)', () => {
-  assert.match(MODULE_INDEX, /intentions \(/);
+test('intentions no longer surface as a module — the tools ride every turn instead', () => {
+  // Intent-setting language used to surface an `intentions` module; now the tools
+  // are core, so nothing needs to (and there is no `intentions` module to add).
+  assert.ok(!selectModules({ turnText: 'every morning I check in on them' }).has('intentions'));
+  assert.ok(!selectModules({ turnText: 'anything', dynamicBlock: '[Intentions coming due]\n - ...' }).has('intentions'));
+});
+
+test('MODULE_INDEX no longer lists intentions (they are core, not a request_tools module)', () => {
+  assert.doesNotMatch(MODULE_INDEX, /intentions \(/);
 });
