@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,10 @@ FIELD_TYPES = {"enum", "number", "scale", "quantity", "date", "text", "text[]", 
 ENTRY_SOURCES = {"chat", "inferred", "clarified", "send-button"}
 
 DEFAULT_ENTRY_CAP_PER_DAY = 24
+
+# §4 inventory-expiry projection: pantry-class items get a "use first" cue this
+# many days before they expire. Pure derivation — code owns the date maths.
+EXPIRY_LEAD_DAYS = 3
 
 # Gauge bands, low → critical. `extreme` opens a CHECK at the Node layer (never a
 # cue, never an auto-escalation — build spec §10.6).
@@ -485,6 +489,56 @@ def cue_candidates(conn: sqlite3.Connection, *, now: datetime | None = None) -> 
         cap = cap if isinstance(cap, (int, float)) else 1
         out.append({**s, "ask_cap_per_day": cap})
     return {"stale": out}
+
+
+def _parse_date(s: Any) -> date | None:
+    """Best-effort parse of a `date`-field value (day or datetime, local-naive) to
+    a date. Returns None on anything unparseable — an item with a junk expiry just
+    isn't projected, never crashes the cue."""
+    if not s:
+        return None
+    txt = str(s).strip().replace("Z", "")
+    try:
+        return datetime.fromisoformat(txt).date()
+    except (TypeError, ValueError):
+        try:
+            return date.fromisoformat(txt[:10])
+        except (TypeError, ValueError):
+            return None
+
+
+def expiring_items(conn: sqlite3.Connection, *, within_days: int = EXPIRY_LEAD_DAYS,
+                   now: datetime | None = None) -> dict[str, Any]:
+    """§4 inventory-expiry projection: pantry-class items (inventory archetype with
+    `project_dates`) whose `expires` date is within `within_days` of today —
+    already-expired items included (days_left < 0), soonest first. Pure derivation;
+    code owns the date maths, the model never computes days-left. Returns
+    {items: [{tracker_id, tracker_label, name, expires, days_left, entry_id}]}."""
+    n = _naive(now) if now is not None else datetime.now()
+    today = n.date()
+    out = []
+    for trk in conn.execute("SELECT * FROM trackers WHERE archetype='inventory'").fetchall():
+        cfg = json.loads(trk["config_json"] or "{}")
+        if not cfg.get("project_dates"):
+            continue
+        latest: dict[str, dict[str, Any]] = {}
+        for r in _entries(conn, trk["id"]):
+            p = json.loads(r["payload_json"] or "{}")
+            name = p.get("name")
+            if name:
+                latest[name] = {**p, "_entry_id": r["id"]}
+        for name, p in latest.items():
+            d = _parse_date(p.get("expires"))
+            if d is None:
+                continue
+            days_left = (d - today).days
+            if days_left <= within_days:
+                out.append({
+                    "tracker_id": trk["id"], "tracker_label": trk["label"], "name": name,
+                    "expires": p.get("expires"), "days_left": days_left, "entry_id": p.get("_entry_id"),
+                })
+    out.sort(key=lambda x: x["days_left"])
+    return {"items": out}
 
 
 def entry_rate_flag(conn: sqlite3.Connection, *, id: str, now: datetime | None = None) -> dict[str, Any]:

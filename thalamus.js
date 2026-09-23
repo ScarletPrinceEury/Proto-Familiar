@@ -1161,6 +1161,17 @@ export async function trackerCues() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), stale: [] }; }
 }
 
+// §4 inventory-expiry: pantry-class items within `within_days` of expiry, for the
+// "use first" line. Shaped fallback so a down peer renders absence.
+export async function trackerExpiring({ within_days = 3 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', items: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_expiring', arguments: { within_days } });
+    return parseToolText(r, { ok: false, items: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
+}
+
 export async function setRoundsVisibility({ value }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
@@ -1671,6 +1682,7 @@ import { formatTemporalContext } from './src/schedule/temporal-format.js';
 import { buildStewardshipBlock } from './src/schedule/stewardship.js';
 import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
 import { nextTrackerCue } from './src/tracker/tracker-cues.js';
+import { buildEatFirstBlock } from './src/tracker/tracker-projections.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './src/schedule/recurrence.js';
@@ -2347,6 +2359,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Pantry "use first" (trackers build spec §4 inventory expiry) ─────
+    // Pure derivation: pantry-class items near/past their expiry, soonest first.
+    // Ward-private; every live turn (no aging — it's a live snapshot, cleared the
+    // moment the item is used or superseded). Travels with the `trackers` module.
+    let eatFirstBlock = '';
+    if (liveTurn && !staticOnly && !gated && trackersOn) {
+      try {
+        const exp = await trackerExpiring({ within_days: 3 });
+        const items = Array.isArray(exp?.items) ? exp.items : [];
+        if (items.length) {
+          eatFirstBlock = buildEatFirstBlock(items);
+          if (eatFirstBlock) console.log(`[thalamus] pantry use-first: ${items.length} item(s) near expiry`);
+        }
+      } catch (err) {
+        console.error('[thalamus] pantry use-first failed:', err?.message ?? err);
+      }
+    }
+
     // ── Care check / break-through framing (step 4b) ──────────────────────
     // Read current threat; if elevated, prepend a [CARE CHECK] block that
     // tells the Familiar to consider checking in proactively. Never forces
@@ -2686,6 +2716,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (recentMemBlock)         dynamicSections.push(recentMemBlock);
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
     if (trackerCueBlock)        dynamicSections.push(trackerCueBlock);
+    if (eatFirstBlock)          dynamicSections.push(eatFirstBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);

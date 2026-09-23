@@ -414,6 +414,24 @@ constants, never on string matching in prompts.
 3. **T-C:** projections (expiry nodes, eat-first, menses windows) +
    `windowSeries` reflection input + watchdog line + 5.4 offer cue +
    T4/T5/T7/T8 tests.
+   - **T-C.1 ✓ SHIPPED (0.14.7-alpha):** the pantry **"use first" line** (§4
+     inventory expiry). Unruh `expiring_items(conn, within_days=3, now)` —
+     pantry-class items (inventory + `project_dates`) whose `expires` is within
+     the lead (`EXPIRY_LEAD_DAYS`=3), already-expired included, soonest-first,
+     code-owned day maths — behind the `tracker_expiring` MCP tool + the
+     `trackerExpiring` thalamus wrapper. `src/tracker/tracker-projections.js`
+     `buildEatFirstBlock` renders `[Pantry — use first]\nspinach (expired) ·
+     yoghurt (2d)` (cap 4 + "+N more"); wired into `enrich()`'s dynamic sections
+     (ward-private, live turns, `trackersEnabled`) and travelling with the
+     `trackers` surfacing module (its `[Pantry — use first]` marker). Pure
+     derivation — no loop, no stored state; it clears the moment the item is
+     used/superseded. Tests: `expiring_items` (Python, project_dates gating +
+     within-lead + soonest-first + no-date skip), `tests/tracker-projections.test.mjs`.
+   - **T-C.2 (next):** the heavier §4 pieces — the expiry **reminder nodes**
+     (mint/update/resolve ward-private schedule nodes via a projection tick) and
+     the **menses window** hold-node (`predict_windows` is built; needs MCP
+     exposure + node projection). **T-C.3:** `windowSeries` reflection input +
+     the watchdog line + the §5.4 offer-a-tracker cue.
 4. **T-D:** mood-send UI + soft lock + T1 learning-only enforcement +
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.
