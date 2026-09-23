@@ -646,6 +646,15 @@ Currently owns:
   → `trackerPredictions` → `buildMensesWindowBlock` renders a hedged
   `[Likely period window]` line (code owns the dates). The persistent expiry
   reminder *nodes* + menses hold-node + reflection inputs are later passes.
+  **Ward-facing management (§7, 0.14.10):** Unruh `archive_tracker` (soft-pause —
+  keeps data, drops out of the active list/cues/projections/capture; `archived_at`
+  column, migration `0008`) + `drop_tracker` (hard delete, CASCADE) behind the
+  `tracker_archive`/`tracker_drop` MCP tools + `archiveTracker`/`dropTracker`
+  thalamus wrappers, reached ONLY from the HTTP layer (`GET /api/trackers` incl.
+  archived, `GET /api/trackers/:id`, `POST …/archive`, `DELETE …/:id`) and a
+  **Trackers tab** in the Knowledge editor. The Familiar never reaches
+  archive/drop — a ledger is the ward's to retire; `tracker_list` gained
+  `include_archived` (default off = the Familiar's active view).
   See docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,

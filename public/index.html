@@ -1053,6 +1053,7 @@
         <button class="ke-tab"               data-tab="coverage"  role="tab">Coverage</button>
         <button class="ke-tab"               data-tab="graph"     role="tab">Graph</button>
         <button class="ke-tab"               data-tab="identity"  role="tab">Identity</button>
+        <button class="ke-tab"               data-tab="trackers"  role="tab">Trackers</button>
         <button class="ke-tab"               data-tab="remember"  role="tab">Remember</button>
         <button class="ke-tab"               data-tab="snapshots" role="tab">Snapshots</button>
         <button class="ke-tab"               data-tab="sessions"  role="tab">Sessions</button>
@@ -1179,6 +1180,21 @@
             <div class="ke-list" id="ke-id-list"></div>
             <div class="ke-detail" id="ke-id-detail">
               <p class="logs-empty">Pick an identity file to edit a section.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ke-pane" id="ke-pane-trackers">
+          <div class="ke-toolbar">
+            <button id="ke-trk-refresh" class="btn-ghost">Refresh</button>
+            <label class="ke-inline-check"><input type="checkbox" id="ke-trk-show-archived"> Show archived</label>
+            <span id="ke-trk-count" class="vl-count" aria-live="polite"></span>
+          </div>
+          <p class="field-hint">The ledgers your Familiar keeps for you. Archiving pauses one (it goes quiet everywhere but keeps its data — un-archive any time); deleting removes it and every entry for good.</p>
+          <div class="ke-split">
+            <div class="ke-list" id="ke-trk-list"></div>
+            <div class="ke-detail" id="ke-trk-detail">
+              <p class="logs-empty">Pick a tracker to see where it stands.</p>
             </div>
           </div>
         </div>

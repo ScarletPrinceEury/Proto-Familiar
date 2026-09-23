@@ -1118,13 +1118,33 @@ export async function readTracker({ tracker_id, days = 14 } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
-export async function listTrackers() {
+export async function listTrackers({ include_archived = false } = {}) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected', trackers: [] };
   try {
-    const r = await unruhClient.callTool({ name: 'tracker_list', arguments: {} });
+    const r = await unruhClient.callTool({ name: 'tracker_list', arguments: { include_archived } });
     return parseToolText(r, { ok: false, trackers: [] });
   } catch (err) { return { ok: false, error: err?.message ?? String(err), trackers: [] }; }
+}
+
+// Ward-facing management (never the Familiar's toolset): soft-pause/resume and
+// hard delete. Reached only from the HTTP layer.
+export async function archiveTracker({ id, archived = true } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_archive', arguments: { id, archived } });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
+export async function dropTracker({ id } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_drop', arguments: { id } });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
 export async function adjustTracker({ id, label, schema, config, sensitive } = {}) {

@@ -6669,6 +6669,8 @@ function init() {
     if (e.key === 'Escape') keGraphToggleNewNodeForm(false);
   });
   $('ke-id-refresh').addEventListener('click', keLoadIdentity);
+  $('ke-trk-refresh')?.addEventListener('click', keLoadTrackers);
+  $('ke-trk-show-archived')?.addEventListener('change', keLoadTrackers);
   $('ke-snap-create').addEventListener('click', keCreateSnapshot);
   $('ke-snap-refresh').addEventListener('click', keLoadSnapshots);
   $('ke-backup-export').addEventListener('click', keExportBackup);
@@ -9690,7 +9692,7 @@ async function toggleVoicePreview(row, button, label) {
 // hit /api/entity/* endpoints; destructive ones auto-snapshot server-side
 // so the Snapshots tab is the always-on undo.
 
-const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'remember', 'snapshots', 'sessions', 'prompts', 'behaviour'];
+const KE_TABS = ['memories', 'coverage', 'graph', 'identity', 'trackers', 'remember', 'snapshots', 'sessions', 'prompts', 'behaviour'];
 
 function openKnowledgeModal() {
   $('knowledge-modal').classList.remove('hidden');
@@ -9766,6 +9768,7 @@ function keSwitchTab(tab) {
     else                        { keSetGraphView('list'); keLoadGraphNodes(); }
   }
   if (tab === 'identity')   keLoadIdentity();
+  if (tab === 'trackers')   keLoadTrackers();
   if (tab === 'remember')   keOpenRememberMap();
   if (tab === 'snapshots')  keLoadSnapshots();
   if (tab === 'sessions')   refreshLogsList();
@@ -11068,6 +11071,74 @@ async function keReopenIdentity(category, filename) {
     if (file) keOpenIdentity(category, file);
     else $('ke-id-detail').innerHTML = '';
   } catch { /* leave the pane as-is on a transient read error */ }
+}
+
+// ── Trackers tab (ward-facing management) ────────────────────────────────────
+async function keLoadTrackers() {
+  const list = $('ke-trk-list');
+  list.innerHTML = '<p class="logs-loading">Loading…</p>';
+  const showArchived = $('ke-trk-show-archived')?.checked;
+  try {
+    const res = await fetch('/api/trackers');
+    if (!res.ok) throw new Error(await keReadServerError(res));
+    const data = await res.json();
+    let trackers = Array.isArray(data.trackers) ? data.trackers : [];
+    if (!showArchived) trackers = trackers.filter(t => !t.archived);
+    $('ke-trk-count').textContent = `${trackers.length} tracker${trackers.length === 1 ? '' : 's'}`;
+    list.innerHTML = '';
+    if (!trackers.length) { list.innerHTML = '<p class="logs-empty">No trackers yet.</p>'; return; }
+    for (const t of trackers) {
+      const row = document.createElement('div');
+      row.className = 'ke-row' + (t.archived ? ' ke-row-settings' : '');
+      row.innerHTML = `
+        <div class="ke-row-title">${esc(t.label)}${t.archived ? ' <span class="vl-count">archived</span>' : ''}${t.sensitive ? ' 🔒' : ''}</div>
+        <div class="ke-row-sub">${esc(t.archetype)}${Array.isArray(t.fields) && t.fields.length ? ' — ' + esc(t.fields.join(', ')) : ''}</div>`;
+      row.addEventListener('click', () => keOpenTracker(t));
+      list.appendChild(row);
+    }
+  } catch (err) { list.innerHTML = keError(err, 'Failed to load trackers.'); }
+}
+
+async function keOpenTracker(t) {
+  const det = $('ke-trk-detail');
+  det.innerHTML = '<p class="logs-loading">Loading…</p>';
+  let read = {};
+  try {
+    const res = await fetch(`/api/trackers/${encodeURIComponent(t.id)}`);
+    if (res.ok) read = await res.json();
+  } catch { /* still show the controls even if the read fails */ }
+  det.innerHTML = `
+    <div class="ke-detail-header"><h3>${esc(t.label)} <span class="vl-count">${esc(t.archetype)}</span>${t.sensitive ? ' 🔒' : ''}</h3></div>
+    <div class="ke-trk-summary">${keTrackerSummary(read)}</div>
+    <div class="ke-actions">
+      <button class="btn-secondary ke-trk-archive">${t.archived ? 'Un-archive' : 'Archive'}</button>
+      <button class="btn-ghost ke-danger ke-trk-delete">Delete tracker</button>
+    </div>`;
+  det.querySelector('.ke-trk-archive').addEventListener('click', async () => {
+    const r = await fetch(`/api/trackers/${encodeURIComponent(t.id)}/archive`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: !t.archived }) });
+    if (!r.ok) { alert(`Failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+    keLoadTrackers(); det.innerHTML = '<p class="logs-empty">Pick a tracker to see where it stands.</p>';
+  });
+  det.querySelector('.ke-trk-delete').addEventListener('click', async () => {
+    if (!confirm(`Delete “${t.label}” and every entry it holds? This can’t be undone.`)) return;
+    const r = await fetch(`/api/trackers/${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+    if (!r.ok) { alert(`Delete failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+    keLoadTrackers(); det.innerHTML = '<p class="logs-empty">Pick a tracker to see where it stands.</p>';
+  });
+}
+
+function keTrackerSummary(read) {
+  if (!read || read.ok === false) return '<p class="logs-empty">Couldn’t read its current state.</p>';
+  const arch = read.archetype;
+  if (arch === 'gauge') return `<p>Band: <strong>${esc(String(read.band ?? '—'))}</strong>${Number.isFinite(read.hours_since) ? ` · ${Math.round(read.hours_since)}h since last` : ''}</p>`;
+  if (arch === 'state') return `<p>${read.current ? esc(Object.entries(read.current).map(([k, v]) => `${k}: ${v}`).join(', ')) : 'nothing recorded yet'}</p>`;
+  if (arch === 'inventory') {
+    const items = Array.isArray(read.items) ? read.items : [];
+    return items.length ? `<ul class="ke-trk-items">${items.map(i => `<li>${esc(String(i.name ?? ''))}</li>`).join('')}</ul>` : '<p class="logs-empty">empty</p>';
+  }
+  const entries = Array.isArray(read.entries) ? read.entries : [];
+  return `<p>${entries.length} recent ${entries.length === 1 ? 'entry' : 'entries'}.</p>`;
 }
 
 // ── Remember-consent map ─────────────────────────────────────────────────────

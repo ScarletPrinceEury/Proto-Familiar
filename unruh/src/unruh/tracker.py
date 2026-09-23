@@ -436,15 +436,32 @@ def read_tracker(conn: sqlite3.Connection, *, id: str, days: int = 14, now: date
     return base
 
 
-def list_trackers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """All trackers (id, label, archetype, sensitive, field names) — the legend."""
-    rows = conn.execute("SELECT * FROM trackers ORDER BY created_at ASC").fetchall()
+def list_trackers(conn: sqlite3.Connection, *, include_archived: bool = False) -> list[dict[str, Any]]:
+    """All trackers (id, label, archetype, sensitive, archived, field names) — the
+    legend. Archived trackers are omitted by default (the Familiar's active view);
+    the ward-facing management list passes include_archived=True to see them all."""
+    where = "" if include_archived else "WHERE archived_at IS NULL"
+    rows = conn.execute(f"SELECT * FROM trackers {where} ORDER BY created_at ASC").fetchall()
     out = []
     for r in rows:
         schema = json.loads(r["schema_json"] or "[]")
         out.append({"id": r["id"], "label": r["label"], "archetype": r["archetype"],
-                    "sensitive": bool(r["sensitive"]), "fields": [f["name"] for f in schema]})
+                    "sensitive": bool(r["sensitive"]), "archived": r["archived_at"] is not None,
+                    "archived_at": r["archived_at"], "fields": [f["name"] for f in schema]})
     return out
+
+
+def archive_tracker(conn: sqlite3.Connection, *, id: str, archived: bool = True) -> dict[str, Any]:
+    """Soft-pause or resume a tracker (ward-facing). Archiving keeps every entry but
+    takes the tracker out of the Familiar's active surfaces (list/cues/projections/
+    passive capture); un-archiving restores it. A no-op hard delete is drop_tracker.
+    Returns {ok, archived} or {ok:false, error} if the tracker is unknown."""
+    trk = _get_tracker(conn, id)
+    if trk is None:
+        return {"ok": False, "error": f"no tracker {id!r}"}
+    stamp = now_iso() if archived else None
+    conn.execute("UPDATE trackers SET archived_at = ?, updated_at = ? WHERE id = ?", (stamp, now_iso(), id))
+    return {"ok": True, "archived": bool(archived)}
 
 
 # ── Derived signals (all code) ───────────────────────────────────────────────
@@ -455,7 +472,7 @@ def stale_trackers(conn: sqlite3.Connection, *, now: datetime | None = None) -> 
     cue candidate). Gauges are excluded — their staleness is the gauge band itself."""
     n = _naive(now) if now is not None else datetime.now()
     out = []
-    for r in conn.execute("SELECT * FROM trackers WHERE archetype != 'gauge'").fetchall():
+    for r in conn.execute("SELECT * FROM trackers WHERE archetype != 'gauge' AND archived_at IS NULL").fetchall():
         cfg = json.loads(r["config_json"] or "{}")
         hours = cfg.get("staleness_hours")
         if not isinstance(hours, (int, float)):
@@ -517,7 +534,7 @@ def expiring_items(conn: sqlite3.Connection, *, within_days: int = EXPIRY_LEAD_D
     n = _naive(now) if now is not None else datetime.now()
     today = n.date()
     out = []
-    for trk in conn.execute("SELECT * FROM trackers WHERE archetype='inventory'").fetchall():
+    for trk in conn.execute("SELECT * FROM trackers WHERE archetype='inventory' AND archived_at IS NULL").fetchall():
         cfg = json.loads(trk["config_json"] or "{}")
         if not cfg.get("project_dates"):
             continue
@@ -547,7 +564,7 @@ def predictions(conn: sqlite3.Connection, *, now: datetime | None = None) -> dic
     i.e. ≥2 completed cycles). Returns {predictions: [{tracker_id, tracker_label,
     window, cycles_seen}]}. Pure arithmetic; the model never computes the dates."""
     out = []
-    for trk in conn.execute("SELECT * FROM trackers").fetchall():
+    for trk in conn.execute("SELECT * FROM trackers WHERE archived_at IS NULL").fetchall():
         cfg = json.loads(trk["config_json"] or "{}")
         if not cfg.get("predict"):
             continue

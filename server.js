@@ -51,7 +51,7 @@ import {
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
   addVillagerTell,
-  listTrackers,
+  listTrackers, readTracker, archiveTracker, dropTracker,
 } from './thalamus.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -4274,6 +4274,35 @@ app.delete('/api/entity/identity/:category/:filename/sections/:section', async (
   if (!VALID_FILENAME_RE.test(filename))        return badRequest(res, 'invalid filename');
   if (!VALID_SECTION_RE.test(section))          return badRequest(res, 'invalid section heading');
   const result = await deleteIdentitySection({ category, filename, section });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json({ ok: true });
+});
+
+// ── Trackers (ward-facing management; build spec §7) ────────────────────────
+// The ward's own view of the ledgers the Familiar keeps: list (incl. archived),
+// read one, soft-pause/resume (archive), and permanently delete. Localhost-gated
+// like every endpoint. The Familiar never reaches archive/drop — a ledger is the
+// ward's to retire.
+app.get('/api/trackers', async (_req, res) => {
+  try { res.json(await listTrackers({ include_archived: true })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.get('/api/trackers/:id', async (req, res) => {
+  const days = req.query.days !== undefined ? Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 14)) : 14;
+  try { res.json(await readTracker({ tracker_id: req.params.id, days })); }
+  catch (err) { gatewayDown(res, err.message); }
+});
+
+app.post('/api/trackers/:id/archive', async (req, res) => {
+  const archived = req.body?.archived !== false;   // default: archive
+  const result = await archiveTracker({ id: req.params.id, archived });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json({ ok: true, archived });
+});
+
+app.delete('/api/trackers/:id', async (req, res) => {
+  const result = await dropTracker({ id: req.params.id });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json({ ok: true });
 });
