@@ -91,12 +91,14 @@ export const TOOL_MODULES = {
   set_day_start_anchor: 'stewardship',
 
   // intentions — my own forward commitments and rounds (Initiative Pass 3).
-  // Surfaced by intent-setting/round language OR by the due-intentions block
-  // travelling with its tools (a payoff turn brings the tools to act).
-  intention_set: 'intentions', intention_list: 'intentions',
-  intention_drop: 'intentions', intention_done: 'intentions',
-  intention_mark_fired: 'intentions',
-  intention_visibility: 'intentions',
+  // CORE / always-exposed (ward directive 2026-09): they're my own selfhood-
+  // maintenance, like interests, and closing one out inline shouldn't cost a
+  // request_tools round. So they ride every turn rather than surfacing on a
+  // trigger.
+  intention_set: 'core', intention_list: 'core',
+  intention_drop: 'core', intention_done: 'core',
+  intention_mark_fired: 'core',
+  intention_visibility: 'core',
 
   // trackers (trackers build spec §3) — my human's private ledgers (mood,
   // sleep, pantry, laundry, upkeep gauges). WARD-ONLY (never in
@@ -136,7 +138,6 @@ export const MODULE_INDEX =
   'files (list/read my own folder, search back through my past sessions), ' +
   'maintenance (id tidy-up), ' +
   'stewardship (set the day-start time I open my human\'s day on), ' +
-  'intentions (my own forward commitments and rounds: set/list/drop/complete, keep my rounds legible to my human or private), ' +
   'media (look again at an image shared earlier, tie an image to someone/something in my graph), ' +
   'trackers (my human\'s private ledgers: mood, sleep, the pantry, laundry, upkeep gauges — list/create/log/read/adjust), ' +
   'browser (open a web page in my own browser and use it — click, fill, scroll, follow a flow — when reading isn\'t enough)';
@@ -218,13 +219,12 @@ const TRIGGERS = {
     blocks: [],
   },
   intentions: {
-    // Intent-setting / round language, plus follow-through phrasing. Generous
-    // by design (the "somewhat generous" rule) — a missed surface costs one
-    // request_tools round; over-surfacing a few hundred tokens once.
-    text: /\b(intention|inten(d|ding)|from now on|every (morning|noon|afternoon|evening|day|night)|each (morning|day|phase)|my round|rounds\b|remind myself|note to self|follow[ -]?up|check in on|keep an eye on|next time (I|we)|when I (next|get)|going forward|make a habit|going to start)\b/i,
-    // The due-intentions block travels with the tools so a payoff turn can act
-    // on what's come due (mark fired / complete / adjust).
-    blocks: ['[Intentions coming due]'],
+    // The intention tools are CORE now (always exposed — ward directive 2026-09),
+    // so this module holds no tools and never surfaces. Left as a no-op key (not
+    // deleted) so the `[Intentions coming due]` context block, if referenced
+    // elsewhere, has a harmless home; the tools ride every turn regardless.
+    text: null,
+    blocks: [],
   },
   trackers: {
     // Tracking language + the ledger vocabulary (mood, sleep, pantry, laundry,

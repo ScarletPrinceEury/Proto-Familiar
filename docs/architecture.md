@@ -520,6 +520,11 @@ Currently owns:
   surfacing + ceiling (`composeDiscordTools` takes a `modules` Set), with
   `request_tools` recovery wired through `getTools` (`recomposeDiscordTools`);
   villager turns keep their grant allowlist and only get the ceiling guard.
+  **Intentions are CORE (0.14.9, ward directive):** the six `intention_*` tools
+  always ride every turn (self-maintenance, like interests) — no longer a
+  surfacing module — so closing one out never costs a `request_tools` round.
+  The Discord `toolCtx` also carries `sessionInfo` now (it was omitted, so
+  `get_session_info` returned all-nulls on Discord).
   `initCerebellumTools()` receives the tome-storage capability, **the
   Village read/upsert functions, and `relayToDiscord`** from server.js at
   boot so `save_to_tome`, `village_lookup` / `village_upsert`, and
