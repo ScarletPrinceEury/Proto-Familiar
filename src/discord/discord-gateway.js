@@ -42,6 +42,7 @@ import { resolveAudience, audienceTagFor, visibleAudiences, topicGrantsForRoom }
 import { buildVillagePresenceBlock, villagePresenceOn } from '../village/village-presence.js';
 import { buildVillagerContextBlock } from '../warmth/villager-context.js';
 import { readSettingsSync, primaryConnectionFrom, composeDiscordTools, runToolCallLoop, executeToolCall, VILLAGER_WRITE_TOOLS, toolRoundsPerTurn } from '../../cerebellum.js';
+import { selectModules, stickyModulesFor, tickSticky, shouldSurface, toolCeiling, enforceToolCeiling } from '../../tool-surfacing.js';
 import { saveAsset, MEDIA_MAX_BYTES, IMAGE_MIME_EXT, VIDEO_MIME_EXT, VIDEO_MAX_BYTES, MAX_IMAGES_PER_MESSAGE } from '../vision/media.js';
 import { materializeAttachments, resolveVisionCapable, ensureDescribed, describeAsset } from '../vision/vision.js';
 import { parseEmotes, rewriteEmotes, readEmoteCache, describeUnseenEmotes, emotesDisabled } from './discord-emotes.js';
@@ -2836,9 +2837,36 @@ async function handleTurn(gw, msg, decision) {
   const toolsOn = process.env.PROTO_FAMILIAR_DISCORD_TOOLS_DISABLED !== '1'
     && settings.discordToolsEnabled !== false;
   const isVillager = !decision.isWard && !!decision.villager;
-  const discordTools = toolsOn
-    ? composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn })
-    : [];
+  // Context-sensitive surfacing + the provider-safe tool ceiling, applied to a
+  // WARD Discord turn exactly like the web turn — otherwise the ward saw the full
+  // ~110-tool registry here (which breaks tool-calling on z.ai). Villager turns
+  // already carry a small allowlisted set, so they only get the ceiling guard.
+  const ceiling = toolCeiling(settings);
+  let surfacedModules = null;   // Set when a ward turn narrowed; drives request_tools recovery
+  let discordTools = [];
+  if (toolsOn) {
+    const fullDiscord = composeDiscordTools({ isWard: !!decision.isWard, isVillager, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn });
+    if (decision.isWard && shouldSurface({ settings, fullCount: fullDiscord.length })) {
+      const prevAssistant = [...(session.messages ?? [])].reverse()
+        .find(m => m?.role === 'assistant' && typeof m.content === 'string')?.content ?? '';
+      const turnText = `${content ?? ''}\n${prevAssistant}`;
+      const villagerNames = (registry.villagers ?? []).map(v => v?.name).filter(Boolean);
+      surfacedModules = selectModules({
+        turnText,
+        dynamicBlock: enriched.dynamic ?? '',
+        villagerNames,
+        sticky: stickyModulesFor(session.sessionId),
+      });
+      discordTools = enforceToolCeiling(
+        composeDiscordTools({ isWard: true, isVillager: false, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn, modules: surfacedModules }),
+        ceiling,
+      );
+      tickSticky(session.sessionId, surfacedModules, Number(settings?.toolStickyTurns ?? 2));
+      console.log(`[discord tools] surfacing: ${surfacedModules.size ? [...surfacedModules].join(', ') : '(core only)'} — ${discordTools.length} of ${fullDiscord.length}`);
+    } else {
+      discordTools = enforceToolCeiling(fullDiscord, ceiling);
+    }
+  }
 
   let rawReply;
   if (discordTools.length) {
@@ -2880,6 +2908,19 @@ async function handleTurn(gw, msg, decision) {
         voiceLeave: async () => gw.voiceController.leaveVoiceCall(),
       } : {}),
     };
+    // When a ward turn narrowed its tools, request_tools can widen the module set
+    // mid-turn — mirror the web recovery: init the growth set here and recompose
+    // the tool list each round from it (never below the surfaced set, never above
+    // the ceiling). Nothing is stranded — a missed tool costs one request_tools round.
+    if (surfacedModules) toolCtx._requestedModules = new Set();
+    const recomposeDiscordTools = () => {
+      if (!surfacedModules || !toolCtx._requestedModules?.size) return discordTools;
+      const union = new Set([...surfacedModules, ...toolCtx._requestedModules]);
+      return enforceToolCeiling(
+        composeDiscordTools({ isWard: true, isVillager: false, grants: audienceGrants ?? {}, settings, visionCapable: visionCapableTurn, modules: union }),
+        ceiling,
+      );
+    };
     // On a villager turn, audit every state-mutating tool with the causing
     // villager before it runs — a villager-driven write is never silent. Reads
     // and the ward's own turns run unwrapped.
@@ -2904,7 +2945,7 @@ async function handleTurn(gw, msg, decision) {
         }),
         baseMessages: apiMessages,
         timeAnchor:   discordTimeAnchor,   // re-appended last every round (web parity)
-        getTools:     () => discordTools,
+        getTools:     recomposeDiscordTools,
         executeTool,
         toolCtx,
         // My human's own turns get the ward-configurable round budget ("check

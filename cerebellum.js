@@ -5537,9 +5537,11 @@ export function discordWriteProvenance(ctx = {}) {
  *   - registered villager → relay + villagerToolNames(grants), macro-resolved.
  *   - stranger / neither → [] (no tools, unchanged from today).
  */
-export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools, visionCapable = false } = {}) {
+export function composeDiscordTools({ isWard = false, isVillager = false, grants = {}, settings = readSettingsSync(), customTools, visionCapable = false, modules } = {}) {
   if (isWard) {
-    const base = composeActiveTools(customTools, settings, { visionCapable });
+    // A `modules` Set narrows the ward's set exactly like the web turn (context-
+    // sensitive surfacing / the provider-safe ceiling); omitted → full registry.
+    const base = composeActiveTools(customTools, settings, { visionCapable, ...(modules instanceof Set ? { modules } : {}) });
     // Discord-only, ward-only: the Familiar can join/leave a voice channel on
     // natural language ("come to #voice"). Off when Discord voice is hard-disabled.
     if (process.env.PROTO_FAMILIAR_DISCORD_VOICE_DISABLED === '1') return base;

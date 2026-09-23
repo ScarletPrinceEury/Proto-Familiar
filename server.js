@@ -144,7 +144,7 @@ import {
   enqueueAndDispatch, formatDeliveryNote, activePushAdapters,
 } from './cerebellum.js';
 import { expandWindow } from './src/schedule/recurrence.js';
-import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES } from './tool-surfacing.js';
+import { selectModules, explainSelection, stickyModulesFor, tickSticky, TOOL_MODULES, shouldSurface, toolCeiling, enforceToolCeiling } from './tool-surfacing.js';
 import { readStewardshipState, recordRoutineReview } from './src/schedule/stewardship.js';
 import { buildNeedsLedger, isRoutineReviewDue, buildRoutineReviewSection, routineReviewHardDisabled } from './src/schedule/routine-review.js';
 import {
@@ -785,10 +785,14 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
   let surfacing = null;   // { selection:Set, used:Set } when active
   if (loopMode) {
     const sset = readSettingsSync();
-    const surfOn = sset?.toolSurfacingEnabled === true
-      && process.env.PROTO_FAMILIAR_TOOL_SURFACING_DISABLED !== '1';
+    // Compose the FULL set first, so the provider-safe ceiling can see how big
+    // this turn's registry would be. shouldSurface is default-ON now; it also
+    // forces narrowing (whatever the toggle says) when the full list would
+    // overflow a provider like z.ai.
+    const fullTools = composeActiveTools(customTools, sset, { visionCapable: visionCapableTurn });
+    const ceiling = toolCeiling(sset);
     let activeTools;
-    if (surfOn) {
+    if (shouldSurface({ settings: sset, fullCount: fullTools.length })) {
       const prevAssistant = [...(Array.isArray(messages) ? messages : [])].reverse()
         .find(m => m?.role === 'assistant' && typeof m.content === 'string')?.content ?? '';
       const turnText = `${typeof userMessage === 'string' ? userMessage : ''}\n${prevAssistant}`;
@@ -811,10 +815,15 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
         sticky: stickyModulesFor(sessionInfo?.sessionId),
       });
       surfacing = { selection, used: new Set() };
-      activeTools = composeActiveTools(customTools, sset, { modules: selection, visionCapable: visionCapableTurn });
-      console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised`);
+      activeTools = enforceToolCeiling(
+        composeActiveTools(customTools, sset, { modules: selection, visionCapable: visionCapableTurn }),
+        ceiling,
+      );
+      console.log(`[tools] surfacing: ${selection.size ? [...selection].join(', ') : '(core only)'} — ${activeTools.length} tool(s) advertised (of ${fullTools.length})`);
     } else {
-      activeTools = composeActiveTools(customTools, readSettingsSync(), { visionCapable: visionCapableTurn });
+      // Toggle explicitly off AND under the ceiling → the full set, but never
+      // above the ceiling (belt-and-suspenders for a provider's hard limit).
+      activeTools = enforceToolCeiling(fullTools, ceiling);
     }
     if (activeTools.length > 0) {
       payload.tools = activeTools;
@@ -849,7 +858,11 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
     const recomposeTools = () => {
       if (!surfacing || !toolCtx._requestedModules?.size) return undefined;
       const union = new Set([...surfacing.selection, ...toolCtx._requestedModules]);
-      return composeActiveTools(customTools, readSettingsSync(), { modules: union, visionCapable: visionCapableTurn });
+      const sset2 = readSettingsSync();
+      return enforceToolCeiling(
+        composeActiveTools(customTools, sset2, { modules: union, visionCapable: visionCapableTurn }),
+        toolCeiling(sset2),
+      );
     };
     const tickSurfacing = (toolNamesUsed = []) => {
       if (!surfacing) return;

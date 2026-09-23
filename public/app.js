@@ -362,8 +362,13 @@ const state = {
   // only core + triggered tool modules are advertised per turn; the Familiar
   // pulls anything else via request_tools. Sticky = extra turns a surfaced
   // module stays (0-10).
-  toolSurfacingEnabled:    false,
+  // Default ON (0.14.6): the full ~110-tool registry breaks tool-calling on some
+  // providers (z.ai/GLM); surfacing trims to core + triggered, and a provider-safe
+  // ceiling (maxToolsPerTurn) auto-trims regardless. Everything stays reachable
+  // via request_tools.
+  toolSurfacingEnabled:    true,
   toolStickyTurns:         2,
+  maxToolsPerTurn:         64,   // provider-safe tool ceiling (ward-tunable)
   // Browser (browser build spec §10). Default OFF — like web search, being able
   // to reach out of the box is opt-in. Env off-switch PROTO_FAMILIAR_BROWSE_DISABLED=1.
   browseEnabled:           false,
@@ -579,7 +584,7 @@ const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'baseUrl', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
-  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'toolRoundsPerTurn',
+  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'maxToolsPerTurn', 'toolRoundsPerTurn',
   'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
@@ -4586,7 +4591,7 @@ function writeSettingsToUI() {
   if ($('memory-integrity-toggle')) setIfNotFocused($('memory-integrity-toggle'), 'checked', state.memoryIntegrityEnabled !== false);
   if ($('hippocampus-toggle')) setIfNotFocused($('hippocampus-toggle'), 'checked', state.hippocampusEnabled !== false);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
-  if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
+  if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled !== false);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
   if ($('tool-rounds-per-turn')) setIfNotFocused($('tool-rounds-per-turn'), 'value', state.toolRoundsPerTurn ?? 12);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);

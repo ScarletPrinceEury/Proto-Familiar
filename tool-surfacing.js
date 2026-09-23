@@ -355,3 +355,53 @@ export function normalizeRequestedModules(raw) {
   for (const a of asked) (ALL_MODULES.includes(a) && a !== CORE ? known : unknown).push(a);
   return { modules: known, unknown };
 }
+
+// ── Provider-safe tool ceiling ─────────────────────────────────────────────
+// The full built-in registry is ~110 tools / ~110 KB of JSON schema. Some
+// providers (z.ai / GLM especially) break tool-calling ENTIRELY when handed a
+// list that large — the reported "tool use failed until I turned surfacing on".
+// So surfacing is no longer just a nicety: a provider-safe ceiling makes the
+// system trim itself whenever the composed list would overflow, whatever the
+// ward's toggle says. Everything stays reachable via request_tools (core), so a
+// trimmed turn costs at most one recovery round, never a lost capability.
+//
+// ⚠️ ward-review value: 64 is a conservative default (well under what broke z.ai,
+// comfortably above core + a few modules). Tunable via settings.maxToolsPerTurn
+// or PROTO_FAMILIAR_MAX_TOOLS; revisit if a provider needs lower/higher.
+export const SAFE_TOOL_CEILING = 64;
+
+export function toolCeiling(settings = {}) {
+  const env = parseInt(process.env.PROTO_FAMILIAR_MAX_TOOLS, 10);
+  if (Number.isFinite(env) && env > 0) return env;
+  const s = parseInt(settings?.maxToolsPerTurn, 10);
+  if (Number.isFinite(s) && s > 0) return s;
+  return SAFE_TOOL_CEILING;
+}
+
+/**
+ * Decide whether to narrow this turn's tools. Default-ON (the safe default for
+ * large-registry providers); the ward can turn the toggle off, but the ceiling
+ * still forces narrowing when the full list would overflow a provider. The hard
+ * env off-switch disables the whole feature (advanced/debug — can break z.ai).
+ * @param {{ settings?: object, fullCount?: number }} p
+ */
+export function shouldSurface({ settings = {}, fullCount } = {}) {
+  if (process.env.PROTO_FAMILIAR_TOOL_SURFACING_DISABLED === '1') return false;
+  if (settings?.toolSurfacingEnabled !== false) return true;           // default ON
+  return Number.isFinite(fullCount) && fullCount > toolCeiling(settings); // ceiling net
+}
+
+/**
+ * Last-resort hard cap so a turn can NEVER exceed the provider-safe ceiling,
+ * even if many modules surfaced at once. CORE tools (safety + request_tools, the
+ * recovery hatch) are always kept; the overflow is dropped from the rest and
+ * stays reachable via request_tools. Pure.
+ */
+export function enforceToolCeiling(tools, ceiling = SAFE_TOOL_CEILING) {
+  if (!Array.isArray(tools) || tools.length <= ceiling) return tools;
+  const core = [], rest = [];
+  for (const t of tools) {
+    (TOOL_MODULES[t?.function?.name] === CORE ? core : rest).push(t);
+  }
+  return [...core, ...rest].slice(0, Math.max(core.length, ceiling));
+}

@@ -509,6 +509,17 @@ Currently owns:
   `request_tools` itself lives here as a core builtin: it validates the
   requested module names against `tool-surfacing.js` and stashes them on
   `toolCtx._requestedModules` for the recompose step.
+  **Provider-safe ceiling + default-ON surfacing (0.14.6):** the full registry
+  is ~110 tools / ~110 KB of schema, which breaks tool-calling on some providers
+  (z.ai/GLM). So surfacing is **default-ON**, and `tool-surfacing.js` adds
+  `shouldSurface`/`toolCeiling`/`enforceToolCeiling`: whenever the composed list
+  would exceed the ceiling (`maxToolsPerTurn`/`PROTO_FAMILIAR_MAX_TOOLS`, default
+  64) it auto-trims via surfacing **even if the ward's toggle is off**, and a
+  final `enforceToolCeiling` hard-caps while always keeping CORE (safety +
+  `request_tools`). **Discord parity:** a ward Discord turn now runs the same
+  surfacing + ceiling (`composeDiscordTools` takes a `modules` Set), with
+  `request_tools` recovery wired through `getTools` (`recomposeDiscordTools`);
+  villager turns keep their grant allowlist and only get the ceiling guard.
   `initCerebellumTools()` receives the tome-storage capability, **the
   Village read/upsert functions, and `relayToDiscord`** from server.js at
   boot so `save_to_tome`, `village_lookup` / `village_upsert`, and
