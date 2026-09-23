@@ -33,3 +33,35 @@ export function buildEatFirstBlock(items) {
   const more = items.length > MAX_EAT_FIRST ? ` (+${items.length - MAX_EAT_FIRST} more)` : '';
   return `[Pantry — use first]\n${line}${more}`;
 }
+
+// Locale-free "Mon D" — code owns the date (exact-values rule); the model only
+// reads it. predict_windows emits local-naive ISO, so a plain YYYY-MM-DD prefix
+// is all we parse.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtDay(iso) {
+  const m = String(iso ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return String(iso ?? '').slice(0, 10);
+  const mon = MONTHS[parseInt(m[2], 10) - 1] ?? m[2];
+  return `${mon} ${parseInt(m[3], 10)}`;
+}
+
+/**
+ * The likely-period-window block from Unruh's `tracker_predictions`. A sensitive
+ * health projection, so it's plain and hedged ("around", "predicted") — never a
+ * claim of certainty. Server-injected context → literal "my human". Only windows
+ * that already cleared the honesty gate (≥2 cycles) reach here. Returns '' for none.
+ * @param {Array<{tracker_label, window:{start,end}, cycles_seen}>} predictions
+ */
+export function buildMensesWindowBlock(predictions) {
+  if (!Array.isArray(predictions) || !predictions.length) return '';
+  const lines = predictions.map(p => {
+    const w = p?.window ?? {};
+    if (!w.start || !w.end) return '';
+    const cyc = Number.isFinite(p.cycles_seen)
+      ? ` (predicted from ${p.cycles_seen} cycle${p.cycles_seen === 1 ? '' : 's'})`
+      : '';
+    return `  — ${p.tracker_label ?? p.tracker_id}: around ${fmtDay(w.start)} – ${fmtDay(w.end)}${cyc}`;
+  }).filter(Boolean);
+  if (!lines.length) return '';
+  return ['[Likely period window]', ...lines].join('\n');
+}

@@ -1172,6 +1172,17 @@ export async function trackerExpiring({ within_days = 3 } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), items: [] }; }
 }
 
+// §4 predictions: forward windows (chiefly the likely period window) from
+// predict-enabled trackers that clear the honesty gate. Shaped fallback.
+export async function trackerPredictions() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', predictions: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_predictions', arguments: {} });
+    return parseToolText(r, { ok: false, predictions: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), predictions: [] }; }
+}
+
 export async function setRoundsVisibility({ value }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
@@ -1682,7 +1693,7 @@ import { formatTemporalContext } from './src/schedule/temporal-format.js';
 import { buildStewardshipBlock } from './src/schedule/stewardship.js';
 import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
 import { nextTrackerCue } from './src/tracker/tracker-cues.js';
-import { buildEatFirstBlock } from './src/tracker/tracker-projections.js';
+import { buildEatFirstBlock, buildMensesWindowBlock } from './src/tracker/tracker-projections.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './src/schedule/recurrence.js';
@@ -2377,6 +2388,24 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
       }
     }
 
+    // ── Likely period window (trackers build spec §4 prediction) ────────
+    // A sensitive health projection from a menses log — surfaced (hedged, plain)
+    // only on ward-private live turns, only once it clears the honesty gate
+    // (≥2 completed cycles). Pure derivation; code owns the dates.
+    let mensesWindowBlock = '';
+    if (liveTurn && !staticOnly && !gated && trackersOn) {
+      try {
+        const pred = await trackerPredictions();
+        const predictions = Array.isArray(pred?.predictions) ? pred.predictions : [];
+        if (predictions.length) {
+          mensesWindowBlock = buildMensesWindowBlock(predictions);
+          if (mensesWindowBlock) console.log('[thalamus] likely period window: surfacing prediction');
+        }
+      } catch (err) {
+        console.error('[thalamus] period-window projection failed:', err?.message ?? err);
+      }
+    }
+
     // ── Care check / break-through framing (step 4b) ──────────────────────
     // Read current threat; if elevated, prepend a [CARE CHECK] block that
     // tells the Familiar to consider checking in proactively. Never forces
@@ -2717,6 +2746,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
     if (trackerCueBlock)        dynamicSections.push(trackerCueBlock);
     if (eatFirstBlock)          dynamicSections.push(eatFirstBlock);
+    if (mensesWindowBlock)      dynamicSections.push(mensesWindowBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);

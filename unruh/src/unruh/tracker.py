@@ -541,6 +541,25 @@ def expiring_items(conn: sqlite3.Connection, *, within_days: int = EXPIRY_LEAD_D
     return {"items": out}
 
 
+def predictions(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict[str, Any]:
+    """§4 prediction candidates: every tracker with `config.predict` on, run through
+    predict_windows, keeping only those that clear the honesty gate (a real window,
+    i.e. ≥2 completed cycles). Returns {predictions: [{tracker_id, tracker_label,
+    window, cycles_seen}]}. Pure arithmetic; the model never computes the dates."""
+    out = []
+    for trk in conn.execute("SELECT * FROM trackers").fetchall():
+        cfg = json.loads(trk["config_json"] or "{}")
+        if not cfg.get("predict"):
+            continue
+        pr = predict_windows(conn, id=trk["id"], now=now)
+        if pr.get("ok") and pr.get("window"):
+            out.append({
+                "tracker_id": trk["id"], "tracker_label": trk["label"],
+                "window": pr["window"], "cycles_seen": pr.get("cycles_seen"),
+            })
+    return {"predictions": out}
+
+
 def entry_rate_flag(conn: sqlite3.Connection, *, id: str, now: datetime | None = None) -> dict[str, Any]:
     """Watchdog (§6): a 7-day entry rate > 3× the trailing 28-day median AND ≥10
     entries in the week → flagged. A private reflection signal, never an accusation.

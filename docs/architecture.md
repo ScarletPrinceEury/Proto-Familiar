@@ -636,8 +636,12 @@ Currently owns:
   tool → `trackerExpiring` wrapper → `buildEatFirstBlock`
   (`src/tracker/tracker-projections.js`) renders the `[Pantry — use first]`
   block in `enrich()` (ward-private, live turns, pure derivation — no loop).
-  The expiry reminder *nodes* + menses window + reflection inputs are later
-  passes. See docs/trackers-build-spec.md.
+  **Menses window (§4, T-C.2):** Unruh `predictions` (scans `config.predict`
+  trackers through `predict_windows`, honesty gate ≥2 cycles) → `tracker_predictions`
+  → `trackerPredictions` → `buildMensesWindowBlock` renders a hedged
+  `[Likely period window]` line (code owns the dates). The persistent expiry
+  reminder *nodes* + menses hold-node + reflection inputs are later passes.
+  See docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted
