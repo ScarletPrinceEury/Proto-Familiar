@@ -114,7 +114,7 @@ ponderings injection, care-check framing) and as background loops
 ```
 /
 ├── server.js                Express server — chat proxy, all HTTP endpoints, autonomous-loop boot
-├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers. MUTATING wrappers read results honestly via `unruhResult` / `mcpToolError` (phylactery-result.js): the SDK's callTool does NOT throw when a tool raises (it resolves isError:true), so a wrapper that just returned `{ok:true}` reported success on failure — the silent-write class behind the identity_update_section bug. Reads deliberately still degrade to empty (absence renders as absence). `saveBookmark` is the M8 write side (→ interest_bookmark), feeding the resurfacing loop
+├── thalamus.js              MCP bridge — Phylactery + Unruh, plus all the helper wrappers. MUTATING wrappers read results honestly via `unruhResult` / `mcpToolError` (phylactery-result.js): the SDK's callTool does NOT throw when a tool raises (it resolves isError:true), so a wrapper that just returned `{ok:true}` reported success on failure — the silent-write class behind the identity_update_section bug. Reads deliberately still degrade to empty (absence renders as absence). `saveBookmark` is the M8 write side (→ interest_bookmark), feeding the resurfacing loop. **Identity editing (0.14.5):** `rewriteIdentitySection` rewrites one `##` section; `setIdentityFile` (→ `identity_set_file`) overwrites a WHOLE file, reaching the heading-less/top content section-rewrite can't target; `deleteIdentitySection` (→ `identity_delete_section`) removes one section — all auto-snapshot, and the `setIdentityFile`/`deleteIdentitySection` tools return `{ok,error}` dicts the wrappers inspect. Backs the Knowledge editor's whole-file edit + per-section delete (`PUT /api/entity/identity/:cat/:file`, `DELETE …/sections/:section`). `VALID_FILENAME_RE` allows hyphens.
 ├── cerebellum.js            Motor module — tool registry + executors + tool loop, triage deliberation, trusted-contact delivery, escalation deadlines
 ├── crisis-signals.js        Pattern-based detector (the regex floor) — 5 tiers, ~13 signal categories, damping
 ├── crisis-classifier.js     ML distress classifier (TF-IDF+logreg) + scoreThreatMessage — the one live threat-scoring seam
@@ -509,6 +509,17 @@ Currently owns:
   `request_tools` itself lives here as a core builtin: it validates the
   requested module names against `tool-surfacing.js` and stashes them on
   `toolCtx._requestedModules` for the recompose step.
+  **Provider-safe ceiling + default-ON surfacing (0.14.6):** the full registry
+  is ~110 tools / ~110 KB of schema, which breaks tool-calling on some providers
+  (z.ai/GLM). So surfacing is **default-ON**, and `tool-surfacing.js` adds
+  `shouldSurface`/`toolCeiling`/`enforceToolCeiling`: whenever the composed list
+  would exceed the ceiling (`maxToolsPerTurn`/`PROTO_FAMILIAR_MAX_TOOLS`, default
+  64) it auto-trims via surfacing **even if the ward's toggle is off**, and a
+  final `enforceToolCeiling` hard-caps while always keeping CORE (safety +
+  `request_tools`). **Discord parity:** a ward Discord turn now runs the same
+  surfacing + ceiling (`composeDiscordTools` takes a `modules` Set), with
+  `request_tools` recovery wired through `getTools` (`recomposeDiscordTools`);
+  villager turns keep their grant allowlist and only get the ceiling guard.
   `initCerebellumTools()` receives the tome-storage capability, **the
   Village read/upsert functions, and `relayToDiscord`** from server.js at
   boot so `save_to_tome`, `village_lookup` / `village_upsert`, and

@@ -3619,6 +3619,47 @@ export async function rewriteIdentitySection({ category, filename, section, cont
   }
 }
 
+// Overwrite a whole identity file (edits heading-less/top content that
+// rewriteIdentitySection can't reach). The tool returns {ok} / {ok:false,error},
+// so we inspect it rather than trusting transport success (the silent-failure
+// class updateIdentitySection fixed).
+export async function setIdentityFile({ category, filename, content, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  await autoSnapshot(`identity_set_file ${category}/${filename}`);
+  try {
+    const result = await callTool('identity_set_file', { category, filename, content, instanceId });
+    if (result && result.ok === false) {
+      console.error(`[thalamus] setIdentityFile rejected for ${category}/${filename}: ${result.error}`);
+      return { ok: false, error: result.error ?? 'set_file failed' };
+    }
+    console.log(`[thalamus] setIdentityFile ${category}/${filename}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] setIdentityFile failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Remove one section from an identity file.
+export async function deleteIdentitySection({ category, filename, section, instanceId = PROTO_INSTANCE_ID }) {
+  await startThalamus();
+  if (!mcpClient) return { ok: false, error: 'phylactery not connected' };
+  await autoSnapshot(`identity_delete_section ${category}/${filename}#${section}`);
+  try {
+    const result = await callTool('identity_delete_section', { category, filename, section, instanceId });
+    if (result && result.ok === false) {
+      console.error(`[thalamus] deleteIdentitySection rejected for ${category}/${filename} § ${section}: ${result.error}`);
+      return { ok: false, error: result.error ?? 'delete_section failed' };
+    }
+    console.log(`[thalamus] deleteIdentitySection ${category}/${filename} § ${section}`);
+    return { ok: true, result };
+  } catch (err) {
+    console.error('[thalamus] deleteIdentitySection failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function createGraphNode({ label, type, description, audience, instanceId = PROTO_INSTANCE_ID }) {
   await startThalamus();
   if (!mcpClient) return { ok: false, error: 'phylactery not connected' };

@@ -137,6 +137,21 @@ def _rewrite_section(content: str, section: str, new_body: str) -> str:
     return result
 
 
+def _delete_section(content: str, section: str) -> tuple[str, bool]:
+    """Remove a markdown section (its heading + body, up to the next heading or
+    EOF). Returns (new_content, removed?). Collapses the blank-line gap the cut
+    leaves behind so the file stays tidy."""
+    pattern = re.compile(
+        r"^#+\s+" + re.escape(section) + r"\s*$.*?(?=^#+|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    new, n = pattern.subn("", content)
+    if n == 0:
+        return content, False
+    new = re.sub(r"\n{3,}", "\n\n", new).strip()
+    return (new + "\n" if new else ""), True
+
+
 def rewrite_section(
     category: str,
     filename: str,
@@ -172,6 +187,83 @@ def rewrite_section(
                     "INSERT INTO identity_files(id,category,filename,content,prompt_label,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                     (new_id(), category, filename, new_content, _derive_prompt_label(filename), sort_order, now, now),
                 )
+        return {"ok": True}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def set_file(
+    category: str,
+    filename: str,
+    content: str,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Overwrite a whole identity file's markdown (auto-snapshots first), creating
+    it if it doesn't exist. This is the general editor: it can edit heading-less /
+    top-of-file content that `rewrite_section` can't target, and remove sections by
+    leaving them out. Returns {ok} or {ok:false, error}."""
+    if category not in VALID_CATEGORIES:
+        return {"ok": False, "error": f"invalid category: {category!r}"}
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        auto_snapshot(conn)
+        now = now_iso()
+        row = conn.execute(
+            "SELECT id FROM identity_files WHERE category=? AND filename=?",
+            (category, filename),
+        ).fetchone()
+        with conn:
+            if row:
+                conn.execute(
+                    "UPDATE identity_files SET content=?, updated_at=? WHERE id=?",
+                    (content, now, row["id"]),
+                )
+            else:
+                order = _ORDER_MAP.get(category, [])
+                sort_order = _sort_key(filename, order)[0]
+                conn.execute(
+                    "INSERT INTO identity_files(id,category,filename,content,prompt_label,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (new_id(), category, filename, content, _derive_prompt_label(filename), sort_order, now, now),
+                )
+        return {"ok": True}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def delete_section(
+    category: str,
+    filename: str,
+    section: str,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Remove one markdown section (heading + body) from an identity file
+    (auto-snapshots first). Returns {ok} on success, {ok:false, error} if the file
+    or the section isn't found — never silently no-ops."""
+    if category not in VALID_CATEGORIES:
+        return {"ok": False, "error": f"invalid category: {category!r}"}
+    own_conn = conn is None
+    if own_conn:
+        conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, content FROM identity_files WHERE category=? AND filename=?",
+            (category, filename),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "error": f"no such identity file: {category}/{filename}"}
+        new_content, removed = _delete_section(row["content"] or "", section)
+        if not removed:
+            return {"ok": False, "error": f"section not found: {section!r}"}
+        auto_snapshot(conn)
+        with conn:
+            conn.execute(
+                "UPDATE identity_files SET content=?, updated_at=? WHERE id=?",
+                (new_content, now_iso(), row["id"]),
+            )
         return {"ok": True}
     finally:
         if own_conn:

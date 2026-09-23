@@ -586,6 +586,7 @@ is not an off-switch.
 | Variable | Does |
 |---|---|
 | `PROTO_FAMILIAR_UPDATE_BRANCH` | which branch the updater checks |
+| `PROTO_FAMILIAR_MAX_TOOLS` | the provider-safe ceiling on how many tools may be advertised in one turn (default 64, or `maxToolsPerTurn`); over it, the turn auto-trims via surfacing so a large registry can't break tool-calling on providers like z.ai |
 | `PROTO_FAMILIAR_ZAI_MCP_COMMAND` | overrides the command used to launch z.ai's vision MCP server |
 | `PROTO_FAMILIAR_CHROME` (or `CHROME`) | points the browser tools at an existing Chrome/Chromium binary, skipping the auto-download |
 | `PROTO_FAMILIAR_BROWSER_INSTALL_TIMEOUT_MS` | how long to wait for the one-time Chromium download before treating it as stalled (default 15 min); raise it for a genuinely slow link. If the download never finishes, its log is at `browser/chromium-install.log` |

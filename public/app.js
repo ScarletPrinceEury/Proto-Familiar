@@ -362,8 +362,13 @@ const state = {
   // only core + triggered tool modules are advertised per turn; the Familiar
   // pulls anything else via request_tools. Sticky = extra turns a surfaced
   // module stays (0-10).
-  toolSurfacingEnabled:    false,
+  // Default ON (0.14.6): the full ~110-tool registry breaks tool-calling on some
+  // providers (z.ai/GLM); surfacing trims to core + triggered, and a provider-safe
+  // ceiling (maxToolsPerTurn) auto-trims regardless. Everything stays reachable
+  // via request_tools.
+  toolSurfacingEnabled:    true,
   toolStickyTurns:         2,
+  maxToolsPerTurn:         64,   // provider-safe tool ceiling (ward-tunable)
   // Browser (browser build spec §10). Default OFF — like web search, being able
   // to reach out of the box is opt-in. Env off-switch PROTO_FAMILIAR_BROWSE_DISABLED=1.
   browseEnabled:           false,
@@ -579,7 +584,7 @@ const SERVER_SYNCED_KEYS = [
   'provider', 'apiKey', 'baseUrl', 'model', 'streaming', 'temperature', 'maxTokens',
   'userName', 'charName',
   'systemPrompt', 'characterProfile', 'userProfile', 'postHistoryPrompt', 'postHistoryRole',
-  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'toolRoundsPerTurn',
+  'toolsEnabled', 'customTools', 'toolSurfacingEnabled', 'toolStickyTurns', 'maxToolsPerTurn', 'toolRoundsPerTurn',
   'stewardshipEnabled', 'spineStatesEnabled', 'dayStartAnchor', 'dayStartGapHours', 'briefLookaheadDays', 'docketMinAgeDays',
   'routineReviewEnabled', 'routineReviewDays',
   'webSearchEnabled', 'webSearchBackend', 'webSearchApiProvider', 'webSearchApiKey',
@@ -4586,7 +4591,7 @@ function writeSettingsToUI() {
   if ($('memory-integrity-toggle')) setIfNotFocused($('memory-integrity-toggle'), 'checked', state.memoryIntegrityEnabled !== false);
   if ($('hippocampus-toggle')) setIfNotFocused($('hippocampus-toggle'), 'checked', state.hippocampusEnabled !== false);
   if ($('notif-sound-toggle')) setIfNotFocused($('notif-sound-toggle'), 'checked', state.notificationSounds !== false);
-  if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled === true);
+  if ($('tool-surfacing-toggle')) setIfNotFocused($('tool-surfacing-toggle'), 'checked', state.toolSurfacingEnabled !== false);
   if ($('tool-sticky-turns')) setIfNotFocused($('tool-sticky-turns'), 'value', state.toolStickyTurns ?? 2);
   if ($('tool-rounds-per-turn')) setIfNotFocused($('tool-rounds-per-turn'), 'value', state.toolRoundsPerTurn ?? 12);
   if ($('stewardship-toggle')) setIfNotFocused($('stewardship-toggle'), 'checked', state.stewardshipEnabled !== false);
@@ -10991,30 +10996,78 @@ function keOpenIdentity(category, file) {
   }
   sections.push(current);
   const det = $('ke-id-detail');
-  const sectionsHtml = sections.map((s, i) => `
+  const sectionsHtml = sections.map((s) => {
+    const isTop = s.heading === '(top)';
+    // A (top) block with no body is just the artifact of a file that opens on a
+    // heading — nothing to show or edit there.
+    if (isTop && !s.body.join('\n').trim()) return '';
+    return `
     <div class="ke-section">
       <div class="ke-section-head">${esc(s.heading)}</div>
       <textarea class="ke-textarea ke-id-section" rows="6" data-section="${esc(s.heading)}">${esc(s.body.join('\n').trim())}</textarea>
       <div class="ke-actions">
-        <button class="btn-send ke-id-save" data-section="${esc(s.heading)}" ${s.heading === '(top)' ? 'disabled title="Top-of-file content has no heading to target — edit the file manually for now."' : ''}>Save section</button>
+        <button class="btn-send ke-id-save" data-section="${esc(s.heading)}" ${isTop ? 'disabled title="Top-of-file content has no heading to target — use “Edit whole file” below."' : ''}>Save section</button>
+        ${isTop ? '' : `<button class="btn-ghost ke-danger ke-id-del" data-section="${esc(s.heading)}">Delete section</button>`}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   det.innerHTML = `
     <div class="ke-detail-header"><h3>${esc(category)} / ${esc(file.filename)}</h3></div>
-    <p class="field-hint">Each section here corresponds to a markdown heading in the file. Saving a section rewrites just that heading's body via identity_rewrite_section; an auto-snapshot is taken first.</p>
-    ${sectionsHtml}`;
+    <p class="field-hint">Each section maps to a markdown heading — “Save section” rewrites just that heading’s body, “Delete section” removes it. For the intro (heading-less) content, or a bigger restructure, use “Edit whole file”. Every save auto-snapshots first.</p>
+    ${sectionsHtml}
+    <div class="ke-section ke-id-wholefile">
+      <div class="ke-section-head">Edit whole file</div>
+      <textarea class="ke-textarea ke-id-full" rows="16">${esc(text)}</textarea>
+      <div class="ke-actions">
+        <button class="btn-send ke-id-save-full">Save whole file</button>
+      </div>
+    </div>`;
+
+  const idUrl = `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(file.filename)}`;
+
+  // Per-section save (rewrite one heading's body).
   det.querySelectorAll('.ke-id-save').forEach(btn => {
     btn.addEventListener('click', async () => {
       const sec = btn.dataset.section;
       const ta  = det.querySelector(`textarea.ke-id-section[data-section="${sec.replace(/"/g, '\\"')}"]`);
-      const r = await fetch(
-        `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(file.filename)}/sections/${encodeURIComponent(sec)}`,
-        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) },
-      );
-      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
-      keLoadIdentity();
+      const r = await fetch(`${idUrl}/sections/${encodeURIComponent(sec)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) });
+      if (!r.ok) { alert(`Save failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+      keLoadIdentity(); keReopenIdentity(category, file.filename);
     });
   });
+
+  // Per-section delete.
+  det.querySelectorAll('.ke-id-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sec = btn.dataset.section;
+      if (!confirm(`Delete the “${sec}” section from ${file.filename}? A snapshot is taken first, so it’s recoverable.`)) return;
+      const r = await fetch(`${idUrl}/sections/${encodeURIComponent(sec)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+      keLoadIdentity(); keReopenIdentity(category, file.filename);
+    });
+  });
+
+  // Whole-file save (reaches top content + lets sections be dropped).
+  det.querySelector('.ke-id-save-full')?.addEventListener('click', async () => {
+    const ta = det.querySelector('textarea.ke-id-full');
+    const r = await fetch(idUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) });
+    if (!r.ok) { alert(`Save failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+    keLoadIdentity(); keReopenIdentity(category, file.filename);
+  });
+}
+
+// Re-open the detail pane with freshly-fetched content after a save/delete, so
+// the parsed sections and the whole-file textarea reflect what's now stored.
+async function keReopenIdentity(category, filename) {
+  try {
+    const res = await fetch('/api/entity/identity');
+    if (!res.ok) return;
+    const data = await res.json();
+    const file = (data[category] ?? []).find(f => f.filename === filename);
+    if (file) keOpenIdentity(category, file);
+    else $('ke-id-detail').innerHTML = '';
+  } catch { /* leave the pane as-is on a transient read error */ }
 }
 
 // ── Remember-consent map ─────────────────────────────────────────────────────

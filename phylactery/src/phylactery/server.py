@@ -10,6 +10,8 @@ Tools exposed (stable contract — Thalamus depends on these shapes):
     identity_append         — append content to an identity file
     identity_update_section — rewrite one section of an identity file (alias)
     identity_rewrite_section — rewrite one section of an identity file
+    identity_set_file       — overwrite a whole identity file (edits top content too)
+    identity_delete_section — remove one section from an identity file
 
   Village registry (routing/gating state — NOT identity):
     village_registry_get    — read the canonical Village registry JSON
@@ -170,6 +172,34 @@ def identity_rewrite_section(
     if not result["ok"]:
         return f"Failed: {result['error']}"
     return f"Section '{section}' of {category}/{filename} rewritten."
+
+
+@mcp.tool()
+def identity_set_file(
+    category: str,
+    filename: str,
+    content: str,
+    instanceId: Optional[str] = None,
+) -> dict[str, Any]:
+    """I use this to rewrite a WHOLE identity file at once (auto-snapshots first),
+    creating it if it's new. Unlike identity_rewrite_section, this reaches the
+    heading-less top of a file and lets me drop sections by leaving them out — the
+    general editor behind the Knowledge manager's whole-file edit. Returns {ok} or
+    {ok:false, error}."""
+    return ident.set_file(category, filename, content, conn=_c())
+
+
+@mcp.tool()
+def identity_delete_section(
+    category: str,
+    filename: str,
+    section: str,
+    instanceId: Optional[str] = None,
+) -> dict[str, Any]:
+    """I use this to remove one section (its heading and body) from an identity
+    file (auto-snapshots first). Returns {ok}, or {ok:false, error} if the file or
+    section isn't found — it never silently no-ops."""
+    return ident.delete_section(category, filename, section, conn=_c())
 
 
 # ── Village registry (routing/gating state — NOT identity) ─────────────────────
