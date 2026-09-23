@@ -283,3 +283,50 @@ def test_predictions_scans_predict_enabled_and_honours_the_gate(conn):
     assert len(out) == 1
     assert out[0]["tracker_id"] == mid and out[0]["window"]["start"] < out[0]["window"]["end"]
     assert out[0]["cycles_seen"] == 2
+
+
+def test_archive_hides_from_active_surfaces_and_list_but_keeps_data(conn):
+    tid = tracker.create_tracker(conn, label="Mood", archetype="series",
+                                 schema=[{"name": "m", "type": "text"}], config={"staleness_hours": 24})["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={"m": "x"}, ts=(NOW - timedelta(hours=40)).isoformat())
+    # Active before archiving: in the list, and a stale cue candidate.
+    assert any(t["id"] == tid for t in tracker.list_trackers(conn))
+    assert any(s["id"] == tid for s in tracker.stale_trackers(conn, now=NOW))
+
+    assert tracker.archive_tracker(conn, id=tid, archived=True) == {"ok": True, "archived": True}
+    # Gone from the default (active) list + cues; still there with include_archived.
+    assert not any(t["id"] == tid for t in tracker.list_trackers(conn))
+    assert not any(s["id"] == tid for s in tracker.stale_trackers(conn, now=NOW))
+    shown = [t for t in tracker.list_trackers(conn, include_archived=True) if t["id"] == tid]
+    assert len(shown) == 1 and shown[0]["archived"] is True
+    # The entry data survives (read still works).
+    assert tracker.read_tracker(conn, id=tid)["count"] == 1
+
+    # Un-archive restores it.
+    assert tracker.archive_tracker(conn, id=tid, archived=False)["archived"] is False
+    assert any(t["id"] == tid for t in tracker.list_trackers(conn))
+
+
+def test_archive_unknown_tracker_errors(conn):
+    r = tracker.archive_tracker(conn, id="ghost-z9", archived=True)
+    assert r["ok"] is False
+
+
+def test_archived_excluded_from_expiring_and_predictions(conn):
+    pid = tracker.create_tracker(conn, label="Pantry", archetype="inventory", schema=[
+        {"name": "name", "type": "text", "required": True}, {"name": "expires", "type": "date"},
+    ], config={"project_dates": True})["id"]
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "milk", "expires": (NOW.date() + timedelta(days=1)).isoformat()})
+    assert tracker.expiring_items(conn, now=NOW)["items"], "precondition: an expiring item"
+    tracker.archive_tracker(conn, id=pid, archived=True)
+    assert tracker.expiring_items(conn, now=NOW)["items"] == [], "archived pantry is not projected"
+
+
+def test_drop_deletes_tracker_and_entries(conn):
+    tid = tracker.create_tracker(conn, label="Temp", archetype="series",
+                                 schema=[{"name": "m", "type": "text"}], config={})["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={"m": "x"})
+    assert tracker.drop_tracker(conn, id=tid)["dropped"] == 1
+    assert not any(t["id"] == tid for t in tracker.list_trackers(conn, include_archived=True))
+    # entries cascaded
+    assert conn.execute("SELECT COUNT(*) c FROM tracker_entries WHERE tracker_id=?", (tid,)).fetchone()["c"] == 0

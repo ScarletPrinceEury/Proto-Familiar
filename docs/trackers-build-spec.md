@@ -320,6 +320,19 @@ constants, never on string matching in prompts.
 - UI: a Trackers tab in the Knowledge/Temporal editor (list, current
   state/series sparkline, add-entry form per schema, create-from-template).
 
+**Ward-facing management ✓ SHIPPED (0.14.10-alpha, T-mgmt.1):** the Trackers
+tab (Knowledge editor) — list (incl. archived, toggle), view current state, and
+**archive / delete**. `GET /api/trackers` (incl. archived), `GET /api/trackers/:id`
+(windowed), `POST /api/trackers/:id/archive`, `DELETE /api/trackers/:id`.
+**Archive** was added beyond the original drop-only spec (ward asked): a soft
+pause (`archived_at`, migration `0008`) that keeps every entry but takes the
+tracker out of the Familiar's active list/cues/projections/passive-capture, and
+un-archives on demand — distinct from the hard `drop_tracker`. Both are
+ward-only (`tracker_archive`/`tracker_drop` MCP + thalamus wrappers reached only
+from HTTP, never composed into the Familiar's toolset — the Familiar never
+destroys or retires a ledger). Still deferred (a later UI pass): the per-schema
+add-entry form, series sparklines, and create-from-template in the tab.
+
 ## 8. Invariants (each pinned by a test)
 
 - **T1 — learning-only:** a mood-tagged message's live chat payload is

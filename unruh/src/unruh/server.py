@@ -1469,13 +1469,38 @@ def tracker_read(tracker_id: str, days: int = 14) -> dict[str, Any]:
 
 
 @mcp.tool()
-def tracker_list() -> dict[str, Any]:
+def tracker_list(include_archived: bool = False) -> dict[str, Any]:
     """I use this to see all the ledgers I keep for my human — their ids, labels,
     shapes, and field names. This is how I know which tracker a message means, and
-    which already exist before I offer a new one. Returns {ok, trackers: [...]}."""
+    which already exist before I offer a new one. Archived ones are hidden unless
+    include_archived is set (the ward's management view). Returns {ok, trackers: [...]}."""
     try:
         with get_conn() as conn:
-            return {"ok": True, "trackers": trk.list_trackers(conn)}
+            return {"ok": True, "trackers": trk.list_trackers(conn, include_archived=include_archived)}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_archive(id: str, archived: bool = True) -> dict[str, Any]:
+    """Ward-facing: soft-pause (or resume) a tracker. Archiving keeps every entry but
+    takes it out of the active surfaces; un-archiving restores it. Reached only from
+    the ward's management UI/HTTP, never the Familiar's toolset. Returns {ok, archived}."""
+    try:
+        with get_conn() as conn:
+            return trk.archive_tracker(conn, id=id, archived=archived)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def tracker_drop(id: str) -> dict[str, Any]:
+    """Ward-facing: permanently delete a tracker AND its entries (ON DELETE CASCADE).
+    Reached only from the ward's management UI/HTTP — never the Familiar's toolset, so
+    the Familiar can never destroy a ledger. Returns {ok, dropped}."""
+    try:
+        with get_conn() as conn:
+            return trk.drop_tracker(conn, id=id)
     except ValueError as e:
         return _err(str(e))
 
