@@ -10991,30 +10991,78 @@ function keOpenIdentity(category, file) {
   }
   sections.push(current);
   const det = $('ke-id-detail');
-  const sectionsHtml = sections.map((s, i) => `
+  const sectionsHtml = sections.map((s) => {
+    const isTop = s.heading === '(top)';
+    // A (top) block with no body is just the artifact of a file that opens on a
+    // heading — nothing to show or edit there.
+    if (isTop && !s.body.join('\n').trim()) return '';
+    return `
     <div class="ke-section">
       <div class="ke-section-head">${esc(s.heading)}</div>
       <textarea class="ke-textarea ke-id-section" rows="6" data-section="${esc(s.heading)}">${esc(s.body.join('\n').trim())}</textarea>
       <div class="ke-actions">
-        <button class="btn-send ke-id-save" data-section="${esc(s.heading)}" ${s.heading === '(top)' ? 'disabled title="Top-of-file content has no heading to target — edit the file manually for now."' : ''}>Save section</button>
+        <button class="btn-send ke-id-save" data-section="${esc(s.heading)}" ${isTop ? 'disabled title="Top-of-file content has no heading to target — use “Edit whole file” below."' : ''}>Save section</button>
+        ${isTop ? '' : `<button class="btn-ghost ke-danger ke-id-del" data-section="${esc(s.heading)}">Delete section</button>`}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   det.innerHTML = `
     <div class="ke-detail-header"><h3>${esc(category)} / ${esc(file.filename)}</h3></div>
-    <p class="field-hint">Each section here corresponds to a markdown heading in the file. Saving a section rewrites just that heading's body via identity_rewrite_section; an auto-snapshot is taken first.</p>
-    ${sectionsHtml}`;
+    <p class="field-hint">Each section maps to a markdown heading — “Save section” rewrites just that heading’s body, “Delete section” removes it. For the intro (heading-less) content, or a bigger restructure, use “Edit whole file”. Every save auto-snapshots first.</p>
+    ${sectionsHtml}
+    <div class="ke-section ke-id-wholefile">
+      <div class="ke-section-head">Edit whole file</div>
+      <textarea class="ke-textarea ke-id-full" rows="16">${esc(text)}</textarea>
+      <div class="ke-actions">
+        <button class="btn-send ke-id-save-full">Save whole file</button>
+      </div>
+    </div>`;
+
+  const idUrl = `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(file.filename)}`;
+
+  // Per-section save (rewrite one heading's body).
   det.querySelectorAll('.ke-id-save').forEach(btn => {
     btn.addEventListener('click', async () => {
       const sec = btn.dataset.section;
       const ta  = det.querySelector(`textarea.ke-id-section[data-section="${sec.replace(/"/g, '\\"')}"]`);
-      const r = await fetch(
-        `/api/entity/identity/${encodeURIComponent(category)}/${encodeURIComponent(file.filename)}/sections/${encodeURIComponent(sec)}`,
-        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) },
-      );
-      if (!r.ok) { alert(`Save failed: ${(await r.json()).error ?? r.status}`); return; }
-      keLoadIdentity();
+      const r = await fetch(`${idUrl}/sections/${encodeURIComponent(sec)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) });
+      if (!r.ok) { alert(`Save failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+      keLoadIdentity(); keReopenIdentity(category, file.filename);
     });
   });
+
+  // Per-section delete.
+  det.querySelectorAll('.ke-id-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sec = btn.dataset.section;
+      if (!confirm(`Delete the “${sec}” section from ${file.filename}? A snapshot is taken first, so it’s recoverable.`)) return;
+      const r = await fetch(`${idUrl}/sections/${encodeURIComponent(sec)}`, { method: 'DELETE' });
+      if (!r.ok) { alert(`Delete failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+      keLoadIdentity(); keReopenIdentity(category, file.filename);
+    });
+  });
+
+  // Whole-file save (reaches top content + lets sections be dropped).
+  det.querySelector('.ke-id-save-full')?.addEventListener('click', async () => {
+    const ta = det.querySelector('textarea.ke-id-full');
+    const r = await fetch(idUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: ta.value }) });
+    if (!r.ok) { alert(`Save failed: ${(await r.json().catch(() => ({}))).error ?? r.status}`); return; }
+    keLoadIdentity(); keReopenIdentity(category, file.filename);
+  });
+}
+
+// Re-open the detail pane with freshly-fetched content after a save/delete, so
+// the parsed sections and the whole-file textarea reflect what's now stored.
+async function keReopenIdentity(category, filename) {
+  try {
+    const res = await fetch('/api/entity/identity');
+    if (!res.ok) return;
+    const data = await res.json();
+    const file = (data[category] ?? []).find(f => f.filename === filename);
+    if (file) keOpenIdentity(category, file);
+    else $('ke-id-detail').innerHTML = '';
+  } catch { /* leave the pane as-is on a transient read error */ }
 }
 
 // ── Remember-consent map ─────────────────────────────────────────────────────

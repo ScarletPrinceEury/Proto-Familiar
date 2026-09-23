@@ -1179,7 +1179,7 @@ export function toolRoundsPerTurn(settings = readSettingsSync()) {
 // below — one source of truth for what counts as a valid write.
 export const VALID_MEMORY_GRANULARITIES = new Set(['daily', 'weekly', 'monthly', 'yearly', 'significant']);
 export const VALID_IDENTITY_CATEGORIES  = new Set(['self', 'ward', 'relationship', 'custom']);
-export const VALID_FILENAME_RE           = /^[\w]+\.md$/;
+export const VALID_FILENAME_RE           = /^[\w-]+\.md$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Pondering entry uids are slug-shaped since the 0.8.x id overhaul
 // ("ponder-x7k2m3"); legacy UUIDs coexist. Path-safe: alnum+dash, bounded.

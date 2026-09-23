@@ -25,7 +25,7 @@ import {
   listUnresolvedAttributions,
   listSnapshots,
   // Writes (each auto-snapshots before the destructive op)
-  updateMemory, deleteMemory, updateMemoryById, deleteMemoryById, moveMemoryDate, rewriteIdentitySection,
+  updateMemory, deleteMemory, updateMemoryById, deleteMemoryById, moveMemoryDate, rewriteIdentitySection, setIdentityFile, deleteIdentitySection,
   updateGraphNode, deleteGraphNode, updateGraphEdge, deleteGraphEdge,
   createGraphNode, createGraphEdge,
   createSnapshot, restoreSnapshot,
@@ -4237,6 +4237,32 @@ app.put('/api/entity/identity/:category/:filename/sections/:section', async (req
   const result = await rewriteIdentitySection({ category, filename, section, content });
   if (!result.ok) return gatewayDown(res, result.error);
   res.json(result.result);
+});
+
+// Whole-file edit — reaches the heading-less top content the per-section save
+// can't, and lets the ward drop sections by leaving them out. Auto-snapshots.
+app.put('/api/entity/identity/:category/:filename', async (req, res) => {
+  const { category, filename } = req.params;
+  const { content } = req.body ?? {};
+  if (!VALID_IDENTITY_CATEGORIES.has(category)) return badRequest(res, 'invalid category');
+  if (!VALID_FILENAME_RE.test(filename))        return badRequest(res, 'invalid filename');
+  if (typeof content !== 'string')              return badRequest(res, 'content required');
+  if (content.length > 65536)                   return badRequest(res, 'content exceeds 64 KB limit');
+  const result = await setIdentityFile({ category, filename, content });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json({ ok: true });
+});
+
+// Delete one section from an identity file. Auto-snapshots; 404s if the file or
+// section isn't found (never a silent no-op).
+app.delete('/api/entity/identity/:category/:filename/sections/:section', async (req, res) => {
+  const { category, filename, section } = req.params;
+  if (!VALID_IDENTITY_CATEGORIES.has(category)) return badRequest(res, 'invalid category');
+  if (!VALID_FILENAME_RE.test(filename))        return badRequest(res, 'invalid filename');
+  if (!VALID_SECTION_RE.test(section))          return badRequest(res, 'invalid section heading');
+  const result = await deleteIdentitySection({ category, filename, section });
+  if (!result.ok) return gatewayDown(res, result.error);
+  res.json({ ok: true });
 });
 
 // ── Graph ─────────────────────────────────────────────────────────────────
