@@ -212,6 +212,33 @@ def test_cue_candidates_attach_ask_cap_and_exclude_gauges(conn):
     assert "hours_since" in by_id[mid]
 
 
+def test_expiring_items_projects_pantry_class_within_lead(conn):
+    from datetime import date
+    pid = tracker.create_tracker(conn, label="Pantry", archetype="inventory", schema=[
+        {"name": "name", "type": "text", "required": True},
+        {"name": "expires", "type": "date"},
+    ], config={"project_dates": True})["id"]
+    d = lambda days: (NOW.date() + timedelta(days=days)).isoformat()
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "spinach", "expires": d(-1)})   # expired
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "yoghurt", "expires": d(2)})    # within lead
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "rice",    "expires": d(30)})   # far off
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "salt"})                        # no expiry
+
+    items = tracker.expiring_items(conn, within_days=3, now=NOW)["items"]
+    names = [i["name"] for i in items]
+    assert names == ["spinach", "yoghurt"], "soonest-first, only within-lead (incl. expired), skips no-date/far"
+    assert items[0]["days_left"] == -1 and items[1]["days_left"] == 2
+    assert items[0]["tracker_id"] == pid and "entry_id" in items[0]
+
+
+def test_expiring_items_requires_project_dates(conn):
+    pid = tracker.create_tracker(conn, label="Fridge", archetype="inventory", schema=[
+        {"name": "name", "type": "text", "required": True}, {"name": "expires", "type": "date"},
+    ], config={})["id"]  # no project_dates
+    tracker.log_entry(conn, tracker_id=pid, payload={"name": "milk", "expires": (NOW.date() + timedelta(days=1)).isoformat()})
+    assert tracker.expiring_items(conn, now=NOW)["items"] == [], "inventory without project_dates is never projected"
+
+
 def test_watchdog_rate_flag(conn):
     tid = tracker.create_tracker(conn, label="Erp", archetype="series",
                                  schema=[{"name": "t", "type": "text"}], config={"entry_cap_per_day": 50})["id"]

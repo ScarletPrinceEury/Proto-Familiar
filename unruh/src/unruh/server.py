@@ -1521,6 +1521,20 @@ def tracker_cues() -> dict[str, Any]:
         return _err(str(e))
 
 
+@mcp.tool()
+def tracker_expiring(within_days: int = 3) -> dict[str, Any]:
+    """I use this to see which pantry-class items are about to go off — inventory
+    trackers with date projection on, whose `expires` is within `within_days`
+    (already-expired ones included, soonest first). It's how I build my human's
+    "use these first" nudge. Code owns the day-count; I never compute a date.
+    Returns {ok, items:[{tracker_id, tracker_label, name, expires, days_left, entry_id}]}."""
+    try:
+        with get_conn() as conn:
+            return {"ok": True, **trk.expiring_items(conn, within_days=within_days)}
+    except ValueError as e:
+        return _err(str(e))
+
+
 # ── Entry point ───────────────────────────────────────────────────────
 
 

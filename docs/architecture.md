@@ -630,8 +630,14 @@ Currently owns:
   dynamic sections (ward-private, live turns only, `trackersEnabled`-gated),
   travelling with the `trackers` surfacing module. The gcal + tracker cue
   stores share `src/util/json-state.js`. The "incomplete-entries" half of §5.3
-  is deliberately deferred (nag risk — see the build spec). See
-  docs/trackers-build-spec.md.
+  is deliberately deferred (nag risk — see the build spec). **Projections
+  (§4, T-C.1):** Unruh `expiring_items` (pantry-class items within
+  `EXPIRY_LEAD_DAYS`=3 of expiry, code-owned day maths) → the `tracker_expiring`
+  tool → `trackerExpiring` wrapper → `buildEatFirstBlock`
+  (`src/tracker/tracker-projections.js`) renders the `[Pantry — use first]`
+  block in `enrich()` (ward-private, live turns, pure derivation — no loop).
+  The expiry reminder *nodes* + menses window + reflection inputs are later
+  passes. See docs/trackers-build-spec.md.
 - **`decideTriageViaLLM({threat, silenceMs, signals})`** — the triage
   deliberation: assembles the [Now]-anchored prompt (identity context,
   recent conversation with relative times, threat signals, trusted
