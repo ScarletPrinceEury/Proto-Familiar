@@ -5,6 +5,7 @@ sources:
   - id: tracker-py
     type: file
     path: unruh/src/unruh/tracker.py
+    note: "contains expiring_items function (§4 inventory-expiry projection) and EXPIRY_LEAD_DAYS constant"
   - id: tracker-test-py
     type: file
     path: unruh/tests/test_tracker.py
@@ -29,6 +30,10 @@ sources:
     path: server.js
     offset: 802
     limit: 10
+  - id: tracker-projections
+    type: file
+    path: src/tracker/tracker-projections.js
+    note: "contains buildEatFirstBlock function that renders the [Pantry — use first] block"
 ---
 
 # Trackers
@@ -56,7 +61,9 @@ T-B.1 adds three integration layers that bring trackers into the live chat:
 
 `renderTrackerRead` summarizes a read result gap-neutrally, never using streaky language like "broke your streak" or "missed a day" — invariant T4 ensures the rendering matches the psychology of actual habit-tracking, not the scorekeeper's rhetoric.
 
-**Tool surfacing** (`tool-surfacing.js`) brings trackers into scope automatically via three channels [@tool-surfacing-js]:
+**Tool surfacing** (`tool-surfacing.js`) brings trackers into scope automatically via three channels [@tool-surfacing-js]. See [Tool Surfacing and Provider-Safe Ceiling](tool-surfacing) for the full system description, including context-sensitive module selection, the provider-safe ceiling mechanism, and how `request_tools` recovery works.
+
+For trackers specifically:
 
 1. Static vocabulary: words like "mood", "sleep", "hydration", "pantry", "laundry" and actions like "log", "add to", "how are my" all surface the `trackers` module automatically.
 2. Registry regex: an existing tracker's own label (e.g., "spoons" energy tracking) surfaces the module if that label is mentioned, generated from `trackerTermsRegex(trackerLabels)` applied to the turn text.
@@ -82,12 +89,20 @@ Each tracker tool enforces its required arguments at the JavaScript boundary bef
 
 `tests/trackers-tb.test.mjs` covers the three T-B.1 invariants: fail-closed gating (T2), surfacing selection (static vocabulary + registry + block), and tool-boundary arg guards (T3) [@trackers-tb-test-mjs]. The deeper validation gate — unknown-field drop, type checks, missing-required field, and daily entry cap — lives in Unruh's `validate_entry` and is covered by `unruh/tests/test_tracker.py` [@tracker-test-py].
 
-## Deferred to T-B.2
+## Inventory expiry tracking: "use first" (0.14.7)
+
+Inventory-type trackers (the pantry archetype) can track expiry dates for each item via a per-tracker `project_dates` configuration flag. When enabled, Unruh's `expiring_items(conn, within_days=3, now)` query finds all items expiring within the lead window (default 3 days), including already-expired items, sorted soonest-first [@tracker-py].
+
+The query is a pure derivation: code owns the date math, the model never computes days-left. Unruh exposes this via `tracker_expiring` MCP call, wrapped in thalamus as `trackerExpiring()`. The server injects the result into ward-only enrich contexts as a `[Pantry — use first]` block via `buildEatFirstBlock` in `src/tracker/tracker-projections.js` — rendering the item names with their days-left (e.g., "milk (2d) · cheese (today) · yogurt (expired)") up to a cap of 4 items, with a "+N more" tail if the pantry has overflow [@tracker-projections].
+
+The lead window (3 days by default) is tunable via `EXPIRY_LEAD_DAYS` in the Python tracker layer. The projection is pure code: no LLM, no storage, no background loop — it rides the same context-building path every ward turn uses.
+
+## Deferred to T-B.2+
 
 Two features are explicitly deferred and documented in the build spec, not yet shipped:
 
 1. **Passive memorization capture** — integrating tracker entries into the [Session memorization](session-memorization) pipeline so the Familiar can ingest logged entries (source: 'inferred') into daily memory, gated by `validate_entry`.
-2. **Cues** — surfacing stale or overdue gauges via a `[Tracker cues]` renderer using the Google Calendar cue machinery, which requires new Unruh MCP surface exposure.
+2. **Cues** — surfacing stale or overdue gauges via a `[Tracker cues]` renderer using the Google Calendar cue machinery, which requires new Unruh MCP surface exposure. Menses windows (predict_windows) and reminder NODES are also deferred.
 
 The live chat path is complete without these; both are additive features.
 
