@@ -17,21 +17,55 @@ function whenText(daysLeft) {
 }
 
 /**
+ * Is my human talking about food right now? Pure code (gate in code, ride the
+ * turn — no LLM). Fires on general food / eating / kitchen vocabulary OR on any
+ * near-expiry item's OWN name appearing in the message (the `trackerTermsRegex`
+ * registry-trigger precedent — a name is the ward's own logged string, so it's
+ * escaped, word-bounded, and ≥3 chars so a short name can't match inside another
+ * word). This is the gate that turns the ambient "use first" block from passive
+ * awareness into an active "bring it up now" cue.
+ * @param {string} text  the current message
+ * @param {string[]} itemNames  the near-expiry items' names
+ */
+const FOOD_TOPIC_RE = /\b(food|eat|eats|eating|eaten|ate|meal|meals|breakfast|brunch|lunch|dinner|supper|snack|snacks|snacking|cook|cooks|cooking|cooked|bake|baking|recipe|recipes|hungry|starving|peckish|groceries|grocery|fridge|freezer|pantry|cupboard|leftovers?|kitchen)\b/i;
+
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+export function discussingFood(text, itemNames = []) {
+  const t = String(text ?? '');
+  if (!t.trim()) return false;
+  if (FOOD_TOPIC_RE.test(t)) return true;
+  for (const name of (Array.isArray(itemNames) ? itemNames : [])) {
+    const n = String(name ?? '').trim();
+    if (n.length >= 3 && new RegExp(`\\b${escapeRe(n)}\\b`, 'i').test(t)) return true;
+  }
+  return false;
+}
+
+/**
  * The "use first" block from Unruh's `tracker_expiring` items. Server-injected
  * context → literal "my human", plain and short. Soonest-first, capped at 4 so a
  * full pantry can't flood the block. Returns '' for an empty set.
+ *
+ * When `foodTopic` is set (my human is on the subject of food, per
+ * `discussingFood`), the block carries an explicit cue to bring it up now —
+ * named plainly, no "if it fits" hedge (CLAUDE.md ward-directed-intent rule).
+ * Without it the block stays the ambient passive line it always was.
  * @param {Array<{name, days_left}>} items
+ * @param {{foodTopic?: boolean}} [opts]
  */
 export const MAX_EAT_FIRST = 4;
 
-export function buildEatFirstBlock(items) {
+export function buildEatFirstBlock(items, { foodTopic = false } = {}) {
   if (!Array.isArray(items) || !items.length) return '';
   const line = items
     .slice(0, MAX_EAT_FIRST)
     .map(it => `${it.name} (${whenText(it.days_left)})`)
     .join(' · ');
   const more = items.length > MAX_EAT_FIRST ? ` (+${items.length - MAX_EAT_FIRST} more)` : '';
-  return `[Pantry — use first]\n${line}${more}`;
+  const block = `[Pantry — use first]\n${line}${more}`;
+  if (!foodTopic) return block;
+  return `${block}\nMy human's on the subject of food — a good moment to bring up what's about to go off.`;
 }
 
 // Locale-free "Mon D" — code owns the date (exact-values rule); the model only

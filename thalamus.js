@@ -1203,6 +1203,22 @@ export async function trackerPredictions() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), predictions: [] }; }
 }
 
+/**
+ * T-C.3a: reconcile the ward-private projection NODES (pantry expiry
+ * reminders + menses hold-node). Code-only — reached from the
+ * tracker-projection loop, never composed into the Familiar's toolset.
+ * Degrades to {ok:false} when Unruh is down (the loop treats that as a
+ * skipped tick). Returns {ok, minted, updated, resolved}.
+ */
+export async function projectTrackerNodes() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_project', arguments: {} });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 export async function setRoundsVisibility({ value }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };
@@ -1713,7 +1729,7 @@ import { formatTemporalContext } from './src/schedule/temporal-format.js';
 import { buildStewardshipBlock } from './src/schedule/stewardship.js';
 import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
 import { nextTrackerCue } from './src/tracker/tracker-cues.js';
-import { buildEatFirstBlock, buildMensesWindowBlock } from './src/tracker/tracker-projections.js';
+import { buildEatFirstBlock, buildMensesWindowBlock, discussingFood } from './src/tracker/tracker-projections.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './src/schedule/recurrence.js';
@@ -2400,8 +2416,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         const exp = await trackerExpiring({ within_days: 3 });
         const items = Array.isArray(exp?.items) ? exp.items : [];
         if (items.length) {
-          eatFirstBlock = buildEatFirstBlock(items);
-          if (eatFirstBlock) console.log(`[thalamus] pantry use-first: ${items.length} item(s) near expiry`);
+          // Food's the topic (general food talk OR my human naming an expiring
+          // item) → the ambient block gains an active "bring it up now" cue.
+          const foodTopic = discussingFood(userMessage, items.map(it => it.name));
+          eatFirstBlock = buildEatFirstBlock(items, { foodTopic });
+          if (eatFirstBlock) console.log(`[thalamus] pantry use-first: ${items.length} item(s) near expiry${foodTopic ? ' (food in topic — active cue)' : ''}`);
         }
       } catch (err) {
         console.error('[thalamus] pantry use-first failed:', err?.message ?? err);

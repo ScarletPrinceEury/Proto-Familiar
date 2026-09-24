@@ -564,6 +564,13 @@ is not an off-switch.
 | `PROTO_FAMILIAR_CONTENT_REGATE_DISABLED` | re-tagging private notes for sharing |
 | `PROTO_FAMILIAR_PHYLACTERY_DISABLED` | identity and memory entirely — your Familiar loses both |
 
+**Trackers**
+
+| Switch | Stops |
+|---|---|
+| `PROTO_FAMILIAR_TRACKERS_DISABLED` | trackers entirely (tools, cues, projections, passive capture, mood-send) |
+| `PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED` | the projection tick that mints schedule nodes from trackers — pantry-expiry reminders and the likely-period hold-block (the derived in-context lines still show) |
+
 **Village and tools**
 
 | Switch | Stops |

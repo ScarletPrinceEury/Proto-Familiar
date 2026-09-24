@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEatFirstBlock, buildMensesWindowBlock, MAX_EAT_FIRST } from '../src/tracker/tracker-projections.js';
+import { buildEatFirstBlock, buildMensesWindowBlock, MAX_EAT_FIRST, discussingFood } from '../src/tracker/tracker-projections.js';
 
 const item = (name, days_left) => ({ name, days_left });
 
@@ -25,6 +25,43 @@ test(`caps at ${MAX_EAT_FIRST} items and notes the remainder`, () => {
 
 test('a single item renders without a remainder note', () => {
   assert.equal(buildEatFirstBlock([item('milk', 1)]), '[Pantry — use first]\nmilk (1d)');
+});
+
+// ── food-topic cue ("bring it up when food is discussed") ──────────────────────
+
+test('discussingFood: fires on general food / kitchen vocabulary', () => {
+  for (const t of ['what should I eat', 'thinking about dinner', "I'm hungry",
+                   'need to do groceries', 'anything in the fridge?', 'a recipe idea',
+                   'making lunch', 'leftovers again']) {
+    assert.equal(discussingFood(t), true, `should fire on: ${t}`);
+  }
+});
+
+test('discussingFood: does NOT fire on unrelated talk', () => {
+  for (const t of ['how was your day', 'I fixed the bug', 'the weather is grim',
+                   'reading a good book', '']) {
+    assert.equal(discussingFood(t), false, `should not fire on: ${t}`);
+  }
+});
+
+test('discussingFood: fires when my human names an expiring item (≥3 chars, word-bounded)', () => {
+  assert.equal(discussingFood('should I use the spinach?', ['spinach', 'yoghurt']), true);
+  assert.equal(discussingFood('nothing relevant here', ['spinach']), false);
+  // a short name never matches inside another word
+  assert.equal(discussingFood('the beggar left', ['egg']), false);
+});
+
+test('buildEatFirstBlock: foodTopic adds the active bring-it-up cue; default stays passive', () => {
+  const items = [item('spinach', 1)];
+  const passive = buildEatFirstBlock(items);
+  assert.equal(passive, '[Pantry — use first]\nspinach (1d)');
+  assert.doesNotMatch(passive, /subject of food/);
+
+  const active = buildEatFirstBlock(items, { foodTopic: true });
+  assert.match(active, /^\[Pantry — use first\]\nspinach \(1d\)/);
+  assert.match(active, /subject of food — a good moment to bring up/);
+  // no suppression hedge (CLAUDE.md ward-directed-intent rule)
+  assert.doesNotMatch(active, /if it fits|when it feels|if the moment/i);
 });
 
 // ── buildMensesWindowBlock ───────────────────────────────────────────────────

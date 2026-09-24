@@ -226,7 +226,13 @@ constants, never on string matching in prompts.
   `{tracker_ref, entry_ref}`; dedup on entry id; item consumed/superseded →
   node resolved by code). Plus a code-built **eat-first line** in temporal
   context when ≥1 item is within lead: `Pantry, use first: spinach (1d) ·
-  yoghurt (2d)` (sorted by days-left, capped 4 items).
+  yoghurt (2d)` (sorted by days-left, capped 4 items). **Food-topic active cue
+  (0.14.12):** the line is ambient every ward turn (passive awareness); a
+  pure-code detector (`discussingFood` — general food/kitchen vocabulary OR my
+  human naming a near-expiry item, the `trackerTermsRegex` registry-trigger
+  precedent) escalates it to an explicit *"bring it up now"* cue when food is the
+  topic — named plainly, no "if it fits" hedge (ward-directed-intent rule). Gate
+  in code, ride the turn (no LLM).
 - **Menses prediction (`predict_windows`, ALWAYS ON per ward).** Honesty
   gate: **≥ 2 completed cycles** of history, else no window. Mean cycle
   length over up to the last 6 cycles; window = predicted start ± 3 days
@@ -453,10 +459,33 @@ add-entry form, series sparklines, and create-from-template in the tab.
      marker). Tests: `predictions` (Python, honesty gate + non-predict excluded),
      `tests/tracker-projections.test.mjs` (hedged wording, date range, cycle
      count).
-   - **T-C.3 (next):** the persistent NODE projections — the pantry expiry
-     **reminder nodes** and the menses **hold-node** (both need a projection tick
-     that mints/updates/resolves ward-private schedule nodes), plus the
-     reflection inputs (`windowSeries` + the watchdog line + the §5.4 offer cue).
+   - **T-C.3a ✓ SHIPPED (0.14.11-alpha):** the persistent NODE projections.
+     `unruh/src/unruh/tracker_projection.py` `project_nodes(conn, now)` — ONE
+     atomic reconcile behind the `tracker_project` MCP tool + the
+     `projectTrackerNodes` thalamus wrapper (code-only; NEVER composed into the
+     Familiar's toolset — the Familiar never mints or destroys a projection
+     node). **Pantry expiry → a `reminder` node** per near-expiry item (**ward
+     decision:** fires a banner the moment the item enters the lead window),
+     deduped on the item's `entry_id` across ALL resolutions so each item fires
+     exactly once — a still-open node whose item leaves the window is resolved
+     `done`. **Menses → ONE `hold` node** per predicted cycle (negative-space,
+     never fires), deduped on `cycle_index`, updated on drift, retired
+     (`cancelled`) when superseded or when the honesty gate stops returning a
+     window. Both carry `payload.sensitive` (stripped on gated turns via
+     `stripSensitiveScheduleNodes`). Driven by `src/schedule/tracker-projection-loop.js`
+     (30-min tick on the needs-tracking template; rides `trackersEnabled`/default
+     ON; stands down at moderate+ threat — no banner into a crisis; off-switch
+     `PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED=1`). Tests:
+     `unruh/tests/test_tracker_projection.py` (mint/dedup/resolve for both
+     projections, honesty gate, fired-node dedup, sensitivity) +
+     `tests/tracker-projection-loop.test.mjs` (gate / threat stand-down / ran /
+     degrade).
+   - **T-C.3b (next):** the reflection inputs — `windowSeries` (per
+     sensitive-allowed tracker, a code-aligned by-day array joined into the
+     reflection payload the way `windowMemories` is), the watchdog line
+     (`entry_rate_flag` as a one-line private reflection signal), and the §5.4
+     offer-a-tracker cue (code detector: same lapse class ≥3×/30d with no
+     tracker → ONE ward-worded cue, 30-day per-class cooldown).
 4. **T-D:** mood-send UI + soft lock + T1 learning-only enforcement +
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.
