@@ -51,7 +51,7 @@ import {
   memByTimerange, getRecentMemoryLines,
   setIntention, roundsForWard, listIntentions, getDueIntentions,
   addVillagerTell,
-  listTrackers, readTracker, archiveTracker, dropTracker,
+  listTrackers, readTracker, archiveTracker, dropTracker, trackerReflectionSeries,
 } from './thalamus.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -6123,9 +6123,22 @@ function startAutonomousPondering() {
         windowMemories = (Array.isArray(mem?.results) ? mem.results : [])
           .map(r => ({ date: r.date, excerpt: r.excerpt, schedule_refs: r.schedule_refs }));
       } catch { /* Phylactery down → grade from edges alone */ }
+      // Trackers T-C.3b: the by-day tracker series + each tracker's watchdog
+      // flag, so reflection can grade "did the projected cost actually follow?"
+      // against recorded pattern (the skipped-meal → rough-day check), not just
+      // the forecast edge. Ward-context, so sensitive trackers are included.
+      // Best-effort + off-switch-aware; a miss just grades from edges/memories.
+      let windowSeries = [];
+      if (readSettingsSync().trackersEnabled !== false
+          && process.env.PROTO_FAMILIAR_TRACKERS_DISABLED !== '1') {
+        try {
+          const ser = await trackerReflectionSeries({ days: 10 });
+          windowSeries = Array.isArray(ser?.series) ? ser.series : [];
+        } catch { /* Unruh down → no tracker series this cycle */ }
+      }
       return {
         mode: 'reflection', outcomes: projected, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds,
-        windowMemories, routineReviewSection, isRoutineReview: !!review,
+        windowMemories, windowSeries, routineReviewSection, isRoutineReview: !!review,
       };
     },
     // Threads: one hop along a related_to edge, so a ponder can wander from

@@ -285,6 +285,62 @@ def test_predictions_scans_predict_enabled_and_honours_the_gate(conn):
     assert out[0]["cycles_seen"] == 2
 
 
+def test_reflection_series_aligns_by_day_and_owns_the_arithmetic(conn):
+    # A sleep series (numeric mean per day) and a mood series (enum values per day).
+    sid = tracker.create_tracker(conn, label="Sleep", archetype="series",
+                                 schema=[{"name": "hours", "type": "scale", "min": 0, "max": 24}])["id"]
+    # two entries same day → code averages (5 and 7 → 6.0)
+    tracker.log_entry(conn, tracker_id=sid, payload={"hours": 5}, ts=(NOW - timedelta(days=1, hours=2)).isoformat())
+    tracker.log_entry(conn, tracker_id=sid, payload={"hours": 7}, ts=(NOW - timedelta(days=1, hours=1)).isoformat())
+
+    mid = tracker.create_tracker(conn, label="Mood", archetype="series",
+                                 schema=[{"name": "mood", "type": "enum", "values": ["low", "ok", "good"]}])["id"]
+    tracker.log_entry(conn, tracker_id=mid, payload={"mood": "low"}, ts=(NOW - timedelta(days=1, hours=3)).isoformat())
+    tracker.log_entry(conn, tracker_id=mid, payload={"mood": "ok"},  ts=(NOW - timedelta(days=1, hours=1)).isoformat())
+
+    ser = tracker.reflection_series(conn, days=10, now=NOW)["series"]
+    by_label = {s["label"]: s for s in ser}
+    assert set(by_label) == {"Sleep", "Mood"}
+
+    sleep_day = by_label["Sleep"]["days"][0]
+    assert sleep_day["n"] == 2 and sleep_day["fields"]["hours"] == 6.0, "numeric field → day mean, code-owned"
+
+    mood_day = by_label["Mood"]["days"][0]
+    assert mood_day["fields"]["mood"] == ["low", "ok"], "enum field → the day's values, in order"
+
+    # Every tracker carries its watchdog flag folded in.
+    assert "watchdog" in by_label["Sleep"] and by_label["Sleep"]["watchdog"]["flagged"] is False
+
+
+def test_reflection_series_computes_anticipated_actual_gap_and_skips_empties(conn):
+    # An outings-style tracker with an anticipated/actual numeric pair.
+    oid = tracker.create_tracker(conn, label="Outings", archetype="series", schema=[
+        {"name": "anticipated", "type": "scale", "min": 0, "max": 10},
+        {"name": "actual",      "type": "scale", "min": 0, "max": 10},
+    ])["id"]
+    # anticipated 8, actual 3 → gap -5 (dreaded worse than it went)
+    tracker.log_entry(conn, tracker_id=oid, payload={"anticipated": 8, "actual": 3},
+                      ts=(NOW - timedelta(days=1)).isoformat())
+    # A tracker with NO entries in the window is skipped entirely.
+    tracker.create_tracker(conn, label="Empty", archetype="series",
+                           schema=[{"name": "x", "type": "text"}])
+
+    ser = tracker.reflection_series(conn, days=10, now=NOW)["series"]
+    labels = {s["label"] for s in ser}
+    assert labels == {"Outings"}, "empty-window trackers are skipped"
+    day = ser[0]["days"][0]
+    assert day["gap"] == -5.0, "code computes actual − anticipated per entry, mean per day"
+
+
+def test_reflection_series_skips_archived(conn):
+    tid = tracker.create_tracker(conn, label="Mood", archetype="series",
+                                 schema=[{"name": "m", "type": "text"}])["id"]
+    tracker.log_entry(conn, tracker_id=tid, payload={"m": "x"}, ts=(NOW - timedelta(days=1)).isoformat())
+    assert len(tracker.reflection_series(conn, now=NOW)["series"]) == 1
+    tracker.archive_tracker(conn, id=tid, archived=True)
+    assert tracker.reflection_series(conn, now=NOW)["series"] == [], "archived trackers leave the reflection input"
+
+
 def test_archive_hides_from_active_surfaces_and_list_but_keeps_data(conn):
     tid = tracker.create_tracker(conn, label="Mood", archetype="series",
                                  schema=[{"name": "m", "type": "text"}], config={"staleness_hours": 24})["id"]

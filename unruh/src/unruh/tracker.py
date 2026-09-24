@@ -640,3 +640,120 @@ def predict_windows(conn: sqlite3.Connection, *, id: str, now: datetime | None =
         "end": (predicted + timedelta(days=3)).isoformat(timespec="seconds"),
         "cycle_index": len(starts),
     }}
+
+
+# ── Reflection input (T-C.3b, §4) ─────────────────────────────────────────────
+
+# Numeric field types whose per-day values code averages. `scale`/`int` store a
+# bare number; `number` stores {value, unit?}; `bool` folds to 1/0 (adherence).
+_NUMERIC_TYPES = {"number", "scale", "int"}
+
+
+def _as_number(v: Any) -> float | None:
+    """Pull a plain float out of a stored field value — bare number, a
+    {value: n} number-with-unit, or a bool (1/0). Anything else → None."""
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, dict):
+        inner = v.get("value")
+        if isinstance(inner, bool):
+            return 1.0 if inner else 0.0
+        if isinstance(inner, (int, float)):
+            return float(inner)
+    return None
+
+
+def _local_day(ts: Any) -> str | None:
+    try:
+        return _naive(datetime.fromisoformat(str(ts))).date().isoformat()
+    except (TypeError, ValueError):
+        s = str(ts or "")
+        return s[:10] or None
+
+
+def reflection_series(conn: sqlite3.Connection, *, days: int = 10,
+                      now: datetime | None = None) -> dict[str, Any]:
+    """§4 reflection input: a code-aligned, by-day series per tracker over the
+    reflection window, so the pondering loop can grade whether a projected cost
+    actually followed (did the rough day track with the skipped meal?) against
+    recorded pattern, not just the forecast edge.
+
+    Pure derivation — CODE owns every count, mean, and gap; the model only reads
+    and interprets the pattern (the exact-values rule). Per tracker, per day:
+    numeric fields → the day's mean; enum/text/bool fields → the day's value(s);
+    an `anticipated`+`actual` numeric pair → the per-day mean gap (actual −
+    anticipated, the §4 anticipated-vs-actual signal, general to any tracker
+    carrying those two fields). Each tracker also carries its watchdog flag
+    (`entry_rate_flag`) folded in — a private one-line signal reflection may
+    turn into a gentle observation, never an accusation. Archived trackers and
+    trackers with no entries in the window are skipped. Reflection runs in
+    ward context, so sensitive trackers are included (the `sensitive` flag rides
+    out so the reflection prompt can hold them with care).
+
+    Returns {series: [{tracker_id, label, archetype, sensitive, days:[{date, n,
+    fields:{...}, gap?}], watchdog:{flagged, week_count, median_daily}}]}."""
+    out = []
+    for trk in conn.execute(
+        "SELECT * FROM trackers WHERE archived_at IS NULL ORDER BY label"
+    ).fetchall():
+        tid = trk["id"]
+        rows = _entries(conn, tid, days=days, now=now)
+        if not rows:
+            continue  # no signal this window → nothing to reflect on
+        schema = json.loads(trk["schema_json"] or "[]")
+        field_types = {f["name"]: f.get("type") for f in schema}
+        has_gap = (
+            field_types.get("anticipated") in _NUMERIC_TYPES
+            and field_types.get("actual") in _NUMERIC_TYPES
+        )
+
+        by_day: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            day = _local_day(r["ts"])
+            if day is None:
+                continue
+            p = json.loads(r["payload_json"] or "{}")
+            cell = by_day.setdefault(day, {"n": 0, "num": {}, "cat": {}, "gaps": []})
+            cell["n"] += 1
+            for fname, ftype in field_types.items():
+                if fname not in p:
+                    continue
+                if ftype in _NUMERIC_TYPES:
+                    val = _as_number(p[fname])
+                    if val is not None:
+                        cell["num"].setdefault(fname, []).append(val)
+                elif ftype in ("enum", "text", "bool"):
+                    raw = p[fname]
+                    cell["cat"].setdefault(fname, []).append(
+                        ("yes" if raw else "no") if isinstance(raw, bool) else raw
+                    )
+            if has_gap:
+                a = _as_number(p.get("anticipated"))
+                b = _as_number(p.get("actual"))
+                if a is not None and b is not None:
+                    cell["gaps"].append(b - a)
+
+        days_out = []
+        for day in sorted(by_day):
+            cell = by_day[day]
+            fields: dict[str, Any] = {}
+            for fname, vals in cell["num"].items():
+                if vals:
+                    fields[fname] = round(sum(vals) / len(vals), 3)
+            for fname, vals in cell["cat"].items():
+                fields[fname] = vals[0] if len(vals) == 1 else vals
+            day_out = {"date": day, "n": cell["n"], "fields": fields}
+            if cell["gaps"]:
+                day_out["gap"] = round(sum(cell["gaps"]) / len(cell["gaps"]), 3)
+            days_out.append(day_out)
+
+        wd = entry_rate_flag(conn, id=tid, now=now)
+        out.append({
+            "tracker_id": tid, "label": trk["label"], "archetype": trk["archetype"],
+            "sensitive": bool(trk["sensitive"]), "days": days_out,
+            "watchdog": {"flagged": wd["flagged"], "week_count": wd["week_count"],
+                         "median_daily": wd["median_daily"]},
+        })
+    return {"series": out}

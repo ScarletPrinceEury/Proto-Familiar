@@ -2572,7 +2572,8 @@ shouldReflectNow()  ← reads tomes/.surface-events.json,
    ▼ (true)
 getReflectionInput()  ← projects fresh outcomes + current
                         what_lapses_cost.md content + identity
-                        anchor into the reflection prompt input
+                        anchor + windowMemories + windowSeries
+                        (trackers T-C.3b) into the prompt input
    │
    ▼
 runPonder(input, { mode: 'reflection' })
@@ -2588,6 +2589,8 @@ LLM returns:
                                filename: 'what_lapses_cost.md',
                                heading, content })   ← via Phylactery MCP
 ```
+
+**Reflection inputs (trackers T-C.3b).** Alongside `windowMemories`, `getReflectionInput` reads `windowSeries` — Unruh's `reflection_series` (via `trackerReflectionSeries`, gated on `trackersEnabled`, best-effort): per non-archived tracker with entries in the last 10 days, a **code-aligned by-day array** (numeric → day mean, enum/text/bool → the day's value(s), an `anticipated`+`actual` numeric pair → the day's mean gap) plus each tracker's **watchdog flag** (`entry_rate_flag`). Code owns every count/mean/gap; the model only interprets — reflection grades whether a projected cost actually followed against recorded pattern (skipped-meal → rough-day), and the watchdog is a gentle private signal it may voice in its own words, never an accusation, never leaving the reflection. Code-only (never in the Familiar's toolset).
 
 **Outcome tagging** is pure-code, runs at chat-turn entry as a fire-and-forget pass over `tomes/.surface-events.json`:
 

@@ -1204,6 +1204,22 @@ export async function trackerPredictions() {
 }
 
 /**
+ * T-C.3b: the by-day tracker series for the pondering reflection assembly
+ * (per-tracker day cells + watchdog flag, code owns all arithmetic).
+ * Code-only — never composed into the Familiar's toolset. Degrades to an
+ * empty series when Unruh is down (reflection then grades from edges/memories
+ * alone). Returns {ok, series:[...]}.
+ */
+export async function trackerReflectionSeries({ days = 10 } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', series: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_reflection_series', arguments: { days } });
+    return parseToolText(r, { ok: false, series: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), series: [] }; }
+}
+
+/**
  * T-C.3a: reconcile the ward-private projection NODES (pantry expiry
  * reminders + menses hold-node). Code-only — reached from the
  * tracker-projection loop, never composed into the Familiar's toolset.
