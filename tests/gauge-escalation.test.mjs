@@ -12,12 +12,14 @@ import {
 
 const gauge = (id, band, extra = {}) => ({ id, label: id, band, escalation: { enabled: true, checkin_deadline_hours: 6 }, ...extra });
 
-// ── G1 (structural): G-C.1 contains NO crisis code ────────────────────────────
-test('G1: the check module calls no threat/contact machinery (G-C.1 is check-only)', () => {
+// ── G1 (structural): the CHECK module stays crisis-free ───────────────────────
+// The teeth (threat raise + contact) live in gauge-crisis.js; this module owns
+// ONLY the check lifecycle. Holding it textually crisis-free keeps every gauge
+// crisis call site auditable in one place and the check-first spine legible.
+test('G1: the check module calls no threat/contact machinery (teeth live in gauge-crisis.js)', () => {
   const src = readFileSync(new URL('../src/schedule/gauge-escalation.js', import.meta.url), 'utf8');
-  // No crisis call sites anywhere — the escalation branch is G-C.2.
-  for (const call of ['flagDistress(', 'recordThreat(', 'contactDeadlineFor(', 'relayToDiscord(']) {
-    assert.ok(!src.includes(call), `G-C.1 must not call ${call}`);
+  for (const call of ['flagDistress(', 'recordThreat(', 'contactDeadlineFor(', 'relayToDiscord(', 'deliverToTrustedContact(']) {
+    assert.ok(!src.includes(call), `the check module must not call ${call}`);
   }
   // No imports from the threat/crisis modules.
   assert.ok(!/from '.*threat-tracker/.test(src) && !/from '.*cerebellum/.test(src), 'no threat/crisis imports');

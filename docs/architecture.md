@@ -647,11 +647,23 @@ Currently owns:
   the safety ladder (extreme → check → crisis) is G-C, ward-signed. **G-C.1
   (the CHECK, 0.14.19):** `src/schedule/gauge-escalation.js` — an escalation-enabled
   gauge reaching `extreme` opens a warm code-built "are you okay?" reach-out
-  (outbox `gauge-check`); a refill/recovery closes it. NO threat/contact (G1
-  holds structurally — that's G-C.2). Rides the needs-tracking loop's timer but
-  independent of its threat stand-down; off-switch
-  `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED`. Unruh `gauge_escalation_candidates`
-  (via `gaugeEscalationCandidates`) feeds it; the Node loop owns every decision.
+  (outbox `gauge-check`); a refill/recovery closes it. This module stays
+  crisis-free by design (structural pin). **G-C.2 (the TEETH, 0.14.21):**
+  `src/schedule/gauge-crisis.js` (the ONE gauge crisis-call site) +
+  `src/schedule/active-hours.js` (pure quiet-hours-aware deadline math). Rides
+  the same needs-loop timer STRICTLY AFTER the check tick and shares the check
+  state via the check module's `readCheckState`/`writeCheckState`. **G1
+  (check-first) is behavioural:** it escalates only a gauge still `extreme` with
+  an OPEN check unanswered for its `checkin_deadline_hours` in ACTIVE time
+  (`activeMsInInterval` — quiet hours excluded), once (`escalatedAt`). Then
+  `flagDistress({reason:'gauge-critical:…'})` floors threat to severe (the
+  silence-triage loop then deliberates — no added call) and, OPT-IN per gauge,
+  `deliverToTrustedContact` reaches `escalation.contact_id` with its own outbox
+  mirror (no covert contact). Both halves share off-switch
+  `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED` and run independent of the needs
+  threat stand-down; the crisis half also stands down under
+  `PROTO_FAMILIAR_THREAT_DISABLED`. Unruh `gauge_escalation_candidates`
+  (via `gaugeEscalationCandidates`) feeds both; the Node loop owns every decision.
   **Gauge UI (G-B.2):** the Trackers tab renders a calm band-coloured **fill
   meter** + a **one-tap refill** (gauge only) → `POST /api/trackers/:id/entries`
   (`source:'ui'`; an empty payload is a valid refill), returning the fresh read
