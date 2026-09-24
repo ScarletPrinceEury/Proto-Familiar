@@ -1745,6 +1745,7 @@ import { formatTemporalContext } from './src/schedule/temporal-format.js';
 import { buildStewardshipBlock } from './src/schedule/stewardship.js';
 import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
 import { nextTrackerCue } from './src/tracker/tracker-cues.js';
+import { nextOfferCue } from './src/tracker/offer-tracker.js';
 import { buildEatFirstBlock, buildMensesWindowBlock, discussingFood } from './src/tracker/tracker-projections.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
@@ -2174,6 +2175,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     // even when temporalLines string assembly fails.
     let temporalPayload = null;
     let temporalLines = '';
+    let needAnchorsForOffer = [];   // §5.4: need anchors, hoisted for the offer-a-tracker cue
     try {
       temporalPayload = parseToolText(temporalResult, null);
       // Recurrence expansion. Recurring nodes anchor on their first
@@ -2206,7 +2208,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
           // need-window, derived live from the same recurring anchors we
           // already fetched (no extra MCP call). A missed window shows
           // even though the expander drops resolved occurrences.
-          temporalPayload.needs = summarizeNeedsForDay(recurNodes.filter(isNeedWindow), Date.now());
+          const needAnchors = recurNodes.filter(isNeedWindow);
+          temporalPayload.needs = summarizeNeedsForDay(needAnchors, Date.now());
+          // §5.4 offer-a-tracker draws its lapse classes from these same
+          // anchors' miss ledgers — hoisted out so the cue can read them below.
+          needAnchorsForOffer = needAnchors;
         } catch (err) {
           console.error('[thalamus] recurrence expansion failed:', err?.message ?? err);
         }
@@ -2458,6 +2464,27 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         }
       } catch (err) {
         console.error('[thalamus] period-window projection failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Offer-a-tracker (trackers build spec §5.4) ──────────────────────
+    // A recurring lapse class from the needs ledger (missed ≥3×/30d) with no
+    // tracker covering it earns ONE gentle offer to track it together, then
+    // rests 30 days. Miss counts ride the anchors already fetched above; the
+    // one tracker read happens only when a fresh candidate survives cooldown.
+    let offerTrackerBlock = '';
+    if (liveTurn && !staticOnly && !gated && trackersOn && needAnchorsForOffer.length) {
+      try {
+        offerTrackerBlock = await nextOfferCue({
+          needAnchors: needAnchorsForOffer,
+          getTrackerLabels: async () => {
+            const trk = await listTrackers({});
+            return (Array.isArray(trk?.trackers) ? trk.trackers : []).map(t => t.label);
+          },
+        });
+        if (offerTrackerBlock) console.log('[thalamus] offer-a-tracker: surfacing a recurring-lapse offer');
+      } catch (err) {
+        console.error('[thalamus] offer-a-tracker failed:', err?.message ?? err);
       }
     }
 
@@ -2802,6 +2829,7 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (trackerCueBlock)        dynamicSections.push(trackerCueBlock);
     if (eatFirstBlock)          dynamicSections.push(eatFirstBlock);
     if (mensesWindowBlock)      dynamicSections.push(mensesWindowBlock);
+    if (offerTrackerBlock)      dynamicSections.push(offerTrackerBlock);
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);

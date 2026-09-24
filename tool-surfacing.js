@@ -233,7 +233,7 @@ const TRIGGERS = {
     // request_tools round. A registered tracker's OWN label also surfaces the
     // module (trackerTermsRegex, wired in selectModules like villager names).
     text: /\b(track(er|ing)?|log (it|this|that)|inventory|pantry|groceries|grocery|laundry|slept|sleep(ing)?|meds?|medication|took my|period|menses|cycle|cramps|went out(side)?|left the house|mood|hydrat\w*|drank|drink water|ate\b|eaten|meal)\b/i,
-    blocks: ['[Tracker cues]', '[Pantry — use first]', '[Likely period window]'],
+    blocks: ['[Tracker cues]', '[Pantry — use first]', '[Likely period window]', '[Might be worth offering to track]'],
   },
   media: {
     // Surfaced by look-again / recognition language, OR whenever an image
