@@ -102,13 +102,20 @@ export function buildTrackerCueBlock(items) {
   if (!Array.isArray(items) || !items.length) return '';
   const lines = items.map(it => {
     const since = sinceText(it.hours_since);
+    // A gauge candidate carries a `band` (low/overdue, §10.5) → a decaying-upkeep
+    // nudge, gentle then firmer. Everything else is a "gone quiet" stale ledger.
+    if (it.band === 'low' || it.band === 'overdue') {
+      const sinceTxt = since ? ` (last ~${since} ago)` : '';
+      const state = it.band === 'overdue' ? 'overdue' : 'getting low';
+      return `  — ${it.label ?? it.id}: ${state}${sinceTxt}  [id: ${it.id}]`;
+    }
     const sinceText2 = since ? ` — last logged ${since} ago` : '';
     return `  — ${it.label ?? it.id}${sinceText2}  [id: ${it.id}]`;
   });
   return [
     '[Tracker cues]',
     ...lines,
-    "Ledgers I keep for my human that have gone quiet a while. If it fits what we're already on, I can check in and log where it stands now with tracker_log — or leave it if the moment isn't there. Either way I've noted it and won't keep re-raising the same one.",
+    "Things I keep an eye on for my human that have gone quiet or drifted low. If it fits what we're already on, I can gently check in and log where it stands now with tracker_log (a gauge just needs a refill) — or leave it if the moment isn't there. Either way I've noted it and won't keep re-raising the same one.",
   ].join('\n');
 }
 

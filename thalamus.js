@@ -1196,6 +1196,20 @@ export async function trackerCues() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), stale: [] }; }
 }
 
+/**
+ * §10.5 gauge cues — gauges in the `low`/`overdue` band, for the shared
+ * `[Tracker cues]` block. Degrades to an empty list when Unruh is down.
+ * Returns {ok, gauges:[{id, label, band, hours_since, ask_cap_per_day}]}.
+ */
+export async function trackerGaugeCues() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', gauges: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_gauge_cues', arguments: {} });
+    return parseToolText(r, { ok: false, gauges: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), gauges: [] }; }
+}
+
 // §4 inventory-expiry: pantry-class items within `within_days` of expiry, for the
 // "use first" line. Shaped fallback so a down peer renders absence.
 export async function trackerExpiring({ within_days = 3 } = {}) {
@@ -2431,12 +2445,17 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     })();
     if (liveTurn && !staticOnly && !gated && trackersOn) {
       try {
-        const cues = await trackerCues();
-        const candidates = Array.isArray(cues?.stale) ? cues.stale : [];
+        // Stale-ledger cues (§5.3) + gauge band cues (§10.5) share the one
+        // [Tracker cues] block. Ids are distinct (a tracker is one or the other),
+        // so the aging/dedup keys don't collide.
+        const [cues, gcues] = await Promise.all([trackerCues(), trackerGaugeCues()]);
+        const stale  = Array.isArray(cues?.stale)   ? cues.stale   : [];
+        const gauges = Array.isArray(gcues?.gauges) ? gcues.gauges : [];
+        const candidates = [...stale, ...gauges];
         if (candidates.length) {
           const todayKey = wardLocalNowISO(wardTimeZoneSetting()).slice(0, 10);
           trackerCueBlock = await nextTrackerCue({ candidates, todayKey, advance: true });
-          if (trackerCueBlock) console.log('[thalamus] tracker cues: surfacing quiet ledger(s)');
+          if (trackerCueBlock) console.log('[thalamus] tracker cues: surfacing quiet ledger(s)/low gauge(s)');
         }
       } catch (err) {
         console.error('[thalamus] tracker cues failed:', err?.message ?? err);

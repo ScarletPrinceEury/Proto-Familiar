@@ -762,10 +762,30 @@ off). Console↔UI parity holds.
 
 ### 10.10 Build passes (extend §9; each: off-switch + tests + docs + version, same commit)
 
-1. **G-A:** `gauge` archetype in the store + `gaugeLevel`/bands (pure) + gauge
-   `read_tracker` + refill via `tracker_log` + G3 fixtures.
-2. **G-B:** cues (§10.5) + the UI meter + one-tap refill + memorization refill (§10.4)
-   + reflection input (recent refills) + G-fixtures.
+1. **G-A ✓ SHIPPED (mostly in T-A 0.14.0; verified + gaps closed 0.14.17):**
+   `gauge` archetype in the store, `gauge_bands`/`gauge_level` (pure, band logic
+   + level formula per §10.3), create-time config-ordering validation, gauge
+   `read_tracker`, refill via `tracker_log`, and the hydration/meals gauge
+   templates all landed in T-A. **0.14.17 closed the two §10.3/G3 gaps:** the
+   gauge read now returns `config` (so a UI meter can render thresholds without
+   a second read), and the G3 fixtures gained **exact-boundary** assertions
+   (each threshold is the exclusive floor of the next band).
+2. **G-B.1 ✓ SHIPPED (0.14.17):** the **gauge cues** (§10.5). Unruh
+   `gauge_cue_candidates` — non-archived gauges in the `low` (gentle) or
+   `overdue` (firmer) band (`fine`/`fading` cue nothing; `extreme` NEVER cues —
+   it opens a check in G-C) — behind `tracker_gauge_cues` + the
+   `trackerGaugeCues` thalamus wrapper. They ride the SHARED `[Tracker cues]`
+   block: `buildTrackerCueBlock` renders a band-aware line for a candidate
+   carrying `band` (getting low / overdue), the stale-ledger line otherwise;
+   `enrich()` merges stale + gauge candidates (distinct ids) through the same
+   aging/dedup pipeline. Tests: `test_tracker.py` (only low+overdue surface;
+   fine/fading/extreme/archived excluded), `tracker-cues.test.mjs` (band-aware
+   lines; stale format intact).
+   - **G-B.2 (next):** the **UI meter + one-tap refill** in the Trackers tab, the
+     **memorization refill** confirm (§10.4 — a gauge refill is a `{}`-payload
+     entry through the existing `tracker_observations` gate), and the gauge
+     **reflection input** (recent refills; gauges already flow through
+     `reflection_series`, may add the band). Palette/meter wording ward-reviewed.
 3. **G-C (SAFETY — ward sign-off in this pass):** the check→crisis ladder — check via
    `reach_out_to_ward`, the confirm gate, the bounded `flag_distress` raise, the
    opt-in `contactDeadlineFor` contact path + mirror. G1/G2/G4/G5/G6 tests. **Ward

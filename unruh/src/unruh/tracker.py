@@ -422,8 +422,11 @@ def read_tracker(conn: sqlite3.Connection, *, id: str, days: int = 14, now: date
             "SELECT ts FROM tracker_entries WHERE tracker_id = ? AND superseded = 0 ORDER BY ts DESC LIMIT 1", (id,),
         ).fetchone()
         g = gauge_level(last["ts"] if last else None, cfg, now=now)
+        # config rides along (§10.3) so a UI meter can render the band thresholds
+        # without a second read; the level itself stays pure-derived above.
         base.update({"band": g["band"], "level": g["level"], "hours_since": g["hours_since"],
-                     "last_refill_at": last["ts"] if last else None})
+                     "last_refill_at": last["ts"] if last else None,
+                     "config": cfg.get("gauge", {}) if isinstance(cfg, dict) else {}})
         return base
 
     if arch == "state":
@@ -504,6 +507,33 @@ def stale_trackers(conn: sqlite3.Connection, *, now: datetime | None = None) -> 
         if elapsed >= hours:
             out.append({"id": r["id"], "label": r["label"], "hours_since": round(elapsed, 1)})
     return out
+
+
+def gauge_cue_candidates(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict[str, Any]:
+    """§10.5 gauge cues: non-archived gauges whose derived band is `low` (a gentle
+    nudge) or `overdue` (firmer). `fine`/`fading` cue nothing (headroom); `extreme`
+    does NOT cue — it opens a CHECK (§10.6, G-C), never a cue. Pure derivation via
+    gauge_level; carries each gauge's `ask_cap_per_day` so the Node cue renderer
+    paces re-offers exactly like the stale-cue path. Returns
+    {gauges: [{id, label, band, hours_since, ask_cap_per_day}]}."""
+    out = []
+    for r in conn.execute("SELECT * FROM trackers WHERE archetype='gauge' AND archived_at IS NULL").fetchall():
+        cfg = json.loads(r["config_json"] or "{}")
+        last = conn.execute(
+            "SELECT ts FROM tracker_entries WHERE tracker_id = ? AND superseded = 0 ORDER BY ts DESC LIMIT 1",
+            (r["id"],),
+        ).fetchone()
+        try:
+            g = gauge_level(last["ts"] if last else None, cfg, now=now)
+        except ValueError:
+            continue  # a gauge with a malformed config never nags
+        if g["band"] not in ("low", "overdue"):
+            continue
+        cap = cfg.get("ask_cap_per_day", 1)
+        cap = cap if isinstance(cap, (int, float)) else 1
+        out.append({"id": r["id"], "label": r["label"], "band": g["band"],
+                    "hours_since": g["hours_since"], "ask_cap_per_day": cap})
+    return {"gauges": out}
 
 
 def cue_candidates(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict[str, Any]:
