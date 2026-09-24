@@ -500,10 +500,31 @@ add-entry form, series sparklines, and create-from-template in the tab.
      + watchdog fold + empty/archived skip); `pondering.test.mjs` (the section
      renders with the anti-shame framing and no suppression hedge; empty →
      omitted).
-   - **T-C.3b.2 (next):** the §5.4 offer-a-tracker cue — code detector (same
-     lapse class ≥3×/30d with no tracker → ONE ward-worded cue, 30-day per-class
-     cooldown; never deficit-framed; never offers erp/menses). Final cue wording
-     is ward-reviewed at merge.
+   - **T-C.3b.2 ✓ SHIPPED (0.14.14-alpha) — T-C.3 COMPLETE:** the §5.4
+     offer-a-tracker cue. `src/tracker/offer-tracker.js` — a pure-code detector
+     over the needs-fulfilment ledger: a lapse class (a need my human keeps
+     missing) at ≥`MIN_LAPSES`=3 misses in `WINDOW_DAYS`=30, with no tracker
+     covering it (token-overlap check against tracker labels), earns ONE
+     `[Might be worth offering to track]` cue, then rests `COOLDOWN_DAYS`=30 per
+     class (state in `tomes/.offer-tracker.json`, mirroring the tracker-cue
+     store). Care-first + non-deficit; the offer names the intent plainly (no
+     suppression hedge) and keeps the choice-to-track with my human;
+     sensitive-health concerns (menses/compulsion/urge) are NEVER offered
+     (`SENSITIVE_CLASS_RE`, the suggested:false guard). Wired into `enrich()`'s
+     dynamic sections (ward-private, live turns, `trackersEnabled`); the miss
+     counts ride the recurring anchors enrich already fetched (`needAnchorsForOffer`),
+     and the one `listTrackers` read happens only when a fresh candidate survives
+     the cooldown (`nextOfferCue` gates it). Travels with the `trackers`
+     surfacing module (its `[Might be worth offering to track]` marker).
+     **Draft wording is ward-reviewed at merge.** Tests:
+     `tests/offer-tracker.test.mjs` (lapse counting + window/threshold, sensitive
+     + cooldown prune, attached-tracker skip, the care-first/no-hedge block, and
+     `nextOfferCue` end-to-end through real state I/O: surface → cooldown → re-offer,
+     old misses aged out). **Deferred (with rationale):** "readiness misses" as a
+     second lapse source — stewardship's readiness is an ephemeral flag on an
+     approaching event, with no durable per-item miss ledger to count over 30
+     days; the detector is source-agnostic so a readiness-lapse ledger can feed
+     it later without reshaping this.
 4. **T-D:** mood-send UI + soft lock + T1 learning-only enforcement +
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.

@@ -33,7 +33,38 @@ sources:
   - id: tracker-projections
     type: file
     path: src/tracker/tracker-projections.js
-    note: "contains buildEatFirstBlock function that renders the [Pantry — use first] block"
+    note: "contains buildEatFirstBlock function that renders the [Pantry — use first] block, and discussingFood (0.14.12 active food cue)"
+  - id: tracker-projection-py
+    type: file
+    path: unruh/src/unruh/tracker_projection.py
+    note: "T-C.3a: project_nodes() reconciles pantry reminder + menses hold schedule nodes"
+  - id: tracker-projection-loop-js
+    type: file
+    path: src/schedule/tracker-projection-loop.js
+  - id: pondering-js
+    type: file
+    path: src/pondering/pondering.js
+    offset: 155
+    limit: 45
+    note: "buildReflectionPrompt's windowSeries/watchdog rendering (T-C.3b.1)"
+  - id: server-reflection-js
+    type: file
+    path: server.js
+    offset: 6120
+    limit: 25
+    note: "getReflectionInput() assembling windowSeries via tracker_reflection_series"
+  - id: offer-tracker-js
+    type: file
+    path: src/tracker/offer-tracker.js
+  - id: tracker-cues-js
+    type: file
+    path: src/tracker/tracker-cues.js
+  - id: thalamus-cues
+    type: file
+    path: thalamus.js
+    offset: 2405
+    limit: 30
+    note: "[Tracker cues] wiring — staleness-based ledger nudge, §5.3"
 ---
 
 # Trackers
@@ -97,19 +128,50 @@ The query is a pure derivation: code owns the date math, the model never compute
 
 The lead window (3 days by default) is tunable via `EXPIRY_LEAD_DAYS` in the Python tracker layer. The projection is pure code: no LLM, no storage, no background loop — it rides the same context-building path every ward turn uses.
 
-## Deferred to T-B.2+
+## Persistent projection nodes: pantry reminders and menses holds (T-C.3a, 0.14.11)
 
-Two features are explicitly deferred and documented in the build spec, not yet shipped:
+The "use first" line above is pure derivation with nothing durable behind it — it exists only in a rendered context block and vanishes if a tick is missed. T-C.3a gives the same two projections (inventory expiry and menses prediction) durable, ward-private citizens in [Unruh](unruh)'s schedule graph: real nodes a reminder can fire against and an availability check can see. `project_nodes()` in `unruh/src/unruh/tracker_projection.py` reconciles both projections in one atomic pass; `tracker-projection-loop.js` drives it on a 30-minute tick through the `tracker_project` MCP tool and its thalamus wrapper, `projectTrackerNodes` [@tracker-projection-py] [@tracker-projection-loop-js].
 
-1. **Passive memorization capture** — integrating tracker entries into the [Session memorization](session-memorization) pipeline so the Familiar can ingest logged entries (source: 'inferred') into daily memory, gated by `validate_entry`.
-2. **Cues** — surfacing stale or overdue gauges via a `[Tracker cues]` renderer using the Google Calendar cue machinery, which requires new Unruh MCP surface exposure. Menses windows (predict_windows) and reminder NODES are also deferred.
+- **Pantry expiry → a `reminder` node** per near-expiry item. This is a ward decision made explicitly in this milestone: the node fires a banner the moment an item enters the `EXPIRY_LEAD_DAYS` window, the active choice over waiting until expiry day or staying silent. Dedup is on the item's `entry_id` across every past resolution, fired or not, so a grocery haul mints one banner per item and no item ever re-nags once its node has fired. A still-open node whose item leaves the expiring set — consumed, superseded, or re-logged with a fresh date — is resolved `done` rather than left dangling [@tracker-projection-py].
+- **Menses prediction → one `hold` node** per predicted cycle. A hold is negative space: it marks the window busy for availability checks and never fires a banner, the appropriate register for a sensitive projection the Familiar should hold quietly rather than announce. It is deduped on `cycle_index`, its times are updated in place as the prediction drifts, and it is retired (`resolution='cancelled'`) the moment a cycle is superseded or the honesty gate (fewer than two completed cycles) stops returning a window at all [@tracker-projection-py].
 
-The live chat path is complete without these; both are additive features.
+Both node kinds carry `payload.sensitive = true`, which `stripSensitiveScheduleNodes` removes from any gated (villager) turn's schedule view, so a projection built from private tracker data cannot leak into a Discord guest's calendar read.
+
+The loop rides `trackersEnabled` (default ON, inert until a tracker exists) and stands down entirely at moderate-or-higher threat — a pantry banner must never fire into a crisis, the same posture [Autonomous loops](autonomous-loops) already gives needs-tracking and warm reach-out. Its own hard off-switch is `PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED=1`, on top of the whole-feature `PROTO_FAMILIAR_TRACKERS_DISABLED=1` [@tracker-projection-loop-js].
+
+Across all of T-C.3 — these projection nodes, the reflection inputs below, and the offer cue below — one posture holds: none of the three is composed into the Familiar's toolset. Code mints, updates, and resolves every node and count; the model reads and interprets, but never calls a tool to create or destroy one of these on its own initiative. This extends [Exact values are code's job](../decisions/exact-values-in-code) from "the model must not format an exact value" to "the model must not be handed the surface that writes one."
+
+## Active food cue: from ambient awareness to a named moment (0.14.12)
+
+The "use first" block was ambient on every turn — passive awareness that never insisted on itself. Nothing told the Familiar *this is the moment* when the ward actually brought food up. `discussingFood(text, itemNames)` in `tracker-projections.js` is a pure-code gate: it fires on general food/kitchen vocabulary, or when the ward names a near-expiry item directly by its own logged name (word-bounded, case-insensitive, at least 3 characters so a short name can't match inside an unrelated word) [@tracker-projections]. When it fires, `buildEatFirstBlock`'s `foodTopic` option appends one plain "bring it up now" line to the existing block, named directly with no "if it fits" hedge. No new LLM call: the gate and the extra line both ride the same enrich pass every turn already runs [@tracker-projections].
+
+## Reflection inputs: grading a forecast against the recorded pattern (T-C.3b.1, 0.14.13)
+
+[Pondering](pondering)'s reflection tick already grades how the Familiar's own surfacings landed — did a raised task get engaged, deferred, or ignored? T-C.3b.1 gives it a second, independent kind of evidence: whether a *tracked pattern* actually bore out a forecast, not just whether a notification was acted on. `reflection_series(conn, days=10)` in `unruh/src/unruh/tracker.py` returns, per non-archived tracker with entries in the window, a by-day array: a numeric field becomes the day's mean, an enum/text/bool field becomes the day's value(s), and — when a tracker happens to carry both an `anticipated` and an `actual` numeric field — the day also carries the mean gap between them. That gap case is written generically against any tracker with those two field names rather than hardcoded to one tracker's schema, so a future anticipated/actual tracker gets the signal for free [@tracker-py].
+
+Each tracker's series also folds in its `entry_rate_flag` watchdog: a private signal that fires when a ledger's 7-day entry rate exceeds three times its trailing 28-day median and has logged at least 10 entries that week [@tracker-py]. `buildReflectionPrompt` (`pondering.js`) renders the series only when at least one tracker has entries that window, so an empty result costs no tokens and adds no "here's nothing" noise, and it frames the watchdog explicitly as something the Familiar *may* choose to raise gently, in its own words — never an accusation, and never something that leaves the reflection [@pondering-js]. `server.js`'s `getReflectionInput()` assembles `windowSeries` by calling the `tracker_reflection_series` MCP tool only when trackers are enabled, and treats an Unruh outage as "grade from edges and memories alone" rather than a failed tick [@server-reflection-js]. Because reflection runs entirely in ward context, sensitive trackers are included in the series — the same "held with care, not withheld" posture the hold nodes above take toward menses data.
+
+## Offer-a-tracker cue (T-C.3b.2, 0.14.14)
+
+The trackers build spec's §5.4 names a second proactive surface: when the ward keeps lapsing on the same kind of need with no tracker watching it, the Familiar can offer — once, gently — to start tracking it together. `offer-tracker.js` implements this as a pure-code detector over the needs ledger already fetched for the turn's recurring anchors, so the miss-counting costs nothing new: `lapseClassesFromNeeds()` counts `missed` resolutions per need-window anchor over a 30-day window (`WINDOW_DAYS`), keeping only classes at or above 3 lapses (`MIN_LAPSES`), merged by normalized label [@offer-tracker-js]. `pruneOfferClasses()` then drops any class matching a sensitive-health pattern (menses, compulsion, ritual, urge) — those concerns stay opt-in only and are never suggested by the Familiar — and any class still inside its own 30-day cooldown (`COOLDOWN_DAYS`), read from `tomes/.offer-tracker.json` [@offer-tracker-js]. Only after a class survives both filters does `nextOfferCue()` make the one `listTrackers` read needed to check whether an existing tracker already covers the concern, by token overlap between the class label and tracker labels; if none does, `buildOfferTrackerBlock` renders the `[Might be worth offering to track]` cue and the class's cooldown is stamped so the same offer will not resurface for another month [@offer-tracker-js]. The block names the recurring snag plainly and states the offer as the Familiar's own initiative, while keeping the choice to actually track it with the ward — care-first rather than deficit-framed.
+
+**Deferred with a stated reason.** The build spec's other §5.4 lapse source, "readiness misses," is not wired in. Stewardship's readiness flag is ephemeral — it marks an approaching event with an open prerequisite, and nothing keeps a durable per-item miss ledger to count over 30 days the way the needs ledger does. `lapseClassesFromNeeds()` is written source-agnostic on purpose, so a durable readiness-lapse ledger could plug into this same detector later without reshaping it [@offer-tracker-js].
+
+## What shipped since T-B.1, and what remains deferred
+
+Two of the three features named as deferred when T-B.1 shipped have since landed: the stale-ledger `[Tracker cues]` renderer nudges a quiet ledger past its own `staleness_hours`, paced by an `ask_cap_per_day` cap, on live ward turns only [@tracker-cues-js] [@thalamus-cues]; and menses prediction windows and pantry/menses schedule nodes both now exist (the `[Likely period window]` block and the T-C.3a projection nodes described above). One deferral remains open:
+
+- **Passive memorization capture** — integrating tracker entries into the [Session memorization](session-memorization) pipeline so the Familiar can ingest logged entries (source: 'inferred') into daily memory, gated by `validate_entry`. Not yet shipped as of T-C.3.
+
+The live chat path is complete without it; it remains an additive feature.
 
 ## Related
 
 - [Phylactery](phylactery) — the store that holds trackers alongside identity and memory.
-- [Unruh](unruh) — the temporal-context specialist that stores tracker data; trackers are per-embodiment like Unruh's threat state.
-- [Session memorization](session-memorization) — the pipeline that might ingest tracker entries in the deferred T-B.2 phase.
+- [Unruh](unruh) — the temporal-context specialist that stores tracker data and the projection nodes T-C.3a mints; trackers are per-embodiment like Unruh's threat state.
+- [Pondering](pondering) — the reflection tick that T-C.3b.1's `windowSeries` and watchdog flags feed into.
+- [Autonomous loops](autonomous-loops) — the tracker-projection loop's cadence, off-switch, and crisis-defer contract in the wider loop roster.
+- [Session memorization](session-memorization) — the pipeline that might ingest tracker entries in the deferred passive-capture phase.
+- [Exact values are code's job](../decisions/exact-values-in-code) — the general discipline T-C.3a's "never in the Familiar's toolset" posture extends.
 - [Engineering conventions](../reference/engineering-conventions) — the exact-values discipline and graceful-degradation rules that trackers follow.
 - [Proactivity over caution](../decisions/proactivity-over-caution) — the behavioral-change sign-off requirement mentioned in the ward-only access guarantee.

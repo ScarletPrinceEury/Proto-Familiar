@@ -645,8 +645,20 @@ Currently owns:
   **Menses window (§4, T-C.2):** Unruh `predictions` (scans `config.predict`
   trackers through `predict_windows`, honesty gate ≥2 cycles) → `tracker_predictions`
   → `trackerPredictions` → `buildMensesWindowBlock` renders a hedged
-  `[Likely period window]` line (code owns the dates). The persistent expiry
-  reminder *nodes* + menses hold-node + reflection inputs are later passes.
+  `[Likely period window]` line (code owns the dates). **Projection nodes
+  (§4, T-C.3a):** the `tracker-projection-loop` + Unruh `tracker_project`
+  reconcile mint the persistent expiry *reminder* nodes + the menses *hold*
+  node (see the loops table). **Reflection inputs (T-C.3b.1):** `reflection_series`
+  feeds `windowSeries` + watchdog flags into the pondering reflection (see the
+  Reflection loop section). **Offer-a-tracker (§5.4, T-C.3b.2):** a recurring
+  lapse class from the needs ledger (missed ≥3× in 30 days, no tracker covering
+  it) earns ONE gentle `[Might be worth offering to track]` cue in `enrich()`,
+  then rests 30 days per class (`src/tracker/offer-tracker.js`, state in
+  `tomes/.offer-tracker.json`). Miss counts ride the recurring anchors enrich
+  already fetched; the one tracker read happens only when a fresh candidate
+  survives cooldown. Care-first, never deficit-framed; sensitive-health concerns
+  (menses/compulsion) never offered. Readiness-miss as a second source awaits a
+  durable readiness-lapse ledger (stewardship's readiness flag is ephemeral).
   **Ward-facing management (§7, 0.14.10):** Unruh `archive_tracker` (soft-pause —
   keeps data, drops out of the active list/cues/projections/capture; `archived_at`
   column, migration `0008`) + `drop_tracker` (hard delete, CASCADE) behind the

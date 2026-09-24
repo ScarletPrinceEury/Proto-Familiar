@@ -20,13 +20,17 @@ sources:
   - id: app-js
     type: file
     path: public/app.js
+  - id: tracker-projection-loop-js
+    type: file
+    path: src/schedule/tracker-projection-loop.js
 ---
 
 # Autonomous Loops
 
 Autonomous loops are background workers that run alongside Proto-Familiar's HTTP server and
 act without a human request — checking in during silence, firing a reminder, drifting off to
-ponder an interest, syncing a calendar, curating an old voice clip. CLAUDE.md counts thirteen of
+ponder an interest, syncing a calendar, curating an old voice clip, reconciling a tracker's
+projected schedule nodes. CLAUDE.md counts fourteen of
 them, each booted in `server.js`'s `app.listen()` callback and each stopped from the
 SIGTERM/SIGINT/SIGHUP handler so a clean shutdown can await any in-flight tick [@claude-md]
 [@architecture-doc]. Loops exist
@@ -70,11 +74,16 @@ Every loop follows the same shape, stated in CLAUDE.md as a rule rather than a h
 | Google Calendar sync | `gcal-sync-loop.js` | 60s base tick, ward-configurable interval | **off** | `PROTO_FAMILIAR_GCAL_DISABLED=1` |
 | Content re-gate | `content-regate-loop.js` | 30min | **off** | `PROTO_FAMILIAR_CONTENT_REGATE_DISABLED=1` |
 | Media retention | `media-retention-loop.js` | ~6h | on | `PROTO_FAMILIAR_MEDIA_RETENTION_DISABLED=1` |
+| Tracker projection | `tracker-projection-loop.js` | 30min | on | `PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED=1` |
 
-Content re-gate and media retention are the two most recently added loops, both from later
-milestone work (content-gating Phase B and the voice milestone's Pass 4 respectively) and are
-easy to miss when skimming `server.js`'s boot list because they are opt-in or slow-ticking rather
-than chat-path-adjacent [@content-regate-loop] [@media-retention-loop]. Content re-gate re-tags
+Tracker projection (T-C.3a) is the most recently added loop: it drives one atomic Unruh reconcile
+per tick (`tracker_project`) that mints, updates, and resolves the ward-private schedule nodes
+behind [Trackers](trackers)' pantry-expiry reminders and menses hold windows — see that page for
+the node shapes, the dedup rules, and why neither node kind is ever composed into the Familiar's
+own toolset [@tracker-projection-loop-js]. Content re-gate and media retention preceded it, both
+from later milestone work (content-gating Phase B and the voice milestone's Pass 4 respectively),
+and are easy to miss when skimming `server.js`'s boot list because they are opt-in or slow-ticking
+rather than chat-path-adjacent [@content-regate-loop] [@media-retention-loop]. Content re-gate re-tags
 the ward's own existing private facts against the content-sensitivity scheme in
 [Content-based memory gating](content-gating) once the ward opts in via "Review my private notes
 for content-sharing," batching an LLM judgment over facts written before that gate existed and
@@ -105,9 +114,10 @@ opt-in on top of the loop being enabled at all [@architecture-doc].
 
 ## Loops that defer to crisis handling
 
-Warm reach-out and needs tracking both stand down entirely once the ward's threat tier
-reaches moderate or higher, so they never compete with silence-triage for the moment that
-matters [@architecture-doc]. This is deliberately the opposite failure direction from the
+Warm reach-out, needs tracking, and tracker projection all stand down entirely once the ward's
+threat tier reaches moderate or higher, so none of them compete with silence-triage for the
+moment that matters — a pantry-expiry banner is exactly the kind of low-stakes nudge that must
+never fire into a crisis [@architecture-doc] [@tracker-projection-loop-js]. This is deliberately the opposite failure direction from the
 incident recorded in
 [Proactivity over caution](../decisions/proactivity-over-caution) — deferring a
 companionship signal in favor of the crisis loop is adding caution in a place that costs
@@ -164,6 +174,7 @@ attention, distinguishing "nothing has happened" from "nothing can happen."
 
 - [Noticing](noticing) — the autonomous loop that surfaces aging commitments and overdue events, the no-nag ledger, and how it integrates with entity-as-subject framing.
 - [Pondering](pondering) — the autonomous thought loop, its cadence, and the `read_pondering` tool.
+- [Trackers](trackers) — the pantry-expiry and menses projection nodes the tracker-projection loop reconciles, and why neither is composed into the Familiar's own toolset.
 - [Safety spine](safety-spine) — the crisis-detection and escalation machinery
   silence-triage sits on top of.
 - [Content-based memory gating](content-gating) — the sensitivity scheme content re-gate
