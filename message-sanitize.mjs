@@ -68,7 +68,17 @@ export function collapseToolTurns(messages = []) {
     out.push(m);                                        // user / system / anything else
   }
   return out
-    .map(m => { if (m && m.role === 'assistant') { const { _carrier, ...rest } = m; return rest; } return m; })
+    .map(m => {
+      if (!m || typeof m !== 'object') return m;
+      // Drop the internal merge marker AND `moodTag` (mood-send, §6, INVARIANT
+      // T1). A mood tag is metadata for the Mood tracker + the memorization
+      // calibration corpus ONLY — it must never reach a live provider prompt.
+      // This is THE provider-history boundary (web /api/chat + Discord), so
+      // stripping here guarantees a tagged message's assembled payload is
+      // byte-free of it, whatever a client sends (belt to the client's suspenders).
+      const { _carrier, moodTag, ...rest } = m;
+      return rest;
+    })
     .filter(m => !(m && m.role === 'assistant' && !String(m.content ?? '').trim()));
 }
 

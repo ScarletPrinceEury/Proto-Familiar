@@ -1576,6 +1576,19 @@ def tracker_predictions() -> dict[str, Any]:
 
 
 @mcp.tool()
+def tracker_ensure_from_template(template_id: str) -> dict[str, Any]:
+    """Infrastructure only — find-or-create a tracker for a shipped template,
+    idempotent on the `template` column. Backs the mood-send auto-create (§6):
+    the first mood tag stands the Mood ledger up, every tag after reuses it.
+    Returns {ok, id, created}."""
+    try:
+        with get_conn() as conn:
+            return trk.ensure_from_template(conn, template_id=template_id)
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def tracker_reflection_series(days: int = 10) -> dict[str, Any]:
     """Infrastructure only — the reflection loop's by-day tracker series. Per
     non-archived tracker with entries in the last `days`: a code-aligned by-day

@@ -1095,6 +1095,21 @@ export async function createTrackerFromTemplate({ template_id } = {}) {
   } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
 }
 
+/**
+ * §6 mood-send auto-create: find-or-create a tracker for a shipped template
+ * (idempotent on the `template` column). Code-only — reached from the mood-send
+ * server path, never composed into the Familiar's toolset. Returns
+ * {ok, id, created}; degrades to {ok:false} when Unruh is down.
+ */
+export async function ensureTrackerFromTemplate({ template_id } = {}) {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_ensure_from_template', arguments: { template_id } });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 export async function logTrackerEntry({ tracker_id, payload, ts, supersedes, source } = {}) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };

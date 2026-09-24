@@ -128,3 +128,31 @@ test('the "[HH:MM] null" Discord render can no longer arise from a carrier', () 
   assert.ok(!rendered.some(line => /\bnull\b/.test(line)), 'no "[10:00] null" line');
   assert.deepEqual(rendered, ['user: [10:00] hi', 'assistant: [10:00] the answer']);
 });
+
+// ── mood-send INVARIANT T1 (§6): moodTag never reaches a live provider prompt ──
+
+test('T1: a moodTag on a user message is stripped at the provider-history boundary', () => {
+  const out = collapseToolTurns([
+    { role: 'user', content: "I'm okay today", moodTag: 'numb' },
+    { role: 'assistant', content: 'Glad to hear from you.' },
+    { role: 'user', content: 'and now?', moodTag: 'low' },
+  ]);
+  // Every message survives with role + content intact...
+  assert.deepEqual(roles(out), ['user', 'assistant', 'user']);
+  assert.deepEqual(contents(out), ["I'm okay today", 'Glad to hear from you.', 'and now?']);
+  // ...but not a single moodTag remains anywhere in the assembled payload.
+  assert.ok(out.every(m => !('moodTag' in m)), 'no message object carries moodTag');
+  assert.ok(!JSON.stringify(out).includes('moodTag'), 'assembled payload is byte-free of moodTag');
+  assert.ok(!JSON.stringify(out).match(/numb|low/), 'the tag values never leak into provider history');
+});
+
+test('T1: moodTag is dropped even on a tool-scaffolding turn that gets collapsed', () => {
+  const out = collapseToolTurns([
+    { role: 'user', content: 'log it', moodTag: 'stressed' },
+    { role: 'assistant', content: null, tool_calls: [{ id: '1', function: { name: 'x' } }] },
+    { role: 'tool', tool_call_id: '1', content: 'done' },
+    { role: 'assistant', content: 'Logged.' },
+  ]);
+  assert.ok(!JSON.stringify(out).includes('moodTag'));
+  assert.ok(!JSON.stringify(out).includes('stressed'));
+});

@@ -332,6 +332,20 @@ def test_reflection_series_computes_anticipated_actual_gap_and_skips_empties(con
     assert day["gap"] == -5.0, "code computes actual − anticipated per entry, mean per day"
 
 
+def test_ensure_from_template_is_idempotent(conn):
+    # First tag stands the Mood ledger up...
+    a = tracker.ensure_from_template(conn, template_id="mood")
+    assert a["ok"] and a["created"] is True
+    # ...every tag after reuses it — no duplicates.
+    b = tracker.ensure_from_template(conn, template_id="mood")
+    assert b["ok"] and b["created"] is False and b["id"] == a["id"]
+    moods = [t for t in tracker.list_trackers(conn) if t["label"] == "Mood"]
+    assert len(moods) == 1, "exactly one Mood tracker after repeated ensures"
+    # An unknown template still errors (via create_from_template).
+    with pytest.raises(ValueError):
+        tracker.ensure_from_template(conn, template_id="nope")
+
+
 def test_reflection_series_skips_archived(conn):
     tid = tracker.create_tracker(conn, label="Mood", archetype="series",
                                  schema=[{"name": "m", "type": "text"}])["id"]

@@ -659,6 +659,18 @@ Currently owns:
   survives cooldown. Care-first, never deficit-framed; sensitive-health concerns
   (menses/compulsion) never offered. Readiness-miss as a second source awaits a
   durable readiness-lapse ledger (stewardship's readiness flag is ephemeral).
+  **Mood-tagged send (§6, T-D, learning-only — T-D.1a 0.14.15):** a `moodTag`
+  rides beside a web send as its own `/api/chat` field (never inside `messages`).
+  Server-side it fire-and-forgets two learning-only writes — `ensureTrackerFromTemplate('mood')`
+  (idempotent find-or-create on the `template` column) + `logTrackerEntry`
+  (`source:'send-button'`, Unruh's `validate_entry` gates the palette) — with NO
+  threat effect (ward decision: the valence→threat link is deferred to a later
+  signed-off pass; when built, the distress set is low+numb+stressed). **INVARIANT
+  T1:** `moodTag` never reaches a live prompt — it is metadata for the Mood
+  tracker + the memorization corpus only, and `collapseToolTurns` (the
+  provider-history boundary) strips it from every message so a tagged turn's
+  assembled payload is byte-free of it. The composer UI + soft lock (T-D.1b) is
+  a later pass.
   **Ward-facing management (§7, 0.14.10):** Unruh `archive_tracker` (soft-pause —
   keeps data, drops out of the active list/cues/projections/capture; `archived_at`
   column, migration `0008`) + `drop_tracker` (hard delete, CASCADE) behind the
