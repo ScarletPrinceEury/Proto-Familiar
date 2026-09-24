@@ -781,11 +781,21 @@ off). Console↔UI parity holds.
    aging/dedup pipeline. Tests: `test_tracker.py` (only low+overdue surface;
    fine/fading/extreme/archived excluded), `tracker-cues.test.mjs` (band-aware
    lines; stale format intact).
-   - **G-B.2 (next):** the **UI meter + one-tap refill** in the Trackers tab, the
-     **memorization refill** confirm (§10.4 — a gauge refill is a `{}`-payload
-     entry through the existing `tracker_observations` gate), and the gauge
-     **reflection input** (recent refills; gauges already flow through
-     `reflection_series`, may add the band). Palette/meter wording ward-reviewed.
+   - **G-B.2 ✓ SHIPPED (0.14.18) — gauge G-B COMPLETE:** the Trackers-tab UI.
+     A calm **fill meter** (`keTrackerSummary` gauge branch — a band-coloured bar
+     that drains as the gauge does; the `config`-in-read from G-A gives the
+     thresholds; level is pure-derived server-side) + a **one-tap refill** button
+     (gauge, non-archived) → `POST /api/trackers/:id/entries` (`source:'ui'`, an
+     empty payload IS a valid refill — the entry's existence is the signal;
+     `validate_entry` gates), which returns the fresh read so the meter updates
+     in place. **Memorization refill (§10.4) rides the existing path** — the
+     memorization legend already carries gauges (id·label·archetype·fields), so
+     a `{}` `tracker_observation` refills a gauge through the same
+     `validate_entry` gate (test: a `{}` entry tops a gauge back to fine/1.0).
+     **Gauge reflection input** rides the existing `reflection_series` — a
+     gauge's per-day refill count is its by-day signal (no gauge-specific change
+     needed). Tests: `test_tracker.py` (refill tops to full). **UI meter/refill
+     wording ward-reviewed live** (front-end not visually verifiable here).
 3. **G-C (SAFETY — ward sign-off in this pass):** the check→crisis ladder — check via
    `reach_out_to_ward`, the confirm gate, the bounded `flag_distress` raise, the
    opt-in `contactDeadlineFor` contact path + mirror. G1/G2/G4/G5/G6 tests. **Ward
