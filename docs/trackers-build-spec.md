@@ -824,13 +824,34 @@ off). Console↔UI parity holds.
      `gaugeEscalationCandidates`. Tests: `test_tracker.py` (validation +
      enabled-only candidates), `gauge-escalation.test.mjs` (open/close/prune,
      message, one-banner dedup, disabled/degrade, the G1 structural pin).
-   - **G-C.2 (next, SAFETY):** the confirmed-crisis branch — a pure
-     **active-hours deadline** helper (quiet-hours-aware, ward decision), and on
-     an unanswered check past `checkin_deadline_hours` (or a ward-confirmed
-     no): the bounded `flagDistress` raise (`gauge-critical` reason) + the
-     opt-in `contactDeadlineFor` contact path with the no-covert-contact mirror,
-     under `PROTO_FAMILIAR_THREAT_DISABLED` stand-down. G1 (full) / G4 / G5 / G6
-     pipeline tests.
+   - **G-C.2 ✓ SHIPPED (0.14.21) — the TEETH:** `src/schedule/gauge-crisis.js`
+     (the ONE gauge crisis-call site) + `src/schedule/active-hours.js` (the pure
+     quiet-hours-aware deadline math). Rides the needs-loop timer STRICTLY AFTER
+     the check tick (so it only ever sees checks the check phase left open),
+     sharing `.gauge-checks.json` via the check module's exported
+     `readCheckState`/`writeCheckState`. **G1 (check-first) is now behavioural:**
+     an escalation fires only for a gauge that is (a) still `extreme`, (b) has an
+     OPEN check, (c) unanswered for its full `checkin_deadline_hours` counted in
+     ACTIVE time (`activeMsInInterval` — quiet hours excluded, so a check opening
+     at 11pm doesn't expire at 5am; DST/midnight handled by Intl, not hand-rolled
+     algebra), and (d) hasn't already escalated — stamped `escalatedAt`, once per
+     open check. Then in order: **step 2** `flagDistress({reason:'gauge-critical:…'})`
+     floors threat to severe (weight/dedup/floor byte-identical; only `reason`
+     conveys cause) → the existing silence-triage loop's severe-tier look does
+     the deliberation (ride the loop, no added call); **step 3** OPT-IN per gauge
+     — `deliverToTrustedContact` reaches `escalation.contact_id`, which mirrors
+     every send to the ward's outbox (no-covert-contact enforced there). A
+     throwing flag leaves the check un-stamped (raise retries; contact skipped);
+     a throwing contact never un-does the flag. Off-switch (shared)
+     `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED=1`; stands down under
+     `PROTO_FAMILIAR_THREAT_DISABLED=1` because `flagDistress` no-ops there.
+     Tests: `active-hours.test.mjs` (quiet-window/wrap/cap math),
+     `gauge-crisis.test.mjs` (**G1 full** — no-check/within-deadline/past-deadline/
+     dedup/recovered, opt-in contact + mirror, flag-throw un-stamped,
+     contact-throw survives, disabled/degrade, crisis-calls-isolated). **Deferred
+     by design (flag for veto):** a check resolves by the gauge RECOVERING (a
+     log/refill closes it); there is no separate "dismiss the banner without
+     logging" stand-down — refilling is the one-tap resolution.
 
 **Do-not-touch (gauge):** no crisis-signals tier/weight changes beyond the bounded
 `gauge-critical` source on the CONFIRMED branch; the check-first gate and all

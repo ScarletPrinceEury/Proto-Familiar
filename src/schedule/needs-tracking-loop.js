@@ -26,6 +26,7 @@ import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync } from '../../cerebellum.js';
 import { selectMissedOccurrences, isNeedWindow } from './needs-tracking.js';
 import { runGaugeCheckTick } from './gauge-escalation.js';
+import { runGaugeCrisisTick } from './gauge-crisis.js';
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — bookkeeping wants no urgency
 const STAND_DOWN_TIERS = new Set(['moderate', 'high', 'severe']);
@@ -96,12 +97,17 @@ export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
     if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
     _active = (async () => {
       await runNeedsTick().catch(err => console.warn('[needs] tick error:', err?.message ?? err));
-      // Gauge safety-ladder CHECK (§10.6, G-C) rides this same timer (reuse, don't
-      // add a loop). It runs INDEPENDENT of the needs threat stand-down — a
-      // "have you eaten in 3 days?" check is the care that matters most in a rough
-      // stretch. Own off-switch (PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED); opt-in
-      // per gauge, off by default. No threat/contact in this pass (that's G-C.2).
+      // Gauge safety-ladder (§10.6, G-C) rides this same timer (reuse, don't add
+      // a loop). It runs INDEPENDENT of the needs threat stand-down — a "have you
+      // eaten in 3 days?" check is the care that matters most in a rough stretch.
+      // Own off-switch (PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED); opt-in per
+      // gauge, off by default. Two phases in order: the CHECK tick opens/closes
+      // checks, then the CRISIS tick (G-C.2) reads the state the check tick just
+      // wrote and, for a check still open past its active-hours deadline, raises
+      // threat + reaches the opt-in contact. Crisis strictly after check so it
+      // can only ever act on a check this tick's check phase left open.
       await runGaugeCheckTick().catch(err => console.warn('[gauge-check] tick error:', err?.message ?? err));
+      await runGaugeCrisisTick().catch(err => console.warn('[gauge-crisis] tick error:', err?.message ?? err));
     })().finally(() => { _active = null; });
   }, tickMs);
   _interval.unref?.();

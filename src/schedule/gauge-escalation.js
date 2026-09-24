@@ -8,11 +8,14 @@
  * A human-confirmable check stands between "my data looks alarming" and any
  * alarm. This is invariant G1.
  *
- * **This pass (G-C.1) builds ONLY the check** — open on extreme, close on
- * refill/recovery. There is NO threat raise and NO contact anywhere in this
- * file yet; the confirmed-crisis branch (deadline → flag_distress → opt-in
- * contact) is G-C.2. So G1 holds here structurally: nothing can escalate
- * because no escalation code exists.
+ * **This module owns ONLY the check** — open on extreme, close on
+ * refill/recovery. It stays crisis-free BY DESIGN: there is no threat raise and
+ * no contact anywhere in this file, and it imports no crisis module (a
+ * structural pin holds this). The teeth (deadline → flag_distress → opt-in
+ * contact, G-C.2) live in the sibling `gauge-crisis.js`, which reads the same
+ * check state through `readCheckState`/`writeCheckState` below and can only
+ * fire for a check THIS module already opened — so invariant G1 (check-first)
+ * is structural on the check side and behavioural on the crisis side.
  *
  * Ward decisions baked in: extreme hydration 48h / meals 72h (the gauge
  * templates' own `extreme_hours`); escalation opt-in per gauge, off by default.
@@ -93,6 +96,19 @@ export function buildGaugeCheckMessage({ label, hours_since, escalation } = {}) 
 
 function file(tomesDir) { return path.join(tomesDir, FILENAME); }
 
+// The check state ({ [gaugeId]: { checkOpenedAt, escalatedAt? } }) is owned
+// here — both this CHECK tick and the G-C.2 crisis tick (gauge-crisis.js) read
+// and write it through these accessors, so there's one owner of the file and
+// no path duplicated across the two modules. `escalatedAt` is stamped by the
+// crisis tick and left intact by this module (an already-open check is never
+// re-opened, so its stamp survives until the check closes on recovery).
+export async function readCheckState({ tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  return readJsonState(file(tomesDir), {});
+}
+export async function writeCheckState(state, { tomesDir = DEFAULT_TOMES_DIR } = {}) {
+  return writeJsonState(file(tomesDir), state);
+}
+
 /**
  * One tick of the check ladder (G-C.1). Rides the needs-tracking loop's timer.
  * Reads escalation-enabled gauges, opens/closes checks, delivers an open check
@@ -116,7 +132,7 @@ export async function runGaugeCheckTick({
     catch { return { reason: 'unruh-unavailable' }; }
   }
 
-  const state = await readJsonState(file(tomesDir), {});
+  const state = await readCheckState({ tomesDir });
   const { actions, nextState } = selectGaugeCheckActions({ candidates: list, checkState: state, now });
 
   let opened = 0;
@@ -130,7 +146,7 @@ export async function runGaugeCheckTick({
       delete nextState[a.id];
     }
   }
-  await writeJsonState(file(tomesDir), nextState);
+  await writeCheckState(nextState, { tomesDir });
   if (opened) console.log(`[gauge-check] opened ${opened} care check(s)`);
   return { reason: 'ran', opened, closed: actions.filter(x => x.kind === 'close').length };
 }
