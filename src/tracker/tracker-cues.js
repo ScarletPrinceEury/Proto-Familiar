@@ -93,10 +93,12 @@ function sinceText(hours) {
 }
 
 /**
- * The first-person cue block — server-injected context, so it uses the literal
- * "my human", names what the cue is for plainly, and makes clear it's an offer
- * I won't keep re-raising (no bias-toward-quiet language, no over-nagging).
- * Returns '' for an empty set.
+ * The first-person cue block — server-injected context. Names what the cue is
+ * for plainly, and makes clear it's an offer I won't keep re-raising (no
+ * bias-toward-quiet language, no over-nagging). Carries a {{user}} token by
+ * design: thalamus resolves it to my human's configured name at the injection
+ * point (the narrow ward-asked exception to the "injected blocks are literal"
+ * rule) — don't rewrite it to "my human" here. Returns '' for an empty set.
  */
 export function buildTrackerCueBlock(items) {
   if (!Array.isArray(items) || !items.length) return '';
@@ -115,7 +117,7 @@ export function buildTrackerCueBlock(items) {
   return [
     '[Tracker cues]',
     ...lines,
-    "Things I keep an eye on for my human that have gone quiet or drifted low. If it fits what we're already on, I can gently check in and log where it stands now with tracker_log (a gauge just needs a refill) — or leave it if the moment isn't there. Either way I've noted it and won't keep re-raising the same one.",
+    'Some of the things I track for {{user}}. I should check on the worrisome ones, and log any info from the conversation that is relevant to these in them, if any. Also refill gauges if appropriate.',
   ].join('\n');
 }
 

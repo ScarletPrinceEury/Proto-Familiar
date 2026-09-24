@@ -1210,6 +1210,20 @@ export async function trackerGaugeCues() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), gauges: [] }; }
 }
 
+/**
+ * §10.6 safety ladder input — escalation-ENABLED gauges with band + last refill.
+ * Code-only (the gauge-check loop reads it; never in the Familiar's toolset).
+ * Degrades to an empty list when Unruh is down. Returns {ok, gauges:[...]}.
+ */
+export async function gaugeEscalationCandidates() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected', gauges: [] };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_gauge_escalations', arguments: {} });
+    return parseToolText(r, { ok: false, gauges: [] });
+  } catch (err) { return { ok: false, error: err?.message ?? String(err), gauges: [] }; }
+}
+
 // §4 inventory-expiry: pantry-class items within `within_days` of expiry, for the
 // "use first" line. Shaped fallback so a down peer renders absence.
 export async function trackerExpiring({ within_days = 3 } = {}) {
@@ -2860,10 +2874,20 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
     if (reachOutBlock)          dynamicSections.push(reachOutBlock);
     if (recentMemBlock)         dynamicSections.push(recentMemBlock);
     if (gcalCueBlock)           dynamicSections.push(gcalCueBlock);
-    if (trackerCueBlock)        dynamicSections.push(trackerCueBlock);
+    // The two tracker cue blocks deliberately carry a {{user}} token so they can
+    // name my human by their configured name. Injected context blocks normally
+    // author the literal "my human" and skip macro resolution (0.7.83 audit) —
+    // this is the narrow, ward-asked exception, resolved locally on just these
+    // two blocks (thalamus stays macro-import-free; every other block is literal).
+    const wardNameForCues = (() => {
+      try { return JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')).userName || 'my human'; }
+      catch { return 'my human'; }
+    })();
+    const resolveWardName = (b) => (b ? b.replaceAll('{{user}}', wardNameForCues) : b);
+    if (trackerCueBlock)        dynamicSections.push(resolveWardName(trackerCueBlock));
     if (eatFirstBlock)          dynamicSections.push(eatFirstBlock);
     if (mensesWindowBlock)      dynamicSections.push(mensesWindowBlock);
-    if (offerTrackerBlock)      dynamicSections.push(offerTrackerBlock);
+    if (offerTrackerBlock)      dynamicSections.push(resolveWardName(offerTrackerBlock));
     if (consentPendingBlock)    dynamicSections.push(consentPendingBlock);
     if (graduationBlock)        dynamicSections.push(graduationBlock);
     if (disclosureBlock)        dynamicSections.push(disclosureBlock);

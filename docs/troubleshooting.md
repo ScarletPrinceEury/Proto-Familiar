@@ -570,6 +570,7 @@ is not an off-switch.
 |---|---|
 | `PROTO_FAMILIAR_TRACKERS_DISABLED` | trackers entirely (tools, cues, projections, passive capture, mood-send) |
 | `PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED` | the projection tick that mints schedule nodes from trackers — pantry-expiry reminders and the likely-period hold-block (the derived in-context lines still show) |
+| `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED` | the gauge safety-ladder check (a decaying-upkeep gauge going critical opens a "are you okay?" check) — gauges still decay + cue |
 
 **Village and tools**
 

@@ -1563,6 +1563,19 @@ def tracker_gauge_cues() -> dict[str, Any]:
 
 
 @mcp.tool()
+def tracker_gauge_escalations() -> dict[str, Any]:
+    """Infrastructure only (§10.6) — gauges whose safety-ladder escalation is
+    ENABLED, with their current band + last refill, for the check-first loop.
+    Not composed into the Familiar's toolset; the Node loop owns every decision.
+    Returns {ok, gauges:[{id, label, band, hours_since, last_refill_at, escalation}]}."""
+    try:
+        with get_conn() as conn:
+            return {"ok": True, **trk.gauge_escalation_candidates(conn)}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def tracker_expiring(within_days: int = 3) -> dict[str, Any]:
     """I use this to see which pantry-class items are about to go off — inventory
     trackers with date projection on, whose `expires` is within `within_days`

@@ -644,7 +644,14 @@ Currently owns:
   candidate), same aging/dedup pipeline. **Gauge archetype (§10, G-A):** decaying
   upkeep — `gauge_level(lastRefillTs, config, now)` derives a pure `{level, band,
   hoursSince}` (bands: fine/fading/low/overdue/extreme); refills log like series;
-  the safety ladder (extreme → check → crisis) is G-C, ward-signed, not yet built.
+  the safety ladder (extreme → check → crisis) is G-C, ward-signed. **G-C.1
+  (the CHECK, 0.14.19):** `src/schedule/gauge-escalation.js` — an escalation-enabled
+  gauge reaching `extreme` opens a warm code-built "are you okay?" reach-out
+  (outbox `gauge-check`); a refill/recovery closes it. NO threat/contact (G1
+  holds structurally — that's G-C.2). Rides the needs-tracking loop's timer but
+  independent of its threat stand-down; off-switch
+  `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED`. Unruh `gauge_escalation_candidates`
+  (via `gaugeEscalationCandidates`) feeds it; the Node loop owns every decision.
   **Gauge UI (G-B.2):** the Trackers tab renders a calm band-coloured **fill
   meter** + a **one-tap refill** (gauge only) → `POST /api/trackers/:id/entries`
   (`source:'ui'`; an empty payload is a valid refill), returning the fresh read

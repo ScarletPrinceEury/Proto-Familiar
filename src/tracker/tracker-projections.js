@@ -65,7 +65,7 @@ export function buildEatFirstBlock(items, { foodTopic = false } = {}) {
   const more = items.length > MAX_EAT_FIRST ? ` (+${items.length - MAX_EAT_FIRST} more)` : '';
   const block = `[Pantry — use first]\n${line}${more}`;
   if (!foodTopic) return block;
-  return `${block}\nMy human's on the subject of food — a good moment to bring up what's about to go off.`;
+  return `${block}\nOh, right, on the topic of food, I should suggest to use up some food about to go off.`;
 }
 
 // Locale-free "Mon D" — code owns the date (exact-values rule); the model only

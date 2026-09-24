@@ -193,6 +193,54 @@ def gauge_bands(config: dict[str, Any]) -> dict[str, float]:
     return {"grace": grace, "low": low, "overdue": overdue, "extreme": extreme}
 
 
+def validate_escalation(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate the OPTIONAL gauge safety-ladder block (§10.3 escalation).
+    Absent / not enabled → no-op (a gauge cues and stops). When enabled it needs
+    a positive `checkin_deadline_hours`; `contact` (opt-in) requires a
+    `contact_id`. Raises ValueError on a malformed block — the ladder is
+    safety-critical, so a half-specified escalation must not silently create."""
+    g = (config or {}).get("gauge", {}) if isinstance(config, dict) else {}
+    esc = g.get("escalation")
+    if esc is None:
+        return {}
+    if not isinstance(esc, dict):
+        raise ValueError("gauge escalation must be an object")
+    if not esc.get("enabled"):
+        return esc  # disabled block may sit incomplete; it never runs
+    dl = esc.get("checkin_deadline_hours")
+    if not isinstance(dl, (int, float)) or isinstance(dl, bool) or dl <= 0:
+        raise ValueError("an enabled escalation needs a positive checkin_deadline_hours")
+    if esc.get("contact"):
+        if not esc.get("contact_id") or not isinstance(esc.get("contact_id"), str):
+            raise ValueError("escalation.contact requires a contact_id (which trusted contact to reach)")
+    return esc
+
+
+def gauge_escalation_candidates(conn: sqlite3.Connection, *, now: datetime | None = None) -> dict[str, Any]:
+    """§10.6 safety ladder input: gauges whose escalation block is ENABLED, with
+    their current band + last refill. The Node loop owns the check state and every
+    decision; this just hands it the derived facts (code owns the band/time).
+    Returns {gauges: [{id, label, band, hours_since, last_refill_at, escalation}]}."""
+    out = []
+    for r in conn.execute("SELECT * FROM trackers WHERE archetype='gauge' AND archived_at IS NULL").fetchall():
+        cfg = json.loads(r["config_json"] or "{}")
+        esc = (cfg.get("gauge", {}) or {}).get("escalation", {})
+        if not (isinstance(esc, dict) and esc.get("enabled")):
+            continue
+        last = conn.execute(
+            "SELECT ts FROM tracker_entries WHERE tracker_id = ? AND superseded = 0 ORDER BY ts DESC LIMIT 1",
+            (r["id"],),
+        ).fetchone()
+        try:
+            g = gauge_level(last["ts"] if last else None, cfg, now=now)
+        except ValueError:
+            continue
+        out.append({"id": r["id"], "label": r["label"], "band": g["band"],
+                    "hours_since": g["hours_since"], "last_refill_at": last["ts"] if last else None,
+                    "escalation": esc})
+    return {"gauges": out}
+
+
 def gauge_level(last_refill_ts: str | None, config: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     """Derive a gauge's current level from time since the last refill. PURE — the
     model never sets this. Returns {level: 0..1, band, hours_since}. With no refill
@@ -241,6 +289,7 @@ def create_tracker(conn: sqlite3.Connection, *, label: str, archetype: str,
     cfg = dict(config or {})
     if archetype == "gauge":
         gauge_bands(cfg)  # validate ordering up front
+        validate_escalation(cfg)  # validate the (optional) safety-ladder block
     ts = now_iso()
     tid = insert_with_slug_retry(
         conn,

@@ -188,6 +188,34 @@ def test_gauge_refill_tops_it_back_to_full(conn):
     assert r["band"] == "fine" and r["level"] == 1.0
 
 
+def test_validate_escalation_rules(conn):
+    ok = {"gauge": {"grace_hours": 3, "low_hours": 6, "overdue_hours": 12, "extreme_hours": 48}}
+    tracker.validate_escalation(ok)                                   # absent block → fine
+    tracker.validate_escalation({"gauge": {**ok["gauge"], "escalation": {"enabled": False}}})  # disabled may be incomplete
+    tracker.validate_escalation({"gauge": {**ok["gauge"], "escalation": {"enabled": True, "checkin_deadline_hours": 6}}})
+    with pytest.raises(ValueError):   # enabled needs a positive deadline
+        tracker.validate_escalation({"gauge": {**ok["gauge"], "escalation": {"enabled": True}}})
+    with pytest.raises(ValueError):
+        tracker.validate_escalation({"gauge": {**ok["gauge"], "escalation": {"enabled": True, "checkin_deadline_hours": 0}}})
+    with pytest.raises(ValueError):   # contact needs a contact_id
+        tracker.validate_escalation({"gauge": {**ok["gauge"], "escalation": {"enabled": True, "checkin_deadline_hours": 6, "contact": True}}})
+    # A gauge with a malformed enabled escalation must not create.
+    with pytest.raises(ValueError):
+        tracker.create_tracker(conn, label="Bad", archetype="gauge",
+                               config={"gauge": {**ok["gauge"], "escalation": {"enabled": True}}})
+
+
+def test_gauge_escalation_candidates_only_enabled(conn):
+    ecfg = {"gauge": {"grace_hours": 3, "low_hours": 6, "overdue_hours": 12, "extreme_hours": 48,
+                      "escalation": {"enabled": True, "checkin_deadline_hours": 6}}}
+    eid = tracker.create_tracker(conn, label="Water", archetype="gauge", config=ecfg)["id"]
+    tracker.log_entry(conn, tracker_id=eid, payload={}, ts=(NOW - timedelta(hours=50)).isoformat())  # extreme
+    tracker.create_tracker(conn, label="Plain", archetype="gauge", config=GCFG)  # no escalation → not a candidate
+    out = tracker.gauge_escalation_candidates(conn, now=NOW)["gauges"]
+    assert [g["label"] for g in out] == ["Water"]
+    assert out[0]["band"] == "extreme" and out[0]["escalation"]["enabled"] is True
+
+
 def test_gauge_cue_candidates_only_low_and_overdue(conn):
     def gauge(label, hours_ago):
         gid = tracker.create_tracker(conn, label=label, archetype="gauge", config=GCFG)["id"]

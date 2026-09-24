@@ -796,11 +796,41 @@ off). Console↔UI parity holds.
      gauge's per-day refill count is its by-day signal (no gauge-specific change
      needed). Tests: `test_tracker.py` (refill tops to full). **UI meter/refill
      wording ward-reviewed live** (front-end not visually verifiable here).
-3. **G-C (SAFETY — ward sign-off in this pass):** the check→crisis ladder — check via
-   `reach_out_to_ward`, the confirm gate, the bounded `flag_distress` raise, the
-   opt-in `contactDeadlineFor` contact path + mirror. G1/G2/G4/G5/G6 tests. **Ward
-   reviews: `extreme_hours` per template, `checkin_deadline` defaults, the reach-out
-   wording, and that G1 (check-first) holds.**
+3. **G-C (SAFETY — ward sign-off 2026-09):** the check→crisis ladder, split into
+   two tested halves. **WARD SIGN-OFF given:** G1 check-first design approved;
+   extreme hydration 48h / meals 72h; **check-in deadline 6 hours of ACTIVE time
+   — quiet hours do NOT count toward it** (ward refinement — a check opening at
+   11pm must not escalate at 5am); trusted-contact path wired as opt-in per
+   gauge. The confirmed-crisis raise conveys `gauge-critical` context via
+   `flagDistress`'s `reason` (its ward-signed weight/dedup logic stays
+   byte-identical — no source-param change).
+   - **G-C.1 ✓ SHIPPED (0.14.19) — the CHECK only, no crisis:**
+     `src/schedule/gauge-escalation.js`. A gauge reaching `extreme` opens a
+     CHECK — a warm, code-built "I haven't seen {label} logged in {duration} —
+     are you okay?" reach-out (outbox `kind:'gauge-check'`, deduped on the gauge
+     id; the exact duration is code-filled, exact-values rule; DRAFT wording,
+     ward-reviewed; optional per-gauge `escalation.check_phrase`). A refill /
+     band recovery CLOSES it (G2). **NO threat, NO contact exist in this file
+     yet — G1 holds structurally** (a test pins that the module calls no
+     `flagDistress`/`recordThreat`/`contactDeadlineFor`/contact machinery and
+     imports no crisis module). Rides the needs-tracking loop's timer (reuse,
+     don't add a loop) but runs INDEPENDENT of the needs threat stand-down (a
+     "have you eaten in 3 days?" check is care that matters most in a rough
+     stretch — noticing precedent). Off-switch
+     `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED=1`. Unruh: `validate_escalation`
+     (an enabled block needs a positive `checkin_deadline_hours`; `contact`
+     needs a `contact_id`; malformed → no create), `gauge_escalation_candidates`
+     (escalation-enabled gauges + band) → `tracker_gauge_escalations` +
+     `gaugeEscalationCandidates`. Tests: `test_tracker.py` (validation +
+     enabled-only candidates), `gauge-escalation.test.mjs` (open/close/prune,
+     message, one-banner dedup, disabled/degrade, the G1 structural pin).
+   - **G-C.2 (next, SAFETY):** the confirmed-crisis branch — a pure
+     **active-hours deadline** helper (quiet-hours-aware, ward decision), and on
+     an unanswered check past `checkin_deadline_hours` (or a ward-confirmed
+     no): the bounded `flagDistress` raise (`gauge-critical` reason) + the
+     opt-in `contactDeadlineFor` contact path with the no-covert-contact mirror,
+     under `PROTO_FAMILIAR_THREAT_DISABLED` stand-down. G1 (full) / G4 / G5 / G6
+     pipeline tests.
 
 **Do-not-touch (gauge):** no crisis-signals tier/weight changes beyond the bounded
 `gauge-critical` source on the CONFIRMED branch; the check-first gate and all
