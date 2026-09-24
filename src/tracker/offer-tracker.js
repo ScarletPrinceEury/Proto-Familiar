@@ -130,8 +130,8 @@ export function buildOfferTrackerBlock(cue) {
   if (!cue || !cue.label) return '';
   return [
     '[Might be worth offering to track]',
-    `  — ${cue.label}: a recurring snag for my human this month (${cue.count} times I've noticed), and there's no ledger for it yet.`,
-    'A good one to offer to track together — so we can watch for a pattern worth getting ahead of. Whether to track is theirs to choose; making the offer is mine. I\'ve noted it and won\'t raise the same one again for a while.',
+    `  — ${cue.label}: missed ${cue.count} times this month, and there's no tracker for it.`,
+    "I can offer to set up a tracker with my human when they keep missing or forgetting the same kind of thing — might help us catch what's going on. Their call whether to; I've noted it and won't keep bringing the same one up.",
   ].join('\n');
 }
 
