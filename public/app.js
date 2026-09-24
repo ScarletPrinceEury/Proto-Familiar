@@ -493,6 +493,14 @@ const state = {
   // sleep, pantry, laundry, upkeep gauges). Default ON but inert until a tracker
   // exists; off = no tracker tools surfaced, no cues, no capture.
   trackersEnabled: true,
+  // Mood-tagged send (§6, T-D). A one-tap mood palette beside send. LEARNING-
+  // ONLY: a tag feeds the Mood tracker + memorization corpus, never a live
+  // prompt (INVARIANT T1). `moodSendEnabled` is the opt-in toggle after
+  // onboarding; `moodSendOnboardedAt` stamps the 14-day soft-lock window on
+  // first boot (fresh install → now + enabled; existing install → past +
+  // opt-in, so we never hijack a composer they've been using). null = unstamped.
+  moodSendEnabled: false,
+  moodSendOnboardedAt: null,
   // Crisis ML classifier (docs/crisis-classifier-build-spec.md) — a raise-only
   // second opinion on distress + a pro-suicide-register warning. Default ON, but
   // INERT until a trained model artifact exists and the seam is wired (gated on
@@ -617,7 +625,7 @@ const SERVER_SYNCED_KEYS = [
   'villageAutoRegisterLocations',
   'featureConnections',
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
-  'trackersEnabled',
+  'trackersEnabled', 'moodSendEnabled', 'moodSendOnboardedAt',
   'crisisClassifierEnabled', 'crisisNormalizationEnabled',
   'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
@@ -3587,7 +3595,124 @@ async function linkPendingToNode(attachment, node) {
   closeTagPicker();
 }
 
-async function sendMessage(userInput) {
+// ── Mood-tagged send (§6, T-D) ───────────────────────────────────────────────
+// The 3×3 circumplex palette: rows are mood clusters (bright/okay → wound-up →
+// worn-down), loosely high→low energy. Keys MUST match the Mood template enum
+// (unruh/.../templates/trackers/mood.json) — Unruh's validate_entry is the gate.
+// LEARNING-ONLY: a tag rides beside the turn (never in `messages`), feeds the
+// Mood tracker + memorization corpus, and never reaches a live prompt (T1).
+const MOOD_PALETTE = [
+  { key: 'energized', emoji: '😄', row: 'bright' },
+  { key: 'good',      emoji: '🙂', row: 'bright' },
+  { key: 'calm',      emoji: '😌', row: 'bright' },
+  { key: 'stressed',  emoji: '😣', row: 'wound' },
+  { key: 'angry',     emoji: '😠', row: 'wound' },
+  { key: 'raw',       emoji: '💔', row: 'wound' },
+  { key: 'low',       emoji: '😔', row: 'worn' },
+  { key: 'numb',      emoji: '😶', row: 'worn' },
+  { key: 'done',      emoji: '😤', row: 'worn' },
+];
+const MOOD_ONBOARD_MS = 14 * 24 * 3600 * 1000;   // soft-lock window: 14 days
+
+// Within the soft-lock window from the stamp → mood-send is primary and shown
+// regardless of the toggle. A stamp in the past (existing installs) or older
+// than 14 days → not onboarding, so `moodSendEnabled` governs. Pure.
+function moodSendInOnboarding(onboardedAt, now = Date.now()) {
+  if (!Number.isFinite(onboardedAt)) return false;
+  const age = now - onboardedAt;
+  return age >= 0 && age < MOOD_ONBOARD_MS;
+}
+
+// Is the mood palette shown this render? Soft-lock window forces it on;
+// otherwise the opt-in toggle decides. Pure.
+function moodSendVisible(settings, now = Date.now()) {
+  if (!settings) return false;
+  if (moodSendInOnboarding(settings.moodSendOnboardedAt, now)) return true;
+  return settings.moodSendEnabled === true;
+}
+
+// Stamp the onboarding window once, on the first boot that lacks it. A FRESH
+// install (no prior turns) starts the 14-day soft lock with the toggle on; an
+// EXISTING install (has history) is stamped into the past with the toggle off —
+// pure opt-in, so mood-send never takes over a composer they've been using.
+// Mutates + returns the settings object. Idempotent once stamped.
+function ensureMoodOnboarding(s, now = Date.now()) {
+  if (!s || s.moodSendOnboardedAt != null) return s;
+  const fresh = (s.turnCount ?? 0) === 0 && !(Array.isArray(s.messages) && s.messages.length);
+  if (fresh) {
+    s.moodSendOnboardedAt = now;
+    if (s.moodSendEnabled == null) s.moodSendEnabled = true;
+  } else {
+    s.moodSendOnboardedAt = now - MOOD_ONBOARD_MS - 1;
+    if (s.moodSendEnabled == null) s.moodSendEnabled = false;
+  }
+  return s;
+}
+
+let _closeMoodPalette = () => {};
+function closeMoodPalette() { try { _closeMoodPalette(); } catch { /* not initialised */ } }
+
+// Build the palette grid, wire the toggle + the Settings checkbox, and set the
+// initial visibility (soft-lock window forces it on and opens it once; otherwise
+// the opt-in toggle decides). Plain send is untouched — the palette is additive.
+function initMoodSend() {
+  const panel  = $('mood-palette');
+  const btn    = $('mood-btn');
+  if (!panel || !btn) return;
+
+  ensureMoodOnboarding(state);
+  saveSettings();
+
+  // Render the 3×3 grid once, from the shared palette definition.
+  panel.innerHTML = '';
+  for (const m of MOOD_PALETTE) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `mood-chip mood-row-${m.row}`;
+    chip.dataset.mood = m.key;
+    chip.title = m.key;
+    chip.setAttribute('aria-label', `Send with mood: ${m.key}`);
+    chip.innerHTML = `<span class="mood-emoji" aria-hidden="true">${m.emoji}</span><span class="mood-key">${esc(m.key)}</span>`;
+    chip.addEventListener('click', () => {
+      const input = $('user-input');
+      const text  = input.value;
+      input.value = '';
+      autoResize(input);
+      setOpen(false);
+      sendMessage(text, m.key);
+    });
+    panel.appendChild(chip);
+  }
+
+  const setOpen = (open) => {
+    panel.classList.toggle('hidden', !open);
+    btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+  };
+  _closeMoodPalette = () => setOpen(false);
+
+  btn.addEventListener('click', () => setOpen(panel.classList.contains('hidden')));
+
+  // The toggle BUTTON shows only while mood-send is visible; hiding it also
+  // collapses the panel. Re-checked whenever the Settings toggle flips.
+  const applyMoodVisibility = () => {
+    const visible = moodSendVisible(state);
+    btn.classList.toggle('hidden', !visible);
+    if (!visible) setOpen(false);
+  };
+  applyMoodVisibility();
+  // During the onboarding window, open the palette ONCE on load so it's found.
+  if (moodSendInOnboarding(state.moodSendOnboardedAt)) setOpen(true);
+
+  const toggle = $('mood-send-toggle');
+  if (toggle) toggle.addEventListener('change', () => {
+    state.moodSendEnabled = toggle.checked;
+    saveSettings();
+    applyMoodVisibility();
+  });
+  window.addEventListener('mood-send-changed', applyMoodVisibility);
+}
+
+async function sendMessage(userInput, moodTag = null) {
   userInput = userInput.trim();
   // Snapshot the pending images (vision) and clear the composer strip — an
   // image-only turn (empty text) is allowed, so only bail when there's neither.
@@ -3646,9 +3771,9 @@ async function sendMessage(userInput) {
     _speakButtonsBeforeTurn = document.querySelectorAll('.msg-speak-btn').length;
     removeContinueRoundsOffer();   // a new turn supersedes any standing offer
     if (state.streaming) {
-      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
+      await doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments, moodTag);
     } else {
-      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments);
+      await doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments, moodTag);
     }
     if (_roundCapHitThisTurn) offerContinueRounds();
     if (state.readAloudByDefault) speakLatestReply(_speakButtonsBeforeTurn);
@@ -3882,6 +4007,10 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
       ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
           ? { sessionAudience: state.sessionAudience }
           : {}),
+      // Mood-tagged send (§6, T-D): the tag rides as its own field — NEVER
+      // inside `messages` (T1). Server logs it to the Mood tracker; the
+      // provider never sees it.
+      ...(typeof moodTag === 'string' && moodTag.trim() ? { moodTag: moodTag.trim() } : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -3975,7 +4104,7 @@ async function attemptStreamingOnce(conn, apiMessages, domArtifacts, userInput, 
   return { content: fullContent, pendingMsgs, finalShell: shell };
 }
 
-async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null) {
+async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null, moodTag = null) {
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -4045,7 +4174,7 @@ async function doStreamingRequest(apiMessages, userInput, userTimestamp, prevUse
       }
       const ts = shell.timeEl?.getAttribute('datetime') || new Date().toISOString();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}) });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp: ts,            id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -4092,6 +4221,10 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
       ...((state.sessionAudience?.participants?.length || state.sessionAudience?.location)
           ? { sessionAudience: state.sessionAudience }
           : {}),
+      // Mood-tagged send (§6, T-D): the tag rides as its own field — NEVER
+      // inside `messages` (T1). Server logs it to the Mood tracker; the
+      // provider never sees it.
+      ...(typeof moodTag === 'string' && moodTag.trim() ? { moodTag: moodTag.trim() } : {}),
       ...toolLoopPayload(),
     }),
   });
@@ -4130,7 +4263,7 @@ async function attemptNonStreamingOnce(conn, apiMessages, domArtifacts, userInpu
   return { content: message?.content ?? '', pendingMsgs, timestamp: roundTs };
 }
 
-async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null) {
+async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prevUserMessageAt, attachments = null, moodTag = null) {
   const sequence    = getConnectionSequence();
   if (sequence.length === 0) {
     throw new Error('No usable connection. Set provider, API key, and model in the Settings panel first.');
@@ -4190,7 +4323,7 @@ async function doNonStreamingRequest(apiMessages, userInput, userTimestamp, prev
       bubble.innerHTML = renderMarkdown(stripDisplayTimestamps(content));
       scrollToBottom();
 
-      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}) });
+      state.messages.push({ role: 'user',      content: userInput, timestamp: userTimestamp, id: generateId(), ...(Array.isArray(attachments) && attachments.length ? { attachments } : {}), ...(moodTag ? { moodTag } : {}) });
       state.messages.push(...pendingMsgs);
       state.messages.push({ role: 'assistant', content,            timestamp,                id: generateId() });
       // Stamp the assistant element's index now that the message is committed,
@@ -4370,6 +4503,7 @@ function readSettingsFromUI() {
   if ($('tome-graduation-toggle')) state.tomeGraduationEnabled = $('tome-graduation-toggle').checked;
   if ($('content-regate-toggle')) state.contentRegateEnabled = $('content-regate-toggle').checked;
   if ($('needs-tracking-toggle')) state.needsTrackingEnabled = $('needs-tracking-toggle').checked;
+  if ($('mood-send-toggle')) state.moodSendEnabled = $('mood-send-toggle').checked;
   if ($('memory-lifecycle-toggle')) state.memoryLifecycleEnabled = $('memory-lifecycle-toggle').checked;
   if ($('ponder-consolidation-toggle')) state.ponderConsolidationEnabled = $('ponder-consolidation-toggle').checked;
   if ($('memory-integrity-toggle')) state.memoryIntegrityEnabled = $('memory-integrity-toggle').checked;
@@ -4586,6 +4720,7 @@ function writeSettingsToUI() {
   if ($('tome-graduation-toggle')) setIfNotFocused($('tome-graduation-toggle'), 'checked', state.tomeGraduationEnabled === true);
   if ($('content-regate-toggle')) setIfNotFocused($('content-regate-toggle'), 'checked', state.contentRegateEnabled === true);
   if ($('needs-tracking-toggle')) setIfNotFocused($('needs-tracking-toggle'), 'checked', state.needsTrackingEnabled === true);
+  if ($('mood-send-toggle')) setIfNotFocused($('mood-send-toggle'), 'checked', state.moodSendEnabled === true);
   if ($('memory-lifecycle-toggle')) setIfNotFocused($('memory-lifecycle-toggle'), 'checked', state.memoryLifecycleEnabled === true);
   if ($('ponder-consolidation-toggle')) setIfNotFocused($('ponder-consolidation-toggle'), 'checked', state.ponderConsolidationEnabled !== false);
   if ($('memory-integrity-toggle')) setIfNotFocused($('memory-integrity-toggle'), 'checked', state.memoryIntegrityEnabled !== false);
@@ -6336,6 +6471,9 @@ function init() {
       imageInput.value = '';   // allow re-picking the same file
     });
   }
+
+  // ── Mood-tagged send (§6, T-D) ─────────────────────────────────
+  initMoodSend();
   // ── Voice notes ────────────────────────────────────────────────
   // Its own visibility rule, from its own consent: listening is a separate
   // switch from seeing, and a microphone button that appears because vision

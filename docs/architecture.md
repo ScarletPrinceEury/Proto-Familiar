@@ -669,8 +669,18 @@ Currently owns:
   T1:** `moodTag` never reaches a live prompt — it is metadata for the Mood
   tracker + the memorization corpus only, and `collapseToolTurns` (the
   provider-history boundary) strips it from every message so a tagged turn's
-  assembled payload is byte-free of it. The composer UI + soft lock (T-D.1b) is
-  a later pass.
+  assembled payload is byte-free of it. **UI (T-D.1b, 0.14.16):** a one-tap
+  **circumplex (mood × energy) palette** beside the composer — a 3×3 grid
+  (energized·good·calm / stressed·angry·raw / low·numb·done; `MOOD_PALETTE` in
+  `public/app.js`, keys match the Mood template enum). `sendMessage(userInput,
+  moodTag)` posts `moodTag` as its own `/api/chat` field + stores it on the
+  `state.messages` user message (never in `apiMessages`; `toApiMessage`
+  whitelists fields, the client-side T1 belt). A **14-day soft lock**
+  (`moodSendOnboardedAt`) shows it to fresh installs; existing installs are
+  stamped past + opt-in (`moodSendEnabled`, Settings toggle) so it never hijacks
+  a composer in use; plain send is untouched. The `raw` (high-energy grief) vs
+  `low` (low-energy depression) split is recorded for the deferred threat pass —
+  high-energy distress is the higher-acuity, self-harm-adjacent signal.
   **Ward-facing management (§7, 0.14.10):** Unruh `archive_tracker` (soft-pause —
   keeps data, drops out of the active list/cues/projections/capture; `archived_at`
   column, migration `0008`) + `drop_tracker` (hard delete, CASCADE) behind the

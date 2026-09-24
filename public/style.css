@@ -1562,6 +1562,39 @@ button { cursor: pointer; font-family: var(--font); }
 }
 .btn-attach:hover { color: var(--accent); border-color: var(--accent); }
 
+/* Mood-tagged send (§6) — the one-tap circumplex palette above the composer.
+   3×3 grid: rows are mood clusters (bright / wound-up / worn-down). */
+.mood-palette {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 8px 14px 4px;
+}
+.mood-palette.hidden { display: none; }
+.mood-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 6px;
+  background: var(--surface-raise);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 0.72rem;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.mood-chip:hover { color: var(--accent); border-color: var(--accent); }
+.mood-chip .mood-emoji { font-size: 1.25rem; line-height: 1; }
+.mood-chip .mood-key { text-transform: capitalize; }
+/* Subtle, theme-safe row tints (fall back to the plain border if color-mix
+   is unsupported). */
+.mood-chip.mood-row-wound { border-color: color-mix(in srgb, var(--border) 65%, #c2683a); }
+.mood-chip.mood-row-worn  { border-color: color-mix(in srgb, var(--border) 65%, #5a6b86); }
+.btn-mood[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.btn-mood.hidden { display: none; }
+
 .attach-strip {
   display: flex;
   flex-wrap: wrap;
