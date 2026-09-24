@@ -3,7 +3,7 @@
   "archetype": "series",
   "sensitive": true,
   "schema": [
-    { "name": "mood", "type": "enum", "required": true, "values": ["good", "calm", "tired", "stressed", "low", "irritable", "numb", "wired"] },
+    { "name": "mood", "type": "enum", "required": true, "values": ["energized", "good", "calm", "stressed", "angry", "raw", "low", "numb", "done"] },
     { "name": "note", "type": "text" },
     { "name": "activity", "type": "text" }
   ],

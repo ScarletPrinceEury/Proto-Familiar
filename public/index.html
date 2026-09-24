@@ -565,7 +565,15 @@
           <!-- Pending image thumbnails (vision) — shown above the composer
                before send; each is removable. Hidden when empty. -->
           <div id="attach-strip" class="attach-strip hidden" aria-label="Attachments to send"></div>
+          <!-- Mood-tagged send (§6). A one-tap circumplex palette (mood × energy)
+               above the composer. Learning-only: a tag feeds the Mood tracker,
+               never the conversation. Hidden until the toggle or onboarding
+               shows it; plain send always works without it. -->
+          <div id="mood-palette" class="mood-palette hidden" role="group" aria-label="Send with a mood tag"></div>
           <div class="input-row">
+            <button id="mood-btn" class="btn-attach btn-mood hidden" title="Send with a mood" aria-label="Send with a mood tag" aria-pressed="false">
+              <span aria-hidden="true">🙂</span>
+            </button>
             <button id="attach-btn" class="btn-attach" title="Attach an image" aria-label="Attach an image">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             </button>
@@ -1948,6 +1956,12 @@
             <input type="checkbox" id="needs-tracking-toggle">
           </div>
           <div class="field-hint">Off by default. When on, your Familiar quietly keeps a record of recurring need-windows it's set up for you (a meal, meds, winding down for sleep): once a window's time has passed without it being met, it's marked <em>missed</em> for that day, building a picture of how your basic needs are actually getting met over time. It stands down whenever you're in distress (that's triage's job, not this), and it only records the miss — whether any knock-on effect followed stays something it has to actually notice and confirm with you.</div>
+
+          <div class="field-row" style="margin-top:12px">
+            <label for="mood-send-toggle">Mood button beside send</label>
+            <input type="checkbox" id="mood-send-toggle">
+          </div>
+          <div class="field-hint">A one-tap mood palette next to the message box: tap how you're feeling — by mood <em>and</em> energy (settled-happy isn't buzzing-happy; curled-up-low isn't raw grief) — and your message sends with that note attached. <strong>It's just for you.</strong> The tag goes into your private Mood tracker and never into what your Familiar reads mid-conversation. New here? It shows for a couple of weeks so you can try it; after that, this toggle keeps it or hides it. Plain send always works without it.</div>
 
           <div class="field-row" style="margin-top:12px">
             <label for="content-regate-toggle">Review my private notes for content-sharing</label>

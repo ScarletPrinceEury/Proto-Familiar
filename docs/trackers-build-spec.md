@@ -548,11 +548,32 @@ add-entry form, series sparklines, and create-from-template in the tab.
      `test_tracker.py` (ensure idempotency), `collapse-tool-turns.test.mjs` (T1
      snapshot — moodTag + its values gone, role/content intact, incl. a collapsed
      tool turn).
-   - **T-D.1b (next):** the composer UI — the 8-mood palette beside send, the
-     soft lock (`moodSendOnboardedAt`, 14-day primary-button window, existing
-     installs never locked), the client wire (post `moodTag`, store it on the
-     session-log message for the corpus, exclude it from `/api/chat` history) +
-     the T9 soft-lock test. **Palette wording/emojis ward-reviewed at merge.**
+   - **T-D.1b ✓ SHIPPED (0.14.16-alpha) — T-D learning-only COMPLETE:** the
+     composer UI. **Palette redesigned with the ward to a circumplex (mood ×
+     energy) grid** — the flat 8 (good/calm/tired/stressed/low/irritable/numb/
+     wired) became a 3×3 of **energized·good·calm / stressed·angry·raw /
+     low·numb·done** (rows = bright → wound-up → worn-down, loosely high→low
+     energy). Key insight the ward surfaced, recorded here for the deferred
+     threat pass: **sadness splits by energy** — `raw` (high-energy anguish/grief)
+     is the higher-acuity, self-harm-adjacent signal; `low` (low-energy curled-up
+     depression) is the withdrawn one — so high-energy distress plausibly earns
+     more weight than low-energy when the threat link is built. The mood template
+     enum now matches these 9 keys (Unruh `validate_entry` is the gate). UI:
+     `public/index.html` (a `mood-btn` toggle + `#mood-palette` grid above the
+     composer), `public/app.js` (`MOOD_PALETTE`, the soft-lock predicates
+     `moodSendInOnboarding`/`moodSendVisible`/`ensureMoodOnboarding`, the palette
+     render + wire, `sendMessage(userInput, moodTag)` threaded through both
+     request paths → posts `moodTag` as its own body field + stores it on the
+     `state.messages` user message, never in `apiMessages`; `toApiMessage`
+     already whitelists fields so it can't leak client-side either), a Settings
+     toggle (`mood-send-toggle`, Automation pane), `public/style.css` (the grid).
+     **Soft lock:** fresh install → `moodSendOnboardedAt=now` + toggle on (14-day
+     window shows it); existing install → stamped past + toggle off (pure opt-in,
+     never hijacks a composer in use). Plain send untouched throughout. Tests:
+     `tests/mood-send.test.mjs` (T9 — the soft-lock predicates + fresh/existing
+     onboarding via the vm-extract harness). **The valence→threat link (T-D.2)
+     remains deferred to its own signed-off pass** (ward: learning-only for now;
+     distress set low+numb+stressed, + the raw/low acuity split above).
 5. **G-A / G-B / G-C:** the `gauge` archetype (§10) — G-A store+derivation, G-B
    cues+UI+capture, **G-C the safety ladder (ward sign-off, §10.6/§10.7)**. These
    extend the milestone after the core archetypes; see §10.11 for the pass detail.
