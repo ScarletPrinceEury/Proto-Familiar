@@ -5,12 +5,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import {
   selectGaugeEscalations, deadlineMsFor, quietConfigFromSettings,
   buildGaugeCrisisReason, buildGaugeContactMessage, runGaugeCrisisTick,
   DEFAULT_DEADLINE_HOURS,
 } from '../src/schedule/gauge-crisis.js';
+import { runGaugeCheckTick } from '../src/schedule/gauge-escalation.js';
+import { deliverToTrustedContact } from '../cerebellum.js';
+import { getThreat } from '../src/safety/threat-tracker.js';
 
 const HOUR = 60 * 60_000;
 const NOW = Date.UTC(2026, 5, 1, 12, 0, 0);
@@ -178,6 +184,72 @@ test('unruh unavailable (fetch throws) → graceful no-op', async () => {
     flag: async () => ({ ok: true }), deliverContact: async () => ({ ok: true }),
   });
   assert.equal(r.reason, 'unruh-unavailable');
+});
+
+// ── G4: escalation bounded — threat-detector-off stands the whole ladder down ─
+test('G4: threat detector disabled → whole ladder stands down (no flag, NO contact)', async () => {
+  const gc = gauge('meds', 'extreme', esc({ contact: true, contact_id: 'Sam' }));
+  const h = harness({ candidates: [gc], state: { meds: { checkOpenedAt: NOW - 7 * HOUR } } });
+  const r = await runGaugeCrisisTick({ ...h.deps, threatDisabled: () => true });
+  assert.equal(r.reason, 'threat-disabled');
+  assert.equal(h.flags.length, 0);
+  assert.equal(h.contacts.length, 0);          // a disabled detector never still reaches a human
+});
+
+// ── G5: no covert contact — pinned against the REAL deliver (mirror is real) ───
+test('G5: a gauge-triggered contact reach is ALWAYS mirrored to the ward (real deliver)', async () => {
+  const outbox = [];
+  const realDeliver = (args) => deliverToTrustedContact({
+    ...args,
+    readSettings: () => ({ trustedContacts: [{ name: 'Sam', channel: 'discord', webhook: 'https://hook' }] }),
+    fetchFn: async () => ({ ok: true }),
+    enqueueOutboxFn: async (item) => { outbox.push(item); },
+  });
+  const gc = gauge('meds', 'extreme', esc({ contact: true, contact_id: 'Sam' }));
+  const h = harness({ candidates: [gc], state: { meds: { checkOpenedAt: NOW - 7 * HOUR } } });
+  const r = await runGaugeCrisisTick({ ...h.deps, deliverContact: realDeliver });
+  assert.equal(r.contacted, 1);
+  const mirror = outbox.find(i => i.kind === 'outbound_alert');
+  assert.ok(mirror, 'a contact reach must mirror to the ward outbox');
+  assert.match(mirror.title, /Sam/);
+});
+
+// ── G6: PIPELINE — check opens, then a deadline-pass drives the REAL teeth ─────
+test('G6 PIPELINE: check opens → deadline pass → real bounded threat raise + mirrored contact', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gauge-pipe-'));
+  try {
+    const t0 = NOW;
+    const gc = gauge('meds', 'extreme', esc({ contact: true, contact_id: 'Sam' }));
+
+    // 1) the CHECK tick opens a check into the real (temp) state file.
+    const banners = [];
+    await runGaugeCheckTick({ now: t0, candidates: [gc], enqueue: async (i) => { banners.push(i); }, tomesDir: dir, enabled: true });
+    assert.equal(banners.filter(b => b.kind === 'gauge-check').length, 1);
+
+    // 2) the CRISIS tick 7h later — REAL flagDistress (temp store) + REAL deliver.
+    const outbox = [];
+    const realDeliver = (args) => deliverToTrustedContact({
+      ...args,
+      readSettings: () => ({ trustedContacts: [{ name: 'Sam', channel: 'discord', webhook: 'https://hook' }] }),
+      fetchFn: async () => ({ ok: true }),
+      enqueueOutboxFn: async (i) => { outbox.push(i); },
+    });
+    const r = await runGaugeCrisisTick({
+      now: t0 + 7 * HOUR, candidates: [gc], tomesDir: dir,
+      readSettings: () => SETTINGS, deliverContact: realDeliver, enabled: true,
+    });
+    assert.equal(r.escalated, 1);
+    assert.equal(r.contacted, 1);
+
+    // the real threat store is now severe — floored, bounded (not runaway).
+    const th = await getThreat({ tomesDir: dir, now: t0 + 7 * HOUR });
+    assert.equal(th.tier, 'severe');
+
+    // and the contact reach mirrored to the ward.
+    assert.ok(outbox.some(i => i.kind === 'outbound_alert'), 'mirror present');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 // ── structural: the crisis calls are isolated to THIS module ──────────────────

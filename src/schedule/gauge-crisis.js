@@ -146,8 +146,14 @@ export async function runGaugeCrisisTick({
   deliverContact  = deliverToTrustedContact,
   tomesDir,
   enabled,
+  threatDisabled  = () => process.env.PROTO_FAMILIAR_THREAT_DISABLED === '1',
 } = {}) {
   if (!(enabled ?? !gaugeEscalationDisabled())) return { reason: 'disabled' };
+  // The teeth are a threat-escalation feature: when the threat detector is off,
+  // the WHOLE ladder stands down — not just the raise (which flagDistress would
+  // no-op anyway) but the opt-in contact too, so a disabled detector can never
+  // still reach a human. (G4 — ward-signed.)
+  if (threatDisabled()) return { reason: 'threat-disabled' };
 
   let list = candidates;
   if (!Array.isArray(list)) {
@@ -173,7 +179,9 @@ export async function runGaugeCrisisTick({
     const wantContact = !!esc.contact && typeof esc.contact_id === 'string' && esc.contact_id.trim();
     const contactName = wantContact ? esc.contact_id.trim() : null;
     try {
-      await flag({ reason: buildGaugeCrisisReason({ label: a.label, hours_since: a.hours_since, contactName }), now });
+      // Threat store and check state are the same tomes/ dir in production;
+      // forwarding tomesDir keeps them co-located and lets tests isolate both.
+      await flag({ reason: buildGaugeCrisisReason({ label: a.label, hours_since: a.hours_since, contactName }), now, ...(tomesDir ? { tomesDir } : {}) });
     } catch (err) {
       console.error('[gauge-crisis] threat flag failed (will retry next tick):', err?.message ?? err);
       continue;   // do NOT stamp — retry the raise next tick
