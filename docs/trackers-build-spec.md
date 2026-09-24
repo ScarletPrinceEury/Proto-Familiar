@@ -226,7 +226,13 @@ constants, never on string matching in prompts.
   `{tracker_ref, entry_ref}`; dedup on entry id; item consumed/superseded →
   node resolved by code). Plus a code-built **eat-first line** in temporal
   context when ≥1 item is within lead: `Pantry, use first: spinach (1d) ·
-  yoghurt (2d)` (sorted by days-left, capped 4 items).
+  yoghurt (2d)` (sorted by days-left, capped 4 items). **Food-topic active cue
+  (0.14.12):** the line is ambient every ward turn (passive awareness); a
+  pure-code detector (`discussingFood` — general food/kitchen vocabulary OR my
+  human naming a near-expiry item, the `trackerTermsRegex` registry-trigger
+  precedent) escalates it to an explicit *"bring it up now"* cue when food is the
+  topic — named plainly, no "if it fits" hedge (ward-directed-intent rule). Gate
+  in code, ride the turn (no LLM).
 - **Menses prediction (`predict_windows`, ALWAYS ON per ward).** Honesty
   gate: **≥ 2 completed cycles** of history, else no window. Mean cycle
   length over up to the last 6 cycles; window = predicted start ± 3 days

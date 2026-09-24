@@ -1729,7 +1729,7 @@ import { formatTemporalContext } from './src/schedule/temporal-format.js';
 import { buildStewardshipBlock } from './src/schedule/stewardship.js';
 import { nextProjectionCue, gatherProjectionCandidates } from './src/gcal/gcal-projection.js';
 import { nextTrackerCue } from './src/tracker/tracker-cues.js';
-import { buildEatFirstBlock, buildMensesWindowBlock } from './src/tracker/tracker-projections.js';
+import { buildEatFirstBlock, buildMensesWindowBlock, discussingFood } from './src/tracker/tracker-projections.js';
 import { weatherEnabled } from './src/weather/weather-mirror.js';
 import { relativeTime, relativeDay, clockTime, dayAndDate } from './relative-time.js';
 import { expandWindow } from './src/schedule/recurrence.js';
@@ -2416,8 +2416,11 @@ export async function enrich(userMessage, { liveTurn = false, staticOnly = false
         const exp = await trackerExpiring({ within_days: 3 });
         const items = Array.isArray(exp?.items) ? exp.items : [];
         if (items.length) {
-          eatFirstBlock = buildEatFirstBlock(items);
-          if (eatFirstBlock) console.log(`[thalamus] pantry use-first: ${items.length} item(s) near expiry`);
+          // Food's the topic (general food talk OR my human naming an expiring
+          // item) → the ambient block gains an active "bring it up now" cue.
+          const foodTopic = discussingFood(userMessage, items.map(it => it.name));
+          eatFirstBlock = buildEatFirstBlock(items, { foodTopic });
+          if (eatFirstBlock) console.log(`[thalamus] pantry use-first: ${items.length} item(s) near expiry${foodTopic ? ' (food in topic — active cue)' : ''}`);
         }
       } catch (err) {
         console.error('[thalamus] pantry use-first failed:', err?.message ?? err);
