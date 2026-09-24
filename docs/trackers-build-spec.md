@@ -480,12 +480,30 @@ add-entry form, series sparklines, and create-from-template in the tab.
      projections, honesty gate, fired-node dedup, sensitivity) +
      `tests/tracker-projection-loop.test.mjs` (gate / threat stand-down / ran /
      degrade).
-   - **T-C.3b (next):** the reflection inputs — `windowSeries` (per
-     sensitive-allowed tracker, a code-aligned by-day array joined into the
-     reflection payload the way `windowMemories` is), the watchdog line
-     (`entry_rate_flag` as a one-line private reflection signal), and the §5.4
-     offer-a-tracker cue (code detector: same lapse class ≥3×/30d with no
-     tracker → ONE ward-worded cue, 30-day per-class cooldown).
+   - **T-C.3b.1 ✓ SHIPPED (0.14.13-alpha):** the reflection inputs.
+     `tracker.py reflection_series(conn, days, now)` — per non-archived tracker
+     with entries in the window, a code-aligned by-day array (numeric fields →
+     day mean, enum/text/bool → the day's value(s), an `anticipated`+`actual`
+     numeric pair → the day's mean gap — the §4 anticipated-vs-actual signal,
+     general to any tracker carrying those two fields) with each tracker's
+     **watchdog flag** (`entry_rate_flag`) folded in. Behind the code-only
+     `tracker_reflection_series` MCP tool + the `trackerReflectionSeries`
+     thalamus wrapper (degrades to `series:[]`; never in the Familiar's
+     toolset). server.js's reflection `getInput` reads it (gated on
+     `trackersEnabled`, best-effort) as `windowSeries` beside `windowMemories`;
+     `buildReflectionPrompt` renders it only when non-empty — the reflection
+     grades a forecast/missed-need cost against recorded pattern (the
+     skipped-meal → rough-day check), and the watchdog is a gentle private
+     signal it may voice in its own words, **never an accusation**, never
+     leaving the reflection. Code owns every count/mean/gap; the model only
+     interprets. Tests: `test_tracker.py` (by-day means + enum lists + gap pair
+     + watchdog fold + empty/archived skip); `pondering.test.mjs` (the section
+     renders with the anti-shame framing and no suppression hedge; empty →
+     omitted).
+   - **T-C.3b.2 (next):** the §5.4 offer-a-tracker cue — code detector (same
+     lapse class ≥3×/30d with no tracker → ONE ward-worded cue, 30-day per-class
+     cooldown; never deficit-framed; never offers erp/menses). Final cue wording
+     is ward-reviewed at merge.
 4. **T-D:** mood-send UI + soft lock + T1 learning-only enforcement +
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.

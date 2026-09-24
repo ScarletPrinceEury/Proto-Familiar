@@ -1576,6 +1576,19 @@ def tracker_predictions() -> dict[str, Any]:
 
 
 @mcp.tool()
+def tracker_reflection_series(days: int = 10) -> dict[str, Any]:
+    """Infrastructure only — the reflection loop's by-day tracker series. Per
+    non-archived tracker with entries in the last `days`: a code-aligned by-day
+    array (numeric fields → day mean, enum/text/bool → day value(s), an
+    anticipated+actual pair → the day's mean gap) plus its watchdog flag. Code
+    owns every number; the model only interprets. Not composed into the
+    Familiar's toolset — it feeds the pondering reflection assembly.
+    Returns {ok, series:[...]}."""
+    with get_conn() as conn:
+        return {"ok": True, **trk.reflection_series(conn, days=days)}
+
+
+@mcp.tool()
 def tracker_project() -> dict[str, Any]:
     """Infrastructure only — the tracker-projection loop's per-tick reconcile.
     Mints/updates/resolves the ward-private schedule NODES behind the derived

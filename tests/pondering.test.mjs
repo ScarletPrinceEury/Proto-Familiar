@@ -267,6 +267,30 @@ test('buildPonderPrompt: reflection cues confirm-or-correct on recent missed nee
   assert.match(prompt, /confirm or correct|never assume the cost followed/i);
 });
 
+test('buildPonderPrompt: reflection embeds the by-day tracker series + watchdog framing (T-C.3b)', () => {
+  const prompt = buildPonderPrompt({
+    mode: 'reflection', outcomes: [], existingNotes: '',
+    windowSeries: [{
+      tracker_id: 'sleep-x1', label: 'Sleep', archetype: 'series', sensitive: false,
+      days: [{ date: '2026-06-24', n: 1, fields: { hours: 5 } }],
+      watchdog: { flagged: false, week_count: 3, median_daily: 1 },
+    }],
+  });
+  assert.match(prompt, /tracking lately, lined up day by day/i);
+  assert.match(prompt, /"label": "Sleep"/);            // the series JSON is embedded
+  assert.match(prompt, /watchdog/);
+  assert.match(prompt, /never an accusation/i);        // the anti-shame framing
+  // no suppression/timing hedge on the watchdog line
+  assert.doesNotMatch(prompt, /if it fits, stay quiet|only if the answer feels obvious/i);
+});
+
+test('buildPonderPrompt: reflection with no tracker series omits the section entirely (no "here\'s nothing" noise)', () => {
+  const withEmpty = buildPonderPrompt({ mode: 'reflection', outcomes: [], existingNotes: '', windowSeries: [] });
+  const withNone  = buildPonderPrompt({ mode: 'reflection', outcomes: [], existingNotes: '' });
+  assert.doesNotMatch(withEmpty, /tracking lately, lined up day by day/i);
+  assert.doesNotMatch(withNone,  /tracking lately, lined up day by day/i);
+});
+
 test('parsePondering: reflection edge_calibrations — valid kept, malformed dropped', () => {
   const r = parsePondering(JSON.stringify({
     title: 't', content: 'c',

@@ -157,10 +157,20 @@ I return ONLY valid JSON with this exact shape (no markdown fences, no commentar
 wants_to_save and drawn_to are both OPTIONAL — I omit them or leave them [] when nothing genuine came up. Each intent carries its kind and a short summary so future-me knows what to file and where, or what I wanted to bring up.`;
 }
 
-function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, routineReviewSection = '' }) {
+function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooccurrences, recentMissedNeeds, windowMemories, windowSeries, routineReviewSection = '' }) {
   const outcomesJson = JSON.stringify(outcomes ?? [], null, 2);
   const memories = Array.isArray(windowMemories) ? windowMemories : [];
   const memoriesJson = JSON.stringify(memories, null, 2);
+  // Trackers T-C.3b: the by-day tracker series + watchdog flags. Only rendered
+  // when there's a ledger with entries this window — empty stays out of the
+  // prompt entirely (no token cost, no "here's nothing" noise).
+  const series = Array.isArray(windowSeries) ? windowSeries : [];
+  const trackerSeriesSection = series.length ? `
+
+Some of what my human's been tracking lately, lined up day by day (code did the counting — the numbers are theirs, I just read them):
+${JSON.stringify(series, null, 2)}
+This is more ground to check a forecast or a missed-need cost against, same as the memories above: did the low mood actually show up the day after the short sleep? did the rough patch follow the skipped meals? If the shape across the days bears the cost out I can mark it observed; if it points the other way I lower my certainty; if it's quiet on the point I just haven't seen it yet. I read the pattern over days, never a single entry.
+Each ledger also carries a \`watchdog\` flag. flagged=true means it's been logged a lot more this week than its usual pace — sometimes that's just a busy stretch, sometimes it's worth a gentle word in my own voice about what's driving it. It's never an accusation and never leaves this reflection; if nothing about it feels worth raising, I leave it.` : '';
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
     : '(no notes yet — this file may not exist or is empty)';
@@ -205,7 +215,7 @@ A missed need is a fact. Whether the cost I projected for it actually followed i
 
 To check "did it actually follow?" against more than the forecast, here's what I kept from the last few days (newest first; some tied to schedule items):
 ${memoriesJson}
-When I grade a forecast or a missed-need cost I check it against this — a rough stretch I recorded, a good day, a thing that went fine. If it shows the cost landed, that's evidence to mark it observed; if it shows the opposite, evidence to lower it; if it's silent, I haven't seen it yet.
+When I grade a forecast or a missed-need cost I check it against this — a rough stretch I recorded, a good day, a thing that went fine. If it shows the cost landed, that's evidence to mark it observed; if it shows the opposite, evidence to lower it; if it's silent, I haven't seen it yet.${trackerSeriesSection}
 
 Pairs I've only NOTICED together so far (co_occurs_with), with counts:
 ${coocsJson}
