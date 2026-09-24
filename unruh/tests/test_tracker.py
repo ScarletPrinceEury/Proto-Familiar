@@ -154,6 +154,13 @@ def test_gauge_level_bands_and_boundaries():
     assert at(50)["band"] == "extreme" and at(50)["level"] == 0.0
     # monotonic decay between grace and extreme
     assert at(10)["level"] < at(4)["level"] < 1.0
+    # EXACT boundaries (G3): each threshold is the exclusive floor of the NEXT
+    # band — at exactly grace/low/overdue/extreme hours the higher band owns it.
+    assert at(3)["band"]  == "fading"    # grace boundary
+    assert at(6)["band"]  == "low"       # low boundary
+    assert at(12)["band"] == "overdue"   # overdue boundary
+    assert at(48)["band"] == "extreme"   # extreme boundary
+    assert at(3)["level"] == 1.0         # still full at the grace edge
 
 def test_gauge_config_ordering_validated():
     with pytest.raises(ValueError):
@@ -165,6 +172,28 @@ def test_gauge_refill_read(conn):
     tracker.log_entry(conn, tracker_id=tid, payload={}, ts=(NOW - timedelta(hours=4)).isoformat())
     r = tracker.read_tracker(conn, id=tid, now=NOW)
     assert r["archetype"] == "gauge" and r["band"] == "fading" and 0.0 < r["level"] < 1.0
+    # config rides along (§10.3) so a UI meter can render the thresholds.
+    assert r["config"] == GCFG["gauge"] and r["last_refill_at"] is not None
+
+
+def test_gauge_cue_candidates_only_low_and_overdue(conn):
+    def gauge(label, hours_ago):
+        gid = tracker.create_tracker(conn, label=label, archetype="gauge", config=GCFG)["id"]
+        tracker.log_entry(conn, tracker_id=gid, payload={}, ts=(NOW - timedelta(hours=hours_ago)).isoformat())
+        return gid
+    gauge("Fresh",   1)    # fine     → no cue
+    gauge("Fading",  4)    # fading   → no cue (headroom)
+    gauge("Water",   8)    # low      → gentle cue
+    gauge("Meals",   20)   # overdue  → firmer cue
+    gauge("Starved", 50)   # extreme  → opens a CHECK, never a cue
+    arch = gauge("ArchLow", 8)
+    tracker.archive_tracker(conn, id=arch, archived=True)   # archived → excluded
+
+    out = tracker.gauge_cue_candidates(conn, now=NOW)["gauges"]
+    by_label = {g["label"]: g for g in out}
+    assert set(by_label) == {"Water", "Meals"}, "only low + overdue cue; fine/fading/extreme/archived excluded"
+    assert by_label["Water"]["band"] == "low" and by_label["Meals"]["band"] == "overdue"
+    assert by_label["Water"]["ask_cap_per_day"] == 1 and "hours_since" in by_label["Water"]
 
 
 # ── templates + derived signals ──────────────────────────────────────────────

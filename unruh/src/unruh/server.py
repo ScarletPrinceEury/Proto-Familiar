@@ -1548,6 +1548,21 @@ def tracker_cues() -> dict[str, Any]:
 
 
 @mcp.tool()
+def tracker_gauge_cues() -> dict[str, Any]:
+    """I use this to see which decaying-upkeep gauges have drifted into `low` (a
+    gentle nudge) or `overdue` (firmer) — the ones worth a soft check-in that
+    they've had water / eaten / stepped out. `extreme` isn't here (that opens a
+    real check, not a cue), and `fine`/`fading` cue nothing. Each carries its
+    `ask_cap_per_day` so I pace it. Returns
+    {ok, gauges:[{id, label, band, hours_since, ask_cap_per_day}]}."""
+    try:
+        with get_conn() as conn:
+            return {"ok": True, **trk.gauge_cue_candidates(conn)}
+    except ValueError as e:
+        return _err(str(e))
+
+
+@mcp.tool()
 def tracker_expiring(within_days: int = 3) -> dict[str, Any]:
     """I use this to see which pantry-class items are about to go off — inventory
     trackers with date projection on, whose `expires` is within `within_days`

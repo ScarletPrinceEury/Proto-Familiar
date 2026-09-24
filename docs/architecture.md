@@ -636,7 +636,15 @@ Currently owns:
   dynamic sections (ward-private, live turns only, `trackersEnabled`-gated),
   travelling with the `trackers` surfacing module. The gcal + tracker cue
   stores share `src/util/json-state.js`. The "incomplete-entries" half of §5.3
-  is deliberately deferred (nag risk — see the build spec). **Projections
+  is deliberately deferred (nag risk — see the build spec). **Gauge cues (§10.5,
+  G-B.1):** Unruh `gauge_cue_candidates` (gauges in the `low`/`overdue` band;
+  `extreme` opens a check, never cues) → `tracker_gauge_cues` → `trackerGaugeCues`;
+  `enrich()` merges them with the stale candidates into the SAME `[Tracker cues]`
+  block (`buildTrackerCueBlock` renders a band-aware line for a `band`-carrying
+  candidate), same aging/dedup pipeline. **Gauge archetype (§10, G-A):** decaying
+  upkeep — `gauge_level(lastRefillTs, config, now)` derives a pure `{level, band,
+  hoursSince}` (bands: fine/fading/low/overdue/extreme); refills log like series;
+  the safety ladder (extreme → check → crisis) is G-C, ward-signed, not yet built. **Projections
   (§4, T-C.1):** Unruh `expiring_items` (pantry-class items within
   `EXPIRY_LEAD_DAYS`=3 of expiry, code-owned day maths) → the `tracker_expiring`
   tool → `trackerExpiring` wrapper → `buildEatFirstBlock`

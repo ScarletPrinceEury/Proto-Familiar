@@ -94,6 +94,19 @@ test('buildTrackerCueBlock renders the marker + id-bearing lines, or empty', () 
   assert.doesNotMatch(block, /only (if|when)|bias toward|erode trust|if it feels/i);
 });
 
+test('buildTrackerCueBlock: gauge candidates render band-aware lines (§10.5)', () => {
+  const block = buildTrackerCueBlock([
+    { id: 'water-h2', label: 'Water', band: 'low',     hours_since: 8 },
+    { id: 'meals-k1', label: 'Meals', band: 'overdue', hours_since: 26 },
+    { id: 'mood-x7',  label: 'mood',  hours_since: 40 },   // stale, unchanged
+  ]);
+  assert.match(block, /Water: getting low \(last ~8h ago\)  \[id: water-h2\]/);
+  assert.match(block, /Meals: overdue \(last ~26h ago\)  \[id: meals-k1\]/);
+  assert.match(block, /mood — last logged 40h ago  \[id: mood-x7\]/);        // stale format intact
+  assert.match(block, /a gauge just needs a refill/);
+  assert.doesNotMatch(block, /bias toward|erode trust|only when/i);
+});
+
 test('buildTrackerCueBlock: days phrasing past 48h', () => {
   const block = buildTrackerCueBlock([{ id: 'laundry-a1', label: 'laundry', hours_since: 170 }]);
   assert.match(block, /last logged 7d ago/);
