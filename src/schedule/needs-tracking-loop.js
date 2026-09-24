@@ -25,6 +25,7 @@ import { getThreat } from '../safety/threat-tracker.js';
 import { isCallActiveFromFile } from '../voice/call-engine.js';
 import { readSettingsSync } from '../../cerebellum.js';
 import { selectMissedOccurrences, isNeedWindow } from './needs-tracking.js';
+import { runGaugeCheckTick } from './gauge-escalation.js';
 
 const DEFAULT_TICK_MS = 30 * 60_000;   // 30 min — bookkeeping wants no urgency
 const STAND_DOWN_TIERS = new Set(['moderate', 'high', 'severe']);
@@ -93,9 +94,15 @@ export function startNeedsTrackingLoop({ tickMs = DEFAULT_TICK_MS } = {}) {
   _interval = setInterval(async () => {
     if (_active) return;                 // never overlap ticks
     if (await isCallActiveFromFile()) return;   // governor (§4.3): defer during a live call
-    _active = runNeedsTick()
-      .catch(err => console.warn('[needs] tick error:', err?.message ?? err))
-      .finally(() => { _active = null; });
+    _active = (async () => {
+      await runNeedsTick().catch(err => console.warn('[needs] tick error:', err?.message ?? err));
+      // Gauge safety-ladder CHECK (§10.6, G-C) rides this same timer (reuse, don't
+      // add a loop). It runs INDEPENDENT of the needs threat stand-down — a
+      // "have you eaten in 3 days?" check is the care that matters most in a rough
+      // stretch. Own off-switch (PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED); opt-in
+      // per gauge, off by default. No threat/contact in this pass (that's G-C.2).
+      await runGaugeCheckTick().catch(err => console.warn('[gauge-check] tick error:', err?.message ?? err));
+    })().finally(() => { _active = null; });
   }, tickMs);
   _interval.unref?.();
   return { stop: stopNeedsTrackingLoop };
