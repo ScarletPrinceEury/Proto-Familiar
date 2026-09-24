@@ -267,6 +267,21 @@ def create_from_template(conn: sqlite3.Connection, *, template_id: str) -> dict[
     )
 
 
+def ensure_from_template(conn: sqlite3.Connection, *, template_id: str) -> dict[str, Any]:
+    """Find-or-create a tracker for `template_id` — idempotent, keyed on the
+    `template` column (not the label, which the ward may rename). Returns
+    {ok, id, created}. Backs the mood-send auto-create (§6): the first tag
+    stands the Mood ledger up; every tag after reuses it, no duplicates."""
+    row = conn.execute(
+        "SELECT id FROM trackers WHERE template = ? ORDER BY created_at DESC LIMIT 1",
+        (template_id,),
+    ).fetchone()
+    if row is not None:
+        return {"ok": True, "id": row["id"], "created": False}
+    res = create_from_template(conn, template_id=template_id)
+    return {"ok": True, "id": res["id"], "created": True}
+
+
 def _get_tracker(conn: sqlite3.Connection, tid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM trackers WHERE id = ?", (tid,)).fetchone()
 

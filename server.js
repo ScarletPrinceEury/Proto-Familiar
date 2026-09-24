@@ -52,6 +52,7 @@ import {
   setIntention, roundsForWard, listIntentions, getDueIntentions,
   addVillagerTell,
   listTrackers, readTracker, archiveTracker, dropTracker, trackerReflectionSeries,
+  ensureTrackerFromTemplate, logTrackerEntry,
 } from './thalamus.js';
 import { scoreThreatMessage } from './src/safety/crisis-classifier.js';
 import { foldReasoningIntoContent, callProviderChat, familiarDeliberationMessages } from './llm-call.js';
@@ -360,7 +361,25 @@ function chatRateLimit(req, res, next) {
  * Proxies to the chosen provider and streams or returns the response.
  */
 app.post('/api/chat', chatRateLimit, async (req, res) => {
-  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort } = req.body;
+  const { provider, apiKey, baseUrl, model, messages, stream, temperature, max_tokens, tools, tool_choice, enrich: enrichFlag, userMessage, lastUserMessageAt, runToolLoop, customTools, sessionInfo, sessionAudience, voiceMode, injectCorePrompts, reasoningEffort, moodTag } = req.body;
+  // Mood-tagged send (§6, T-D, LEARNING-ONLY). A `moodTag` rides beside the
+  // turn as its own field — never inside `messages`, and stripped at the
+  // provider boundary by collapseToolTurns anyway (INVARIANT T1). Here it does
+  // exactly two learning-only things, both fire-and-forget so a tracker hiccup
+  // never touches the chat turn: stand up the Mood ledger if needed, and log
+  // the tag as an entry (`source:'send-button'`). NO threat effect in this pass
+  // (ward decision 2026-09: learning-only for now; the valence→threat link is a
+  // later, separately-signed-off pass). Unruh's `validate_entry` is the gate —
+  // an off-palette tag is dropped there, never stored wrong.
+  if (typeof moodTag === 'string' && moodTag.trim() && readSettingsSync().trackersEnabled !== false
+      && process.env.PROTO_FAMILIAR_TRACKERS_DISABLED !== '1') {
+    (async () => {
+      const ens = await ensureTrackerFromTemplate({ template_id: 'mood' });
+      if (ens?.ok && ens.id) {
+        await logTrackerEntry({ tracker_id: ens.id, payload: { mood: moodTag.trim() }, source: 'send-button' });
+      }
+    })().catch(err => console.error('[mood-send] tag capture failed (chat unaffected):', err?.message ?? err));
+  }
   // runToolLoop: the app sends true when the user has tools enabled.
   // The server then composes the tool list (built-ins + custom) and runs
   // the multi-round tool-call loop HERE — executing via cerebellum —

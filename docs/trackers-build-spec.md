@@ -528,6 +528,31 @@ add-entry form, series sparklines, and create-from-template in the tab.
 4. **T-D:** mood-send UI + soft lock + T1 learning-only enforcement +
    threat link (**ward sign-off on §6 constants + palette wording + 5.4
    final text happens in this session's review**) + T6/T9 tests + docs.
+   - **WARD SIGN-OFF (2026-09):** the threat link is **deferred — learning-only
+     for now.** Mood tags feed the Mood tracker + the memorization calibration
+     corpus ONLY; **no valence→threat effect ships until a later, separately
+     signed-off pass.** When that pass comes, the ward-approved distress set is
+     **low + numb + stressed** (NOT just the spec's low+numb) — which means
+     re-valencing `stressed` to ≤ −2; re-confirm at that sign-off. The bounded
+     numbers (`MOOD_TAG_DELTA`=0.4, cap 2/24h → +0.8/day, never high/severe)
+     stand as the proposal for that pass.
+   - **T-D.1a ✓ SHIPPED (0.14.15-alpha):** the learning-only server spine.
+     Unruh `ensure_from_template` (idempotent find-or-create on the `template`
+     column) → `tracker_ensure_from_template` MCP + `ensureTrackerFromTemplate`
+     wrapper (code-only). `/api/chat` reads a `moodTag` req.body field (never in
+     `messages`) → fire-and-forget: ensure the Mood ledger + `logTrackerEntry`
+     (`source:'send-button'`, `validate_entry` is the palette gate) — NO threat
+     call. **INVARIANT T1:** `collapseToolTurns` (THE provider-history boundary)
+     now strips `moodTag` from every message, so a tagged turn's assembled
+     payload is byte-free of it whatever the client sends. Tests:
+     `test_tracker.py` (ensure idempotency), `collapse-tool-turns.test.mjs` (T1
+     snapshot — moodTag + its values gone, role/content intact, incl. a collapsed
+     tool turn).
+   - **T-D.1b (next):** the composer UI — the 8-mood palette beside send, the
+     soft lock (`moodSendOnboardedAt`, 14-day primary-button window, existing
+     installs never locked), the client wire (post `moodTag`, store it on the
+     session-log message for the corpus, exclude it from `/api/chat` history) +
+     the T9 soft-lock test. **Palette wording/emojis ward-reviewed at merge.**
 5. **G-A / G-B / G-C:** the `gauge` archetype (§10) — G-A store+derivation, G-B
    cues+UI+capture, **G-C the safety ladder (ward sign-off, §10.6/§10.7)**. These
    extend the milestone after the core archetypes; see §10.11 for the pass detail.
