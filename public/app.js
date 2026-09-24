@@ -3601,16 +3601,19 @@ async function linkPendingToNode(attachment, node) {
 // (unruh/.../templates/trackers/mood.json) — Unruh's validate_entry is the gate.
 // LEARNING-ONLY: a tag rides beside the turn (never in `messages`), feeds the
 // Mood tracker + memorization corpus, and never reaches a live prompt (T1).
+// Each mood carries a plain valence+energy `hint` shown on hover (and folded
+// into the aria-label) so the palette is parseable — a chip reads "energized"
+// but hovering says what that means on the mood/energy axes.
 const MOOD_PALETTE = [
-  { key: 'energized', emoji: '😄', row: 'bright' },
-  { key: 'good',      emoji: '🙂', row: 'bright' },
-  { key: 'calm',      emoji: '😌', row: 'bright' },
-  { key: 'stressed',  emoji: '😣', row: 'wound' },
-  { key: 'angry',     emoji: '😠', row: 'wound' },
-  { key: 'raw',       emoji: '💔', row: 'wound' },
-  { key: 'low',       emoji: '😔', row: 'worn' },
-  { key: 'numb',      emoji: '😶', row: 'worn' },
-  { key: 'done',      emoji: '😤', row: 'worn' },
+  { key: 'energized', emoji: '😄', row: 'bright', hint: 'good mood, high energy' },
+  { key: 'good',      emoji: '🙂', row: 'bright', hint: 'good mood, steady energy' },
+  { key: 'calm',      emoji: '😌', row: 'bright', hint: 'good mood, low energy' },
+  { key: 'stressed',  emoji: '😣', row: 'wound',  hint: 'strained mood, high energy' },
+  { key: 'angry',     emoji: '😠', row: 'wound',  hint: 'angry mood, high energy' },
+  { key: 'raw',       emoji: '💔', row: 'wound',  hint: 'hurting mood, high energy' },
+  { key: 'low',       emoji: '😔', row: 'worn',   hint: 'low mood, low energy' },
+  { key: 'numb',      emoji: '😶', row: 'worn',   hint: 'flat mood, low energy' },
+  { key: 'done',      emoji: '😤', row: 'worn',   hint: 'fed-up mood, low energy' },
 ];
 const MOOD_ONBOARD_MS = 14 * 24 * 3600 * 1000;   // soft-lock window: 14 days
 
@@ -3670,8 +3673,8 @@ function initMoodSend() {
     chip.type = 'button';
     chip.className = `mood-chip mood-row-${m.row}`;
     chip.dataset.mood = m.key;
-    chip.title = m.key;
-    chip.setAttribute('aria-label', `Send with mood: ${m.key}`);
+    chip.title = m.hint ? `${m.key} — ${m.hint}` : m.key;
+    chip.setAttribute('aria-label', m.hint ? `Send with mood: ${m.key} (${m.hint})` : `Send with mood: ${m.key}`);
     chip.innerHTML = `<span class="mood-emoji" aria-hidden="true">${m.emoji}</span><span class="mood-key">${esc(m.key)}</span>`;
     chip.addEventListener('click', () => {
       const input = $('user-input');

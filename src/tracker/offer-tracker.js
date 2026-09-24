@@ -121,17 +121,19 @@ export function pickOfferCue({ classes = [], trackerLabels = [], state = {}, now
 }
 
 /**
- * The first-person offer block — server-injected context, so literal "my human",
- * plain and care-first. Names the recurring snag without deficit-framing, names
- * the intent (offer to track it — no "if it fits" hedge on the raising), and
- * keeps the CHOICE with my human. DRAFT wording — ward-reviewed at merge.
+ * The first-person offer block — server-injected context, plain and care-first.
+ * Names the recurring snag without deficit-framing, names the intent (offer to
+ * track it — no "if it fits" hedge on the raising), and keeps the CHOICE with my
+ * human. Carries a {{user}} token by design: thalamus resolves it to my human's
+ * configured name at the injection point (the narrow ward-asked exception to the
+ * "injected blocks are literal" rule) — don't rewrite it to "my human" here.
  */
 export function buildOfferTrackerBlock(cue) {
   if (!cue || !cue.label) return '';
   return [
     '[Might be worth offering to track]',
     `  — ${cue.label}: missed ${cue.count} times this month, and there's no tracker for it.`,
-    "I can offer to set up a tracker with my human when they keep missing or forgetting the same kind of thing — might help us catch what's going on. Their call whether to; I've noted it and won't keep bringing the same one up.",
+    'I can offer to set up a tracker with {{user}} when they keep missing or forgetting the same kind of thing.',
   ].join('\n');
 }
 

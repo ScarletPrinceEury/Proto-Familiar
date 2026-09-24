@@ -63,8 +63,10 @@ test('buildOfferTrackerBlock: care-first, names the offer, no deficit/suppressio
   assert.match(block, /^\[Might be worth offering to track\]/);
   assert.match(block, /dinner/);
   assert.match(block, /4 times/);
-  assert.match(block, /offer to set up a tracker/i);         // the intent is named
-  assert.match(block, /their call whether to/i);             // consent stays with my human
+  assert.match(block, /offer to set up a tracker/i);         // the intent is named (an offer, not a directive)
+  // Carries the {{user}} token literally — thalamus resolves it to the ward's
+  // name at injection (the builder itself does no macro substitution).
+  assert.match(block, /\{\{user\}\}/);
   assert.doesNotMatch(block, /if it fits|when it feels|only if the moment/i);  // no suppression hedge
   assert.equal(buildOfferTrackerBlock(null), '');
 });

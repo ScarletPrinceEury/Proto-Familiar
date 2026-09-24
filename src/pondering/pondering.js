@@ -170,7 +170,7 @@ function buildReflectionPrompt({ outcomes, existingNotes, consequenceEdges, cooc
 Some of what my human's been tracking lately, lined up day by day (code did the counting — the numbers are theirs, I just read them):
 ${JSON.stringify(series, null, 2)}
 This is more ground to check a forecast or a missed-need cost against, same as the memories above: did the low mood actually show up the day after the short sleep? did the rough patch follow the skipped meals? If the shape across the days bears the cost out I can mark it observed; if it points the other way I lower my certainty; if it's quiet on the point I just haven't seen it yet. I read the pattern over days, never a single entry.
-Each ledger also carries a \`watchdog\` flag. flagged=true means it's been logged a lot more this week than its usual pace — sometimes that's just a busy stretch, sometimes it's worth a gentle word in my own voice about what's driving it. It's never an accusation and never leaves this reflection; if nothing about it feels worth raising, I leave it.` : '';
+Each ledger also carries a \`watchdog\` flag. flagged=true means it's been logged a lot more this week than its usual pace — sometimes that's just a busy stretch, but if it's maladaptive or harmful I should carefully talk about it to my human, following the instructions of my mental health tomes.` : '';
   const existing = (existingNotes && existingNotes.trim())
     ? existingNotes.trim()
     : '(no notes yet — this file may not exist or is empty)';

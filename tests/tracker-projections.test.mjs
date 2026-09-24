@@ -55,11 +55,11 @@ test('buildEatFirstBlock: foodTopic adds the active bring-it-up cue; default sta
   const items = [item('spinach', 1)];
   const passive = buildEatFirstBlock(items);
   assert.equal(passive, '[Pantry — use first]\nspinach (1d)');
-  assert.doesNotMatch(passive, /subject of food/);
+  assert.doesNotMatch(passive, /on the topic of food/);
 
   const active = buildEatFirstBlock(items, { foodTopic: true });
   assert.match(active, /^\[Pantry — use first\]\nspinach \(1d\)/);
-  assert.match(active, /subject of food — a good moment to bring up/);
+  assert.match(active, /on the topic of food, I should suggest to use up some food/);
   // no suppression hedge (CLAUDE.md ward-directed-intent rule)
   assert.doesNotMatch(active, /if it fits|when it feels|if the moment/i);
 });

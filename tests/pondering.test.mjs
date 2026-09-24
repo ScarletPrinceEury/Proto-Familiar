@@ -279,7 +279,8 @@ test('buildPonderPrompt: reflection embeds the by-day tracker series + watchdog 
   assert.match(prompt, /tracking lately, lined up day by day/i);
   assert.match(prompt, /"label": "Sleep"/);            // the series JSON is embedded
   assert.match(prompt, /watchdog/);
-  assert.match(prompt, /never an accusation/i);        // the anti-shame framing
+  assert.match(prompt, /just a busy stretch/i);        // the anti-shame framing (a spike isn't automatically bad)
+  assert.match(prompt, /mental health tomes/i);        // routes a real concern through the tomes, not ad-hoc
   // no suppression/timing hedge on the watchdog line
   assert.doesNotMatch(prompt, /if it fits, stay quiet|only if the answer feels obvious/i);
 });

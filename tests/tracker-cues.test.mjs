@@ -89,7 +89,11 @@ test('buildTrackerCueBlock renders the marker + id-bearing lines, or empty', () 
   const block = buildTrackerCueBlock([{ id: 'mood-x7', label: 'mood', hours_since: 40 }]);
   assert.match(block, /^\[Tracker cues\]/);
   assert.match(block, /mood — last logged 40h ago  \[id: mood-x7\]/);
-  assert.match(block, /tracker_log/);
+  assert.match(block, /check on the worrisome ones/);
+  assert.match(block, /log any info from the conversation/);
+  // Carries the {{user}} token literally — thalamus resolves it to the ward's
+  // name at injection (the builder itself does no macro substitution).
+  assert.match(block, /\{\{user\}\}/);
   // No bias-toward-quiet language.
   assert.doesNotMatch(block, /only (if|when)|bias toward|erode trust|if it feels/i);
 });
@@ -103,7 +107,7 @@ test('buildTrackerCueBlock: gauge candidates render band-aware lines (§10.5)', 
   assert.match(block, /Water: getting low \(last ~8h ago\)  \[id: water-h2\]/);
   assert.match(block, /Meals: overdue \(last ~26h ago\)  \[id: meals-k1\]/);
   assert.match(block, /mood — last logged 40h ago  \[id: mood-x7\]/);        // stale format intact
-  assert.match(block, /a gauge just needs a refill/);
+  assert.match(block, /refill gauges if appropriate/);
   assert.doesNotMatch(block, /bias toward|erode trust|only when/i);
 });
 
