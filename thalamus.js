@@ -1203,6 +1203,22 @@ export async function trackerPredictions() {
   } catch (err) { return { ok: false, error: err?.message ?? String(err), predictions: [] }; }
 }
 
+/**
+ * T-C.3a: reconcile the ward-private projection NODES (pantry expiry
+ * reminders + menses hold-node). Code-only — reached from the
+ * tracker-projection loop, never composed into the Familiar's toolset.
+ * Degrades to {ok:false} when Unruh is down (the loop treats that as a
+ * skipped tick). Returns {ok, minted, updated, resolved}.
+ */
+export async function projectTrackerNodes() {
+  await startThalamus();
+  if (!unruhClient) return { ok: false, error: 'unruh not connected' };
+  try {
+    const r = await unruhClient.callTool({ name: 'tracker_project', arguments: {} });
+    return unruhResult(r);
+  } catch (err) { return { ok: false, error: err?.message ?? String(err) }; }
+}
+
 export async function setRoundsVisibility({ value }) {
   await startThalamus();
   if (!unruhClient) return { ok: false, error: 'unruh not connected' };

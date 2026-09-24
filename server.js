@@ -112,6 +112,7 @@ import { startMemorySweepLoop, stopMemorySweepLoop, isRunning as memorySweepRunn
 import { startTomeGraduationLoop, stopTomeGraduationLoop } from './src/tomes/tome-graduation-loop.js';
 import { startContentRegateLoop, stopContentRegateLoop } from './src/memory/content-regate-loop.js';
 import { startNeedsTrackingLoop, stopNeedsTrackingLoop } from './src/schedule/needs-tracking-loop.js';
+import { startTrackerProjectionLoop, stopTrackerProjectionLoop } from './src/schedule/tracker-projection-loop.js';
 import { startMediaRetentionLoop, stopMediaRetentionLoop } from './src/vision/media-retention-loop.js';
 import { isNeedWindow } from './src/schedule/needs-tracking.js';
 import { decideReachoutViaLLM, getWarmVillagers } from './src/warmth/reachout.js';
@@ -7001,6 +7002,14 @@ function startReachout() {
   // hard off-switch: PROTO_FAMILIAR_NEEDS_TRACKING_DISABLED=1.
   startNeedsTrackingLoop();
 
+  // Tracker projections (T-C.3a). Rides trackersEnabled (default ON, inert
+  // until a tracker exists): a 30-min tick reconciles the ward-private
+  // projection nodes — a `reminder` per near-expiry pantry item (fires once,
+  // deduped on the item) and one `hold` per predicted menses window. Stands
+  // down at moderate+ threat; hard off-switch:
+  // PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED=1.
+  startTrackerProjectionLoop();
+
   // Media-retention (voice Pass 4, §9) — the 13th background worker. DEFAULT ON:
   // aged voice-clip SOUNDS are curated (kept when the sound is the point, else
   // let go to transcript-only — the words always survive). Defers during a live
@@ -7381,6 +7390,7 @@ async function handleSignal(signal) {
   try { await stopTomeGraduationLoop(); } catch { /* already stopped */ }
   try { await stopContentRegateLoop(); } catch { /* already stopped */ }
   try { await stopNeedsTrackingLoop(); } catch { /* already stopped */ }
+  try { await stopTrackerProjectionLoop(); } catch { /* already stopped */ }
   try { await stopMediaRetentionLoop(); } catch { /* already stopped */ }
   try { await stopMemorySweepLoop(); } catch { /* already stopped */ }
   try { await stopNoticingLoop(); } catch { /* already stopped */ }

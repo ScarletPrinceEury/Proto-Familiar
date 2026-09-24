@@ -44,6 +44,7 @@ from unruh import schedule as sched
 from unruh import templates as tmpl
 from unruh import interest as interests
 from unruh import tracker as trk
+from unruh import tracker_projection as proj
 from unruh import handoff as handoffs
 from unruh import intention as intentions_mod
 from unruh import location as location_mod
@@ -1572,6 +1573,19 @@ def tracker_predictions() -> dict[str, Any]:
             return {"ok": True, **trk.predictions(conn)}
     except ValueError as e:
         return _err(str(e))
+
+
+@mcp.tool()
+def tracker_project() -> dict[str, Any]:
+    """Infrastructure only — the tracker-projection loop's per-tick reconcile.
+    Mints/updates/resolves the ward-private schedule NODES behind the derived
+    tracker lines: a `reminder` per near-expiry pantry item (fires once, deduped
+    on entry) and one `hold` per predicted menses window (deduped on cycle). Not
+    composed into the Familiar's toolset — the Familiar never destroys or mints a
+    projection node; code owns this path end-to-end.
+    Returns {ok, minted, updated, resolved}."""
+    with get_conn() as conn:
+        return proj.project_nodes(conn)
 
 
 # ── Entry point ───────────────────────────────────────────────────────
