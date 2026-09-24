@@ -1595,6 +1595,23 @@ button { cursor: pointer; font-family: var(--font); }
 .btn-mood[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .btn-mood.hidden { display: none; }
 
+/* Gauge fill meter (§10, G-B.2) — calm, not alarmist; drains as the gauge does.
+   Band-coloured fill; the level itself is pure-derived server-side. */
+.gauge-meter {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-raise);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 4px 0 8px;
+}
+.gauge-fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.3s ease; }
+.gauge-band-fine .gauge-fill,
+.gauge-band-fading .gauge-fill  { background: #4a9d6a; }  /* settled green */
+.gauge-band-low .gauge-fill     { background: #c9a227; }  /* amber */
+.gauge-band-overdue .gauge-fill { background: #c2683a; }  /* orange */
+.gauge-band-extreme .gauge-fill { background: #b04a4a; }  /* calm red */
+
 .attach-strip {
   display: flex;
   flex-wrap: wrap;

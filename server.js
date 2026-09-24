@@ -4327,6 +4327,19 @@ app.delete('/api/trackers/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Log one entry from the ward's own hand (§7 / §10.4) — the Trackers-tab
+// add-entry, and a gauge's one-tap REFILL (an empty payload is a valid refill:
+// the entry's existence is the signal). `source:'ui'`. Unruh's validate_entry
+// is the gate — a bad payload comes back as its structured refusal, never
+// stored wrong. Returns the fresh read so a meter can update in place.
+app.post('/api/trackers/:id/entries', async (req, res) => {
+  const payload = (req.body && typeof req.body.payload === 'object' && req.body.payload) || {};
+  const logged = await logTrackerEntry({ tracker_id: req.params.id, payload, source: 'ui' });
+  if (!logged.ok) return res.status(400).json({ ok: false, error: logged.error, code: logged.code });
+  try { res.json({ ok: true, read: await readTracker({ tracker_id: req.params.id }) }); }
+  catch { res.json({ ok: true }); }
+});
+
 // ── Graph ─────────────────────────────────────────────────────────────────
 app.get('/api/entity/graph/nodes', async (req, res) => {
   const { type, limit, offset } = req.query;

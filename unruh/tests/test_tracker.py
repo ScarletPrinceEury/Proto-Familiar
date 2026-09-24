@@ -176,6 +176,18 @@ def test_gauge_refill_read(conn):
     assert r["config"] == GCFG["gauge"] and r["last_refill_at"] is not None
 
 
+def test_gauge_refill_tops_it_back_to_full(conn):
+    # A gauge refill is a plain empty-payload entry (§10.4) — its existence is
+    # the signal. Backs the one-tap UI refill AND passive memorization refills.
+    gid = tracker.create_tracker(conn, label="Water", archetype="gauge", config=GCFG)["id"]
+    tracker.log_entry(conn, tracker_id=gid, payload={}, ts=(NOW - timedelta(hours=20)).isoformat())
+    assert tracker.read_tracker(conn, id=gid, now=NOW)["band"] == "overdue"
+    # Refill "now" → back to full/fine.
+    assert tracker.log_entry(conn, tracker_id=gid, payload={}, ts=NOW.isoformat())["ok"]
+    r = tracker.read_tracker(conn, id=gid, now=NOW)
+    assert r["band"] == "fine" and r["level"] == 1.0
+
+
 def test_gauge_cue_candidates_only_low_and_overdue(conn):
     def gauge(label, hours_ago):
         gid = tracker.create_tracker(conn, label=label, archetype="gauge", config=GCFG)["id"]

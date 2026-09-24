@@ -644,7 +644,12 @@ Currently owns:
   candidate), same aging/dedup pipeline. **Gauge archetype (§10, G-A):** decaying
   upkeep — `gauge_level(lastRefillTs, config, now)` derives a pure `{level, band,
   hoursSince}` (bands: fine/fading/low/overdue/extreme); refills log like series;
-  the safety ladder (extreme → check → crisis) is G-C, ward-signed, not yet built. **Projections
+  the safety ladder (extreme → check → crisis) is G-C, ward-signed, not yet built.
+  **Gauge UI (G-B.2):** the Trackers tab renders a calm band-coloured **fill
+  meter** + a **one-tap refill** (gauge only) → `POST /api/trackers/:id/entries`
+  (`source:'ui'`; an empty payload is a valid refill), returning the fresh read
+  so the meter updates in place. Refills also arrive via passive memorization
+  (a `{}` `tracker_observation`, existing gate) and the live `tracker_log`. **Projections
   (§4, T-C.1):** Unruh `expiring_items` (pantry-class items within
   `EXPIRY_LEAD_DAYS`=3 of expiry, code-owned day maths) → the `tracker_expiring`
   tool → `trackerExpiring` wrapper → `buildEatFirstBlock`

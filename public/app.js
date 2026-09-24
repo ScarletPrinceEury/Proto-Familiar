@@ -11249,9 +11249,22 @@ async function keOpenTracker(t) {
     <div class="ke-detail-header"><h3>${esc(t.label)} <span class="vl-count">${esc(t.archetype)}</span>${t.sensitive ? ' 🔒' : ''}</h3></div>
     <div class="ke-trk-summary">${keTrackerSummary(read)}</div>
     <div class="ke-actions">
+      ${t.archetype === 'gauge' && !t.archived ? '<button class="btn-primary ke-trk-refill">I just did this — refill</button>' : ''}
       <button class="btn-secondary ke-trk-archive">${t.archived ? 'Un-archive' : 'Archive'}</button>
       <button class="btn-ghost ke-danger ke-trk-delete">Delete tracker</button>
     </div>`;
+  det.querySelector('.ke-trk-refill')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    try {
+      const r = await fetch(`/api/trackers/${encodeURIComponent(t.id)}/entries`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payload: {} }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) { alert(`Refill failed: ${data.error ?? r.status}`); btn.disabled = false; return; }
+      // Update the meter in place from the fresh read.
+      if (data.read) det.querySelector('.ke-trk-summary').innerHTML = keTrackerSummary(data.read);
+      btn.disabled = false;
+    } catch (err) { alert(`Refill failed: ${err?.message ?? err}`); btn.disabled = false; }
+  });
   det.querySelector('.ke-trk-archive').addEventListener('click', async () => {
     const r = await fetch(`/api/trackers/${encodeURIComponent(t.id)}/archive`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: !t.archived }) });
@@ -11269,7 +11282,16 @@ async function keOpenTracker(t) {
 function keTrackerSummary(read) {
   if (!read || read.ok === false) return '<p class="logs-empty">Couldn’t read its current state.</p>';
   const arch = read.archetype;
-  if (arch === 'gauge') return `<p>Band: <strong>${esc(String(read.band ?? '—'))}</strong>${Number.isFinite(read.hours_since) ? ` · ${Math.round(read.hours_since)}h since last` : ''}</p>`;
+  if (arch === 'gauge') {
+    const lvl  = Number.isFinite(read.level) ? Math.max(0, Math.min(1, read.level)) : 0;
+    const band = String(read.band ?? '—');
+    const since = Number.isFinite(read.hours_since) ? ` · ${Math.round(read.hours_since)}h since last` : '';
+    // A calm fill meter (not alarmist): the bar drains as the gauge does; band
+    // names the state. Level is pure-derived server-side — never model-set.
+    return `<div class="gauge-meter gauge-band-${esc(band)}" role="img" aria-label="${esc(band)}, ${Math.round(lvl * 100)}% full">`
+      + `<div class="gauge-fill" style="width:${Math.round(lvl * 100)}%"></div></div>`
+      + `<p>Band: <strong>${esc(band)}</strong>${since}</p>`;
+  }
   if (arch === 'state') return `<p>${read.current ? esc(Object.entries(read.current).map(([k, v]) => `${k}: ${v}`).join(', ')) : 'nothing recorded yet'}</p>`;
   if (arch === 'inventory') {
     const items = Array.isArray(read.items) ? read.items : [];
