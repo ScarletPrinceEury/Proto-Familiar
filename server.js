@@ -355,6 +355,12 @@ function chatRateLimit(req, res, next) {
   next();
 }
 
+// A voice CALL caps tool rounds tighter than a typed turn: a spoken request
+// shouldn't spiral into a multi-round research session mid-conversation
+// (latency). The forced closing round (RULE B) still guarantees a spoken answer
+// if the cap is reached, so this bounds cost without risking dead air.
+const VOICE_CALL_MAX_TOOL_ROUNDS = 4;
+
 /**
  * POST /api/chat
  * Body: { provider, apiKey, model, messages, stream, temperature?, max_tokens? }
@@ -942,8 +948,13 @@ app.post('/api/chat', chatRateLimit, async (req, res) => {
       try {
         const runLoop = (baseMessages) => runToolCallLoop({
           // Live ward conversation → the ward-configurable round budget
-          // (background loops keep the tight MAX_TOOL_ROUNDS default).
-          maxRounds: toolRoundsPerTurn(readSettingsSync()),
+          // (background loops keep the tight MAX_TOOL_ROUNDS default). A voice
+          // CALL caps tighter still (latency) — the forced closing round keeps
+          // an over-cap turn from going silent.
+          maxRounds: (() => {
+            const web = toolRoundsPerTurn(readSettingsSync());
+            return voiceMode ? Math.min(VOICE_CALL_MAX_TOOL_ROUNDS, web) : web;
+          })(),
           getTools: recomposeTools,
           callUpstream: async (msgs, roundTools, opts) => {
             // forceText (round-cap closing round): strip tools entirely so the

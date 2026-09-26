@@ -12,6 +12,7 @@
 
 import { extractContent } from '../../llm-call.js';
 import { connectionReady } from '../../providers.js';
+import { stripLlmTimestamps } from '../../message-sanitize.mjs';
 
 // A hung turn must not hang the call forever. The enriched chat path can be slow
 // (an MCP cold start on the first turn, a thinking model), but it has to end so
@@ -42,6 +43,14 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
     // ward turn carries no speaker (→ ward-<slug>).
     const userTurn = speaker ? { role: 'user', content: text, speaker } : { role: 'user', content: text };
     const messages = [...history, userTurn];
+    // Tools on a call (ward setting, default ON): a spoken "add that to my
+    // calendar" should actually DO it, not just talk about it. When on, the
+    // server runs the tool loop (capped tighter than a typed turn, voiceMode)
+    // and the model's natural per-round preamble ("let me check…") is spoken
+    // ahead of the answer below, so the tool-use is announced, never silent.
+    // Off (setting or env) → the fast no-tool reply the call path always had.
+    const toolsOn = process.env.PROTO_FAMILIAR_VOICE_CALL_TOOLS_DISABLED !== '1'
+      && s.voiceCallToolsEnabled !== false;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), VOICE_TURN_TIMEOUT_MS);
     const started = Date.now();
@@ -52,14 +61,16 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
         signal: ctrl.signal,
         body: JSON.stringify({
           provider: conn.provider, apiKey: conn.apiKey, model: conn.model, baseUrl: conn.baseUrl,
-          // NO tool loop on a call — a spoken "Eury?" wants a fast "Hey?", not a
-          // 19-tool research task. That lands the request on /api/chat's RAW
-          // non-stream passthrough, so we replicate BOTH of callProviderChat's
-          // guarantees ourselves (RULE A, 0.9 post-mortem): a generous max_tokens
-          // (a thinking model bills reasoning against the cap — no cap = empty
-          // content = dead silence) and extractContent at the reply boundary
-          // (the answer may sit in reasoning_content, not content).
-          messages, stream: false, runToolLoop: false, enrich: true,
+          // stream:false lands on /api/chat's RAW non-stream path, so we
+          // replicate BOTH of callProviderChat's guarantees ourselves (RULE A,
+          // 0.9 post-mortem): a generous max_tokens (a thinking model bills
+          // reasoning against the cap — no cap = empty content = dead silence)
+          // and extractContent at the reply boundary (the answer may sit in
+          // reasoning_content, not content). runToolLoop follows the ward's
+          // per-call setting; the server caps voiceMode tool rounds tightly so a
+          // spoken "Eury?" still gets a fast "Hey?" and only a real go-look-it-up
+          // request spends rounds.
+          messages, stream: false, runToolLoop: toolsOn, enrich: true,
           max_tokens: 4000,
           userMessage: text,
           voiceMode: true,          // reply comes out speech-shaped, not screen-shaped
@@ -68,7 +79,15 @@ export function createVoiceChatTurn({ port, readSettings, connectionForFeature, 
         }),
       });
       const data = await res.json().catch(() => null);
-      const reply = extractContent(data?.choices?.[0]?.message ?? {});
+      const finalReply = extractContent(data?.choices?.[0]?.message ?? {});
+      // When she used tools, speak her own preamble on each round first ("let me
+      // check…" — the carrier `content` runToolCallLoop records per round), then
+      // the answer. Absent on a no-tool turn, so this is a no-op there. Timestamps
+      // stripped like every other outgoing boundary before it reaches TTS.
+      const preambles = Array.isArray(data?._toolRounds)
+        ? data._toolRounds.map(r => (typeof r?.content === 'string' ? r.content.trim() : '')).filter(Boolean)
+        : [];
+      const reply = stripLlmTimestamps([...preambles, finalReply].filter(Boolean).join(' ')).trim();
       if (!res.ok) { log(`voice turn /api/chat returned ${res.status}: ${JSON.stringify(data)?.slice(0, 300)}`); return null; }
       if (!reply) { log(`voice turn produced no content after ${Date.now() - started}ms (thinking model with empty content?)`); return null; }
       return reply;

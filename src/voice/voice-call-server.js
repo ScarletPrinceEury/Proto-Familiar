@@ -11,8 +11,10 @@
  *
  * It owns three things and delegates the rest:
  *   1. the real `onTurn` deps — `runTurn` (a full `/api/chat` turn, so a voice
- *      reply has identity + memory + tools, §4.4), `synthesize` (the reply →
- *      TTS PCM), `scoreThreat` (D2), `threatEnabled` (the D2 gate);
+ *      reply has identity + memory, and — when `voiceCallToolsEnabled` (default
+ *      ON) — tools too, capped tighter than a typed turn and announced by the
+ *      model's spoken preamble; see voice-chat-turn.js), `synthesize` (the reply
+ *      → TTS PCM), `scoreThreat` (D2), `threatEnabled` (the D2 gate);
  *   2. the singleton call engine (one call at a time) + `clearStaleCallState`
  *      at boot;
  *   3. the WebSocket endpoint that binds one browser connection to the engine

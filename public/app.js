@@ -541,6 +541,11 @@ const state = {
   // How long (ms) to wait for a pause before the Familiar answers on a call, so
   // it doesn't interrupt a longer thought. 0 = reply as soon as an utterance ends.
   voiceCallSettleMs: 1500,
+  // Let the Familiar USE tools during a live call (default ON) — so a spoken
+  // "add that to my calendar" actually does it, announced by their own "let me
+  // check…" preamble (spoken ahead of the answer). Tool rounds are capped
+  // tighter on a call than a typed turn so a quick "Eury?" stays fast.
+  voiceCallToolsEnabled: true,
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -627,7 +632,7 @@ const SERVER_SYNCED_KEYS = [
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
   'trackersEnabled', 'moodSendEnabled', 'moodSendOnboardedAt',
   'crisisClassifierEnabled', 'crisisNormalizationEnabled',
-  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs', 'voiceCallToolsEnabled',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
   'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel', 'voiceOfflineAsrModel',
@@ -4543,6 +4548,7 @@ function readSettingsFromUI() {
   }
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
+  if ($('voice-call-tools-toggle')) state.voiceCallToolsEnabled = $('voice-call-tools-toggle').checked;
   if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
   if ($('voice-greetings-toggle')) state.voiceProactiveGreetings = $('voice-greetings-toggle').checked;
   if ($('audio-tagging-toggle')) state.voiceAudioTaggingEnabled = $('audio-tagging-toggle').checked;
@@ -4754,6 +4760,7 @@ function writeSettingsToUI() {
   if ($('voice-offline-asr-model')) setIfNotFocused($('voice-offline-asr-model'), 'value', state.voiceOfflineAsrModel ?? 'sensevoice');
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
+  if ($('voice-call-tools-toggle')) setIfNotFocused($('voice-call-tools-toggle'), 'checked', state.voiceCallToolsEnabled !== false);
   if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
   if ($('voice-greetings-toggle')) setIfNotFocused($('voice-greetings-toggle'), 'checked', state.voiceProactiveGreetings !== false);
   if ($('audio-tagging-toggle')) setIfNotFocused($('audio-tagging-toggle'), 'checked', state.voiceAudioTaggingEnabled === true);
@@ -6218,7 +6225,7 @@ function init() {
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle', 'crisis-classifier-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode', 'voice-offline-asr-model',
-    'voice-call-offline-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
+    'voice-call-offline-toggle', 'voice-call-tools-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',

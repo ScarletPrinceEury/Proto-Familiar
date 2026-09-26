@@ -27,7 +27,7 @@ test('posts with the RULE-A guarantees + passes sessionAudience through', async 
   assert.equal(reply, 'hey');
   const body = fetchFn.calls[0].body;
   assert.equal(body.max_tokens, 4000, 'generous cap (thinking models bill reasoning)');
-  assert.equal(body.runToolLoop, false);
+  assert.equal(body.runToolLoop, true, 'tools on a call by default');
   assert.equal(body.enrich, true);
   assert.equal(body.voiceMode, true);
   assert.equal(body.injectCorePrompts, true, 'no browser here — the server must fold in the four core prompts');
@@ -63,4 +63,36 @@ test('sessionAudience defaults to ward-private when omitted', async () => {
   const fetchFn = okFetch({ content: 'ok' });
   await createVoiceChatTurn(deps(fetchFn))({ transcript: 'hi' });
   assert.equal(fetchFn.calls[0].body.sessionAudience, 'ward-private');
+});
+
+// ── tools on a call (Pass 1) ──────────────────────────────────────────────────
+test('tools on: speaks the model preamble from _toolRounds, THEN the answer', async () => {
+  const fn = async () => ({ ok: true, status: 200, json: async () => ({
+    choices: [{ message: { content: 'Your dentist is Tuesday at 3.' } }],
+    _toolRounds: [{ content: 'Let me check your calendar—', toolCalls: [{}], results: [] }],
+  }) });
+  const reply = await createVoiceChatTurn(deps(fn))({ transcript: 'when is my dentist?' });
+  assert.equal(reply, 'Let me check your calendar— Your dentist is Tuesday at 3.');
+});
+
+test('a no-tool turn is unchanged: just the answer (no _toolRounds → no preamble)', async () => {
+  const reply = await createVoiceChatTurn(deps(okFetch({ content: 'Hey?' })))({ transcript: 'Eury?' });
+  assert.equal(reply, 'Hey?');
+});
+
+test('voiceCallToolsEnabled:false → runToolLoop false (fast no-tool reply)', async () => {
+  const fetchFn = okFetch({ content: 'hey' });
+  await createVoiceChatTurn(deps(fetchFn, { readSettings: () => ({ voiceCallToolsEnabled: false }) }))({ transcript: 'hi' });
+  assert.equal(fetchFn.calls[0].body.runToolLoop, false);
+});
+
+test('PROTO_FAMILIAR_VOICE_CALL_TOOLS_DISABLED=1 overrides the setting → runToolLoop false', async () => {
+  process.env.PROTO_FAMILIAR_VOICE_CALL_TOOLS_DISABLED = '1';
+  try {
+    const fetchFn = okFetch({ content: 'hey' });
+    await createVoiceChatTurn(deps(fetchFn, { readSettings: () => ({ voiceCallToolsEnabled: true }) }))({ transcript: 'hi' });
+    assert.equal(fetchFn.calls[0].body.runToolLoop, false);
+  } finally {
+    delete process.env.PROTO_FAMILIAR_VOICE_CALL_TOOLS_DISABLED;
+  }
 });
