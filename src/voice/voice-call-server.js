@@ -26,6 +26,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { createCallEngine, clearStaleCallState, callsDisabled } from './call-engine.js';
+import { createThinkingSoundMaker } from './voice-call-sfx.js';
 import { connectionReady } from '../../providers.js';
 import { createWebCallAdapter } from './voice-web-adapter.js';
 import { createVoiceTurnRunner } from './voice-call-turn.js';
@@ -371,6 +372,10 @@ export function attachVoiceCall(deps) {
     diarize,        // §8.3 who-is-speaking on a mixed stream (web open-mic)
     diarizeSegments, // run diarization only in open-mic mode with the model present
     tagSegment,     // §8.4 room-sound tagging — inert until the ward opts in + the model is present
+    // Whimsy (Pass 2): the "rummaging" filler for a slow (tool-using) turn.
+    // Opt-in (voiceCallSoundEffects, default OFF; env PROTO_FAMILIAR_VOICE_CALL_SFX_DISABLED);
+    // the maker returns null when off, so this is inert until the ward turns it on.
+    makeThinkingSound: createThinkingSoundMaker({ readSettings, log }),
     tomesDir: path.join(rootDir, 'tomes'),
     log,
   });

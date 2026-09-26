@@ -3298,7 +3298,15 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   voiceMode tool rounds at `VOICE_CALL_MAX_TOOL_ROUNDS` (4, vs the typed
   `toolRoundsPerTurn`) so a call can't spiral into a research session, and the
   model's per-round preamble (from `_toolRounds`) is spoken ahead of the answer
-  so tool-use is announced, not silent (the whimsy sound layer is a later pass). A **registered villager**'s voice runs a turn gated to the ROOM's
+  so tool-use is announced, not silent. **Whimsy filler (`voiceCallSoundEffects`,
+  default OFF; env `PROTO_FAMILIAR_VOICE_CALL_SFX_DISABLED`; `voice-call-sfx.js`):**
+  a quiet "rummaging" sound played only when a reply is genuinely slow. The call
+  engine starts an injected `makeThinkingSound({shouldStop})` looping PCM stream
+  after `thinkingSoundDelayMs` (1s) IF the turn hasn't returned, and stops it via
+  `stopPlayback` (barge-in's own path) the instant the reply is ready — every
+  seam wrapped so a filler hiccup can never delay or drop the reply. The sound is
+  a code-generated rustle (`generateRustlePcm`) or a ward-supplied WAV
+  (`voiceCallSoundEffectPath`, `parseWavToMonoPcm`, falling back to generated). A **registered villager**'s voice runs a turn gated to the ROOM's
   audience (ward-signed §5): the speaker slug resolves → user id (`refToUser`) →
   villager, the audience input `{location, participants}` is built from the
   complete VC roster (`discordVoiceChannelMembers`, seeded from `GUILD_CREATE`
