@@ -302,6 +302,15 @@
             <input type="checkbox" id="voice-call-tools-toggle" checked>
             <span>Let my Familiar use their tools during a call — so "add that to my calendar" or "what's on for tomorrow?" actually happens live, not just talked about. My Familiar says what they're about to do first. On by default. (A call keeps tool use short so a quick question still gets a quick answer.)</span>
           </label>
+          <label class="switch-row" style="margin-top:8px; display:flex; align-items:center; gap:8px">
+            <input type="checkbox" id="voice-call-sfx-toggle">
+            <span>Play a quiet "rummaging" sound while my Familiar looks something up on a call — only when there's a real pause to fill, and it stops the moment they're ready to answer. A little whimsy. Off by default.</span>
+          </label>
+          <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
+            <label for="voice-call-sfx-path" style="font-size:0.85em">Your own sound (optional)</label>
+            <input type="text" id="voice-call-sfx-path" placeholder="leave empty for the built-in rustle" style="flex:1; min-width:12em" aria-label="Path to your own WAV sound for the call rummaging effect">
+            <span class="field-hint">Path to a 16-bit WAV on the server. Empty = the built-in generated sound. A file that can't be read falls back to the built-in one.</span>
+          </div>
           <div class="action-row" style="margin-top:8px; align-items:center; gap:8px">
             <label for="voice-call-settle" style="font-size:0.85em">Wait for a pause before replying</label>
             <input type="number" id="voice-call-settle" min="0" max="4000" step="250" style="width:6em" aria-label="Milliseconds of pause before the Familiar answers on a call">

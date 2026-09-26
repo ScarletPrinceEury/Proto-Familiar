@@ -103,6 +103,12 @@ export function createCallEngine({
   diarizeSegments = () => false, // predicate: run the diarization stage on this adapter's finalized utterances (mixed stream — web open-mic). False for per-speaker adapters (Discord SSRC, push-to-talk).
   tagSegment = null,      // async (float32Samples, sampleRate) => AudioSet events []|null — the room-sound tagger (spec §8.4). Raw events; the caller classifies + phrases. Null = off.
   tomesDir = DEFAULT_TOMES_DIR,
+  // Whimsy (Pass 2): a looping "rummaging" filler played only when a reply is
+  // genuinely slow (the go-look-it-up pause) and stopped the instant it's ready.
+  // `makeThinkingSound({shouldStop}) => async-iterable | null` (null = off);
+  // default null so the sound is opt-in and existing callers are unchanged.
+  makeThinkingSound = null,
+  thinkingSoundDelayMs = () => 1000,   // only fill a pause longer than this
   maxCalls = 1,
   now = () => Date.now(),
   log = () => {},
@@ -493,8 +499,37 @@ export function createCallEngine({
     // one. The engine forwards both without interpreting them.
     const textNotes = Array.isArray(meta?.textNotes) ? meta.textNotes : null;
     const source = meta?.source === 'text' ? 'text' : 'voice';
+    // Whimsy filler (Pass 2): if the turn is slow (a real go-look-it-up pause),
+    // start the looping "rummaging" sound after the delay, and stop it the moment
+    // the reply is ready. Every seam is wrapped: a filler hiccup must NEVER delay
+    // or drop the reply, so `turnDone` guards the start, the stop+drain runs in a
+    // finally, and the reply playback below is untouched and always reached.
+    let turnDone = false;
+    let thinkingPromise = null;
+    let thinkTimer = null;
+    if (makeThinkingSound) {
+      thinkTimer = setTimeout(() => {
+        if (turnDone) return;
+        try {
+          const s = makeThinkingSound({ shouldStop: () => turnDone });
+          if (s) thinkingPromise = Promise.resolve(c.adapter.playAudio(c.callId, s))
+            .catch((e) => log(`thinking sound playback failed: ${e?.message ?? e}`));
+        } catch (e) { log(`thinking sound start failed: ${e?.message ?? e}`); }
+      }, Math.max(0, thinkingSoundDelayMs()));
+      thinkTimer.unref?.();
+    }
     try { reply = await onTurn(transcript, { callId: c.callId, speakerRef, speakerName, embedding, roomSounds, textNotes, source }); }
     catch (err) { log(`onTurn threw: ${err?.message ?? err}`); }
+    finally {
+      turnDone = true;
+      if (thinkTimer) clearTimeout(thinkTimer);
+      // Stop the filler and let its playback fully drain before the reply, so the
+      // two can never overlap. stopPlayback is the same proven path barge-in uses.
+      if (thinkingPromise) {
+        try { await c.adapter.stopPlayback(c.callId); } catch (e) { log(`thinking sound stop failed: ${e?.message ?? e}`); }
+        try { await thinkingPromise; } catch { /* already logged */ }
+      }
+    }
     if (call !== c) return;   // the call ended mid-turn — nothing to deliver to
     // Always hand the turn's outcome to the adapter, even when there is nothing
     // to say. playAudio(null) signals the browser to leave "Thinking…" and wait

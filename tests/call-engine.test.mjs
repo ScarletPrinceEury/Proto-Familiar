@@ -928,3 +928,81 @@ test('barge window names the guard when a heard partial did NOT stop me', async 
     await engine.endCall();
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// ── Whimsy filler (Pass 2): thinking sound during a slow tool-using turn ──────
+// A transport adapter that tells a looping filler (an async-iterable) apart from
+// a spoken reply (a string), so the tests can assert order + that it stopped.
+function sfxAdapterFactory(rec) {
+  return (hooks) => {
+    rec.hooks = hooks;
+    return {
+      id: 'fake', capabilities: { perSpeakerStreams: true, roster: false, ring: false },
+      joinCall: async () => { return { callId: 'c1' }; },
+      leaveCall: async () => {},
+      playAudio: async (_id, reply) => {
+        if (reply && typeof reply[Symbol.asyncIterator] === 'function') {
+          rec.fillerPlayed = true;
+          for await (const _chunk of reply) { /* consume until the stream self-stops */ }
+        } else {
+          rec.played.push(reply);
+        }
+        return { barged: false };
+      },
+      stopPlayback: async () => { rec.stopped = (rec.stopped || 0) + 1; },
+    };
+  };
+}
+
+test('thinking sound fills a SLOW turn, then is stopped before the reply plays', async () => {
+  const dir = await tmp();
+  try {
+    const rec = { played: [], stopped: 0 };
+    const worker = fakeWorker();
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (t) => { await tick(120); return `SPOKEN:${t}`; },   // slow → the filler window opens
+      streamingModelDir: '', tomesDir: dir,
+      thinkingSoundDelayMs: () => 20,
+      makeThinkingSound: ({ shouldStop }) => ({
+        sampleRate: 24000,
+        async *[Symbol.asyncIterator]() { while (!shouldStop()) { yield Buffer.alloc(4); await tick(10); } },
+      }),
+    });
+    engine.registerCallAdapter(sfxAdapterFactory(rec));
+    await engine.startCall('fake', 'room');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+    const opens = worker.calls.requests.filter((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: opens[0].streamId, text: 'look it up' });
+    await tick(220);
+    assert.equal(rec.fillerPlayed, true, 'the filler played during the slow turn');
+    assert.ok(rec.stopped >= 1, 'the filler was stopped');
+    assert.equal(rec.played[0], 'SPOKEN:look it up', 'the reply still played, after the filler');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('thinking sound: a FAST turn never starts the filler (no dead-air whimsy on a quick reply)', async () => {
+  const dir = await tmp();
+  try {
+    const rec = { played: [], stopped: 0 };
+    const worker = fakeWorker();
+    let makerCalled = false;
+    const engine = createCallEngine({
+      worker,
+      onTurn: async (t) => `SPOKEN:${t}`,             // immediate → resolves before the delay
+      streamingModelDir: '', tomesDir: dir,
+      thinkingSoundDelayMs: () => 50,
+      makeThinkingSound: () => { makerCalled = true; return null; },
+    });
+    engine.registerCallAdapter(sfxAdapterFactory(rec));
+    await engine.startCall('fake', 'room');
+    await rec.hooks.pushAudio({ callId: 'c1', speakerRef: 'ward', pcm: Buffer.alloc(320) });
+    const opens = worker.calls.requests.filter((r) => r.op === 'asrStream');
+    worker.emit({ op: 'asr-final', streamId: opens[0].streamId, text: 'quick one' });
+    await tick(120);
+    assert.equal(makerCalled, false, 'the filler was never even constructed for a fast turn');
+    assert.equal(rec.fillerPlayed, undefined);
+    assert.equal(rec.played[0], 'SPOKEN:quick one');
+    await engine.endCall();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});

@@ -546,6 +546,12 @@ const state = {
   // check…" preamble (spoken ahead of the answer). Tool rounds are capped
   // tighter on a call than a typed turn so a quick "Eury?" stays fast.
   voiceCallToolsEnabled: true,
+  // Whimsy (default OFF): a quiet "rummaging" sound while the Familiar looks
+  // something up on a call — played only when a reply is genuinely slow, stopped
+  // the moment it's ready. Leave the path empty for the built-in generated
+  // rustle, or point it at your own mono/stereo 16-bit WAV to use that instead.
+  voiceCallSoundEffects: false,
+  voiceCallSoundEffectPath: '',
   // Speak each new reply as it arrives, without pressing anything.
   //
   // Spec §11 puts this in Pass 1 and it was never built — found by auditing my
@@ -632,7 +638,7 @@ const SERVER_SYNCED_KEYS = [
   'visionEnabled', 'visionMaxLiveImages', 'visionThreatScoring', 'gifAsVideoEnabled',
   'trackersEnabled', 'moodSendEnabled', 'moodSendOnboardedAt',
   'crisisClassifierEnabled', 'crisisNormalizationEnabled',
-  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs', 'voiceCallToolsEnabled',
+  'voiceEnabled', 'readAloudByDefault', 'voiceThreatScoring', 'voiceAsrLanguage', 'voiceCallMode', 'voiceCallOfflineTranscribe', 'voiceCallSettleMs', 'voiceCallToolsEnabled', 'voiceCallSoundEffects', 'voiceCallSoundEffectPath',
   'mediaRetentionEnabled', 'voiceNoteRetentionDays', 'voiceEscalationFactor',
   'voiceGuestPolicy', 'voiceGuestThreshold', 'voiceGuestEnterSegments', 'voiceGuestExitSegments', 'voiceGuestExitQuietSec',
   'voiceAudioTaggingEnabled', 'voiceProactiveJoin', 'voiceProactiveGreetings', 'voiceKeepAudio', 'voiceSpeakerModel', 'voiceOfflineAsrModel',
@@ -4549,6 +4555,8 @@ function readSettingsFromUI() {
   if ($('voice-call-mode')) state.voiceCallMode = $('voice-call-mode').value === 'open' ? 'open' : 'push';
   if ($('voice-call-offline-toggle')) state.voiceCallOfflineTranscribe = $('voice-call-offline-toggle').checked;
   if ($('voice-call-tools-toggle')) state.voiceCallToolsEnabled = $('voice-call-tools-toggle').checked;
+  if ($('voice-call-sfx-toggle')) state.voiceCallSoundEffects = $('voice-call-sfx-toggle').checked;
+  if ($('voice-call-sfx-path')) state.voiceCallSoundEffectPath = $('voice-call-sfx-path').value.trim();
   if ($('voice-proactive-join-toggle')) state.voiceProactiveJoin = $('voice-proactive-join-toggle').checked;
   if ($('voice-greetings-toggle')) state.voiceProactiveGreetings = $('voice-greetings-toggle').checked;
   if ($('audio-tagging-toggle')) state.voiceAudioTaggingEnabled = $('audio-tagging-toggle').checked;
@@ -4761,6 +4769,8 @@ function writeSettingsToUI() {
   if ($('voice-call-mode')) setIfNotFocused($('voice-call-mode'), 'value', state.voiceCallMode === 'open' ? 'open' : 'push');
   if ($('voice-call-offline-toggle')) setIfNotFocused($('voice-call-offline-toggle'), 'checked', state.voiceCallOfflineTranscribe !== false);
   if ($('voice-call-tools-toggle')) setIfNotFocused($('voice-call-tools-toggle'), 'checked', state.voiceCallToolsEnabled !== false);
+  if ($('voice-call-sfx-toggle')) setIfNotFocused($('voice-call-sfx-toggle'), 'checked', state.voiceCallSoundEffects === true);
+  if ($('voice-call-sfx-path')) setIfNotFocused($('voice-call-sfx-path'), 'value', state.voiceCallSoundEffectPath ?? '');
   if ($('voice-proactive-join-toggle')) setIfNotFocused($('voice-proactive-join-toggle'), 'checked', state.voiceProactiveJoin === true);
   if ($('voice-greetings-toggle')) setIfNotFocused($('voice-greetings-toggle'), 'checked', state.voiceProactiveGreetings !== false);
   if ($('audio-tagging-toggle')) setIfNotFocused($('audio-tagging-toggle'), 'checked', state.voiceAudioTaggingEnabled === true);
@@ -6225,7 +6235,7 @@ function init() {
     'event-alerts-toggle', 'event-alerts-lead', 'elapsed-stamp-hours',
     'weather-toggle', 'vision-enabled-toggle', 'vision-threat-toggle', 'crisis-classifier-toggle',
     'voice-call-threat-toggle', 'voice-call-lang', 'voice-call-mode', 'voice-offline-asr-model',
-    'voice-call-offline-toggle', 'voice-call-tools-toggle', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
+    'voice-call-offline-toggle', 'voice-call-tools-toggle', 'voice-call-sfx-toggle', 'voice-call-sfx-path', 'voice-call-settle', 'voice-proactive-join-toggle', 'voice-greetings-toggle', 'audio-tagging-toggle',
     'gcal-write-toggle', 'gcal-write-command',
     'gcal-ical-urls', 'gcal-cli-calendars',
     'user-name', 'char-name',

@@ -515,6 +515,7 @@ is not an off-switch.
 | `PROTO_FAMILIAR_VOICE_BARGE_DISABLED` | barge-in — the Familiar stopping when someone speaks over it in a call (falls back to the web browser's own barge; disables the noise-robust partial-driven interrupt) |
 | `PROTO_FAMILIAR_VOICE_TEXT_INTERLEAVE_DISABLED` | typing in a Discord voice channel's attached text chat during a call — the Familiar reading it and answering by voice (and describing an image shared there). Falls back to treating those messages as normal text |
 | `PROTO_FAMILIAR_VOICE_CALL_TOOLS_DISABLED` | the Familiar using tools during a live call (schedule/memory/etc.) — falls back to the fast no-tool spoken reply. (Also toggleable per-install via "Let my Familiar use their tools during a call" in Settings; the env var is the hard off-switch.) |
+| `PROTO_FAMILIAR_VOICE_CALL_SFX_DISABLED` | the whimsy "rummaging" sound played during a slow (tool-using) call reply — the call is otherwise unaffected. (Off by default anyway; opt in via "Play a quiet rummaging sound…" in Settings. The env var is the hard off-switch.) |
 | `PROTO_FAMILIAR_PROACTIVE_SESSION_DISABLED` | recording proactive messages (reminders, event alerts, "a thought from me", triage check-ins) into your shared session so the Familiar knows it sent them and your reply has context (esp. Discord DMs). Delivery is unaffected either way |
 | `PROTO_FAMILIAR_VISION_DISABLED` | seeing images |
 | `PROTO_FAMILIAR_VISION_THREAT_DISABLED` | an image raising your Familiar's concern |
