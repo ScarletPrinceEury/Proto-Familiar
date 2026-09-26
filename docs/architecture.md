@@ -3292,7 +3292,13 @@ chat turn:  hearVoiceNotes() ──→ ensureTranscribed (BEFORE prompt assembly
   voice runs a real ward-private chat turn via `voice-chat-turn.js` — the shared
   `/api/chat` spoken turn (RULE-A guarantees) the web call also uses — wrapped by
   the same `createVoiceTurnRunner` (ward-only threat scoring, speakable,
-  synthesize). A **registered villager**'s voice runs a turn gated to the ROOM's
+  synthesize). **Tools on a call (`voiceCallToolsEnabled`, default ON; hard
+  off-switch `PROTO_FAMILIAR_VOICE_CALL_TOOLS_DISABLED`):** the turn sends
+  `runToolLoop: true`, so a spoken request actually acts; `/api/chat` caps
+  voiceMode tool rounds at `VOICE_CALL_MAX_TOOL_ROUNDS` (4, vs the typed
+  `toolRoundsPerTurn`) so a call can't spiral into a research session, and the
+  model's per-round preamble (from `_toolRounds`) is spoken ahead of the answer
+  so tool-use is announced, not silent (the whimsy sound layer is a later pass). A **registered villager**'s voice runs a turn gated to the ROOM's
   audience (ward-signed §5): the speaker slug resolves → user id (`refToUser`) →
   villager, the audience input `{location, participants}` is built from the
   complete VC roster (`discordVoiceChannelMembers`, seeded from `GUILD_CREATE`
