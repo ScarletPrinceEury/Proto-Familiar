@@ -695,13 +695,18 @@ Currently owns:
   rides beside a web send as its own `/api/chat` field (never inside `messages`).
   Server-side it fire-and-forgets two learning-only writes — `ensureTrackerFromTemplate('mood')`
   (idempotent find-or-create on the `template` column) + `logTrackerEntry`
-  (`source:'send-button'`, Unruh's `validate_entry` gates the palette) — with NO
-  threat effect (ward decision: the valence→threat link is deferred to a later
-  signed-off pass; when built, the distress set is low+numb+stressed). **INVARIANT
-  T1:** `moodTag` never reaches a live prompt — it is metadata for the Mood
-  tracker + the memorization corpus only, and `collapseToolTurns` (the
-  provider-history boundary) strips it from every message so a tagged turn's
-  assembled payload is byte-free of it. **UI (T-D.1b, 0.14.16):** a one-tap
+  (`source:'send-button'`, Unruh's `validate_entry` gates the palette).
+  **Mood→threat (T-D.2, 0.14.30, ward-signed):** a DISTRESS mood also raises the
+  threat tier, bounded — `src/tracker/mood-threat.js` `applyMoodThreat` (energy-
+  weighted raw 0.6 / stressed 0.45 / low = numb 0.3; RAISE-ONLY; clamped below
+  HIGH at `MOOD_THREAT_CEILING` 3.5; ≤2/day; decays) via the existing
+  `recordThreat` seam (crisis-signals/threat-tracker logic untouched). Off-switch
+  `PROTO_FAMILIAR_MOOD_THREAT_DISABLED`; no-ops under `PROTO_FAMILIAR_THREAT_DISABLED`.
+  **INVARIANT T1 (compounding guard):** `moodTag` is never STORED in chat history
+  or re-injected — `collapseToolTurns` (the provider-history boundary) + the
+  client `toApiMessage` whitelist keep it out. **T-D.1c (0.14.29):** whether it's
+  ALSO shown to the Familiar on its own turn is `moodVisibleToFamiliar` (default
+  on) — a per-turn system note, read that turn only, never stored (so T1 holds). **UI (T-D.1b, 0.14.16):** a one-tap
   **circumplex (mood × energy) palette** beside the composer — a 3×3 grid
   (energized·good·calm / stressed·angry·raw / low·numb·done; `MOOD_PALETTE` in
   `public/app.js`, keys match the Mood template enum). `sendMessage(userInput,

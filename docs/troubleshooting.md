@@ -571,6 +571,7 @@ is not an off-switch.
 | Switch | Stops |
 |---|---|
 | `PROTO_FAMILIAR_TRACKERS_DISABLED` | trackers entirely (tools, cues, projections, passive capture, mood-send) |
+| `PROTO_FAMILIAR_MOOD_THREAT_DISABLED` | the mood→threat link (a distress mood-send gently raising the threat tier). Off = mood stays pure telemetry + Familiar-visibility; the tier is untouched. (Also stands down under `PROTO_FAMILIAR_THREAT_DISABLED`.) Bounded either way: mood alone never reaches high/severe. |
 | `PROTO_FAMILIAR_TRACKER_PROJECTION_DISABLED` | the projection tick that mints schedule nodes from trackers — pantry-expiry reminders and the likely-period hold-block (the derived in-context lines still show) |
 | `PROTO_FAMILIAR_GAUGE_ESCALATION_DISABLED` | the whole gauge safety ladder — the "are you okay?" CHECK on a critical gauge AND its G-C.2 teeth (an unanswered check past its active-hours deadline raising threat + reaching an opt-in trusted contact); gauges still decay + cue. (The teeth also stand down under `PROTO_FAMILIAR_THREAT_DISABLED`.) |
 
